@@ -30,9 +30,11 @@ pub mod diagnostic;
 pub mod position;
 pub mod range;
 pub mod symbol;
+pub mod tsconfig;
 
 // Re-exports so consumers can write `svn_core::Range` etc.
 pub use diagnostic::{Diagnostic, DiagnosticSource, Severity};
 pub use position::{Position, PositionMap};
 pub use range::Range;
 pub use symbol::Symbol;
+pub use tsconfig::{CompilerOptions, ModuleResolution, Reference, TsConfigFile};

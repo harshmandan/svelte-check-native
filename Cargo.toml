@@ -40,6 +40,8 @@ serde_json = "1"
 smol_str = "0.3"
 camino = "1"
 memchr = "2"
+# Tolerant JSON for tsconfig.json (comments + trailing commas).
+json5 = "0.4"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

@@ -12,7 +12,13 @@
 // `declare global` because this file is a `.d.ts` script (no top-level
 // imports/exports), so its declarations are already global.
 
-/** `$state<T>(initial?)` declares reactive state. Macro. */
+/** `$state<T>(initial?)` declares reactive state. Macro.
+ *
+ * Matches svelte's real `$state` signature — strict inference from the
+ * initial value when no explicit generic is given. Calls like
+ * `$state<T>(0)` where T is a generic parameter and 0 isn't assignable
+ * to T do fire TS2345; that matches Svelte's own type behavior.
+ */
 declare function $state<T>(initial: T): T;
 declare function $state<T>(): T | undefined;
 declare namespace $state {

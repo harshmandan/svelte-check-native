@@ -17,12 +17,12 @@
 //!   `smol_str::SmolStr`).
 //! - [`diagnostic`] — `Diagnostic`, `Severity`, `DiagnosticSource`.
 //!
-//! ### Design notes vs. `-rs`
+//! ### Design notes
 //!
-//! - `Range` replaces `Span` (name aligns with LSP).
-//! - `PositionMap` replaces `SourceMap`; it no longer conflates source-map-v3
-//!   mappings with line/col tables. The source-map-v3 work lives in the
-//!   `emit` crate where it's actually used.
+//! - `Range` is the byte-offset interval type — name aligns with LSP.
+//! - `PositionMap` resolves byte offsets to line/col on demand; does not
+//!   conflate source-map-v3 mappings with line/col tables. Source maps
+//!   live in the `emit` crate where they're actually constructed.
 //! - One canonical `Diagnostic` type — no parallel representations in
 //!   different stages of the pipeline.
 

@@ -1,7 +1,8 @@
 //! Byte-offset ranges into a source file.
 //!
-//! `Range` replaces `-rs`'s `Span`. The name aligns with LSP terminology and
-//! signals that these are *byte* positions, not abstract token spans.
+//! `Range` is the primitive interval type used everywhere in the workspace.
+//! The name aligns with LSP terminology and signals that these are *byte*
+//! positions, not abstract token spans.
 //!
 //! All offsets are `u32` (4 GiB max) — well beyond any realistic source file.
 

@@ -1,16 +1,17 @@
-//! Rune detection — the first semantic pass that proves the
-//! no-character-level-scanning rule.
+//! Rune detection.
 //!
 //! Walks the script's oxc AST and records every call site of a Svelte 5
 //! rune: `$state`, `$derived`, `$effect`, `$bindable`, `$inspect`, `$host`,
-//! `$props`, plus dotted variants (`$state.raw`, `$derived.by`, `$effect.pre`,
-//! `$effect.root`, `$state.snapshot`, `$props.id`).
+//! `$props`, plus dotted variants (`$state.raw`, `$derived.by`,
+//! `$effect.pre`, `$effect.root`, `$state.snapshot`, `$inspect.with`,
+//! `$props.id`).
 //!
-//! Deliberately AST-based. `-rs` had a ~800-line character scanner for this
-//! and still got #1 (`parent$` truncation) and #2 (callable-store vs rune
-//! misclassification) wrong. Pattern-matching on oxc `Expression` variants
-//! makes both bugs categorically impossible: identifiers are identifiers, no
-//! substring shenanigans.
+//! Pattern-matches on oxc `Expression` variants — never scans raw text.
+//! Identifier-aware by construction: `parent$` is an identifier that
+//! ends in `$`, not a "$parent" rune. Callable stores written `$t(...)`
+//! are not runes either, because the rune set is an explicit whitelist
+//! of exact identifiers. Both kinds of mistake are categorically
+//! impossible at this layer.
 //!
 //! ### Scope of this pass
 //!

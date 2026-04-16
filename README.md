@@ -16,13 +16,16 @@ on the command-line surface — same flags, same output formats, same exit codes
 
 ## Scoreboard
 
-Parity is tracked by a fixed suite of upstream `svelte-check` fixtures plus one
-test per bug we rescued from a related Rust fork. When this hits 39/39, v0.1
-ships.
+Parity is tracked by:
+- the 63 Svelte 5–only fixtures from `svelte2tsx`'s test corpus (real
+  Svelte 5 components that should type-check cleanly), and
+- a small set of grey-box regression fixtures targeting specific
+  emit-shape behaviors (void-references, definite-assignment rewrites,
+  for-of fallback for empty `{#each}`).
 
 <!-- SCOREBOARD-START -->
 ```
-svelte-check-native scoreboard: 0/39 passing
+svelte-check-native scoreboard: 0/63 .v5 fixtures + 6/6 grey-box fixtures
 ```
 <!-- SCOREBOARD-END -->
 

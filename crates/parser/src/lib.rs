@@ -10,12 +10,13 @@
 //! Template AST — elements, attributes, directives, control-flow blocks —
 //! is not yet implemented. [`Template`] carries only byte ranges for now.
 //!
-//! ### Design mandate (from todo.md §1.2)
+//! ### Design mandate
 //!
 //! Embedded JS/TS is NEVER stored as raw `String` for later character-level
-//! scanning — that was the #1 source of bugs in `-rs`. Every expression goes
-//! through `oxc_parser` exactly once, at the boundary where this crate hands
-//! script contents to `analyze`.
+//! scanning. Every expression is parsed through `oxc_parser` exactly once,
+//! at the boundary where this crate hands script contents to `analyze`.
+//! Working against a real AST eliminates an entire category of fragile
+//! identifier-mangling bugs that hand-rolled scanners are prone to.
 
 // Tests are allowed to panic loudly on setup failures.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]

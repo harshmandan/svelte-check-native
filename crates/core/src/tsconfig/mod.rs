@@ -1,13 +1,11 @@
 //! The canonical `TsConfig` representation.
 //!
-//! One struct, used everywhere (CLI config resolution, overlay builder, watch
-//! cache). **No parallel JSON-reading shortcuts** anywhere else in the
-//! workspace — if you need a tsconfig field, add it here and parse it once.
-//!
-//! See `todo.md` architectural lesson #4: `-rs` had two parallel
-//! representations (`CompilerOptions` struct parsing ~6 fields, overlay
-//! builder reading ~12 fields directly from JSON). New fields fell in the
-//! gap. This module is the single source of truth.
+//! One struct, used everywhere (CLI config resolution, overlay builder,
+//! cache lookups). **No parallel JSON-reading shortcuts** anywhere else in
+//! the workspace — if you need a tsconfig field, add it here and parse it
+//! once. Fields fall through the gaps in any system that has two
+//! representations of the same config; this module is deliberately the
+//! single source of truth.
 //!
 //! ### Scope of this file
 //!

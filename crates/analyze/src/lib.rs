@@ -1,10 +1,16 @@
 //! Semantic analysis passes over the Svelte AST.
 //!
 //! Populates a `SemanticModel` with: detected runes, prop destructures,
-//! store subscriptions, `bind:` targets, SvelteKit route role, and — critically
-//! — a `VoidRefRegistry` collecting every synthesized name that the emit crate
-//! will need to reference. This replaces the ad-hoc per-feature `void x;`
-//! emission scattered through `-rs`'s transformer (12 of 33 bugs).
+//! store subscriptions, `bind:` targets, SvelteKit route role, and —
+//! critically — a `VoidRefRegistry` collecting every synthesized name
+//! that the emit crate will need to reference.
+//!
+//! Centralizing the registry of synthesized names is what stops emit from
+//! having to remember a per-feature `void <name>;` line every time a new
+//! emission landed. Every kind of synthesized name (template-check
+//! wrapper, action attrs, bind pairs, store aliases, prop locals)
+//! registers here; emit reads the registry once and writes a single
+//! consolidated `void (...)` block.
 //!
 //! All passes share a single `Visitor` walk of the AST. One pass, many
 //! collectors.

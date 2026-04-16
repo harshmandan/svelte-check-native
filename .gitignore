@@ -1,7 +1,3 @@
-# Reference-only fork of external/upstream.
-# Kept in-tree for diffing during the rewrite; NEVER tracked in our history.
-upstream/
-
 # Rust
 target/
 *.rs.bk

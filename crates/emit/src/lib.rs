@@ -654,7 +654,7 @@ fn emit_void_block(
     // `void (a, b, c);` block. The block form uses comma operators which
     // TypeScript flags with TS2695 ("Left side of comma operator is
     // unused and has no side effects"). Per-statement form has no such
-    // problem and matches what upstream svelte-check / upstream do.
+    // problem and matches what upstream svelte-check does.
     //
     // Names covered:
     //   - the template-check wrapper (`__svn_tpl_check`)

@@ -18,8 +18,7 @@ catch bugs that only surface under strict checking (`noUnusedLocals`,
 ## Fixture naming
 
 `fixtures/bugs/<NN>-<kebab-case-slug>/` where `NN` is a two-digit zero-padded
-number matching the bug in `todo.md` Phase 2.1. The order is historical — it's
-the order bugs were discovered in the `upstream` rescue.
+number identifying the bug. Names are historical (creation order).
 
 ## Fixture contents
 
@@ -29,7 +28,6 @@ Each fixture directory contains:
 - `tsconfig.json` — usually 2 lines: `extends` + `include`
 - `expected.json` — either `{"clean": true}` or `{"errors": [...]}` with
   the exact expected diagnostics
-- optional `README.md` — one-paragraph explainer linking back to
-  `todo.md` or `upstream/report.md` (reference only)
+- optional `README.md` — one-paragraph explainer of the bug
 
 The runner in `crates/cli/tests/bug_fixtures/run.cjs` iterates this dir.

@@ -8,7 +8,7 @@
 //! `bind:`, `<svelte:element {...}>`, or by a subcomponent after spread).
 //!
 //! Without per-prop void-refs, `noUnusedLocals` flags every destructured
-//! prop as unused — roughly 80 % of the the benchmark project error budget comes from
+//! prop as unused — roughly 80 % of a typical project's error budget comes from
 //! this one gap.
 //!
 //! ### Destructuring patterns handled

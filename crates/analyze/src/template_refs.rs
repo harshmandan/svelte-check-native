@@ -23,7 +23,7 @@
 //!
 //! Most templates have dozens to hundreds of expression sites. Spinning
 //! up an oxc parse per site is the obvious approach but it's measurably
-//! slow on large component sets (the benchmark project: ~1300 components, many
+//! slow on large component sets (1k+ components, many
 //! hundreds of expressions each).
 //!
 //! Here we use a simple JS tokenizer: skip strings, template literals,

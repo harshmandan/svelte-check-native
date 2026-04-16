@@ -1,4 +1,4 @@
 {
-    "clean": true,
-    "_note": "bug #1 from todo.md Phase 2.1: store identifier ending in $ (parent$) was truncated in the rune/store scanner — generated code declared $parent but the template used $parent$"
+    "emit_contains": ["parent$"],
+    "_note": "Bug repro: a store identifier ending in `$` (e.g. `parent$`) must round-trip through the emit pipeline without losing its trailing `$`. Originally a character-level scanner would truncate to `parent`, breaking later `$parent$` references. Working at the AST level — as we do — preserves the identifier verbatim."
 }

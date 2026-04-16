@@ -100,10 +100,184 @@ fn main() -> ExitCode {
         return run_emit_ts(&workspace);
     }
 
-    // Type-checking pipeline still under construction.
-    eprintln!("svelte-check-native: type-checking not yet implemented (phase 1 in progress)");
-    eprintln!("see todo.md or https://github.com/harshmandan/svelte-check-native");
-    ExitCode::from(2)
+    let tsconfig = match resolve_tsconfig(&workspace, cli.tsconfig.as_deref(), cli.no_tsconfig) {
+        Ok(Some(p)) => Some(p),
+        Ok(None) => None,
+        Err(msg) => {
+            eprintln!("svelte-check-native: {msg}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let Some(tsconfig) = tsconfig else {
+        eprintln!(
+            "svelte-check-native: --no-tsconfig mode is not yet implemented; pass --tsconfig <path> or run inside a project with a tsconfig.json"
+        );
+        return ExitCode::from(2);
+    };
+
+    run_typecheck(&workspace, &tsconfig, &cli.output)
+}
+
+/// Resolve the user's tsconfig path. Honors `--tsconfig`, `--no-tsconfig`,
+/// and otherwise walks up from the workspace looking for `tsconfig.json`
+/// then `jsconfig.json`.
+fn resolve_tsconfig(
+    workspace: &Path,
+    explicit: Option<&Path>,
+    no_tsconfig: bool,
+) -> Result<Option<PathBuf>, String> {
+    if no_tsconfig {
+        return Ok(None);
+    }
+    if let Some(p) = explicit {
+        let resolved = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            workspace.join(p)
+        };
+        if !resolved.is_file() {
+            return Err(format!("tsconfig not found at {}", resolved.display()));
+        }
+        return Ok(Some(resolved));
+    }
+    let mut cur: Option<&Path> = Some(workspace);
+    while let Some(dir) = cur {
+        for name in ["tsconfig.json", "jsconfig.json"] {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Ok(Some(candidate));
+            }
+        }
+        cur = dir.parent();
+    }
+    Err(format!(
+        "no tsconfig.json or jsconfig.json found at or above {}",
+        workspace.display()
+    ))
+}
+
+/// Default flow: parse + emit each .svelte file, hand the lot to tsgo,
+/// format diagnostics, exit with the appropriate code.
+fn run_typecheck(workspace: &Path, tsconfig: &Path, output_format: &str) -> ExitCode {
+    let svelte_files = discover_svelte_files(workspace);
+
+    let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::with_capacity(svelte_files.len());
+    for file in &svelte_files {
+        let source = match std::fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(err) => {
+                eprintln!("failed to read {}: {err}", file.display());
+                continue;
+            }
+        };
+        let (doc, _parse_errors) = svn_parser::parse_sections(&source);
+        let (fragment, _template_errors) =
+            svn_parser::parse_all_template_runs(&source, &doc.template.text_runs);
+        let summary = svn_analyze::walk_template(&fragment, &source);
+        let emitted = svn_emit::emit_document(&doc, &fragment, &summary);
+        inputs.push(svn_typecheck::CheckInput {
+            source_path: file.clone(),
+            generated_ts: emitted.typescript,
+        });
+    }
+
+    let diagnostics = match svn_typecheck::check(workspace, tsconfig, &inputs) {
+        Ok(d) => d,
+        Err(err) => {
+            eprintln!("svelte-check-native: type-check failed: {err}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let error_count = diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, svn_typecheck::Severity::Error))
+        .count();
+    let warning_count = diagnostics.len() - error_count;
+
+    print_diagnostics(workspace, &diagnostics, output_format);
+
+    if error_count > 0 {
+        ExitCode::from(1)
+    } else {
+        let _ = warning_count;
+        ExitCode::from(0)
+    }
+}
+
+fn print_diagnostics(
+    workspace: &Path,
+    diagnostics: &[svn_typecheck::CheckDiagnostic],
+    output_format: &str,
+) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+
+    match output_format {
+        "machine-verbose" => {
+            println!("{now_ms} START \"{}\"", workspace.display());
+            for d in diagnostics {
+                let rel = d
+                    .source_path
+                    .strip_prefix(workspace)
+                    .unwrap_or(&d.source_path);
+                let type_label = match d.severity {
+                    svn_typecheck::Severity::Error => "ERROR",
+                    svn_typecheck::Severity::Warning => "WARNING",
+                };
+                let payload = serde_json::json!({
+                    "type": type_label,
+                    "filename": rel.to_string_lossy(),
+                    "start": {
+                        "line": d.line.saturating_sub(1),
+                        "character": d.column.saturating_sub(1),
+                    },
+                    "end": {
+                        "line": d.line.saturating_sub(1),
+                        "character": d.column.saturating_sub(1) + d.span_length.unwrap_or(0),
+                    },
+                    "message": d.message,
+                    "code": d.code,
+                    "source": "ts",
+                });
+                println!("{now_ms} {payload}");
+            }
+            let errors = diagnostics
+                .iter()
+                .filter(|d| matches!(d.severity, svn_typecheck::Severity::Error))
+                .count();
+            let warnings = diagnostics.len() - errors;
+            let files: std::collections::HashSet<_> =
+                diagnostics.iter().map(|d| &d.source_path).collect();
+            println!(
+                "{now_ms} COMPLETED 0 FILES {errors} ERRORS {warnings} WARNINGS {} FILES_WITH_PROBLEMS",
+                files.len()
+            );
+        }
+        _ => {
+            for d in diagnostics {
+                let rel = d
+                    .source_path
+                    .strip_prefix(workspace)
+                    .unwrap_or(&d.source_path);
+                let label = match d.severity {
+                    svn_typecheck::Severity::Error => "Error",
+                    svn_typecheck::Severity::Warning => "Warning",
+                };
+                println!(
+                    "{}:{}:{}\n{label}: {} (TS{})\n",
+                    rel.display(),
+                    d.line,
+                    d.column,
+                    d.message,
+                    d.code
+                );
+            }
+        }
+    }
 }
 
 /// `--emit-ts` flow: discover `.svelte` files, parse, emit, print to stdout

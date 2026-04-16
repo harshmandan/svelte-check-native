@@ -1137,6 +1137,8 @@ dependencies = [
  "serde_json",
  "svn-core",
  "svn-emit",
+ "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "walkdir",
 ]

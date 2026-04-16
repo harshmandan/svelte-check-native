@@ -1,0 +1,8 @@
+{
+    "name": "svelte-check-native-dev",
+    "private": true,
+    "description": "Dev-time tooling holder for svelte-check-native. Not published.",
+    "devDependencies": {
+        "@typescript/native-preview": ">=7.0.0-dev.0"
+    }
+}

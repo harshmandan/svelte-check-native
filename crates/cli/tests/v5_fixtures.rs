@@ -80,19 +80,16 @@ fn v5_fixtures_suite() {
 /// Find the platform-native tsgo binary or the JS wrapper inside the repo's
 /// local node_modules. Tries the platform package first (faster, no Node
 /// startup), then falls back to the wrapper.
-fn locate_local_tsgo(crate_dir: &PathBuf) -> Option<PathBuf> {
+fn locate_local_tsgo(crate_dir: &std::path::Path) -> Option<PathBuf> {
     let repo_root = crate_dir.parent()?.parent()?; // crates/cli → crates → repo
-    for candidate in [
+    [
         repo_root.join("node_modules/@typescript/native-preview-darwin-arm64/lib/tsgo"),
         repo_root.join("node_modules/@typescript/native-preview-darwin-x64/lib/tsgo"),
         repo_root.join("node_modules/@typescript/native-preview-linux-arm64/lib/tsgo"),
         repo_root.join("node_modules/@typescript/native-preview-linux-x64/lib/tsgo"),
         repo_root.join("node_modules/@typescript/native-preview-win32-x64/lib/tsgo.exe"),
         repo_root.join("node_modules/@typescript/native-preview/bin/tsgo.js"),
-    ] {
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+    ]
+    .into_iter()
+    .find(|p| p.is_file())
 }

@@ -51,10 +51,11 @@ mod script_split;
 use std::fmt::Write;
 use std::path::Path;
 
+use oxc_allocator::Allocator;
 use smol_str::SmolStr;
-use svn_analyze::TemplateSummary;
+use svn_analyze::{TemplateSummary, find_store_refs};
 use svn_parser::Document;
-use svn_parser::{EachBlock, Fragment, Node};
+use svn_parser::{EachBlock, Fragment, Node, parse_script_body};
 
 use crate::script_split::split_imports;
 
@@ -136,6 +137,18 @@ fn emit_document_with_render_name(
             let _ = writeln!(out, "async function {render_name}() {{");
         }
     }
+    // Detect $store auto-subscribe references. For each `$ident` where
+    // `ident` is a top-level binding in the script, emit a `let $ident: any;`
+    // declaration so type references like `typeof $store` resolve.
+    if let (Some(s), Some(instance)) = (&split, &doc.instance_script) {
+        let alloc = Allocator::default();
+        let parsed = parse_script_body(&alloc, &s.body, instance.lang);
+        let store_refs = find_store_refs(&parsed.program, &s.body);
+        for name in &store_refs {
+            let _ = writeln!(out, "    let {name}: any;");
+        }
+    }
+
     if let Some(s) = &split {
         out.push_str(&s.body);
         if !s.body.ends_with('\n') {

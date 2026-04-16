@@ -56,7 +56,8 @@ use std::collections::HashSet;
 use oxc_allocator::Allocator;
 use smol_str::SmolStr;
 use svn_analyze::{
-    TemplateSummary, collect_top_level_bindings, find_props, find_store_refs, find_template_refs,
+    TemplateSummary, collect_top_level_bindings, find_props, find_store_refs_with_bindings,
+    find_template_refs,
 };
 use svn_parser::Document;
 use svn_parser::{EachBlock, Fragment, Node, parse_script_body};
@@ -162,26 +163,55 @@ fn emit_document_with_render_name(
         collect_top_level_bindings(&parsed_mod.program, &mut script_bindings);
     }
 
-    let (mut store_refs, prop_names): (Vec<SmolStr>, Vec<SmolStr>) =
+    let prop_names: Vec<SmolStr> =
         if let (Some(_s), Some(instance)) = (&split, &doc.instance_script) {
-            // Scan store refs and bindings against the *original* script
-            // content (imports included). Using the imports-blanked body
-            // would miss store names imported from external modules
-            // (e.g. SvelteKit's `import { page } from '$app/stores'` plus
+            // Scan bindings + props against the *original* script content
+            // (imports included). Using the imports-blanked body would
+            // miss store names imported from external modules (e.g.
+            // SvelteKit's `import { page } from '$app/stores'` plus
             // template uses of `$page.data.foo`).
             let alloc_orig = Allocator::default();
             let parsed_orig = parse_script_body(&alloc_orig, instance.content, instance.lang);
-            let stores = find_store_refs(&parsed_orig.program, instance.content);
-            let props = find_props(&parsed_orig.program)
+            let props: Vec<SmolStr> = find_props(&parsed_orig.program)
                 .into_iter()
                 .map(|p| p.local_name)
                 .collect();
 
             collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
-            (stores, props)
+            props
         } else {
-            (Vec::new(), Vec::new())
+            Vec::new()
         };
+
+    // Store auto-subscribe scan happens AFTER both module + instance
+    // bindings are collected, so a `$properties` use in instance can
+    // resolve to a `properties` declared in `<script module>`.
+    let mut store_refs: Vec<SmolStr> = {
+        let mut accumulated: Vec<SmolStr> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        let push_unique = |found: Vec<SmolStr>, seen: &mut HashSet<String>, out: &mut Vec<SmolStr>| {
+            for name in found {
+                if seen.insert(name.to_string()) {
+                    out.push(name);
+                }
+            }
+        };
+        if let Some(module_script) = &doc.module_script {
+            push_unique(
+                find_store_refs_with_bindings(module_script.content, &script_bindings),
+                &mut seen,
+                &mut accumulated,
+            );
+        }
+        if let Some(instance) = &doc.instance_script {
+            push_unique(
+                find_store_refs_with_bindings(instance.content, &script_bindings),
+                &mut seen,
+                &mut accumulated,
+            );
+        }
+        accumulated
+    };
 
     // Walk template expressions for identifier references. A single walk
     // produces both:

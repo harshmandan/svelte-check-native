@@ -154,16 +154,21 @@ pub fn build(
 /// the input path is not under the workspace root, return None — the
 /// mirror only makes sense for paths inside the project we generated
 /// overlays for.
+///
+/// Resolves relative paths against the workspace root explicitly. The
+/// cache root's parent stopped equalling the workspace once the cache
+/// moved under `node_modules/.cache/`, so taking `layout.root.parent()`
+/// would point at `node_modules/.cache/` and strip-prefix would fail
+/// for every path-target the user actually declared.
 fn mirror_into_overlay(layout: &CacheLayout, path_str: &str) -> Option<String> {
     let p = Path::new(path_str);
     let abs = if p.is_absolute() {
         p.to_path_buf()
     } else {
-        layout.root.as_path().parent()?.join(p)
+        layout.workspace.join(p)
     };
     let normalized = normalize(&abs);
-    let ws_parent = layout.root.as_path().parent()?;
-    let rel = normalized.strip_prefix(ws_parent).ok()?;
+    let rel = normalized.strip_prefix(&layout.workspace).ok()?;
     let mirrored = layout.svelte_dir.join(rel);
     Some(mirrored.to_string_lossy().into_owned())
 }
@@ -172,23 +177,36 @@ fn mirror_into_overlay(layout: &CacheLayout, path_str: &str) -> Option<String> {
 /// entry, resolving relative paths-target values against the declaring
 /// tsconfig's directory (or its `baseUrl` when set). Inner configs
 /// override outer (as TS does).
+///
+/// `extends` may be a single string OR an array of strings (TS 5.0+).
+/// Arrays are walked left-to-right; later entries override earlier
+/// ones for conflicting keys, matching TS semantics. Combined with
+/// "inner wins over outer," the precedence is: the first config to
+/// declare a key in a depth-first inner-first walk wins.
 fn collect_user_paths(tsconfig: &Path) -> Vec<(String, Vec<String>)> {
     use std::collections::HashMap;
     let mut accumulated: HashMap<String, Vec<String>> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
 
-    let mut current: Option<PathBuf> = Some(tsconfig.to_path_buf());
+    // FIFO queue rather than single-pointer so array-extends work.
+    // Cap iterations to keep pathological cycles from looping.
+    let mut queue: std::collections::VecDeque<PathBuf> =
+        std::collections::VecDeque::from([tsconfig.to_path_buf()]);
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     let mut hops = 0usize;
-    while let Some(path) = current.take() {
+    while let Some(path) = queue.pop_front() {
         hops += 1;
-        if hops > 16 {
+        if hops > 32 {
             break;
         }
+        if !visited.insert(path.clone()) {
+            continue;
+        }
         let Ok(content) = std::fs::read_to_string(&path) else {
-            break;
+            continue;
         };
         let Ok(json) = json5::from_str::<Value>(&content) else {
-            break;
+            continue;
         };
         let dir = path.parent().unwrap_or(Path::new(""));
         let opts = json.get("compilerOptions");
@@ -230,18 +248,40 @@ fn collect_user_paths(tsconfig: &Path) -> Vec<(String, Vec<String>)> {
                 }
             }
         }
-        current = json.get("extends").and_then(|v| v.as_str()).map(|s| {
-            if Path::new(s).is_absolute() {
-                PathBuf::from(s)
-            } else {
-                dir.join(s)
-            }
-        });
+        for ext in resolve_extends(&json, dir) {
+            queue.push_back(ext);
+        }
     }
     order
         .into_iter()
         .filter_map(|k| accumulated.remove(&k).map(|v| (k, v)))
         .collect()
+}
+
+/// Read an `extends` field that may be a single string or an array of
+/// strings, returning the resolved absolute path(s) in declaration
+/// order. Returns empty if `extends` is absent or malformed.
+fn resolve_extends(json: &Value, dir: &Path) -> Vec<PathBuf> {
+    let Some(extends) = json.get("extends") else {
+        return Vec::new();
+    };
+    let resolve_one = |s: &str| -> PathBuf {
+        if Path::new(s).is_absolute() {
+            PathBuf::from(s)
+        } else {
+            dir.join(s)
+        }
+    };
+    if let Some(s) = extends.as_str() {
+        return vec![resolve_one(s)];
+    }
+    if let Some(arr) = extends.as_array() {
+        return arr
+            .iter()
+            .filter_map(|v| v.as_str().map(resolve_one))
+            .collect();
+    }
+    Vec::new()
 }
 
 /// Walk the user tsconfig's `extends` chain (depth-limited; tsconfig
@@ -254,18 +294,23 @@ fn collect_user_paths(tsconfig: &Path) -> Vec<(String, Vec<String>)> {
 /// with fewer virtual roots merged) when this returns empty.
 fn collect_user_root_dirs(tsconfig: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let mut current: Option<PathBuf> = Some(tsconfig.to_path_buf());
+    let mut queue: std::collections::VecDeque<PathBuf> =
+        std::collections::VecDeque::from([tsconfig.to_path_buf()]);
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     let mut hops = 0usize;
-    while let Some(path) = current.take() {
+    while let Some(path) = queue.pop_front() {
         hops += 1;
-        if hops > 16 {
+        if hops > 32 {
             break;
         }
+        if !visited.insert(path.clone()) {
+            continue;
+        }
         let Ok(content) = std::fs::read_to_string(&path) else {
-            break;
+            continue;
         };
         let Ok(json) = json5::from_str::<Value>(&content) else {
-            break;
+            continue;
         };
         let dir = path.parent().unwrap_or(Path::new(""));
         if let Some(rd) = json
@@ -284,15 +329,9 @@ fn collect_user_root_dirs(tsconfig: &Path) -> Vec<PathBuf> {
                 }
             }
         }
-        // Follow `extends` (string only — we don't support extends arrays
-        // yet; rare in practice).
-        current = json.get("extends").and_then(|v| v.as_str()).map(|s| {
-            if Path::new(s).is_absolute() {
-                PathBuf::from(s)
-            } else {
-                dir.join(s)
-            }
-        });
+        for ext in resolve_extends(&json, dir) {
+            queue.push_back(ext);
+        }
     }
     out
 }

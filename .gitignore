@@ -3,6 +3,11 @@ target/
 *.rs.bk
 **/*.rs.bk
 
+# Claude Code: track command/skill definitions, ignore per-session state
+.claude/*
+!.claude/commands/
+!.claude/skills/
+
 # Generated cache dirs (produced by the tool itself while dogfooding)
 .svelte-check/
 .svelte-kit/

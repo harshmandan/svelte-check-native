@@ -1,29 +1,30 @@
-// Copy the freshly-built Rust binary into the platform package matching
-// the host machine. Runs after `cargo build --release`.
+// Copy the host's freshly-built `target/release/<bin>` into the
+// matching npm platform package's bin/. Used by `npm run build:native`
+// for fast single-target iteration on the dev's own machine.
 //
-// Cross-platform builds (CI) should hand-pick the right target triple
-// per platform package and copy each into its directory; this script
-// only handles the local-host case for `npm run build:native`.
+// For cross-platform builds use `npm run build:all` instead — that
+// uses cargo-zigbuild and the targets.mjs map to handle every target.
 
 import { copyFileSync, chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { TARGETS } from './targets.mjs';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
 
-function platformPackageDir() {
-  const platform = process.platform;
-  const arch = process.arch;
-  return `svelte-check-native-${platform}-${arch}`;
+const hostNpmPlatform = `${process.platform}-${process.arch}`;
+const target = TARGETS.find((t) => t.npmPlatform === hostNpmPlatform);
+if (!target) {
+  console.error(`no platform package for host ${hostNpmPlatform}.`);
+  console.error(`known platforms: ${TARGETS.map((t) => t.npmPlatform).join(', ')}`);
+  process.exit(1);
 }
 
-const isWin = process.platform === 'win32';
-const binName = isWin ? 'svelte-check-native.exe' : 'svelte-check-native';
-
-const sourceBin = join(repoRoot, 'target', 'release', binName);
-const destDir = join(repoRoot, 'npm', platformPackageDir(), 'bin');
-const destBin = join(destDir, binName);
+const sourceBin = join(repoRoot, 'target', 'release', target.binName);
+const destDir = join(repoRoot, 'npm', `svelte-check-native-${target.npmPlatform}`, 'bin');
+const destBin = join(destDir, target.binName);
 
 if (!existsSync(sourceBin)) {
   console.error(`source binary missing: ${sourceBin}`);
@@ -34,7 +35,7 @@ if (!existsSync(destDir)) {
   mkdirSync(destDir, { recursive: true });
 }
 copyFileSync(sourceBin, destBin);
-if (!isWin) {
+if (!target.binName.endsWith('.exe')) {
   chmodSync(destBin, 0o755);
 }
 console.log(`copied ${sourceBin} → ${destBin}`);

@@ -1022,7 +1022,9 @@ mod tests {
 
     #[test]
     fn each_block_without_as_clause() {
-        // bug fixture #25 (each-without-as-clause).
+        // Svelte allows `{#each items}` with no binding (iterate N times,
+        // discard the item). Parser must distinguish this from the more
+        // common `{#each items as item}` form.
         let frag = parse_ok("{#each items}<span>x</span>{/each}");
         let Node::EachBlock(b) = &frag.nodes[0] else {
             unreachable!()

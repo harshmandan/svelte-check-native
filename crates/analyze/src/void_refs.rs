@@ -7,9 +7,10 @@
 //! the end of `$$render`, which is what stops `noUnusedLocals` from firing
 //! on every synthesized name.
 //!
-//! This is the principled fix for the 12 reactive `void x;` emissions that
-//! `-rs` accumulated bug-by-bug across the transformer (fixes.md categories
-//! B/C/D/I).
+//! Centralizing void-references avoids the trap where each new emit feature
+//! has to remember to add a per-feature `void <name>;` line: the registry
+//! collects names during analysis, emit reads it once, and adding a new
+//! synthesized name is a single `.register()` call.
 //!
 //! Insertion is order-preserving and deduplicating. The order matters only
 //! for stable test-snapshot comparisons; runtime semantics don't depend on it.

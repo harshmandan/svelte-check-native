@@ -108,10 +108,11 @@ pub fn emit_document(
 
 /// Walk the fragment tree and emit per-construct scaffolding.
 ///
-/// Currently handles `{#each}` blocks (for fixture #25 + general iteration)
-/// and recurses into other block bodies / element children. Element- and
-/// component-level type-checking is not yet implemented; nodes other than
-/// each blocks contribute only via their nested children.
+/// Currently emits a `for`-of loop for each `{#each}` block and recurses
+/// into other block bodies / element children. Element- and component-level
+/// type-checking (attribute validation, prop type-checking, slot/snippet
+/// shape) is not yet implemented; nodes other than each-blocks contribute
+/// only via their nested children.
 fn emit_template_body(out: &mut String, source: &str, fragment: &Fragment, depth: usize) {
     for node in &fragment.nodes {
         emit_template_node(out, source, node, depth);
@@ -152,8 +153,9 @@ fn emit_template_node(out: &mut String, source: &str, node: &Node, depth: usize)
 
 /// Emit a `for`-of loop for an `{#each}` block.
 ///
-/// Uses a fallback binding name when the block has no `as` clause —
-/// fixes the `for (const  of ...)` syntax error from `-rs` bug #25.
+/// `{#each items}` without an `as` clause is legal Svelte (iterate N times,
+/// discard the value); we use `__svn_each_unused` as a placeholder binding
+/// so the emitted TypeScript stays syntactically valid.
 fn emit_each_block(out: &mut String, source: &str, b: &EachBlock, depth: usize) {
     let indent = "    ".repeat(depth);
     let expr_text = source
@@ -199,11 +201,18 @@ fn first_identifier(binding: &str) -> &str {
 }
 
 /// Rewrite `let <name>: T` declarations to `let <name>!: T` for each
-/// bind-target identifier. Bug fixture #30 (definite-assignment).
+/// bind-target identifier.
+///
+/// Svelte assigns a `bind:this` target asynchronously, after the binding
+/// element mounts. TypeScript's flow analysis can't see that, so any closure
+/// reading the variable would be flagged "used before being assigned"
+/// (TS2454). The `!:` definite-assignment assertion tells TypeScript to
+/// trust us.
 ///
 /// Only matches `let <name>:` patterns with the colon — declarations with
-/// initializers (`let x = ...`) don't have the type-annotation form and
-/// don't need the `!` (they're already definitely assigned).
+/// initializers (`let x = ...`) are already definitely assigned and don't
+/// need the `!`. Adding `!` to an initialized declaration is itself a TS
+/// error (TS1263).
 fn rewrite_definite_assignment(script: &str, target_names: &[SmolStr]) -> String {
     if target_names.is_empty() {
         return script.to_string();
@@ -395,7 +404,8 @@ mod tests {
 
     #[test]
     fn template_check_wrapper_in_void_block() {
-        // Bug fixture #7 grey-box.
+        // The synthesized `__svn_tpl_check` function would otherwise trip
+        // `noUnusedLocals`; the consolidated void block keeps it referenced.
         let out = emit_str("<p>hi</p>");
         assert!(out.contains("void ("));
         assert!(out.contains("__svn_tpl_check"));
@@ -403,16 +413,17 @@ mod tests {
 
     #[test]
     fn use_directive_emits_action_attrs() {
-        // Bug fixture #8 grey-box.
+        // Each `use:` directive needs an action-attrs holder declared in
+        // the template-check function and referenced in the void block.
         let out = emit_str("<div use:tooltip>x</div>");
         assert!(out.contains("__svn_action_attrs_0"));
-        // Both declared (inside __svn_tpl_check) and void-referenced.
         assert!(out.contains("let __svn_action_attrs_0"));
     }
 
     #[test]
     fn bind_pair_emits_bind_pair_declaration() {
-        // Bug fixture #9 grey-box.
+        // `bind:foo={getter, setter}` declares a tuple holder both inside
+        // the template-check function and in the void block.
         let out = emit_str("<input bind:value={() => g(), (v) => s(v)} />");
         assert!(out.contains("__svn_bind_pair_0"));
         assert!(out.contains("let __svn_bind_pair_0"));
@@ -433,14 +444,16 @@ mod tests {
         assert_eq!(void_count, 1, "expected exactly one void(...) block");
     }
 
-    // ===== Bug fixture #25 (each-without-as-clause) =====
     #[test]
-    fn each_block_emits_for_loop() {
+    fn each_block_without_as_clause_uses_placeholder_binding() {
+        // `{#each items}` (no `as`) must still produce a syntactically
+        // valid `for (const <something> of ...)` — the empty binding
+        // case `for (const  of ...)` is a TS1123 error.
         let out = emit_str("{#each items}<span>x</span>{/each}");
         assert!(out.contains("for (const"), "missing for-of loop:\n{out}");
         assert!(
             !out.contains("for (const  of"),
-            "double-space before `of` (regression of bug #25):\n{out}"
+            "empty binding produced double-space-before-`of`:\n{out}"
         );
     }
 
@@ -452,15 +465,19 @@ mod tests {
 
     #[test]
     fn each_with_destructured_pattern() {
+        // Destructuring patterns in the `as` clause are passed through
+        // verbatim; the loop is still well-formed.
         let out = emit_str("{#each pairs as { a, b }}<x />{/each}");
-        // Should still produce a for-of without double-space-of.
         assert!(out.contains("for (const"));
         assert!(!out.contains("for (const  of"));
     }
 
-    // ===== Bug fixture #30 (definite-assignment) =====
     #[test]
     fn bind_this_target_gets_definite_assignment() {
+        // A variable declared `let x: T;` and used as a `bind:this` target
+        // must be rewritten to `let x!: T;` — Svelte assigns the binding
+        // asynchronously, so flow analysis would otherwise flag closure
+        // reads as "used before being assigned" (TS2454).
         let src = "<script lang=\"ts\">let inputEl: HTMLDivElement;</script>\
                    <div bind:this={inputEl}></div>";
         let out = emit_str(src);
@@ -487,9 +504,9 @@ mod tests {
 
     #[test]
     fn bind_target_with_initializer_unchanged() {
-        // `let x = ...` (no `:`) doesn't need the `!` and we shouldn't
-        // touch it. Bug fixture #30 only rewrites declared-but-not-yet-
-        // assigned variables.
+        // `let x = ...` (no `:` annotation) is already definitely
+        // assigned and doesn't need `!`. Adding it is itself a TS1263
+        // error.
         let src = "<script lang=\"ts\">let inputEl = null as any as HTMLDivElement;</script>\
                    <div bind:this={inputEl}></div>";
         let out = emit_str(src);

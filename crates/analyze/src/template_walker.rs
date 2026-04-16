@@ -8,8 +8,9 @@
 //!   per component).
 //! - `bind:foo={getter, setter}` → register `__svn_bind_pair_N`.
 //! - `bind:this={x}` where `x` is a simple identifier → record `x` as a
-//!   bind-target (used later for the `let x!: T` definite-assignment
-//!   rewrite — bug fixture #30).
+//!   bind-target. Emit later rewrites the matching `let x: T;` declaration
+//!   in the script to `let x!: T;` so TypeScript's definite-assignment
+//!   analysis doesn't flag closure reads (Svelte assigns asynchronously).
 //! - Each block — counted; emit needs the count to generate unique loop
 //!   binding names.
 //!
@@ -257,7 +258,9 @@ mod tests {
 
     #[test]
     fn use_directive_registers_action_attrs() {
-        // Bug fixture #8.
+        // Each `use:foo` directive needs an `__svn_action_attrs_N` holder
+        // declared in the template-check function so its inferred attribute
+        // type doesn't go unused.
         let s = walk_str(r#"<div use:tooltip={{ text: 'hi' }}>x</div>"#);
         assert!(
             s.void_refs
@@ -288,7 +291,8 @@ mod tests {
 
     #[test]
     fn bind_pair_registers_bind_pair() {
-        // Bug fixture #9.
+        // `bind:foo={getter, setter}` declares a tuple holder; without a
+        // void-reference, TypeScript flags it as unused.
         let s = walk_str("<input bind:value={() => g(), (v) => s(v)} />");
         assert!(
             s.void_refs

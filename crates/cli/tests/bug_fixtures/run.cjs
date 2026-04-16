@@ -16,7 +16,7 @@
 //       → run binary normally, assert exact set of ERRORs (black-box)
 //   { "emit_contains": ["..."], "emit_not_contains": ["..."] }
 //       → run binary with `--emit-ts`; capture stdout as generated TS;
-//         assert substring presence/absence (grey-box)
+//         assert substring presence/absence on the emitted code
 
 'use strict';
 

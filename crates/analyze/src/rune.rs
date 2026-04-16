@@ -308,19 +308,21 @@ mod tests {
 
     #[test]
     fn dollar_suffix_identifier_not_a_rune() {
-        // `parent$` is an identifier that happens to start with `parent` and
-        // end with `$`. It is NOT `$parent`. bug #1 from the -rs rescue —
-        // a char-level scanner misclassified this.
+        // `parent$` is an ordinary identifier that happens to end in `$`.
+        // It must not be confused with `$parent` (auto-subscribed store).
+        // Working at the AST level makes the distinction trivial; a
+        // character scanner would have to special-case it.
         let src = "const parent$ = writable(0);";
         assert_eq!(runes_in(src), Vec::<RuneKind>::new());
     }
 
     #[test]
     fn callable_store_not_a_rune() {
-        // svelte-i18n exposes `t` as a store, auto-subscribed as `$t`. At
-        // the script AST level this shows up as a normal function call to an
-        // identifier named `$t` — but `$t` is not a rune. bug #2 from the
-        // -rs rescue. Our whitelist in identify_rune_callee excludes it.
+        // `svelte-i18n` exposes `t` as a callable store; consumers write
+        // `$t('key')` and Svelte rewrites it to `t.subscribe(...)` plus a
+        // call. At the AST level the callee is an identifier named `$t`,
+        // which is NOT a rune — runes are an explicit, finite whitelist
+        // in identify_rune_callee.
         let src = r#"
             import { t } from 'svelte-i18n';
             const label = $t('hello');

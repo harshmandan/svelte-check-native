@@ -18,9 +18,10 @@
 //! ### What's NOT covered yet
 //!
 //! - **Interpolations inside quoted attribute values** (e.g. `class="a {b} c"`).
-//!   Quoted values are currently stored as a single literal Text part. This
-//!   will be added in a follow-up commit tied to bug fixture #8
-//!   (`style_directive_interpolation`).
+//!   Quoted values are currently stored as a single literal Text part. Real
+//!   parsing of `{expr}` islands inside quoted strings — needed so that
+//!   identifiers like `b` inside `style:left="{b}px"` are seen as
+//!   referenced — is not yet implemented.
 
 use smol_str::SmolStr;
 use svn_core::Range;

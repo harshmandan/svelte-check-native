@@ -50,8 +50,14 @@ let skipped = 0;
 const failures = [];
 
 function runFixture(name, fixtureDir) {
-    const input = path.join(fixtureDir, 'input.svelte');
-    if (!fs.existsSync(input)) {
+    // Most fixtures use input.svelte; SvelteKit-targeted ones use
+    // +page.svelte (or +layout.svelte) because the file name itself
+    // signals the route role to svelte2tsx's auto-typing.
+    const candidates = ['input.svelte', '+page.svelte', '+layout.svelte', '+page.ts'];
+    const input = candidates
+        .map((c) => path.join(fixtureDir, c))
+        .find((p) => fs.existsSync(p));
+    if (!input) {
         skipped++;
         return;
     }

@@ -285,12 +285,17 @@ fn emit_document_with_render_name(
     emit_template_body(&mut out, doc.source, fragment, 2);
     out.push_str("    }\n");
 
+    let exported_locals: Vec<SmolStr> = split
+        .as_ref()
+        .map(|s| s.exported_locals.clone())
+        .unwrap_or_default();
     emit_void_block(
         &mut out,
         summary,
         &store_refs,
         &prop_names,
         &template_void_refs,
+        &exported_locals,
     );
 
     out.push_str("}\n");
@@ -457,6 +462,7 @@ fn emit_void_block(
     store_refs: &[SmolStr],
     prop_names: &[SmolStr],
     template_refs: &[SmolStr],
+    exported_locals: &[SmolStr],
 ) {
     // One `void <name>;` statement per synthesized name — NOT a single
     // `void (a, b, c);` block. The block form uses comma operators which
@@ -503,6 +509,14 @@ fn emit_void_block(
         emit(out, name);
     }
     for name in template_refs {
+        emit(out, name);
+    }
+    // Names declared `export const|let|var|function|class` (or
+    // `export { x }`) by the user. Stripping the `export` keyword leaves
+    // them as plain locals — without voiding, TS6133 fires on the
+    // declaration. The user explicitly marked them as public surface so
+    // counting them as "used" is the right call.
+    for name in exported_locals {
         emit(out, name);
     }
 }

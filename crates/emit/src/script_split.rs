@@ -18,16 +18,22 @@
 //! mapping.
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::Statement;
+use oxc_ast::ast::{BindingPatternKind, Declaration, Statement};
 use oxc_span::GetSpan;
+use smol_str::SmolStr;
 use svn_parser::{ScriptLang, parse_script_body};
 
 /// `hoisted`: statements lifted to module top level (newline-joined).
 /// `body`: the original script content with hoisted spans blanked out.
+/// `exported_locals`: names that were `export`-ed in the source but
+/// whose `export` keyword was stripped (the declaration stays in body).
+/// Emit voids these so TS6133 doesn't flag them as unused — the user
+/// declared them as public surface.
 #[derive(Debug, Clone)]
 pub struct SplitScript {
     pub hoisted: String,
     pub body: String,
+    pub exported_locals: Vec<SmolStr>,
 }
 
 /// Split out every module-level statement (imports, exports of all
@@ -41,6 +47,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
         return SplitScript {
             hoisted: String::new(),
             body: content.to_string(),
+            exported_locals: Vec::new(),
         };
     }
 
@@ -56,6 +63,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
         return SplitScript {
             hoisted: String::new(),
             body: content.to_string(),
+            exported_locals: Vec::new(),
         };
     }
 
@@ -77,6 +85,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
     // `export default x` where x is a name (we can't easily distinguish
     // expression-vs-name without more parsing — drop is safer).
     let mut drop_spans: Vec<(usize, usize)> = Vec::new();
+    let mut exported_locals: Vec<SmolStr> = Vec::new();
 
     for stmt in &parsed.program.body {
         match stmt {
@@ -93,14 +102,20 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
                     if inner_start > span.0 {
                         strip_keyword_spans.push((span.0, inner_start));
                     }
+                    collect_declaration_names(d, &mut exported_locals);
                 } else if decl.source.is_some() {
                     // `export { x } from 'mod'` — pure module re-export,
                     // no local name references. Hoist.
                     hoist_spans.push(span);
                 } else {
                     // `export { x, y }` (no `from`) — local name re-export.
-                    // Drop.
+                    // Drop the statement, but the names ARE exported, so
+                    // record them for void-emission.
                     drop_spans.push(span);
+                    for spec in &decl.specifiers {
+                        exported_locals
+                            .push(SmolStr::from(spec.local.name().as_str()));
+                    }
                 }
             }
             Statement::ExportDefaultDeclaration(decl) => {
@@ -126,6 +141,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
         return SplitScript {
             hoisted: String::new(),
             body: content.to_string(),
+            exported_locals,
         };
     }
 
@@ -169,7 +185,62 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
     }
     body.push_str(&content[cursor..]);
 
-    SplitScript { hoisted, body }
+    SplitScript {
+        hoisted,
+        body,
+        exported_locals,
+    }
+}
+
+/// Collect the local names introduced by an exported declaration.
+fn collect_declaration_names(decl: &Declaration<'_>, out: &mut Vec<SmolStr>) {
+    match decl {
+        Declaration::VariableDeclaration(v) => {
+            for d in &v.declarations {
+                collect_binding_pattern_names(&d.id.kind, out);
+            }
+        }
+        Declaration::FunctionDeclaration(f) => {
+            if let Some(id) = &f.id {
+                out.push(SmolStr::from(id.name.as_str()));
+            }
+        }
+        Declaration::ClassDeclaration(c) => {
+            if let Some(id) = &c.id {
+                out.push(SmolStr::from(id.name.as_str()));
+            }
+        }
+        // `export interface`, `export type` — types, not values. Skip:
+        // voiding them would fire TS2693.
+        _ => {}
+    }
+}
+
+fn collect_binding_pattern_names(pat: &BindingPatternKind<'_>, out: &mut Vec<SmolStr>) {
+    match pat {
+        BindingPatternKind::BindingIdentifier(id) => {
+            out.push(SmolStr::from(id.name.as_str()));
+        }
+        BindingPatternKind::ObjectPattern(o) => {
+            for prop in &o.properties {
+                collect_binding_pattern_names(&prop.value.kind, out);
+            }
+            if let Some(rest) = &o.rest {
+                collect_binding_pattern_names(&rest.argument.kind, out);
+            }
+        }
+        BindingPatternKind::ArrayPattern(a) => {
+            for el in a.elements.iter().flatten() {
+                collect_binding_pattern_names(&el.kind, out);
+            }
+            if let Some(rest) = &a.rest {
+                collect_binding_pattern_names(&rest.argument.kind, out);
+            }
+        }
+        BindingPatternKind::AssignmentPattern(a) => {
+            collect_binding_pattern_names(&a.left.kind, out);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -26,17 +26,20 @@ Same flags as upstream `svelte-check`. See `svelte-check-native --help`.
 
 ## Speed
 
-On `a heavy SvelteKit TS app` (1206 `.svelte` files, M-series 8-core):
+On `a heavy SvelteKit TS app` (1206 `.svelte` files, M-series 8-core,
+warm cache, median of 3 runs):
 
 | | Warm |
 |---|---|
-| `svelte-check-native` | **~2.5 s** |
+| `svelte-check-native` | **~3 s** |
 | `svelte-check --tsgo` | ~13 s |
 | `svelte-check` (default) | ~40 s |
 
-Diagnostic output is byte-equivalent to upstream `svelte-check` for the
-same flags (verified parity: 0 errors / 10 warnings / 7 files on the
-above workload).
+Cold (no cache, fresh `bun` import): ~7–8 s.
+
+Diagnostic output is byte-equivalent to upstream `svelte-check` with
+the same flags (verified parity: 0 errors / 10 warnings / 7 files on
+the above workload).
 
 ## How it works
 

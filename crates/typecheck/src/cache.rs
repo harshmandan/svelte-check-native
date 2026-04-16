@@ -64,7 +64,15 @@ impl CacheLayout {
     /// Map an original `.svelte` source path to its generated `.svelte.ts`
     /// counterpart inside the cache.
     ///
-    /// `Foo.svelte` → `<cache>/svelte/<rel>/++Foo.svelte.ts`.
+    /// `<workspace>/lib/Foo.svelte` → `<cache>/svelte/lib/Foo.svelte.ts`.
+    ///
+    /// We DON'T add a prefix (no more `++`) — the file lives in the cache
+    /// directory under a mirrored path, so it never collides with the
+    /// real `.svelte` source. Keeping the same basename is what lets
+    /// `import './Foo.svelte.js'` (rewritten from `import './Foo.svelte'`
+    /// in the emit pass) resolve to this file via TS's standard `.js`
+    /// → `.ts` lookup, sidestepping the `*.svelte` ambient module
+    /// declaration entirely.
     pub fn generated_path(&self, source: &Path) -> PathBuf {
         let rel = source.strip_prefix(&self.workspace).unwrap_or(source);
         let parent = rel.parent().unwrap_or_else(|| Path::new(""));
@@ -72,20 +80,7 @@ impl CacheLayout {
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown.svelte");
-        let renamed = format!("++{file_stem}.ts");
-        self.svelte_dir.join(parent).join(renamed)
-    }
-
-    /// Map a `.svelte` source path to its `.d.svelte.ts` re-export stub
-    /// inside the cache.
-    pub fn dts_path(&self, source: &Path) -> PathBuf {
-        let rel = source.strip_prefix(&self.workspace).unwrap_or(source);
-        let parent = rel.parent().unwrap_or_else(|| Path::new(""));
-        let file_stem = rel
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Unknown");
-        let renamed = format!("{file_stem}.d.svelte.ts");
+        let renamed = format!("{file_stem}.ts");
         self.svelte_dir.join(parent).join(renamed)
     }
 
@@ -99,13 +94,15 @@ impl CacheLayout {
         let rel = generated.strip_prefix(&self.svelte_dir).ok()?;
         let parent = rel.parent().unwrap_or_else(|| Path::new(""));
         let file = rel.file_name().and_then(|s| s.to_str())?;
-        // `++Foo.svelte.ts` → `Foo.svelte`. Or `Foo.d.svelte.ts` → `Foo.svelte`.
+        // `Foo.svelte.ts` → `Foo.svelte`. Tolerate the legacy `++`
+        // prefix and `.d.svelte.ts` shapes too in case a stale cache
+        // from an older binary is around.
         let original_name = if let Some(stripped) = file.strip_prefix("++") {
             stripped.strip_suffix(".ts").unwrap_or(stripped).to_string()
         } else if let Some(stem) = file.strip_suffix(".d.svelte.ts") {
             format!("{stem}.svelte")
         } else {
-            return None;
+            file.strip_suffix(".ts")?.to_string()
         };
         Some(self.workspace.join(parent).join(original_name))
     }
@@ -156,12 +153,12 @@ mod tests {
     }
 
     #[test]
-    fn generated_path_uses_double_plus_prefix() {
+    fn generated_path_mirrors_source_basename_under_overlay_svelte_dir() {
         let layout = CacheLayout::for_workspace("/p");
         let gen_path = layout.generated_path(Path::new("/p/src/Foo.svelte"));
         assert_eq!(
             gen_path,
-            Path::new("/p/.svelte-check/svelte/src/++Foo.svelte.ts")
+            Path::new("/p/.svelte-check/svelte/src/Foo.svelte.ts")
         );
     }
 
@@ -171,17 +168,7 @@ mod tests {
         let gen_path = layout.generated_path(Path::new("/p/Index.svelte"));
         assert_eq!(
             gen_path,
-            Path::new("/p/.svelte-check/svelte/++Index.svelte.ts")
-        );
-    }
-
-    #[test]
-    fn dts_path_uses_d_dot_svelte_dot_ts_suffix() {
-        let layout = CacheLayout::for_workspace("/p");
-        let dts = layout.dts_path(Path::new("/p/src/Foo.svelte"));
-        assert_eq!(
-            dts,
-            Path::new("/p/.svelte-check/svelte/src/Foo.d.svelte.ts")
+            Path::new("/p/.svelte-check/svelte/Index.svelte.ts")
         );
     }
 
@@ -194,10 +181,13 @@ mod tests {
     }
 
     #[test]
-    fn original_from_generated_handles_dts_form() {
+    fn original_from_generated_tolerates_legacy_dts_form() {
         let layout = CacheLayout::for_workspace("/p");
-        let dts = layout.dts_path(Path::new("/p/src/Foo.svelte"));
-        let back = layout.original_from_generated(&dts).unwrap();
+        // Legacy `.d.svelte.ts` shape — emit no longer writes these,
+        // but the inverse mapping still recognizes them so a stale
+        // cache from an older binary is handled gracefully.
+        let dts = Path::new("/p/.svelte-check/svelte/src/Foo.d.svelte.ts");
+        let back = layout.original_from_generated(dts).unwrap();
         assert_eq!(back, Path::new("/p/src/Foo.svelte"));
     }
 

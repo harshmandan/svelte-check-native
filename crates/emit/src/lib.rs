@@ -427,11 +427,43 @@ fn emit_document_with_render_name(
     out.push_str("}\n");
     let _ = writeln!(out, "{render_name};");
 
+    // Default export so `import Foo from './Foo.svelte'` resolves to a
+    // valid module member (TS1192 otherwise). Named exports come from
+    // the user's preserved module-script `export const/function/...`
+    // declarations, which the emit pass already lifts verbatim above
+    // the wrapper. Typing the default as `any` is a v0.1 simplification
+    // — a richer `__SvelteComponent<Props, Exports>`-shaped type would
+    // let consumers see proper prop / event typing too, but `any` is
+    // enough to clear TS1192 across the project.
+    out.push_str("declare const __svn_component_default: any;\n");
+    out.push_str("export default __svn_component_default;\n");
+
+    // Rewrite every `.svelte` extension on import / export specifiers
+    // to `.svelte.ts` so TS resolves the import to our generated
+    // overlay file rather than to the `*.svelte` ambient module
+    // declaration that the `svelte` package ships (which only knows
+    // about the default export — named imports otherwise fire TS2614).
+    //
+    // Requires `allowImportingTsExtensions: true` in the overlay
+    // tsconfig (set in svn-typecheck::overlay::build).
+    let out = rewrite_svelte_imports(&out);
+
     EmitOutput {
         typescript: out,
         render_name,
         line_map,
     }
+}
+
+/// Append `.ts` to every `.svelte` extension that appears as a module
+/// specifier suffix. Safe-by-substring: only matches when followed by
+/// a quote or close-paren, which covers `import './x.svelte'`,
+/// `import "./x.svelte"`, `import('./x.svelte')`, and
+/// `export ... from './x.svelte'`.
+fn rewrite_svelte_imports(src: &str) -> String {
+    src.replace(".svelte\"", ".svelte.ts\"")
+        .replace(".svelte'", ".svelte.ts'")
+        .replace(".svelte)", ".svelte.ts)")
 }
 
 /// 1-based line number of the next character that would be appended to `s`.

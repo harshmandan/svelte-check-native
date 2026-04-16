@@ -75,25 +75,171 @@ pub fn build(
         push_root(entry.as_path(), &mut root_dirs, &mut seen);
     }
 
+    // Path aliases: collect every entry the user defined in their
+    // extends chain and prepend a cache-mirror candidate. TS resolves
+    // each pattern's value-list in order, so a path-mapped import like
+    // `$lib/foo/Bar.svelte.ts` first tries our generated overlay file
+    // and falls back to the source location if not found. Without this,
+    // path-mapped Svelte imports skip rootDirs entirely and never reach
+    // our overlay (rootDirs only kicks in for raw relative paths).
+    let mut paths_map: serde_json::Map<String, Value> = serde_json::Map::new();
+    for (pattern, values) in collect_user_paths(user_tsconfig) {
+        let mut merged: Vec<String> = Vec::new();
+        for v in &values {
+            // The cache mirror sits at <overlay>/svelte/<same-relative-segment>.
+            // The tail after the workspace root in `v` is what we mirror.
+            let mirrored = mirror_into_overlay(layout, &v);
+            if let Some(m) = mirrored {
+                if !merged.iter().any(|x| x == &m) {
+                    merged.push(m);
+                }
+            }
+        }
+        for v in values {
+            if !merged.iter().any(|x| x == &v) {
+                merged.push(v);
+            }
+        }
+        paths_map.insert(pattern, Value::Array(merged.into_iter().map(Value::String).collect()));
+    }
+
+    let mut compiler_options = serde_json::Map::new();
+    compiler_options.insert("noEmit".into(), json!(true));
+    compiler_options.insert("allowArbitraryExtensions".into(), json!(true));
+    // `allowImportingTsExtensions` lets emit rewrite
+    // `import './X.svelte'` → `import './X.svelte.ts'` so the import
+    // lands on our generated overlay file rather than resolving to the
+    // `*.svelte` ambient declaration shipped with the `svelte` package.
+    compiler_options.insert("allowImportingTsExtensions".into(), json!(true));
+    compiler_options.insert("incremental".into(), json!(true));
+    compiler_options.insert(
+        "tsBuildInfoFile".into(),
+        json!(layout.tsbuildinfo.to_string_lossy()),
+    );
+    compiler_options.insert("skipLibCheck".into(), json!(true));
+    // tsgo has removed the legacy `node`/`node10` moduleResolution
+    // values. Force `bundler` in the overlay so tsgo accepts the
+    // project; the user's runtime moduleResolution setting is
+    // unaffected (we never touch their files).
+    compiler_options.insert("moduleResolution".into(), json!("bundler"));
+    compiler_options.insert("module".into(), json!("esnext"));
+    compiler_options.insert("rootDirs".into(), json!(root_dirs));
+    if !paths_map.is_empty() {
+        compiler_options.insert("paths".into(), Value::Object(paths_map));
+        // tsgo still requires baseUrl when paths is set (despite tsc
+        // 5.x removing it as a top-level option). Set it to the cache
+        // root — paths-target values are already absolute, so baseUrl
+        // is essentially unused for resolution. The TS5102 deprecation
+        // warning that tsgo emits is filtered out in
+        // svn-typecheck::map_diagnostic.
+        compiler_options.insert(
+            "baseUrl".into(),
+            json!(layout.root.to_string_lossy()),
+        );
+    }
+
     json!({
         "extends": extends_rel,
-        "compilerOptions": {
-            "noEmit": true,
-            "allowArbitraryExtensions": true,
-            "incremental": true,
-            "tsBuildInfoFile": layout.tsbuildinfo.to_string_lossy(),
-            "skipLibCheck": true,
-            // tsgo (the typescript-go preview) has removed the legacy
-            // `node`/`node10` moduleResolution values. Many existing
-            // tsconfigs still use them. Force `bundler` in the overlay so
-            // tsgo accepts the project; the user's runtime moduleResolution
-            // setting is unaffected (we never touch their files).
-            "moduleResolution": "bundler",
-            "module": "esnext",
-            "rootDirs": root_dirs,
-        },
+        "compilerOptions": Value::Object(compiler_options),
         "files": files,
     })
+}
+
+/// Map an absolute paths-target path INTO the overlay svelte tree. If
+/// the input path is not under the workspace root, return None — the
+/// mirror only makes sense for paths inside the project we generated
+/// overlays for.
+fn mirror_into_overlay(layout: &CacheLayout, path_str: &str) -> Option<String> {
+    let p = Path::new(path_str);
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        layout.root.as_path().parent()?.join(p)
+    };
+    let normalized = normalize(&abs);
+    let ws_parent = layout.root.as_path().parent()?;
+    let rel = normalized.strip_prefix(ws_parent).ok()?;
+    let mirrored = layout.svelte_dir.join(rel);
+    Some(mirrored.to_string_lossy().into_owned())
+}
+
+/// Walk the user tsconfig's `extends` chain and collect every `paths`
+/// entry, resolving relative paths-target values against the declaring
+/// tsconfig's directory (or its `baseUrl` when set). Inner configs
+/// override outer (as TS does).
+fn collect_user_paths(tsconfig: &Path) -> Vec<(String, Vec<String>)> {
+    use std::collections::HashMap;
+    let mut accumulated: HashMap<String, Vec<String>> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+
+    let mut current: Option<PathBuf> = Some(tsconfig.to_path_buf());
+    let mut hops = 0usize;
+    while let Some(path) = current.take() {
+        hops += 1;
+        if hops > 16 {
+            break;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            break;
+        };
+        let Ok(json) = json5::from_str::<Value>(&content) else {
+            break;
+        };
+        let dir = path.parent().unwrap_or(Path::new(""));
+        let opts = json.get("compilerOptions");
+        // baseUrl resolves relative paths inside `paths` values.
+        let base_url = opts
+            .and_then(|c| c.get("baseUrl"))
+            .and_then(Value::as_str)
+            .map(|b| {
+                if Path::new(b).is_absolute() {
+                    PathBuf::from(b)
+                } else {
+                    dir.join(b)
+                }
+            })
+            .unwrap_or_else(|| dir.to_path_buf());
+        if let Some(p) = opts.and_then(|c| c.get("paths")).and_then(Value::as_object) {
+            for (pattern, values) in p {
+                if accumulated.contains_key(pattern) {
+                    // Inner (closer-to-root) wins. Skip outer entries.
+                    continue;
+                }
+                let arr = match values.as_array() {
+                    Some(a) => a,
+                    None => continue,
+                };
+                let mut resolved: Vec<String> = Vec::new();
+                for v in arr {
+                    let Some(s) = v.as_str() else { continue };
+                    let abs = if Path::new(s).is_absolute() {
+                        PathBuf::from(s)
+                    } else {
+                        base_url.join(s)
+                    };
+                    resolved.push(normalize(&abs).to_string_lossy().into_owned());
+                }
+                if !resolved.is_empty() {
+                    order.push(pattern.clone());
+                    accumulated.insert(pattern.clone(), resolved);
+                }
+            }
+        }
+        current = json
+            .get("extends")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                if Path::new(s).is_absolute() {
+                    PathBuf::from(s)
+                } else {
+                    dir.join(s)
+                }
+            });
+    }
+    order
+        .into_iter()
+        .filter_map(|k| accumulated.remove(&k).map(|v| (k, v)))
+        .collect()
 }
 
 /// Walk the user tsconfig's `extends` chain (depth-limited; tsconfig

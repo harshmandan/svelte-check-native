@@ -122,6 +122,13 @@ pub fn check(
     // Step 1: write generated TS for each input. Skip identical writes.
     // Collect a per-overlay-path line map so the diagnostic mapper can
     // translate tsgo's overlay positions back to source positions.
+    //
+    // Note: no separate `.d.svelte.ts` re-export stub is written. The
+    // generated `<name>.svelte.ts` IS the type definition for
+    // `<name>.svelte` — emit rewrites every `import './X.svelte'` to
+    // `import './X.svelte.js'` so TS's standard `.js`→`.ts` resolver
+    // lands on our generated file rather than the `*.svelte` ambient
+    // declaration that the `svelte` package ships.
     let mut generated_paths: Vec<PathBuf> = Vec::with_capacity(inputs.len());
     let mut line_maps: std::collections::HashMap<PathBuf, Vec<LineMapEntry>> =
         std::collections::HashMap::with_capacity(inputs.len());
@@ -130,26 +137,6 @@ pub fn check(
         write_if_changed(&gen_path, &input.generated_ts)?;
         line_maps.insert(gen_path.clone(), input.line_map.clone());
         generated_paths.push(gen_path);
-
-        // Re-export stub so `import X from './X.svelte'` resolves at the
-        // type level. The `.d.svelte.ts` form is required for
-        // `moduleResolution: node16`+. Listed in `files` (below) so tsgo
-        // actually loads it; otherwise auto-discovery via
-        // `allowArbitraryExtensions` is unreliable across rootDirs
-        // boundaries (the `.d.svelte.ts` lives in the cache while the
-        // companion `.svelte` source lives in the workspace).
-        let dts_path = layout.dts_path(&input.source_path);
-        let stem = input
-            .source_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Component");
-        let stub = format!(
-            "export {{ default }} from \"./++{stem}.svelte.ts\";\n\
-             export * from \"./++{stem}.svelte.ts\";\n"
-        );
-        write_if_changed(&dts_path, &stub)?;
-        generated_paths.push(dts_path);
     }
 
     // Step 2: write overlay tsconfig.
@@ -162,10 +149,26 @@ pub fn check(
     let raw = run_tsgo(&tsgo, &layout.overlay_tsconfig)?;
 
     // Step 4: map diagnostics back to source paths + apply line map.
+    // Drop diagnostics that are about our overlay tsconfig itself —
+    // those are noise from compiler options we set deliberately
+    // (e.g. TS5102 baseUrl deprecation, which we keep set because
+    // tsgo's path resolution still requires it).
     Ok(raw
         .into_iter()
+        .filter(|d| !is_overlay_tsconfig_noise(d, &layout))
         .map(|d| map_diagnostic(d, &layout, &line_maps))
         .collect())
+}
+
+/// Filter for diagnostics that come from our own overlay tsconfig and
+/// represent intentional choices we've made — they're not user-actionable.
+fn is_overlay_tsconfig_noise(raw: &RawDiagnostic, layout: &CacheLayout) -> bool {
+    let abs = if raw.file.is_absolute() {
+        raw.file.clone()
+    } else {
+        layout.workspace.join(&raw.file)
+    };
+    abs == layout.overlay_tsconfig
 }
 
 fn map_diagnostic(

@@ -70,15 +70,76 @@ pub struct CheckInput {
 pub struct CheckDiagnostic {
     /// Original `.svelte` (or `.ts`/`.js`) source path.
     pub source_path: PathBuf,
-    /// 1-based line in the original source.
+    /// 1-based line of the diagnostic START in the original source.
     pub line: u32,
-    /// 1-based column in the original source.
+    /// 1-based column of the diagnostic START in the original source.
     pub column: u32,
+    /// 1-based line of the diagnostic END. Equal to `line` for
+    /// single-line spans.
+    pub end_line: u32,
+    /// 1-based column of the diagnostic END (exclusive). For zero-width
+    /// spans this equals `column`.
+    pub end_column: u32,
     pub severity: Severity,
-    /// TypeScript error code (numeric).
-    pub code: u32,
+    /// Code identifier. `Numeric` for TypeScript (TS6133, TS2614, …),
+    /// `Slug` for Svelte compiler warnings (`state_referenced_locally`,
+    /// `element_invalid_self_closing_tag`, …). The output formatter
+    /// emits each form natively (number / quoted string).
+    pub code: DiagnosticCode,
     pub message: String,
-    pub span_length: Option<u32>,
+    /// Where this diagnostic came from. Drives the `source` field in
+    /// machine-output and matches upstream svelte-check's classification.
+    pub source: DiagnosticSource,
+    /// Documentation URL for this diagnostic, if available. Surfaces as
+    /// `codeDescription.href` in machine-verbose output — IDE
+    /// integrations render it as a clickable link in the problems
+    /// panel.
+    pub code_description_url: Option<String>,
+}
+
+/// Polymorphic diagnostic code: TypeScript uses numbers, the Svelte
+/// compiler uses string slugs. Upstream svelte-check emits each
+/// natively in machine output (`"code": 6133` vs
+/// `"code": "state_referenced_locally"`), so editors and CI parsers
+/// can route by type.
+#[derive(Debug, Clone)]
+pub enum DiagnosticCode {
+    Numeric(u32),
+    Slug(String),
+}
+
+impl std::fmt::Display for DiagnosticCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            // TS-style display: `TS6133`. The numeric form is what
+            // user-facing tooling typically expects when prefixed.
+            Self::Numeric(n) => write!(f, "TS{n}"),
+            // Compiler slugs render as-is — matches the way svelte-
+            // check shows `state_referenced_locally`.
+            Self::Slug(s) => f.write_str(s),
+        }
+    }
+}
+
+/// Diagnostic origin. Mirrors the `source` field upstream svelte-check
+/// emits for each diagnostic (`"js"` covers both TS and JS — same
+/// backend; `"svelte"` is compiler diagnostics; `"css"` is CSS-linter
+/// diagnostics, reserved here for when we add a CSS pass).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSource {
+    Js,
+    Svelte,
+    Css,
+}
+
+impl DiagnosticSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Js => "js",
+            Self::Svelte => "svelte",
+            Self::Css => "css",
+        }
+    }
 }
 
 /// Errors from the full check pipeline.
@@ -197,14 +258,27 @@ fn map_diagnostic(
         }
         None => (absolute_file, raw.line),
     };
+    let span = raw.span_length.unwrap_or(0);
     CheckDiagnostic {
         source_path,
         line,
         column: raw.column,
+        // tsgo emits a single-line span_length, no end-line info — so
+        // for TS diagnostics we collapse end_line == start_line.
+        end_line: line,
+        end_column: raw.column.saturating_add(span),
         severity: raw.severity,
-        code: raw.code,
+        code: DiagnosticCode::Numeric(raw.code),
         message: raw.message,
-        span_length: raw.span_length,
+        // Both TS and JS diagnostics from tsgo are classified as `js`
+        // by upstream svelte-check (same backend).
+        source: DiagnosticSource::Js,
+        // tsgo doesn't supply doc URLs in its compact output; we'd
+        // need a static lookup table per error code to fill these in
+        // (typescript.tv has them but mapping isn't 1-to-1). Leave
+        // empty for now — IDEs that want links can derive them from
+        // the numeric code.
+        code_description_url: None,
     }
 }
 

@@ -36,7 +36,7 @@ todo = "warn"
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 smol_str = "0.3"
 camino = "1"
 memchr = "2"

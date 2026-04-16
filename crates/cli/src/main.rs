@@ -163,7 +163,13 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
-    let diagnostic_sources = parse_diagnostic_sources(cli.diagnostic_sources.as_deref());
+    let diagnostic_sources = match parse_diagnostic_sources(cli.diagnostic_sources.as_deref()) {
+        Ok(s) => s,
+        Err(msg) => {
+            eprintln!("svelte-check-native: {msg}");
+            return ExitCode::from(2);
+        }
+    };
     let compiler_warnings = parse_compiler_warnings(cli.compiler_warnings.as_deref());
     let ignore_set = build_ignore_set(cli.ignore.as_deref());
     let color = resolve_color_mode(cli.color, cli.no_color);
@@ -305,15 +311,23 @@ struct DiagnosticSources {
     css: bool,
 }
 
-impl DiagnosticSources {
-    fn all() -> Self {
-        Self { js: true, svelte: true, css: true }
-    }
-}
+// `DiagnosticSources::all()` previously existed as a default
+// constructor — now subsumed by parse_diagnostic_sources(None) which
+// only enables the sources we actually support (js + svelte; css is
+// reserved but not yet implemented).
 
-fn parse_diagnostic_sources(spec: Option<&str>) -> DiagnosticSources {
+/// Parse `--diagnostic-sources "js,svelte"` into our enabled-source set.
+///
+/// Returns `Err` with a user-facing message when an unsupported source
+/// is requested (currently `css` — we don't ship a CSS linter yet).
+/// Empty entries are skipped silently. Unknown entries warn-and-continue.
+///
+/// When `spec` is `None`, all currently-supported sources are enabled.
+fn parse_diagnostic_sources(spec: Option<&str>) -> Result<DiagnosticSources, String> {
     let Some(spec) = spec else {
-        return DiagnosticSources::all();
+        // Default = everything we actually support. `css` is reserved
+        // and stays off so we don't claim to lint CSS when we don't.
+        return Ok(DiagnosticSources { js: true, svelte: true, css: false });
     };
     let mut sources = DiagnosticSources { js: false, svelte: false, css: false };
     for entry in spec.split(',') {
@@ -321,7 +335,17 @@ fn parse_diagnostic_sources(spec: Option<&str>) -> DiagnosticSources {
         match entry.as_str() {
             "js" | "ts" | "javascript" | "typescript" => sources.js = true,
             "svelte" => sources.svelte = true,
-            "css" | "scss" | "sass" | "less" | "postcss" => sources.css = true,
+            "css" | "scss" | "sass" | "less" | "postcss" => {
+                // Hard error rather than silent no-op: if the user
+                // explicitly asks for css linting, telling them we'll
+                // do something and then doing nothing is worse than
+                // making them notice the gap.
+                return Err(format!(
+                    "--diagnostic-sources {entry:?} requested but CSS linting is not yet \
+                     implemented. Drop {entry:?} from the list (or omit --diagnostic-sources \
+                     entirely to use the supported defaults: js, svelte)."
+                ));
+            }
             "" => {}
             other => {
                 eprintln!(
@@ -330,7 +354,7 @@ fn parse_diagnostic_sources(spec: Option<&str>) -> DiagnosticSources {
             }
         }
     }
-    sources
+    Ok(sources)
 }
 
 /// Per-compiler-warning severity override map.
@@ -538,19 +562,36 @@ fn run_typecheck(
                             compiler_overrides,
                         );
                         let Some(severity) = severity else { continue };
+                        // Documented compiler-warning codes link to the
+                        // svelte.dev compiler-warnings reference page
+                        // via their slug. Mirrors what upstream svelte-
+                        // check emits in `codeDescription.href`.
+                        let href = format!(
+                            "https://svelte.dev/docs/svelte/compiler-warnings#{}",
+                            w.code,
+                        );
+                        // svelte/compiler emits 1-based line numbers
+                        // but 0-based column offsets. CheckDiagnostic
+                        // is documented as 1-based across the board
+                        // (and the formatter subtracts 1 to convert
+                        // back to 0-based LSP-style on the way out),
+                        // so add 1 to columns at the source-of-truth
+                        // boundary.
                         diagnostics.push(svn_typecheck::CheckDiagnostic {
                             source_path: path.clone(),
                             line: w.start.line,
-                            column: w.start.column,
+                            column: w.start.column.saturating_add(1),
+                            end_line: w.end.line,
+                            end_column: w.end.column.saturating_add(1),
                             severity,
-                            // Compiler diagnostic codes are slugs
-                            // (`state_referenced_locally`), not numbers
-                            // — we store 0 here and prepend the slug
-                            // into the message so output formatters
-                            // still surface it.
-                            code: 0,
-                            message: format!("{} ({})", w.message, w.code),
-                            span_length: None,
+                            code: svn_typecheck::DiagnosticCode::Slug(
+                                w.code.clone(),
+                            ),
+                            // Raw message — no slug pollution. The slug
+                            // surfaces via `code` separately.
+                            message: w.message,
+                            source: svn_typecheck::DiagnosticSource::Svelte,
+                            code_description_url: Some(href),
                         });
                     }
                 }
@@ -579,7 +620,13 @@ fn run_typecheck(
         .count();
     let warning_count = diagnostics.len() - error_count;
 
-    print_diagnostics(workspace, &diagnostics, output_format, color);
+    print_diagnostics(
+        workspace,
+        &diagnostics,
+        output_format,
+        color,
+        svelte_files.len(),
+    );
 
     if timings {
         let total = phase_start.elapsed();
@@ -612,6 +659,7 @@ fn print_diagnostics(
     diagnostics: &[svn_typecheck::CheckDiagnostic],
     output_format: &str,
     color: ColorMode,
+    files_checked: usize,
 ) {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -631,6 +679,7 @@ fn print_diagnostics(
             print_machine(workspace, diagnostics, now_ms, true);
             print_machine_completed(
                 now_ms,
+                files_checked,
                 errors,
                 warnings,
                 files_with_problems.len(),
@@ -640,6 +689,7 @@ fn print_diagnostics(
             print_machine(workspace, diagnostics, now_ms, false);
             print_machine_completed(
                 now_ms,
+                files_checked,
                 errors,
                 warnings,
                 files_with_problems.len(),
@@ -681,21 +731,45 @@ fn print_machine(
             svn_typecheck::Severity::Warning => "WARNING",
         };
         if verbose {
-            let payload = serde_json::json!({
-                "type": type_label,
-                "filename": rel.to_string_lossy(),
-                "start": {
+            // Build the payload field-by-field so the `code` value
+            // serializes as a number for TS diagnostics and as a
+            // quoted string for compiler diagnostics — matches
+            // upstream svelte-check's machine-verbose output. Same
+            // story for `codeDescription`: only present when we have
+            // a documentation URL.
+            let mut obj = serde_json::Map::new();
+            obj.insert("type".to_string(), serde_json::json!(type_label));
+            obj.insert("filename".to_string(), serde_json::json!(rel.to_string_lossy()));
+            obj.insert(
+                "start".to_string(),
+                serde_json::json!({
                     "line": d.line.saturating_sub(1),
                     "character": d.column.saturating_sub(1),
+                }),
+            );
+            obj.insert(
+                "end".to_string(),
+                serde_json::json!({
+                    "line": d.end_line.saturating_sub(1),
+                    "character": d.end_column.saturating_sub(1),
+                }),
+            );
+            obj.insert("message".to_string(), serde_json::json!(d.message));
+            obj.insert(
+                "code".to_string(),
+                match &d.code {
+                    svn_typecheck::DiagnosticCode::Numeric(n) => serde_json::json!(n),
+                    svn_typecheck::DiagnosticCode::Slug(s) => serde_json::json!(s),
                 },
-                "end": {
-                    "line": d.line.saturating_sub(1),
-                    "character": d.column.saturating_sub(1) + d.span_length.unwrap_or(0),
-                },
-                "message": d.message,
-                "code": d.code,
-                "source": "ts",
-            });
+            );
+            if let Some(href) = &d.code_description_url {
+                obj.insert(
+                    "codeDescription".to_string(),
+                    serde_json::json!({ "href": href }),
+                );
+            }
+            obj.insert("source".to_string(), serde_json::json!(d.source.as_str()));
+            let payload = serde_json::Value::Object(obj);
             println!("{now_ms} {payload}");
         } else {
             // Non-verbose: line-oriented `<ts> <TYPE> "<file>" <line>:<col> "<msg>"`.
@@ -709,9 +783,15 @@ fn print_machine(
     }
 }
 
-fn print_machine_completed(now_ms: u128, errors: usize, warnings: usize, files: usize) {
+fn print_machine_completed(
+    now_ms: u128,
+    files_checked: usize,
+    errors: usize,
+    warnings: usize,
+    files_with_problems: usize,
+) {
     println!(
-        "{now_ms} COMPLETED 0 FILES {errors} ERRORS {warnings} WARNINGS {files} FILES_WITH_PROBLEMS"
+        "{now_ms} COMPLETED {files_checked} FILES {errors} ERRORS {warnings} WARNINGS {files_with_problems} FILES_WITH_PROBLEMS"
     );
 }
 
@@ -740,22 +820,31 @@ fn print_human(
             svn_typecheck::Severity::Error => paint("Error", "31", color),
             svn_typecheck::Severity::Warning => paint("Warn", "33", color),
         };
+        // Span length for the code-frame caret. We have a real
+        // [start, end) so prefer that; fall back to 1 char when the
+        // span is empty (zero-width markers still get visualized).
+        let span = d.end_column.saturating_sub(d.column);
+        let span = if span == 0 { Some(1) } else { Some(span) };
         if verbose {
             // Code frame: try to read the source file and emit a short
             // excerpt around the diagnostic line, with a caret pointer.
-            let frame = format_code_frame(&d.source_path, d.line, d.column, d.span_length);
+            let frame = format_code_frame(&d.source_path, d.line, d.column, span);
+            // `Display for DiagnosticCode` already prefixes numeric
+            // codes with `TS`; printing `(TS{code})` would double-up
+            // for TS errors AND attach a wrong `TS` to slug codes.
+            // Just print `(<code>)` and let Display do the right thing.
             if frame.is_empty() {
-                println!("{label}: {} (TS{})", d.message, d.code);
+                println!("{label}: {} ({})", d.message, d.code);
             } else {
                 println!(
-                    "{label}: {} (TS{})\n{}",
+                    "{label}: {} ({})\n{}",
                     d.message,
                     d.code,
                     paint(&frame, "36", color),
                 );
             }
         } else {
-            println!("{label}: {} (TS{})", d.message, d.code);
+            println!("{label}: {} ({})", d.message, d.code);
         }
         println!();
     }

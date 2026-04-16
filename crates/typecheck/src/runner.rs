@@ -29,7 +29,19 @@ pub enum RunError {
 /// Run tsgo against an overlay tsconfig. Returns the parsed diagnostics
 /// (raw — paths still point at generated files; the orchestrator maps them
 /// back to source).
-pub fn run(tsgo: &TsgoBinary, overlay_tsconfig: &Path) -> Result<Vec<RawDiagnostic>, RunError> {
+///
+/// `workspace` is set as tsgo's working directory so the diagnostic paths
+/// it emits (which are relative to its cwd) resolve under the workspace
+/// root via `workspace.join()`. Without this, running the binary from a
+/// monorepo root with `--workspace ./apps/admin` produces phantom paths
+/// like `apps/admin/apps/admin/.svelte-check/tsconfig.json`, which
+/// breaks the overlay-noise filter and leaks intentional config-flag
+/// deprecations (e.g. TS5102 baseUrl) as user-visible errors.
+pub fn run(
+    tsgo: &TsgoBinary,
+    overlay_tsconfig: &Path,
+    workspace: &Path,
+) -> Result<Vec<RawDiagnostic>, RunError> {
     let output = if tsgo.needs_node {
         Command::new("node")
             .arg(&tsgo.path)
@@ -38,6 +50,7 @@ pub fn run(tsgo: &TsgoBinary, overlay_tsconfig: &Path) -> Result<Vec<RawDiagnost
             .arg("--pretty")
             .arg("true")
             .arg("--noErrorTruncation")
+            .current_dir(workspace)
             .output()
             .map_err(RunError::Spawn)?
     } else {
@@ -47,6 +60,7 @@ pub fn run(tsgo: &TsgoBinary, overlay_tsconfig: &Path) -> Result<Vec<RawDiagnost
             .arg("--pretty")
             .arg("true")
             .arg("--noErrorTruncation")
+            .current_dir(workspace)
             .output()
             .map_err(RunError::Spawn)?
     };

@@ -1,19 +1,27 @@
 //! Cache directory management for generated `.svelte.ts` files.
 //!
-//! Layout (matches upstream svelte-check):
+//! Layout:
 //!
 //! ```text
-//! <workspace>/.svelte-check/             (or .svelte-kit/.svelte-check/ for Kit projects)
+//! <cache root>/
 //!   tsconfig.json                        overlay tsconfig
 //!   tsbuildinfo.json                     tsgo incremental build info
 //!   svelte/<mirrored relative path>/
-//!     ++Foo.svelte.ts                    generated TypeScript for Foo.svelte
-//!     Foo.d.svelte.ts                    re-export stub for module resolution
+//!     Foo.svelte.ts                      generated TypeScript for Foo.svelte
 //! ```
 //!
-//! The `++` prefix prevents collisions with sibling files in the mirrored
-//! tree; `.d.svelte.ts` (rather than `.svelte.d.ts`) is required because
-//! `moduleResolution: node16+` won't resolve the latter.
+//! The cache root is chosen by [`CacheLayout::for_workspace`]:
+//!
+//!   1. `<workspace>/node_modules/.cache/svelte-check-native/` — preferred
+//!      when `node_modules/` exists. This directory is gitignored
+//!      everywhere (it's the convention used by eslint, prettier,
+//!      vite, vitest, ts-loader, etc.) so the cache is invisible to
+//!      git without the user having to add anything to `.gitignore`.
+//!
+//!   2. `<workspace>/.svelte-check/` — fallback when there is no
+//!      `node_modules/` (rare; mostly fresh-clone or no-deps test
+//!      fixtures). Users who hit this path are expected to add
+//!      `.svelte-check/` to their `.gitignore` themselves.
 //!
 //! `write_if_changed` skips disk writes when the new content matches what's
 //! already on disk — keeps tsgo's `.tsbuildinfo` happy and avoids touching
@@ -26,7 +34,9 @@ use std::path::{Path, PathBuf};
 pub struct CacheLayout {
     /// Workspace root the cache belongs to.
     pub workspace: PathBuf,
-    /// Cache root: `<workspace>/.svelte-check/`.
+    /// Cache root: usually `<workspace>/node_modules/.cache/svelte-check-native/`
+    /// (gitignored by convention), with `<workspace>/.svelte-check/` as a
+    /// fallback when there is no `node_modules`. See [`Self::for_workspace`].
     pub root: PathBuf,
     /// Generated-TS subdir: `<root>/svelte/`.
     pub svelte_dir: PathBuf,
@@ -44,9 +54,19 @@ pub struct CacheLayout {
 
 impl CacheLayout {
     /// Compute the layout for a workspace. Doesn't create directories.
+    ///
+    /// Picks `<workspace>/node_modules/.cache/svelte-check-native/` when
+    /// `node_modules/` already exists (the common case in any real
+    /// Svelte project), and falls back to `<workspace>/.svelte-check/`
+    /// otherwise — see the module docs for why.
     pub fn for_workspace(workspace: impl Into<PathBuf>) -> Self {
         let workspace = workspace.into();
-        let root = workspace.join(".svelte-check");
+        let node_modules = workspace.join("node_modules");
+        let root = if node_modules.is_dir() {
+            node_modules.join(".cache").join("svelte-check-native")
+        } else {
+            workspace.join(".svelte-check")
+        };
         let svelte_dir = root.join("svelte");
         let overlay_tsconfig = root.join("tsconfig.json");
         let tsbuildinfo = root.join("tsbuildinfo.json");
@@ -131,7 +151,9 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn layout_paths_are_under_workspace() {
+    fn layout_paths_are_under_workspace_when_no_node_modules() {
+        // `/projects/foo` doesn't exist on disk, so `node_modules.is_dir()`
+        // returns false and the fallback `.svelte-check` root kicks in.
         let layout = CacheLayout::for_workspace("/projects/foo");
         assert_eq!(layout.root, Path::new("/projects/foo/.svelte-check"));
         assert_eq!(
@@ -150,6 +172,29 @@ mod tests {
             layout.svelte_shims,
             Path::new("/projects/foo/.svelte-check/svelte-shims.d.ts")
         );
+    }
+
+    #[test]
+    fn layout_picks_node_modules_cache_when_present() {
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("node_modules")).unwrap();
+        let layout = CacheLayout::for_workspace(tmp.path().to_path_buf());
+        let expected_root = tmp
+            .path()
+            .join("node_modules")
+            .join(".cache")
+            .join("svelte-check-native");
+        assert_eq!(layout.root, expected_root);
+        assert_eq!(layout.svelte_dir, expected_root.join("svelte"));
+        assert_eq!(layout.overlay_tsconfig, expected_root.join("tsconfig.json"));
+    }
+
+    #[test]
+    fn layout_falls_back_to_dot_svelte_check_when_no_node_modules() {
+        let tmp = tempdir().unwrap();
+        // No node_modules created.
+        let layout = CacheLayout::for_workspace(tmp.path().to_path_buf());
+        assert_eq!(layout.root, tmp.path().join(".svelte-check"));
     }
 
     #[test]

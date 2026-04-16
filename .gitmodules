@@ -1,0 +1,3 @@
+[submodule "language-tools"]
+	path = language-tools
+	url = https://github.com/sveltejs/language-tools.git

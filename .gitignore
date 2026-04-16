@@ -1,0 +1,36 @@
+# Reference-only fork of external/upstream.
+# Kept in-tree for diffing during the rewrite; NEVER tracked in our history.
+upstream/
+
+# Rust
+target/
+*.rs.bk
+**/*.rs.bk
+
+# Generated cache dirs (produced by the tool itself while dogfooding)
+.svelte-check/
+.svelte-kit/
+
+# Insta snapshot pending files
+*.snap.new
+*.pending-snap
+
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log

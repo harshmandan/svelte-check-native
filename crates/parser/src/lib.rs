@@ -23,10 +23,19 @@
 pub mod document;
 pub mod error;
 mod scanner;
+mod script;
 mod sections;
 
 pub use document::{
     Document, ScriptAttr, ScriptContext, ScriptLang, ScriptSection, StyleSection, Template,
 };
 pub use error::ParseError;
+pub use script::{ParsedScript, parse_script_body};
 pub use sections::parse_sections;
+
+// Re-export oxc essentials so downstream crates can work with the AST
+// without taking direct oxc dependencies in every workspace member that
+// just *consumes* parsed output.
+pub use oxc_allocator::Allocator;
+pub use oxc_ast;
+pub use oxc_diagnostics::OxcDiagnostic;

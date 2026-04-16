@@ -1102,6 +1102,7 @@ dependencies = [
  "memchr",
  "oxc_allocator",
  "oxc_ast",
+ "oxc_diagnostics",
  "oxc_parser",
  "oxc_span",
  "smol_str",

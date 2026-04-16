@@ -62,6 +62,7 @@ globset = "0.4"
 # JS/TS parser (per todo.md §1.2 mandate)
 oxc_allocator = "0.45"
 oxc_ast = "0.45"
+oxc_diagnostics = "0.45"
 oxc_parser = "0.45"
 oxc_span = "0.45"
 

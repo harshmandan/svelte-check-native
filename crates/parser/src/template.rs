@@ -140,15 +140,43 @@ impl<'src> TemplateParser<'src> {
             }
 
             // Tag (`{@html}` / `{@const}` / `{@render}` / `{@debug}` / `{@attach}`).
-            // Not yet supported — emit error and skip.
+            //
+            // Real Svelte semantics differ per tag (`@html` injects raw HTML,
+            // `@render` invokes a snippet, `@const` declares a local in
+            // template scope, `@debug` stops in the debugger, `@attach`
+            // attaches behavior). For type-checking purposes the only thing
+            // that matters here is what *identifiers* the tag's body
+            // references — those are real value reads from the script's
+            // scope and need to flow into our void-ref pass.
+            //
+            // We model each tag as an `Interpolation` whose expression range
+            // covers the body after the tag keyword. This is a deliberate
+            // semantic shortcut: it isn't quite right for `@const name = expr`
+            // (where `name` is a new binding, not a reference), but the
+            // template-ref pass intersects with script bindings, so a `@const`
+            // local that doesn't shadow a script local just gets dropped.
             if self.scanner.starts_with("{@") {
                 let start = self.scanner.pos();
                 match find_mustache_end(self.scanner.source(), self.scanner.pos() + 1) {
                     Some(end) => {
-                        self.errors.push(ParseError::UnsupportedBlock {
-                            range: Range::new(start, end + 1),
-                        });
+                        let body_start = self.scanner.pos() + 2; // past `{@`
+                        let src = self.scanner.source();
+                        // Skip the tag keyword (alpha chars).
+                        let mut p = body_start as usize;
+                        let bytes = src.as_bytes();
+                        while p < end as usize && bytes[p].is_ascii_alphabetic() {
+                            p += 1;
+                        }
+                        // Skip whitespace after the keyword.
+                        while p < end as usize && bytes[p].is_ascii_whitespace() {
+                            p += 1;
+                        }
+                        let expr_range = Range::new(p as u32, end);
                         self.scanner.set_pos(end + 1);
+                        nodes.push(Node::Interpolation(Interpolation {
+                            expression_range: expr_range,
+                            range: Range::new(start, end + 1),
+                        }));
                     }
                     None => {
                         self.errors.push(ParseError::UnterminatedMustache {
@@ -1097,14 +1125,23 @@ mod tests {
     }
 
     #[test]
-    fn at_tags_still_unsupported() {
-        let src = "{@html foo}";
-        let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
-        assert!(
-            errors
-                .iter()
-                .any(|e| matches!(e, ParseError::UnsupportedBlock { .. }))
-        );
+    fn at_tags_modeled_as_interpolations() {
+        // `{@html}`, `{@render}`, `{@const}`, `{@debug}`, `{@attach}` —
+        // each is parsed as an Interpolation whose expression range
+        // covers the body after the tag keyword. This is enough for the
+        // template-ref pass to extract identifier references, which is
+        // all type-checking needs at this level. Real per-tag semantics
+        // (e.g. `@const` introduces a binding) aren't modeled.
+        for src in ["{@html foo}", "{@render fn(arg)}", "{@debug x, y}"] {
+            let (frag, errors) = parse_template(src, Range::new(0, src.len() as u32));
+            assert!(errors.is_empty(), "no errors for {src}: {errors:?}");
+            assert_eq!(frag.nodes.len(), 1, "single node for {src}");
+            assert!(
+                matches!(frag.nodes[0], Node::Interpolation(_)),
+                "interpolation for {src}, got {:?}",
+                frag.nodes[0]
+            );
+        }
     }
 
     #[test]

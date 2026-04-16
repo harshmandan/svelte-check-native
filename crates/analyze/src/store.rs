@@ -106,7 +106,14 @@ pub fn find_store_refs(program: &oxc_ast::ast::Program<'_>, source: &str) -> Vec
     out
 }
 
-fn collect_top_level_bindings(program: &oxc_ast::ast::Program<'_>, out: &mut HashSet<String>) {
+/// Collect the set of names declared at the top level of a script: imports
+/// (default/named/namespace), `let`/`const`/`var`, function and class
+/// declarations, and the same forms re-exported via `export ... = ...`.
+///
+/// Used by store auto-subscribe (this file) and by template-ref filtering
+/// in the emit pipeline — anywhere we need to know "what names exist in
+/// the script's scope?".
+pub fn collect_top_level_bindings(program: &oxc_ast::ast::Program<'_>, out: &mut HashSet<String>) {
     for stmt in &program.body {
         collect_from_statement(stmt, out);
     }

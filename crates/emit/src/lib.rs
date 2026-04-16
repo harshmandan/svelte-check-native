@@ -51,9 +51,13 @@ mod script_split;
 use std::fmt::Write;
 use std::path::Path;
 
+use std::collections::HashSet;
+
 use oxc_allocator::Allocator;
 use smol_str::SmolStr;
-use svn_analyze::{TemplateSummary, find_store_refs};
+use svn_analyze::{
+    TemplateSummary, collect_top_level_bindings, find_props, find_store_refs, find_template_refs,
+};
 use svn_parser::Document;
 use svn_parser::{EachBlock, Fragment, Node, parse_script_body};
 
@@ -137,16 +141,67 @@ fn emit_document_with_render_name(
             let _ = writeln!(out, "async function {render_name}() {{");
         }
     }
-    // Detect $store auto-subscribe references. For each `$ident` where
-    // `ident` is a top-level binding in the script, emit a `let $ident: any;`
-    // declaration so type references like `typeof $store` resolve.
-    if let (Some(s), Some(instance)) = (&split, &doc.instance_script) {
-        let alloc = Allocator::default();
-        let parsed = parse_script_body(&alloc, &s.body, instance.lang);
-        let store_refs = find_store_refs(&parsed.program, &s.body);
-        for name in &store_refs {
-            let _ = writeln!(out, "    let {name}: any;");
-        }
+    // Analyze the instance script for store refs, destructured props, and
+    // the set of script-declared bindings. The bindings are intersected
+    // with template-referenced identifiers below to drive per-template
+    // void-refs (closes the TS6133 gap for imports/locals used only in
+    // markup).
+    //
+    // Bindings come from both the module script (`<script module>`) and
+    // the instance script — names from either scope are visible in the
+    // template, so both must seed the void-ref intersection.
+    //
+    // Two oxc parses are needed for the instance script: `s.body` has
+    // imports blanked out (so store-ref scanning and prop detection see
+    // only the body), but binding collection must see the *original*
+    // content so imports count as declared names.
+    let mut script_bindings: HashSet<String> = HashSet::new();
+    if let Some(module_script) = &doc.module_script {
+        let alloc_mod = Allocator::default();
+        let parsed_mod = parse_script_body(&alloc_mod, module_script.content, module_script.lang);
+        collect_top_level_bindings(&parsed_mod.program, &mut script_bindings);
+    }
+
+    let (store_refs, prop_names): (Vec<SmolStr>, Vec<SmolStr>) =
+        if let (Some(s), Some(instance)) = (&split, &doc.instance_script) {
+            let alloc = Allocator::default();
+            let parsed = parse_script_body(&alloc, &s.body, instance.lang);
+            let stores = find_store_refs(&parsed.program, &s.body);
+            let props = find_props(&parsed.program)
+                .into_iter()
+                .map(|p| p.local_name)
+                .collect();
+
+            let alloc_orig = Allocator::default();
+            let parsed_orig = parse_script_body(&alloc_orig, instance.content, instance.lang);
+            collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
+            (stores, props)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+    // Template-referenced identifiers that are also script-declared get
+    // voided, so TS6133 doesn't fire on imports/locals used only inside
+    // the markup (e.g. `<MyButton />`, `{count}`).
+    let template_void_refs: Vec<SmolStr> = if script_bindings.is_empty() {
+        Vec::new()
+    } else {
+        let already: HashSet<&str> = store_refs
+            .iter()
+            .chain(prop_names.iter())
+            .map(|s| s.as_str())
+            .collect();
+        find_template_refs(fragment, doc.source)
+            .into_iter()
+            .filter(|name| script_bindings.contains(name.as_str()))
+            .filter(|name| !already.contains(name.as_str()))
+            .collect()
+    };
+
+    // Store auto-subscribe aliases: declare `let $store: any;` for every
+    // detected `$ident` so type references like `typeof $store` resolve.
+    for name in &store_refs {
+        let _ = writeln!(out, "    let {name}: any;");
     }
 
     if let Some(s) = &split {
@@ -170,7 +225,13 @@ fn emit_document_with_render_name(
     emit_template_body(&mut out, doc.source, fragment, 2);
     out.push_str("    }\n");
 
-    emit_void_block(&mut out, summary);
+    emit_void_block(
+        &mut out,
+        summary,
+        &store_refs,
+        &prop_names,
+        &template_void_refs,
+    );
 
     out.push_str("}\n");
     let _ = writeln!(out, "{render_name};");
@@ -295,16 +356,24 @@ fn emit_each_block(out: &mut String, source: &str, b: &EachBlock, depth: usize) 
 }
 
 /// Emit `let __svn_action_attrs_N: any = {};` declarations inside
-/// `__svn_tpl_check` — one per `use:` directive.
+/// `__svn_tpl_check` — one per `use:` directive — and immediately void
+/// each one so TypeScript's `noUnusedLocals` doesn't flag them.
+///
+/// The void in the *outer* function (in `emit_void_block`) brings the
+/// names into scope for whoever might reference them externally; the void
+/// here suppresses TS6133 inside `__svn_tpl_check` itself, where the
+/// declaration lives.
 fn emit_action_attrs_declarations(out: &mut String, summary: &TemplateSummary) {
     for name in summary.void_refs.names() {
         if name.starts_with("__svn_action_attrs_") {
             let _ = writeln!(out, "        let {name}: any = {{}};");
+            let _ = writeln!(out, "        void {name};");
         }
     }
 }
 
 /// Emit getter/setter tuple placeholders for `bind:foo={getter, setter}`.
+/// Same pattern as action-attrs: declare + void inside `__svn_tpl_check`.
 fn emit_bind_pair_declarations(out: &mut String, summary: &TemplateSummary) {
     for name in summary.void_refs.names() {
         if name.starts_with("__svn_bind_pair_") {
@@ -312,23 +381,51 @@ fn emit_bind_pair_declarations(out: &mut String, summary: &TemplateSummary) {
                 out,
                 "        let {name}: [() => any, (v: any) => void] = [() => undefined as any, () => {{}}];"
             );
+            let _ = writeln!(out, "        void {name};");
         }
     }
 }
 
-fn emit_void_block(out: &mut String, summary: &TemplateSummary) {
-    let names = summary.void_refs.names();
-    if names.is_empty() {
-        return;
+fn emit_void_block(
+    out: &mut String,
+    summary: &TemplateSummary,
+    store_refs: &[SmolStr],
+    prop_names: &[SmolStr],
+    template_refs: &[SmolStr],
+) {
+    // One `void <name>;` statement per synthesized name — NOT a single
+    // `void (a, b, c);` block. The block form uses comma operators which
+    // TypeScript flags with TS2695 ("Left side of comma operator is
+    // unused and has no side effects"). Per-statement form has no such
+    // problem and matches what upstream svelte-check / upstream do.
+    //
+    // Names covered:
+    //   - synthesized helpers from analyze (template-check wrapper,
+    //     action-attrs holders, bind-pair tuples)
+    //   - store auto-subscribe aliases
+    //   - destructured props (the component's public API; treat as used
+    //     even if the body doesn't reference them directly)
+    //   - script-declared bindings that are referenced from the template
+    //     (component imports, locals only used in markup)
+    for name in summary.void_refs.names() {
+        let _ = writeln!(out, "    void {name};");
     }
-    out.push_str("    void (");
-    for (i, name) in names.iter().enumerate() {
-        if i > 0 {
-            out.push_str(", ");
+    for name in store_refs {
+        let _ = writeln!(out, "    void {name};");
+        // The auto-subscribe alias `$store` references the store, but the
+        // underlying `store` const is itself only used in template
+        // expressions like `$store` (which the alias receives). Void the
+        // base name so TS6133 doesn't fire on the original declaration.
+        if let Some(base) = name.strip_prefix('$') {
+            let _ = writeln!(out, "    void {base};");
         }
-        out.push_str(name);
     }
-    out.push_str(");\n");
+    for name in prop_names {
+        let _ = writeln!(out, "    void {name};");
+    }
+    for name in template_refs {
+        let _ = writeln!(out, "    void {name};");
+    }
 }
 
 fn first_identifier(binding: &str) -> &str {
@@ -467,7 +564,10 @@ mod tests {
         let out = emit_str("");
         assert!(out.contains("function $$render_"));
         assert!(out.contains("__svn_tpl_check"));
-        assert!(out.contains("void (__svn_tpl_check"));
+        assert!(
+            out.contains("void __svn_tpl_check;"),
+            "expected per-statement void of __svn_tpl_check:\n{out}"
+        );
     }
 
     #[test]
@@ -562,8 +662,7 @@ mod tests {
     #[test]
     fn template_check_wrapper_in_void_block() {
         let out = emit_str("<p>hi</p>");
-        assert!(out.contains("void ("));
-        assert!(out.contains("__svn_tpl_check"));
+        assert!(out.contains("void __svn_tpl_check;"));
     }
 
     #[test]
@@ -590,10 +689,19 @@ mod tests {
     }
 
     #[test]
-    fn void_block_is_consolidated() {
+    fn void_block_uses_per_statement_form() {
+        // Switched from `void (a, b, c);` to `void X; void Y; void Z;`
+        // — the consolidated form triggers TS2695 ("Left side of comma
+        // operator is unused"). Each synthesized name gets its own
+        // `void X;` line, and we should never emit the parenthesized
+        // multi-name form.
         let out = emit_str("<div use:a use:b>x</div>");
-        let void_count = out.matches("    void (").count();
-        assert_eq!(void_count, 1, "expected exactly one void(...) block");
+        assert!(
+            !out.contains("    void ("),
+            "no parenthesized void(...) form expected:\n{out}"
+        );
+        assert!(out.contains("void __svn_action_attrs_0;"));
+        assert!(out.contains("void __svn_action_attrs_1;"));
     }
 
     #[test]

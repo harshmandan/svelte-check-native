@@ -18,12 +18,16 @@
 // Tests are allowed to panic loudly on setup failures.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
+pub mod props;
 pub mod rune;
 pub mod store;
+pub mod template_refs;
 pub mod template_walker;
 pub mod void_refs;
 
+pub use props::{PropInfo, find_props};
 pub use rune::{RuneCall, RuneKind, find_runes};
-pub use store::find_store_refs;
+pub use store::{collect_top_level_bindings, find_store_refs};
+pub use template_refs::find_template_refs;
 pub use template_walker::{BindThisTarget, TemplateSummary, walk_template};
 pub use void_refs::VoidRefRegistry;

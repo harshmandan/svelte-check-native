@@ -408,6 +408,14 @@ fn build_style_section<'src>(_source: &'src str, raw: RawSection<'src>) -> Style
 }
 
 fn parse_context_attr(attrs: &[ScriptAttr], errors: &mut Vec<ParseError>) -> ScriptContext {
+    // Svelte 5 syntax: bare `module` attribute (boolean).
+    if attrs
+        .iter()
+        .any(|a| a.name.eq_ignore_ascii_case("module") && a.value.is_none())
+    {
+        return ScriptContext::Module;
+    }
+    // Svelte 4 syntax: `context="module"`.
     let Some(attr) = attrs
         .iter()
         .find(|a| a.name.eq_ignore_ascii_case("context"))

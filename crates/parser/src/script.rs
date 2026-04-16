@@ -6,8 +6,10 @@
 //! hiding them would be a lossy abstraction since `analyze` walks them
 //! natively.
 //!
-//! **Design mandate (todo.md §1.2):** embedded JS/TS is parsed exactly once
-//! here, into a real AST. Never scanned character-by-character downstream.
+//! **Architecture rule:** embedded JS/TS is parsed exactly once here,
+//! into a real AST. Never scanned character-by-character downstream —
+//! hand-rolled scanners are fragile by construction; an AST-level
+//! pattern match makes whole classes of bug categorically impossible.
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;

@@ -14,10 +14,10 @@
 //! - Each block — counted; emit needs the count to generate unique loop
 //!   binding names.
 //!
-//! Per todo.md §1.3 this should ideally fuse with rune detection in a
-//! single visitor. For now rune detection runs over the script AST (oxc)
-//! while template walking is structural — different inputs, two passes.
-//! When we add a `Visit` trait that bridges both, we'll fuse.
+//! This should ideally fuse with rune detection in a single visitor.
+//! For now rune detection runs over the script AST (oxc) while template
+//! walking is structural — different inputs, two passes. When we add a
+//! `Visit` trait that bridges both, we'll fuse.
 
 use smol_str::SmolStr;
 use svn_core::Range;

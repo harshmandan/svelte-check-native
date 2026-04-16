@@ -2,10 +2,36 @@
   "private": true,
   "name": "svelte-check-native-monorepo",
   "version": "0.0.0",
-  "description": "Monorepo root for svelte-check-native. The published package lives at npm/svelte-check-native/.",
+  "description": "Monorepo root for svelte-check-native — a fast CLI type-checker for Svelte 5+ projects, written in Rust, powered by tsgo. The published npm package lives at npm/svelte-check-native/.",
+  "keywords": [
+    "svelte",
+    "sveltekit",
+    "svelte-check",
+    "rust",
+    "native",
+    "typescript-native",
+    "tsgo",
+    "oxc",
+    "linter",
+    "parser",
+    "dx"
+  ],
+  "homepage": "https://github.com/harshmandan/svelte-check-native",
+  "bugs": {
+    "url": "https://github.com/harshmandan/svelte-check-native/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/harshmandan/svelte-check-native.git"
+  },
+  "license": "MIT",
+  "author": "Harsh Mandan",
   "scripts": {
+    "test": "cargo test --workspace",
+    "lint": "cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --check",
     "build:rust": "cargo build --release -p svelte-check-native",
     "build:native": "npm run build:rust && node scripts/copy-binary.mjs",
+    "build:all": "node scripts/build-all.mjs",
     "pack:all": "node scripts/pack-all.mjs"
   },
   "devDependencies": {

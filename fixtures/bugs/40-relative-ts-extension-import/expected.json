@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "User imports a sibling .ts file with the explicit `.ts` extension from a .svelte file. The .ts file lives in the workspace tree (not in our generated cache). With our overlay's rootDirs union of <cache>/svelte and <workspace>, the import should resolve through the rootDirs virtual merge. Real-world projects (especially anything moving away from path aliases) hit this constantly."
+}

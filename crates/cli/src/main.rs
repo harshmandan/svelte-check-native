@@ -86,6 +86,23 @@ struct Cli {
     /// Print generated TypeScript for each Svelte file (debug).
     #[arg(long = "emit-ts", default_value_t = false)]
     emit_ts: bool,
+
+    /// Print phase-by-phase timing breakdown (discovery, parse+emit,
+    /// tsgo, compiler bridge) at the end of the run.
+    #[arg(long, default_value_t = false)]
+    timings: bool,
+
+    /// Print resolved paths (workspace, tsconfig, tsgo, JS runtime,
+    /// svelte/compiler) and exit. Useful for diagnosing "which tsgo
+    /// did it pick?" issues.
+    #[arg(long = "debug-paths", default_value_t = false)]
+    debug_paths: bool,
+
+    /// Print the resolved tsgo binary path + its --version output, then
+    /// exit. Helps verify that `@typescript/native-preview` is at the
+    /// expected version.
+    #[arg(long = "tsgo-version", default_value_t = false)]
+    tsgo_version: bool,
 }
 
 fn main() -> ExitCode {
@@ -122,6 +139,10 @@ fn main() -> ExitCode {
         return run_emit_ts(&workspace);
     }
 
+    if cli.tsgo_version {
+        return run_tsgo_version(&workspace);
+    }
+
     let tsconfig = match resolve_tsconfig(&workspace, cli.tsconfig.as_deref(), cli.no_tsconfig) {
         Ok(Some(p)) => Some(p),
         Ok(None) => None,
@@ -130,6 +151,10 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+
+    if cli.debug_paths {
+        return run_debug_paths(&workspace, tsconfig.as_deref());
+    }
 
     let Some(tsconfig) = tsconfig else {
         eprintln!(
@@ -140,6 +165,8 @@ fn main() -> ExitCode {
 
     let diagnostic_sources = parse_diagnostic_sources(cli.diagnostic_sources.as_deref());
     let compiler_warnings = parse_compiler_warnings(cli.compiler_warnings.as_deref());
+    let ignore_set = build_ignore_set(cli.ignore.as_deref());
+    let color = resolve_color_mode(cli.color, cli.no_color);
 
     run_typecheck(
         &workspace,
@@ -149,7 +176,121 @@ fn main() -> ExitCode {
         cli.fail_on_warnings,
         diagnostic_sources,
         &compiler_warnings,
+        ignore_set.as_ref(),
+        color,
+        cli.timings,
     )
+}
+
+/// Tri-state color mode resolved from `--color` / `--no-color` / isatty.
+///
+/// `--no-color` wins (most defensive — explicit opt-out always honored).
+/// `--color` forces ANSI even when stdout is piped (useful for CI tools
+/// that render ANSI in their UI). Otherwise auto-detect via isatty.
+#[derive(Debug, Clone, Copy)]
+enum ColorMode {
+    Always,
+    Never,
+    Auto,
+}
+
+impl ColorMode {
+    fn use_color(self) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Never => false,
+            Self::Auto => std::io::IsTerminal::is_terminal(&std::io::stdout()),
+        }
+    }
+}
+
+fn resolve_color_mode(force_on: bool, force_off: bool) -> ColorMode {
+    if force_off {
+        ColorMode::Never
+    } else if force_on {
+        ColorMode::Always
+    } else {
+        ColorMode::Auto
+    }
+}
+
+/// `--debug-paths`: print every resolved binary / file the run would
+/// use, then exit. Useful when "which tsgo did it pick?" or "is bun
+/// even being found?" comes up.
+fn run_debug_paths(workspace: &Path, tsconfig: Option<&Path>) -> ExitCode {
+    println!("workspace:        {}", workspace.display());
+    match tsconfig {
+        Some(p) => println!("tsconfig:         {}", p.display()),
+        None => println!("tsconfig:         <none>"),
+    }
+    match svn_typecheck::discover(workspace) {
+        Ok(bin) => println!("tsgo:             {}", &bin.path.display()),
+        Err(e) => println!("tsgo:             <not found> ({e})"),
+    }
+    // The svelte-compiler crate keeps its discovery internal; report
+    // best-effort by checking the same env var + PATH lookups it does.
+    let runtime = std::env::var("SVN_JS_RUNTIME").ok();
+    if let Some(r) = &runtime {
+        println!("js runtime:       {r} (from SVN_JS_RUNTIME)");
+    } else if let Ok(p) = which_on_path("bun") {
+        println!("js runtime:       {} (bun)", p.display());
+    } else if let Ok(p) = which_on_path("node") {
+        println!("js runtime:       {} (node)", p.display());
+    } else {
+        println!("js runtime:       <not found> (compiler warnings will be skipped)");
+    }
+    ExitCode::from(0)
+}
+
+/// `--tsgo-version`: print resolved binary path + `tsgo --version`,
+/// exit. No type-checking happens.
+fn run_tsgo_version(workspace: &Path) -> ExitCode {
+    let bin = match svn_typecheck::discover(workspace) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("svelte-check-native: tsgo not found: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    println!("tsgo binary: {}", &bin.path.display());
+    let output = std::process::Command::new(&bin.path)
+        .arg("--version")
+        .output();
+    match output {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            if !stdout.trim().is_empty() {
+                println!("tsgo version: {}", stdout.trim());
+            }
+            if !stderr.trim().is_empty() {
+                eprintln!("{}", stderr.trim());
+            }
+            if o.status.success() {
+                ExitCode::from(0)
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        Err(e) => {
+            eprintln!("svelte-check-native: failed to invoke tsgo: {e}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// Tiny `which` reimplementation to avoid pulling in a dep solely for
+/// `--debug-paths`. Walks `PATH` looking for an executable.
+fn which_on_path(name: &str) -> std::io::Result<PathBuf> {
+    let path = std::env::var_os("PATH")
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "PATH not set"))?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::NotFound, name.to_string()))
 }
 
 /// Which diagnostic sources are active. Defaults to all-enabled.
@@ -311,7 +452,11 @@ fn resolve_tsconfig(
 /// participate in the exit-code decision (matching upstream
 /// svelte-check). `sources` opts diagnostics in/out per source family
 /// (`js`/`svelte`/`css`). `compiler_overrides` reclassifies individual
-/// compiler warnings (e.g. `css-unused-selector:error`).
+/// compiler warnings (e.g. `css-unused-selector:error`). `ignore` is a
+/// pre-built glob set for path filtering; `color` controls ANSI in
+/// human output; `timings` prints a phase-by-phase breakdown when
+/// true.
+#[allow(clippy::too_many_arguments)]
 fn run_typecheck(
     workspace: &Path,
     tsconfig: &Path,
@@ -320,8 +465,15 @@ fn run_typecheck(
     fail_on_warnings: bool,
     sources: DiagnosticSources,
     compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
+    ignore: Option<&globset::GlobSet>,
+    color: ColorMode,
+    timings: bool,
 ) -> ExitCode {
-    let svelte_files = discover_svelte_files(workspace);
+    let phase_start = std::time::Instant::now();
+
+    let mark = std::time::Instant::now();
+    let svelte_files = discover_svelte_files(workspace, ignore);
+    let t_discovery = mark.elapsed();
 
     // Read every source up-front; we need the bytes for both the
     // tsgo-typecheck path and the svelte/compiler bridge.
@@ -335,6 +487,7 @@ fn run_typecheck(
         }
     }
 
+    let mark = std::time::Instant::now();
     let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::with_capacity(svelte_sources.len());
     for (file, source) in &svelte_sources {
         let (doc, _parse_errors) = svn_parser::parse_sections(source);
@@ -348,9 +501,11 @@ fn run_typecheck(
             line_map: emitted.line_map,
         });
     }
+    let t_emit = mark.elapsed();
 
     // Run tsgo (`js`/`ts` source). Skipped entirely when
     // `--diagnostic-sources` opts out of `js`.
+    let mark = std::time::Instant::now();
     let mut diagnostics = if sources.js {
         match svn_typecheck::check(workspace, tsconfig, &inputs) {
             Ok(d) => d,
@@ -362,6 +517,7 @@ fn run_typecheck(
     } else {
         Vec::new()
     };
+    let t_typecheck = mark.elapsed();
 
     // Compiler-warning bridge: ask the user's `svelte/compiler` for any
     // non-typecheck diagnostics (`state_referenced_locally`,
@@ -370,6 +526,7 @@ fn run_typecheck(
     // emitted warning gets routed through `apply_compiler_override`
     // first so `--compiler-warnings code:severity` reclassifications
     // win.
+    let mark = std::time::Instant::now();
     if sources.svelte {
         match svn_svelte_compiler::compile_batch(workspace, &svelte_sources) {
             Ok(per_file) => {
@@ -403,6 +560,7 @@ fn run_typecheck(
             }
         }
     }
+    let t_compiler = mark.elapsed();
 
     // `css` source is reserved — once we add a CSS linter (or wire one
     // through preprocessor output), this is where we'd run it. For now
@@ -421,7 +579,26 @@ fn run_typecheck(
         .count();
     let warning_count = diagnostics.len() - error_count;
 
-    print_diagnostics(workspace, &diagnostics, output_format);
+    print_diagnostics(workspace, &diagnostics, output_format, color);
+
+    if timings {
+        let total = phase_start.elapsed();
+        eprintln!();
+        eprintln!("Phase                        Duration");
+        eprintln!("─────────────────────────────────────");
+        eprintln!("discovery                    {:>9.2?}", t_discovery);
+        eprintln!("parse + analyze + emit       {:>9.2?}", t_emit);
+        eprintln!("tsgo type-check              {:>9.2?}", t_typecheck);
+        eprintln!("svelte/compiler bridge       {:>9.2?}", t_compiler);
+        eprintln!("─────────────────────────────────────");
+        eprintln!("total (incl. format/exit)    {:>9.2?}", total);
+        eprintln!(
+            "files: {} | errors: {} | warnings: {}",
+            svelte_files.len(),
+            error_count,
+            warning_count,
+        );
+    }
 
     if error_count > 0 || (fail_on_warnings && warning_count > 0) {
         ExitCode::from(1)
@@ -434,6 +611,7 @@ fn print_diagnostics(
     workspace: &Path,
     diagnostics: &[svn_typecheck::CheckDiagnostic],
     output_format: &str,
+    color: ColorMode,
 ) {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -446,7 +624,7 @@ fn print_diagnostics(
     let warnings = diagnostics.len() - errors;
     let files_with_problems: std::collections::HashSet<_> =
         diagnostics.iter().map(|d| &d.source_path).collect();
-    let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    let use_color = color.use_color();
 
     match output_format {
         "machine-verbose" => {
@@ -655,7 +833,7 @@ fn format_code_frame(
 /// `--emit-ts` flow: discover `.svelte` files, parse, emit, print to stdout
 /// with file separators. Exits 0 unconditionally — debug-mode is best-effort.
 fn run_emit_ts(workspace: &Path) -> ExitCode {
-    let files = discover_svelte_files(workspace);
+    let files = discover_svelte_files(workspace, None);
     if files.is_empty() {
         eprintln!(
             "svelte-check-native: no .svelte files found under {}",
@@ -698,15 +876,44 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
     ExitCode::from(0)
 }
 
-fn discover_svelte_files(workspace: &Path) -> Vec<PathBuf> {
+fn discover_svelte_files(
+    workspace: &Path,
+    ignore: Option<&globset::GlobSet>,
+) -> Vec<PathBuf> {
     WalkDir::new(workspace)
         .into_iter()
-        .filter_entry(|e| !is_excluded_dir(e.path()))
+        .filter_entry(|e| {
+            // Hard-coded exclusions for directories that are NEVER worth
+            // walking (node_modules, .git, build outputs).
+            if is_excluded_dir(e.path()) {
+                return false;
+            }
+            // User --ignore patterns. Match against the workspace-relative
+            // path so patterns like "dist" / "**/*.spec.svelte" /
+            // "_components/legacy/**" all behave intuitively.
+            if let Some(set) = ignore {
+                if let Ok(rel) = e.path().strip_prefix(workspace) {
+                    if set.is_match(rel) {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
         .filter(|e| {
             let path = e.path();
             matches!(path.extension().and_then(|s| s.to_str()), Some("svelte"))
+        })
+        // Per-file glob check too, so `*.spec.svelte`-style patterns
+        // exclude individual files (not just directories).
+        .filter(|e| {
+            let Some(set) = ignore else { return true };
+            match e.path().strip_prefix(workspace) {
+                Ok(rel) => !set.is_match(rel),
+                Err(_) => true,
+            }
         })
         .map(|e| e.path().to_path_buf())
         .collect()
@@ -721,4 +928,39 @@ fn is_excluded_dir(path: &Path) -> bool {
         name,
         "node_modules" | ".git" | ".svelte-kit" | ".svelte-check" | "target" | "dist"
     ) || name.starts_with('.')
+}
+
+/// Build a [`GlobSet`] from a comma-separated `--ignore` spec.
+///
+/// Patterns are git-style globs (`**/*` for arbitrary depth, `*` for
+/// single segment, `?` for one char, `[abc]` for character classes).
+/// Matched against workspace-relative paths.
+///
+/// Empty / whitespace-only patterns are skipped. Invalid patterns
+/// produce a stderr warning and are silently dropped — the run
+/// continues with the patterns that DID parse, mirroring upstream
+/// svelte-check's lenient behavior.
+fn build_ignore_set(spec: Option<&str>) -> Option<globset::GlobSet> {
+    let spec = spec?;
+    let mut builder = globset::GlobSetBuilder::new();
+    let mut any = false;
+    for entry in spec.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        match globset::Glob::new(entry) {
+            Ok(g) => {
+                builder.add(g);
+                any = true;
+            }
+            Err(e) => {
+                eprintln!("svelte-check-native: invalid --ignore pattern {entry:?}: {e}");
+            }
+        }
+    }
+    if !any {
+        return None;
+    }
+    builder.build().ok()
 }

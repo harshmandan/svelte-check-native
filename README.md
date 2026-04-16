@@ -29,16 +29,18 @@ Same flags as `svelte-check`. See `svelte-check-native --help`.
 ## Speed
 
 A heavy SvelteKit + TypeScript app (~1200 `.svelte` files, M-series
-8-core, warm cache, median of 3 runs):
+8-core, median of 3 runs each):
 
-|                          | Warm     |
-| ------------------------ | -------- |
-| `svelte-check-native`    | **~3 s** |
-| `svelte-check-rs`        | ~11 s    |
-| `svelte-check --tsgo`    | ~13 s    |
-| `svelte-check` (default) | ~40 s    |
+|                          | Cold     | Warm     | Dirty    |
+| ------------------------ | -------- | -------- | -------- |
+| `svelte-check-native`    | **~7 s** | **~3 s** | **~3 s** |
+| `svelte-check-rs`        | ~19 s    | ~11 s    | ~10 s    |
+| `svelte-check --tsgo`    | ~13 s    | ~13 s    | ~13 s    |
+| `svelte-check` (default) | ~43 s    | ~39 s    | ~39 s    |
 
-Cold (no cache, fresh `bun` import): ~7–8 s.
+- **Cold** = empty cache, fresh `bun` / `node` import.
+- **Warm** = re-run with no source changes.
+- **Dirty** = one `.svelte` file `touch`ed between runs.
 
 Diagnostic output is byte-equivalent to upstream `svelte-check` with
 the same flags.

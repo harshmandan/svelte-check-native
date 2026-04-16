@@ -29,5 +29,7 @@ pub use props::{PropInfo, find_props};
 pub use rune::{RuneCall, RuneKind, find_runes};
 pub use store::{collect_top_level_bindings, find_store_refs, find_store_refs_with_bindings};
 pub use template_refs::find_template_refs;
-pub use template_walker::{BindThisTarget, TemplateSummary, walk_template};
+pub use template_walker::{
+    BindThisTarget, ComponentInstantiation, PropShape, TemplateSummary, walk_template,
+};
 pub use void_refs::VoidRefRegistry;

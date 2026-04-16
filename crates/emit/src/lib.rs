@@ -409,6 +409,17 @@ fn emit_document_with_render_name(
     emit_action_attrs_declarations(&mut out, summary);
     emit_bind_pair_declarations(&mut out, summary);
     emit_template_body(&mut out, doc.source, fragment, 2);
+    // Component-instantiation prop checking is collected by analyze
+    // (`summary.component_instantiations`) but not yet emitted. A
+    // first-cut `satisfies ComponentProps<typeof Component>` emit
+    // surfaced too many false positives in real component libraries
+    // (libraries that intentionally accept arbitrary props via spread
+    // types, classes that take ClassValue but get string literals,
+    // boolean-shorthand props the lib types as a union, etc.) — net
+    // worse than the v0.1 baseline of "don't check component props at
+    // all." The collection still happens so the data is available;
+    // wiring an emit pass that's net-positive is queued for v0.2.
+    let _ = &summary.component_instantiations;
     out.push_str("    }\n");
 
     let exported_locals: Vec<SmolStr> = split
@@ -629,6 +640,120 @@ fn emit_action_attrs_declarations(out: &mut String, summary: &TemplateSummary) {
             let _ = writeln!(out, "        void {name};");
         }
     }
+}
+
+/// Emit excess-property checks for `<Component prop=...>` instantiations.
+///
+/// Wired off in v0.1: a first-cut pass produced too many false
+/// positives in real component libraries (excess-property semantics
+/// against ComponentProps don't match what users expect when libs
+/// accept arbitrary HTML attrs via spread types). Kept around as
+/// scaffolding for the v0.2 implementation that will need the same
+/// shape — analyze still populates summary.component_instantiations.
+#[allow(dead_code)]
+///
+/// For each component instantiation collected by analyze, emit:
+///
+/// ```ts
+///     void ({ prop1: "lit", prop2: <expr>, prop3, prop4: true } satisfies
+///         import('svelte').ComponentProps<typeof Component>);
+/// ```
+///
+/// `satisfies` checks the literal against the component's prop type
+/// without widening — TS fires `Object literal may only specify known
+/// properties` when the user passes a name the component doesn't
+/// declare. Required props missing from the literal are accepted (for
+/// v0.1; full required-prop checking would need to know which props
+/// are bound via directives we deliberately exclude).
+fn emit_component_prop_checks(out: &mut String, source: &str, summary: &TemplateSummary) {
+    for inst in &summary.component_instantiations {
+        let _ = write!(out, "        void ({{");
+        let mut first = true;
+        for p in &inst.props {
+            if !first {
+                let _ = write!(out, ", ");
+            }
+            first = false;
+            match p {
+                svn_analyze::PropShape::Literal { name, value } => {
+                    write_object_key(out, name);
+                    out.push_str(": ");
+                    write_js_string_literal(out, value);
+                }
+                svn_analyze::PropShape::Expression { name, expr_range } => {
+                    let expr = &source[expr_range.start as usize..expr_range.end as usize];
+                    write_object_key(out, name);
+                    let _ = write!(out, ": ({expr})");
+                }
+                svn_analyze::PropShape::Shorthand { name } => {
+                    // `{foo}` shorthand is only valid when the key is also a
+                    // valid JS identifier — otherwise expand to `"foo": foo`.
+                    if is_simple_js_identifier(name) {
+                        out.push_str(name);
+                    } else {
+                        write_object_key(out, name);
+                        let _ = write!(out, ": {name}");
+                    }
+                }
+                svn_analyze::PropShape::BoolShorthand { name } => {
+                    write_object_key(out, name);
+                    out.push_str(": true");
+                }
+            }
+        }
+        let _ = writeln!(
+            out,
+            "}} satisfies import('svelte').ComponentProps<typeof {}>);",
+            inst.component_root
+        );
+    }
+}
+
+/// Write an object-literal key. Plain JS identifiers are emitted bare;
+/// anything with a hyphen, a non-ident character, or a JS reserved
+/// word lookalike is double-quoted (always safe).
+#[allow(dead_code)]
+fn write_object_key(out: &mut String, name: &str) {
+    if is_simple_js_identifier(name) {
+        out.push_str(name);
+    } else {
+        write_js_string_literal(out, name);
+    }
+}
+
+/// True for ASCII identifiers `[A-Za-z_$][A-Za-z0-9_$]*`. We don't try
+/// to enumerate JS reserved words — modern JS (ES5+) allows reserved
+/// words as bare property names anyway.
+#[allow(dead_code)]
+fn is_simple_js_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else { return false };
+    if !(first.is_ascii_alphabetic() || first == '_' || first == '$') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+/// Write `value` as a JS double-quoted string literal, escaping the
+/// usual unsafe characters. Pure ASCII assumption — Svelte attribute
+/// values are decoded earlier in the pipeline.
+#[allow(dead_code)]
+fn write_js_string_literal(out: &mut String, value: &str) {
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 /// Emit getter/setter tuple placeholders for `bind:foo={getter, setter}`.

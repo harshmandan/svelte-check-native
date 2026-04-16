@@ -365,14 +365,22 @@ fn write_bridge_to_temp() -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-/// Convenience: process a batch of files through one worker.
+/// Process a batch of files through one or more worker subprocesses.
 ///
-/// Used by `svelte-check-native check` to run compiler diagnostics over
-/// every input. Returns one `(PathBuf, Vec<CompilerDiagnostic>)` per
-/// input source in the same order. Consumes `inputs` so the caller's
-/// `PathBuf`s move into the result without re-cloning. Failures on
-/// individual files don't abort the batch — that file just gets an
-/// empty result.
+/// On large batches the work is split across N workers running in
+/// parallel threads — each owns its own `Worker` (its own JS subprocess)
+/// and processes a contiguous slice of `inputs`. Results are merged in
+/// input order so the output is deterministic.
+///
+/// Worker count is chosen by [`pick_worker_count`] from input size and
+/// `std::thread::available_parallelism`. Single-file or very-small
+/// batches stay on the original single-worker path because the cost of
+/// spawning extra `bun` / `node` processes (and re-importing
+/// `svelte/compiler` in each one) outweighs the parallelism benefit.
+///
+/// Consumes `inputs` so the caller's `PathBuf`s move through the worker
+/// into the result without re-cloning. Failures on individual files
+/// don't abort the batch — that file just gets an empty result.
 pub fn compile_batch(
     workspace: &Path,
     inputs: Vec<(PathBuf, String)>,
@@ -380,6 +388,47 @@ pub fn compile_batch(
     if inputs.is_empty() {
         return Ok(Vec::new());
     }
+    let n_workers = pick_worker_count(inputs.len());
+    if n_workers <= 1 {
+        return compile_chunk(workspace, inputs);
+    }
+
+    // Split into n_workers contiguous chunks, preserving input order so
+    // the merged result reads back in the caller's original order.
+    let chunks = split_into_chunks(inputs, n_workers);
+
+    // Each chunk runs on its own thread, owning its own Worker. We
+    // spawn workers from inside the thread (not on the main thread)
+    // so the JS subprocess startup cost overlaps across workers — the
+    // hot startup path is the `import svelte/compiler` inside each
+    // bridge.mjs, which is single-threaded JS but runs concurrently
+    // across processes.
+    type ChunkResult = Result<Vec<(PathBuf, Vec<CompilerDiagnostic>)>, BridgeError>;
+    let mut handles: Vec<JoinHandle<ChunkResult>> = Vec::with_capacity(chunks.len());
+    for chunk in chunks {
+        let workspace = workspace.to_path_buf();
+        let h = thread::Builder::new()
+            .name("svn-bridge-worker".into())
+            .spawn(move || compile_chunk(&workspace, chunk))
+            .map_err(BridgeError::Io)?;
+        handles.push(h);
+    }
+
+    let mut out: Vec<(PathBuf, Vec<CompilerDiagnostic>)> = Vec::new();
+    for h in handles {
+        // join() returns Err if the worker thread panicked; treat as
+        // SubprocessDied since we have no diagnostics to fall back on.
+        let chunk_result = h.join().map_err(|_| BridgeError::SubprocessDied)?;
+        out.extend(chunk_result?);
+    }
+    Ok(out)
+}
+
+/// Run a single chunk of inputs through one freshly-spawned `Worker`.
+fn compile_chunk(
+    workspace: &Path,
+    inputs: Vec<(PathBuf, String)>,
+) -> Result<Vec<(PathBuf, Vec<CompilerDiagnostic>)>, BridgeError> {
     let mut worker = Worker::spawn(workspace)?;
     let mut out = Vec::with_capacity(inputs.len());
     for (path, source) in inputs {
@@ -394,6 +443,61 @@ pub fn compile_batch(
         }
     }
     Ok(out)
+}
+
+/// Pick a worker count for `n_inputs` files, honoring the
+/// `SVN_BRIDGE_WORKERS` env var when set.
+///
+/// Each extra worker pays a one-shot ~200 ms cost to spawn `bun`/`node`
+/// and import `svelte/compiler`, plus ~100 MB of resident memory for
+/// the JS heap. Empirically, `cores / 2` is the sweet spot on 8-core
+/// Apple Silicon (4 workers beats 8 by ~20 % on a 1.2k-file workload —
+/// over-subscribing past the performance-core count introduces
+/// scheduler / IPC contention faster than it saves serial work). The
+/// minimum of 2 ensures we keep at least *some* parallelism on a
+/// 4-core box. Cap at 8 to keep memory bounded on large boxes.
+fn pick_worker_count(n_inputs: usize) -> usize {
+    if let Ok(s) = std::env::var("SVN_BRIDGE_WORKERS") {
+        if let Ok(n) = s.parse::<usize>() {
+            return n.clamp(1, 32).min(n_inputs.max(1));
+        }
+    }
+    // Below this threshold the extra-worker spawn cost outweighs the
+    // parallelism win — the single-worker path stays put.
+    const MULTI_WORKER_THRESHOLD: usize = 32;
+    if n_inputs < MULTI_WORKER_THRESHOLD {
+        return 1;
+    }
+    let cores = thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    let chosen = (cores / 2).max(2).min(8);
+    chosen.min(n_inputs)
+}
+
+/// Split `inputs` into `n` contiguous chunks of (almost) equal size.
+/// The leftover from `len % n` is distributed one extra item to the
+/// first `len % n` chunks so the largest chunk is at most one item
+/// bigger than the smallest.
+fn split_into_chunks<T>(mut inputs: Vec<T>, n: usize) -> Vec<Vec<T>> {
+    let n = n.max(1);
+    let total = inputs.len();
+    let base = total / n;
+    let extra = total % n;
+    let mut chunks: Vec<Vec<T>> = Vec::with_capacity(n);
+    // drain from the front so chunks come out in input order.
+    let mut iter = inputs.drain(..);
+    for i in 0..n {
+        let take = base + if i < extra { 1 } else { 0 };
+        let mut c = Vec::with_capacity(take);
+        for _ in 0..take {
+            if let Some(item) = iter.next() {
+                c.push(item);
+            }
+        }
+        chunks.push(c);
+    }
+    chunks
 }
 
 #[cfg(test)]

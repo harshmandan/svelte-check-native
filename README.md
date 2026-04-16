@@ -34,6 +34,7 @@ A heavy SvelteKit + TypeScript app (~1200 `.svelte` files, M-series
 |                          | Warm     |
 | ------------------------ | -------- |
 | `svelte-check-native`    | **~3 s** |
+| `svelte-check-rs`        | ~11 s    |
 | `svelte-check --tsgo`    | ~13 s    |
 | `svelte-check` (default) | ~40 s    |
 

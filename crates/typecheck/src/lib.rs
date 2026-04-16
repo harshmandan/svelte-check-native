@@ -214,7 +214,7 @@ pub fn check(
 
     // Step 3: spawn tsgo.
     let tsgo = discover(workspace)?;
-    let raw = run_tsgo(&tsgo, &layout.overlay_tsconfig)?;
+    let raw = run_tsgo(&tsgo, &layout.overlay_tsconfig, workspace)?;
 
     // Step 4: map diagnostics back to source paths + apply line map.
     // Drop diagnostics that are about our overlay tsconfig itself —
@@ -230,13 +230,56 @@ pub fn check(
 
 /// Filter for diagnostics that come from our own overlay tsconfig and
 /// represent intentional choices we've made — they're not user-actionable.
+///
+/// Robust against the path-shape tsgo emits: it formats diagnostic
+/// paths relative to its own cwd. We set tsgo's cwd to the workspace
+/// in [`run_tsgo`], so a relative `raw.file` joins back to the right
+/// absolute path. As defense in depth we also accept a match by
+/// canonicalized absolute path (handles symlinks like `/var` vs
+/// `/private/var` on macOS) and a final ends-with check on the unique
+/// `.svelte-check/tsconfig.json` suffix.
 fn is_overlay_tsconfig_noise(raw: &RawDiagnostic, layout: &CacheLayout) -> bool {
     let abs = if raw.file.is_absolute() {
         raw.file.clone()
     } else {
         layout.workspace.join(&raw.file)
     };
-    abs == layout.overlay_tsconfig
+    if abs == layout.overlay_tsconfig {
+        return true;
+    }
+    if let (Ok(a), Ok(b)) = (abs.canonicalize(), layout.overlay_tsconfig.canonicalize()) {
+        if a == b {
+            return true;
+        }
+    }
+    // Last resort: tsgo on some configurations emits the path as
+    // workspace-relative even when the overlay was passed absolute.
+    // The overlay's basename + parent directory together are unique
+    // enough that any path matching both is ours.
+    let overlay_name = layout
+        .overlay_tsconfig
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let overlay_parent_name = layout
+        .overlay_tsconfig
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if !overlay_name.is_empty() && !overlay_parent_name.is_empty() {
+        let raw_name = raw.file.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let raw_parent_name = raw
+            .file
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        if raw_name == overlay_name && raw_parent_name == overlay_parent_name {
+            return true;
+        }
+    }
+    false
 }
 
 fn map_diagnostic(

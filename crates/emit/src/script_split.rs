@@ -19,6 +19,7 @@
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Statement;
+use oxc_span::GetSpan;
 use svn_parser::{ScriptLang, parse_script_body};
 
 /// `hoisted`: statements lifted to module top level (newline-joined).
@@ -58,13 +59,23 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
         };
     }
 
-    // Spans we hoist verbatim to module top level.
+    // Spans we hoist verbatim to module top level. For statements that
+    // are pure module-shape (no references to body locals): imports,
+    // `export { x } from 'mod'`, `export * from 'mod'`.
     let mut hoist_spans: Vec<(usize, usize)> = Vec::new();
+    // Spans where we strip just the `export ` prefix and let the inner
+    // declaration stay in the body. For `export const/let/var/function/class`
+    // — the declaration body might reference locals (e.g. `export function
+    // getA() { return a; }` where `a` is a local), so hoisting would
+    // break those references. Stripping the keyword keeps everything in
+    // scope; the consumer-facing export goes away (consumers can't
+    // `import { foo } from './X.svelte'` for these names) but the body
+    // type-checks cleanly.
+    let mut strip_keyword_spans: Vec<(usize, usize)> = Vec::new();
     // Spans we drop entirely (blank in body, don't add to hoisted prelude).
-    // This is for `export { x, y }` re-exports without a `from` clause:
-    // the names reference local variables inside $$render and can't survive
-    // hoisting. We accept that consumers can't `import { x, y }` from this
-    // component for now — type-checking the body is the priority.
+    // For `export { x, y }` (no `from`) re-exports of local names, and
+    // `export default x` where x is a name (we can't easily distinguish
+    // expression-vs-name without more parsing — drop is safer).
     let mut drop_spans: Vec<(usize, usize)> = Vec::new();
 
     for stmt in &parsed.program.body {
@@ -74,19 +85,29 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
             }
             Statement::ExportNamedDeclaration(decl) => {
                 let span = (decl.span.start as usize, decl.span.end as usize);
-                if decl.declaration.is_some() || decl.source.is_some() {
-                    // `export const/let/var/function/class` — has its own
-                    // declaration body. Or `export { x } from 'mod'` —
-                    // module re-export with source. Both safe to hoist.
+                if let Some(d) = &decl.declaration {
+                    // `export const/let/var/function/class` — strip just
+                    // the `export ` prefix. The declaration content stays
+                    // in body where its identifier references resolve.
+                    let inner_start = GetSpan::span(d).start as usize;
+                    if inner_start > span.0 {
+                        strip_keyword_spans.push((span.0, inner_start));
+                    }
+                } else if decl.source.is_some() {
+                    // `export { x } from 'mod'` — pure module re-export,
+                    // no local name references. Hoist.
                     hoist_spans.push(span);
                 } else {
-                    // `export { x, y }` (no `from`) re-exports local names.
-                    // Drop entirely.
+                    // `export { x, y }` (no `from`) — local name re-export.
+                    // Drop.
                     drop_spans.push(span);
                 }
             }
             Statement::ExportDefaultDeclaration(decl) => {
-                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+                // `export default <expr>` — drop. Expressions may reference
+                // locals; we don't try to disambiguate. The default export
+                // surface goes away but the body keeps type-checking.
+                drop_spans.push((decl.span.start as usize, decl.span.end as usize));
             }
             Statement::ExportAllDeclaration(decl) => {
                 hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
@@ -95,7 +116,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
         }
     }
 
-    if hoist_spans.is_empty() && drop_spans.is_empty() {
+    if hoist_spans.is_empty() && strip_keyword_spans.is_empty() && drop_spans.is_empty() {
         return SplitScript {
             hoisted: String::new(),
             body: content.to_string(),
@@ -111,12 +132,14 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
         }
     }
 
-    // Body with hoisted + dropped regions blanked. Replacing each span
-    // with ASCII whitespace of the same byte length preserves byte
-    // offsets for the source-map mapping that runs later.
+    // Body with hoisted + strip-keyword + dropped regions all blanked.
+    // For strip-keyword spans we only blank the keyword prefix, not the
+    // declaration — the declaration stays at its original byte position
+    // in the body, with the `export ` replaced by spaces.
     let mut blank_spans: Vec<(usize, usize)> =
-        Vec::with_capacity(hoist_spans.len() + drop_spans.len());
+        Vec::with_capacity(hoist_spans.len() + strip_keyword_spans.len() + drop_spans.len());
     blank_spans.extend(hoist_spans.iter().copied());
+    blank_spans.extend(strip_keyword_spans.iter().copied());
     blank_spans.extend(drop_spans.iter().copied());
     blank_spans.sort_by_key(|&(s, _)| s);
 
@@ -187,20 +210,42 @@ let x = 1;
     }
 
     #[test]
-    fn export_const_is_hoisted() {
+    fn export_const_keyword_is_stripped_keeping_declaration_in_body() {
+        // The declaration body is what we care about for type-checking.
+        // The `export ` prefix is blanked but `const PI = 3.14;` stays
+        // at its original position in the body.
         let src = "let x = 1;\nexport const PI = 3.14;";
         let s = split_imports(src, ScriptLang::Ts);
-        assert!(s.hoisted.contains("export const PI = 3.14;"));
-        assert!(!s.body.contains("export"));
-        assert!(s.body.contains("let x = 1;"));
+        assert!(
+            !s.hoisted.contains("export"),
+            "should not hoist:\n{}",
+            s.hoisted
+        );
+        assert!(
+            !s.body.contains("export"),
+            "should be blanked from body:\n{}",
+            s.body
+        );
+        assert!(
+            s.body.contains("const PI = 3.14;"),
+            "declaration must survive:\n{}",
+            s.body
+        );
     }
 
     #[test]
-    fn export_function_is_hoisted() {
-        // Svelte 5 component-level method export.
+    fn export_function_keyword_is_stripped() {
+        // Svelte 5 component-level method export. Keyword stripped so
+        // the function body's references (which may use other locals)
+        // stay in scope.
         let src = "let x = $state(0);\nexport function foo() { return x; }";
         let s = split_imports(src, ScriptLang::Ts);
-        assert!(s.hoisted.contains("export function foo()"));
+        assert!(!s.hoisted.contains("export"));
+        assert!(
+            s.body.contains("function foo()"),
+            "function declaration kept:\n{}",
+            s.body
+        );
         assert!(s.body.contains("let x = $state(0);"));
     }
 
@@ -244,11 +289,15 @@ let x = 1;
     }
 
     #[test]
-    fn export_default_is_hoisted() {
+    fn export_default_is_dropped() {
+        // `export default x` could reference a local; we don't try to
+        // disambiguate. Drop is safer than hoisting. Consumer-side
+        // default-export surface goes away but body type-checks.
         let src = "let x = 1;\nexport default x;";
         let s = split_imports(src, ScriptLang::Ts);
-        assert!(s.hoisted.contains("export default x;"));
-        assert!(!s.body.contains("export"));
+        assert!(!s.hoisted.contains("export default"));
+        assert!(!s.body.contains("export default"));
+        assert!(s.body.contains("let x = 1;"));
     }
 
     #[test]

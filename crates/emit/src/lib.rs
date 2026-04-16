@@ -348,10 +348,27 @@ fn emit_document_with_render_name(
     };
     store_refs.extend(template_store_refs);
 
-    // Store auto-subscribe aliases: declare `let $store: any;` for every
-    // detected `$ident` so type references like `typeof $store` resolve.
+    // Store auto-subscribe aliases: declare a typed `let $store!:
+    // __SvnStoreValue<typeof store>;` for every detected `$ident`.
+    //
+    // Why `let !` and not `const = expr`:
+    //   - `$store` references in the body need the alias to be visible
+    //     at the top of the function, but the underlying `store` may be
+    //     declared FURTHER DOWN in the body (or hoisted above as an
+    //     import). A value-position reference like `__svn_store_get(store)`
+    //     fires TS2448 ("used before declaration") for body-declared
+    //     stores. A type-position reference (`typeof store`) is resolved
+    //     lazily by TS and works regardless of declaration order.
+    //   - `__SvnStoreValue<typeof store>` extracts the value type out of
+    //     the store wrapper using a conditional infer. Without this,
+    //     downstream code (`$store.bar`, `$store.map(...)`) would see
+    //     `any` and cascade into TS7006/TS18046/TS2339/TS2698 hits.
+    //   - The `!` definite-assignment assertion suppresses TS2454; we
+    //     never actually assign to `$store` ourselves, but Svelte's
+    //     compiler treats the identifier as initialized at runtime.
     for name in &store_refs {
-        let _ = writeln!(out, "    let {name}: any;");
+        let base = name.strip_prefix('$').unwrap_or(name);
+        let _ = writeln!(out, "    let {name}!: __SvnStoreValue<typeof {base}>;");
     }
 
     if let Some(s) = &split {

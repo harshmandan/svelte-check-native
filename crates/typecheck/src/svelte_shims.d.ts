@@ -12,6 +12,38 @@
 // `declare global` because this file is a `.d.ts` script (no top-level
 // imports/exports), so its declarations are already global.
 
+// ---------- helpers used by emit ----------
+
+/** Minimal shape of a Svelte store. */
+type __SvnStore<T> = { subscribe: (run: (value: T) => any, invalidate?: any) => any };
+
+/**
+ * Type-level store unwrap. Used in emit as
+ *   `let $foo!: __SvnStoreValue<typeof foo>;`
+ *
+ * Forward references the store's *type* without depending on
+ * declaration order — the `let` declaration goes ABOVE the body so the
+ * body can reference `$foo`, but `foo` itself is declared further down.
+ * TS resolves types lazily, so `typeof foo` works even when `foo`
+ * appears later in the source.
+ *
+ * The conditional handles non-store inputs by falling through to the
+ * input type itself (matches what Svelte's auto-subscribe would do).
+ * `undefined | null` collapse to themselves, which is the closest we can
+ * get to the runtime "subscribe-first" semantic without actually
+ * calling subscribe.
+ */
+type __SvnStoreValue<S> =
+    S extends __SvnStore<infer T> ? T : S;
+
+/**
+ * Surface a type-only template reference inside the type-check function
+ * so TS6196 doesn't fire on `import type { Foo }` that's only used in a
+ * `<Component prop={value as Foo} />`-style assertion. The body is a
+ * pure type expression — no runtime cost.
+ */
+declare function __svn_type_ref<T>(): T;
+
 /** `$state<T>(initial?)` declares reactive state. Macro.
  *
  * Matches svelte's real `$state` signature — strict inference from the

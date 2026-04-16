@@ -53,14 +53,32 @@ pub fn split_imports(content: &str, lang: ScriptLang) -> SplitScript {
         };
     }
 
+    // Spans we hoist verbatim to module top level.
     let mut hoist_spans: Vec<(usize, usize)> = Vec::new();
+    // Spans we drop entirely (blank in body, don't add to hoisted prelude).
+    // This is for `export { x, y }` re-exports without a `from` clause:
+    // the names reference local variables inside $$render and can't survive
+    // hoisting. We accept that consumers can't `import { x, y }` from this
+    // component for now — type-checking the body is the priority.
+    let mut drop_spans: Vec<(usize, usize)> = Vec::new();
+
     for stmt in &parsed.program.body {
         match stmt {
             Statement::ImportDeclaration(decl) => {
                 hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
             }
             Statement::ExportNamedDeclaration(decl) => {
-                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+                let span = (decl.span.start as usize, decl.span.end as usize);
+                if decl.declaration.is_some() || decl.source.is_some() {
+                    // `export const/let/var/function/class` — has its own
+                    // declaration body. Or `export { x } from 'mod'` —
+                    // module re-export with source. Both safe to hoist.
+                    hoist_spans.push(span);
+                } else {
+                    // `export { x, y }` (no `from`) re-exports local names.
+                    // Drop entirely.
+                    drop_spans.push(span);
+                }
             }
             Statement::ExportDefaultDeclaration(decl) => {
                 hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
@@ -72,14 +90,14 @@ pub fn split_imports(content: &str, lang: ScriptLang) -> SplitScript {
         }
     }
 
-    if hoist_spans.is_empty() {
+    if hoist_spans.is_empty() && drop_spans.is_empty() {
         return SplitScript {
             hoisted: String::new(),
             body: content.to_string(),
         };
     }
 
-    // Hoisted prelude: emit each statement verbatim, joined by newlines.
+    // Hoisted prelude: emit each hoist-span verbatim, joined by newlines.
     let mut hoisted = String::new();
     for &(start, end) in &hoist_spans {
         hoisted.push_str(&content[start..end]);
@@ -88,12 +106,18 @@ pub fn split_imports(content: &str, lang: ScriptLang) -> SplitScript {
         }
     }
 
-    // Body with hoisted regions blanked. Replacing each span with ASCII
-    // whitespace of the same byte length preserves byte offsets for the
-    // source-map mapping that runs later.
+    // Body with hoisted + dropped regions blanked. Replacing each span
+    // with ASCII whitespace of the same byte length preserves byte
+    // offsets for the source-map mapping that runs later.
+    let mut blank_spans: Vec<(usize, usize)> =
+        Vec::with_capacity(hoist_spans.len() + drop_spans.len());
+    blank_spans.extend(hoist_spans.iter().copied());
+    blank_spans.extend(drop_spans.iter().copied());
+    blank_spans.sort_by_key(|&(s, _)| s);
+
     let mut body = String::with_capacity(content.len());
     let mut cursor = 0;
-    for &(start, end) in &hoist_spans {
+    for &(start, end) in &blank_spans {
         body.push_str(&content[cursor..start]);
         for ch in content[start..end].chars() {
             if ch == '\n' || ch == '\r' {
@@ -176,18 +200,42 @@ let x = 1;
     }
 
     #[test]
-    fn export_re_export_list_is_hoisted() {
+    fn re_export_list_without_source_is_dropped_not_hoisted() {
+        // `export { a, b }` (no `from` clause) re-exports local names.
+        // Hoisting it to module level would fire TS2304/TS2552 because
+        // `a` and `b` live inside $$render. We drop it entirely; the
+        // declarations themselves stay intact in the body.
         let src = "let a = 1;\nlet b = 2;\nexport { a, b };";
         let s = split_imports(src, ScriptLang::Ts);
-        assert!(s.hoisted.contains("export { a, b };"));
+        assert!(
+            !s.hoisted.contains("export { a, b }"),
+            "re-export without source should NOT be hoisted:\n{}",
+            s.hoisted
+        );
+        assert!(
+            !s.body.contains("export { a, b }"),
+            "should be blanked from body"
+        );
+        assert!(s.body.contains("let a = 1;"));
+        assert!(s.body.contains("let b = 2;"));
+    }
+
+    #[test]
+    fn renamed_re_export_without_source_is_dropped() {
+        let src = "let a = 1;\nexport { a as renamed };";
+        let s = split_imports(src, ScriptLang::Ts);
+        assert!(!s.hoisted.contains("export"));
         assert!(!s.body.contains("export"));
     }
 
     #[test]
-    fn export_renamed_re_export_is_hoisted() {
-        let src = "let a = 1;\nexport { a as renamed };";
+    fn re_export_with_source_is_hoisted() {
+        // `export { x } from 'mod'` doesn't reference local names — it's a
+        // pure module-to-module re-export. Safe to hoist.
+        let src = "export { foo } from './other';";
         let s = split_imports(src, ScriptLang::Ts);
-        assert!(s.hoisted.contains("export { a as renamed };"));
+        assert!(s.hoisted.contains("export { foo } from './other';"));
+        assert!(!s.body.contains("export"));
     }
 
     #[test]
@@ -240,6 +288,8 @@ let x = 1;
 
     #[test]
     fn import_and_export_in_same_script() {
+        // Import gets hoisted; bare re-export gets dropped (its name lives
+        // inside $$render).
         let src = "\
 import { writable } from 'svelte/store';
 let count = writable(0);
@@ -247,7 +297,7 @@ export { count };
 ";
         let s = split_imports(src, ScriptLang::Ts);
         assert!(s.hoisted.contains("import { writable }"));
-        assert!(s.hoisted.contains("export { count };"));
+        assert!(!s.hoisted.contains("export { count }"));
         assert!(s.body.contains("let count = writable(0);"));
     }
 }

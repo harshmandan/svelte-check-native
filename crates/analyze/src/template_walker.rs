@@ -21,7 +21,9 @@
 
 use smol_str::SmolStr;
 use svn_core::Range;
-use svn_parser::{Attribute, Directive, DirectiveKind, DirectiveValue, Fragment, Node};
+use svn_parser::{
+    AttrValuePart, Attribute, Directive, DirectiveKind, DirectiveValue, Fragment, Node,
+};
 
 use crate::void_refs::VoidRefRegistry;
 
@@ -42,6 +44,40 @@ pub struct TemplateSummary {
     /// downstream `{#if NAME.x}` / `{#each NAME as ...}` references
     /// don't fire TS2304.
     pub at_const_names: Vec<SmolStr>,
+    /// Each `<Component prop1=... prop2=... />` instantiation we found,
+    /// with enough info for emit to generate a `satisfies
+    /// ComponentProps<typeof Component>` type-check that catches
+    /// excess-property errors on the user's prop list.
+    ///
+    /// Components with directives (`bind:`, `on:`, `use:`, `class:`,
+    /// `style:`, transitions, animations) or spreads are excluded — for
+    /// those, the satisfies object would be incomplete in a way that
+    /// would itself cause false positives. Component-prop checking for
+    /// those shapes is a future expansion.
+    pub component_instantiations: Vec<ComponentInstantiation>,
+}
+
+/// One `<Component ...>` site eligible for excess-property checking.
+#[derive(Debug, Clone)]
+pub struct ComponentInstantiation {
+    /// Root identifier of the component name (e.g. `MyButton` from
+    /// `<MyButton />` or `<ui.MyButton />`).
+    pub component_root: SmolStr,
+    /// Plain attributes only (no bind/on/use/etc directives, no spread).
+    pub props: Vec<PropShape>,
+}
+
+/// One prop on a component instantiation.
+#[derive(Debug, Clone)]
+pub enum PropShape {
+    /// `name="literal"` — quoted string value with no interpolation.
+    Literal { name: SmolStr, value: String },
+    /// `name={expr}` — emit the expression source verbatim as the value.
+    Expression { name: SmolStr, expr_range: Range },
+    /// `{name}` — shorthand `name={name}`.
+    Shorthand { name: SmolStr },
+    /// `name` (no `=`) — boolean shorthand.
+    BoolShorthand { name: SmolStr },
 }
 
 /// One `bind:this={x}` site.
@@ -151,6 +187,7 @@ fn walk_node(
         }
         Node::Component(c) => {
             walk_attributes(&c.attributes, summary, counters, ctx);
+            collect_component_instantiation(c, summary);
             walk_fragment(&c.children, summary, counters, ctx);
         }
         Node::SvelteElement(s) => {
@@ -280,6 +317,76 @@ fn is_ident_start(c: char) -> bool {
 #[inline]
 fn is_ident_continue(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '$'
+}
+
+/// Inspect a `<Component ...>` site and, if it's a shape we know how to
+/// generate a satisfies-check for, push a `ComponentInstantiation` to
+/// the summary. Skipped shapes:
+///
+///   - any directive (`bind:`, `on:`, `use:`, `class:`, `style:`,
+///     `transition:`, `in:`, `out:`, `animate:`, `let:`) — those affect
+///     the prop set in ways our simple satisfies-object can't model
+///     without false positives
+///   - any spread (`{...obj}`) — the spread provides unknown props at
+///     runtime; satisfies wouldn't catch excess on the explicit ones
+///     accurately because the spread might intentionally add them
+///   - dotted component names (`<ui.MyButton />`) — `typeof ui.MyButton`
+///     would parse but we'd need to emit the dotted form carefully;
+///     v0.1 punts and skips
+///   - non-quoted plain attribute values containing interpolations
+///     (e.g. `class="a {b}"`) — value isn't a single string literal
+///
+/// What survives: `<Comp prop="lit" prop2={expr} {short} bool />`-style
+/// instantiations. These are exactly the shapes that catch the
+/// "user passed an unknown prop" class of bug we see in real
+/// component libraries.
+fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut TemplateSummary) {
+    if c.name.contains('.') {
+        return;
+    }
+    let mut props: Vec<PropShape> = Vec::with_capacity(c.attributes.len());
+    for attr in &c.attributes {
+        match attr {
+            Attribute::Plain(p) => {
+                let Some(v) = &p.value else {
+                    props.push(PropShape::BoolShorthand { name: p.name.clone() });
+                    continue;
+                };
+                // Single literal text part (no interpolations) — keep it.
+                if v.parts.len() == 1 {
+                    if let AttrValuePart::Text { content, .. } = &v.parts[0] {
+                        props.push(PropShape::Literal {
+                            name: p.name.clone(),
+                            value: content.clone(),
+                        });
+                        continue;
+                    }
+                }
+                // Anything else (multi-part, interpolation in unquoted) is
+                // out of scope for v0.1 prop-checking.
+                return;
+            }
+            Attribute::Expression(e) => {
+                props.push(PropShape::Expression {
+                    name: e.name.clone(),
+                    expr_range: e.expression_range,
+                });
+            }
+            Attribute::Shorthand(s) => {
+                props.push(PropShape::Shorthand { name: s.name.clone() });
+            }
+            // Spread or any directive disqualifies the whole instantiation.
+            Attribute::Spread(_) | Attribute::Directive(_) => {
+                return;
+            }
+        }
+    }
+    summary
+        .component_instantiations
+        .push(ComponentInstantiation {
+            component_root: c.name.clone(),
+            props,
+        });
 }
 
 #[cfg(test)]

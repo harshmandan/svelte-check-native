@@ -36,6 +36,12 @@ pub struct TemplateSummary {
     /// Number of `{#each}` blocks encountered. Emit uses this to allocate
     /// unique iteration helpers.
     pub each_block_count: usize,
+    /// Names introduced by `{@const NAME = expr}` template tags. These
+    /// are template-scope locals that don't exist in the script. Emit
+    /// declares each as `let NAME: any;` inside `__svn_tpl_check` so
+    /// downstream `{#if NAME.x}` / `{#each NAME as ...}` references
+    /// don't fire TS2304.
+    pub at_const_names: Vec<SmolStr>,
 }
 
 /// One `bind:this={x}` site.
@@ -59,7 +65,56 @@ pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
     let mut ctx = WalkCtx { source };
     walk_fragment(fragment, &mut summary, &mut counters, &ctx);
     let _ = &mut ctx;
+    collect_at_const_names(source, &mut summary.at_const_names);
     summary
+}
+
+/// Source-level scan for `{@const NAME = ...}` declarations.
+///
+/// The structural parser models `@const` as a generic interpolation
+/// (we deliberately punt on per-tag semantics there), which loses the
+/// LHS / RHS split. Re-scanning the raw source for the literal pattern
+/// is the simplest path to the bound name without changing the AST
+/// shape.
+///
+/// Multiple `{@const}` declarations and the same name across separate
+/// templates are deduped so emit doesn't generate `let X: any;` twice
+/// (TS2451 redeclaration).
+fn collect_at_const_names(source: &str, out: &mut Vec<SmolStr>) {
+    let bytes = source.as_bytes();
+    let needle = b"{@const";
+    let mut i = 0;
+    let mut seen = std::collections::HashSet::<SmolStr>::new();
+    while i + needle.len() < bytes.len() {
+        if &bytes[i..i + needle.len()] != needle {
+            i += 1;
+            continue;
+        }
+        let mut p = i + needle.len();
+        // Require whitespace after `@const`.
+        if p >= bytes.len() || !bytes[p].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        while p < bytes.len() && bytes[p].is_ascii_whitespace() {
+            p += 1;
+        }
+        let name_start = p;
+        while p < bytes.len()
+            && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_' || bytes[p] == b'$')
+        {
+            p += 1;
+        }
+        if p == name_start {
+            i += 1;
+            continue;
+        }
+        let name = SmolStr::from(&source[name_start..p]);
+        if seen.insert(name.clone()) {
+            out.push(name);
+        }
+        i = p;
+    }
 }
 
 struct WalkCtx<'src> {

@@ -273,6 +273,13 @@ fn emit_document_with_render_name(
 
     out.push_str("    async function __svn_tpl_check() {\n");
     out.push_str("        // template type-check body (incremental)\n");
+    // Template-scope locals from `{@const NAME = ...}` tags. Declared
+    // here so subsequent `{#each NAME as ...}` and `{#if NAME.x}`
+    // emissions resolve.
+    for name in &summary.at_const_names {
+        let _ = writeln!(out, "        let {name}: any = undefined;");
+        let _ = writeln!(out, "        void {name};");
+    }
     emit_action_attrs_declarations(&mut out, summary);
     emit_bind_pair_declarations(&mut out, summary);
     emit_template_body(&mut out, doc.source, fragment, 2);

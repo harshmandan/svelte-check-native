@@ -54,6 +54,16 @@ pub enum Node {
     Component(Component),
     /// `<svelte:foo>` — Svelte special element.
     SvelteElement(SvelteElement),
+    /// `{#if cond}...{:else if c}...{:else}...{/if}`
+    IfBlock(IfBlock),
+    /// `{#each expr as item, index (key)}...{:else}...{/each}`
+    EachBlock(EachBlock),
+    /// `{#await promise}...{:then v}...{:catch e}...{/await}`
+    AwaitBlock(AwaitBlock),
+    /// `{#key expr}...{/key}`
+    KeyBlock(KeyBlock),
+    /// `{#snippet name(params)}...{/snippet}`
+    SnippetBlock(SnippetBlock),
 }
 
 impl Node {
@@ -66,6 +76,11 @@ impl Node {
             Self::Element(e) => e.range,
             Self::Component(c) => c.range,
             Self::SvelteElement(e) => e.range,
+            Self::IfBlock(b) => b.range,
+            Self::EachBlock(b) => b.range,
+            Self::AwaitBlock(b) => b.range,
+            Self::KeyBlock(b) => b.range,
+            Self::SnippetBlock(b) => b.range,
         }
     }
 }
@@ -359,6 +374,103 @@ impl SvelteElementKind {
         }
     }
 }
+
+// ===== Control-flow blocks ===============================================
+
+/// `{#if cond}...{:else if c}...{:else}...{/if}`
+#[derive(Debug, Clone)]
+pub struct IfBlock {
+    /// Byte range of the primary condition expression (between `{#if ` and `}`).
+    pub condition_range: Range,
+    pub consequent: Fragment,
+    /// Zero or more `{:else if c}` arms, in source order.
+    pub elseif_arms: Vec<ElseIfArm>,
+    /// `{:else}` body, if present.
+    pub alternate: Option<Fragment>,
+    pub range: Range,
+}
+
+#[derive(Debug, Clone)]
+pub struct ElseIfArm {
+    pub condition_range: Range,
+    pub body: Fragment,
+}
+
+/// `{#each expr as item, index (key)}...{:else}...{/each}`.
+///
+/// `as_clause` is optional (Svelte allows `{#each items}` without binding).
+/// The exact pattern shape is stored as a byte range; `analyze` can parse it
+/// with oxc when needed.
+#[derive(Debug, Clone)]
+pub struct EachBlock {
+    /// Byte range of the iterable expression.
+    pub expression_range: Range,
+    /// `{#each items}` (no `as`) → None.
+    pub as_clause: Option<EachAsClause>,
+    pub body: Fragment,
+    /// `{:else}` empty-list body, if present.
+    pub alternate: Option<Fragment>,
+    pub range: Range,
+}
+
+#[derive(Debug, Clone)]
+pub struct EachAsClause {
+    /// Byte range of the destructuring pattern (may be an identifier,
+    /// array-destructuring, or object-destructuring).
+    pub context_range: Range,
+    /// `index` binding range (the `i` in `as item, i`).
+    pub index_range: Option<Range>,
+    /// `(key)` expression range, if a key is provided.
+    pub key_range: Option<Range>,
+}
+
+/// `{#await promise}...{:then v}...{:catch e}...{/await}` and its short forms.
+#[derive(Debug, Clone)]
+pub struct AwaitBlock {
+    pub expression_range: Range,
+    /// `{#await p}` branch (shown while pending).
+    pub pending: Option<Fragment>,
+    /// `{:then value}` branch. May appear as `{#await p then v}` short form.
+    pub then_branch: Option<ThenBranch>,
+    /// `{:catch err}` branch. May appear as `{#await p catch e}` short form.
+    pub catch_branch: Option<CatchBranch>,
+    pub range: Range,
+}
+
+#[derive(Debug, Clone)]
+pub struct ThenBranch {
+    /// `{:then value}` binding pattern range. `None` for `{:then}` without
+    /// a binding.
+    pub context_range: Option<Range>,
+    pub body: Fragment,
+}
+
+#[derive(Debug, Clone)]
+pub struct CatchBranch {
+    pub context_range: Option<Range>,
+    pub body: Fragment,
+}
+
+/// `{#key expr}...{/key}`
+#[derive(Debug, Clone)]
+pub struct KeyBlock {
+    pub expression_range: Range,
+    pub body: Fragment,
+    pub range: Range,
+}
+
+/// `{#snippet name(params)}...{/snippet}`
+#[derive(Debug, Clone)]
+pub struct SnippetBlock {
+    pub name: SmolStr,
+    /// Byte range of the parameter list (inside parens). Empty range if
+    /// `{#snippet name()}` had no params.
+    pub parameters_range: Range,
+    pub body: Fragment,
+    pub range: Range,
+}
+
+// ===== Static helpers ====================================================
 
 /// HTML "void" elements that have no closing tag.
 ///

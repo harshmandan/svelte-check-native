@@ -19,10 +19,15 @@ use smol_str::SmolStr;
 use svn_core::Range;
 
 use crate::ast::{
-    Comment, Component, Element, Fragment, Interpolation, Node, SvelteElement, SvelteElementKind,
-    Text, is_component_tag, is_void_element,
+    CatchBranch, Comment, Component, Element, ElseIfArm, Fragment, Interpolation, Node,
+    SvelteElement, SvelteElementKind, Text, ThenBranch, is_component_tag, is_void_element,
 };
 use crate::attributes::parse_attributes;
+use crate::blocks::{
+    AwaitShortForm, BlockTerminator, build_await_block, build_each_block, build_if_block,
+    build_key_block, build_snippet_block, parse_await_header, parse_each_header, parse_if_header,
+    parse_key_header, parse_snippet_header, peek_and_consume_terminator,
+};
 use crate::error::ParseError;
 use crate::mustache::find_mustache_end;
 use crate::scanner::Scanner;
@@ -33,7 +38,7 @@ use crate::scanner::Scanner;
 /// The returned [`Fragment`] has `range == range`.
 pub fn parse_template(source: &str, range: Range) -> (Fragment, Vec<ParseError>) {
     let mut parser = TemplateParser::new(source, range);
-    let nodes = parser.parse_fragment_until(None);
+    let (nodes, _stop) = parser.parse_fragment_until(None);
     (
         Fragment {
             nodes,
@@ -98,23 +103,70 @@ impl<'src> TemplateParser<'src> {
         self.scanner.pos() >= self.fragment_end || self.scanner.eof()
     }
 
-    /// Parse a sequence of nodes until either the fragment end is reached or
-    /// a closing tag matching `stop_tag` is encountered. Returns the parsed
-    /// nodes; on a stop-tag match, leaves the scanner positioned at the
-    /// start of that closing tag so the caller can consume it.
-    fn parse_fragment_until(&mut self, stop_tag: Option<&str>) -> Vec<Node> {
+    /// Parse a sequence of nodes until a stop condition is hit. Returns the
+    /// parsed nodes and *why* parsing stopped.
+    ///
+    /// Stop conditions:
+    /// - End of fragment / EOF — returns `None`.
+    /// - `</stop_element>` if `stop_element` is `Some(tag)` — the caller
+    ///   consumes it.
+    /// - A block-level terminator `{:...}` or `{/...}` — the caller
+    ///   dispatches on it (e.g. the `{#if}` handler uses `{:else}` to start
+    ///   the alternate branch).
+    fn parse_fragment_until(
+        &mut self,
+        stop_element: Option<&str>,
+    ) -> (Vec<Node>, Option<BlockTerminator>) {
         let mut nodes = Vec::new();
         while !self.at_fragment_end() {
-            // Detect closing tag: `</TAG` or `</`.
-            if self.scanner.starts_with("</") {
-                if let Some(tag) = stop_tag {
-                    // Peek whether this closing tag matches `tag`.
-                    if self.peek_closing_tag_matches(tag) {
-                        return nodes;
+            // Block-level terminator: `{:...}` or `{/...}`.
+            if self.scanner.starts_with("{:") || self.scanner.starts_with("{/") {
+                if let Some(term) = peek_and_consume_terminator(&mut self.scanner, &mut self.errors)
+                {
+                    return (nodes, Some(term));
+                }
+                // Malformed terminator — error was recorded; advance to
+                // avoid infinite loop.
+                self.scanner.advance_byte();
+                continue;
+            }
+
+            // Block header: `{#if}`, `{#each}`, `{#await}`, `{#key}`, `{#snippet}`.
+            if self.scanner.starts_with("{#") {
+                if let Some(node) = self.parse_block() {
+                    nodes.push(node);
+                }
+                continue;
+            }
+
+            // Tag (`{@html}` / `{@const}` / `{@render}` / `{@debug}` / `{@attach}`).
+            // Not yet supported — emit error and skip.
+            if self.scanner.starts_with("{@") {
+                let start = self.scanner.pos();
+                match find_mustache_end(self.scanner.source(), self.scanner.pos() + 1) {
+                    Some(end) => {
+                        self.errors.push(ParseError::UnsupportedBlock {
+                            range: Range::new(start, end + 1),
+                        });
+                        self.scanner.set_pos(end + 1);
+                    }
+                    None => {
+                        self.errors.push(ParseError::UnterminatedMustache {
+                            range: Range::new(start, self.fragment_end),
+                        });
+                        self.scanner.set_pos(self.fragment_end);
                     }
                 }
-                // Unmatched closing tag inside a fragment — record error and
-                // advance past `<` to avoid infinite loop.
+                continue;
+            }
+
+            // `</TAG>` closing tag.
+            if self.scanner.starts_with("</") {
+                if let Some(tag) = stop_element {
+                    if self.peek_closing_tag_matches(tag) {
+                        return (nodes, None);
+                    }
+                }
                 self.errors.push(ParseError::MalformedOpenTag {
                     range: Range::new(self.scanner.pos(), self.scanner.pos() + 2),
                 });
@@ -128,56 +180,301 @@ impl<'src> TemplateParser<'src> {
             }
 
             if self.scanner.peek_byte() == Some(b'<') {
-                match self.parse_element_or_component() {
-                    Some(node) => nodes.push(node),
-                    None => {
-                        // parse_element_or_component already reported the error
-                        // and advanced past `<`; continue.
-                    }
+                if let Some(node) = self.parse_element_or_component() {
+                    nodes.push(node);
                 }
                 continue;
             }
 
             if self.scanner.peek_byte() == Some(b'{') {
-                // Block expressions ({#if}, {#each}, {:else}, {/if}, {@html}, etc.)
-                // are not yet supported. Distinguish from a plain
-                // interpolation by looking at the char after `{`.
-                match self.scanner.peek_byte_at(1) {
-                    Some(b'#') | Some(b':') | Some(b'/') | Some(b'@') => {
-                        let start = self.scanner.pos();
-                        // Skip the opening `{` and the rest up to the matching `}`
-                        // so we don't loop forever.
-                        match find_mustache_end(self.scanner.source(), self.scanner.pos() + 1) {
-                            Some(end) => {
-                                self.errors.push(ParseError::UnsupportedBlock {
-                                    range: Range::new(start, end + 1),
-                                });
-                                self.scanner.set_pos(end + 1);
-                            }
-                            None => {
-                                self.errors.push(ParseError::UnterminatedMustache {
-                                    range: Range::new(start, self.fragment_end),
-                                });
-                                self.scanner.set_pos(self.fragment_end);
-                            }
-                        }
-                        continue;
-                    }
-                    _ => {}
-                }
-                match self.parse_interpolation() {
-                    Some(node) => nodes.push(node),
-                    None => {
-                        // Error already recorded; advance one byte.
-                        self.scanner.advance_byte();
-                    }
+                if let Some(node) = self.parse_interpolation() {
+                    nodes.push(node);
+                } else {
+                    self.scanner.advance_byte();
                 }
                 continue;
             }
 
             nodes.push(self.parse_text());
         }
-        nodes
+        (nodes, None)
+    }
+
+    /// Dispatch on the block name after `{#` and build the correct block node.
+    fn parse_block(&mut self) -> Option<Node> {
+        let block_start = self.scanner.pos();
+        debug_assert!(self.scanner.starts_with("{#"));
+        self.scanner.advance(2);
+
+        let name_start = self.scanner.pos();
+        while let Some(b) = self.scanner.peek_byte() {
+            if b.is_ascii_alphabetic() {
+                self.scanner.advance_byte();
+            } else {
+                break;
+            }
+        }
+        let name_end = self.scanner.pos();
+        let name = &self.scanner.source()[name_start as usize..name_end as usize];
+
+        match name {
+            "if" => self.parse_if_block(block_start),
+            "each" => self.parse_each_block(block_start),
+            "await" => self.parse_await_block(block_start),
+            "key" => self.parse_key_block(block_start),
+            "snippet" => self.parse_snippet_block(block_start),
+            other => {
+                self.errors.push(ParseError::UnsupportedBlock {
+                    range: Range::new(block_start, self.scanner.pos()),
+                });
+                // Skip to the end of this opening mustache and beyond to the
+                // matching `{/other}` if we can find one — else bail.
+                if let Some(end) = find_mustache_end(self.scanner.source(), self.scanner.pos()) {
+                    self.scanner.set_pos(end + 1);
+                }
+                let needle = format!("{{/{other}}}");
+                if let Some(pos) = self.scanner.find(needle.as_bytes()) {
+                    self.scanner.set_pos(pos + needle.len() as u32);
+                }
+                None
+            }
+        }
+    }
+
+    fn parse_if_block(&mut self, block_start: u32) -> Option<Node> {
+        let condition_range = parse_if_header(&mut self.scanner, &mut self.errors)?;
+        let (consequent_nodes, term) = self.parse_fragment_until(None);
+        let consequent = Fragment {
+            nodes: consequent_nodes,
+            range: Range::new(condition_range.end + 1, self.scanner.pos()),
+        };
+
+        let mut elseif_arms: Vec<ElseIfArm> = Vec::new();
+        let mut alternate: Option<Fragment> = None;
+        let mut next = term;
+
+        loop {
+            match next {
+                Some(BlockTerminator::Close { tag }) if tag == "if" => break,
+                Some(BlockTerminator::ElseIf { condition_range }) => {
+                    let (body_nodes, t) = self.parse_fragment_until(None);
+                    elseif_arms.push(ElseIfArm {
+                        condition_range,
+                        body: Fragment {
+                            nodes: body_nodes,
+                            range: Range::new(0, 0),
+                        },
+                    });
+                    next = t;
+                }
+                Some(BlockTerminator::Else) => {
+                    let (body_nodes, t) = self.parse_fragment_until(None);
+                    alternate = Some(Fragment {
+                        nodes: body_nodes,
+                        range: Range::new(0, 0),
+                    });
+                    next = t;
+                }
+                _ => {
+                    self.errors.push(ParseError::UnterminatedElement {
+                        name: "if".to_string(),
+                        range: Range::new(block_start, self.scanner.pos()),
+                    });
+                    break;
+                }
+            }
+        }
+
+        Some(Node::IfBlock(build_if_block(
+            condition_range,
+            consequent,
+            elseif_arms,
+            alternate,
+            block_start,
+            self.scanner.pos(),
+        )))
+    }
+
+    fn parse_each_block(&mut self, block_start: u32) -> Option<Node> {
+        let (expr_range, as_clause) = parse_each_header(&mut self.scanner, &mut self.errors)?;
+        let (body_nodes, term) = self.parse_fragment_until(None);
+        let body = Fragment {
+            nodes: body_nodes,
+            range: Range::new(expr_range.end + 1, self.scanner.pos()),
+        };
+
+        let mut alternate: Option<Fragment> = None;
+        match term {
+            Some(BlockTerminator::Close { tag }) if tag == "each" => {}
+            Some(BlockTerminator::Else) => {
+                let (alt_nodes, t2) = self.parse_fragment_until(None);
+                alternate = Some(Fragment {
+                    nodes: alt_nodes,
+                    range: Range::new(0, 0),
+                });
+                match t2 {
+                    Some(BlockTerminator::Close { tag }) if tag == "each" => {}
+                    _ => {
+                        self.errors.push(ParseError::UnterminatedElement {
+                            name: "each".to_string(),
+                            range: Range::new(block_start, self.scanner.pos()),
+                        });
+                    }
+                }
+            }
+            _ => {
+                self.errors.push(ParseError::UnterminatedElement {
+                    name: "each".to_string(),
+                    range: Range::new(block_start, self.scanner.pos()),
+                });
+            }
+        }
+
+        Some(Node::EachBlock(build_each_block(
+            expr_range,
+            as_clause,
+            body,
+            alternate,
+            block_start,
+            self.scanner.pos(),
+        )))
+    }
+
+    fn parse_await_block(&mut self, block_start: u32) -> Option<Node> {
+        let (expr_range, short) = parse_await_header(&mut self.scanner, &mut self.errors)?;
+
+        let (mut pending, mut then_branch, mut catch_branch) = (None, None, None);
+
+        match short {
+            AwaitShortForm::Then(ctx) => {
+                // `{#await p then v}` — body is the then-branch directly.
+                let (body, t) = self.parse_fragment_until(None);
+                then_branch = Some(ThenBranch {
+                    context_range: ctx,
+                    body: Fragment {
+                        nodes: body,
+                        range: Range::new(0, 0),
+                    },
+                });
+                self.finish_await_block(t, block_start);
+            }
+            AwaitShortForm::Catch(ctx) => {
+                let (body, t) = self.parse_fragment_until(None);
+                catch_branch = Some(CatchBranch {
+                    context_range: ctx,
+                    body: Fragment {
+                        nodes: body,
+                        range: Range::new(0, 0),
+                    },
+                });
+                self.finish_await_block(t, block_start);
+            }
+            AwaitShortForm::None => {
+                // Full form: pending, then optional :then, optional :catch, {/await}.
+                let (pending_nodes, mut term) = self.parse_fragment_until(None);
+                pending = Some(Fragment {
+                    nodes: pending_nodes,
+                    range: Range::new(0, 0),
+                });
+                // :then?
+                if let Some(BlockTerminator::Then { context_range }) = &term {
+                    let ctx = *context_range;
+                    let (then_nodes, t2) = self.parse_fragment_until(None);
+                    then_branch = Some(ThenBranch {
+                        context_range: ctx,
+                        body: Fragment {
+                            nodes: then_nodes,
+                            range: Range::new(0, 0),
+                        },
+                    });
+                    term = t2;
+                }
+                // :catch?
+                if let Some(BlockTerminator::Catch { context_range }) = &term {
+                    let ctx = *context_range;
+                    let (catch_nodes, t2) = self.parse_fragment_until(None);
+                    catch_branch = Some(CatchBranch {
+                        context_range: ctx,
+                        body: Fragment {
+                            nodes: catch_nodes,
+                            range: Range::new(0, 0),
+                        },
+                    });
+                    term = t2;
+                }
+                self.finish_await_block(term, block_start);
+            }
+        }
+
+        Some(Node::AwaitBlock(build_await_block(
+            expr_range,
+            pending,
+            then_branch,
+            catch_branch,
+            block_start,
+            self.scanner.pos(),
+        )))
+    }
+
+    fn finish_await_block(&mut self, term: Option<BlockTerminator>, block_start: u32) {
+        match term {
+            Some(BlockTerminator::Close { tag }) if tag == "await" => {}
+            _ => {
+                self.errors.push(ParseError::UnterminatedElement {
+                    name: "await".to_string(),
+                    range: Range::new(block_start, self.scanner.pos()),
+                });
+            }
+        }
+    }
+
+    fn parse_key_block(&mut self, block_start: u32) -> Option<Node> {
+        let expr_range = parse_key_header(&mut self.scanner, &mut self.errors)?;
+        let (body_nodes, term) = self.parse_fragment_until(None);
+        let body = Fragment {
+            nodes: body_nodes,
+            range: Range::new(expr_range.end + 1, self.scanner.pos()),
+        };
+        match term {
+            Some(BlockTerminator::Close { tag }) if tag == "key" => {}
+            _ => {
+                self.errors.push(ParseError::UnterminatedElement {
+                    name: "key".to_string(),
+                    range: Range::new(block_start, self.scanner.pos()),
+                });
+            }
+        }
+        Some(Node::KeyBlock(build_key_block(
+            expr_range,
+            body,
+            block_start,
+            self.scanner.pos(),
+        )))
+    }
+
+    fn parse_snippet_block(&mut self, block_start: u32) -> Option<Node> {
+        let (name, params_range) = parse_snippet_header(&mut self.scanner, &mut self.errors)?;
+        let (body_nodes, term) = self.parse_fragment_until(None);
+        let body = Fragment {
+            nodes: body_nodes,
+            range: Range::new(params_range.end + 1, self.scanner.pos()),
+        };
+        match term {
+            Some(BlockTerminator::Close { tag }) if tag == "snippet" => {}
+            _ => {
+                self.errors.push(ParseError::UnterminatedElement {
+                    name: "snippet".to_string(),
+                    range: Range::new(block_start, self.scanner.pos()),
+                });
+            }
+        }
+        Some(Node::SnippetBlock(build_snippet_block(
+            name,
+            params_range,
+            body,
+            block_start,
+            self.scanner.pos(),
+        )))
     }
 
     fn parse_text(&mut self) -> Node {
@@ -385,7 +682,7 @@ impl<'src> TemplateParser<'src> {
         open_end: u32,
     ) -> Option<Fragment> {
         let children_start = self.scanner.pos();
-        let children = self.parse_fragment_until(Some(tag));
+        let (children, _stop) = self.parse_fragment_until(Some(tag));
         let children_end = self.scanner.pos();
 
         // Consume the closing tag if present.
@@ -665,15 +962,146 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_block_tag_records_error_but_doesnt_hang() {
-        let src = "{#if condition}<p>yes</p>{/if}";
+    fn if_block_parses() {
+        let frag = parse_ok("{#if cond}<p>yes</p>{/if}");
+        assert_eq!(frag.nodes.len(), 1);
+        let Node::IfBlock(b) = &frag.nodes[0] else {
+            panic!("expected IfBlock, got {:?}", frag.nodes[0]);
+        };
+        assert_eq!(
+            b.condition_range.slice("{#if cond}<p>yes</p>{/if}").trim(),
+            "cond"
+        );
+        assert_eq!(b.consequent.nodes.len(), 1); // <p>
+    }
+
+    #[test]
+    fn if_else_block_parses() {
+        let frag = parse_ok("{#if cond}A{:else}B{/if}");
+        let Node::IfBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        assert!(b.alternate.is_some());
+        assert_eq!(b.elseif_arms.len(), 0);
+    }
+
+    #[test]
+    fn if_elseif_else_block_parses() {
+        let frag = parse_ok("{#if a}A{:else if b}B{:else if c}C{:else}D{/if}");
+        let Node::IfBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        assert_eq!(b.elseif_arms.len(), 2);
+        assert!(b.alternate.is_some());
+    }
+
+    #[test]
+    fn each_block_parses() {
+        let frag = parse_ok("{#each items as item}<li>{item}</li>{/each}");
+        let Node::EachBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        let src = "{#each items as item}<li>{item}</li>{/each}";
+        assert_eq!(b.expression_range.slice(src).trim(), "items");
+        let clause = b.as_clause.as_ref().unwrap();
+        assert_eq!(clause.context_range.slice(src), "item");
+    }
+
+    #[test]
+    fn each_block_with_index_and_key() {
+        let src = "{#each items as item, i (item.id)}<li>{item}</li>{/each}";
+        let frag = parse_ok(src);
+        let Node::EachBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        let clause = b.as_clause.as_ref().unwrap();
+        assert_eq!(clause.context_range.slice(src), "item");
+        assert_eq!(clause.index_range.map(|r| r.slice(src)), Some("i"));
+        assert_eq!(clause.key_range.map(|r| r.slice(src)), Some("item.id"));
+    }
+
+    #[test]
+    fn each_block_without_as_clause() {
+        // bug fixture #25 (each-without-as-clause).
+        let frag = parse_ok("{#each items}<span>x</span>{/each}");
+        let Node::EachBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        assert!(b.as_clause.is_none());
+    }
+
+    #[test]
+    fn each_with_else() {
+        let frag = parse_ok("{#each items as item}A{:else}empty{/each}");
+        let Node::EachBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        assert!(b.alternate.is_some());
+    }
+
+    #[test]
+    fn await_block_full_form() {
+        let frag = parse_ok("{#await p}loading{:then v}{v}{:catch e}err{/await}");
+        let Node::AwaitBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        assert!(b.pending.is_some());
+        assert!(b.then_branch.is_some());
+        assert!(b.catch_branch.is_some());
+    }
+
+    #[test]
+    fn await_block_short_then_form() {
+        let frag = parse_ok("{#await p then v}{v}{/await}");
+        let Node::AwaitBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        assert!(b.pending.is_none());
+        assert!(b.then_branch.is_some());
+    }
+
+    #[test]
+    fn key_block_parses() {
+        let frag = parse_ok("{#key trigger}<x />{/key}");
+        let Node::KeyBlock(b) = &frag.nodes[0] else {
+            panic!("expected KeyBlock");
+        };
+        assert_eq!(
+            b.expression_range.slice("{#key trigger}<x />{/key}").trim(),
+            "trigger"
+        );
+    }
+
+    #[test]
+    fn snippet_block_parses() {
+        let src = "{#snippet row(item, i)}<tr>{i}: {item.name}</tr>{/snippet}";
+        let frag = parse_ok(src);
+        let Node::SnippetBlock(b) = &frag.nodes[0] else {
+            panic!("expected SnippetBlock");
+        };
+        assert_eq!(b.name, "row");
+        assert_eq!(b.parameters_range.slice(src), "item, i");
+    }
+
+    #[test]
+    fn unknown_block_tag_records_error_and_skips() {
+        let src = "{#deferred x}body{/deferred}";
         let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
-        // {#if} and {/if} both recorded as unsupported.
         assert!(
             errors
                 .iter()
-                .any(|e| matches!(e, ParseError::UnsupportedBlock { .. })),
-            "expected UnsupportedBlock error, got {errors:?}"
+                .any(|e| matches!(e, ParseError::UnsupportedBlock { .. }))
+        );
+    }
+
+    #[test]
+    fn at_tags_still_unsupported() {
+        let src = "{@html foo}";
+        let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ParseError::UnsupportedBlock { .. }))
         );
     }
 

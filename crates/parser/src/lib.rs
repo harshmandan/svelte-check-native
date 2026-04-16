@@ -22,6 +22,7 @@
 
 pub mod ast;
 mod attributes;
+mod blocks;
 pub mod document;
 pub mod error;
 mod mustache;
@@ -31,9 +32,10 @@ mod sections;
 mod template;
 
 pub use ast::{
-    AttrValue, AttrValuePart, Attribute, Comment, Component, Directive, DirectiveKind,
-    DirectiveValue, Element, ExpressionAttr, Fragment, Interpolation, Node, PlainAttr,
-    ShorthandAttr, SpreadAttr, SvelteElement, SvelteElementKind, Text as TemplateText,
+    AttrValue, AttrValuePart, Attribute, AwaitBlock, CatchBranch, Comment, Component, Directive,
+    DirectiveKind, DirectiveValue, EachAsClause, EachBlock, Element, ElseIfArm, ExpressionAttr,
+    Fragment, IfBlock, Interpolation, KeyBlock, Node, PlainAttr, ShorthandAttr, SnippetBlock,
+    SpreadAttr, SvelteElement, SvelteElementKind, Text as TemplateText, ThenBranch,
     is_component_tag, is_void_element,
 };
 pub use document::{

@@ -112,6 +112,12 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
             Statement::ExportAllDeclaration(decl) => {
                 hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
             }
+            // TypeScript `namespace Foo { ... }` (and the equivalent
+            // `module Foo { ... }`). Allowed only at the module level
+            // (TS1235 inside a function); hoist verbatim.
+            Statement::TSModuleDeclaration(decl) => {
+                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+            }
             _ => {}
         }
     }
@@ -306,6 +312,25 @@ let x = 1;
         let s = split_imports(src, ScriptLang::Ts);
         assert!(s.hoisted.contains("export * from './other';"));
         assert!(!s.body.contains("export"));
+    }
+
+    #[test]
+    fn typescript_namespace_is_hoisted() {
+        // `namespace Foo { ... }` is illegal inside a function (TS1235);
+        // must be lifted to module level.
+        let src = "let x = 1;\nnamespace Foo { export type Bar = number; }";
+        let s = split_imports(src, ScriptLang::Ts);
+        assert!(
+            s.hoisted.contains("namespace Foo"),
+            "namespace must be hoisted:\n{}",
+            s.hoisted
+        );
+        assert!(
+            !s.body.contains("namespace"),
+            "blanked from body:\n{}",
+            s.body
+        );
+        assert!(s.body.contains("let x = 1;"));
     }
 
     #[test]

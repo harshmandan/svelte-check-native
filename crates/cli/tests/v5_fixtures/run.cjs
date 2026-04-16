@@ -122,8 +122,8 @@ for (const entry of entries) {
 
 console.log(`v5 fixtures: ${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`);
 if (failures.length > 0) {
-    console.log('\nFirst error per failing fixture (showing up to 10):');
-    for (const f of failures.slice(0, 10)) {
+    console.log('\nFirst error per failing fixture (showing up to 30):');
+    for (const f of failures.slice(0, 30)) {
         const e = f.first;
         console.log(
             `  FAIL ${f.name} (${f.count} errors): TS${e.code} ${e.message} @ ${e.filename}:${e.start.line + 1}:${e.start.character + 1}`

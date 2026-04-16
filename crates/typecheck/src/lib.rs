@@ -142,7 +142,11 @@ pub fn check(
 
         // Re-export stub so `import X from './X.svelte'` resolves at the
         // type level. The `.d.svelte.ts` form is required for
-        // `moduleResolution: node16`+.
+        // `moduleResolution: node16`+. Listed in `files` (below) so tsgo
+        // actually loads it; otherwise auto-discovery via
+        // `allowArbitraryExtensions` is unreliable across rootDirs
+        // boundaries (the `.d.svelte.ts` lives in the cache while the
+        // companion `.svelte` source lives in the workspace).
         let dts_path = layout.dts_path(&input.source_path);
         let stem = input
             .source_path
@@ -154,6 +158,7 @@ pub fn check(
              export * from \"./++{stem}.svelte.ts\";\n"
         );
         write_if_changed(&dts_path, &stub)?;
+        generated_paths.push(dts_path);
     }
 
     // Step 2: write overlay tsconfig.

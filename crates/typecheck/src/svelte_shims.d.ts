@@ -322,6 +322,27 @@ declare module 'svelte/elements' {
     export type HTMLAttributes<T extends EventTarget = HTMLElement> = any;
     export type SVGAttributes<T extends EventTarget = SVGElement> = any;
     export type DOMAttributes<T extends EventTarget = Element> = any;
+    // ClassValue mirrors clsx-style accepted shapes — string, array, or
+    // object map of class-name → boolean. Real Svelte 5.10+ exports this.
+    export type ClassValue = any;
+    // Event handler aliases — Svelte 5 re-exports these from
+    // svelte/elements as ergonomic shorthands.
+    export type EventHandler<E extends Event = Event, T extends EventTarget = Element> =
+        (event: E & { currentTarget: EventTarget & T }) => any;
+    export type ClipboardEventHandler<T extends EventTarget = Element> = EventHandler<ClipboardEvent, T>;
+    export type CompositionEventHandler<T extends EventTarget = Element> = EventHandler<CompositionEvent, T>;
+    export type DragEventHandler<T extends EventTarget = Element> = EventHandler<DragEvent, T>;
+    export type FocusEventHandler<T extends EventTarget = Element> = EventHandler<FocusEvent, T>;
+    export type FormEventHandler<T extends EventTarget = Element> = EventHandler<Event, T>;
+    export type ChangeEventHandler<T extends EventTarget = Element> = EventHandler<Event, T>;
+    export type KeyboardEventHandler<T extends EventTarget = Element> = EventHandler<KeyboardEvent, T>;
+    export type MouseEventHandler<T extends EventTarget = Element> = EventHandler<MouseEvent, T>;
+    export type TouchEventHandler<T extends EventTarget = Element> = EventHandler<TouchEvent, T>;
+    export type PointerEventHandler<T extends EventTarget = Element> = EventHandler<PointerEvent, T>;
+    export type UIEventHandler<T extends EventTarget = Element> = EventHandler<UIEvent, T>;
+    export type WheelEventHandler<T extends EventTarget = Element> = EventHandler<WheelEvent, T>;
+    export type AnimationEventHandler<T extends EventTarget = Element> = EventHandler<AnimationEvent, T>;
+    export type TransitionEventHandler<T extends EventTarget = Element> = EventHandler<TransitionEvent, T>;
 }
 
 declare module 'svelte/compiler' {

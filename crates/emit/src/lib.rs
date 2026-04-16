@@ -428,31 +428,45 @@ fn emit_void_block(
     // problem and matches what upstream svelte-check / upstream do.
     //
     // Names covered:
-    //   - synthesized helpers from analyze (template-check wrapper,
-    //     action-attrs holders, bind-pair tuples)
+    //   - the template-check wrapper (`__svn_tpl_check`)
     //   - store auto-subscribe aliases
     //   - destructured props (the component's public API; treat as used
     //     even if the body doesn't reference them directly)
     //   - script-declared bindings that are referenced from the template
     //     (component imports, locals only used in markup)
+    //
+    // NOT covered here (intentionally): `__svn_action_attrs_N` and
+    // `__svn_bind_pair_N`. Those names are declared *inside* the inner
+    // `__svn_tpl_check` function and self-voided there. Voiding them in
+    // the outer scope as well would fire TS2304 (cannot find name) since
+    // the inner declarations aren't visible from the outer function.
+    let mut emitted: HashSet<String> = HashSet::new();
+    let mut emit = |out: &mut String, name: &str| {
+        if emitted.insert(name.to_string()) {
+            let _ = writeln!(out, "    void {name};");
+        }
+    };
     for name in summary.void_refs.names() {
-        let _ = writeln!(out, "    void {name};");
+        if name.starts_with("__svn_action_attrs_") || name.starts_with("__svn_bind_pair_") {
+            continue;
+        }
+        emit(out, name);
     }
     for name in store_refs {
-        let _ = writeln!(out, "    void {name};");
+        emit(out, name);
         // The auto-subscribe alias `$store` references the store, but the
         // underlying `store` const is itself only used in template
         // expressions like `$store` (which the alias receives). Void the
         // base name so TS6133 doesn't fire on the original declaration.
         if let Some(base) = name.strip_prefix('$') {
-            let _ = writeln!(out, "    void {base};");
+            emit(out, base);
         }
     }
     for name in prop_names {
-        let _ = writeln!(out, "    void {name};");
+        emit(out, name);
     }
     for name in template_refs {
-        let _ = writeln!(out, "    void {name};");
+        emit(out, name);
     }
 }
 

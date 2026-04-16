@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "bug #1 from todo.md Phase 2.1: store identifier ending in $ (parent$) was truncated in the rune/store scanner — generated code declared $parent but the template used $parent$"
+}

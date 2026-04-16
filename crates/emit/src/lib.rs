@@ -123,13 +123,17 @@ fn emit_document_with_render_name(
     // `<script generics="T extends ...">` — expose the type params as
     // generics on the wrapping function so references inside the body
     // resolve. Falls back to no-generics when the attribute is absent.
+    //
+    // The wrapper is `async` because Svelte 5 components are allowed to
+    // use top-level `await` in their `<script>` body (TLA via Vite/SvelteKit
+    // is supported); without `async` we'd report TS1308 for those.
     let generics = extract_generics_attr(doc);
     match &generics {
         Some(g) => {
-            let _ = writeln!(out, "function {render_name}<{g}>() {{");
+            let _ = writeln!(out, "async function {render_name}<{g}>() {{");
         }
         None => {
-            let _ = writeln!(out, "function {render_name}() {{");
+            let _ = writeln!(out, "async function {render_name}() {{");
         }
     }
     if let Some(s) = &split {

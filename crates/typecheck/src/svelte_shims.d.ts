@@ -52,6 +52,22 @@ declare function $inspect<T extends any[]>(
 /** `$host<T>()` returns the host element for a custom-element component. */
 declare function $host<T = HTMLElement>(): T;
 
+// Internal helpers emitted by svelte-check-native into generated `.svelte.ts`
+// files. Declared here so the generated code type-checks. The `__svn_*`
+// prefix marks them as ours; user code shouldn't touch them.
+
+/** Iterable wrapper for `{#each}` blocks. Accepts arrays, ArrayLike (`{ length: N }`), and any other iterable. */
+declare function __svn_each_items<T>(value: T): Iterable<__SvnEachItem<T>>;
+
+/** Resolved item type for `__svn_each_items`. The `0 extends 1 & T` guard preserves `any` (avoids the conditional-type-distribution-collapses-to-unknown trap). */
+type __SvnEachItem<T> = 0 extends 1 & T
+    ? any
+    : T extends ArrayLike<infer U>
+        ? U
+        : T extends Iterable<infer U>
+            ? U
+            : never;
+
 //
 // We declare only what's needed to make type-checking succeed for code
 // that imports from the standard `svelte/*` entry points. When the real

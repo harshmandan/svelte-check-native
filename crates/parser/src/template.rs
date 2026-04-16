@@ -375,8 +375,10 @@ impl<'src> TemplateParser<'src> {
 
         match short {
             AwaitShortForm::Then(ctx) => {
-                // `{#await p then v}` — body is the then-branch directly.
-                let (body, t) = self.parse_fragment_until(None);
+                // `{#await p then v}` — body is the then-branch directly,
+                // BUT `{:catch}` is still allowed afterward in Svelte's
+                // grammar. So parse until either `:catch` or `{/await}`.
+                let (body, mut term) = self.parse_fragment_until(None);
                 then_branch = Some(ThenBranch {
                     context_range: ctx,
                     body: Fragment {
@@ -384,7 +386,19 @@ impl<'src> TemplateParser<'src> {
                         range: Range::new(0, 0),
                     },
                 });
-                self.finish_await_block(t, block_start);
+                if let Some(BlockTerminator::Catch { context_range }) = &term {
+                    let cctx = *context_range;
+                    let (catch_nodes, t2) = self.parse_fragment_until(None);
+                    catch_branch = Some(CatchBranch {
+                        context_range: cctx,
+                        body: Fragment {
+                            nodes: catch_nodes,
+                            range: Range::new(0, 0),
+                        },
+                    });
+                    term = t2;
+                }
+                self.finish_await_block(term, block_start);
             }
             AwaitShortForm::Catch(ctx) => {
                 let (body, t) = self.parse_fragment_until(None);
@@ -1088,6 +1102,20 @@ mod tests {
         };
         assert!(b.pending.is_none());
         assert!(b.then_branch.is_some());
+    }
+
+    #[test]
+    fn await_short_then_with_trailing_catch() {
+        // `{#await p then v} body {:catch} fallback {/await}` — Svelte
+        // grammar allows `:catch` after a then-short-form. Pre-fix this
+        // tripped UnterminatedElement{await} because the parser bailed
+        // at `{:catch}` expecting `{/await}`.
+        let frag = parse_ok("{#await p then v}<b/>{:catch}<c/>{/await}");
+        let Node::AwaitBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        assert!(b.then_branch.is_some());
+        assert!(b.catch_branch.is_some());
     }
 
     #[test]

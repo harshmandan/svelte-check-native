@@ -1084,7 +1084,10 @@ dependencies = [
 name = "svn-emit"
 version = "0.0.0"
 dependencies = [
+ "blake3",
  "oxc_allocator",
+ "oxc_ast",
+ "oxc_span",
  "smol_str",
  "svn-analyze",
  "svn-core",

@@ -191,7 +191,7 @@ fn run_typecheck(workspace: &Path, tsconfig: &Path, output_format: &str) -> Exit
         let (fragment, _template_errors) =
             svn_parser::parse_all_template_runs(&source, &doc.template.text_runs);
         let summary = svn_analyze::walk_template(&fragment, &source);
-        let emitted = svn_emit::emit_document(&doc, &fragment, &summary);
+        let emitted = svn_emit::emit_document(&doc, &fragment, &summary, file);
         inputs.push(svn_typecheck::CheckInput {
             source_path: file.clone(),
             generated_ts: emitted.typescript,
@@ -329,7 +329,7 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
         }
 
         let summary = svn_analyze::walk_template(&fragment, &source);
-        let emitted = svn_emit::emit_document(&doc, &fragment, &summary);
+        let emitted = svn_emit::emit_document(&doc, &fragment, &summary, file);
         let display_path = file
             .strip_prefix(workspace)
             .unwrap_or(file)

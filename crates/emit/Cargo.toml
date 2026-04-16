@@ -13,6 +13,7 @@ svn-core = { path = "../core" }
 svn-parser = { path = "../parser" }
 svn-analyze = { path = "../analyze" }
 smol_str.workspace = true
-
-[dev-dependencies]
 oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_span.workspace = true
+blake3.workspace = true

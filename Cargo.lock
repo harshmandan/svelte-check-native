@@ -1051,6 +1051,7 @@ dependencies = [
  "svn-svelte-compiler",
  "svn-typecheck",
  "tokio",
+ "walkdir",
 ]
 
 [[package]]
@@ -1083,6 +1084,7 @@ dependencies = [
 name = "svn-emit"
 version = "0.0.0"
 dependencies = [
+ "oxc_allocator",
  "smol_str",
  "svn-analyze",
  "svn-core",

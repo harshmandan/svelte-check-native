@@ -13,5 +13,9 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 pub mod rune;
+pub mod template_walker;
+pub mod void_refs;
 
 pub use rune::{RuneCall, RuneKind, find_runes};
+pub use template_walker::{BindThisTarget, TemplateSummary, walk_template};
+pub use void_refs::VoidRefRegistry;

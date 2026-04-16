@@ -30,6 +30,9 @@
 // Tests are allowed to panic loudly on setup failures.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
+use std::fmt::Write;
+
+use svn_analyze::TemplateSummary;
 use svn_parser::Document;
 
 /// Output of [`emit_document`].
@@ -44,10 +47,14 @@ pub struct EmitOutput {
 
 /// Emit the TypeScript scaffold for a parsed Svelte document.
 ///
-/// Scaffolding-pass behavior: passes script bodies through verbatim,
-/// wraps in `function $$render() { ... }`, and registers
-/// `__svn_tpl_check` as a void reference. No template traversal yet.
-pub fn emit_document(doc: &Document<'_>) -> EmitOutput {
+/// Reads the [`TemplateSummary`] from analyze to know which synthesized names
+/// need void-references. The summary's [`VoidRefRegistry`] is the single
+/// source of truth for what gets emitted in the consolidated `void (...)`
+/// block — replaces the per-feature reactive `void x;` emissions that
+/// littered `-rs`'s transformer.
+///
+/// [`VoidRefRegistry`]: svn_analyze::VoidRefRegistry
+pub fn emit_document(doc: &Document<'_>, summary: &TemplateSummary) -> EmitOutput {
     let estimated_capacity = doc.source.len().saturating_mul(2).saturating_add(256);
     let mut out = String::with_capacity(estimated_capacity);
 
@@ -71,24 +78,74 @@ pub fn emit_document(doc: &Document<'_>) -> EmitOutput {
 
     out.push_str("    async function __svn_tpl_check() {\n");
     out.push_str("        // template type-check body (not yet emitted)\n");
+    emit_action_attrs_declarations(&mut out, summary);
+    emit_bind_pair_declarations(&mut out, summary);
     out.push_str("    }\n");
-    out.push_str("    void __svn_tpl_check;\n");
+
+    emit_void_block(&mut out, summary);
 
     out.push_str("}\n");
-    out.push_str("$$render;\n"); // reference $$render so noUnusedLocals doesn't fire
+    out.push_str("$$render;\n");
 
     EmitOutput { typescript: out }
+}
+
+/// Emit `let __svn_action_attrs_N: any = {};` declarations inside
+/// `__svn_tpl_check` — one per `use:` directive seen in the template.
+///
+/// We currently emit them as untyped placeholders. The real action-return
+/// helper (`__svn_ensure_action<T>`) gets wired in once the typecheck crate
+/// is ready.
+fn emit_action_attrs_declarations(out: &mut String, summary: &TemplateSummary) {
+    for name in summary.void_refs.names() {
+        if name.starts_with("__svn_action_attrs_") {
+            let _ = writeln!(out, "        let {name}: any = {{}};");
+        }
+    }
+}
+
+/// Emit `let __svn_bind_pair_N: [() => any, (v: any) => void] = ...;` placeholders.
+fn emit_bind_pair_declarations(out: &mut String, summary: &TemplateSummary) {
+    for name in summary.void_refs.names() {
+        if name.starts_with("__svn_bind_pair_") {
+            let _ = writeln!(
+                out,
+                "        let {name}: [() => any, (v: any) => void] = [() => undefined as any, () => {{}}];"
+            );
+        }
+    }
+}
+
+/// Emit the consolidated `void (a, b, c, ...);` block that prevents
+/// `noUnusedLocals` from firing on every synthesized name.
+fn emit_void_block(out: &mut String, summary: &TemplateSummary) {
+    let names = summary.void_refs.names();
+    if names.is_empty() {
+        return;
+    }
+    out.push_str("    void (");
+    for (i, name) in names.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(name);
+    }
+    out.push_str(");\n");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use svn_parser::parse_sections;
+    use svn_analyze::walk_template;
+    use svn_parser::{parse_all_template_runs, parse_sections};
 
     fn emit_str(src: &str) -> String {
         let (doc, errors) = parse_sections(src);
         assert!(errors.is_empty(), "parse errors: {errors:?}");
-        emit_document(&doc).typescript
+        let (fragment, errors) = parse_all_template_runs(src, &doc.template.text_runs);
+        assert!(errors.is_empty(), "template parse errors: {errors:?}");
+        let summary = walk_template(&fragment);
+        emit_document(&doc, &summary).typescript
     }
 
     #[test]
@@ -96,7 +153,7 @@ mod tests {
         let out = emit_str("");
         assert!(out.contains("function $$render"));
         assert!(out.contains("__svn_tpl_check"));
-        assert!(out.contains("void __svn_tpl_check"));
+        assert!(out.contains("void (__svn_tpl_check"));
     }
 
     #[test]
@@ -128,16 +185,42 @@ mod tests {
     }
 
     #[test]
-    fn template_check_wrapper_is_void_referenced() {
-        // Bug fixture #7 grey-box: the wrapper must be referenced.
+    fn template_check_wrapper_in_void_block() {
+        // Bug fixture #7 grey-box.
         let out = emit_str("<p>hi</p>");
-        assert!(out.contains("void __svn_tpl_check"));
+        assert!(out.contains("void ("));
+        assert!(out.contains("__svn_tpl_check"));
+    }
+
+    #[test]
+    fn use_directive_emits_action_attrs() {
+        // Bug fixture #8 grey-box.
+        let out = emit_str("<div use:tooltip>x</div>");
+        assert!(out.contains("__svn_action_attrs_0"));
+        // Both declared (inside __svn_tpl_check) and void-referenced.
+        assert!(out.contains("let __svn_action_attrs_0"));
+    }
+
+    #[test]
+    fn bind_pair_emits_bind_pair_declaration() {
+        // Bug fixture #9 grey-box.
+        let out = emit_str("<input bind:value={() => g(), (v) => s(v)} />");
+        assert!(out.contains("__svn_bind_pair_0"));
+        assert!(out.contains("let __svn_bind_pair_0"));
     }
 
     #[test]
     fn render_function_is_referenced() {
         let out = emit_str("<p>hi</p>");
-        // $$render must also be self-referenced to avoid TS6133.
         assert!(out.contains("$$render;"));
+    }
+
+    #[test]
+    fn void_block_is_consolidated() {
+        // Multiple synthesized names should appear in ONE void(...) block,
+        // not multiple void X; statements.
+        let out = emit_str("<div use:a use:b>x</div>");
+        let void_count = out.matches("    void (").count();
+        assert_eq!(void_count, 1, "expected exactly one void(...) block");
     }
 }

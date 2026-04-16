@@ -21,8 +21,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+mod load;
 mod parse;
 
+pub use load::{LoadError, load};
 pub use parse::{ParseError, parse_file, parse_str};
 
 /// A single parsed tsconfig file.

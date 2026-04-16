@@ -67,6 +67,7 @@ oxc_span = "0.45"
 
 # Testing
 insta = { version = "1", features = ["yaml", "filters"] }
+tempfile = "3"
 
 [profile.release]
 lto = "thin"

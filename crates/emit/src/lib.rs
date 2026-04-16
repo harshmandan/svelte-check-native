@@ -640,9 +640,11 @@ fn rewrite_definite_assignment_in_place(out: &mut String, target_names: &[SmolSt
 }
 
 /// At byte position `i`, try to match `let <name>` where `<name>` is one
-/// of `target_names` AND is followed by `:` (after optional whitespace).
-/// Returns the byte position immediately after the matched name on
-/// success.
+/// of `target_names` AND is followed by `:` (after optional whitespace)
+/// AND has NO `=` initializer before the next `;` or newline (TS1263:
+/// "Declarations with initializers cannot also have definite assignment
+/// assertions"). Returns the byte position immediately after the matched
+/// name on success.
 fn try_match_let_decl(bytes: &[u8], i: usize, target_names: &[SmolStr]) -> Option<usize> {
     if i + 3 > bytes.len() || &bytes[i..i + 3] != b"let" {
         return None;
@@ -676,6 +678,22 @@ fn try_match_let_decl(bytes: &[u8], i: usize, target_names: &[SmolStr]) -> Optio
     }
     if q >= bytes.len() || bytes[q] != b':' {
         return None;
+    }
+    // Walk forward through the type annotation looking for `=` (= initializer)
+    // before `;` or newline. Tracks `<>{}[]()` depth so generic args like
+    // `Foo<T = U>` and object types like `{ k: V }` don't trigger false hits.
+    let mut s = q + 1;
+    let mut paren_depth: i32 = 0;
+    while s < bytes.len() {
+        let c = bytes[s];
+        match c {
+            b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
+            b')' | b']' | b'}' | b'>' => paren_depth -= 1,
+            b'=' if paren_depth == 0 => return None, // has initializer
+            b';' | b'\n' if paren_depth == 0 => break,
+            _ => {}
+        }
+        s += 1;
     }
     Some(name_end)
 }

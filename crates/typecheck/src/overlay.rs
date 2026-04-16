@@ -59,17 +59,22 @@ pub fn build(
 
     let mut root_dirs: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let push_root = |dir: &Path, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
-        let s = dir.to_string_lossy().to_string();
-        if seen.insert(s.clone()) {
-            out.push(s);
-        }
-    };
+    let push_root =
+        |dir: &Path, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
+            let s = dir.to_string_lossy().to_string();
+            if seen.insert(s.clone()) {
+                out.push(s);
+            }
+        };
     // Overlay svelte subdir first — that's where generated files live.
     push_root(layout.svelte_dir.as_path(), &mut root_dirs, &mut seen);
     // Workspace root second — fallback for projects without their own
     // rootDirs entries.
-    push_root(layout.root.as_path().parent().unwrap_or(Path::new("")), &mut root_dirs, &mut seen);
+    push_root(
+        layout.root.as_path().parent().unwrap_or(Path::new("")),
+        &mut root_dirs,
+        &mut seen,
+    );
     // Whatever the user's extends chain declared.
     for entry in collect_user_root_dirs(user_tsconfig) {
         push_root(entry.as_path(), &mut root_dirs, &mut seen);
@@ -88,7 +93,7 @@ pub fn build(
         for v in &values {
             // The cache mirror sits at <overlay>/svelte/<same-relative-segment>.
             // The tail after the workspace root in `v` is what we mirror.
-            let mirrored = mirror_into_overlay(layout, &v);
+            let mirrored = mirror_into_overlay(layout, v);
             if let Some(m) = mirrored {
                 if !merged.iter().any(|x| x == &m) {
                     merged.push(m);
@@ -100,7 +105,10 @@ pub fn build(
                 merged.push(v);
             }
         }
-        paths_map.insert(pattern, Value::Array(merged.into_iter().map(Value::String).collect()));
+        paths_map.insert(
+            pattern,
+            Value::Array(merged.into_iter().map(Value::String).collect()),
+        );
     }
 
     let mut compiler_options = serde_json::Map::new();
@@ -132,10 +140,7 @@ pub fn build(
         // is essentially unused for resolution. The TS5102 deprecation
         // warning that tsgo emits is filtered out in
         // svn-typecheck::map_diagnostic.
-        compiler_options.insert(
-            "baseUrl".into(),
-            json!(layout.root.to_string_lossy()),
-        );
+        compiler_options.insert("baseUrl".into(), json!(layout.root.to_string_lossy()));
     }
 
     json!({
@@ -225,16 +230,13 @@ fn collect_user_paths(tsconfig: &Path) -> Vec<(String, Vec<String>)> {
                 }
             }
         }
-        current = json
-            .get("extends")
-            .and_then(|v| v.as_str())
-            .map(|s| {
-                if Path::new(s).is_absolute() {
-                    PathBuf::from(s)
-                } else {
-                    dir.join(s)
-                }
-            });
+        current = json.get("extends").and_then(|v| v.as_str()).map(|s| {
+            if Path::new(s).is_absolute() {
+                PathBuf::from(s)
+            } else {
+                dir.join(s)
+            }
+        });
     }
     order
         .into_iter()
@@ -284,16 +286,13 @@ fn collect_user_root_dirs(tsconfig: &Path) -> Vec<PathBuf> {
         }
         // Follow `extends` (string only — we don't support extends arrays
         // yet; rare in practice).
-        current = json
-            .get("extends")
-            .and_then(|v| v.as_str())
-            .map(|s| {
-                if Path::new(s).is_absolute() {
-                    PathBuf::from(s)
-                } else {
-                    dir.join(s)
-                }
-            });
+        current = json.get("extends").and_then(|v| v.as_str()).map(|s| {
+            if Path::new(s).is_absolute() {
+                PathBuf::from(s)
+            } else {
+                dir.join(s)
+            }
+        });
     }
     out
 }

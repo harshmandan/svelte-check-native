@@ -222,7 +222,9 @@ fn walk_directive(
                 summary.void_refs.register(name);
                 counters.bind_pair += 1;
             }
-            Some(DirectiveValue::Expression { expression_range, .. }) => {
+            Some(DirectiveValue::Expression {
+                expression_range, ..
+            }) => {
                 // `bind:this={x}` and `bind:foo={x}` (any prop name) — if
                 // the bound value is a simple identifier, that local
                 // gets assigned asynchronously by Svelte (bind:this when

@@ -120,8 +120,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
                     // record them for void-emission.
                     drop_spans.push(span);
                     for spec in &decl.specifiers {
-                        exported_locals
-                            .push(SmolStr::from(spec.local.name().as_str()));
+                        exported_locals.push(SmolStr::from(spec.local.name().as_str()));
                     }
                 }
             }

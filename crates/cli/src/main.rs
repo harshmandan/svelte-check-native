@@ -108,8 +108,15 @@ struct Cli {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    // CLAUDECODE=1 → force machine output (matches upstream svelte-check).
-    let output = if std::env::var("CLAUDECODE").as_deref() == Ok("1") {
+    // Coding-agent CLIs set marker env vars on spawned subprocesses so child
+    // tools can adapt their output. Upstream svelte-check honors CLAUDECODE=1;
+    // we extend the same machine-output default to Gemini CLI (GEMINI_CLI=1)
+    // and OpenAI Codex CLI (CODEX_CI=1) since they consume tool output the
+    // same way.
+    let in_agent_cli = ["CLAUDECODE", "GEMINI_CLI", "CODEX_CI"]
+        .iter()
+        .any(|k| std::env::var(k).as_deref() == Ok("1"));
+    let output = if in_agent_cli {
         "machine".to_string()
     } else {
         cli.output.clone()
@@ -296,7 +303,10 @@ fn which_on_path(name: &str) -> std::io::Result<PathBuf> {
             return Ok(candidate);
         }
     }
-    Err(std::io::Error::new(std::io::ErrorKind::NotFound, name.to_string()))
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        name.to_string(),
+    ))
 }
 
 /// Which diagnostic sources are active. Defaults to all-enabled.
@@ -327,9 +337,17 @@ fn parse_diagnostic_sources(spec: Option<&str>) -> Result<DiagnosticSources, Str
     let Some(spec) = spec else {
         // Default = everything we actually support. `css` is reserved
         // and stays off so we don't claim to lint CSS when we don't.
-        return Ok(DiagnosticSources { js: true, svelte: true, css: false });
+        return Ok(DiagnosticSources {
+            js: true,
+            svelte: true,
+            css: false,
+        });
     };
-    let mut sources = DiagnosticSources { js: false, svelte: false, css: false };
+    let mut sources = DiagnosticSources {
+        js: false,
+        svelte: false,
+        css: false,
+    };
     for entry in spec.split(',') {
         let entry = entry.trim().to_lowercase();
         match entry.as_str() {
@@ -377,7 +395,7 @@ fn apply_compiler_override(
     base: svn_svelte_compiler::Severity,
     overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
 ) -> Option<svn_typecheck::Severity> {
-    let resolved = overrides
+    overrides
         .get(code)
         .copied()
         .map(|o| match o {
@@ -390,8 +408,7 @@ fn apply_compiler_override(
                 svn_svelte_compiler::Severity::Error => svn_typecheck::Severity::Error,
                 svn_svelte_compiler::Severity::Warning => svn_typecheck::Severity::Warning,
             })
-        });
-    resolved
+        })
 }
 
 fn parse_compiler_warnings(
@@ -556,11 +573,8 @@ fn run_typecheck(
             Ok(per_file) => {
                 for (path, warnings) in per_file {
                     for w in warnings {
-                        let severity = apply_compiler_override(
-                            &w.code,
-                            w.severity,
-                            compiler_overrides,
-                        );
+                        let severity =
+                            apply_compiler_override(&w.code, w.severity, compiler_overrides);
                         let Some(severity) = severity else { continue };
                         // Documented compiler-warning codes link to the
                         // svelte.dev compiler-warnings reference page
@@ -584,9 +598,7 @@ fn run_typecheck(
                             end_line: w.end.line,
                             end_column: w.end.column.saturating_add(1),
                             severity,
-                            code: svn_typecheck::DiagnosticCode::Slug(
-                                w.code.clone(),
-                            ),
+                            code: svn_typecheck::DiagnosticCode::Slug(w.code.clone()),
                             // Raw message — no slug pollution. The slug
                             // surfaces via `code` separately.
                             message: w.message,
@@ -739,7 +751,10 @@ fn print_machine(
             // a documentation URL.
             let mut obj = serde_json::Map::new();
             obj.insert("type".to_string(), serde_json::json!(type_label));
-            obj.insert("filename".to_string(), serde_json::json!(rel.to_string_lossy()));
+            obj.insert(
+                "filename".to_string(),
+                serde_json::json!(rel.to_string_lossy()),
+            );
             obj.insert(
                 "start".to_string(),
                 serde_json::json!({
@@ -882,12 +897,7 @@ fn paint(text: &str, code: &str, color: bool) -> String {
 /// Read the source file and produce a short code frame around the
 /// (1-based) diagnostic line. Returns an empty string on read failure or
 /// out-of-range line numbers — caller falls back to no-frame output.
-fn format_code_frame(
-    path: &Path,
-    line: u32,
-    column: u32,
-    span_length: Option<u32>,
-) -> String {
+fn format_code_frame(path: &Path, line: u32, column: u32, span_length: Option<u32>) -> String {
     let Ok(source) = std::fs::read_to_string(path) else {
         return String::new();
     };
@@ -902,10 +912,7 @@ fn format_code_frame(
     let width = (end).to_string().len();
     for (i, &content) in lines[start..end].iter().enumerate() {
         let ln = start + i + 1;
-        let _ = std::fmt::Write::write_fmt(
-            &mut out,
-            format_args!("{ln:>width$} | {content}\n"),
-        );
+        let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{ln:>width$} | {content}\n"));
         if ln == line as usize {
             let pad = width + 3 + column.saturating_sub(1) as usize;
             let underline = "^".repeat(span_length.unwrap_or(1).max(1) as usize);
@@ -965,10 +972,7 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
     ExitCode::from(0)
 }
 
-fn discover_svelte_files(
-    workspace: &Path,
-    ignore: Option<&globset::GlobSet>,
-) -> Vec<PathBuf> {
+fn discover_svelte_files(workspace: &Path, ignore: Option<&globset::GlobSet>) -> Vec<PathBuf> {
     WalkDir::new(workspace)
         .into_iter()
         .filter_entry(|e| {

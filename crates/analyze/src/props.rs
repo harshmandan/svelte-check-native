@@ -44,22 +44,15 @@ pub struct PropInfo {
 /// return the local names introduced. Order is source order.
 pub fn find_props(program: &oxc_ast::ast::Program<'_>) -> Vec<PropInfo> {
     let mut out = Vec::new();
+    // Only top-level: $props() calls elsewhere are not component-level
+    // prop declarations.
     for stmt in &program.body {
-        match stmt {
-            Statement::VariableDeclaration(decl) => {
-                for declarator in &decl.declarations {
-                    if declarator
-                        .init
-                        .as_ref()
-                        .is_some_and(is_props_call_like)
-                    {
-                        collect_from_binding(&declarator.id.kind, &mut out);
-                    }
+        if let Statement::VariableDeclaration(decl) = stmt {
+            for declarator in &decl.declarations {
+                if declarator.init.as_ref().is_some_and(is_props_call_like) {
+                    collect_from_binding(&declarator.id.kind, &mut out);
                 }
             }
-            // We only look at top-level; $props() calls elsewhere are not
-            // component-level prop declarations.
-            _ => {}
         }
     }
     out

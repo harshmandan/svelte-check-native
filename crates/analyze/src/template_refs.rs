@@ -52,7 +52,7 @@ use std::collections::HashSet;
 use smol_str::SmolStr;
 use svn_core::Range;
 use svn_parser::{
-    Attribute, AttrValuePart, Directive, DirectiveKind, DirectiveValue, Fragment, Node,
+    AttrValuePart, Attribute, Directive, DirectiveKind, DirectiveValue, Fragment, Node,
 };
 
 /// Find every root identifier referenced in the template fragment.
@@ -78,12 +78,7 @@ fn walk_fragment(
     }
 }
 
-fn walk_node(
-    node: &Node,
-    source: &str,
-    seen: &mut HashSet<SmolStr>,
-    out: &mut Vec<SmolStr>,
-) {
+fn walk_node(node: &Node, source: &str, seen: &mut HashSet<SmolStr>, out: &mut Vec<SmolStr>) {
     match node {
         Node::Element(e) => {
             walk_attributes(&e.attributes, source, seen, out);
@@ -156,7 +151,10 @@ fn walk_attributes(
             Attribute::Plain(p) => {
                 if let Some(v) = &p.value {
                     for part in &v.parts {
-                        if let AttrValuePart::Expression { expression_range, .. } = part {
+                        if let AttrValuePart::Expression {
+                            expression_range, ..
+                        } = part
+                        {
                             extract_idents(source, *expression_range, seen, out);
                         }
                     }
@@ -193,16 +191,25 @@ fn walk_directive(
     }
 
     match &d.value {
-        Some(DirectiveValue::Expression { expression_range, .. }) => {
+        Some(DirectiveValue::Expression {
+            expression_range, ..
+        }) => {
             extract_idents(source, *expression_range, seen, out);
         }
-        Some(DirectiveValue::BindPair { getter_range, setter_range, .. }) => {
+        Some(DirectiveValue::BindPair {
+            getter_range,
+            setter_range,
+            ..
+        }) => {
             extract_idents(source, *getter_range, seen, out);
             extract_idents(source, *setter_range, seen, out);
         }
         Some(DirectiveValue::Quoted(v)) => {
             for part in &v.parts {
-                if let AttrValuePart::Expression { expression_range, .. } = part {
+                if let AttrValuePart::Expression {
+                    expression_range, ..
+                } = part
+                {
                     extract_idents(source, *expression_range, seen, out);
                 }
             }
@@ -238,7 +245,9 @@ fn push_ident(name: &str, seen: &mut HashSet<SmolStr>, out: &mut Vec<SmolStr>) {
 
 fn is_valid_ident(s: &str) -> bool {
     let mut chars = s.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !is_ident_start(first) {
         return false;
     }
@@ -311,12 +320,7 @@ fn is_keyword(s: &str) -> bool {
 /// Skips string literals, template literals (recursing into `${...}`),
 /// regex literals, and comments. Suppresses identifiers preceded by `.`
 /// or `?.` so `obj.prop` only yields `obj`.
-fn extract_idents(
-    source: &str,
-    range: Range,
-    seen: &mut HashSet<SmolStr>,
-    out: &mut Vec<SmolStr>,
-) {
+fn extract_idents(source: &str, range: Range, seen: &mut HashSet<SmolStr>, out: &mut Vec<SmolStr>) {
     let Some(slice) = source.get(range.start as usize..range.end as usize) else {
         return;
     };
@@ -384,10 +388,8 @@ fn extract_idents(
                         }
                         i += 1;
                     }
-                    let inner_range = Range::new(
-                        range.start + inner_start as u32,
-                        range.start + i as u32,
-                    );
+                    let inner_range =
+                        Range::new(range.start + inner_start as u32, range.start + i as u32);
                     extract_idents(source, inner_range, seen, out);
                     if i < bytes.len() {
                         i += 1; // past `}`

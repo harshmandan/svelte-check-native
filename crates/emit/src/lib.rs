@@ -286,13 +286,14 @@ fn emit_document_with_render_name(
     let mut store_refs: Vec<SmolStr> = {
         let mut accumulated: Vec<SmolStr> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
-        let push_unique = |found: Vec<SmolStr>, seen: &mut HashSet<String>, out: &mut Vec<SmolStr>| {
-            for name in found {
-                if seen.insert(name.to_string()) {
-                    out.push(name);
+        let push_unique =
+            |found: Vec<SmolStr>, seen: &mut HashSet<String>, out: &mut Vec<SmolStr>| {
+                for name in found {
+                    if seen.insert(name.to_string()) {
+                        out.push(name);
+                    }
                 }
-            }
-        };
+            };
         if let Some(module_script) = &doc.module_script {
             push_unique(
                 find_store_refs_with_bindings(module_script.content, &script_bindings),
@@ -329,8 +330,7 @@ fn emit_document_with_render_name(
             .collect();
         let mut tpl_voids = Vec::new();
         let mut tpl_stores = Vec::new();
-        let mut store_seen: HashSet<String> =
-            store_refs.iter().map(|s| s.to_string()).collect();
+        let mut store_seen: HashSet<String> = store_refs.iter().map(|s| s.to_string()).collect();
         for name in find_template_refs(fragment, doc.source) {
             // `$foo` where `foo` is a script binding (and not already a
             // declared store) — synthesize the auto-subscribe alias.
@@ -475,7 +475,10 @@ fn current_line(s: &str) -> u32 {
 /// 1-based line number at the given byte offset in `source`.
 #[inline]
 fn source_line_at(source: &str, offset: u32) -> u32 {
-    1 + source[..offset as usize].bytes().filter(|&b| b == b'\n').count() as u32
+    1 + source[..offset as usize]
+        .bytes()
+        .filter(|&b| b == b'\n')
+        .count() as u32
 }
 
 /// Count the number of complete lines in `text` (the count of `\n` plus
@@ -725,28 +728,16 @@ fn all_identifiers(binding: &str) -> Vec<String> {
     let bytes = binding.as_bytes();
     let mut out: Vec<String> = Vec::new();
     let mut i = 0;
-    let mut after_colon_in_object = false;
     let mut depth_brace = 0usize; // tracks `{ ... }` for object key:value
     while i < bytes.len() {
         let b = bytes[i];
         match b {
             b'{' => {
                 depth_brace += 1;
-                after_colon_in_object = false;
                 i += 1;
             }
             b'}' => {
                 depth_brace = depth_brace.saturating_sub(1);
-                after_colon_in_object = false;
-                i += 1;
-            }
-            b':' if depth_brace > 0 => {
-                // Inside an object pattern: the next ident is the local name.
-                after_colon_in_object = true;
-                i += 1;
-            }
-            b',' => {
-                after_colon_in_object = false;
                 i += 1;
             }
             b'=' => {
@@ -779,28 +770,21 @@ fn all_identifiers(binding: &str) -> Vec<String> {
                 let take = if depth_brace > 0 {
                     // Inside an object pattern: `key: local` — only collect
                     // the local. `{ a }` shorthand has no colon so `a`
-                    // counts (after_colon_in_object is false but depth>0).
-                    // Look ahead: if the next non-ws byte is `:`, this is
-                    // a key, skip it.
+                    // counts. Look ahead: if the next non-ws byte is `:`,
+                    // this identifier is a key and must be skipped;
+                    // otherwise it is a binding (either the local after
+                    // a colon, or a shorthand entry).
                     let mut j = i;
                     while j < bytes.len() && bytes[j].is_ascii_whitespace() {
                         j += 1;
                     }
-                    let next_is_colon = bytes.get(j) == Some(&b':');
-                    if next_is_colon {
-                        false
-                    } else if after_colon_in_object {
-                        true
-                    } else {
-                        true // shorthand `{ a }`
-                    }
+                    bytes.get(j) != Some(&b':')
                 } else {
                     true
                 };
                 if take {
                     out.push(name.to_string());
                 }
-                after_colon_in_object = false;
             }
             _ => {
                 i += 1;

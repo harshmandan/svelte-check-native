@@ -59,10 +59,7 @@ pub fn find_store_refs(program: &oxc_ast::ast::Program<'_>, source: &str) -> Vec
 /// letting callers union module-script and instance-script bindings
 /// (a `$store` reference in instance can resolve to a binding declared
 /// in `<script module>`).
-pub fn find_store_refs_with_bindings(
-    source: &str,
-    bound: &HashSet<String>,
-) -> Vec<SmolStr> {
+pub fn find_store_refs_with_bindings(source: &str, bound: &HashSet<String>) -> Vec<SmolStr> {
     if bound.is_empty() {
         return Vec::new();
     }

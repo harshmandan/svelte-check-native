@@ -199,6 +199,18 @@ impl Worker {
                 Err(e) => return Err(BridgeError::BadResponse(e.to_string())),
             };
             if parsed.id == id {
+                // The bridge surfaces an `error` field only when compile
+                // threw and we couldn't pin the failure to a position
+                // (parse errors with location are emitted as a warning
+                // entry instead). Log it on stderr so the user sees that
+                // the file was skipped, then return whatever warnings we
+                // do have.
+                if let Some(msg) = parsed.error.as_deref() {
+                    eprintln!(
+                        "svelte-check-native: bridge error on {}: {msg}",
+                        filename.display(),
+                    );
+                }
                 return Ok(parsed.warnings.into_iter().map(Into::into).collect());
             }
             // Out-of-order — shouldn't happen with sequential protocol;
@@ -224,10 +236,9 @@ impl Drop for Worker {
 struct BridgeResponse {
     id: u64,
     warnings: Vec<RawWarning>,
-    // Surfaced for future logging — the host treats per-file errors as
-    // an empty result, so we don't currently propagate the message.
+    // Optional bridge-level error message, distinct from a compile error
+    // pinned to a source location. `compile_one` logs it on stderr.
     #[serde(default)]
-    #[allow(dead_code)]
     error: Option<String>,
 }
 
@@ -284,7 +295,10 @@ fn which_in_path(name: &str) -> std::io::Result<PathBuf> {
             return Ok(candidate);
         }
     }
-    Err(std::io::Error::new(std::io::ErrorKind::NotFound, name.to_string()))
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        name.to_string(),
+    ))
 }
 
 /// Walk up from `start` looking for `node_modules/svelte/compiler/index.js`

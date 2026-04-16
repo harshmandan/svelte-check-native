@@ -442,7 +442,8 @@ fn parse_quoted_value(
         if b == quote {
             let chunk_end = scanner.pos();
             if chunk_end > chunk_start {
-                let content = scanner.source()[chunk_start as usize..chunk_end as usize].to_string();
+                let content =
+                    scanner.source()[chunk_start as usize..chunk_end as usize].to_string();
                 parts.push(AttrValuePart::Text {
                     content,
                     range: Range::new(chunk_start, chunk_end),

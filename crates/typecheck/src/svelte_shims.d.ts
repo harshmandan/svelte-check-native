@@ -2,6 +2,57 @@
 // project cache so that components can be type-checked even when the
 // real `svelte` npm package is not installed in node_modules.
 //
+// Includes ambient declarations for the Svelte 5 runes ($state,
+// $derived, $effect, $props, $bindable, $inspect, $host). These are
+// macros that the Svelte compiler rewrites at build time — TypeScript
+// needs them declared as globals so references to them in `<script>`
+// bodies don't fire TS2304 "Cannot find name".
+
+// Runes are declared at top level (script mode) rather than inside
+// `declare global` because this file is a `.d.ts` script (no top-level
+// imports/exports), so its declarations are already global.
+
+/** `$state<T>(initial?)` declares reactive state. Macro. */
+declare function $state<T>(initial: T): T;
+declare function $state<T>(): T | undefined;
+declare namespace $state {
+    function raw<T>(initial: T): T;
+    function raw<T>(): T | undefined;
+    function snapshot<T>(value: T): T;
+}
+
+/** `$derived(expression)` re-evaluates whenever its dependencies change. */
+declare function $derived<T>(expression: T): T;
+declare namespace $derived {
+    function by<T>(fn: () => T): T;
+}
+
+/** `$effect(fn)` runs a side effect after every dependency change. */
+declare function $effect(fn: () => void | (() => void)): void;
+declare namespace $effect {
+    function pre(fn: () => void | (() => void)): void;
+    function root(fn: () => void | (() => void)): () => void;
+    function tracking(): boolean;
+}
+
+/** `$props<T>()` declares the component's prop bag. */
+declare function $props<T = Record<string, any>>(): T;
+declare namespace $props {
+    function id(): string;
+}
+
+/** `$bindable<T>(fallback?)` marks a prop as two-way bindable. */
+declare function $bindable<T>(fallback?: T): T;
+
+/** `$inspect(...values)` logs values whenever they change in dev. */
+declare function $inspect<T extends any[]>(
+    ...values: T
+): { with(fn: (type: 'init' | 'update', ...values: T) => void): void };
+
+/** `$host<T>()` returns the host element for a custom-element component. */
+declare function $host<T = HTMLElement>(): T;
+
+//
 // We declare only what's needed to make type-checking succeed for code
 // that imports from the standard `svelte/*` entry points. When the real
 // `svelte` package IS installed, its declarations win because they live

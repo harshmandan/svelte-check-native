@@ -434,33 +434,76 @@ fn parse_quoted_value(
     let start = scanner.pos();
     let quote = scanner.peek_byte()?;
     scanner.advance_byte();
-    let text_start = scanner.pos();
+
+    let mut parts: Vec<AttrValuePart> = Vec::new();
+    let mut chunk_start = scanner.pos();
 
     while let Some(b) = scanner.peek_byte() {
         if b == quote {
-            let text_end = scanner.pos();
-            scanner.advance_byte();
-            let content = scanner.source()[text_start as usize..text_end as usize].to_string();
-            return Some(AttrValue {
-                parts: vec![AttrValuePart::Text {
+            let chunk_end = scanner.pos();
+            if chunk_end > chunk_start {
+                let content = scanner.source()[chunk_start as usize..chunk_end as usize].to_string();
+                parts.push(AttrValuePart::Text {
                     content,
-                    range: Range::new(text_start, text_end),
-                }],
+                    range: Range::new(chunk_start, chunk_end),
+                });
+            }
+            scanner.advance_byte();
+            return Some(AttrValue {
+                parts,
                 range: Range::new(start, scanner.pos()),
                 quoted: true,
             });
+        }
+        if b == b'{' {
+            // Interpolation `{...}` inside the quoted value (Svelte
+            // attribute concatenation: `class="foo {bar} baz"`).
+            // Flush the preceding text, parse the mustache body using
+            // the shared brace-balancing scanner, and push an
+            // Expression part covering the body.
+            let text_end = scanner.pos();
+            if text_end > chunk_start {
+                let content = scanner.source()[chunk_start as usize..text_end as usize].to_string();
+                parts.push(AttrValuePart::Text {
+                    content,
+                    range: Range::new(chunk_start, text_end),
+                });
+            }
+            let brace_start = scanner.pos();
+            scanner.advance_byte(); // past `{`
+            let expr_start = scanner.pos();
+            let Some(end) = find_mustache_end(scanner.source(), expr_start) else {
+                // Unterminated mustache inside the quoted attribute —
+                // best-effort: stop here and return what we have. The
+                // caller will continue scanning the surrounding markup.
+                return Some(AttrValue {
+                    parts,
+                    range: Range::new(start, scanner.pos()),
+                    quoted: true,
+                });
+            };
+            scanner.set_pos(end + 1);
+            parts.push(AttrValuePart::Expression {
+                expression_range: Range::new(expr_start, end),
+                range: Range::new(brace_start, end + 1),
+            });
+            chunk_start = scanner.pos();
+            continue;
         }
         scanner.advance_char();
     }
 
     // Unterminated string — consume to EOF and return what we have.
     let text_end = scanner.pos();
-    let content = scanner.source()[text_start as usize..text_end as usize].to_string();
-    Some(AttrValue {
-        parts: vec![AttrValuePart::Text {
+    if text_end > chunk_start {
+        let content = scanner.source()[chunk_start as usize..text_end as usize].to_string();
+        parts.push(AttrValuePart::Text {
             content,
-            range: Range::new(text_start, text_end),
-        }],
+            range: Range::new(chunk_start, text_end),
+        });
+    }
+    Some(AttrValue {
+        parts,
         range: Range::new(start, scanner.pos()),
         quoted: true,
     })

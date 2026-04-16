@@ -506,14 +506,11 @@ mod tests {
 
     #[test]
     fn quoted_attr_with_interpolation() {
-        // The structural parser currently emits a single Text part for
-        // quoted attribute values and doesn't lift `{...}` interpolations
-        // inside them into expression parts. Once the attribute scanner
-        // recognizes interpolations within quoted values, this test should
-        // assert `r.contains("bar")`. For now the documented behavior is:
-        // no idents collected from inside quoted strings.
+        // `class="foo {bar} baz"` — the parser splits the quoted value
+        // into Text/Expression parts and the template-ref pass walks the
+        // expression part for identifiers.
         let r = refs_in(r#"<div class="foo {bar} baz" />"#);
-        assert!(!r.contains(&"bar".to_string()));
+        assert!(r.contains(&"bar".to_string()));
     }
 
     #[test]

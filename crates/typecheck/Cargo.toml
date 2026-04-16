@@ -14,6 +14,7 @@ svn-emit = { path = "../emit" }
 anyhow.workspace = true
 tokio.workspace = true
 blake3.workspace = true
+json5.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 walkdir.workspace = true

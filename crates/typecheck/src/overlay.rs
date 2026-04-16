@@ -5,16 +5,29 @@
 //! to consume our virtual files (`allowArbitraryExtensions`, `noEmit`,
 //! incremental build info location).
 //!
-//! ### Current scope
+//! ### rootDirs merging
 //!
-//! Minimal: lists generated files explicitly via `files`, sets the
-//! mandatory overrides, extends the user tsconfig. Doesn't yet rebase
-//! `paths`/`rootDirs`/`include`/`exclude` from the user config — those
-//! arrive in a follow-up commit when path-aliased fixtures need them.
-//! Pure pass-through extends works for the upstream test fixtures whose
-//! tsconfigs use plain `include` patterns.
+//! TS treats `rootDirs` as an array — and arrays do NOT merge across the
+//! `extends` chain (inner config wins outright). That means just setting
+//! a child `rootDirs` here would clobber whatever the user's tsconfig had
+//! (commonly SvelteKit's `[".." , "./types"]`).
+//!
+//! To keep relative imports resolving from generated `++Foo.svelte.ts`
+//! files in the overlay back to the original source tree, we compute the
+//! union of:
+//!   - `<overlay>/svelte`        — where our generated `.ts` files live
+//!   - every `rootDirs` entry from the user's `extends` chain (resolved
+//!     to absolute paths so the absolute-vs-relative distinction is gone)
+//!   - the workspace root         — fallback for projects that don't
+//!     declare `rootDirs` themselves
+//!
+//! TS then virtually merges all those folders, so a relative import
+//! `./loading-labels` from
+//! `<overlay>/svelte/src/lib/components/ai/++AssistantOverlay.svelte.ts`
+//! ALSO resolves against
+//! `<workspace>/src/lib/components/ai/loading-labels`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -44,6 +57,24 @@ pub fn build(
         .collect();
     files.push(layout.svelte_shims.to_string_lossy().into_owned());
 
+    let mut root_dirs: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let push_root = |dir: &Path, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
+        let s = dir.to_string_lossy().to_string();
+        if seen.insert(s.clone()) {
+            out.push(s);
+        }
+    };
+    // Overlay svelte subdir first — that's where generated files live.
+    push_root(layout.svelte_dir.as_path(), &mut root_dirs, &mut seen);
+    // Workspace root second — fallback for projects without their own
+    // rootDirs entries.
+    push_root(layout.root.as_path().parent().unwrap_or(Path::new("")), &mut root_dirs, &mut seen);
+    // Whatever the user's extends chain declared.
+    for entry in collect_user_root_dirs(user_tsconfig) {
+        push_root(entry.as_path(), &mut root_dirs, &mut seen);
+    }
+
     json!({
         "extends": extends_rel,
         "compilerOptions": {
@@ -59,9 +90,85 @@ pub fn build(
             // setting is unaffected (we never touch their files).
             "moduleResolution": "bundler",
             "module": "esnext",
+            "rootDirs": root_dirs,
         },
         "files": files,
     })
+}
+
+/// Walk the user tsconfig's `extends` chain (depth-limited; tsconfig
+/// chains shouldn't realistically exceed a handful of links) and return
+/// every `rootDirs` entry resolved to an absolute path.
+///
+/// Unreadable, malformed, or missing files cause the walk to stop — we
+/// don't care about producing perfect output, only about preserving as
+/// much of the user's intent as we can. The overlay still works (just
+/// with fewer virtual roots merged) when this returns empty.
+fn collect_user_root_dirs(tsconfig: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut current: Option<PathBuf> = Some(tsconfig.to_path_buf());
+    let mut hops = 0usize;
+    while let Some(path) = current.take() {
+        hops += 1;
+        if hops > 16 {
+            break;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            break;
+        };
+        let Ok(json) = json5::from_str::<Value>(&content) else {
+            break;
+        };
+        let dir = path.parent().unwrap_or(Path::new(""));
+        if let Some(rd) = json
+            .get("compilerOptions")
+            .and_then(|c| c.get("rootDirs"))
+            .and_then(|v| v.as_array())
+        {
+            for entry in rd {
+                if let Some(s) = entry.as_str() {
+                    let resolved = if Path::new(s).is_absolute() {
+                        PathBuf::from(s)
+                    } else {
+                        dir.join(s)
+                    };
+                    out.push(normalize(&resolved));
+                }
+            }
+        }
+        // Follow `extends` (string only — we don't support extends arrays
+        // yet; rare in practice).
+        current = json
+            .get("extends")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                if Path::new(s).is_absolute() {
+                    PathBuf::from(s)
+                } else {
+                    dir.join(s)
+                }
+            });
+    }
+    out
+}
+
+/// Collapse `..` segments without touching the filesystem. Pure path
+/// arithmetic — necessary because `Path::canonicalize` requires the path
+/// to exist, and rootDirs entries from extends chains often point at
+/// locations that won't exist for every user.
+fn normalize(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// Compute a relative path from `from` to `to`, falling back to the

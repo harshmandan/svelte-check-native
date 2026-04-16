@@ -27,7 +27,9 @@
 
 use std::collections::HashSet;
 
-use oxc_ast::ast::{BindingPatternKind, Declaration, ImportDeclarationSpecifier, Statement};
+use oxc_ast::ast::{
+    BindingPatternKind, Declaration, ImportDeclarationSpecifier, ImportOrExportKind, Statement,
+};
 use smol_str::SmolStr;
 
 /// All known rune names. Identifiers starting with `$` that match one of
@@ -147,18 +149,33 @@ fn collect_from_statement(stmt: &Statement<'_>, out: &mut HashSet<String>) {
             }
         }
         Statement::ImportDeclaration(decl) => {
+            // Whole-import `import type { X } from '...'` introduces no
+            // runtime binding. Skip — voiding a type-only name fires
+            // TS2693 ("only refers to a type, but is being used as a
+            // value here").
+            if matches!(decl.import_kind, ImportOrExportKind::Type) {
+                return;
+            }
             if let Some(specifiers) = &decl.specifiers {
                 for spec in specifiers {
-                    let name = match spec {
-                        ImportDeclarationSpecifier::ImportSpecifier(s) => s.local.name.as_str(),
+                    let (name, is_type_only) = match spec {
+                        ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                            // Per-specifier `import { type X }`.
+                            (
+                                s.local.name.as_str(),
+                                matches!(s.import_kind, ImportOrExportKind::Type),
+                            )
+                        }
                         ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
-                            s.local.name.as_str()
+                            (s.local.name.as_str(), false)
                         }
                         ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
-                            s.local.name.as_str()
+                            (s.local.name.as_str(), false)
                         }
                     };
-                    out.insert(name.to_string());
+                    if !is_type_only {
+                        out.insert(name.to_string());
+                    }
                 }
             }
         }

@@ -1,28 +1,21 @@
-//! Normalize an instance script body so it can be wrapped in
-//! `function $$render() { ... }` without producing TypeScript errors.
+//! Hoist `import` declarations out of an instance script body.
 //!
-//! Two transforms, both done in a single oxc parse pass:
+//! `<script>` content in a Svelte 5 component is module-scope code, but
+//! our emit wraps it in `function $$render() { ... }`. ES `import`s are
+//! illegal inside a function body (TS1232), so we lift them to module
+//! top level and blank the original spans with whitespace. Code in the
+//! body still sees the imports via normal module scope.
 //!
-//! 1. **Hoist `import` declarations.** ES `import`s are illegal inside a
-//!    function body (TS1232). We lift them out to module top level and
-//!    blank the original spans with whitespace. Code in the body still
-//!    sees them via normal module scope.
-//! 2. **Strip `export` modifiers** from top-level `export let foo` /
-//!    `export const foo` declarations. Svelte 4 used `export let foo` to
-//!    declare a prop; that keyword is illegal inside a function body
-//!    (TS1184 "Modifiers cannot appear here"). For type-checking
-//!    purposes the `export` is meaningless — the prop semantics come
-//!    from svelte2tsx's wrapping, not from the keyword. We blank just
-//!    the `export ` (six bytes) so the `let foo` that follows still
-//!    parses.
+//! Replacing instead of deleting preserves byte offsets inside the body
+//! so line/column positions stay aligned for the source-map mapping
+//! that runs later.
 //!
-//! Both transforms preserve byte offsets inside the body (we replace,
-//! not delete) so line/column positions stay aligned for the
-//! source-map mapping that runs later.
+//! Note: this module no longer strips `export` modifiers (Svelte 4 prop
+//! syntax `export let foo`). Svelte 5 uses `let { foo } = $props()` for
+//! props — there's nothing to strip.
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Statement;
-use oxc_span::GetSpan;
 use svn_parser::{ScriptLang, parse_script_body};
 
 /// `imports`: text to insert at module top-level (one declaration per
@@ -34,19 +27,13 @@ pub struct SplitScript {
     pub body: String,
 }
 
-/// Split + normalize an instance script body.
+/// Split out the top-level `import` declarations from a script body.
 ///
-/// - Top-level `import` declarations are lifted out into `imports` and
-///   blanked from the body.
-/// - Top-level `export` modifiers on `let`/`const`/`var` declarations
-///   are blanked from the body so the resulting `let foo: T` can be
-///   wrapped in a function without TS1184.
-///
-/// Re-parses the body once with oxc. If parsing panics (malformed user
-/// code), the content is passed through unchanged.
+/// Re-parses the body with oxc; cheap enough at the small sizes a
+/// `<script>` block holds. If parsing fails (malformed user code) the
+/// content is passed through unchanged in `body`, with `imports` empty.
 pub fn split_imports(content: &str, lang: ScriptLang) -> SplitScript {
-    let needs_pass = content.contains("import") || content.contains("export");
-    if !needs_pass {
+    if !content.contains("import") {
         return SplitScript {
             imports: String::new(),
             body: content.to_string(),
@@ -64,32 +51,13 @@ pub fn split_imports(content: &str, lang: ScriptLang) -> SplitScript {
     }
 
     let mut import_spans: Vec<(usize, usize)> = Vec::new();
-    let mut export_keyword_spans: Vec<(usize, usize)> = Vec::new();
-
     for stmt in &parsed.program.body {
-        match stmt {
-            Statement::ImportDeclaration(decl) => {
-                import_spans.push((decl.span.start as usize, decl.span.end as usize));
-            }
-            Statement::ExportNamedDeclaration(decl) if decl.declaration.is_some() => {
-                // `export let foo` / `export const foo` / `export var foo`.
-                // We only blank the `export ` keyword (and the trailing
-                // whitespace up to the declaration body) so the
-                // `let foo: T = bar;` part stays intact and parseable
-                // inside the wrapping function.
-                if let Some(d) = &decl.declaration {
-                    let stmt_start = decl.span.start as usize;
-                    let inner_start = GetSpan::span(d).start as usize;
-                    if inner_start > stmt_start {
-                        export_keyword_spans.push((stmt_start, inner_start));
-                    }
-                }
-            }
-            _ => {}
+        if let Statement::ImportDeclaration(decl) = stmt {
+            import_spans.push((decl.span.start as usize, decl.span.end as usize));
         }
     }
 
-    if import_spans.is_empty() && export_keyword_spans.is_empty() {
+    if import_spans.is_empty() {
         return SplitScript {
             imports: String::new(),
             body: content.to_string(),
@@ -104,18 +72,12 @@ pub fn split_imports(content: &str, lang: ScriptLang) -> SplitScript {
         }
     }
 
-    // Combine import + export-keyword spans into one sorted list, then
-    // blank each region. Replacing with ASCII whitespace of the same
-    // byte length preserves every byte offset after it — line/col stays
-    // valid for the source-map mapping that runs later.
-    let mut blank_spans: Vec<(usize, usize)> = Vec::new();
-    blank_spans.extend(import_spans.iter().copied());
-    blank_spans.extend(export_keyword_spans.iter().copied());
-    blank_spans.sort_by_key(|&(s, _)| s);
-
+    // Replacing each import span with ASCII whitespace of the same byte
+    // length preserves every byte offset after it — keeps source-map
+    // positions accurate.
     let mut body = String::with_capacity(content.len());
     let mut cursor = 0;
-    for &(start, end) in &blank_spans {
+    for &(start, end) in &import_spans {
         body.push_str(&content[cursor..start]);
         for ch in content[start..end].chars() {
             if ch == '\n' || ch == '\r' {
@@ -123,7 +85,6 @@ pub fn split_imports(content: &str, lang: ScriptLang) -> SplitScript {
             } else if ch.is_ascii() {
                 body.push(' ');
             } else {
-                // Multi-byte char: replace each byte with a space.
                 let byte_len = ch.len_utf8();
                 for _ in 0..byte_len {
                     body.push(' ');
@@ -226,82 +187,9 @@ let x = 1;
     }
 
     #[test]
-    fn no_import_or_export_keyword_fast_path() {
+    fn no_imports_fast_path() {
         let s = split_imports("const x = 1;", ScriptLang::Ts);
         assert_eq!(s.imports, "");
         assert_eq!(s.body, "const x = 1;");
-    }
-
-    #[test]
-    fn export_let_modifier_stripped() {
-        // Svelte 4 prop syntax: `export let foo` becomes plain `let foo`
-        // for type-checking. The `export` keyword is illegal inside a
-        // function body (TS1184) so it must come out.
-        let src = "export let foo: string = 'hi';";
-        let s = split_imports(src, ScriptLang::Ts);
-        assert!(s.imports.is_empty());
-        assert!(
-            !s.body.contains("export"),
-            "body still contains `export`:\n{}",
-            s.body
-        );
-        assert!(
-            s.body.contains("let foo: string"),
-            "the underlying declaration must survive intact:\n{}",
-            s.body
-        );
-    }
-
-    #[test]
-    fn export_const_modifier_stripped() {
-        let src = "export const PI = 3.14;";
-        let s = split_imports(src, ScriptLang::Ts);
-        assert!(!s.body.contains("export"));
-        assert!(s.body.contains("const PI = 3.14;"));
-    }
-
-    #[test]
-    fn export_with_destructuring_stripped() {
-        let src = "export let { foo, bar }: { foo: string; bar: number } = obj;";
-        let s = split_imports(src, ScriptLang::Ts);
-        assert!(!s.body.contains("export"));
-        assert!(s.body.contains("let { foo, bar }"));
-    }
-
-    #[test]
-    fn re_export_statement_left_alone() {
-        // `export { foo }` (no declaration) is a re-export; it doesn't have
-        // a `declaration` field on ExportNamedDeclaration so our pass
-        // leaves it alone. (It would still be invalid inside a function,
-        // but stripping the keyword would change semantics meaningfully —
-        // best to leave that case for a future iteration.)
-        let src = "let x = 1;\nexport { x };";
-        let s = split_imports(src, ScriptLang::Ts);
-        assert!(
-            s.body.contains("export { x }"),
-            "re-export without declaration should be left intact:\n{}",
-            s.body
-        );
-    }
-
-    #[test]
-    fn export_offsets_preserved() {
-        let src = "export let foo: T = 1;\nlet b = foo;";
-        let original_b_pos = src.find("let b").unwrap();
-        let s = split_imports(src, ScriptLang::Ts);
-        let new_b_pos = s.body.find("let b").unwrap();
-        assert_eq!(new_b_pos, original_b_pos);
-    }
-
-    #[test]
-    fn import_and_export_in_same_script() {
-        let src = "\
-import { writable } from 'svelte/store';
-export let count = writable(0);
-";
-        let s = split_imports(src, ScriptLang::Ts);
-        assert!(s.imports.contains("import { writable }"));
-        assert!(!s.body.contains("export"));
-        assert!(s.body.contains("let count = writable(0);"));
     }
 }

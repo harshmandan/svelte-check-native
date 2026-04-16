@@ -1057,6 +1057,9 @@ dependencies = [
 name = "svn-analyze"
 version = "0.0.0"
 dependencies = [
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_span",
  "smol_str",
  "svn-core",
  "svn-parser",

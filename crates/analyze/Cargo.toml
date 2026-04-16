@@ -12,3 +12,6 @@ workspace = true
 svn-core = { path = "../core" }
 svn-parser = { path = "../parser" }
 smol_str.workspace = true
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_span.workspace = true

@@ -1085,7 +1085,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "svelte-check-native"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "camino",
@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "svn-analyze"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -1119,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "svn-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "camino",
  "json5",
@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "svn-emit"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "blake3",
  "oxc_allocator",
@@ -1147,7 +1147,7 @@ dependencies = [
 
 [[package]]
 name = "svn-lint"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "svn-analyze",
  "svn-core",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "svn-parser"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "memchr",
  "oxc_allocator",
@@ -1171,7 +1171,7 @@ dependencies = [
 
 [[package]]
 name = "svn-svelte-compiler"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "svn-typecheck"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1542,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
 ]

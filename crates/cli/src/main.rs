@@ -10,8 +10,6 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     eprintln!("svelte-check-native: not yet implemented (phase 0.5 stub)");
-    eprintln!(
-        "see todo.md in the repo root or https://github.com/harshmandan/svelte-check-native"
-    );
+    eprintln!("see todo.md in the repo root or https://github.com/harshmandan/svelte-check-native");
     ExitCode::from(2)
 }

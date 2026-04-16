@@ -32,8 +32,10 @@
 
 use std::fmt::Write;
 
+use smol_str::SmolStr;
 use svn_analyze::TemplateSummary;
 use svn_parser::Document;
+use svn_parser::{EachBlock, Fragment, Node};
 
 /// Output of [`emit_document`].
 ///
@@ -47,6 +49,9 @@ pub struct EmitOutput {
 
 /// Emit the TypeScript scaffold for a parsed Svelte document.
 ///
+/// `fragment` is the parsed template AST; the emitter walks it to generate
+/// per-block scaffolding (currently just `for`-loops for `{#each}`).
+///
 /// Reads the [`TemplateSummary`] from analyze to know which synthesized names
 /// need void-references. The summary's [`VoidRefRegistry`] is the single
 /// source of truth for what gets emitted in the consolidated `void (...)`
@@ -54,7 +59,11 @@ pub struct EmitOutput {
 /// littered `-rs`'s transformer.
 ///
 /// [`VoidRefRegistry`]: svn_analyze::VoidRefRegistry
-pub fn emit_document(doc: &Document<'_>, summary: &TemplateSummary) -> EmitOutput {
+pub fn emit_document(
+    doc: &Document<'_>,
+    fragment: &Fragment,
+    summary: &TemplateSummary,
+) -> EmitOutput {
     let estimated_capacity = doc.source.len().saturating_mul(2).saturating_add(256);
     let mut out = String::with_capacity(estimated_capacity);
 
@@ -70,16 +79,23 @@ pub fn emit_document(doc: &Document<'_>, summary: &TemplateSummary) -> EmitOutpu
 
     out.push_str("function $$render() {\n");
     if let Some(instance_script) = &doc.instance_script {
-        out.push_str(instance_script.content);
-        if !instance_script.content.ends_with('\n') {
+        let bind_target_names: Vec<SmolStr> = summary
+            .bind_this_targets
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        let rewritten = rewrite_definite_assignment(instance_script.content, &bind_target_names);
+        out.push_str(&rewritten);
+        if !rewritten.ends_with('\n') {
             out.push('\n');
         }
     }
 
     out.push_str("    async function __svn_tpl_check() {\n");
-    out.push_str("        // template type-check body (not yet emitted)\n");
+    out.push_str("        // template type-check body (incremental)\n");
     emit_action_attrs_declarations(&mut out, summary);
     emit_bind_pair_declarations(&mut out, summary);
+    emit_template_body(&mut out, doc.source, fragment, 2);
     out.push_str("    }\n");
 
     emit_void_block(&mut out, summary);
@@ -88,6 +104,199 @@ pub fn emit_document(doc: &Document<'_>, summary: &TemplateSummary) -> EmitOutpu
     out.push_str("$$render;\n");
 
     EmitOutput { typescript: out }
+}
+
+/// Walk the fragment tree and emit per-construct scaffolding.
+///
+/// Currently handles `{#each}` blocks (for fixture #25 + general iteration)
+/// and recurses into other block bodies / element children. Element- and
+/// component-level type-checking is not yet implemented; nodes other than
+/// each blocks contribute only via their nested children.
+fn emit_template_body(out: &mut String, source: &str, fragment: &Fragment, depth: usize) {
+    for node in &fragment.nodes {
+        emit_template_node(out, source, node, depth);
+    }
+}
+
+fn emit_template_node(out: &mut String, source: &str, node: &Node, depth: usize) {
+    match node {
+        Node::EachBlock(b) => emit_each_block(out, source, b, depth),
+        Node::IfBlock(b) => {
+            emit_template_body(out, source, &b.consequent, depth);
+            for arm in &b.elseif_arms {
+                emit_template_body(out, source, &arm.body, depth);
+            }
+            if let Some(alt) = &b.alternate {
+                emit_template_body(out, source, alt, depth);
+            }
+        }
+        Node::AwaitBlock(b) => {
+            if let Some(p) = &b.pending {
+                emit_template_body(out, source, p, depth);
+            }
+            if let Some(t) = &b.then_branch {
+                emit_template_body(out, source, &t.body, depth);
+            }
+            if let Some(c) = &b.catch_branch {
+                emit_template_body(out, source, &c.body, depth);
+            }
+        }
+        Node::KeyBlock(b) => emit_template_body(out, source, &b.body, depth),
+        Node::SnippetBlock(b) => emit_template_body(out, source, &b.body, depth),
+        Node::Element(e) => emit_template_body(out, source, &e.children, depth),
+        Node::Component(c) => emit_template_body(out, source, &c.children, depth),
+        Node::SvelteElement(s) => emit_template_body(out, source, &s.children, depth),
+        Node::Text(_) | Node::Interpolation(_) | Node::Comment(_) => {}
+    }
+}
+
+/// Emit a `for`-of loop for an `{#each}` block.
+///
+/// Uses a fallback binding name when the block has no `as` clause —
+/// fixes the `for (const  of ...)` syntax error from `-rs` bug #25.
+fn emit_each_block(out: &mut String, source: &str, b: &EachBlock, depth: usize) {
+    let indent = "    ".repeat(depth);
+    let expr_text = source
+        .get(b.expression_range.start as usize..b.expression_range.end as usize)
+        .unwrap_or("undefined")
+        .trim();
+    let binding_text = match &b.as_clause {
+        Some(c) => source
+            .get(c.context_range.start as usize..c.context_range.end as usize)
+            .unwrap_or("__svn_each_unused")
+            .to_string(),
+        None => "__svn_each_unused".to_string(),
+    };
+    let _ = writeln!(
+        out,
+        "{indent}for (const {binding_text} of __svn_each_items({expr_text})) {{"
+    );
+    emit_template_body(out, source, &b.body, depth + 1);
+    let _ = writeln!(out, "{indent}    void {};", first_identifier(&binding_text));
+    let _ = writeln!(out, "{indent}}}");
+
+    if let Some(alt) = &b.alternate {
+        emit_template_body(out, source, alt, depth);
+    }
+}
+
+/// Extract the first identifier-looking token from a binding pattern (for
+/// the `void <name>;` reference inside a for-loop body — keeps the
+/// destructured name "used" even if the inner template emit doesn't reach
+/// it yet).
+fn first_identifier(binding: &str) -> &str {
+    let trimmed =
+        binding.trim_start_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '$');
+    let end = trimmed
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '$')
+        .unwrap_or(trimmed.len());
+    let head = &trimmed[..end];
+    if head.is_empty() {
+        "__svn_each_unused"
+    } else {
+        head
+    }
+}
+
+/// Rewrite `let <name>: T` declarations to `let <name>!: T` for each
+/// bind-target identifier. Bug fixture #30 (definite-assignment).
+///
+/// Only matches `let <name>:` patterns with the colon — declarations with
+/// initializers (`let x = ...`) don't have the type-annotation form and
+/// don't need the `!` (they're already definitely assigned).
+fn rewrite_definite_assignment(script: &str, target_names: &[SmolStr]) -> String {
+    if target_names.is_empty() {
+        return script.to_string();
+    }
+    let mut out = String::with_capacity(script.len() + target_names.len() * 2);
+    let bytes = script.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(consumed) = try_match_let_decl(bytes, i, target_names) {
+            // Insert: "let <name>!" replacing "let <name>".
+            // `consumed.0` is the offset just after the matched name; we
+            // splice `!` before continuing.
+            out.push_str(&script[i..consumed.name_end]);
+            out.push('!');
+            i = consumed.name_end;
+        } else {
+            // Push current byte (handle multi-byte char advance).
+            let ch_len = utf8_char_len(bytes[i]);
+            out.push_str(&script[i..i + ch_len]);
+            i += ch_len;
+        }
+    }
+    out
+}
+
+struct LetMatch {
+    name_end: usize,
+}
+
+/// At byte position `i`, try to match `let <name>` where `<name>` is one of
+/// `target_names` AND is followed by `:` (after optional whitespace).
+/// Returns the position immediately after the matched name on success.
+fn try_match_let_decl(bytes: &[u8], i: usize, target_names: &[SmolStr]) -> Option<LetMatch> {
+    // Match `let` keyword at a word boundary.
+    if i + 3 > bytes.len() || &bytes[i..i + 3] != b"let" {
+        return None;
+    }
+    if i > 0 && is_ident_byte(bytes[i - 1]) {
+        return None;
+    }
+    let after_let = i + 3;
+    if after_let >= bytes.len() || !is_ascii_ws(bytes[after_let]) {
+        return None;
+    }
+    let mut p = after_let;
+    while p < bytes.len() && is_ascii_ws(bytes[p]) {
+        p += 1;
+    }
+    let name_start = p;
+    while p < bytes.len() && is_ident_byte(bytes[p]) {
+        p += 1;
+    }
+    let name_end = p;
+    if name_end == name_start {
+        return None;
+    }
+    let name = &bytes[name_start..name_end];
+    if !target_names.iter().any(|t| t.as_bytes() == name) {
+        return None;
+    }
+    // Must be followed by `:` (with optional whitespace). Avoid matching
+    // `let x = ...` (which doesn't need `!`) or `let x;` (no annotation).
+    let mut q = name_end;
+    while q < bytes.len() && is_ascii_ws(bytes[q]) {
+        q += 1;
+    }
+    if q >= bytes.len() || bytes[q] != b':' {
+        return None;
+    }
+    Some(LetMatch { name_end })
+}
+
+#[inline]
+fn is_ascii_ws(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\r')
+}
+
+#[inline]
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+}
+
+#[inline]
+fn utf8_char_len(b: u8) -> usize {
+    if b < 0xC0 {
+        1
+    } else if b < 0xE0 {
+        2
+    } else if b < 0xF0 {
+        3
+    } else {
+        4
+    }
 }
 
 /// Emit `let __svn_action_attrs_N: any = {};` declarations inside
@@ -144,8 +353,8 @@ mod tests {
         assert!(errors.is_empty(), "parse errors: {errors:?}");
         let (fragment, errors) = parse_all_template_runs(src, &doc.template.text_runs);
         assert!(errors.is_empty(), "template parse errors: {errors:?}");
-        let summary = walk_template(&fragment);
-        emit_document(&doc, &summary).typescript
+        let summary = walk_template(&fragment, src);
+        emit_document(&doc, &fragment, &summary).typescript
     }
 
     #[test]
@@ -222,5 +431,71 @@ mod tests {
         let out = emit_str("<div use:a use:b>x</div>");
         let void_count = out.matches("    void (").count();
         assert_eq!(void_count, 1, "expected exactly one void(...) block");
+    }
+
+    // ===== Bug fixture #25 (each-without-as-clause) =====
+    #[test]
+    fn each_block_emits_for_loop() {
+        let out = emit_str("{#each items}<span>x</span>{/each}");
+        assert!(out.contains("for (const"), "missing for-of loop:\n{out}");
+        assert!(
+            !out.contains("for (const  of"),
+            "double-space before `of` (regression of bug #25):\n{out}"
+        );
+    }
+
+    #[test]
+    fn each_block_with_binding_uses_user_name() {
+        let out = emit_str("{#each items as item}<span>{item}</span>{/each}");
+        assert!(out.contains("for (const item of"));
+    }
+
+    #[test]
+    fn each_with_destructured_pattern() {
+        let out = emit_str("{#each pairs as { a, b }}<x />{/each}");
+        // Should still produce a for-of without double-space-of.
+        assert!(out.contains("for (const"));
+        assert!(!out.contains("for (const  of"));
+    }
+
+    // ===== Bug fixture #30 (definite-assignment) =====
+    #[test]
+    fn bind_this_target_gets_definite_assignment() {
+        let src = "<script lang=\"ts\">let inputEl: HTMLDivElement;</script>\
+                   <div bind:this={inputEl}></div>";
+        let out = emit_str(src);
+        assert!(
+            out.contains("let inputEl!:"),
+            "missing definite-assignment rewrite:\n{out}"
+        );
+        assert!(
+            !out.contains("let inputEl: "),
+            "still has un-rewritten declaration:\n{out}"
+        );
+    }
+
+    #[test]
+    fn non_bind_target_let_unchanged() {
+        let src = "<script lang=\"ts\">let other: number = 1;</script>";
+        let out = emit_str(src);
+        assert!(
+            out.contains("let other: number"),
+            "non-bind-target should not be rewritten:\n{out}"
+        );
+        assert!(!out.contains("let other!"));
+    }
+
+    #[test]
+    fn bind_target_with_initializer_unchanged() {
+        // `let x = ...` (no `:`) doesn't need the `!` and we shouldn't
+        // touch it. Bug fixture #30 only rewrites declared-but-not-yet-
+        // assigned variables.
+        let src = "<script lang=\"ts\">let inputEl = null as any as HTMLDivElement;</script>\
+                   <div bind:this={inputEl}></div>";
+        let out = emit_str(src);
+        assert!(
+            !out.contains("let inputEl!"),
+            "shouldn't add `!` to declarations with initializers:\n{out}"
+        );
     }
 }

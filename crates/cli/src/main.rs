@@ -138,8 +138,8 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
             eprintln!("{}: template warning: {err}", file.display());
         }
 
-        let summary = svn_analyze::walk_template(&fragment);
-        let emitted = svn_emit::emit_document(&doc, &summary);
+        let summary = svn_analyze::walk_template(&fragment, &source);
+        let emitted = svn_emit::emit_document(&doc, &fragment, &summary);
         let display_path = file
             .strip_prefix(workspace)
             .unwrap_or(file)

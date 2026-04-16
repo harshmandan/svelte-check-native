@@ -48,12 +48,21 @@ pub struct BindThisTarget {
 
 /// Walk the template fragment, collecting synthesized-name registrations
 /// and bind-target metadata.
-pub fn walk_template(fragment: &Fragment) -> TemplateSummary {
+///
+/// `source` is the original component source — needed to extract identifier
+/// text from byte ranges (e.g. for `bind:this={x}`).
+pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
     let mut summary = TemplateSummary::default();
     summary.void_refs.register("__svn_tpl_check");
     let mut counters = Counters::default();
-    walk_fragment(fragment, &mut summary, &mut counters);
+    let mut ctx = WalkCtx { source };
+    walk_fragment(fragment, &mut summary, &mut counters, &ctx);
+    let _ = &mut ctx;
     summary
+}
+
+struct WalkCtx<'src> {
+    source: &'src str,
 }
 
 #[derive(Default)]
@@ -62,116 +71,144 @@ struct Counters {
     bind_pair: usize,
 }
 
-fn walk_fragment(fragment: &Fragment, summary: &mut TemplateSummary, counters: &mut Counters) {
+fn walk_fragment(
+    fragment: &Fragment,
+    summary: &mut TemplateSummary,
+    counters: &mut Counters,
+    ctx: &WalkCtx<'_>,
+) {
     for node in &fragment.nodes {
-        walk_node(node, summary, counters);
+        walk_node(node, summary, counters, ctx);
     }
 }
 
-fn walk_node(node: &Node, summary: &mut TemplateSummary, counters: &mut Counters) {
+fn walk_node(
+    node: &Node,
+    summary: &mut TemplateSummary,
+    counters: &mut Counters,
+    ctx: &WalkCtx<'_>,
+) {
     match node {
         Node::Element(e) => {
-            walk_attributes(&e.attributes, summary, counters);
-            walk_fragment(&e.children, summary, counters);
+            walk_attributes(&e.attributes, summary, counters, ctx);
+            walk_fragment(&e.children, summary, counters, ctx);
         }
         Node::Component(c) => {
-            walk_attributes(&c.attributes, summary, counters);
-            walk_fragment(&c.children, summary, counters);
+            walk_attributes(&c.attributes, summary, counters, ctx);
+            walk_fragment(&c.children, summary, counters, ctx);
         }
         Node::SvelteElement(s) => {
-            walk_attributes(&s.attributes, summary, counters);
-            walk_fragment(&s.children, summary, counters);
+            walk_attributes(&s.attributes, summary, counters, ctx);
+            walk_fragment(&s.children, summary, counters, ctx);
         }
         Node::IfBlock(b) => {
-            walk_fragment(&b.consequent, summary, counters);
+            walk_fragment(&b.consequent, summary, counters, ctx);
             for arm in &b.elseif_arms {
-                walk_fragment(&arm.body, summary, counters);
+                walk_fragment(&arm.body, summary, counters, ctx);
             }
             if let Some(alt) = &b.alternate {
-                walk_fragment(alt, summary, counters);
+                walk_fragment(alt, summary, counters, ctx);
             }
         }
         Node::EachBlock(b) => {
             summary.each_block_count += 1;
-            walk_fragment(&b.body, summary, counters);
+            walk_fragment(&b.body, summary, counters, ctx);
             if let Some(alt) = &b.alternate {
-                walk_fragment(alt, summary, counters);
+                walk_fragment(alt, summary, counters, ctx);
             }
         }
         Node::AwaitBlock(b) => {
             if let Some(p) = &b.pending {
-                walk_fragment(p, summary, counters);
+                walk_fragment(p, summary, counters, ctx);
             }
             if let Some(t) = &b.then_branch {
-                walk_fragment(&t.body, summary, counters);
+                walk_fragment(&t.body, summary, counters, ctx);
             }
             if let Some(c) = &b.catch_branch {
-                walk_fragment(&c.body, summary, counters);
+                walk_fragment(&c.body, summary, counters, ctx);
             }
         }
-        Node::KeyBlock(b) => walk_fragment(&b.body, summary, counters),
-        Node::SnippetBlock(b) => walk_fragment(&b.body, summary, counters),
+        Node::KeyBlock(b) => walk_fragment(&b.body, summary, counters, ctx),
+        Node::SnippetBlock(b) => walk_fragment(&b.body, summary, counters, ctx),
         // Leaf nodes — no children to descend into, no attributes.
         Node::Text(_) | Node::Interpolation(_) | Node::Comment(_) => {}
     }
 }
 
-fn walk_attributes(attrs: &[Attribute], summary: &mut TemplateSummary, counters: &mut Counters) {
+fn walk_attributes(
+    attrs: &[Attribute],
+    summary: &mut TemplateSummary,
+    counters: &mut Counters,
+    ctx: &WalkCtx<'_>,
+) {
     for attr in attrs {
         if let Attribute::Directive(d) = attr {
-            walk_directive(d, summary, counters);
+            walk_directive(d, summary, counters, ctx);
         }
     }
 }
 
-fn walk_directive(d: &Directive, summary: &mut TemplateSummary, counters: &mut Counters) {
+fn walk_directive(
+    d: &Directive,
+    summary: &mut TemplateSummary,
+    counters: &mut Counters,
+    ctx: &WalkCtx<'_>,
+) {
     match d.kind {
         DirectiveKind::Use => {
-            // Each `use:foo` produces an action-attrs holder we must
-            // void-reference.
             let name = format!("__svn_action_attrs_{}", counters.action_attrs);
             summary.void_refs.register(name);
             counters.action_attrs += 1;
         }
-        DirectiveKind::Bind => {
-            match &d.value {
-                Some(DirectiveValue::BindPair { .. }) => {
-                    let name = format!("__svn_bind_pair_{}", counters.bind_pair);
-                    summary.void_refs.register(name);
-                    counters.bind_pair += 1;
-                }
-                Some(DirectiveValue::Expression {
-                    expression_range, ..
-                }) if d.name == "this" => {
-                    // bind:this={ident} → record as definite-assignment target
-                    // when the expression is a single identifier.
-                    if let Some(name) = simple_identifier_in(*expression_range) {
-                        summary.bind_this_targets.push(BindThisTarget {
-                            name,
-                            range: *expression_range,
-                        });
-                    }
-                }
-                _ => {}
+        DirectiveKind::Bind => match &d.value {
+            Some(DirectiveValue::BindPair { .. }) => {
+                let name = format!("__svn_bind_pair_{}", counters.bind_pair);
+                summary.void_refs.register(name);
+                counters.bind_pair += 1;
             }
-        }
+            Some(DirectiveValue::Expression {
+                expression_range, ..
+            }) if d.name == "this" => {
+                if let Some(name) = simple_identifier_in(ctx.source, *expression_range) {
+                    summary.bind_this_targets.push(BindThisTarget {
+                        name,
+                        range: *expression_range,
+                    });
+                }
+            }
+            _ => {}
+        },
         _ => {}
     }
 }
 
 /// If the byte range covers a single ECMAScript identifier (with optional
-/// surrounding whitespace), return it. Otherwise None.
-///
-/// Conservative: we only accept ASCII identifier chars (`a-zA-Z0-9_$`).
-/// Real Unicode identifier support would require oxc; for the
-/// definite-assignment rewrite we only care about plain identifiers.
-fn simple_identifier_in(range: Range) -> Option<SmolStr> {
-    // The range here doesn't have direct source access — caller would need
-    // to provide source. We defer to a later refactor where this fn takes
-    // (source, range). For now the walker passes the range through and the
-    // emit/typecheck stage extracts the identifier text.
-    let _ = range;
-    None
+/// surrounding whitespace), return it.
+fn simple_identifier_in(source: &str, range: Range) -> Option<SmolStr> {
+    let slice = source.get(range.start as usize..range.end as usize)?.trim();
+    if slice.is_empty() {
+        return None;
+    }
+    let mut chars = slice.chars();
+    let first = chars.next()?;
+    if !is_ident_start(first) {
+        return None;
+    }
+    if chars.all(is_ident_continue) {
+        Some(SmolStr::from(slice))
+    } else {
+        None
+    }
+}
+
+#[inline]
+fn is_ident_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_' || c == '$'
+}
+
+#[inline]
+fn is_ident_continue(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '$'
 }
 
 #[cfg(test)]
@@ -184,7 +221,28 @@ mod tests {
         assert!(errors.is_empty(), "section parse errors: {errors:?}");
         let (fragment, errors) = parse_all_template_runs(src, &doc.template.text_runs);
         assert!(errors.is_empty(), "template parse errors: {errors:?}");
-        walk_template(&fragment)
+        walk_template(&fragment, src)
+    }
+
+    #[test]
+    fn bind_this_simple_identifier_recorded() {
+        let s = walk_str("<div bind:this={inputEl} />");
+        assert_eq!(s.bind_this_targets.len(), 1);
+        assert_eq!(s.bind_this_targets[0].name, "inputEl");
+    }
+
+    #[test]
+    fn bind_this_complex_expression_not_recorded() {
+        // member expressions, calls, etc. shouldn't trigger the rewrite.
+        let s = walk_str("<div bind:this={refs[0]} />");
+        assert!(s.bind_this_targets.is_empty());
+    }
+
+    #[test]
+    fn bind_this_with_dollar_identifier_recorded() {
+        let s = walk_str("<div bind:this={$el} />");
+        assert_eq!(s.bind_this_targets.len(), 1);
+        assert_eq!(s.bind_this_targets[0].name, "$el");
     }
 
     #[test]

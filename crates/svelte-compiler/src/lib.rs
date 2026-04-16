@@ -471,7 +471,7 @@ fn pick_worker_count(n_inputs: usize) -> usize {
     let cores = thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
         .unwrap_or(1);
-    let chosen = (cores / 2).max(2).min(8);
+    let chosen = (cores / 2).clamp(2, 8);
     chosen.min(n_inputs)
 }
 

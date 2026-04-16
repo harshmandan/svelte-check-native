@@ -212,7 +212,7 @@ Wall-clock from `time(1)`, median of 3 runs, all on the same hardware
                             Cold       Warm       Dirty
                             ----       ----       -----
 svelte-check-native          6.32 s     4.95 s     4.56 s
-upstream             19.24 s    10.79 s    10.02 s
+an alternative Rust implementation             19.24 s    10.79 s    10.02 s
 svelte-check  --tsgo        13.42 s    12.70 s    13.37 s
 svelte-check  (default)     42.89 s    39.36 s    38.89 s
 ```
@@ -247,7 +247,7 @@ Speedup factors against the realistic default baseline:
 ```
                   Cold     Warm     Dirty
 svelte-check-native    6.8x     8.0x     8.5x
-upstream        2.2x     3.6x     3.9x
+an alternative Rust implementation        2.2x     3.6x     3.9x
 svelte-check --tsgo    3.2x     3.1x     2.9x
 ```
 
@@ -258,7 +258,7 @@ architecture, not from skipping checks.
 | Tool | Cold | Warm | Dirty | Errors | Warnings (svelte) | Warnings (css) |
 |---|---|---|---|---|---|---|
 | svelte-check-native | 6.32s | 4.95s | 4.56s | 0 | 44 | (not run) |
-| upstream | 19.24s | 10.79s | 10.02s | 0 | 44 | (not run) |
+| an alternative Rust implementation | 19.24s | 10.79s | 10.02s | 0 | 44 | (not run) |
 | svelte-check `--tsgo` | 13.42s | 12.70s | 13.37s | 1¹ | 44 | 4 |
 | svelte-check default | 42.89s | 39.36s | 38.89s | 0 | 44 | 4 |
 

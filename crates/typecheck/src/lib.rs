@@ -164,12 +164,17 @@ pub enum CheckError {
 /// path to their `tsconfig.json` (or `jsconfig.json`); `inputs` is the list
 /// of files-to-check with their generated TS.
 ///
+/// Consumes `inputs` so each `generated_ts` string drops as soon as it has
+/// been written to the cache — the bridge phase that runs after this call
+/// can hold ~100 MB of bun heaps; we don't also want to keep a duplicate
+/// of every overlay TS in our own RSS waiting to be GC'd at end-of-fn.
+///
 /// Returns mapped diagnostics ready for output formatting. Returns an empty
 /// vec on success with no problems.
 pub fn check(
     workspace: &Path,
     user_tsconfig: &Path,
-    inputs: &[CheckInput],
+    inputs: Vec<CheckInput>,
 ) -> Result<Vec<CheckDiagnostic>, CheckError> {
     let layout = CacheLayout::for_workspace(workspace);
     std::fs::create_dir_all(&layout.svelte_dir)?;
@@ -193,10 +198,12 @@ pub fn check(
     let mut generated_paths: Vec<PathBuf> = Vec::with_capacity(inputs.len());
     let mut line_maps: std::collections::HashMap<PathBuf, Vec<LineMapEntry>> =
         std::collections::HashMap::with_capacity(inputs.len());
+    // `inputs` is consumed here — `generated_ts` and `line_map` move out
+    // of each `CheckInput` and the string drops at end of iteration.
     for input in inputs {
         let gen_path = layout.generated_path(&input.source_path);
         write_if_changed(&gen_path, &input.generated_ts)?;
-        line_maps.insert(gen_path.clone(), input.line_map.clone());
+        line_maps.insert(gen_path.clone(), input.line_map);
         generated_paths.push(gen_path);
     }
 

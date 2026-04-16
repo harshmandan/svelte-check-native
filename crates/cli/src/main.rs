@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
+use rayon::prelude::*;
 use walkdir::WalkDir;
 
 #[derive(Parser, Debug)]
@@ -529,26 +530,36 @@ fn run_typecheck(
     }
 
     let mark = std::time::Instant::now();
+    // Per-file parse → analyze → emit is pure compute with no shared
+    // mutable state (each iteration owns its own oxc Allocator inside
+    // the called functions). rayon distributes across the thread pool
+    // and `collect_into_vec` preserves source order so the resulting
+    // `inputs` matches `svelte_sources` index-for-index.
     let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::with_capacity(svelte_sources.len());
-    for (file, source) in &svelte_sources {
-        let (doc, _parse_errors) = svn_parser::parse_sections(source);
-        let (fragment, _template_errors) =
-            svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
-        let summary = svn_analyze::walk_template(&fragment, source);
-        let emitted = svn_emit::emit_document(&doc, &fragment, &summary, file);
-        inputs.push(svn_typecheck::CheckInput {
-            source_path: file.clone(),
-            generated_ts: emitted.typescript,
-            line_map: emitted.line_map,
-        });
-    }
+    svelte_sources
+        .par_iter()
+        .map(|(file, source)| {
+            let (doc, _parse_errors) = svn_parser::parse_sections(source);
+            let (fragment, _template_errors) =
+                svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+            let summary = svn_analyze::walk_template(&fragment, source);
+            let emitted = svn_emit::emit_document(&doc, &fragment, &summary, file);
+            svn_typecheck::CheckInput {
+                source_path: file.clone(),
+                generated_ts: emitted.typescript,
+                line_map: emitted.line_map,
+            }
+        })
+        .collect_into_vec(&mut inputs);
     let t_emit = mark.elapsed();
 
     // Run tsgo (`js`/`ts` source). Skipped entirely when
-    // `--diagnostic-sources` opts out of `js`.
+    // `--diagnostic-sources` opts out of `js`. Move `inputs` into the
+    // call so each `generated_ts` string drops as soon as it has been
+    // written to the cache — see svn_typecheck::check docs.
     let mark = std::time::Instant::now();
     let mut diagnostics = if sources.js {
-        match svn_typecheck::check(workspace, tsconfig, &inputs) {
+        match svn_typecheck::check(workspace, tsconfig, inputs) {
             Ok(d) => d,
             Err(err) => {
                 eprintln!("svelte-check-native: type-check failed: {err}");
@@ -556,6 +567,9 @@ fn run_typecheck(
             }
         }
     } else {
+        // When tsgo is skipped, drop `inputs` early too so we don't
+        // hold the generated TS strings through the bridge phase.
+        drop(inputs);
         Vec::new()
     };
     let t_typecheck = mark.elapsed();

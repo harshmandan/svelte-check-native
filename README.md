@@ -12,9 +12,11 @@ Powered by Rust + [tsgo](https://github.com/microsoft/typescript-go).
 npm i -D svelte-check-native
 ```
 
-Requires `@typescript/native-preview` (tsgo) and a `svelte` package in
-your project's `node_modules`. `bun` or `node` on `PATH` is used to call
-`svelte/compiler` for warnings.
+Also requires `@typescript/native-preview` (tsgo)
+
+```
+npm i -D @typescript/native-preview
+```
 
 ## Use
 
@@ -22,24 +24,23 @@ your project's `node_modules`. `bun` or `node` on `PATH` is used to call
 svelte-check-native --workspace .
 ```
 
-Same flags as upstream `svelte-check`. See `svelte-check-native --help`.
+Same flags as `svelte-check`. See `svelte-check-native --help`.
 
 ## Speed
 
-On `a heavy SvelteKit TS app` (1206 `.svelte` files, M-series 8-core,
-warm cache, median of 3 runs):
+A heavy SvelteKit + TypeScript app (~1200 `.svelte` files, M-series
+8-core, warm cache, median of 3 runs):
 
-| | Warm |
-|---|---|
-| `svelte-check-native` | **~3 s** |
-| `svelte-check --tsgo` | ~13 s |
-| `svelte-check` (default) | ~40 s |
+|                          | Warm     |
+| ------------------------ | -------- |
+| `svelte-check-native`    | **~3 s** |
+| `svelte-check --tsgo`    | ~13 s    |
+| `svelte-check` (default) | ~40 s    |
 
 Cold (no cache, fresh `bun` import): ~7–8 s.
 
 Diagnostic output is byte-equivalent to upstream `svelte-check` with
-the same flags (verified parity: 0 errors / 10 warnings / 7 files on
-the above workload).
+the same flags.
 
 ## How it works
 

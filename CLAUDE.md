@@ -14,6 +14,11 @@ file is the shorter "rules of engagement" layer on top of that.
 - **Upstream submodule:** `language-tools/` is a pinned submodule of
   `sveltejs/language-tools` — the source of truth for CLI behavior.
 - **Full plan:** `todo.md`.
+- **Bug test-spec:** `upstream/fixes.md` — detailed per-bug recipes
+  (input, expected, actual-before-fix, fix approach, test hint) for the 32
+  transformer bugs. Read before writing any bug fixture; prefer behavioral
+  assertions (tsgo reports no TS6133) over structural ones (exact generated
+  substring) when possible.
 
 ## Scope discipline (repeated here because it's easy to forget)
 

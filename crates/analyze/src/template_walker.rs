@@ -222,15 +222,28 @@ fn walk_directive(
                 summary.void_refs.register(name);
                 counters.bind_pair += 1;
             }
-            Some(DirectiveValue::Expression {
-                expression_range, ..
-            }) if d.name == "this" => {
+            Some(DirectiveValue::Expression { expression_range, .. }) => {
+                // `bind:this={x}` and `bind:foo={x}` (any prop name) — if
+                // the bound value is a simple identifier, that local
+                // gets assigned asynchronously by Svelte (bind:this when
+                // the element mounts; bind:foo when the child component
+                // updates the bound prop). Record it for the definite-
+                // assignment rewrite so closures reading the variable
+                // don't fire TS2454.
                 if let Some(name) = simple_identifier_in(ctx.source, *expression_range) {
                     summary.bind_this_targets.push(BindThisTarget {
                         name,
                         range: *expression_range,
                     });
                 }
+            }
+            None => {
+                // Bare `bind:foo` is shorthand for `bind:foo={foo}` —
+                // same definite-assignment story as the explicit form.
+                summary.bind_this_targets.push(BindThisTarget {
+                    name: d.name.clone(),
+                    range: d.range,
+                });
             }
             _ => {}
         },

@@ -138,13 +138,129 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
+    let diagnostic_sources = parse_diagnostic_sources(cli.diagnostic_sources.as_deref());
+    let compiler_warnings = parse_compiler_warnings(cli.compiler_warnings.as_deref());
+
     run_typecheck(
         &workspace,
         &tsconfig,
         &output,
         &cli.threshold,
         cli.fail_on_warnings,
+        diagnostic_sources,
+        &compiler_warnings,
     )
+}
+
+/// Which diagnostic sources are active. Defaults to all-enabled.
+///
+/// `--diagnostic-sources "js,svelte"` switches off `css` (and disables
+/// any source not named in the list). `js` covers TS too — they share
+/// the same backend for us.
+#[derive(Debug, Clone, Copy)]
+struct DiagnosticSources {
+    js: bool,
+    svelte: bool,
+    css: bool,
+}
+
+impl DiagnosticSources {
+    fn all() -> Self {
+        Self { js: true, svelte: true, css: true }
+    }
+}
+
+fn parse_diagnostic_sources(spec: Option<&str>) -> DiagnosticSources {
+    let Some(spec) = spec else {
+        return DiagnosticSources::all();
+    };
+    let mut sources = DiagnosticSources { js: false, svelte: false, css: false };
+    for entry in spec.split(',') {
+        let entry = entry.trim().to_lowercase();
+        match entry.as_str() {
+            "js" | "ts" | "javascript" | "typescript" => sources.js = true,
+            "svelte" => sources.svelte = true,
+            "css" | "scss" | "sass" | "less" | "postcss" => sources.css = true,
+            "" => {}
+            other => {
+                eprintln!(
+                    "svelte-check-native: unknown --diagnostic-sources entry {other:?}; ignoring"
+                );
+            }
+        }
+    }
+    sources
+}
+
+/// Per-compiler-warning severity override map.
+///
+/// `--compiler-warnings "css-unused-selector:ignore,unused-export-let:error"`
+/// → `{ "css-unused-selector": Ignore, "unused-export-let": Error }`.
+/// Anything not listed keeps its compiler-default severity (`warning`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompilerWarningOverride {
+    Ignore,
+    Warning,
+    Error,
+}
+
+/// Apply a per-code override to a single compiler-warning severity.
+/// Returns `None` if the override is `Ignore` (caller should drop the
+/// diagnostic).
+fn apply_compiler_override(
+    code: &str,
+    base: svn_svelte_compiler::Severity,
+    overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
+) -> Option<svn_typecheck::Severity> {
+    let resolved = overrides
+        .get(code)
+        .copied()
+        .map(|o| match o {
+            CompilerWarningOverride::Ignore => None,
+            CompilerWarningOverride::Warning => Some(svn_typecheck::Severity::Warning),
+            CompilerWarningOverride::Error => Some(svn_typecheck::Severity::Error),
+        })
+        .unwrap_or_else(|| {
+            Some(match base {
+                svn_svelte_compiler::Severity::Error => svn_typecheck::Severity::Error,
+                svn_svelte_compiler::Severity::Warning => svn_typecheck::Severity::Warning,
+            })
+        });
+    resolved
+}
+
+fn parse_compiler_warnings(
+    spec: Option<&str>,
+) -> std::collections::HashMap<String, CompilerWarningOverride> {
+    let mut out = std::collections::HashMap::new();
+    let Some(spec) = spec else {
+        return out;
+    };
+    for entry in spec.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((code, severity)) = entry.split_once(':') else {
+            eprintln!(
+                "svelte-check-native: malformed --compiler-warnings entry {entry:?} (expected `code:severity`); ignoring"
+            );
+            continue;
+        };
+        let severity = match severity.trim().to_lowercase().as_str() {
+            "ignore" | "off" | "silent" => CompilerWarningOverride::Ignore,
+            "warning" | "warn" => CompilerWarningOverride::Warning,
+            "error" => CompilerWarningOverride::Error,
+            other => {
+                eprintln!(
+                    "svelte-check-native: unknown --compiler-warnings severity {other:?}; ignoring entry"
+                );
+                continue;
+            }
+        };
+        out.insert(code.trim().to_string(), severity);
+    }
+    out
 }
 
 /// Resolve the user's tsconfig path. Honors `--tsconfig`, `--no-tsconfig`,
@@ -193,30 +309,34 @@ fn resolve_tsconfig(
 /// `threshold` controls which diagnostics are kept: `error` filters out
 /// warnings; `warning` keeps both. `fail_on_warnings` makes warnings
 /// participate in the exit-code decision (matching upstream
-/// svelte-check).
+/// svelte-check). `sources` opts diagnostics in/out per source family
+/// (`js`/`svelte`/`css`). `compiler_overrides` reclassifies individual
+/// compiler warnings (e.g. `css-unused-selector:error`).
 fn run_typecheck(
     workspace: &Path,
     tsconfig: &Path,
     output_format: &str,
     threshold: &str,
     fail_on_warnings: bool,
+    sources: DiagnosticSources,
+    compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
 ) -> ExitCode {
     let svelte_files = discover_svelte_files(workspace);
 
     // Read every source up-front; we need the bytes for both the
     // tsgo-typecheck path and the svelte/compiler bridge.
-    let mut sources: Vec<(PathBuf, String)> = Vec::with_capacity(svelte_files.len());
+    let mut svelte_sources: Vec<(PathBuf, String)> = Vec::with_capacity(svelte_files.len());
     for file in &svelte_files {
         match std::fs::read_to_string(file) {
-            Ok(s) => sources.push((file.clone(), s)),
+            Ok(s) => svelte_sources.push((file.clone(), s)),
             Err(err) => {
                 eprintln!("failed to read {}: {err}", file.display());
             }
         }
     }
 
-    let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::with_capacity(sources.len());
-    for (file, source) in &sources {
+    let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::with_capacity(svelte_sources.len());
+    for (file, source) in &svelte_sources {
         let (doc, _parse_errors) = svn_parser::parse_sections(source);
         let (fragment, _template_errors) =
             svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
@@ -229,50 +349,66 @@ fn run_typecheck(
         });
     }
 
-    let mut diagnostics = match svn_typecheck::check(workspace, tsconfig, &inputs) {
-        Ok(d) => d,
-        Err(err) => {
-            eprintln!("svelte-check-native: type-check failed: {err}");
-            return ExitCode::from(2);
+    // Run tsgo (`js`/`ts` source). Skipped entirely when
+    // `--diagnostic-sources` opts out of `js`.
+    let mut diagnostics = if sources.js {
+        match svn_typecheck::check(workspace, tsconfig, &inputs) {
+            Ok(d) => d,
+            Err(err) => {
+                eprintln!("svelte-check-native: type-check failed: {err}");
+                return ExitCode::from(2);
+            }
         }
+    } else {
+        Vec::new()
     };
 
     // Compiler-warning bridge: ask the user's `svelte/compiler` for any
     // non-typecheck diagnostics (`state_referenced_locally`,
-    // `element_invalid_self_closing_tag`, accessibility hints, etc.) and
-    // merge them into the diagnostic stream. Best-effort — if no JS
-    // runtime or no svelte package is present, skip silently.
-    match svn_svelte_compiler::compile_batch(workspace, &sources) {
-        Ok(per_file) => {
-            for (path, warnings) in per_file {
-                for w in warnings {
-                    diagnostics.push(svn_typecheck::CheckDiagnostic {
-                        source_path: path.clone(),
-                        line: w.start.line,
-                        column: w.start.column,
-                        severity: match w.severity {
-                            svn_svelte_compiler::Severity::Error => {
-                                svn_typecheck::Severity::Error
-                            }
-                            svn_svelte_compiler::Severity::Warning => {
-                                svn_typecheck::Severity::Warning
-                            }
-                        },
-                        // Compiler diagnostic codes are slugs
-                        // (`state_referenced_locally`), not numbers — we
-                        // store 0 here and prepend the slug into the
-                        // message so output formatters still surface it.
-                        code: 0,
-                        message: format!("{} ({})", w.message, w.code),
-                        span_length: None,
-                    });
+    // `element_invalid_self_closing_tag`, accessibility hints, etc.).
+    // Skipped when `--diagnostic-sources` opts out of `svelte`. Each
+    // emitted warning gets routed through `apply_compiler_override`
+    // first so `--compiler-warnings code:severity` reclassifications
+    // win.
+    if sources.svelte {
+        match svn_svelte_compiler::compile_batch(workspace, &svelte_sources) {
+            Ok(per_file) => {
+                for (path, warnings) in per_file {
+                    for w in warnings {
+                        let severity = apply_compiler_override(
+                            &w.code,
+                            w.severity,
+                            compiler_overrides,
+                        );
+                        let Some(severity) = severity else { continue };
+                        diagnostics.push(svn_typecheck::CheckDiagnostic {
+                            source_path: path.clone(),
+                            line: w.start.line,
+                            column: w.start.column,
+                            severity,
+                            // Compiler diagnostic codes are slugs
+                            // (`state_referenced_locally`), not numbers
+                            // — we store 0 here and prepend the slug
+                            // into the message so output formatters
+                            // still surface it.
+                            code: 0,
+                            message: format!("{} ({})", w.message, w.code),
+                            span_length: None,
+                        });
+                    }
                 }
             }
-        }
-        Err(_) => {
-            // Bridge unavailable — proceed with TS diagnostics only.
+            Err(_) => {
+                // Bridge unavailable — proceed with TS diagnostics only.
+            }
         }
     }
+
+    // `css` source is reserved — once we add a CSS linter (or wire one
+    // through preprocessor output), this is where we'd run it. For now
+    // the flag's effect on `css` is purely opt-out semantics; opting in
+    // is a no-op until we have something to emit.
+    let _ = sources.css;
 
     // `--threshold error` drops warnings entirely (mirrors upstream).
     if threshold == "error" {

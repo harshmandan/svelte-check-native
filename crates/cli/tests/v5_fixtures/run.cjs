@@ -143,9 +143,23 @@ function runFixture(name, fixtureDir) {
     }
 }
 
+// We accept fixtures from two layouts:
+//   - upstream svelte2tsx samples — many non-v5 dirs share the SAMPLES_DIR;
+//     we filter to .v5 only to skip Svelte 4 fixtures
+//   - our own v5-stores layout — every dir is a fixture, except `_shared/`
+//     and other underscore-prefixed metadata dirs
+//
+// Heuristic: if any .v5 dir exists, behave as upstream-mode (filter to .v5).
+// Otherwise local-mode (every dir except _-prefixed ones).
 const entries = fs.readdirSync(SAMPLES_DIR).sort();
+const hasV5 = entries.some((e) => e.endsWith('.v5'));
+const isFixtureDir = (entry) => {
+    if (entry.startsWith('_')) return false;
+    if (hasV5 && !entry.endsWith('.v5')) return false;
+    return true;
+};
 for (const entry of entries) {
-    if (!entry.endsWith('.v5')) continue;
+    if (!isFixtureDir(entry)) continue;
     const dir = path.join(SAMPLES_DIR, entry);
     if (!fs.statSync(dir).isDirectory()) continue;
     runFixture(entry, dir);

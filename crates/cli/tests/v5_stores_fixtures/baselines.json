@@ -1,0 +1,45 @@
+{
+    "_doc": "Same baseline format as v5_fixtures/baselines.json. Listed fixtures are expected to produce up to N errors. These are direct ports of upstream svelte2tsx fixtures that test verbatim-emit behavior — preserving user code character-for-character even when the user's code references undefined names, unresolved modules, or other things TS would flag.",
+    "verbatim_emit_fixtures": {
+        "$store-as-directive": {
+            "max_errors": 2,
+            "reason": "Tests store-name-as-directive emit shape; user code has TS oddities (unused comma operator side) that svelte2tsx preserves verbatim."
+        },
+        "$store-assign": {
+            "max_errors": 2,
+            "reason": "User code references `writable` without importing it. Verbatim emit preserves the unresolved name."
+        },
+        "$store-inside-block-without-braces": {
+            "max_errors": 3,
+            "reason": "Multiple `$store` references where only some `store` names are declared in the fixture; verbatim emit preserves the unresolved ones."
+        },
+        "$store-nested-declaration": {
+            "max_errors": 2,
+            "reason": "Implicit-any in JSDoc-typed JS under strict mode. Verbatim emit doesn't add type annotations."
+        },
+        "$store-no-instance-only-module-script": {
+            "max_errors": 1,
+            "reason": "import from './somewhere' that doesn't exist. Verbatim emit preserves the unresolved import."
+        },
+        "store-destructuring": {
+            "max_errors": 5,
+            "reason": "User code references `fromSomewhere()` without import. Verbatim emit preserves the unresolved name."
+        },
+        "store-from-module": {
+            "max_errors": 5,
+            "reason": "import from './store' that doesn't exist. Verbatim emit preserves."
+        },
+        "store-import": {
+            "max_errors": 3,
+            "reason": "import from './store' that doesn't exist. Verbatim emit preserves."
+        },
+        "store-property-access": {
+            "max_errors": 1,
+            "reason": "User code references `someStore` without declaration. Verbatim emit preserves."
+        },
+        "uses-$store": {
+            "max_errors": 2,
+            "reason": "User code references `$b` where `b` is never declared (external store assumed). Verbatim emit preserves."
+        }
+    }
+}

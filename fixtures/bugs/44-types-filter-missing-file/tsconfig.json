@@ -1,0 +1,9 @@
+{
+    "extends": "../_shared/tsconfig.base.json",
+    "compilerOptions": {
+        "types": [
+            "./.generated/non-existent.d.ts"
+        ]
+    },
+    "include": ["**/*"]
+}

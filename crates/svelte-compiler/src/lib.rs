@@ -147,9 +147,26 @@ impl Worker {
             svelte_pkg.join("compiler.js")
         };
 
+        // Discover the user's svelte.config.{js,mjs,cjs} so the bridge
+        // can dynamic-import it once at startup and fold its
+        // `compilerOptions` into every compile() call. Without this,
+        // projects that rely on experimental rune flags (e.g.
+        // `compilerOptions.experimental.async = true`) get spurious
+        // compiler errors that upstream svelte-check (which does honor
+        // svelte.config.js) does not produce.
+        let svelte_config = locate_svelte_config(workspace);
+
         let mut cmd = Command::new(&runtime);
         cmd.arg(&bridge_path);
         cmd.arg(&svelte_compiler_resolved);
+        // Empty string means "no config" — keeps argv positional rather
+        // than introducing a flag-style parser to the bridge for one arg.
+        cmd.arg(
+            svelte_config
+                .as_deref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
         cmd.current_dir(&workspace_for_cwd);
         cmd.env("NODE_PATH", &svelte_parent_node_modules);
         cmd.stdin(Stdio::piped());
@@ -347,6 +364,32 @@ fn locate_svelte(start: &Path) -> Option<PathBuf> {
         let pkg = dir.join("node_modules").join("svelte");
         if pkg.is_dir() && pkg.join("package.json").is_file() {
             return Some(pkg);
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
+/// Walk up from `start` looking for the user's svelte.config.{js,mjs,cjs}.
+/// Returns the absolute path of the first match, or None if no config
+/// exists in the workspace's ancestor chain. Stops at the first
+/// `node_modules/` boundary so we don't accidentally pick up a
+/// dependency's vendored config.
+fn locate_svelte_config(start: &Path) -> Option<PathBuf> {
+    const NAMES: &[&str] = &["svelte.config.js", "svelte.config.mjs", "svelte.config.cjs"];
+    let mut cur: Option<&Path> = Some(start);
+    while let Some(dir) = cur {
+        for name in NAMES {
+            let p = dir.join(name);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+        // Don't recurse past the workspace into a parent project's
+        // node_modules — that path would point at a dep's vendored
+        // config, never the user's intent.
+        if dir.file_name() == Some(std::ffi::OsStr::new("node_modules")) {
+            return None;
         }
         cur = dir.parent();
     }

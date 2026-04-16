@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "User declares `include: [\"src/**/*.ts\", \"src/**/*.svelte\"]`. Our overlay must mirror those include patterns so user TS modules (route loaders, hooks, $lib helpers, .svelte.ts rune helpers, etc.) are part of the type-check program — not just the .svelte sources transitively imported from there. Without this, an entire class of user .ts files goes silently unchecked."
+}

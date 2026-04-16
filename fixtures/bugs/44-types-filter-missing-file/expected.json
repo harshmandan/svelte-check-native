@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "User's tsconfig includes a `types` entry pointing at a build-time-generated .d.ts that doesn't exist on disk yet (e.g. `unplugin-auto-import` output before the first build). tsgo treats a missing `types` entry as fatal TS2688 — once that fires, downstream files in the program go un-diagnosed. Our overlay must filter the inherited `types` array to drop entries that don't resolve, so the rest of the project still gets checked."
+}

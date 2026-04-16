@@ -569,7 +569,10 @@ fn run_typecheck(
     // win.
     let mark = std::time::Instant::now();
     if sources.svelte {
-        match svn_svelte_compiler::compile_batch(workspace, &svelte_sources) {
+        // Move svelte_sources into the bridge — we don't need it after
+        // this point and the bridge takes the PathBufs by value to avoid
+        // re-cloning them inside the result vec.
+        match svn_svelte_compiler::compile_batch(workspace, std::mem::take(&mut svelte_sources)) {
             Ok(per_file) => {
                 for (path, warnings) in per_file {
                     for w in warnings {

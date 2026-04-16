@@ -34,10 +34,10 @@
 
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::thread::{self, JoinHandle};
 
 use serde::{Deserialize, Serialize};
 
@@ -99,6 +99,10 @@ pub struct Worker {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
+    /// Thread that drains the subprocess's stderr and forwards it to our
+    /// own stderr, prefixed so it's distinguishable from host output.
+    /// Joined in `Drop` after the child exits.
+    stderr_pump: Option<JoinHandle<()>>,
 }
 
 impl Worker {
@@ -150,19 +154,25 @@ impl Worker {
         cmd.env("NODE_PATH", &svelte_parent_node_modules);
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
-        // Inherit stderr so subprocess crashes (parse errors, missing
-        // svelte/compiler) surface immediately rather than disappearing
-        // silently. The host can demote this to piped-and-logged once
-        // we have a clean error-wrapping pass.
-        cmd.stderr(Stdio::inherit());
+        // Pipe stderr so subprocess output doesn't interleave with our
+        // human/machine output on a shared terminal. A background thread
+        // reads it line-by-line and re-emits each line with a prefix so
+        // bridge crashes still surface, but cleanly tagged.
+        cmd.stderr(Stdio::piped());
         let mut child = cmd.spawn()?;
         let stdin = child.stdin.take().ok_or(BridgeError::SubprocessDied)?;
         let stdout = child.stdout.take().ok_or(BridgeError::SubprocessDied)?;
+        let stderr = child.stderr.take().ok_or(BridgeError::SubprocessDied)?;
+        let stderr_pump = thread::Builder::new()
+            .name("svn-bridge-stderr".into())
+            .spawn(move || pump_stderr(stderr))
+            .ok();
         Ok(Self {
             child,
             stdin,
             stdout: BufReader::new(stdout),
             next_id: 1,
+            stderr_pump,
         })
     }
 
@@ -229,6 +239,33 @@ impl Drop for Worker {
         // mid-run.
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if let Some(pump) = self.stderr_pump.take() {
+            // Child is dead → its stderr is closed → pump's read loop
+            // returns and the thread exits. Join is then quick.
+            let _ = pump.join();
+        }
+    }
+}
+
+/// Read the bridge subprocess's stderr line by line and forward each
+/// line to our own stderr with a prefix so it's distinguishable from
+/// host output. Returns when the read side closes (typically when the
+/// child exits).
+fn pump_stderr<R: Read + Send + 'static>(reader: R) {
+    let mut buf = BufReader::new(reader);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match buf.read_line(&mut line) {
+            Ok(0) => return,
+            Ok(_) => {
+                let trimmed = line.trim_end_matches(['\n', '\r']);
+                if !trimmed.is_empty() {
+                    eprintln!("svelte-check-native [bridge]: {trimmed}");
+                }
+            }
+            Err(_) => return,
+        }
     }
 }
 
@@ -331,28 +368,28 @@ fn write_bridge_to_temp() -> std::io::Result<PathBuf> {
 /// Convenience: process a batch of files through one worker.
 ///
 /// Used by `svelte-check-native check` to run compiler diagnostics over
-/// every input. Returns one `Vec<CompilerDiagnostic>` per input source
-/// in the same order. Failures on individual files don't abort the
-/// batch — that file just gets an empty result.
+/// every input. Returns one `(PathBuf, Vec<CompilerDiagnostic>)` per
+/// input source in the same order. Consumes `inputs` so the caller's
+/// `PathBuf`s move into the result without re-cloning. Failures on
+/// individual files don't abort the batch — that file just gets an
+/// empty result.
 pub fn compile_batch(
     workspace: &Path,
-    inputs: &[(PathBuf, String)],
-) -> Result<HashMap<PathBuf, Vec<CompilerDiagnostic>>, BridgeError> {
+    inputs: Vec<(PathBuf, String)>,
+) -> Result<Vec<(PathBuf, Vec<CompilerDiagnostic>)>, BridgeError> {
     if inputs.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(Vec::new());
     }
     let mut worker = Worker::spawn(workspace)?;
-    let mut out = HashMap::with_capacity(inputs.len());
+    let mut out = Vec::with_capacity(inputs.len());
     for (path, source) in inputs {
-        match worker.compile_one(path, source) {
-            Ok(d) => {
-                out.insert(path.clone(), d);
-            }
+        match worker.compile_one(&path, &source) {
+            Ok(d) => out.push((path, d)),
             Err(BridgeError::SubprocessDied) => return Err(BridgeError::SubprocessDied),
             Err(_) => {
                 // Per-file failures are swallowed (returned as empty
                 // result) so one bad file doesn't kill the whole run.
-                out.insert(path.clone(), Vec::new());
+                out.push((path, Vec::new()));
             }
         }
     }

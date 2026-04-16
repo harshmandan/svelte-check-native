@@ -1,8 +1,14 @@
 {
-    "name": "svelte-check-native-dev",
-    "private": true,
-    "description": "Dev-time tooling holder for svelte-check-native. Not published.",
-    "devDependencies": {
-        "@typescript/native-preview": ">=7.0.0-dev.0"
-    }
+  "private": true,
+  "name": "svelte-check-native-monorepo",
+  "version": "0.0.0",
+  "description": "Monorepo root for svelte-check-native. The published package lives at npm/svelte-check-native/.",
+  "scripts": {
+    "build:rust": "cargo build --release -p svelte-check-native",
+    "build:native": "npm run build:rust && node scripts/copy-binary.mjs",
+    "pack:all": "node scripts/pack-all.mjs"
+  },
+  "devDependencies": {
+    "@typescript/native-preview": ">=7.0.0-dev.0"
+  }
 }

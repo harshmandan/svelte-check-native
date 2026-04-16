@@ -1,0 +1,24 @@
+{
+  "name": "svelte-check-native-darwin-arm64",
+  "version": "0.1.0",
+  "description": "darwin-arm64 binary for svelte-check-native. Do not install directly — depend on `svelte-check-native` instead.",
+  "homepage": "https://github.com/harshmandan/svelte-check-native",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/harshmandan/svelte-check-native.git"
+  },
+  "license": "MIT",
+  "author": "Harsh Mandan",
+  "files": [
+    "bin/svelte-check-native"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

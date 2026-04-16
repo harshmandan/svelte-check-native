@@ -1,28 +1,31 @@
-// Walk every `.v5` fixture under svelte2tsx's test corpus and assert
-// our binary type-checks each input.svelte cleanly (zero errors).
+// Walk every `.v5` fixture under svelte2tsx's test corpus and run our
+// binary against each. Pass criteria:
+//
+//   - Fixture NOT in baselines.json:
+//         pass iff zero ERROR-severity diagnostics (clean fixture)
+//   - Fixture IN baselines.json:
+//         pass iff our error count ≤ baseline.max_errors
+//
+// The baseline list captures fixtures that are testing svelte2tsx's
+// verbatim-emit behavior — they preserve user code character-for-character
+// even when the user's code doesn't type-check. svelte2tsx's own
+// `expectedv2.ts` for these fixtures contains TS errors. A "pass" for
+// these fixtures means we're not introducing extra errors beyond what
+// the user's code produces.
 //
 // Each fixture is a self-contained directory:
 //   <fixture>.v5/
-//     input.svelte       — Svelte 5 source (the system under test)
+//     input.svelte       — Svelte 5 source (the SUT)
 //     expectedv2.ts      — what svelte2tsx emits (reference; not consumed)
 //
-// We invoke our binary in single-file mode by writing a temporary
-// per-fixture workspace that contains:
-//   - the input.svelte under a `src/` directory
-//   - a minimal tsconfig.json
-// and running the full type-check pipeline against it.
-//
-// The fixture passes when the binary reports zero ERROR-severity
-// diagnostics. The bar is intentionally lenient: a fixture is a
-// known-good Svelte 5 component, so any error we report against it is
-// a fidelity gap.
+// We invoke our binary by writing a temporary per-fixture workspace
+// containing the input.svelte under `src/` plus a minimal tsconfig.
 //
 // Env:
 //   SVELTE_CHECK_BIN — absolute path to the svelte-check-native binary
 //   SAMPLES_DIR      — absolute path to the .v5 samples directory
-//   SHIM_TSCONFIG    — absolute path to a minimal tsconfig.json template
-//                      that fixtures inherit via `extends`. Keeps each
-//                      fixture's tsconfig tiny and consistent.
+//   SHIM_TSCONFIG    — absolute path to the minimal tsconfig template
+//   BASELINES        — absolute path to baselines.json
 
 'use strict';
 
@@ -43,8 +46,22 @@ const SHIM_TSCONFIG = process.env.SHIM_TSCONFIG;
 if (!SHIM_TSCONFIG) {
     throw new Error('run.cjs: SHIM_TSCONFIG env var required');
 }
+const BASELINES = process.env.BASELINES;
+if (!BASELINES) {
+    throw new Error('run.cjs: BASELINES env var required');
+}
+
+const baselines = (() => {
+    try {
+        const raw = JSON.parse(fs.readFileSync(BASELINES, 'utf-8'));
+        return raw.verbatim_emit_fixtures || {};
+    } catch (err) {
+        throw new Error(`run.cjs: failed to read baselines from ${BASELINES}: ${err.message}`);
+    }
+})();
 
 let passed = 0;
+let passedBaseline = 0; // passed because within baseline budget
 let failed = 0;
 let skipped = 0;
 const failures = [];
@@ -101,7 +118,21 @@ function runFixture(name, fixtureDir) {
             }
         }
 
-        if (errors.length === 0) {
+        const baseline = baselines[name];
+        if (baseline) {
+            // Verbatim-emit fixture: pass iff our error count ≤ baseline.
+            if (errors.length <= baseline.max_errors) {
+                passedBaseline++;
+            } else {
+                failed++;
+                failures.push({
+                    name,
+                    count: errors.length,
+                    first: errors[0],
+                    baseline: baseline.max_errors
+                });
+            }
+        } else if (errors.length === 0) {
             passed++;
         } else {
             failed++;
@@ -120,13 +151,18 @@ for (const entry of entries) {
     runFixture(entry, dir);
 }
 
-console.log(`v5 fixtures: ${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`);
+const total = passed + passedBaseline + failed;
+const passLine = passedBaseline > 0
+    ? `v5 fixtures: ${passed + passedBaseline}/${total} (${passed} clean, ${passedBaseline} within-baseline), ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`
+    : `v5 fixtures: ${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`;
+console.log(passLine);
 if (failures.length > 0) {
     console.log('\nFirst error per failing fixture (showing up to 30):');
     for (const f of failures.slice(0, 30)) {
         const e = f.first;
+        const baselineNote = f.baseline !== undefined ? ` [over baseline ${f.baseline}]` : '';
         console.log(
-            `  FAIL ${f.name} (${f.count} errors): TS${e.code} ${e.message} @ ${e.filename}:${e.start.line + 1}:${e.start.character + 1}`
+            `  FAIL ${f.name} (${f.count} errors${baselineNote}): TS${e.code} ${e.message} @ ${e.filename}:${e.start.line + 1}:${e.start.character + 1}`
         );
     }
 }

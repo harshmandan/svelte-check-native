@@ -29,6 +29,11 @@ fn v5_fixtures_suite() {
         .canonicalize()
         .expect("base tsconfig must exist");
 
+    let baselines = crate_dir
+        .join("tests/v5_fixtures/baselines.json")
+        .canonicalize()
+        .expect("baselines.json must exist");
+
     let samples = crate_dir
         .join("../../language-tools/packages/svelte2tsx/test/svelte2tsx/samples")
         .canonicalize()
@@ -52,6 +57,7 @@ fn v5_fixtures_suite() {
         .env("SVELTE_CHECK_BIN", bin)
         .env("SAMPLES_DIR", &samples)
         .env("SHIM_TSCONFIG", &shim_tsconfig)
+        .env("BASELINES", &baselines)
         .env("TSGO_BIN", &tsgo)
         .output()
     {

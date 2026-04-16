@@ -1,0 +1,37 @@
+{
+    "_doc": "Per-fixture baselines for the v5 fixtures suite. Listed fixtures are expected to produce up to `max_errors` ERROR-severity diagnostics — they're testing svelte2tsx's verbatim-emit behavior (preserving user code character-for-character) rather than asserting that the output type-checks. svelte2tsx's own `expectedv2.ts` for these fixtures contains TS errors that match what the user wrote. A fixture in this list passes if our error count ≤ max_errors. Fixtures not in this list must produce zero errors to pass.",
+    "verbatim_emit_fixtures": {
+        "runes-best-effort-types.v5": {
+            "max_errors": 1,
+            "reason": "let { g = foo } = $props() — `foo` is undefined; the fixture preserves the user's reference verbatim. svelte2tsx emits the same error in expectedv2.ts."
+        },
+        "ts-runes-best-effort-types.v5": {
+            "max_errors": 3,
+            "reason": "Same as runes-best-effort-types but with extra TS-typed defaults (h = null as Bar, i = null as any as Baz). All three undefined references preserved verbatim."
+        },
+        "ts-runes-generics.v5": {
+            "max_errors": 2,
+            "reason": "let x = $state<T>(0) where T is a generic. Real svelte's $state<T>(initial: T) signature flags this — 0 isn't assignable to generic T. svelte2tsx emits verbatim; our shim mirrors the real signature so the same TS2345 fires."
+        },
+        "ts-runes-with-slot.v5": {
+            "max_errors": 2,
+            "reason": "Same $state<T>(0) pattern as ts-runes-generics, plus snippet handling."
+        },
+        "snippet-module-hoist-2.v5": {
+            "max_errors": 1,
+            "reason": "import { imported } from './x' — './x' doesn't exist in the fixture. Tests that snippet hoisting works in the presence of unresolved imports; the import error itself is expected."
+        },
+        "snippet-module-hoist-7.v5": {
+            "max_errors": 1,
+            "reason": "import { store } from './foo' — './foo' doesn't exist. Same pattern as snippet-module-hoist-2."
+        },
+        "ts-runes-hoistable-props-5.v5": {
+            "max_errors": 1,
+            "reason": "import X from './X' — './X' doesn't exist. Tests prop type-extraction in presence of unresolved import."
+        },
+        "ts-runes-hoistable-props-false-11.v5": {
+            "max_errors": 1,
+            "reason": "interface A { Abc: typeof a }; let {}: Abc = $props(). The TS2713 'A.Abc' inside the fixture's outer interface uses A as a namespace — svelte2tsx preserves and the user error is the test target."
+        }
+    }
+}

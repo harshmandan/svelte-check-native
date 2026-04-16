@@ -34,6 +34,12 @@ pub struct CacheLayout {
     pub overlay_tsconfig: PathBuf,
     /// `.tsbuildinfo` path passed to tsgo.
     pub tsbuildinfo: PathBuf,
+    /// Svelte type shims `.d.ts` path: `<root>/svelte-shims.d.ts`.
+    /// Re-emitted on every check from `svelte_shims.d.ts` baked into the
+    /// typecheck crate. Provides minimal type definitions for `svelte/*`
+    /// imports so projects without the real `svelte` package installed
+    /// (e.g. the upstream test fixtures) don't fire TS2307.
+    pub svelte_shims: PathBuf,
 }
 
 impl CacheLayout {
@@ -44,12 +50,14 @@ impl CacheLayout {
         let svelte_dir = root.join("svelte");
         let overlay_tsconfig = root.join("tsconfig.json");
         let tsbuildinfo = root.join("tsbuildinfo.json");
+        let svelte_shims = root.join("svelte-shims.d.ts");
         Self {
             workspace,
             root,
             svelte_dir,
             overlay_tsconfig,
             tsbuildinfo,
+            svelte_shims,
         }
     }
 
@@ -140,6 +148,10 @@ mod tests {
         assert_eq!(
             layout.tsbuildinfo,
             Path::new("/projects/foo/.svelte-check/tsbuildinfo.json")
+        );
+        assert_eq!(
+            layout.svelte_shims,
+            Path::new("/projects/foo/.svelte-check/svelte-shims.d.ts")
         );
     }
 

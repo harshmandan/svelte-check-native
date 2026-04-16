@@ -6,8 +6,12 @@ file is the shorter "rules of engagement" layer on top of that.
 
 ## Project at a glance
 
-- **Goal:** a CLI-only type checker for Svelte 5, written in Rust, powered by
-  tsgo. Drop-in replacement for upstream `svelte-check`.
+- **Goal:** a CLI-only type checker for **Svelte 5+ only**, written in Rust,
+  powered by tsgo. Drop-in replacement for upstream `svelte-check`.
+  No Svelte 4 support — this is a deliberate scope decision: drops the
+  `export let foo` prop syntax, `$:` reactive statements, `<slot>`, and
+  `on:` event directives from our handling. upstream makes the
+  same decision.
 - **Reference fork:** `upstream/` is a patched fork of `external/upstream`
   we rescued from. Kept in-tree (gitignored) for diffing. **Never copy code
   from it verbatim.**

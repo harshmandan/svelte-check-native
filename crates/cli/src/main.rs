@@ -17,7 +17,15 @@ use clap::Parser;
 use walkdir::WalkDir;
 
 #[derive(Parser, Debug)]
-#[command(name = "svelte-check-native", version)]
+#[command(
+    name = "svelte-check-native",
+    version,
+    about = "CLI-only type checker for Svelte 5+ projects. Powered by tsgo.",
+    long_about = "svelte-check-native — type-check Svelte 5+ components.\n\n\
+                  Svelte 4 syntax (export let, $:, <slot>, on:event) is not\n\
+                  supported. tsgo (@typescript/native-preview) must be installed\n\
+                  in the project's node_modules, or pointed at via TSGO_BIN."
+)]
 struct Cli {
     /// Workspace root to scan. Defaults to current working directory.
     #[arg(long)]

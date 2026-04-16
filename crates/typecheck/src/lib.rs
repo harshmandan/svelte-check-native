@@ -44,6 +44,12 @@ pub use discovery::{DiscoveryError, TsgoBinary, discover};
 pub use output::{RawDiagnostic, Severity, parse as parse_output};
 pub use runner::{RunError, run as run_tsgo};
 
+/// Svelte type shims, baked into the binary. Written into the cache
+/// directory on every check so projects without `svelte` installed in
+/// node_modules can still type-check (covers all upstream `svelte/*`
+/// import paths).
+const SVELTE_SHIMS_DTS: &str = include_str!("svelte_shims.d.ts");
+
 /// Number of lines [`svn_emit::emit_document`] inserts before the user's
 /// instance script starts. Used to translate tsgo's reported line numbers
 /// back to the original `.svelte` line numbers.
@@ -120,6 +126,12 @@ pub fn check(
 ) -> Result<Vec<CheckDiagnostic>, CheckError> {
     let layout = CacheLayout::for_workspace(workspace);
     std::fs::create_dir_all(&layout.svelte_dir)?;
+
+    // Ship the svelte type shims into the cache. Provides `svelte`,
+    // `svelte/store`, `svelte/transition`, etc. type definitions so
+    // projects without a real `svelte` install in node_modules don't
+    // fire TS2307 on every `import` from those modules.
+    write_if_changed(&layout.svelte_shims, SVELTE_SHIMS_DTS)?;
 
     // Step 1: write generated TS for each input. Skip identical writes.
     let mut generated_paths: Vec<PathBuf> = Vec::with_capacity(inputs.len());

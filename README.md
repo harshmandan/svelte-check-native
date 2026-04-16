@@ -1,10 +1,15 @@
 # svelte-check-native
 
-A fast, CLI-only type checker for Svelte 5 projects. Written in Rust, powered by
-[tsgo](https://github.com/microsoft/typescript-go).
+A fast, CLI-only type checker for **Svelte 5+** projects. Written in Rust,
+powered by [tsgo](https://github.com/microsoft/typescript-go).
 
 Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check)
 on the command-line surface — same flags, same output formats, same exit codes.
+
+> **Svelte 5 only.** Components using Svelte 4 syntax (`export let foo`, `$:`
+> reactive statements, `<slot>`, `on:` event directives) are not a supported
+> input. They will mostly parse but downstream type-checking is undefined.
+> If you need Svelte 4 support, use upstream `svelte-check`.
 
 > **Status:** pre-alpha. See `todo.md` for the implementation plan. The
 > compatibility scoreboard below auto-updates from CI.
@@ -27,10 +32,13 @@ svelte-check-native scoreboard: 0/39 passing
   LSP server, no editor integration, no autocomplete, no hover docs, no
   go-to-definition. Use your editor's Svelte plugin for those.
 - **tsgo-only.** Uses `@typescript/native-preview` (tsgo) for TypeScript
-  diagnostics. No fallback to `tsc`.
-- **Svelte 5 runes-aware.** Handles `$state`, `$derived`, `$effect`,
-  `$bindable`, `$props`, `$inspect`, `$host`, plus snippets, `{@attach}`,
-  `{@const}`, `{@render}`.
+  diagnostics. No fallback to `tsc`. tsgo isn't bundled — install
+  `@typescript/native-preview` as a devDependency in your project.
+- **Svelte 5 only.** Handles all runes (`$state`, `$derived`, `$effect`,
+  `$bindable`, `$props`, `$inspect`, `$host`), snippets, `{@attach}`,
+  `{@const}`, `{@render}`, all `<svelte:*>` specials including
+  `<svelte:boundary>`. No Svelte 4 prop syntax (`export let`), reactive
+  statements (`$:`), slots (`<slot>`), or legacy event directives (`on:`).
 - **SvelteKit aware.** `+page.svelte`, `+server.ts`, `+layout.ts`, etc. get
   their route-type injection automatically.
 

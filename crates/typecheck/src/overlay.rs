@@ -35,11 +35,14 @@ pub fn build(
     // `extends` is resolved relative to the overlay tsconfig dir.
     let extends_rel = relative_from(layout.root.as_path(), user_tsconfig);
 
-    // `files` are absolutized so tsgo doesn't mis-resolve.
-    let files: Vec<String> = generated_files
+    // `files` are absolutized so tsgo doesn't mis-resolve. Always
+    // include the svelte type shim so generated files can reference
+    // `svelte/*` modules even when the real package isn't installed.
+    let mut files: Vec<String> = generated_files
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
+    files.push(layout.svelte_shims.to_string_lossy().into_owned());
 
     json!({
         "extends": extends_rel,
@@ -177,8 +180,23 @@ mod tests {
         ];
         let overlay = build(&layout, &user_ts, &gen_files);
         let files = overlay["files"].as_array().unwrap();
-        assert_eq!(files.len(), 2);
+        // 2 generated + 1 svelte-shims.d.ts = 3.
+        assert_eq!(files.len(), 3);
         assert!(files[0].as_str().unwrap().ends_with("++A.svelte.ts"));
         assert!(files[1].as_str().unwrap().ends_with("++B.svelte.ts"));
+        assert!(files[2].as_str().unwrap().ends_with("svelte-shims.d.ts"));
+    }
+
+    #[test]
+    fn build_overlay_includes_svelte_shims_when_no_generated_files() {
+        // Even with zero `.svelte` files, the shim must still appear so
+        // standalone `.ts`/`.js` files in the project can import from
+        // svelte/* modules.
+        let layout = CacheLayout::for_workspace("/projects/app");
+        let user_ts = PathBuf::from("/projects/app/tsconfig.json");
+        let overlay = build(&layout, &user_ts, &[]);
+        let files = overlay["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].as_str().unwrap().ends_with("svelte-shims.d.ts"));
     }
 }

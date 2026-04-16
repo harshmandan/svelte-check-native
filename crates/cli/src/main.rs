@@ -92,7 +92,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     // CLAUDECODE=1 → force machine output (matches upstream svelte-check).
-    let _output = if std::env::var("CLAUDECODE").as_deref() == Ok("1") {
+    let output = if std::env::var("CLAUDECODE").as_deref() == Ok("1") {
         "machine".to_string()
     } else {
         cli.output.clone()
@@ -138,7 +138,13 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
-    run_typecheck(&workspace, &tsconfig, &cli.output)
+    run_typecheck(
+        &workspace,
+        &tsconfig,
+        &output,
+        &cli.threshold,
+        cli.fail_on_warnings,
+    )
 }
 
 /// Resolve the user's tsconfig path. Honors `--tsconfig`, `--no-tsconfig`,
@@ -183,7 +189,18 @@ fn resolve_tsconfig(
 
 /// Default flow: parse + emit each .svelte file, hand the lot to tsgo,
 /// format diagnostics, exit with the appropriate code.
-fn run_typecheck(workspace: &Path, tsconfig: &Path, output_format: &str) -> ExitCode {
+///
+/// `threshold` controls which diagnostics are kept: `error` filters out
+/// warnings; `warning` keeps both. `fail_on_warnings` makes warnings
+/// participate in the exit-code decision (matching upstream
+/// svelte-check).
+fn run_typecheck(
+    workspace: &Path,
+    tsconfig: &Path,
+    output_format: &str,
+    threshold: &str,
+    fail_on_warnings: bool,
+) -> ExitCode {
     let svelte_files = discover_svelte_files(workspace);
 
     let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::with_capacity(svelte_files.len());
@@ -207,13 +224,18 @@ fn run_typecheck(workspace: &Path, tsconfig: &Path, output_format: &str) -> Exit
         });
     }
 
-    let diagnostics = match svn_typecheck::check(workspace, tsconfig, &inputs) {
+    let mut diagnostics = match svn_typecheck::check(workspace, tsconfig, &inputs) {
         Ok(d) => d,
         Err(err) => {
             eprintln!("svelte-check-native: type-check failed: {err}");
             return ExitCode::from(2);
         }
     };
+
+    // `--threshold error` drops warnings entirely (mirrors upstream).
+    if threshold == "error" {
+        diagnostics.retain(|d| matches!(d.severity, svn_typecheck::Severity::Error));
+    }
 
     let error_count = diagnostics
         .iter()
@@ -223,10 +245,9 @@ fn run_typecheck(workspace: &Path, tsconfig: &Path, output_format: &str) -> Exit
 
     print_diagnostics(workspace, &diagnostics, output_format);
 
-    if error_count > 0 {
+    if error_count > 0 || (fail_on_warnings && warning_count > 0) {
         ExitCode::from(1)
     } else {
-        let _ = warning_count;
         ExitCode::from(0)
     }
 }

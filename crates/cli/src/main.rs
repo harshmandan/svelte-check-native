@@ -90,11 +90,25 @@ fn main() -> ExitCode {
         cli.output.clone()
     };
 
-    let workspace = cli
+    let workspace_arg = cli
         .workspace
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
+    // Canonicalize so subsequent walk-up logic (tsgo discovery, tsconfig
+    // search) traverses real filesystem ancestors. Without this, a relative
+    // workspace like `./test-success` walks `.parent()` → `./` → `""` →
+    // None and never reaches actual node_modules locations.
+    let workspace = match workspace_arg.canonicalize() {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!(
+                "svelte-check-native: cannot resolve workspace {}: {err}",
+                workspace_arg.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
 
     if cli.emit_ts {
         return run_emit_ts(&workspace);
@@ -139,7 +153,9 @@ fn resolve_tsconfig(
         if !resolved.is_file() {
             return Err(format!("tsconfig not found at {}", resolved.display()));
         }
-        return Ok(Some(resolved));
+        // Canonicalize so the overlay's `extends` path is computable as a
+        // proper relative path between two absolute directories.
+        return Ok(Some(resolved.canonicalize().unwrap_or(resolved)));
     }
     let mut cur: Option<&Path> = Some(workspace);
     while let Some(dir) = cur {

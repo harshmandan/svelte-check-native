@@ -132,22 +132,57 @@ pub fn build(
     compiler_options.insert("moduleResolution".into(), json!("bundler"));
     compiler_options.insert("module".into(), json!("esnext"));
     compiler_options.insert("rootDirs".into(), json!(root_dirs));
+    // Filter the user's `types` to drop entries that don't resolve.
+    // tsgo treats a missing `types` entry as a fatal TS2688 and stops
+    // emitting diagnostics for the rest of the program — so a single
+    // stale path (a build-time-generated .d.ts that hasn't been
+    // regenerated yet, a typo, etc.) silently zeros our error count.
+    // We override the inherited `types` with the surviving entries so
+    // the user's intent is preserved without the fatal-abort.
+    if let Some(types) = collect_user_types(user_tsconfig) {
+        compiler_options.insert("types".into(), json!(types));
+    }
     if !paths_map.is_empty() {
         compiler_options.insert("paths".into(), Value::Object(paths_map));
-        // tsgo still requires baseUrl when paths is set (despite tsc
-        // 5.x removing it as a top-level option). Set it to the cache
-        // root — paths-target values are already absolute, so baseUrl
-        // is essentially unused for resolution. The TS5102 deprecation
-        // warning that tsgo emits is filtered out in
-        // svn-typecheck::map_diagnostic.
-        compiler_options.insert("baseUrl".into(), json!(layout.root.to_string_lossy()));
+        // baseUrl is set to the WORKSPACE root. This serves two
+        // purposes: (1) tsgo's onetime requirement that `paths` and
+        // `baseUrl` appear together (the deprecation warning that fires
+        // is filtered as overlay noise); (2) tsgo limits diagnostic
+        // emission to files under baseUrl, which is the right scope
+        // for "type-check the user's project" — files outside the
+        // workspace are dependencies that we shouldn't flag.
+        //
+        // Pointing baseUrl at the cache root (an earlier choice) was
+        // wrong: it confined diagnostics to the cache directory, so
+        // tsgo loaded user TS files for resolution but never emitted
+        // errors on them, silently zeroing meaningful counts on any
+        // project whose include patterns brought in standalone
+        // .ts/.svelte.ts modules.
+        compiler_options.insert("baseUrl".into(), json!(layout.workspace.to_string_lossy()));
     }
 
-    json!({
-        "extends": extends_rel,
-        "compilerOptions": Value::Object(compiler_options),
-        "files": files,
-    })
+    // Pull the user's `include` patterns into our overlay so tsgo also
+    // type-checks standalone TS modules the user authored (route loaders,
+    // hooks, $lib helpers, .svelte.ts rune-helper modules, etc.). Without
+    // this our overlay only sees the generated .svelte.ts overlays plus
+    // their transitive imports — anything the user `include`s but that's
+    // not reached from a .svelte file goes unchecked.
+    //
+    // Patterns matching `*.svelte` are dropped: tsgo can't parse raw
+    // .svelte files, and the .svelte content is already covered by the
+    // generated overlays we list in `files`. Patterns are emitted as
+    // absolute path globs so the tsconfig works regardless of the
+    // overlay's location relative to the workspace.
+    let user_includes = collect_user_includes(user_tsconfig);
+
+    let mut overlay = serde_json::Map::new();
+    overlay.insert("extends".into(), Value::String(extends_rel));
+    overlay.insert("compilerOptions".into(), Value::Object(compiler_options));
+    overlay.insert("files".into(), json!(files));
+    if !user_includes.is_empty() {
+        overlay.insert("include".into(), json!(user_includes));
+    }
+    Value::Object(overlay)
 }
 
 /// Map an absolute paths-target path INTO the overlay svelte tree. If
@@ -334,6 +369,165 @@ fn collect_user_root_dirs(tsconfig: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+/// Walk the user tsconfig's `extends` chain and collect every `include`
+/// pattern, resolved to an absolute path-glob. Only the FIRST tsconfig
+/// in the chain that declares `include` wins, matching TS behavior:
+/// `include` in an inner config overrides any inherited from `extends`.
+///
+/// Patterns matching `**/*.svelte` (or anything that ends in
+/// `.svelte`) are dropped — tsgo can't parse raw .svelte and the
+/// .svelte content is already covered by our generated overlay files
+/// in the `files` array. Keeping `.svelte` patterns would either fire
+/// "file is not a TS file" errors or get silently ignored depending on
+/// tsgo build; either way they add nothing useful.
+fn collect_user_includes(tsconfig: &Path) -> Vec<String> {
+    let mut queue: std::collections::VecDeque<PathBuf> =
+        std::collections::VecDeque::from([tsconfig.to_path_buf()]);
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut hops = 0usize;
+    while let Some(path) = queue.pop_front() {
+        hops += 1;
+        if hops > 32 {
+            break;
+        }
+        if !visited.insert(path.clone()) {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(json) = json5::from_str::<Value>(&content) else {
+            continue;
+        };
+        let dir = path.parent().unwrap_or(Path::new(""));
+        if let Some(arr) = json.get("include").and_then(|v| v.as_array()) {
+            // First config to declare include wins (TS semantics).
+            let mut out: Vec<String> = Vec::new();
+            for entry in arr {
+                let Some(s) = entry.as_str() else { continue };
+                if is_svelte_only_pattern(s) {
+                    continue;
+                }
+                let resolved = if Path::new(s).is_absolute() {
+                    PathBuf::from(s)
+                } else {
+                    dir.join(s)
+                };
+                out.push(normalize(&resolved).to_string_lossy().into_owned());
+            }
+            if !out.is_empty() {
+                return out;
+            }
+        }
+        for ext in resolve_extends(&json, dir) {
+            queue.push_back(ext);
+        }
+    }
+    Vec::new()
+}
+
+/// True when an include pattern is only meaningful for raw `.svelte`
+/// files — those are handled by our overlay's generated `.svelte.ts`
+/// files in the `files` array, so dropping the pattern keeps tsgo from
+/// trying to load the original `.svelte` source as TypeScript.
+fn is_svelte_only_pattern(pattern: &str) -> bool {
+    let trimmed = pattern.trim_end_matches('/');
+    trimmed.ends_with(".svelte")
+}
+
+/// Walk the user tsconfig's `extends` chain to find the first `types`
+/// entry, then filter it: package-name entries pass through, relative
+/// path entries are kept only if they actually exist on disk. Returns
+/// `Some(filtered_list)` when the chain declared `types`, `None`
+/// otherwise (so we don't override an unset value).
+///
+/// Filtering matters because tsgo treats a non-resolvable `types`
+/// entry as a fatal TS2688 — once that fires, downstream files in the
+/// program go un-diagnosed. Projects that auto-generate a .d.ts (e.g.
+/// unplugin-auto-import → `.generated/types/auto-imports.d.ts`) hit
+/// this pattern any time the user has a fresh clone or a stale build.
+fn collect_user_types(tsconfig: &Path) -> Option<Vec<String>> {
+    let mut queue: std::collections::VecDeque<PathBuf> =
+        std::collections::VecDeque::from([tsconfig.to_path_buf()]);
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut hops = 0usize;
+    while let Some(path) = queue.pop_front() {
+        hops += 1;
+        if hops > 32 {
+            break;
+        }
+        if !visited.insert(path.clone()) {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(json) = json5::from_str::<Value>(&content) else {
+            continue;
+        };
+        let dir = path.parent().unwrap_or(Path::new(""));
+        if let Some(arr) = json
+            .get("compilerOptions")
+            .and_then(|c| c.get("types"))
+            .and_then(|v| v.as_array())
+        {
+            // Inner config wins (TS semantics).
+            let mut out: Vec<String> = Vec::new();
+            for entry in arr {
+                let Some(s) = entry.as_str() else { continue };
+                if is_resolvable_types_entry(s, dir) {
+                    out.push(s.to_string());
+                }
+            }
+            return Some(out);
+        }
+        for ext in resolve_extends(&json, dir) {
+            queue.push_back(ext);
+        }
+    }
+    None
+}
+
+/// True when a `types` entry will resolve under tsgo's lookup rules.
+/// Package-name entries (no slash, or scoped like `@types/foo`) are
+/// resolved through `node_modules/@types/<name>` etc. — we accept them
+/// optimistically without filesystem checks because the alternative
+/// (walking node_modules) is expensive and usually right.
+///
+/// Relative path entries (start with `.` or contain a path separator)
+/// are required to point at an existing file. tsgo's `types` lookup
+/// for relative entries does NOT add `.d.ts` automatically when the
+/// path already includes an extension, so we test the literal path
+/// first and `<path>.d.ts` as a fallback.
+fn is_resolvable_types_entry(entry: &str, declaring_dir: &Path) -> bool {
+    let looks_relative = entry.starts_with('.')
+        || entry.starts_with('/')
+        || (entry.contains('/') && !entry.starts_with('@'));
+    if !looks_relative {
+        return true;
+    }
+    let candidate = if Path::new(entry).is_absolute() {
+        PathBuf::from(entry)
+    } else {
+        declaring_dir.join(entry)
+    };
+    if candidate.is_file() {
+        return true;
+    }
+    // `types: ["./foo"]` may resolve as `foo.d.ts`.
+    let with_dts = candidate.with_extension(format!(
+        "{}.d.ts",
+        candidate.extension().and_then(|e| e.to_str()).unwrap_or(""),
+    ));
+    if with_dts.is_file() {
+        return true;
+    }
+    // Plain extensionless input: try `<entry>.d.ts`.
+    let mut as_dts = candidate.clone();
+    as_dts.as_mut_os_string().push(".d.ts");
+    as_dts.is_file()
 }
 
 /// Collapse `..` segments without touching the filesystem. Pure path

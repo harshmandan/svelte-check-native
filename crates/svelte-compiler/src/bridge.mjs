@@ -31,6 +31,29 @@ if (!svelteCompilerPath) {
 }
 const { compile } = await import(pathToFileURL(svelteCompilerPath).href)
 
+// Optional: absolute path to the user's svelte.config.{js,mjs,cjs}.
+// Empty string when no config was discovered. Loaded once at startup
+// and merged into every compile() call so experimental rune flags
+// (e.g. `compilerOptions.experimental.async = true`) are honored.
+const svelteConfigPath = process.argv[3] || ''
+let userCompilerOptions = {}
+if (svelteConfigPath) {
+  try {
+    const mod = await import(pathToFileURL(svelteConfigPath).href)
+    // svelte.config.js is conventionally ESM with a default export;
+    // tolerate CJS-style { compilerOptions } at the module root too.
+    const cfg = mod.default ?? mod
+    if (cfg && typeof cfg === 'object' && cfg.compilerOptions) {
+      userCompilerOptions = cfg.compilerOptions
+    }
+  } catch (e) {
+    console.error(
+      'bridge: failed to load svelte.config (' + svelteConfigPath + '): ' +
+        (e?.message || String(e)) + ' — proceeding with defaults',
+    )
+  }
+}
+
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 
 rl.on('line', (line) => {
@@ -47,6 +70,8 @@ rl.on('line', (line) => {
   }
   try {
     const result = compile(req.source, {
+      // User compilerOptions first so our explicit overrides win.
+      ...userCompilerOptions,
       filename: req.filename,
       // Skip codegen — we only care about diagnostics.
       generate: false,

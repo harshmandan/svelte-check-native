@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "svelte.config.js sets `compilerOptions.experimental.async: true`. Our bridge must dynamic-import the config at startup and merge its compilerOptions into every compile() call so the user's experimental flag is honored. Without it svelte/compiler raises `experimental_async` on the `{await ...}` template expression."
+}

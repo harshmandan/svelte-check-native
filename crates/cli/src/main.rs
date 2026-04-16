@@ -203,19 +203,24 @@ fn run_typecheck(
 ) -> ExitCode {
     let svelte_files = discover_svelte_files(workspace);
 
-    let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::with_capacity(svelte_files.len());
+    // Read every source up-front; we need the bytes for both the
+    // tsgo-typecheck path and the svelte/compiler bridge.
+    let mut sources: Vec<(PathBuf, String)> = Vec::with_capacity(svelte_files.len());
     for file in &svelte_files {
-        let source = match std::fs::read_to_string(file) {
-            Ok(s) => s,
+        match std::fs::read_to_string(file) {
+            Ok(s) => sources.push((file.clone(), s)),
             Err(err) => {
                 eprintln!("failed to read {}: {err}", file.display());
-                continue;
             }
-        };
-        let (doc, _parse_errors) = svn_parser::parse_sections(&source);
+        }
+    }
+
+    let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::with_capacity(sources.len());
+    for (file, source) in &sources {
+        let (doc, _parse_errors) = svn_parser::parse_sections(source);
         let (fragment, _template_errors) =
-            svn_parser::parse_all_template_runs(&source, &doc.template.text_runs);
-        let summary = svn_analyze::walk_template(&fragment, &source);
+            svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+        let summary = svn_analyze::walk_template(&fragment, source);
         let emitted = svn_emit::emit_document(&doc, &fragment, &summary, file);
         inputs.push(svn_typecheck::CheckInput {
             source_path: file.clone(),
@@ -231,6 +236,43 @@ fn run_typecheck(
             return ExitCode::from(2);
         }
     };
+
+    // Compiler-warning bridge: ask the user's `svelte/compiler` for any
+    // non-typecheck diagnostics (`state_referenced_locally`,
+    // `element_invalid_self_closing_tag`, accessibility hints, etc.) and
+    // merge them into the diagnostic stream. Best-effort — if no JS
+    // runtime or no svelte package is present, skip silently.
+    match svn_svelte_compiler::compile_batch(workspace, &sources) {
+        Ok(per_file) => {
+            for (path, warnings) in per_file {
+                for w in warnings {
+                    diagnostics.push(svn_typecheck::CheckDiagnostic {
+                        source_path: path.clone(),
+                        line: w.start.line,
+                        column: w.start.column,
+                        severity: match w.severity {
+                            svn_svelte_compiler::Severity::Error => {
+                                svn_typecheck::Severity::Error
+                            }
+                            svn_svelte_compiler::Severity::Warning => {
+                                svn_typecheck::Severity::Warning
+                            }
+                        },
+                        // Compiler diagnostic codes are slugs
+                        // (`state_referenced_locally`), not numbers — we
+                        // store 0 here and prepend the slug into the
+                        // message so output formatters still surface it.
+                        code: 0,
+                        message: format!("{} ({})", w.message, w.code),
+                        span_length: None,
+                    });
+                }
+            }
+        }
+        Err(_) => {
+            // Bridge unavailable — proceed with TS diagnostics only.
+        }
+    }
 
     // `--threshold error` drops warnings entirely (mirrors upstream).
     if threshold == "error" {

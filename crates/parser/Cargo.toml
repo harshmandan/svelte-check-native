@@ -1,0 +1,18 @@
+[package]
+name = "svn-parser"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+svn-core = { path = "../core" }
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_parser.workspace = true
+oxc_span.workspace = true
+smol_str.workspace = true
+thiserror.workspace = true

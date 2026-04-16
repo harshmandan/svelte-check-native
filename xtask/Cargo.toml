@@ -1,0 +1,17 @@
+[package]
+name = "xtask"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+
+[[bin]]
+name = "scoreboard"
+path = "src/bin/scoreboard.rs"

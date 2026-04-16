@@ -1,0 +1,29 @@
+[package]
+name = "svelte-check-native"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "svelte-check-native"
+path = "src/main.rs"
+
+[dependencies]
+svn-core = { path = "../core" }
+svn-parser = { path = "../parser" }
+svn-analyze = { path = "../analyze" }
+svn-emit = { path = "../emit" }
+svn-lint = { path = "../lint" }
+svn-svelte-compiler = { path = "../svelte-compiler" }
+svn-typecheck = { path = "../typecheck" }
+clap.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+camino.workspace = true

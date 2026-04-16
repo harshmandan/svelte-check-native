@@ -1,0 +1,10 @@
+//! Semantic analysis passes over the Svelte AST.
+//!
+//! Populates a `SemanticModel` with: detected runes, prop destructures,
+//! store subscriptions, `bind:` targets, SvelteKit route role, and — critically
+//! — a `VoidRefRegistry` collecting every synthesized name that the emit crate
+//! will need to reference. This replaces the ad-hoc per-feature `void x;`
+//! emission scattered through `-rs`'s transformer (12 of 33 bugs).
+//!
+//! All passes share a single `Visitor` walk of the AST. One pass, many
+//! collectors.

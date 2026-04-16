@@ -1,0 +1,14 @@
+[package]
+name = "svn-analyze"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+svn-core = { path = "../core" }
+svn-parser = { path = "../parser" }
+smol_str.workspace = true

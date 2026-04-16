@@ -1,0 +1,78 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/core",
+    "crates/parser",
+    "crates/analyze",
+    "crates/emit",
+    "crates/lint",
+    "crates/svelte-compiler",
+    "crates/typecheck",
+    "crates/cli",
+    "xtask",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/harshmandan/svelte-check-native"
+authors = ["Harsh Mandan <harshsinghmandan@gmail.com>"]
+version = "0.0.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+# Escalate common footguns to errors. Style/pedantic left at default.
+unwrap_used = "warn"
+expect_used = "warn"
+dbg_macro = "warn"
+todo = "warn"
+
+[workspace.dependencies]
+# Shared across crates — pin centrally, inherit per-crate.
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smol_str = "0.3"
+camino = "1"
+memchr = "2"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Async + process
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process", "io-util", "sync"] }
+
+# Parallelism
+rayon = "1"
+
+# Hashing / caching
+blake3 = "1"
+
+# Filesystem walking
+walkdir = "2"
+globset = "0.4"
+
+# JS/TS parser (per todo.md §1.2 mandate)
+oxc_allocator = "0.45"
+oxc_ast = "0.45"
+oxc_parser = "0.45"
+oxc_span = "0.45"
+
+# Testing
+insta = { version = "1", features = ["yaml", "filters"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+# keep default
+
+[profile.bench]
+lto = "thin"

@@ -162,41 +162,64 @@ fn emit_document_with_render_name(
         collect_top_level_bindings(&parsed_mod.program, &mut script_bindings);
     }
 
-    let (store_refs, prop_names): (Vec<SmolStr>, Vec<SmolStr>) =
-        if let (Some(s), Some(instance)) = (&split, &doc.instance_script) {
-            let alloc = Allocator::default();
-            let parsed = parse_script_body(&alloc, &s.body, instance.lang);
-            let stores = find_store_refs(&parsed.program, &s.body);
-            let props = find_props(&parsed.program)
+    let (mut store_refs, prop_names): (Vec<SmolStr>, Vec<SmolStr>) =
+        if let (Some(_s), Some(instance)) = (&split, &doc.instance_script) {
+            // Scan store refs and bindings against the *original* script
+            // content (imports included). Using the imports-blanked body
+            // would miss store names imported from external modules
+            // (e.g. SvelteKit's `import { page } from '$app/stores'` plus
+            // template uses of `$page.data.foo`).
+            let alloc_orig = Allocator::default();
+            let parsed_orig = parse_script_body(&alloc_orig, instance.content, instance.lang);
+            let stores = find_store_refs(&parsed_orig.program, instance.content);
+            let props = find_props(&parsed_orig.program)
                 .into_iter()
                 .map(|p| p.local_name)
                 .collect();
 
-            let alloc_orig = Allocator::default();
-            let parsed_orig = parse_script_body(&alloc_orig, instance.content, instance.lang);
             collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
             (stores, props)
         } else {
             (Vec::new(), Vec::new())
         };
 
-    // Template-referenced identifiers that are also script-declared get
-    // voided, so TS6133 doesn't fire on imports/locals used only inside
-    // the markup (e.g. `<MyButton />`, `{count}`).
-    let template_void_refs: Vec<SmolStr> = if script_bindings.is_empty() {
-        Vec::new()
+    // Walk template expressions for identifier references. A single walk
+    // produces both:
+    //   - `template_void_refs`: refs that match a script binding —
+    //     consumed by emit_void_block so TS6133 doesn't fire on
+    //     imports/locals only used in markup
+    //   - additional `$store` refs to seed the auto-subscribe alias
+    //     declarations: a store imported in the script but only
+    //     auto-subscribed in the template (`{$page.data.x}`) needs the
+    //     same `let $page: any;` declaration as a script-side use.
+    let (template_void_refs, template_store_refs) = if script_bindings.is_empty() {
+        (Vec::new(), Vec::new())
     } else {
         let already: HashSet<&str> = store_refs
             .iter()
             .chain(prop_names.iter())
             .map(|s| s.as_str())
             .collect();
-        find_template_refs(fragment, doc.source)
-            .into_iter()
-            .filter(|name| script_bindings.contains(name.as_str()))
-            .filter(|name| !already.contains(name.as_str()))
-            .collect()
+        let mut tpl_voids = Vec::new();
+        let mut tpl_stores = Vec::new();
+        let mut store_seen: HashSet<String> =
+            store_refs.iter().map(|s| s.to_string()).collect();
+        for name in find_template_refs(fragment, doc.source) {
+            // `$foo` where `foo` is a script binding (and not already a
+            // declared store) — synthesize the auto-subscribe alias.
+            if let Some(base) = name.as_str().strip_prefix('$') {
+                if script_bindings.contains(base) && store_seen.insert(name.to_string()) {
+                    tpl_stores.push(name.clone());
+                    continue;
+                }
+            }
+            if script_bindings.contains(name.as_str()) && !already.contains(name.as_str()) {
+                tpl_voids.push(name);
+            }
+        }
+        (tpl_voids, tpl_stores)
     };
+    store_refs.extend(template_store_refs);
 
     // Store auto-subscribe aliases: declare `let $store: any;` for every
     // detected `$ident` so type references like `typeof $store` resolve.
@@ -347,7 +370,12 @@ fn emit_each_block(out: &mut String, source: &str, b: &EachBlock, depth: usize) 
         "{indent}for (const {binding_text} of __svn_each_items({expr_text})) {{"
     );
     emit_template_body(out, source, &b.body, depth + 1);
-    let _ = writeln!(out, "{indent}    void {};", first_identifier(&binding_text));
+    // Void every identifier that the binding pattern destructures, not
+    // just the first. `[id, label]` and `[id, { label }]` both bind two
+    // names and TS6133 fires on each unused one.
+    for ident in all_identifiers(&binding_text) {
+        let _ = writeln!(out, "{indent}    void {ident};");
+    }
     let _ = writeln!(out, "{indent}}}");
 
     if let Some(alt) = &b.alternate {
@@ -428,18 +456,110 @@ fn emit_void_block(
     }
 }
 
-fn first_identifier(binding: &str) -> &str {
-    let trimmed =
-        binding.trim_start_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '$');
-    let end = trimmed
-        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '$')
-        .unwrap_or(trimmed.len());
-    let head = &trimmed[..end];
-    if head.is_empty() {
-        "__svn_each_unused"
-    } else {
-        head
+/// Pull every identifier-like token out of a destructuring pattern.
+///
+/// For `id`             → `["id"]`
+/// For `[id, label]`    → `["id", "label"]`
+/// For `[id, { label }]` → `["id", "label"]`
+/// For `{ a: x, b }`    → `["x", "b"]` (only the local-name side of `key:value`)
+///
+/// Best-effort byte scan — the analyze crate has a real oxc-backed
+/// destructuring walk for the *script* path; this helper handles the
+/// far smaller set of shapes that appear inside `{#each ... as <pat>}`
+/// without the cost of an oxc invocation per each-block.
+///
+/// Falls back to a single `__svn_each_unused` token when nothing
+/// identifier-shaped is found, so the emitted `void` line stays valid.
+fn all_identifiers(binding: &str) -> Vec<String> {
+    let bytes = binding.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    let mut after_colon_in_object = false;
+    let mut depth_brace = 0usize; // tracks `{ ... }` for object key:value
+    while i < bytes.len() {
+        let b = bytes[i];
+        match b {
+            b'{' => {
+                depth_brace += 1;
+                after_colon_in_object = false;
+                i += 1;
+            }
+            b'}' => {
+                depth_brace = depth_brace.saturating_sub(1);
+                after_colon_in_object = false;
+                i += 1;
+            }
+            b':' if depth_brace > 0 => {
+                // Inside an object pattern: the next ident is the local name.
+                after_colon_in_object = true;
+                i += 1;
+            }
+            b',' => {
+                after_colon_in_object = false;
+                i += 1;
+            }
+            b'=' => {
+                // Skip default value `name = expr` — advance past expr to
+                // the next comma/closer at the same depth. Conservative:
+                // just stop collecting until we see `,` `]` `}`.
+                i += 1;
+                let mut paren = 0usize;
+                while i < bytes.len() {
+                    match bytes[i] {
+                        b'(' | b'[' | b'{' => paren += 1,
+                        b')' | b']' | b'}' if paren > 0 => paren -= 1,
+                        b',' | b']' | b'}' if paren == 0 => break,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+            }
+            _ if b.is_ascii_alphabetic() || b == b'_' || b == b'$' => {
+                let start = i;
+                while i < bytes.len() {
+                    let c = bytes[i];
+                    if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' {
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let name = &binding[start..i];
+                let take = if depth_brace > 0 {
+                    // Inside an object pattern: `key: local` — only collect
+                    // the local. `{ a }` shorthand has no colon so `a`
+                    // counts (after_colon_in_object is false but depth>0).
+                    // Look ahead: if the next non-ws byte is `:`, this is
+                    // a key, skip it.
+                    let mut j = i;
+                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    let next_is_colon = bytes.get(j) == Some(&b':');
+                    if next_is_colon {
+                        false
+                    } else if after_colon_in_object {
+                        true
+                    } else {
+                        true // shorthand `{ a }`
+                    }
+                } else {
+                    true
+                };
+                if take {
+                    out.push(name.to_string());
+                }
+                after_colon_in_object = false;
+            }
+            _ => {
+                i += 1;
+            }
+        }
     }
+    if out.is_empty() {
+        out.push("__svn_each_unused".to_string());
+    }
+    out
 }
 
 /// Rewrite `let <name>: T;` → `let <name>!: T;` for each bind-target

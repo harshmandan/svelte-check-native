@@ -1,41 +1,44 @@
-//! Hoist `import` declarations out of an instance script body.
+//! Hoist module-level statements out of an instance script body.
 //!
-//! `<script>` content in a Svelte 5 component is module-scope code, but
-//! our emit wraps it in `function $$render() { ... }`. ES `import`s are
-//! illegal inside a function body (TS1232), so we lift them to module
-//! top level and blank the original spans with whitespace. Code in the
-//! body still sees the imports via normal module scope.
+//! `<script>` content in a Svelte 5 component is module-scope code, but our
+//! emit wraps it in `function $$render() { ... }`. Several statement kinds
+//! are illegal inside a function body and must be lifted to module top
+//! level:
 //!
-//! Replacing instead of deleting preserves byte offsets inside the body
-//! so line/column positions stay aligned for the source-map mapping
-//! that runs later.
+//! - **`import`** — TS1232 if inside a function
+//! - **`export const/let/var/function/class`** — TS1184 / TS1233
+//! - **`export { a, b }` / `export { a as b }`** — TS1233
+//! - **`export { a } from 'mod'`** — TS1233
+//! - **`export default x`** — TS1232
+//! - **`export * from 'mod'`** — TS1232
 //!
-//! Note: this module no longer strips `export` modifiers (Svelte 4 prop
-//! syntax `export let foo`). Svelte 5 uses `let { foo } = $props()` for
-//! props — there's nothing to strip.
+//! All are hoisted to a module-level prelude. The original spans inside
+//! the script body are blanked with whitespace of the same byte length so
+//! line/column positions inside the body stay aligned for source-map
+//! mapping.
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Statement;
 use svn_parser::{ScriptLang, parse_script_body};
 
-/// `imports`: text to insert at module top-level (one declaration per
-/// segment, joined with newlines).
-/// `body`: the original script content with import regions blanked out.
+/// `hoisted`: statements lifted to module top level (newline-joined).
+/// `body`: the original script content with hoisted spans blanked out.
 #[derive(Debug, Clone)]
 pub struct SplitScript {
-    pub imports: String,
+    pub hoisted: String,
     pub body: String,
 }
 
-/// Split out the top-level `import` declarations from a script body.
+/// Split out every module-level statement (imports, exports of all
+/// shapes) from a script body.
 ///
-/// Re-parses the body with oxc; cheap enough at the small sizes a
-/// `<script>` block holds. If parsing fails (malformed user code) the
-/// content is passed through unchanged in `body`, with `imports` empty.
+/// Re-parses the body once with oxc. If parsing panics on malformed user
+/// code, the content is passed through unchanged.
 pub fn split_imports(content: &str, lang: ScriptLang) -> SplitScript {
-    if !content.contains("import") {
+    // Fast path: no import/export keyword at all → nothing to hoist.
+    if !content.contains("import") && !content.contains("export") {
         return SplitScript {
-            imports: String::new(),
+            hoisted: String::new(),
             body: content.to_string(),
         };
     }
@@ -45,39 +48,52 @@ pub fn split_imports(content: &str, lang: ScriptLang) -> SplitScript {
 
     if parsed.panicked {
         return SplitScript {
-            imports: String::new(),
+            hoisted: String::new(),
             body: content.to_string(),
         };
     }
 
-    let mut import_spans: Vec<(usize, usize)> = Vec::new();
+    let mut hoist_spans: Vec<(usize, usize)> = Vec::new();
     for stmt in &parsed.program.body {
-        if let Statement::ImportDeclaration(decl) = stmt {
-            import_spans.push((decl.span.start as usize, decl.span.end as usize));
+        match stmt {
+            Statement::ImportDeclaration(decl) => {
+                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+            }
+            Statement::ExportNamedDeclaration(decl) => {
+                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+            }
+            Statement::ExportDefaultDeclaration(decl) => {
+                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+            }
+            Statement::ExportAllDeclaration(decl) => {
+                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+            }
+            _ => {}
         }
     }
 
-    if import_spans.is_empty() {
+    if hoist_spans.is_empty() {
         return SplitScript {
-            imports: String::new(),
+            hoisted: String::new(),
             body: content.to_string(),
         };
     }
 
-    let mut imports = String::new();
-    for &(start, end) in &import_spans {
-        imports.push_str(&content[start..end]);
+    // Hoisted prelude: emit each statement verbatim, joined by newlines.
+    let mut hoisted = String::new();
+    for &(start, end) in &hoist_spans {
+        hoisted.push_str(&content[start..end]);
         if !content[start..end].ends_with('\n') {
-            imports.push('\n');
+            hoisted.push('\n');
         }
     }
 
-    // Replacing each import span with ASCII whitespace of the same byte
-    // length preserves every byte offset after it — keeps source-map
-    // positions accurate.
+    // Body with hoisted regions blanked. Replacing each span with ASCII
+    // whitespace of the same byte length preserves byte offsets for the
+    // source-map mapping that runs later.
     let mut body = String::with_capacity(content.len());
     let mut cursor = 0;
-    for &(start, end) in &import_spans {
+    for &(start, end) in &hoist_spans {
         body.push_str(&content[cursor..start]);
         for ch in content[start..end].chars() {
             if ch == '\n' || ch == '\r' {
@@ -95,7 +111,7 @@ pub fn split_imports(content: &str, lang: ScriptLang) -> SplitScript {
     }
     body.push_str(&content[cursor..]);
 
-    SplitScript { imports, body }
+    SplitScript { hoisted, body }
 }
 
 #[cfg(test)]
@@ -103,9 +119,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_imports_passes_through() {
+    fn no_imports_or_exports_passes_through() {
         let s = split_imports("let x = 1;", ScriptLang::Js);
-        assert_eq!(s.imports, "");
+        assert_eq!(s.hoisted, "");
         assert_eq!(s.body, "let x = 1;");
     }
 
@@ -114,12 +130,10 @@ mod tests {
         let src = "import { writable } from 'svelte/store';\nlet x = 1;";
         let s = split_imports(src, ScriptLang::Ts);
         assert!(
-            s.imports
+            s.hoisted
                 .contains("import { writable } from 'svelte/store';")
         );
         assert!(s.body.contains("let x = 1;"));
-        // Hoisted region replaced with whitespace, not removed — preserves
-        // line offsets for the body content that follows.
         assert!(!s.body.contains("import"));
     }
 
@@ -131,8 +145,8 @@ import b from 'b';
 let x = 1;
 ";
         let s = split_imports(src, ScriptLang::Ts);
-        assert!(s.imports.contains("import a from 'a';"));
-        assert!(s.imports.contains("import b from 'b';"));
+        assert!(s.hoisted.contains("import a from 'a';"));
+        assert!(s.hoisted.contains("import b from 'b';"));
         assert!(s.body.contains("let x = 1;"));
     }
 
@@ -140,27 +154,69 @@ let x = 1;
     fn type_only_imports_hoisted() {
         let src = "import type { Foo } from './foo';\nlet x: Foo = bar;";
         let s = split_imports(src, ScriptLang::Ts);
-        assert!(s.imports.contains("import type { Foo }"));
+        assert!(s.hoisted.contains("import type { Foo }"));
     }
 
     #[test]
-    fn body_offsets_preserved_for_source_mapping() {
-        // After hoisting, the byte position of `let x` in body should match
-        // its position in the original content (not shifted earlier).
-        let src = "import a from 'a';\nlet x = 1;";
-        let original_pos = src.find("let x").unwrap();
+    fn export_const_is_hoisted() {
+        let src = "let x = 1;\nexport const PI = 3.14;";
         let s = split_imports(src, ScriptLang::Ts);
-        let new_pos = s.body.find("let x").unwrap();
-        assert_eq!(
-            new_pos, original_pos,
-            "blanking should preserve byte offsets so line/col mapping stays valid"
-        );
+        assert!(s.hoisted.contains("export const PI = 3.14;"));
+        assert!(!s.body.contains("export"));
+        assert!(s.body.contains("let x = 1;"));
     }
 
     #[test]
-    fn newlines_inside_import_preserved() {
-        // Multi-line import shouldn't collapse to one line — keep newlines
-        // so subsequent line numbers don't shift.
+    fn export_function_is_hoisted() {
+        // Svelte 5 component-level method export.
+        let src = "let x = $state(0);\nexport function foo() { return x; }";
+        let s = split_imports(src, ScriptLang::Ts);
+        assert!(s.hoisted.contains("export function foo()"));
+        assert!(s.body.contains("let x = $state(0);"));
+    }
+
+    #[test]
+    fn export_re_export_list_is_hoisted() {
+        let src = "let a = 1;\nlet b = 2;\nexport { a, b };";
+        let s = split_imports(src, ScriptLang::Ts);
+        assert!(s.hoisted.contains("export { a, b };"));
+        assert!(!s.body.contains("export"));
+    }
+
+    #[test]
+    fn export_renamed_re_export_is_hoisted() {
+        let src = "let a = 1;\nexport { a as renamed };";
+        let s = split_imports(src, ScriptLang::Ts);
+        assert!(s.hoisted.contains("export { a as renamed };"));
+    }
+
+    #[test]
+    fn export_default_is_hoisted() {
+        let src = "let x = 1;\nexport default x;";
+        let s = split_imports(src, ScriptLang::Ts);
+        assert!(s.hoisted.contains("export default x;"));
+        assert!(!s.body.contains("export"));
+    }
+
+    #[test]
+    fn export_star_re_export_is_hoisted() {
+        let src = "export * from './other';";
+        let s = split_imports(src, ScriptLang::Ts);
+        assert!(s.hoisted.contains("export * from './other';"));
+        assert!(!s.body.contains("export"));
+    }
+
+    #[test]
+    fn body_offsets_preserved() {
+        let src = "import a from 'a';\nlet x = 1;\nexport const y = 2;\nlet z = 3;";
+        let original_let_z = src.find("let z").unwrap();
+        let s = split_imports(src, ScriptLang::Ts);
+        let new_let_z = s.body.find("let z").unwrap();
+        assert_eq!(new_let_z, original_let_z);
+    }
+
+    #[test]
+    fn newlines_preserved_inside_blanked_regions() {
         let src = "\
 import {
     a,
@@ -168,28 +224,30 @@ import {
 } from 'mod';
 let x = 1;
 ";
-        let original_let_line = src.lines().position(|l| l.contains("let x")).unwrap();
+        let original_x_line = src.lines().position(|l| l.contains("let x")).unwrap();
         let s = split_imports(src, ScriptLang::Ts);
-        let new_let_line = s.body.lines().position(|l| l.contains("let x")).unwrap();
-        assert_eq!(new_let_line, original_let_line);
+        let new_x_line = s.body.lines().position(|l| l.contains("let x")).unwrap();
+        assert_eq!(new_x_line, original_x_line);
     }
 
     #[test]
     fn malformed_script_falls_back_to_passthrough() {
-        // If oxc panics, return the source unchanged.
         let src = "import {{{ unbalanced";
         let s = split_imports(src, ScriptLang::Ts);
-        // `body` should contain the original; `imports` may or may not
-        // have content depending on whether oxc recovered enough to find
-        // a valid import statement.
-        let total = format!("{}{}", s.imports, s.body);
+        let total = format!("{}{}", s.hoisted, s.body);
         assert!(total.contains("import"));
     }
 
     #[test]
-    fn no_imports_fast_path() {
-        let s = split_imports("const x = 1;", ScriptLang::Ts);
-        assert_eq!(s.imports, "");
-        assert_eq!(s.body, "const x = 1;");
+    fn import_and_export_in_same_script() {
+        let src = "\
+import { writable } from 'svelte/store';
+let count = writable(0);
+export { count };
+";
+        let s = split_imports(src, ScriptLang::Ts);
+        assert!(s.hoisted.contains("import { writable }"));
+        assert!(s.hoisted.contains("export { count };"));
+        assert!(s.body.contains("let count = writable(0);"));
     }
 }

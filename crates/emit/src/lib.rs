@@ -112,9 +112,9 @@ fn emit_document_with_render_name(
         .map(|s| split_imports(s.content, s.lang));
 
     if let Some(s) = &split {
-        if !s.imports.is_empty() {
-            out.push_str(&s.imports);
-            if !s.imports.ends_with('\n') {
+        if !s.hoisted.is_empty() {
+            out.push_str(&s.hoisted);
+            if !s.hoisted.ends_with('\n') {
                 out.push('\n');
             }
         }

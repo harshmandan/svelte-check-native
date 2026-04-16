@@ -50,8 +50,7 @@ svelte-check-native scoreboard: 0/39 passing
 *(will be published once v0.1 ships)*
 
 ```sh
-# npm wrapper (recommended)
-npm i -D @harshmandan/svelte-check-native
+npm i -D svelte-check-native
 
 # or via cargo
 cargo install svelte-check-native

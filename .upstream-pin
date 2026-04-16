@@ -1,0 +1,11 @@
+# Upstream commits we've reviewed for compatibility.
+#
+# This file pins the LAST-REVIEWED upstream SHA — distinct from the
+# submodule gitlink (which is what we currently build/test against).
+# /update-check and /update-tests diff origin/main against the pin
+# below. Bump the pin (and the gitlink, if needed) only after a
+# manual review pass confirms no behavior gap or test gap.
+
+[language-tools]
+sha = "5be821d5a5a92b614ec1dbd06f34ac19c6a9fe8f"
+note = "svelte-check@4.4.6"

@@ -203,6 +203,7 @@ fn run_typecheck(workspace: &Path, tsconfig: &Path, output_format: &str) -> Exit
         inputs.push(svn_typecheck::CheckInput {
             source_path: file.clone(),
             generated_ts: emitted.typescript,
+            line_map: emitted.line_map,
         });
     }
 

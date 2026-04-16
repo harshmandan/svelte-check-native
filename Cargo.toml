@@ -59,7 +59,9 @@ blake3 = "1"
 walkdir = "2"
 globset = "0.4"
 
-# JS/TS parser (per todo.md §1.2 mandate)
+# JS/TS parser. Architecture rule: embedded JS/TS is parsed once into
+# a real AST and walked structurally — never scanned character-by-
+# character. oxc is the only parser in the workspace for this reason.
 oxc_allocator = "0.45"
 oxc_ast = "0.45"
 oxc_diagnostics = "0.45"

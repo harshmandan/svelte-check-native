@@ -68,13 +68,13 @@ pub fn build(
         };
     // Overlay svelte subdir first — that's where generated files live.
     push_root(layout.svelte_dir.as_path(), &mut root_dirs, &mut seen);
-    // Workspace root second — fallback for projects without their own
-    // rootDirs entries.
-    push_root(
-        layout.root.as_path().parent().unwrap_or(Path::new("")),
-        &mut root_dirs,
-        &mut seen,
-    );
+    // Workspace root second — so any relative import from a generated
+    // overlay file (e.g. `import x from '../stores/util.ts'` written
+    // inside a .svelte) resolves through TS's rootDirs virtual merge
+    // back to the real source tree. Use the workspace explicitly: the
+    // cache root's parent is no longer the workspace ever since we
+    // moved the cache under node_modules/.cache/.
+    push_root(layout.workspace.as_path(), &mut root_dirs, &mut seen);
     // Whatever the user's extends chain declared.
     for entry in collect_user_root_dirs(user_tsconfig) {
         push_root(entry.as_path(), &mut root_dirs, &mut seen);

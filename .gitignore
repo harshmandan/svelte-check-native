@@ -45,3 +45,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local benchmark workspaces (cloned third-party repos used to dogfood
+# the binary against real-world codebases — never committed)
+bench/

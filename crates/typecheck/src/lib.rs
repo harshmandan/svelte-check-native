@@ -44,11 +44,37 @@ pub use discovery::{DiscoveryError, TsgoBinary, discover};
 pub use output::{RawDiagnostic, Severity, parse as parse_output};
 pub use runner::{RunError, run as run_tsgo};
 
-/// Svelte type shims, baked into the binary. Written into the cache
-/// directory on every check so projects without `svelte` installed in
-/// node_modules can still type-check (covers all upstream `svelte/*`
-/// import paths).
-const SVELTE_SHIMS_DTS: &str = include_str!("svelte_shims.d.ts");
+/// Always-on shim: Svelte 5 rune ambients ($state, $derived, $effect,
+/// etc.) plus the helper types emit references (`__SvnStoreValue`,
+/// `__svn_type_ref`). Written into the cache on every check.
+const SVELTE_SHIMS_CORE: &str = include_str!("svelte_shims_core.d.ts");
+
+/// Fallback `declare module 'svelte/*'` blocks for environments where
+/// the user has no real `svelte` package installed (e.g. the upstream
+/// fixture corpus). Written into the cache ONLY when no real svelte is
+/// reachable from the workspace's node_modules chain — when one IS
+/// installed, these declarations would shadow the richer real types
+/// (see `svelte_shims_fallback.d.ts` header for details).
+const SVELTE_SHIMS_FALLBACK: &str = include_str!("svelte_shims_fallback.d.ts");
+
+/// Walk up from `workspace` looking for `node_modules/svelte/package.json`.
+/// Returns `true` iff the user has the real `svelte` package installed
+/// somewhere in the resolution chain.
+fn has_real_svelte(workspace: &Path) -> bool {
+    let mut cur: Option<&Path> = Some(workspace);
+    while let Some(dir) = cur {
+        if dir
+            .join("node_modules")
+            .join("svelte")
+            .join("package.json")
+            .is_file()
+        {
+            return true;
+        }
+        cur = dir.parent();
+    }
+    false
+}
 
 pub use svn_emit::LineMapEntry;
 
@@ -179,11 +205,23 @@ pub fn check(
     let layout = CacheLayout::for_workspace(workspace);
     std::fs::create_dir_all(&layout.svelte_dir)?;
 
-    // Ship the svelte type shims into the cache. Provides `svelte`,
-    // `svelte/store`, `svelte/transition`, etc. type definitions so
-    // projects without a real `svelte` install in node_modules don't
-    // fire TS2307 on every `import` from those modules.
-    write_if_changed(&layout.svelte_shims, SVELTE_SHIMS_DTS)?;
+    // Ship the svelte type shims into the cache. Core (runes + helper
+    // types) is always written. The `declare module 'svelte/*'`
+    // fallback is only written when no real svelte is reachable —
+    // otherwise its minimal declarations would shadow the richer real
+    // types (e.g. svelte/elements re-exports HTMLAnchorAttributes,
+    // HTMLInputAttributes, ClassValue from clsx, etc., none of which
+    // our shim enumerates).
+    let shim_text = if has_real_svelte(workspace) {
+        SVELTE_SHIMS_CORE.to_string()
+    } else {
+        let mut combined = String::with_capacity(SVELTE_SHIMS_CORE.len() + SVELTE_SHIMS_FALLBACK.len() + 1);
+        combined.push_str(SVELTE_SHIMS_CORE);
+        combined.push('\n');
+        combined.push_str(SVELTE_SHIMS_FALLBACK);
+        combined
+    };
+    write_if_changed(&layout.svelte_shims, &shim_text)?;
 
     // Step 1: write generated TS for each input. Skip identical writes.
     // Collect a per-overlay-path line map so the diagnostic mapper can

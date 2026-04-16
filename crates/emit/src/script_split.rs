@@ -34,7 +34,7 @@ pub struct SplitScript {
 ///
 /// Re-parses the body once with oxc. If parsing panics on malformed user
 /// code, the content is passed through unchanged.
-pub fn split_imports(content: &str, lang: ScriptLang) -> SplitScript {
+pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
     // Fast path: no import/export keyword at all → nothing to hoist.
     if !content.contains("import") && !content.contains("export") {
         return SplitScript {
@@ -43,8 +43,13 @@ pub fn split_imports(content: &str, lang: ScriptLang) -> SplitScript {
         };
     }
 
+    // Always parse as TypeScript — TS is a superset of JS for our
+    // purposes (we're identifying statement spans, not generating
+    // runtime code). Parsing as TS lets us correctly handle scripts
+    // that use type annotations even when `<script>` doesn't carry
+    // `lang="ts"`. (Svelte 5 + svelte:options runes accepts this.)
     let allocator = Allocator::default();
-    let parsed = parse_script_body(&allocator, content, lang);
+    let parsed = parse_script_body(&allocator, content, ScriptLang::Ts);
 
     if parsed.panicked {
         return SplitScript {

@@ -1,0 +1,5 @@
+{
+    "emit_not_contains": ["for (const  of", "for (const of "],
+    "emit_contains": ["for (const"],
+    "_note": "bug #25: {#each items} (no `as` clause) generated `for (const  of ...)` — double space / missing binding → TS1005. Emit must use a dummy binding like `__svn_unused` or the `_` underscore."
+}

@@ -1,0 +1,4 @@
+{
+    "emit_contains": ["__svn_tpl_check", "void"],
+    "_note": "bug #7: __svelte_template_check__ was declared but never referenced → TS6133 under noUnusedLocals. Our emit must register __svn_tpl_check in VoidRefRegistry and emit it in the consolidated void block."
+}

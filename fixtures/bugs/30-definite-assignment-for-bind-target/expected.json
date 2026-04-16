@@ -1,0 +1,5 @@
+{
+    "emit_contains": ["let inputEl!:"],
+    "emit_not_contains": ["let inputEl:"],
+    "_note": "bug #30: `let x: T` + `bind:this={x}` caused TS2454 (used-before-assigned) because Svelte assigns x asynchronously. Fix: rewrite bind-target declarations with the definite-assignment assertion `let x!: T`. Emit must detect bind-this targets and rewrite their declaration."
+}

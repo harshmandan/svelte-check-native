@@ -1,0 +1,4 @@
+{
+    "emit_contains": ["__svn_action_attrs"],
+    "_note": "bug #8: __action_attrs_N were declared for typing custom events from actions but never referenced → TS6133. Our emit must register each __svn_action_attrs_N in VoidRefRegistry."
+}

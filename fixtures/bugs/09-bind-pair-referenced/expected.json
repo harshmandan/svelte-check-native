@@ -1,0 +1,4 @@
+{
+    "emit_contains": ["__svn_bind_pair"],
+    "_note": "bug #9: __bind_pair_N (getter/setter tuple for bind:value={g, s}) was declared but never used → TS6133. Our emit must register each __svn_bind_pair_N."
+}

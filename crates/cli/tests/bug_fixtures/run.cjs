@@ -10,8 +10,13 @@
 //   FIXTURES_DIR     — absolute path to fixtures/bugs/
 //
 // expected.json shapes:
-//   { "clean": true }                     → assert zero ERRORs emitted
-//   { "errors": [{file,line,column,code}] } → assert exact set
+//   { "clean": true }
+//       → run binary normally, assert zero ERRORs emitted (black-box)
+//   { "errors": [{file,line,column,code}] }
+//       → run binary normally, assert exact set of ERRORs (black-box)
+//   { "emit_contains": ["..."], "emit_not_contains": ["..."] }
+//       → run binary with `--emit-ts`; capture stdout as generated TS;
+//         assert substring presence/absence (grey-box)
 
 'use strict';
 
@@ -61,58 +66,90 @@ function runFixture(name, fixtureDir) {
     rmSync(path.join(fixtureDir, '.svelte-kit'), { recursive: true, force: true });
 
     const tsconfig = path.join(fixtureDir, 'tsconfig.json');
-    const args = [
-        '--workspace',
-        fixtureDir,
-        '--output',
-        'machine-verbose'
-    ];
-    if (existsSync(tsconfig)) {
-        args.push('--tsconfig', tsconfig);
-    } else {
-        args.push('--no-tsconfig');
-    }
-
-    let stdout = '';
-    try {
-        stdout = execFileSync(BIN, args, { encoding: 'utf-8', timeout: 60_000 });
-    } catch (err) {
-        stdout = err.stdout || '';
-    }
-
-    const actualErrors = [];
-    for (const line of stdout.split('\n')) {
-        const jsonStart = line.indexOf('{');
-        if (jsonStart === -1) continue;
-        let entry;
-        try {
-            entry = JSON.parse(line.slice(jsonStart));
-        } catch {
-            continue;
-        }
-        if (entry.type === 'ERROR') {
-            actualErrors.push({
-                file: String(entry.filename || '').replace(/\\/g, '/'),
-                line: entry.start?.line ?? -1,
-                column: entry.start?.character ?? -1,
-                code: entry.code
-            });
-        }
-    }
+    const tsconfigExists = existsSync(tsconfig);
+    const isEmitMode = Array.isArray(expected.emit_contains) || Array.isArray(expected.emit_not_contains);
 
     const issues = [];
-    if (expected.clean === true) {
-        if (actualErrors.length !== 0) {
-            issues.push(
-                `expected clean, got ${actualErrors.length} error(s):\n` +
-                    JSON.stringify(actualErrors, null, 2)
-            );
+
+    if (isEmitMode) {
+        // Grey-box: run with --emit-ts, capture stdout as generated TS.
+        const args = ['--emit-ts', '--workspace', fixtureDir];
+        if (tsconfigExists) {
+            args.push('--tsconfig', tsconfig);
+        } else {
+            args.push('--no-tsconfig');
+        }
+
+        let emit = '';
+        try {
+            emit = execFileSync(BIN, args, { encoding: 'utf-8', timeout: 60_000 });
+        } catch (err) {
+            emit = err.stdout || '';
+        }
+
+        for (const needle of expected.emit_contains || []) {
+            if (!emit.includes(needle)) {
+                issues.push(`expected emit to contain ${JSON.stringify(needle)}`);
+            }
+        }
+        for (const needle of expected.emit_not_contains || []) {
+            if (emit.includes(needle)) {
+                issues.push(`expected emit to NOT contain ${JSON.stringify(needle)}`);
+            }
+        }
+
+        if (issues.length && process.env.DEBUG_EMIT) {
+            issues.push(`captured emit (first 4000 chars):\n${emit.slice(0, 4000)}`);
         }
     } else {
-        const exp = [...(expected.errors || [])].sort(sortKey);
-        const act = [...actualErrors].sort(sortKey);
-        if (JSON.stringify(exp) !== JSON.stringify(act)) {
-            issues.push(`expected:\n${JSON.stringify(exp, null, 2)}\nactual:\n${JSON.stringify(act, null, 2)}`);
+        // Black-box: run normally, parse machine-verbose diagnostics.
+        const args = ['--workspace', fixtureDir, '--output', 'machine-verbose'];
+        if (tsconfigExists) {
+            args.push('--tsconfig', tsconfig);
+        } else {
+            args.push('--no-tsconfig');
+        }
+
+        let stdout = '';
+        try {
+            stdout = execFileSync(BIN, args, { encoding: 'utf-8', timeout: 60_000 });
+        } catch (err) {
+            stdout = err.stdout || '';
+        }
+
+        const actualErrors = [];
+        for (const line of stdout.split('\n')) {
+            const jsonStart = line.indexOf('{');
+            if (jsonStart === -1) continue;
+            let entry;
+            try {
+                entry = JSON.parse(line.slice(jsonStart));
+            } catch {
+                continue;
+            }
+            if (entry.type === 'ERROR') {
+                actualErrors.push({
+                    file: String(entry.filename || '').replace(/\\/g, '/'),
+                    line: entry.start?.line ?? -1,
+                    column: entry.start?.character ?? -1,
+                    code: entry.code
+                });
+            }
+        }
+
+        if (expected.clean === true) {
+            if (actualErrors.length !== 0) {
+                issues.push(
+                    `expected clean, got ${actualErrors.length} error(s):\n` +
+                        JSON.stringify(actualErrors, null, 2)
+                );
+            }
+        } else {
+            const exp = [...(expected.errors || [])].sort(sortKey);
+            const act = [...actualErrors].sort(sortKey);
+            if (JSON.stringify(exp) !== JSON.stringify(act)) {
+                issues.push(`expected:\n${JSON.stringify(exp, null, 2)}\nactual:\n${JSON.stringify(act, null, 2)}`);
+            }
         }
     }
 

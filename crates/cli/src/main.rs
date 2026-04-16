@@ -240,69 +240,217 @@ fn print_diagnostics(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
+    let errors = diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, svn_typecheck::Severity::Error))
+        .count();
+    let warnings = diagnostics.len() - errors;
+    let files_with_problems: std::collections::HashSet<_> =
+        diagnostics.iter().map(|d| &d.source_path).collect();
+    let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
 
     match output_format {
         "machine-verbose" => {
-            println!("{now_ms} START \"{}\"", workspace.display());
-            for d in diagnostics {
-                let rel = d
-                    .source_path
-                    .strip_prefix(workspace)
-                    .unwrap_or(&d.source_path);
-                let type_label = match d.severity {
-                    svn_typecheck::Severity::Error => "ERROR",
-                    svn_typecheck::Severity::Warning => "WARNING",
-                };
-                let payload = serde_json::json!({
-                    "type": type_label,
-                    "filename": rel.to_string_lossy(),
-                    "start": {
-                        "line": d.line.saturating_sub(1),
-                        "character": d.column.saturating_sub(1),
-                    },
-                    "end": {
-                        "line": d.line.saturating_sub(1),
-                        "character": d.column.saturating_sub(1) + d.span_length.unwrap_or(0),
-                    },
-                    "message": d.message,
-                    "code": d.code,
-                    "source": "ts",
-                });
-                println!("{now_ms} {payload}");
-            }
-            let errors = diagnostics
-                .iter()
-                .filter(|d| matches!(d.severity, svn_typecheck::Severity::Error))
-                .count();
-            let warnings = diagnostics.len() - errors;
-            let files: std::collections::HashSet<_> =
-                diagnostics.iter().map(|d| &d.source_path).collect();
-            println!(
-                "{now_ms} COMPLETED 0 FILES {errors} ERRORS {warnings} WARNINGS {} FILES_WITH_PROBLEMS",
-                files.len()
+            print_machine(workspace, diagnostics, now_ms, true);
+            print_machine_completed(
+                now_ms,
+                errors,
+                warnings,
+                files_with_problems.len(),
             );
         }
+        "machine" => {
+            print_machine(workspace, diagnostics, now_ms, false);
+            print_machine_completed(
+                now_ms,
+                errors,
+                warnings,
+                files_with_problems.len(),
+            );
+        }
+        "human" => {
+            print_human(workspace, diagnostics, false, use_color);
+            print_human_summary(errors, warnings, files_with_problems.len(), use_color);
+        }
+        // human-verbose is the default
         _ => {
-            for d in diagnostics {
-                let rel = d
-                    .source_path
-                    .strip_prefix(workspace)
-                    .unwrap_or(&d.source_path);
-                let label = match d.severity {
-                    svn_typecheck::Severity::Error => "Error",
-                    svn_typecheck::Severity::Warning => "Warning",
-                };
-                println!(
-                    "{}:{}:{}\n{label}: {} (TS{})\n",
-                    rel.display(),
-                    d.line,
-                    d.column,
-                    d.message,
-                    d.code
-                );
-            }
+            // Verbose mode prints a banner before diagnostics — matches
+            // upstream svelte-check so editor integrations and shell
+            // wrappers parsing the prelude don't break.
+            println!("Loading svelte-check in workspace: {}", workspace.display());
+            println!("Getting Svelte diagnostics...");
+            println!();
+            print_human(workspace, diagnostics, true, use_color);
+            print_human_summary(errors, warnings, files_with_problems.len(), use_color);
         }
     }
+}
+
+/// `machine` and `machine-verbose` body — per-diagnostic lines.
+fn print_machine(
+    workspace: &Path,
+    diagnostics: &[svn_typecheck::CheckDiagnostic],
+    now_ms: u128,
+    verbose: bool,
+) {
+    println!("{now_ms} START \"{}\"", workspace.display());
+    for d in diagnostics {
+        let rel = d
+            .source_path
+            .strip_prefix(workspace)
+            .unwrap_or(&d.source_path);
+        let type_label = match d.severity {
+            svn_typecheck::Severity::Error => "ERROR",
+            svn_typecheck::Severity::Warning => "WARNING",
+        };
+        if verbose {
+            let payload = serde_json::json!({
+                "type": type_label,
+                "filename": rel.to_string_lossy(),
+                "start": {
+                    "line": d.line.saturating_sub(1),
+                    "character": d.column.saturating_sub(1),
+                },
+                "end": {
+                    "line": d.line.saturating_sub(1),
+                    "character": d.column.saturating_sub(1) + d.span_length.unwrap_or(0),
+                },
+                "message": d.message,
+                "code": d.code,
+                "source": "ts",
+            });
+            println!("{now_ms} {payload}");
+        } else {
+            // Non-verbose: line-oriented `<ts> <TYPE> "<file>" <line>:<col> "<msg>"`.
+            let fname = serde_json::to_string(&rel.to_string_lossy()).unwrap_or_default();
+            let msg = serde_json::to_string(&d.message).unwrap_or_default();
+            println!(
+                "{now_ms} {type_label} {fname} {}:{} {msg}",
+                d.line, d.column,
+            );
+        }
+    }
+}
+
+fn print_machine_completed(now_ms: u128, errors: usize, warnings: usize, files: usize) {
+    println!(
+        "{now_ms} COMPLETED 0 FILES {errors} ERRORS {warnings} WARNINGS {files} FILES_WITH_PROBLEMS"
+    );
+}
+
+/// `human` / `human-verbose` body — per-diagnostic block.
+fn print_human(
+    workspace: &Path,
+    diagnostics: &[svn_typecheck::CheckDiagnostic],
+    verbose: bool,
+    color: bool,
+) {
+    let workspace_display = workspace.display().to_string();
+    for d in diagnostics {
+        let rel = d
+            .source_path
+            .strip_prefix(workspace)
+            .unwrap_or(&d.source_path);
+        let filename = rel.display().to_string();
+        // Path that IDEs turn into clickable links.
+        println!(
+            "{workspace_display}/{}:{}:{}",
+            paint(&filename, "32", color),
+            d.line,
+            d.column,
+        );
+        let label = match d.severity {
+            svn_typecheck::Severity::Error => paint("Error", "31", color),
+            svn_typecheck::Severity::Warning => paint("Warn", "33", color),
+        };
+        if verbose {
+            // Code frame: try to read the source file and emit a short
+            // excerpt around the diagnostic line, with a caret pointer.
+            let frame = format_code_frame(&d.source_path, d.line, d.column, d.span_length);
+            if frame.is_empty() {
+                println!("{label}: {} (TS{})", d.message, d.code);
+            } else {
+                println!(
+                    "{label}: {} (TS{})\n{}",
+                    d.message,
+                    d.code,
+                    paint(&frame, "36", color),
+                );
+            }
+        } else {
+            println!("{label}: {} (TS{})", d.message, d.code);
+        }
+        println!();
+    }
+}
+
+fn print_human_summary(errors: usize, warnings: usize, files: usize, color: bool) {
+    let parts = format!(
+        "svelte-check found {} error{} and {} warning{} in {} file{}",
+        errors,
+        if errors == 1 { "" } else { "s" },
+        warnings,
+        if warnings == 1 { "" } else { "s" },
+        files,
+        if files == 1 { "" } else { "s" },
+    );
+    if errors > 0 {
+        println!("{}", paint(&parts, "31", color));
+    } else if warnings > 0 {
+        println!("{}", paint(&parts, "33", color));
+    } else {
+        println!("{}", paint(&parts, "32", color));
+    }
+}
+
+/// Wrap `text` in an ANSI color code if `color` is true. Cheap fallback to
+/// plain text when stdout isn't a terminal.
+fn paint(text: &str, code: &str, color: bool) -> String {
+    if color {
+        format!("\x1b[{code}m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
+}
+
+/// Read the source file and produce a short code frame around the
+/// (1-based) diagnostic line. Returns an empty string on read failure or
+/// out-of-range line numbers — caller falls back to no-frame output.
+fn format_code_frame(
+    path: &Path,
+    line: u32,
+    column: u32,
+    span_length: Option<u32>,
+) -> String {
+    let Ok(source) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    let lines: Vec<&str> = source.lines().collect();
+    let target_idx = match (line as usize).checked_sub(1) {
+        Some(i) if i < lines.len() => i,
+        _ => return String::new(),
+    };
+    let start = target_idx.saturating_sub(1);
+    let end = (target_idx + 2).min(lines.len());
+    let mut out = String::new();
+    let width = (end).to_string().len();
+    for (i, &content) in lines[start..end].iter().enumerate() {
+        let ln = start + i + 1;
+        let _ = std::fmt::Write::write_fmt(
+            &mut out,
+            format_args!("{ln:>width$} | {content}\n"),
+        );
+        if ln == line as usize {
+            let pad = width + 3 + column.saturating_sub(1) as usize;
+            let underline = "^".repeat(span_length.unwrap_or(1).max(1) as usize);
+            for _ in 0..pad {
+                out.push(' ');
+            }
+            out.push_str(&underline);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// `--emit-ts` flow: discover `.svelte` files, parse, emit, print to stdout

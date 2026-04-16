@@ -151,6 +151,71 @@ fn emit_document_with_render_name(
 
     if let Some(s) = &split {
         if !s.hoisted.is_empty() {
+            // Build a per-import line-map entry so a diagnostic on a
+            // hoisted import line points at the original `<script>`
+            // import line. Each hoisted statement is concatenated
+            // verbatim into `s.hoisted` — line counts inside each
+            // statement match the source 1:1, so we emit one entry per
+            // statement.
+            if let Some(instance) = &doc.instance_script {
+                let mut overlay_cursor = current_line(&out);
+                let bytes = s.hoisted.as_bytes();
+                let mut byte = 0usize;
+                for &source_offset in &s.hoisted_byte_offsets {
+                    // Each hoisted statement runs until either the next
+                    // `\n` followed by a non-blank line, or the next
+                    // hoisted offset's projection in the concatenated
+                    // string. Simplest: count lines until we hit the
+                    // next statement (we know there's an extra `\n`
+                    // between statements).
+                    let stmt_start_byte = byte;
+                    while byte < bytes.len() && bytes[byte] != b'\n' {
+                        byte += 1;
+                    }
+                    // Multi-line imports: keep walking while indented
+                    // continuations or close-brace tokens follow.
+                    while byte < bytes.len() {
+                        let next = byte + 1;
+                        if next >= bytes.len() {
+                            break;
+                        }
+                        // If the next char starts a new statement that
+                        // also appears in `hoisted_byte_offsets`, stop
+                        // here. Otherwise keep walking to allow
+                        // multi-line imports.
+                        let after_nl = bytes[next];
+                        if after_nl == b'\n' {
+                            // Blank line — definitely end of statement.
+                            byte += 1;
+                            break;
+                        }
+                        // Heuristic: if the line starts with an alpha
+                        // character at column 0, it's a new statement.
+                        if after_nl.is_ascii_alphabetic() {
+                            byte += 1;
+                            break;
+                        }
+                        byte += 1;
+                        while byte < bytes.len() && bytes[byte] != b'\n' {
+                            byte += 1;
+                        }
+                    }
+                    let stmt_text = &s.hoisted[stmt_start_byte..byte];
+                    let stmt_line_count = count_lines(stmt_text).max(1);
+                    let source_line =
+                        source_line_at(doc.source, instance.content_range.start + source_offset);
+                    line_map.push(LineMapEntry {
+                        overlay_start_line: overlay_cursor,
+                        overlay_end_line: overlay_cursor + stmt_line_count,
+                        source_start_line: source_line,
+                    });
+                    overlay_cursor += stmt_line_count;
+                    // Skip the trailing newline we wrote.
+                    if byte < bytes.len() && bytes[byte] == b'\n' {
+                        byte += 1;
+                    }
+                }
+            }
             out.push_str(&s.hoisted);
             if !s.hoisted.ends_with('\n') {
                 out.push('\n');

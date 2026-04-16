@@ -29,11 +29,16 @@ use svn_parser::{ScriptLang, parse_script_body};
 /// whose `export` keyword was stripped (the declaration stays in body).
 /// Emit voids these so TS6133 doesn't flag them as unused — the user
 /// declared them as public surface.
+/// `hoisted_byte_offsets`: byte offsets into the original *content*
+/// where each hoisted statement starts. Caller uses these to build a
+/// line map so diagnostics inside hoisted regions point at the correct
+/// source line, not at line 1.
 #[derive(Debug, Clone)]
 pub struct SplitScript {
     pub hoisted: String,
     pub body: String,
     pub exported_locals: Vec<SmolStr>,
+    pub hoisted_byte_offsets: Vec<u32>,
 }
 
 /// Split out every module-level statement (imports, exports of all
@@ -48,6 +53,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
             hoisted: String::new(),
             body: content.to_string(),
             exported_locals: Vec::new(),
+            hoisted_byte_offsets: Vec::new(),
         };
     }
 
@@ -64,6 +70,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
             hoisted: String::new(),
             body: content.to_string(),
             exported_locals: Vec::new(),
+            hoisted_byte_offsets: Vec::new(),
         };
     }
 
@@ -142,12 +149,19 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
             hoisted: String::new(),
             body: content.to_string(),
             exported_locals,
+            hoisted_byte_offsets: Vec::new(),
         };
     }
 
     // Hoisted prelude: emit each hoist-span verbatim, joined by newlines.
+    // Record the start byte-offset of each hoisted span IN THE ORIGINAL
+    // content so callers can build a line map: each hoisted statement in
+    // the overlay corresponds to the same statement in the source, and
+    // diagnostics inside should map back to the right source line.
     let mut hoisted = String::new();
+    let mut hoisted_byte_offsets: Vec<u32> = Vec::with_capacity(hoist_spans.len());
     for &(start, end) in &hoist_spans {
+        hoisted_byte_offsets.push(start as u32);
         hoisted.push_str(&content[start..end]);
         if !content[start..end].ends_with('\n') {
             hoisted.push('\n');
@@ -189,6 +203,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
         hoisted,
         body,
         exported_locals,
+        hoisted_byte_offsets,
     }
 }
 

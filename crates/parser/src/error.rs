@@ -31,18 +31,42 @@ pub enum ParseError {
 
     #[error("unknown script lang {value:?}; expected \"ts\", \"typescript\", \"js\", or nothing")]
     UnknownScriptLang { value: String, range: Range },
+
+    #[error("unterminated HTML comment")]
+    UnterminatedComment { range: Range },
+
+    #[error("unterminated mustache expression (no matching `}}`)")]
+    UnterminatedMustache { range: Range },
+
+    #[error("unterminated <{name}> element (no matching </{name}>)")]
+    UnterminatedElement { name: String, range: Range },
+
+    #[error("mismatched closing tag, expected </{expected}>")]
+    MismatchedClosingTag { expected: String, range: Range },
+
+    #[error("unknown <svelte:{name}> element")]
+    UnknownSvelteElement { name: String, range: Range },
+
+    #[error("block-level mustache ({{#}}/{{:}}/{{/}}/{{@}}) not yet supported in this build")]
+    UnsupportedBlock { range: Range },
 }
 
 impl ParseError {
     /// The source range this error points at.
     pub fn range(&self) -> Range {
-        match *self {
-            Self::UnterminatedTag { range, .. } => range,
-            Self::DuplicateScript { range, .. } => range,
-            Self::DuplicateStyle { range, .. } => range,
-            Self::MalformedOpenTag { range } => range,
-            Self::UnknownScriptContext { range, .. } => range,
-            Self::UnknownScriptLang { range, .. } => range,
+        match self {
+            Self::UnterminatedTag { range, .. } => *range,
+            Self::DuplicateScript { range, .. } => *range,
+            Self::DuplicateStyle { range, .. } => *range,
+            Self::MalformedOpenTag { range } => *range,
+            Self::UnknownScriptContext { range, .. } => *range,
+            Self::UnknownScriptLang { range, .. } => *range,
+            Self::UnterminatedComment { range } => *range,
+            Self::UnterminatedMustache { range } => *range,
+            Self::UnterminatedElement { range, .. } => *range,
+            Self::MismatchedClosingTag { range, .. } => *range,
+            Self::UnknownSvelteElement { range, .. } => *range,
+            Self::UnsupportedBlock { range } => *range,
         }
     }
 }

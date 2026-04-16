@@ -11,7 +11,7 @@ use std::fmt;
 ///
 /// Invariants: `start <= end`. The `new` constructor debug-asserts this; the
 /// helper constructors maintain it structurally.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Range {
     pub start: u32,
     pub end: u32,

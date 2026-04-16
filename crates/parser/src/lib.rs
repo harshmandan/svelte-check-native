@@ -20,18 +20,26 @@
 // Tests are allowed to panic loudly on setup failures.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
+pub mod ast;
 pub mod document;
 pub mod error;
+mod mustache;
 mod scanner;
 mod script;
 mod sections;
+mod template;
 
+pub use ast::{
+    Comment, Component, Element, Fragment, Interpolation, Node, SvelteElement, SvelteElementKind,
+    Text as TemplateText, is_component_tag, is_void_element,
+};
 pub use document::{
     Document, ScriptAttr, ScriptContext, ScriptLang, ScriptSection, StyleSection, Template,
 };
 pub use error::ParseError;
 pub use script::{ParsedScript, parse_script_body};
 pub use sections::parse_sections;
+pub use template::{parse_all_template_runs, parse_template};
 
 // Re-export oxc essentials so downstream crates can work with the AST
 // without taking direct oxc dependencies in every workspace member that

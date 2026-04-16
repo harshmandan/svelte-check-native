@@ -120,7 +120,18 @@ fn emit_document_with_render_name(
         }
     }
 
-    let _ = writeln!(out, "function {render_name}() {{");
+    // `<script generics="T extends ...">` — expose the type params as
+    // generics on the wrapping function so references inside the body
+    // resolve. Falls back to no-generics when the attribute is absent.
+    let generics = extract_generics_attr(doc);
+    match &generics {
+        Some(g) => {
+            let _ = writeln!(out, "function {render_name}<{g}>() {{");
+        }
+        None => {
+            let _ = writeln!(out, "function {render_name}() {{");
+        }
+    }
     if let Some(s) = &split {
         out.push_str(&s.body);
         if !s.body.ends_with('\n') {
@@ -166,6 +177,30 @@ fn render_function_name(source_path: &Path) -> SmolStr {
     let hex = hash.to_hex();
     let short = &hex.as_str()[..8];
     SmolStr::from(format!("$$render_{short}"))
+}
+
+/// Extract the `generics=` attribute value from `<script>` if present.
+///
+/// Svelte 5's syntax for declaring generic type params on a component:
+///
+/// ```svelte
+/// <script lang="ts" generics="T extends Item, K extends keyof T">
+/// ```
+///
+/// The value is spliced verbatim into our wrapping function as
+/// `function $$render<T extends Item, K extends keyof T>() { ... }` so
+/// any references to `T` / `K` inside the script body resolve correctly.
+fn extract_generics_attr(doc: &Document<'_>) -> Option<SmolStr> {
+    let script = doc.instance_script.as_ref()?;
+    let attr = script
+        .attrs
+        .iter()
+        .find(|a| a.name.eq_ignore_ascii_case("generics"))?;
+    let value = attr.value.as_deref()?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(SmolStr::from(value))
 }
 
 /// Walk the fragment tree and emit per-construct scaffolding.
@@ -458,7 +493,9 @@ mod tests {
     fn extract_render_name(out: &str) -> String {
         let idx = out.find("function $$render_").unwrap();
         let tail = &out[idx + "function ".len()..];
-        tail.chars().take_while(|c| *c != '(').collect()
+        tail.chars()
+            .take_while(|c| *c != '(' && *c != '<')
+            .collect()
     }
 
     #[test]
@@ -600,5 +637,56 @@ mod tests {
             !out.contains("let inputEl!"),
             "shouldn't add `!` to declarations with initializers:\n{out}"
         );
+    }
+
+    #[test]
+    fn no_generics_attribute_emits_plain_function() {
+        let out = emit_str("<script lang=\"ts\">let x = 1;</script>");
+        let render = extract_render_name(&out);
+        assert!(out.contains(&format!("{render}() {{")));
+        assert!(!out.contains(&format!("{render}<")));
+    }
+
+    #[test]
+    fn simple_generics_attribute_threaded_into_function_signature() {
+        // `<script generics="T">` puts T in scope inside the body.
+        let src = "<script lang=\"ts\" generics=\"T\">let x: T;</script>";
+        let out = emit_str(src);
+        let render = extract_render_name(&out);
+        assert!(
+            out.contains(&format!("{render}<T>() {{")),
+            "generic T should appear in function signature:\n{out}"
+        );
+    }
+
+    #[test]
+    fn generics_with_constraint_threaded_verbatim() {
+        let src = "<script lang=\"ts\" generics=\"T extends Record<string, unknown>\">\
+                   let x: T;</script>";
+        let out = emit_str(src);
+        assert!(
+            out.contains("<T extends Record<string, unknown>>"),
+            "constrained generic should be spliced verbatim:\n{out}"
+        );
+    }
+
+    #[test]
+    fn multiple_generics_threaded() {
+        let src = "<script lang=\"ts\" generics=\"T, K extends keyof T\">\
+                   let x: T;</script>";
+        let out = emit_str(src);
+        assert!(
+            out.contains("<T, K extends keyof T>"),
+            "multi-param generics should be spliced verbatim:\n{out}"
+        );
+    }
+
+    #[test]
+    fn empty_generics_attribute_treated_as_absent() {
+        let src = "<script lang=\"ts\" generics=\"\">let x = 1;</script>";
+        let out = emit_str(src);
+        let render = extract_render_name(&out);
+        assert!(out.contains(&format!("{render}() {{")));
+        assert!(!out.contains(&format!("{render}<")));
     }
 }

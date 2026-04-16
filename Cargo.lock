@@ -1099,6 +1099,7 @@ dependencies = [
 name = "svn-parser"
 version = "0.0.0"
 dependencies = [
+ "memchr",
  "oxc_allocator",
  "oxc_ast",
  "oxc_parser",

@@ -1,8 +1,32 @@
 //! Svelte 5 parser.
 //!
-//! Produces a `Document` AST where embedded JS/TS expressions are parsed into
-//! real `oxc_ast` nodes — never stored as raw strings (that was the #1 source
-//! of bugs in `upstream`).
+//! ### Current scope
 //!
-//! Handles Svelte 5 features from day one: runes, snippets, `{@attach}`,
-//! `{@const}`, `{@render}`, all `svelte:*` special elements.
+//! Structural-only: identifies top-level `<script>`, `<script context="module">`,
+//! and `<style>` sections, plus byte ranges of template content between them.
+//! Embedded JS/TS is handed off verbatim to the `analyze` crate (which will
+//! invoke `oxc_parser` on it).
+//!
+//! Template AST — elements, attributes, directives, control-flow blocks —
+//! is not yet implemented. [`Template`] carries only byte ranges for now.
+//!
+//! ### Design mandate (from todo.md §1.2)
+//!
+//! Embedded JS/TS is NEVER stored as raw `String` for later character-level
+//! scanning — that was the #1 source of bugs in `-rs`. Every expression goes
+//! through `oxc_parser` exactly once, at the boundary where this crate hands
+//! script contents to `analyze`.
+
+// Tests are allowed to panic loudly on setup failures.
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
+pub mod document;
+pub mod error;
+mod scanner;
+mod sections;
+
+pub use document::{
+    Document, ScriptAttr, ScriptContext, ScriptLang, ScriptSection, StyleSection, Template,
+};
+pub use error::ParseError;
+pub use sections::parse_sections;

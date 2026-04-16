@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "User tsconfig uses array-form `extends` (TS 5.0+). The `paths` declaration that maps $lib lives in the SECOND extends entry. The walker must visit every entry in the array, not just the first/string-form. Originally we only handled `extends: \"./single.json\"` and silently skipped arrays — every $lib import then failed TS2307."
+}

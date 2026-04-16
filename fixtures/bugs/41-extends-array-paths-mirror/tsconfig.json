@@ -1,0 +1,8 @@
+{
+    "extends": ["./base/tsconfig.json", "./sub/tsconfig.paths.json"],
+    "compilerOptions": {
+        "allowImportingTsExtensions": true,
+        "noEmit": true
+    },
+    "include": ["**/*"]
+}

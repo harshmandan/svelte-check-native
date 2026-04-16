@@ -21,6 +21,7 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 pub mod ast;
+mod attributes;
 pub mod document;
 pub mod error;
 mod mustache;
@@ -30,8 +31,10 @@ mod sections;
 mod template;
 
 pub use ast::{
-    Comment, Component, Element, Fragment, Interpolation, Node, SvelteElement, SvelteElementKind,
-    Text as TemplateText, is_component_tag, is_void_element,
+    AttrValue, AttrValuePart, Attribute, Comment, Component, Directive, DirectiveKind,
+    DirectiveValue, Element, ExpressionAttr, Fragment, Interpolation, Node, PlainAttr,
+    ShorthandAttr, SpreadAttr, SvelteElement, SvelteElementKind, Text as TemplateText,
+    is_component_tag, is_void_element,
 };
 pub use document::{
     Document, ScriptAttr, ScriptContext, ScriptLang, ScriptSection, StyleSection, Template,

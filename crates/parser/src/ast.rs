@@ -102,6 +102,7 @@ pub struct Comment {
 #[derive(Debug, Clone)]
 pub struct Element {
     pub name: SmolStr,
+    pub attributes: Vec<Attribute>,
     pub children: Fragment,
     /// True for self-closing (`<br />`) or void elements (`<br>`, `<img>`).
     pub self_closing: bool,
@@ -113,6 +114,7 @@ pub struct Element {
 #[derive(Debug, Clone)]
 pub struct Component {
     pub name: SmolStr,
+    pub attributes: Vec<Attribute>,
     pub children: Fragment,
     pub self_closing: bool,
     pub range: Range,
@@ -122,9 +124,179 @@ pub struct Component {
 #[derive(Debug, Clone)]
 pub struct SvelteElement {
     pub kind: SvelteElementKind,
+    pub attributes: Vec<Attribute>,
     pub children: Fragment,
     pub self_closing: bool,
     pub range: Range,
+}
+
+/// An attribute on an element, component, or svelte:* element.
+#[derive(Debug, Clone)]
+pub enum Attribute {
+    /// `name="value"`, `name=value`, or `name` (boolean).
+    ///
+    /// The value may contain text-with-interpolations: `class="a {b} c"`.
+    Plain(PlainAttr),
+    /// `name={expression}` — expression attribute.
+    Expression(ExpressionAttr),
+    /// `{name}` — shorthand expansion of `name={name}`.
+    Shorthand(ShorthandAttr),
+    /// `{...expr}` — object spread.
+    Spread(SpreadAttr),
+    /// `bind:foo`, `on:click`, `use:action`, `class:x`, `style:y`,
+    /// `transition:name`, `in:name`, `out:name`, `animate:name`, `let:name`.
+    Directive(Directive),
+}
+
+impl Attribute {
+    pub fn range(&self) -> Range {
+        match self {
+            Self::Plain(a) => a.range,
+            Self::Expression(a) => a.range,
+            Self::Shorthand(a) => a.range,
+            Self::Spread(a) => a.range,
+            Self::Directive(a) => a.range,
+        }
+    }
+}
+
+/// `name`, `name=value`, `name="value"`, `name='value'`.
+#[derive(Debug, Clone)]
+pub struct PlainAttr {
+    pub name: SmolStr,
+    /// `None` for a boolean attribute (no `=`).
+    pub value: Option<AttrValue>,
+    pub range: Range,
+}
+
+/// Value of a plain attribute. A sequence of literal text and `{expr}`
+/// interpolations. For unquoted values this is always a single Text part.
+#[derive(Debug, Clone)]
+pub struct AttrValue {
+    pub parts: Vec<AttrValuePart>,
+    pub range: Range,
+    pub quoted: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum AttrValuePart {
+    /// Literal text chunk.
+    Text { content: String, range: Range },
+    /// `{expression}` interpolation.
+    Expression {
+        expression_range: Range,
+        range: Range,
+    },
+}
+
+/// `name={expression}`.
+#[derive(Debug, Clone)]
+pub struct ExpressionAttr {
+    pub name: SmolStr,
+    pub expression_range: Range,
+    pub range: Range,
+}
+
+/// `{name}` — shorthand expansion of `name={name}`.
+#[derive(Debug, Clone)]
+pub struct ShorthandAttr {
+    pub name: SmolStr,
+    pub range: Range,
+}
+
+/// `{...expr}`.
+#[derive(Debug, Clone)]
+pub struct SpreadAttr {
+    pub expression_range: Range,
+    pub range: Range,
+}
+
+/// `<prefix>:<name>[|<modifier>]*[={value}]`.
+///
+/// Examples:
+/// - `bind:value`
+/// - `bind:value={expr}`
+/// - `bind:value={getter, setter}` (Svelte 5 getter/setter pair)
+/// - `on:click|once|preventDefault={handler}`
+/// - `transition:fade|local={{ duration: 200 }}`
+#[derive(Debug, Clone)]
+pub struct Directive {
+    pub kind: DirectiveKind,
+    /// Name after the `:`. E.g. `value` for `bind:value`, `click` for `on:click`.
+    pub name: SmolStr,
+    /// `|modifier` entries. E.g. `["once", "preventDefault"]` for
+    /// `on:click|once|preventDefault`.
+    pub modifiers: Vec<SmolStr>,
+    pub value: Option<DirectiveValue>,
+    pub range: Range,
+}
+
+/// Which directive prefix this is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectiveKind {
+    Bind,
+    On,
+    Use,
+    Class,
+    Style,
+    Transition,
+    In,
+    Out,
+    Animate,
+    Let,
+}
+
+impl DirectiveKind {
+    /// Parse the prefix (`bind`, `on`, etc.).
+    pub fn parse(prefix: &str) -> Option<Self> {
+        match prefix {
+            "bind" => Some(Self::Bind),
+            "on" => Some(Self::On),
+            "use" => Some(Self::Use),
+            "class" => Some(Self::Class),
+            "style" => Some(Self::Style),
+            "transition" => Some(Self::Transition),
+            "in" => Some(Self::In),
+            "out" => Some(Self::Out),
+            "animate" => Some(Self::Animate),
+            "let" => Some(Self::Let),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bind => "bind",
+            Self::On => "on",
+            Self::Use => "use",
+            Self::Class => "class",
+            Self::Style => "style",
+            Self::Transition => "transition",
+            Self::In => "in",
+            Self::Out => "out",
+            Self::Animate => "animate",
+            Self::Let => "let",
+        }
+    }
+}
+
+/// The RHS of a directive after `=`.
+#[derive(Debug, Clone)]
+pub enum DirectiveValue {
+    /// `bind:foo={expr}`, `on:click={handler}`, etc.
+    Expression {
+        expression_range: Range,
+        range: Range,
+    },
+    /// `bind:foo={getter, setter}` — Svelte 5 getter/setter pair.
+    BindPair {
+        getter_range: Range,
+        setter_range: Range,
+        range: Range,
+    },
+    /// `style:left="100px"` or `transition:fade="literal"` — quoted string
+    /// value (possibly with interpolations).
+    Quoted(AttrValue),
 }
 
 /// Which of the `<svelte:*>` special elements this is.

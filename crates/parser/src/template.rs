@@ -22,6 +22,7 @@ use crate::ast::{
     Comment, Component, Element, Fragment, Interpolation, Node, SvelteElement, SvelteElementKind,
     Text, is_component_tag, is_void_element,
 };
+use crate::attributes::parse_attributes;
 use crate::error::ParseError;
 use crate::mustache::find_mustache_end;
 use crate::scanner::Scanner;
@@ -285,10 +286,11 @@ impl<'src> TemplateParser<'src> {
         let name_end = self.scanner.pos();
         let name: SmolStr = self.scanner.source()[name_start as usize..name_end as usize].into();
 
-        // Attributes — SKIPPED in this commit. We scan until `>` or `/>`,
-        // ignoring everything (including values with `>` inside quotes, which
-        // is handled crudely but correctly for well-formed input).
-        let (self_closing, open_tag_end) = self.skip_until_tag_close()?;
+        // Parse attributes into real AST nodes.
+        let attributes = parse_attributes(&mut self.scanner, self.fragment_end, &mut self.errors);
+
+        // Consume `>` or `/>`.
+        let (self_closing, open_tag_end) = self.finish_opening_tag()?;
 
         // Distinguish element kinds.
         if let Some(suffix) = name.strip_prefix("svelte:") {
@@ -306,6 +308,7 @@ impl<'src> TemplateParser<'src> {
             };
             return Some(Node::SvelteElement(SvelteElement {
                 kind,
+                attributes,
                 children,
                 self_closing,
                 range: Range::new(tag_start, self.scanner.pos()),
@@ -320,6 +323,7 @@ impl<'src> TemplateParser<'src> {
             };
             return Some(Node::Component(Component {
                 name,
+                attributes,
                 children,
                 self_closing,
                 range: Range::new(tag_start, self.scanner.pos()),
@@ -336,73 +340,42 @@ impl<'src> TemplateParser<'src> {
 
         Some(Node::Element(Element {
             name,
+            attributes,
             children,
             self_closing: self_closing || is_void,
             range: Range::new(tag_start, self.scanner.pos()),
         }))
     }
 
-    /// Advance past attributes and the `>` or `/>` of an opening tag.
-    /// Returns `(self_closing, end_pos)` where `end_pos` is just past the
-    /// closing delimiter. On EOF returns `None`.
-    fn skip_until_tag_close(&mut self) -> Option<(bool, u32)> {
-        while !self.at_fragment_end() {
-            match self.scanner.peek_byte()? {
-                b'>' => {
+    /// After [`parse_attributes`] returns, the scanner points at `>` or `/`.
+    /// Consume the closing delimiter and return `(self_closing, end_pos)`.
+    fn finish_opening_tag(&mut self) -> Option<(bool, u32)> {
+        self.scanner.skip_ascii_whitespace();
+        match self.scanner.peek_byte()? {
+            b'>' => {
+                self.scanner.advance_byte();
+                Some((false, self.scanner.pos()))
+            }
+            b'/' => {
+                self.scanner.advance_byte();
+                self.scanner.skip_ascii_whitespace();
+                if self.scanner.peek_byte() == Some(b'>') {
                     self.scanner.advance_byte();
-                    return Some((false, self.scanner.pos()));
-                }
-                b'/' => {
-                    self.scanner.advance_byte();
-                    if self.scanner.peek_byte() == Some(b'>') {
-                        self.scanner.advance_byte();
-                        return Some((true, self.scanner.pos()));
-                    }
-                }
-                b'"' => {
-                    // Skip quoted attribute value.
-                    self.scanner.advance_byte();
-                    while let Some(b) = self.scanner.peek_byte() {
-                        self.scanner.advance_byte();
-                        if b == b'"' {
-                            break;
-                        }
-                    }
-                }
-                b'\'' => {
-                    self.scanner.advance_byte();
-                    while let Some(b) = self.scanner.peek_byte() {
-                        self.scanner.advance_byte();
-                        if b == b'\'' {
-                            break;
-                        }
-                    }
-                }
-                b'{' => {
-                    // Expression attribute like `{name}` or `={expr}` or spread.
-                    // Skip the whole mustache block.
-                    let open = self.scanner.pos();
-                    self.scanner.advance_byte();
-                    match find_mustache_end(self.scanner.source(), self.scanner.pos()) {
-                        Some(end) => self.scanner.set_pos(end + 1),
-                        None => {
-                            self.errors.push(ParseError::UnterminatedMustache {
-                                range: Range::new(open, self.fragment_end),
-                            });
-                            self.scanner.set_pos(self.fragment_end);
-                            return None;
-                        }
-                    }
-                }
-                _ => {
-                    self.scanner.advance_char();
+                    Some((true, self.scanner.pos()))
+                } else {
+                    self.errors.push(ParseError::MalformedOpenTag {
+                        range: Range::new(self.scanner.pos(), self.scanner.pos()),
+                    });
+                    None
                 }
             }
+            _ => {
+                self.errors.push(ParseError::MalformedOpenTag {
+                    range: Range::new(self.scanner.pos(), self.scanner.pos()),
+                });
+                None
+            }
         }
-        self.errors.push(ParseError::MalformedOpenTag {
-            range: Range::new(self.fragment_end, self.fragment_end),
-        });
-        None
     }
 
     fn parse_children_until(

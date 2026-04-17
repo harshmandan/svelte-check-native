@@ -95,7 +95,9 @@ pub fn run(
         .lines()
         .filter(|line| {
             let trimmed = line.trim_start_matches(|c: char| !c.is_alphanumeric() && c != '/');
-            trimmed.starts_with('/') && !line.contains("): error TS") && !line.contains("): warning TS")
+            trimmed.starts_with('/')
+                && !line.contains("): error TS")
+                && !line.contains("): warning TS")
         })
         .count();
 

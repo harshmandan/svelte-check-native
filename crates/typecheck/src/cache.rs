@@ -81,18 +81,30 @@ impl CacheLayout {
         }
     }
 
-    /// Map an original `.svelte` source path to its generated `.svelte.ts`
-    /// counterpart inside the cache.
+    /// Map an original `.svelte` source path to its generated overlay
+    /// inside the cache (the file that holds the actual emitted TS).
     ///
-    /// `<workspace>/lib/Foo.svelte` → `<cache>/svelte/lib/Foo.svelte.ts`.
+    /// `<workspace>/lib/Foo.svelte` → `<cache>/svelte/lib/Foo.svelte.svn.ts`.
     ///
-    /// We DON'T add a prefix (no more `++`) — the file lives in the cache
-    /// directory under a mirrored path, so it never collides with the
-    /// real `.svelte` source. Keeping the same basename is what lets
-    /// `import './Foo.svelte.js'` (rewritten from `import './Foo.svelte'`
-    /// in the emit pass) resolve to this file via TS's standard `.js`
-    /// → `.ts` lookup, sidestepping the `*.svelte` ambient module
-    /// declaration entirely.
+    /// The `.svn.ts` middle segment is what keeps this overlay from
+    /// colliding with a user's same-named `.svelte.ts` runes module
+    /// (Svelte 5 convention: `Foo.svelte` paired with `Foo.svelte.ts`
+    /// for shared runes logic — cnblocks, shadcn-svelte, bits-ui all
+    /// use it). A plain `.svelte.ts` overlay would live at the exact
+    /// virtual path as the user's runes module; with `rootDirs`
+    /// cache-first, the overlay shadowed the runes module and
+    /// consumers writing `import { useFoo } from './Foo.svelte.js'`
+    /// lost the named exports.
+    ///
+    /// Consumer resolution:
+    ///   - `import Foo from './Foo.svelte'` in our own emitted overlay
+    ///     code: the emit pass rewrites the specifier to
+    ///     `./Foo.svelte.svn.ts`, so it lands here directly.
+    ///   - `import Foo from './Foo.svelte'` in USER-controlled files
+    ///     (barrel re-exports, `.ts` modules, etc.) that we don't
+    ///     touch: TS's `allowArbitraryExtensions` looks for
+    ///     `Foo.d.svelte.ts` ambient — see `ambient_path` below,
+    ///     which re-exports from this overlay.
     pub fn generated_path(&self, source: &Path) -> PathBuf {
         let rel = source.strip_prefix(&self.workspace).unwrap_or(source);
         let parent = rel.parent().unwrap_or_else(|| Path::new(""));
@@ -100,27 +112,56 @@ impl CacheLayout {
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown.svelte");
-        let renamed = format!("{file_stem}.ts");
+        let renamed = format!("{file_stem}.svn.ts");
         self.svelte_dir.join(parent).join(renamed)
     }
 
-    /// Reverse the [`generated_path`] mapping — given a path inside the
-    /// cache, return the corresponding original `.svelte` source path
-    /// (or `None` if the input doesn't match the cache layout).
+    /// Ambient-declaration path for a `.svelte` source, sibling to the
+    /// overlay. `<workspace>/lib/Foo.svelte` →
+    /// `<cache>/svelte/lib/Foo.d.svelte.ts`.
+    ///
+    /// The `.d.svelte.ts` shape is what TypeScript's
+    /// `allowArbitraryExtensions` looks for when resolving
+    /// `import './Foo.svelte'` as a non-standard extension. The file
+    /// just re-exports from the real overlay
+    /// (`export { default } from './Foo.svelte.svn.ts'; export *
+    /// from './Foo.svelte.svn.ts';`) so user-controlled modules that
+    /// reference `./Foo.svelte` pick up the overlay's types without
+    /// our emit having to rewrite their specifiers.
+    pub fn ambient_path(&self, source: &Path) -> PathBuf {
+        let rel = source.strip_prefix(&self.workspace).unwrap_or(source);
+        let parent = rel.parent().unwrap_or_else(|| Path::new(""));
+        let file_stem = rel
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown.svelte");
+        // Strip the `.svelte` suffix then add `.d.svelte.ts`.
+        let bare = file_stem.strip_suffix(".svelte").unwrap_or(file_stem);
+        self.svelte_dir
+            .join(parent)
+            .join(format!("{bare}.d.svelte.ts"))
+    }
+
+    /// Reverse the [`generated_path`] / [`ambient_path`] mapping —
+    /// given a path inside the cache, return the corresponding
+    /// original `.svelte` source path (or `None` if the input doesn't
+    /// match the cache layout).
     ///
     /// Used by the diagnostic-mapping pass to translate tsgo's output
-    /// filenames back to user-facing source paths.
+    /// filenames back to user-facing source paths. Handles the current
+    /// `.svelte.svn.ts` / `.d.svelte.ts` pair plus legacy
+    /// `.svelte.ts` and `++` shapes so a stale cache from an older
+    /// binary is tolerated.
     pub fn original_from_generated(&self, generated: &Path) -> Option<PathBuf> {
         let rel = generated.strip_prefix(&self.svelte_dir).ok()?;
         let parent = rel.parent().unwrap_or_else(|| Path::new(""));
         let file = rel.file_name().and_then(|s| s.to_str())?;
-        // `Foo.svelte.ts` → `Foo.svelte`. Tolerate the legacy `++`
-        // prefix and `.d.svelte.ts` shapes too in case a stale cache
-        // from an older binary is around.
-        let original_name = if let Some(stripped) = file.strip_prefix("++") {
-            stripped.strip_suffix(".ts").unwrap_or(stripped).to_string()
+        let original_name = if let Some(stem) = file.strip_suffix(".svelte.svn.ts") {
+            format!("{stem}.svelte")
         } else if let Some(stem) = file.strip_suffix(".d.svelte.ts") {
             format!("{stem}.svelte")
+        } else if let Some(stripped) = file.strip_prefix("++") {
+            stripped.strip_suffix(".ts").unwrap_or(stripped).to_string()
         } else {
             file.strip_suffix(".ts")?.to_string()
         };
@@ -203,7 +244,7 @@ mod tests {
         let gen_path = layout.generated_path(Path::new("/p/src/Foo.svelte"));
         assert_eq!(
             gen_path,
-            Path::new("/p/.svelte-check/svelte/src/Foo.svelte.ts")
+            Path::new("/p/.svelte-check/svelte/src/Foo.svelte.svn.ts")
         );
     }
 
@@ -213,7 +254,7 @@ mod tests {
         let gen_path = layout.generated_path(Path::new("/p/Index.svelte"));
         assert_eq!(
             gen_path,
-            Path::new("/p/.svelte-check/svelte/Index.svelte.ts")
+            Path::new("/p/.svelte-check/svelte/Index.svelte.svn.ts")
         );
     }
 

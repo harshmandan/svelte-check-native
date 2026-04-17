@@ -20,5 +20,6 @@ async function $$render_94c42fc9() {
 }
 $$render_94c42fc9;
 declare const __svn_component_default: import('svelte').Component<Props>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Props>;
 export default __svn_component_default;
 

@@ -12,6 +12,7 @@ async function $$render_628a5909() {
 }
 $$render_628a5909;
 declare const __svn_component_default: import('svelte').Component<{ label: string; index: number }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ label: string; index: number }>;
 export default __svn_component_default;
 
 // === input.svelte ===
@@ -39,5 +40,6 @@ async function $$render_45e0d54d() {
 }
 $$render_45e0d54d;
 declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
 export default __svn_component_default;
 

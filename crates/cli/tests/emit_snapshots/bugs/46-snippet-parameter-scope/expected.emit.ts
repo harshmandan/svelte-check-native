@@ -13,6 +13,7 @@ async function $$render_e2598f27() {
 }
 $$render_e2598f27;
 declare const __svn_component_default: import('svelte').Component<{ children: Snippet<[isOpen: boolean, toggle: () => void]> }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ children: Snippet<[isOpen: boolean, toggle: () => void]> }>;
 export default __svn_component_default;
 
 // === Inner.svelte ===
@@ -29,6 +30,7 @@ async function $$render_ea3119be() {
 }
 $$render_ea3119be;
 declare const __svn_component_default: import('svelte').Component<{ open: boolean; onToggle: () => void }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ open: boolean; onToggle: () => void }>;
 export default __svn_component_default;
 
 // === input.svelte ===
@@ -65,5 +67,6 @@ async function $$render_7cc45a4f() {
 }
 $$render_7cc45a4f;
 declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
 export default __svn_component_default;
 

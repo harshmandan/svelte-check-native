@@ -18,5 +18,6 @@ async function $$render_a3a3d9ca() {
 }
 $$render_a3a3d9ca;
 declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
 export default __svn_component_default;
 

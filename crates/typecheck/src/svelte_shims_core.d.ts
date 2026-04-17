@@ -199,14 +199,26 @@ declare function __svn_any<T = any>(): T;
  */
 declare function __svn_ensure_component<P extends Record<string, any>>(
     c: import('svelte').Component<P>,
-): new (options: { target?: any; props?: Partial<P> }) => { $$prop_def: P };
+): new (options: { target?: any; props?: __SvnPropsPartial<P> }) => { $$prop_def: P };
 declare function __svn_ensure_component<C extends new (...args: any[]) => any>(c: C): C;
 declare function __svn_ensure_component<P>(
     c: (anchor: any, props: P) => any,
-): new (options: { target?: any; props?: Partial<P> }) => { $$prop_def: P };
+): new (options: { target?: any; props?: __SvnPropsPartial<P> }) => { $$prop_def: P };
 declare function __svn_ensure_component(
     c: unknown,
 ): new (options: { target?: any; props?: any }) => { $$prop_def: any };
+
+/**
+ * Partial<> variant that widens each prop with `| null`. Required
+ * props become optional (same as `Partial<>` — bind:, spread, and
+ * implicit children absorb the "missing" case), AND variables the
+ * user typed `T | null` (common with `bind:this` stored in `$state<T
+ * | null>(null)`) can be passed in without a TS2322 "`HTMLElement |
+ * null` not assignable to `HTMLElement | undefined`" mismatch.
+ * Excess-property checks (typo'd prop names) and contextual-typing
+ * flow (callback destructures, snippet params) are preserved.
+ */
+type __SvnPropsPartial<P> = { [K in keyof P]?: P[K] | null };
 
 /**
  * Assert that a `bind:this` target's declared type accepts the element

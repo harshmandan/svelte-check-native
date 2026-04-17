@@ -22,5 +22,6 @@ let {Abc}: A = $props()
 }
 $$render_486a4e14;
 declare const __svn_component_default: import('svelte').Component<A>;
+declare type __svn_component_default = import('svelte').SvelteComponent<A>;
 export default __svn_component_default;
 

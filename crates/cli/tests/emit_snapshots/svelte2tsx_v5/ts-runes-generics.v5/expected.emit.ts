@@ -14,5 +14,6 @@ async function $$render_6b1a6441<T>() {
 }
 $$render_6b1a6441;
 declare const __svn_component_default: <T>(__anchor: any, props: Partial<{ a: T, b: string }>) => any;
+declare type __svn_component_default<T> = import('svelte').SvelteComponent<{ a: T, b: string }>;
 export default __svn_component_default;
 

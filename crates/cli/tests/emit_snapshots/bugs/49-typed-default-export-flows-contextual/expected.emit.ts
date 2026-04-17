@@ -21,6 +21,10 @@ declare const __svn_component_default: import('svelte').Component<{
         checked: boolean;
         onchange: (event: { checked: boolean }) => void;
     }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{
+        checked: boolean;
+        onchange: (event: { checked: boolean }) => void;
+    }>;
 export default __svn_component_default;
 
 // === input.svelte ===
@@ -44,5 +48,6 @@ async function $$render_026729db() {
 }
 $$render_026729db;
 declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
 export default __svn_component_default;
 

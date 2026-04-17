@@ -27,14 +27,14 @@ async function $$render_0bc1cb85() {
                 void x;
             }
             void ({
-                bar: (x) => {
+                bar: (x: any) => {
                     void x;
                     return null as any;
                 },
             } satisfies Partial<__SvnComponentProps<typeof Component>>);
             void ({
                 data: ([1, 2, 3]),
-                row: (item) => {
+                row: (item: any) => {
                     void item;
                     return null as any;
                 },
@@ -49,11 +49,11 @@ async function $$render_0bc1cb85() {
             void ({} satisfies Partial<__SvnComponentProps<typeof List>>);
             void ({
                 data: ([1, 2, 3]),
-                row1: (item) => {
+                row1: (item: any) => {
                     void item;
                     return null as any;
                 },
-                row2: (item) => {
+                row2: (item: any) => {
                     void item;
                     return null as any;
                 },

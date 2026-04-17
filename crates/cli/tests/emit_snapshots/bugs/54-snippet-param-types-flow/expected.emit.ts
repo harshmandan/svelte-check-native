@@ -42,12 +42,12 @@ async function $$render_8568e182() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         void ({
-            row: ({ id, label }) => {
+            row: ({ id, label }: any) => {
                 void id;
                 void label;
                 return null as any;
             },
-            header: (columns) => {
+            header: (columns: any) => {
                 void columns;
                 return null as any;
             },

@@ -1500,7 +1500,19 @@ fn write_snippet_arrow_prop(
         let _ = write!(out, "{indent}}}");
         return;
     }
-    let _ = writeln!(out, ": ({params_text}) => {{");
+    // When the user didn't annotate the snippet parameters, the arrow
+    // gets its param types entirely from the parent's `Snippet<[...]>`
+    // contextual type — which only helps when the parent component
+    // actually types its prop. When `ComponentProps<typeof Parent>`
+    // collapses to `any` (the common case — most user components don't
+    // write `Snippet<[T, U]>` annotations), contextual typing falls
+    // back to no-context and the un-annotated params fire TS7006
+    // implicit-any. Append `: any` to every top-level comma-separated
+    // param that lacks a top-level `:` so the arrow has an explicit
+    // annotation. The user's own `(x: string)` annotation is passed
+    // through unchanged — we only annotate the gaps.
+    let annotated = annotate_snippet_params(params_text);
+    let _ = writeln!(out, ": ({annotated}) => {{");
     emit_template_body(out, source, &s.body, depth + 1, insts);
     // `void <ident>;` for each identifier in the param list. The arrow
     // body has no structural representation of the snippet's template
@@ -1521,6 +1533,102 @@ fn write_snippet_arrow_prop(
     // flows into the parameters from the satisfies target.
     let _ = writeln!(out, "{body_indent}return null as any;");
     let _ = write!(out, "{indent}}}");
+}
+
+/// Split `params_text` on top-level commas and, for each part that
+/// doesn't already carry a top-level type annotation, append `: any`.
+/// "Top-level" here means depth 0 in balanced `()`, `[]`, `{}`, `<>` —
+/// so object-destructure patterns like `{ a, b }` are treated as one
+/// unannotated part (inner `:` colons are inside braces) and get
+/// `{ a, b }: any` appended.
+///
+/// Pre-existing user annotations pass through unchanged — we only
+/// widen the implicit-any gap.
+fn annotate_snippet_params(params_text: &str) -> String {
+    let bytes = params_text.as_bytes();
+    let mut parts: Vec<(usize, usize)> = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' | b'[' | b'{' | b'<' => depth += 1,
+            b')' | b']' | b'}' | b'>' if depth > 0 => depth -= 1,
+            b',' if depth == 0 => {
+                parts.push((start, i));
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push((start, bytes.len()));
+
+    let mut out = String::with_capacity(params_text.len() + 16);
+    let mut first = true;
+    for (s, e) in parts {
+        if !first {
+            out.push_str(", ");
+        }
+        first = false;
+        let part = params_text[s..e].trim();
+        if part.is_empty() {
+            continue;
+        }
+        // Detect a top-level `:` annotation inside THIS part.
+        let part_bytes = part.as_bytes();
+        let mut d = 0i32;
+        let mut has_top_colon = false;
+        for &b in part_bytes {
+            match b {
+                b'(' | b'[' | b'{' | b'<' => d += 1,
+                b')' | b']' | b'}' | b'>' if d > 0 => d -= 1,
+                b':' if d == 0 => {
+                    has_top_colon = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        out.push_str(part);
+        if !has_top_colon {
+            // Skip the `= default` tail if present — can't suffix `: any` AFTER
+            // the default, it belongs on the binding itself: `x: any = 1`.
+            if let Some(eq) = find_top_level_eq(part) {
+                // Split around the `=` and re-insert the annotation.
+                let before = part[..eq].trim_end();
+                let after = &part[eq..];
+                out.truncate(out.len() - part.len());
+                out.push_str(before);
+                out.push_str(": any ");
+                out.push_str(after);
+            } else {
+                out.push_str(": any");
+            }
+        }
+    }
+    out
+}
+
+/// Find the byte offset of the first top-level `=` in `s`, or None.
+/// Used to place type annotations before a default-value initializer.
+fn find_top_level_eq(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut d = 0i32;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' | b'[' | b'{' | b'<' => d += 1,
+            b')' | b']' | b'}' | b'>' if d > 0 => d -= 1,
+            b'=' if d == 0 => {
+                // Skip `==`/`===` — not initializers.
+                let next = bytes.get(i + 1).copied();
+                if next == Some(b'=') || next == Some(b'>') {
+                    continue;
+                }
+                return Some(i);
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Write an object-literal key. Plain JS identifiers are emitted bare;

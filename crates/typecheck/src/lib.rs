@@ -195,13 +195,16 @@ pub enum CheckError {
 /// can hold ~100 MB of bun heaps; we don't also want to keep a duplicate
 /// of every overlay TS in our own RSS waiting to be GC'd at end-of-fn.
 ///
-/// Returns mapped diagnostics ready for output formatting. Returns an empty
-/// vec on success with no problems.
+/// Returns mapped diagnostics + the count of files in tsgo's program
+/// (used for the COMPLETED line's `<N> FILES` denominator so it
+/// matches upstream svelte-check's number — upstream prints the
+/// LanguageService program count, not just the `.svelte` walker
+/// count). On success with no problems the diagnostics vec is empty.
 pub fn check(
     workspace: &Path,
     user_tsconfig: &Path,
     inputs: Vec<CheckInput>,
-) -> Result<Vec<CheckDiagnostic>, CheckError> {
+) -> Result<CheckOutput, CheckError> {
     let layout = CacheLayout::for_workspace(workspace);
     std::fs::create_dir_all(&layout.svelte_dir)?;
 
@@ -252,18 +255,34 @@ pub fn check(
 
     // Step 3: spawn tsgo.
     let tsgo = discover(workspace)?;
-    let raw = run_tsgo(&tsgo, &layout.overlay_tsconfig, workspace)?;
+    let run = run_tsgo(&tsgo, &layout.overlay_tsconfig, workspace)?;
 
     // Step 4: map diagnostics back to source paths + apply line map.
     // Drop diagnostics that are about our overlay tsconfig itself —
     // those are noise from compiler options we set deliberately
-    // (e.g. TS5102 baseUrl deprecation, which we keep set because
-    // tsgo's path resolution still requires it).
-    Ok(raw
+    // (e.g. TS5102 baseUrl deprecation; we filter rather than re-add
+    // baseUrl because doing so suppresses tsgo's diagnostic emission
+    // on our overlay files entirely).
+    let diagnostics = run
+        .diagnostics
         .into_iter()
         .filter(|d| !is_overlay_tsconfig_noise(d, &layout))
         .map(|d| map_diagnostic(d, &layout, &line_maps))
-        .collect())
+        .collect();
+    Ok(CheckOutput {
+        diagnostics,
+        program_file_count: run.program_file_count,
+    })
+}
+
+/// Bundle of what [`check`] returns.
+#[derive(Debug)]
+pub struct CheckOutput {
+    pub diagnostics: Vec<CheckDiagnostic>,
+    /// File count from tsgo's program (`--listFiles`). Reported in the
+    /// COMPLETED line's `<N> FILES` field so the denominator matches
+    /// upstream svelte-check's.
+    pub program_file_count: usize,
 }
 
 /// Filter for diagnostics that come from our own overlay tsconfig and

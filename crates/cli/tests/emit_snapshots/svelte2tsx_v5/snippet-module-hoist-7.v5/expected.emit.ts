@@ -24,7 +24,6 @@ async function $$render_6c5b63d4() {
     void store2;
 }
 $$render_6c5b63d4;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

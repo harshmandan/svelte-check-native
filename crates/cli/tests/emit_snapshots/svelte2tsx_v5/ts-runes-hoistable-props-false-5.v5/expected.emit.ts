@@ -14,7 +14,6 @@ async function $$render_86a0cb14() {
     void someProp;
 }
 $$render_86a0cb14;
-declare function __svn_component_default(__anchor: any, props: { someProp: Shadowed }): any;
-declare type __svn_component_default = (__anchor: any, props: { someProp: Shadowed }) => any;
+declare const __svn_component_default: import('svelte').Component<{ someProp: Shadowed }>;
 export default __svn_component_default;
 

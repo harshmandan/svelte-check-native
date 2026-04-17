@@ -28,38 +28,59 @@ async function $$render_0bc1cb85() {
                     void x;
                 });
             }
-            Component(__svn_any(), {
-                bar: (x) => {
-                    void x;
-                    return __svn_snippet_return();
-                },
-            });
-            List(__svn_any(), {
-                data: ([1, 2, 3]),
-                row: (item) => {
-                    void item;
-                    return __svn_snippet_return();
-                },
-                await_inside: () => {
-                    {
-                        const bar: any = undefined;
-                        void bar;
-                    }
-                    return __svn_snippet_return();
-                },
-            });
-            List(__svn_any(), {});
-            List(__svn_any(), {
-                data: ([1, 2, 3]),
-                row1: (item) => {
-                    void item;
-                    return __svn_snippet_return();
-                },
-                row2: (item) => {
-                    void item;
-                    return __svn_snippet_return();
-                },
-            });
+            {
+                const __svn_C_122 = __svn_ensure_component(Component);
+                new __svn_C_122({
+                    target: __svn_any(),
+                    props: {
+                        bar: (x) => {
+                            void x;
+                            return __svn_snippet_return();
+                        },
+                    },
+                });
+            }
+            {
+                const __svn_C_181 = __svn_ensure_component(List);
+                new __svn_C_181({
+                    target: __svn_any(),
+                    props: {
+                        data: ([1, 2, 3]),
+                        row: (item) => {
+                            void item;
+                            return __svn_snippet_return();
+                        },
+                        await_inside: () => {
+                            {
+                                const bar: any = undefined;
+                                void bar;
+                            }
+                            return __svn_snippet_return();
+                        },
+                    },
+                });
+            }
+            {
+                const __svn_C_219 = __svn_ensure_component(List);
+                new __svn_C_219({ target: __svn_any(), props: {} });
+            }
+            {
+                const __svn_C_23c = __svn_ensure_component(List);
+                new __svn_C_23c({
+                    target: __svn_any(),
+                    props: {
+                        data: ([1, 2, 3]),
+                        row1: (item) => {
+                            void item;
+                            return __svn_snippet_return();
+                        },
+                        row2: (item) => {
+                            void item;
+                            return __svn_snippet_return();
+                        },
+                    },
+                });
+            }
             {
                 void ((/**@type {number}*/a: any) => {
                     void type;
@@ -72,7 +93,6 @@ async function $$render_0bc1cb85() {
     void __svn_tpl_check;
 }
 $$render_0bc1cb85;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

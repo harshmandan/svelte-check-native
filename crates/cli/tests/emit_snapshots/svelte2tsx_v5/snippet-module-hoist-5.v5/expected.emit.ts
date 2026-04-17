@@ -13,7 +13,6 @@ async function $$render_3a14f9f8() {
     void __svn_tpl_check;
 }
 $$render_3a14f9f8;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

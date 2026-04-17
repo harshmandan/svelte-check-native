@@ -11,8 +11,7 @@ async function $$render_628a5909() {
     void index;
 }
 $$render_628a5909;
-declare function __svn_component_default(__anchor: any, props: { label: string; index: number }): any;
-declare type __svn_component_default = (__anchor: any, props: { label: string; index: number }) => any;
+declare const __svn_component_default: import('svelte').Component<{ label: string; index: number }>;
 export default __svn_component_default;
 
 // === input.svelte ===
@@ -26,7 +25,10 @@ async function $$render_45e0d54d() {
         // template type-check body (incremental)
         for (const item of __svn_each_items(items)) {
             const i: number = 0;
-            Inner(__svn_any(), {label: (item.text), index: (i)});
+            {
+                const __svn_C_a9 = __svn_ensure_component(Inner);
+                new __svn_C_a9({ target: __svn_any(), props: {label: (item.text), index: (i)} });
+            }
             void item;
             void i;
         }
@@ -36,7 +38,6 @@ async function $$render_45e0d54d() {
     void Inner;
 }
 $$render_45e0d54d;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

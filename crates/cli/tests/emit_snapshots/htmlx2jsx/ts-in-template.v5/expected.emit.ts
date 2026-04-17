@@ -75,14 +75,19 @@ async function $$render_43de206c() {
                     void baz;
                 });
             }
-            Component(__svn_any(), {attr: (attr as boolean)});
-            Component(__svn_any(), {});
+            {
+                const __svn_C_354 = __svn_ensure_component(Component);
+                new __svn_C_354({ target: __svn_any(), props: {attr: (attr as boolean)} });
+            }
+            {
+                const __svn_C_392 = __svn_ensure_component(Component);
+                new __svn_C_392({ target: __svn_any(), props: {} });
+            }
         }
     }
     void __svn_tpl_check;
 }
 $$render_43de206c;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

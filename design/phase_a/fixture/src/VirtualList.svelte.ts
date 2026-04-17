@@ -37,12 +37,16 @@ $$render_virtual_list;
 // snippet parameter via `Snippet<[T]>`. That's the whole reason we pick
 // a call-signature shape for the default export instead of a typed
 // const.
-declare function __svn_component_default<T>(
-    __anchor: any,
-    props: {
+import { SvelteComponent as $$_SC } from 'svelte';
+
+declare class __svn_component_default<T> extends $$_SC<{
+    items: T[];
+    children: Snippet<[T]>;
+}> {
+    constructor(options: { target?: any; props?: Partial<{
         items: T[];
         children: Snippet<[T]>;
-    },
-): any;
+    }> });
+}
 
 export default __svn_component_default;

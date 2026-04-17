@@ -3,13 +3,18 @@
 async function $$render_6ce80dfb() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        Input(__svn_any(), {type: "text"});
-        Input(__svn_any(), {type: "checkbox"});
+        {
+            const __svn_C_49 = __svn_ensure_component(Input);
+            new __svn_C_49({ target: __svn_any(), props: {type: "text"} });
+        }
+        {
+            const __svn_C_6a = __svn_ensure_component(Input);
+            new __svn_C_6a({ target: __svn_any(), props: {type: "checkbox"} });
+        }
     }
     void __svn_tpl_check;
 }
 $$render_6ce80dfb;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

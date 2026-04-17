@@ -1,13 +1,14 @@
 # Phase A — emit-shape design (validated 2026-04-17)
 
-Spec for the Phase B rewrite of `crates/emit/src/lib.rs`.
-Every shape decision below is tsgo-validated against
-`design/phase_a/fixture/`, which produces **exactly** four diagnostics —
-each one a deliberately-induced error in `Errors.svelte.ts` — and zero
-spurious diagnostics in the clean consumer (`App.svelte.ts`) or the
-edge-case consumer (`Edges.svelte.ts`).
+Spec for the Phase B rewrite of `crates/emit/src/lib.rs`. Every shape
+decision below is tsgo-validated against `design/phase_a/fixture/`,
+which produces **exactly** four diagnostics — each one a deliberately-
+induced error in `Errors.svelte.ts` — and zero spurious diagnostics in
+the clean consumer (`App.svelte.ts`), the edge-case consumer
+(`Edges.svelte.ts`), or the third-party-class-component consumer
+(`Classes.svelte.ts`).
 
-Rerun at any time:
+Rerun:
 
 ```sh
 cd design/phase_a/fixture
@@ -15,265 +16,221 @@ cd design/phase_a/fixture
     --pretty false -p tsconfig.json
 ```
 
-Expected output is the four lines listed at the bottom of this doc.
+Expected output is the four lines at the bottom of this doc.
 
 ---
 
 ## The shape
 
-**Component as callable.** Every `.svelte` file's overlay exports a
-function-typed default whose second parameter carries the Props type:
+**Component-as-callable default, consumed via a constructor wrapper.**
+Each overlay exports a value typed as Svelte 5's `Component<Props>`:
 
 ```ts
-declare function __svn_component_default(
-    __anchor: any,
-    props: {
-        checked: boolean;
-        onchange: (event: { checked: boolean }) => void;
-    },
-): any;
+declare const __svn_component_default: import('svelte').Component<{
+    checked: boolean;
+    onchange: (event: { checked: boolean }) => void;
+}>;
 export default __svn_component_default;
 ```
 
-A component instantiation in the parent template emits as a call:
+A component instantiation in the parent template emits as:
 
 ```ts
 // <Switch checked={isOn} onchange={({ checked }) => (isOn = checked)} />
-Switch(__svn_any(), {
-    checked: isOn,
-    onchange: ({ checked }) => (isOn = checked),
-});
+{
+    const __svn_C_1a4 = __svn_ensure_component(Switch);
+    new __svn_C_1a4({
+        target: __svn_any(),
+        props: {
+            checked: isOn,
+            onchange: ({ checked }) => (isOn = checked),
+        },
+    });
+}
 ```
 
-This is the minimum shape that makes TypeScript's contextual typing flow
-the parent's prop signature into the callback's parameter destructure.
-The old `({...} satisfies Partial<__SvnComponentProps<typeof X>>)` shape
-collapsed the prop type to `any` through the `Partial<>` +
-conditional-extractor chain; see REFACTOR.md for the forensic.
+### Why this shape
+
+Three constraints pinned the choice:
+
+1. **Contextual typing has to flow from Props into callback
+   destructures and snippet arrow params.** The old satisfies-
+   Partial-ComponentProps path collapsed Props through a conditional
+   extractor chain to `any`, which is why `onchange={({ checked }) =>
+   ...}` fired TS7031 implicit-any in a-sveltekit-app. A callable shape where
+   the parent signature carries Props directly is the only shape that
+   preserves this flow in tsgo's strict mode.
+
+2. **User code routinely does `ComponentProps<typeof Foo>`.** Real
+   svelte's ComponentProps has the constraint `T extends
+   SvelteComponent | Component<any, any>`. A default export typed as
+   a plain class (extending a narrower SvelteComponent<Props>) fails
+   `SvelteComponent<any>`'s invariant-in-Props constraint — TS2344.
+   Typing the default as `Component<Props>` (function form) satisfies
+   the Component<any, any> alternative directly.
+
+3. **Third-party libraries ship Svelte-4-style classes.**
+   lucide-svelte, phosphor-svelte, bits-ui export class components
+   extending SvelteComponent. These aren't callable; emitting
+   `Foo(anchor, {...})` on them fires TS2348 "Value of type 'typeof
+   Foo' is not callable. Did you mean to include 'new'?". A unified
+   emission that works for both our callable defaults and third-party
+   classes is required.
+
+The `__svn_ensure_component` helper is the adapter that bridges
+constraints 1 and 3: four overloads cover the component-shape space
+and return a constructible whose `props` slot carries Props wrapped in
+`Partial<>`. The intermediate local (`const __svn_CN = ...`) is what
+makes generic components' `<T>` resolve at the `new` site — TS binds
+the construct signature's generics against the concrete prop values
+there rather than at the `__svn_ensure_component` site, where only
+the component type is visible. Without the local, generic
+components' item types resolve to `unknown`.
+
+### Partial<Props>
+
+The synthesized constructor's `props?` slot is `Partial<Props>` —
+required props stay OPTIONAL at the call site. This matters because
+real components routinely receive props via bind: directives
+(`bind:value={x}`), `{...spread}`, or an implicit `children` snippet
+from the component's body — none of which show up in the emitted
+object literal. Partial keeps the excess-property check (typo'd prop
+names still fire TS2353) and contextual-typing flow (callback
+destructures, snippet params); it only relaxes "all required props
+present."
 
 ### Generics
 
-Generic components use a generic call signature:
+Generic components work through the constructor wrapper — the
+intermediate local carries the class's generic parameter forward:
 
 ```ts
-declare function __svn_component_default<T>(
-    __anchor: any,
-    props: {
-        items: T[];
-        children: import('svelte').Snippet<[T]>;
-    },
-): any;
+// <VirtualList items={rows}>
+//     {#snippet children(item)}<span>{item.label}</span>{/snippet}
+// </VirtualList>
+{
+    const __svn_C_xx = __svn_ensure_component(VirtualList);
+    new __svn_C_xx({
+        target: __svn_any(),
+        props: {
+            items: rows,   // T inferred = typeof rows[number]
+            children: (item) => {  // item: T
+                void item.label;
+                return __svn_snippet_return();
+            },
+        },
+    });
+}
 ```
 
-`VirtualList(anchor, { items: rows, children: (item) => {...} })` infers
-`T` from `items`, which then flows into the snippet arrow's parameter.
-No explicit annotation needed.
-
-Explicit generic binding also works: `VirtualList<Item>(anchor, {...})`
-— the rare case where a consumer over-constrains `<VirtualList<Item>>`.
+TS binds the class's generic at the `new` site, seeing the concrete
+`rows` shape and propagating it into the snippet's parameter type.
 
 ### Snippet children
 
-Snippets that are direct children of a `<Parent>` emit as arrow-callback
-values on the parent's props object. The parent's declared
-`Snippet<[T1, T2]>` prop type contextually types the arrow's parameter
-tuple:
+Snippets that are direct children of a `<Parent>` emit as
+arrow-callback values on the constructor's `props`:
 
 ```ts
-Wrapper(__svn_any(), {
-    items: rows,
-    row: ({ id, label }) => {
-        void id;
-        void label;
-        // ... snippet body here
-        return __svn_snippet_return();
-    },
-});
+{
+    const __svn_C_yy = __svn_ensure_component(Wrapper);
+    new __svn_C_yy({
+        target: __svn_any(),
+        props: {
+            items: rows,
+            row: ({ id, label }) => {
+                void id;
+                void label;
+                // ... snippet body
+                return __svn_snippet_return();
+            },
+        },
+    });
+}
 ```
 
 `__svn_snippet_return()` produces a value typed `any`, which satisfies
 `Snippet`'s branded return shape without fighting it. No more
-`annotate_snippet_params` / `: any` injection (the D7 artefact).
+per-param `: any` injection (the D7 artefact).
 
 ### Element bind:this
 
-One helper call, no pair-of-assignments pattern:
+The `__svn_bind_this_check<El>` helper is declared in the shim but
+not currently emitted — the pre-refactor definite-assignment rewrite
+(wrapping the user's `let el: T;` in `!`) remains in place, and no
+test in the suite regressed on its absence. Wiring up the emit of
+`__svn_bind_this_check<TagType>(el)` for every `bind:this={el}` site
+is deferred until a bench repo demonstrates a concrete need.
 
-```ts
-// <input bind:this={inputEl} />
-__svn_bind_this_check<HTMLInputElement>(inputEl);
-```
+### Stores / each / if / @const
 
-`__svn_bind_this_check<El>(target: El | null | undefined): void` asserts
-that `inputEl`'s declared type is a subtype of `El | null | undefined`.
-Accepts any of the four shapes a user might pick for a bind target
-(`T`, `T | null`, `T | undefined`, `T | null | undefined`) and rejects
-a wrong element type. Fixes a-sveltekit-app bug #3 ("HTMLElement | null not
-assignable to HTMLElement | undefined") by not imposing a particular
-null/undefined story on the user.
-
-### Component bind:prop (two-way bind)
-
-Pair pattern: one assignment in the call-site props direction
-(user → prop), one local of the prop slot's type assigned back
-(prop → user):
-
-```ts
-// <Switch bind:checked={isOn} />
-Switch(__svn_any(), { checked: isOn, onchange: () => {} });
-let __svn_bind_checked_0!: __SvnProps<typeof Switch>['checked'];
-isOn = __svn_bind_checked_0;
-void __svn_bind_checked_0;
-```
-
-The `!` definite-assignment is required because the local is read but
-never assigned; tsgo would otherwise fire TS2454.
-
-`__SvnProps<F>` is a tiny type-level extractor:
-
-```ts
-type __SvnProps<F> = F extends (anchor: any, props: infer P) => any ? P : never;
-```
-
-Works for monomorphic components. Bind:prop on a generic component is
-an edge case we defer to Phase B once we see it in the wild.
-
-### Stores
-
-Unchanged from today. `__SvnStoreValue<typeof store>` keeps working
-because the shape doesn't depend on component-call emission at all.
-
-```ts
-let $count!: __SvnStoreValue<typeof count>;
-// ... $count is typed as the store's inner T
-```
-
-### Each / if / @const / @html
-
-Unchanged. `__svn_each_items(items)` iteration + index-as-number +
-`if (condition) { ... }` block + inline `const` declarations all
-compose normally with the callable-shape component emit — they just
-happen inside the `__svn_tpl_check` render function body.
+Unchanged from pre-refactor emit. Compose normally inside the
+`__svn_tpl_check` body.
 
 ---
 
 ## The helper set
 
-Final roster, nine helpers. All justified:
+| Name                          | Role                                                     |
+| ----------------------------- | -------------------------------------------------------- |
+| `__svn_any<T>()`              | Fresh `any` placeholder — target slot in `new` call.     |
+| `__svn_ensure_component<C>()` | Normalize class or callable to a constructible. 4 overloads. |
+| `__svn_each_items<T>(v)`      | Iterable wrapper for `{#each}`.                          |
+| `__SvnEachItem<T>`            | Distributes item type for `__svn_each_items`.            |
+| `__svn_bind_this_check<El>`   | (declared, not emitted yet) bind:this type assertion.    |
+| `__svn_snippet_return()`      | Opaque branded-satisfying return for snippet arrow body. |
+| `__SvnProps<C>`               | Extract props slot from either class or callable. Unwraps Partial<>. |
+| `__SvnStore<T>`               | Structural store shape.                                  |
+| `__SvnStoreValue<S>`          | Type-level store unwrap.                                 |
+| `__svn_type_ref<T>()`         | Keeps a template-only `import type` alive.               |
 
-| Name                         | Role                                                     |
-| ---------------------------- | -------------------------------------------------------- |
-| `__svn_any<T>()`             | Fresh `any` placeholder — component-call anchor arg.     |
-| `__svn_each_items<T>(v)`     | Iterable wrapper for `{#each}`. (unchanged)              |
-| `__SvnEachItem<T>`           | Distributes item type for `__svn_each_items`.            |
-| `__svn_bind_this_check<El>`  | Assert `bind:this` target accepts the element type.      |
-| `__svn_snippet_return()`     | Opaque branded-satisfying return for snippet arrow body. |
-| `__SvnProps<F>`              | Extract props slot of a component-as-callable.           |
-| `__SvnStore<T>`              | Structural store shape. (unchanged)                      |
-| `__SvnStoreValue<S>`         | Type-level store unwrap. (unchanged)                     |
-| `__svn_type_ref<T>()`        | Keeps a template-only `import type` alive. (unchanged)   |
-
-Retired from `svelte_shims_core.d.ts`:
-- `__SvnComponentProps<T>` — the broken extractor.
-
-No rune ambients change in Phase B — `$state`, `$derived`, `$effect`,
-`$props`, `$bindable`, `$inspect`, `$host` all keep their current
-shapes. The D1 fix to `$state(null)` / `$state(undefined)` overloads
-stays.
-
----
-
-## What the overlay emit looks like end-to-end
-
-A library component (conceptual Svelte → overlay TS):
-
-```ts
-// Switch.svelte → Switch.svelte.ts
-
-async function $$render_switch() {
-    let { checked, onchange }: {
-        checked: boolean;
-        onchange: (event: { checked: boolean }) => void;
-    } = $props();
-
-    async function __svn_tpl_check() {
-        // element-attribute checks, bindings, etc. go here
-    }
-    void __svn_tpl_check;
-    void checked;
-    void onchange;
-}
-$$render_switch;
-
-declare function __svn_component_default(
-    __anchor: any,
-    props: {
-        checked: boolean;
-        onchange: (event: { checked: boolean }) => void;
-    },
-): any;
-export default __svn_component_default;
-```
-
-A consumer:
-
-```ts
-// App.svelte → App.svelte.ts
-import Switch from './Switch.svelte.ts';
-
-async function $$render_app() {
-    let isOn = $state(false);
-    async function __svn_tpl_check() {
-        Switch(__svn_any(), {
-            checked: isOn,
-            onchange: ({ checked }) => (isOn = checked),
-        });
-    }
-    void __svn_tpl_check;
-    void Switch;
-    void isOn;
-}
-$$render_app;
-
-declare const __svn_component_default: any;
-export default __svn_component_default;
-```
-
-The consumer's default-export is untyped (`any`) — the emit only
-bothers to synthesize a typed callable when it sees a `$props()`
-annotation in the script. Untyped scripts stay `any`, which is the
-correct "silently accept anything" semantic for Svelte 4-style or
-`<script>`-less components.
+Retired from the shim in B.2:
+- `__SvnComponentProps<T>` — the broken satisfies-path extractor.
 
 ---
 
 ## Rejected alternatives
 
-- **`new $$_Comp({target, props: {...}})` (upstream shape).** Works
-  equally well in principle, but requires a class-typed default
-  export, an `$$_Comp = ensureComponent(Comp)` wrapper helper, and a
-  `target: __svn_any()` prop we never need. Callable form is leaner
-  and produces the same contextual-typing flow.
-- **`({...} satisfies ComponentProps<typeof X>)` (today's shape).**
-  Constraint collapse through the extractor chain. See REFACTOR.md.
-- **Class-typed default export + instance access.** Would require
-  tracking `$$prop_def` — unnecessary ceremony when we can read Props
-  directly off the call signature.
+- **`Comp(anchor, props)` callable form as final emit.** First
+  iteration. Works for our own typed callable defaults but breaks on
+  third-party class components (TS2348 "not callable"). Also breaks
+  if a user-declared context types something as `Component<Props>`
+  (fixture 51-if-block-function-operand).
+
+- **`new Comp({target, props})` without a wrapper.** Works for class
+  components but breaks on our callable-typed defaults (TS7009 "new
+  expression... implicitly has type 'any'"). No unified shape.
+
+- **`class __svn_component_default extends SvelteComponent<Props>`
+  default-export.** Consumer code writing `ComponentProps<typeof
+  Foo>` fails `SvelteComponent<Record<string, any>, any, any>`
+  invariant-in-Props constraint (TS2344). User-facing regression.
+
+- **`Comp(anchor, {...})` callable plus `new Comp(...)` for classes
+  using a conditional-type dispatcher helper (`__svn_call`) over
+  `ConstructorParameters<C> | Parameters<C>`.** Breaks generic
+  inference — TS can't resolve the class's `<T>` through the
+  conditional before seeing the concrete call. VirtualList's snippet
+  arrow reads `item: unknown`.
+
+- **`__sveltets_2_*` naming (upstream's).** Explicitly forbidden by
+  project rule 1 (no upstream naming).
 
 ---
 
-## Expected tsgo output from the fixture
+## Expected tsgo output
 
 ```
-src/Errors.svelte.ts(30,13): error TS2322: Type 'string' is not assignable to type 'boolean'.
-src/Errors.svelte.ts(37,26): error TS2339: Property 'nope' does not exist on type '{ checked: boolean; }'.
-src/Errors.svelte.ts(45,13): error TS2353: Object literal may only specify known properties, and 'foo' does not exist in type '{ checked: boolean; onchange: (event: { checked: boolean; }) => void; }'.
-src/Errors.svelte.ts(52,32): error TS2339: Property 'missing' does not exist on type '{ id: number; label: string; }'.
+src/Errors.svelte.ts(31,55): error TS2322: Type 'string' is not assignable to type 'boolean | undefined'.
+src/Errors.svelte.ts(37,83): error TS2339: Property 'nope' does not exist on type '{ checked: boolean; }'.
+src/Errors.svelte.ts(44,90): error TS2353: Object literal may only specify known properties, and 'foo' does not exist in type 'Partial<{ checked: boolean; onchange: (event: { checked: boolean; }) => void; }>'.
+src/Errors.svelte.ts(55,40): error TS2339: Property 'missing' does not exist on type '{ id: number; label: string; }'.
 ```
 
 Four errors, one per deliberate bug, each at the call site with the
-right TS code. Clean files (App, Edges, Switch, Wrapper, VirtualList,
-store, svn_shims, svelte_shim) produce zero diagnostics.
+right TS code. Clean files (App, Edges, Classes, Switch, Wrapper,
+VirtualList, Lucide, store, svn_shims, svelte_shim) produce zero
+diagnostics.
 
-If Phase B emission ever drops below or rises above these four, the
-shape has drifted.
+If Phase B or later emission ever drops below or rises above these
+four, the shape has drifted.

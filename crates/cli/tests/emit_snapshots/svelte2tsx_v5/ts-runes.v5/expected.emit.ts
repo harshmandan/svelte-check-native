@@ -13,7 +13,6 @@ async function $$render_a8c1b0a7() {
     void b;
 }
 $$render_a8c1b0a7;
-declare function __svn_component_default(__anchor: any, props: { a: number, b: string }): any;
-declare type __svn_component_default = (__anchor: any, props: { a: number, b: string }) => any;
+declare const __svn_component_default: import('svelte').Component<{ a: number, b: string }>;
 export default __svn_component_default;
 

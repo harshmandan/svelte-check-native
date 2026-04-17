@@ -13,7 +13,6 @@ async function $$render_6b1a6441<T>() {
     void b;
 }
 $$render_6b1a6441;
-declare function __svn_component_default<T>(__anchor: any, props: { a: T, b: string }): any;
-declare type __svn_component_default<T> = (__anchor: any, props: { a: T, b: string }) => any;
+declare const __svn_component_default: <T>(__anchor: any, props: Partial<{ a: T, b: string }>) => any;
 export default __svn_component_default;
 

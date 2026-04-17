@@ -34,5 +34,9 @@ async function $$render_wrapper() {
 }
 $$render_wrapper;
 
-declare function __svn_component_default(__anchor: any, props: WrapperProps): any;
+import { SvelteComponent as $$_SC } from 'svelte';
+
+declare class __svn_component_default extends $$_SC<WrapperProps> {
+    constructor(options: { target?: any; props?: Partial<WrapperProps> });
+}
 export default __svn_component_default;

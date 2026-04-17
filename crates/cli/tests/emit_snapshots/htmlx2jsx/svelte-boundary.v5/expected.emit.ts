@@ -6,7 +6,10 @@ async function $$render_e5ad478b() {
         {
             const failed: any = undefined;
             void failed;
-            ComponentThatFails(__svn_any(), {});
+            {
+                const __svn_C_27 = __svn_ensure_component(ComponentThatFails);
+                new __svn_C_27({ target: __svn_any(), props: {} });
+            }
             {
                 void ((e: any) => {
                     void e;
@@ -17,7 +20,6 @@ async function $$render_e5ad478b() {
     void __svn_tpl_check;
 }
 $$render_e5ad478b;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

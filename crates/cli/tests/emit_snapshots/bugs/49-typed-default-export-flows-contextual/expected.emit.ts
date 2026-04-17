@@ -17,14 +17,10 @@ async function $$render_1497f2af() {
     void onchange;
 }
 $$render_1497f2af;
-declare function __svn_component_default(__anchor: any, props: {
+declare const __svn_component_default: import('svelte').Component<{
         checked: boolean;
         onchange: (event: { checked: boolean }) => void;
-    }): any;
-declare type __svn_component_default = (__anchor: any, props: {
-        checked: boolean;
-        onchange: (event: { checked: boolean }) => void;
-    }) => any;
+    }>;
 export default __svn_component_default;
 
 // === input.svelte ===
@@ -37,14 +33,16 @@ async function $$render_026729db() {
     let isOn = $state(false);
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        Switch(__svn_any(), {checked: (isOn), onchange: (({ checked }) => (isOn = checked))});
+        {
+            const __svn_C_1a4 = __svn_ensure_component(Switch);
+            new __svn_C_1a4({ target: __svn_any(), props: {checked: (isOn), onchange: (({ checked }) => (isOn = checked))} });
+        }
     }
     void __svn_tpl_check;
     void Switch;
     void isOn;
 }
 $$render_026729db;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

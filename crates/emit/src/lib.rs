@@ -141,13 +141,20 @@ fn emit_document_with_render_name(
         }
     }
 
+    // `<script generics="T extends ...">` — pulled from the parser's
+    // ScriptSection::generics. Extracted up front so script_split can
+    // decide whether to hoist bare `type`/`interface` declarations out
+    // of the render body (they'd lose access to the `T` generic if
+    // lifted to module scope).
+    let generics = extract_generics_attr(doc);
+
     // Hoist imports out of the instance script. Required because the
     // instance body gets wrapped in `function $$render() { ... }` and ES
     // `import` declarations can't appear inside a function (TS1232).
     let split = doc
         .instance_script
         .as_ref()
-        .map(|s| split_imports(s.content, s.lang));
+        .map(|s| split_imports(s.content, s.lang, generics.is_some()));
 
     if let Some(s) = &split {
         if !s.hoisted.is_empty() {
@@ -223,14 +230,14 @@ fn emit_document_with_render_name(
         }
     }
 
-    // `<script generics="T extends ...">` — expose the type params as
-    // generics on the wrapping function so references inside the body
-    // resolve. Falls back to no-generics when the attribute is absent.
+    // `<script generics="T extends ...">` (extracted above) — expose
+    // the type params as generics on the wrapping function so
+    // references inside the body resolve. Falls back to no-generics
+    // when the attribute is absent.
     //
     // The wrapper is `async` because Svelte 5 components are allowed to
     // use top-level `await` in their `<script>` body (TLA via Vite/SvelteKit
     // is supported); without `async` we'd report TS1308 for those.
-    let generics = extract_generics_attr(doc);
     match &generics {
         Some(g) => {
             let _ = writeln!(out, "async function {render_name}<{g}>() {{");
@@ -502,7 +509,21 @@ fn emit_document_with_render_name(
     // through `ComponentProps<typeof X>`) and the type alias
     // resolves to `SvelteComponent<Props>` (instance-shaped).
     // Without a known annotation both sides fall back to `any`.
-    if let Some(ty) = &prop_type_source {
+    //
+    // Exception: when the component has `<script generics="T...">`,
+    // `Props` (or the inline `$props<...>()` type argument) likely
+    // references those type parameters. The typed-default declaration
+    // lives at module scope — outside the `$$render<T>()` wrapper —
+    // so `T` is unbound there and the declaration would fire "Cannot
+    // find name 'T'". Fall back to `any` for generic components:
+    // consumers still get a valid default import, just without the
+    // contextual-typing flow that `ComponentProps<typeof X>` would
+    // provide. The alternative (emitting a helper type that
+    // re-introduces the generic at module scope via a function-valued
+    // default export) would change the default's *shape* and break
+    // `ComponentProps<typeof X>` anyway, so the trade isn't worth it
+    // for what's a rare pattern.
+    if let (Some(ty), None) = (&prop_type_source, &generics) {
         let _ = writeln!(
             out,
             "declare const __svn_component_default: import('svelte').Component<{ty}>;"
@@ -590,7 +611,8 @@ fn render_function_name(source_path: &Path) -> SmolStr {
     SmolStr::from(format!("$$render_{short}"))
 }
 
-/// Extract the `generics=` attribute value from `<script>` if present.
+/// Extract the `generics=` attribute value from the instance `<script>`
+/// if present.
 ///
 /// Svelte 5's syntax for declaring generic type params on a component:
 ///
@@ -601,17 +623,14 @@ fn render_function_name(source_path: &Path) -> SmolStr {
 /// The value is spliced verbatim into our wrapping function as
 /// `function $$render<T extends Item, K extends keyof T>() { ... }` so
 /// any references to `T` / `K` inside the script body resolve correctly.
+///
+/// Parsing lives in the structural parser (`ScriptSection::generics`);
+/// this helper just re-types the already-extracted `Option<String>` as
+/// a `SmolStr` and guards against callers that pass in a document
+/// without an instance script.
 fn extract_generics_attr(doc: &Document<'_>) -> Option<SmolStr> {
     let script = doc.instance_script.as_ref()?;
-    let attr = script
-        .attrs
-        .iter()
-        .find(|a| a.name.eq_ignore_ascii_case("generics"))?;
-    let value = attr.value.as_deref()?.trim();
-    if value.is_empty() {
-        return None;
-    }
-    Some(SmolStr::from(value))
+    script.generics.as_deref().map(SmolStr::from)
 }
 
 /// Walk the fragment tree and emit per-construct scaffolding.

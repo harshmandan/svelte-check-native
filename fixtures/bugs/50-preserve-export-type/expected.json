@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "`export type` and `export interface` declarations inside `<script>` (instance-script) must be hoisted to the module prelude of the generated overlay with the `export` keyword intact. A consumer using `import type { Section } from './Panel.svelte'` needs the overlay's module top level to re-export the type; without the hoist, the type declaration lands inside the wrapping `$$render` function and the import resolves to nothing."
+}

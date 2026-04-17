@@ -18,7 +18,7 @@
 //! mapping.
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{BindingPatternKind, Declaration, Statement};
+use oxc_ast::ast::{BindingPatternKind, Declaration, ImportOrExportKind, Statement};
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
 use svn_parser::{ScriptLang, parse_script_body};
@@ -112,6 +112,24 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
             Statement::ExportNamedDeclaration(decl) => {
                 let span = (decl.span.start as usize, decl.span.end as usize);
                 if let Some(d) = &decl.declaration {
+                    // `export type Foo = ...` / `export interface Foo { ... }` —
+                    // pure type-namespace declarations. Hoist the whole
+                    // statement (including the `export` keyword) so the
+                    // overlay's module top level carries the export and
+                    // consumers writing `import type { Foo } from './X.svelte'`
+                    // resolve. Without this branch we'd fall through to the
+                    // strip-keyword path below, which would blank the
+                    // `export ` prefix and leave `type Foo = ...` in the
+                    // function body — invisible to consumers and never
+                    // re-exported by the overlay.
+                    if matches!(
+                        d,
+                        Declaration::TSTypeAliasDeclaration(_)
+                            | Declaration::TSInterfaceDeclaration(_)
+                    ) {
+                        hoist_spans.push(span);
+                        continue;
+                    }
                     // `export const/let/var/function/class` — strip just
                     // the `export ` prefix. The declaration content stays
                     // in body where its identifier references resolve.
@@ -128,8 +146,20 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
                     // `export { x, y }` (no `from`) — local name re-export.
                     // Drop the statement, but the names ARE exported, so
                     // record them for void-emission.
+                    //
+                    // Type-only specifiers (`export { type Bar }` or a
+                    // whole-decl `export type { Bar }`) must NOT be added
+                    // to `exported_locals`: the emit wraps each entry in
+                    // `void <name>;`, and voiding a type name fires TS2693
+                    // ("'Bar' only refers to a type but is being used as a
+                    // value here"). Types don't need void'ing for TS6133
+                    // anyway — they aren't emitted at runtime.
                     drop_spans.push(span);
+                    let decl_type_only = decl.export_kind == ImportOrExportKind::Type;
                     for spec in &decl.specifiers {
+                        if decl_type_only || spec.export_kind == ImportOrExportKind::Type {
+                            continue;
+                        }
                         exported_locals.push(SmolStr::from(spec.local.name().as_str()));
                     }
                 }
@@ -471,6 +501,85 @@ let x = 1;
         let s = split_imports(src, ScriptLang::Ts);
         let total = format!("{}{}", s.hoisted, s.body);
         assert!(total.contains("import"));
+    }
+
+    #[test]
+    fn export_type_alias_is_hoisted_with_export_keyword() {
+        // `export type Foo = ...` is a pure type-namespace declaration
+        // that's legal at module top level. Hoist the whole statement so
+        // consumers writing `import type { Foo } from './X.svelte'`
+        // resolve. Stripping just the `export ` would leave the type in
+        // the function body, invisible to consumers.
+        let src = "let x = 1;\nexport type Foo = string | number;";
+        let s = split_imports(src, ScriptLang::Ts);
+        assert!(
+            s.hoisted.contains("export type Foo = string | number;"),
+            "export type must be hoisted verbatim:\n{}",
+            s.hoisted
+        );
+        assert!(
+            !s.body.contains("type Foo"),
+            "declaration must be removed from body:\n{}",
+            s.body
+        );
+    }
+
+    #[test]
+    fn export_interface_is_hoisted_with_export_keyword() {
+        let src = "let x = 1;\nexport interface Foo { n: number; }";
+        let s = split_imports(src, ScriptLang::Ts);
+        assert!(
+            s.hoisted.contains("export interface Foo { n: number; }"),
+            "export interface must be hoisted verbatim:\n{}",
+            s.hoisted
+        );
+        assert!(!s.body.contains("interface Foo"));
+    }
+
+    #[test]
+    fn export_type_specifier_not_void_emitted() {
+        // `export { type Bar }` — type-only specifier. The declaration
+        // list gets dropped; the type name must NOT be recorded in
+        // exported_locals because emit would wrap it in `void Bar;`
+        // which fires TS2693 on a type name.
+        let src = "type Bar = string;\nexport { type Bar };";
+        let s = split_imports(src, ScriptLang::Ts);
+        assert!(
+            !s.exported_locals.iter().any(|n| n == "Bar"),
+            "type-only specifier must not be voided:\n{:?}",
+            s.exported_locals
+        );
+    }
+
+    #[test]
+    fn export_type_decl_specifier_list_not_void_emitted() {
+        // `export type { Bar }` — whole declaration marked type-only.
+        // Same rule: don't void the name.
+        let src = "type Bar = string;\nexport type { Bar };";
+        let s = split_imports(src, ScriptLang::Ts);
+        assert!(
+            !s.exported_locals.iter().any(|n| n == "Bar"),
+            "whole-decl type export must not be voided:\n{:?}",
+            s.exported_locals
+        );
+    }
+
+    #[test]
+    fn mixed_value_and_type_specifier_only_value_voided() {
+        // `export { Foo, type Bar }` — Foo is a runtime name (goes to
+        // exported_locals for void-emission), Bar is a type (skipped).
+        let src = "let Foo = 1;\ntype Bar = string;\nexport { Foo, type Bar };";
+        let s = split_imports(src, ScriptLang::Ts);
+        assert!(
+            s.exported_locals.iter().any(|n| n == "Foo"),
+            "value specifier missing:\n{:?}",
+            s.exported_locals
+        );
+        assert!(
+            !s.exported_locals.iter().any(|n| n == "Bar"),
+            "type specifier must not be voided:\n{:?}",
+            s.exported_locals
+        );
     }
 
     #[test]

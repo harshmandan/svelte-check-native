@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A `<script>` inside `<svelte:head>` is parsed as a second top-level script section and rejected as a duplicate. Its opening-tag attributes (e.g. `onload={useThing(...)}`) often reference script-local identifiers that would otherwise read as TS6133. Treating the duplicate script's open-tag range as a template run lets the normal template-ref walker pick up those references."
+}

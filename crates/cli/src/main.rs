@@ -558,9 +558,9 @@ fn run_typecheck(
     // call so each `generated_ts` string drops as soon as it has been
     // written to the cache — see svn_typecheck::check docs.
     let mark = std::time::Instant::now();
-    let mut diagnostics = if sources.js {
+    let (mut diagnostics, program_file_count) = if sources.js {
         match svn_typecheck::check(workspace, tsconfig, inputs) {
-            Ok(d) => d,
+            Ok(out) => (out.diagnostics, Some(out.program_file_count)),
             Err(err) => {
                 eprintln!("svelte-check-native: type-check failed: {err}");
                 return ExitCode::from(2);
@@ -570,7 +570,7 @@ fn run_typecheck(
         // When tsgo is skipped, drop `inputs` early too so we don't
         // hold the generated TS strings through the bridge phase.
         drop(inputs);
-        Vec::new()
+        (Vec::new(), None)
     };
     let t_typecheck = mark.elapsed();
 
@@ -649,12 +649,17 @@ fn run_typecheck(
         .count();
     let warning_count = diagnostics.len() - error_count;
 
+    // Prefer tsgo's program file count (matches upstream svelte-check's
+    // denominator). Fall back to a workspace walk only when tsgo was
+    // skipped via `--diagnostic-sources` opting out of `js`.
+    let files_for_completed = program_file_count
+        .unwrap_or_else(|| count_project_files(workspace, ignore));
     print_diagnostics(
         workspace,
         &diagnostics,
         output_format,
         color,
-        count_project_files(workspace, ignore),
+        files_for_completed,
     );
 
     if timings {

@@ -1,0 +1,11 @@
+{
+    "emit_contains": [
+        "import('./$types.js').PageData",
+        "import('./$types.js').ActionData",
+        "declare const __svn_component_default: import('svelte').Component<{ data: import('./$types.js').PageData; form?: import('./$types.js').ActionData; }>;"
+    ],
+    "emit_not_contains": [
+        "declare const __svn_component_default: any;"
+    ],
+    "_note": "SvelteKit route files (+page.svelte, +layout.svelte) get contextual type information for kit-injected props from ./$types.js. Upstream's svelte2tsx auto-injects this on untyped $props() destructures; our emit does the same by synthesizing an inline type from the destructured prop names and feeding it through the existing prop_type_source pipeline. This grey-box fixture asserts the synthesized default export carries PageData + ActionData so ComponentProps<typeof Page> downstream resolves to the real shape instead of `any`."
+}

@@ -49,6 +49,34 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
         // starts with `<script` or `<style` (case-insensitive) becomes an
         // opaque section.
 
+        // HTML comment content is opaque — must not be scanned for
+        // `<script>` / `<style>` tags. Real-world pattern: a
+        // component's reference / legacy code kept as commented-out
+        // `<!-- <script>...</script>...{#if x}...-->` (cnblocks'
+        // integration-* and logocloud-three use this convention).
+        // Without this skip, the sections pass picks up the inner
+        // `<script>` as the instance script and the template parser
+        // picks up inner `{#if}` blocks referencing names that only
+        // exist in the commented-out code, firing TS2304 in the
+        // overlay.
+        if scanner.peek_byte() == Some(b'<') && scanner.starts_with("<!--") {
+            let after_open = scanner.pos() as usize + 4;
+            match scanner.source()[after_open..].find("-->") {
+                Some(offset) => {
+                    let skip_to = (after_open + offset + 3).min(scanner.source().len());
+                    scanner.set_pos(skip_to as u32);
+                }
+                None => {
+                    // Unterminated comment — treat rest of source as
+                    // comment body to avoid re-scanning the same `<!--`.
+                    // parse_template below will surface the unterminated
+                    // error when it walks the same region.
+                    scanner.set_pos(scanner.source().len() as u32);
+                }
+            }
+            continue;
+        }
+
         if scanner.peek_byte() == Some(b'<')
             && (scanner.starts_with_ignore_case("<script")
                 && !is_ident_char(scanner.peek_byte_at(7)))
@@ -518,6 +546,45 @@ mod tests {
             "expected no errors, got {errors:?} for source:\n{src}"
         );
         doc
+    }
+
+    #[test]
+    fn script_inside_html_comment_not_picked_up_as_instance() {
+        // Real-world pattern: a component file keeps its legacy /
+        // reference implementation in an HTML comment. Without the
+        // comment-skip, the sections pass wires up the inner
+        // <script> as the instance script, which leaks body-scope
+        // references into the template and breaks the overlay.
+        let src = r#"<script lang="ts">
+import Foo from './Foo.svelte';
+</script>
+<Foo />
+<!-- <script lang="ts">
+let position: string;
+</script>
+{#if position}ignored{/if}
+ -->"#;
+        let doc = parse_ok(src);
+        let s = doc.instance_script.expect("real instance script");
+        assert!(
+            s.content.contains("import Foo"),
+            "expected real script, got: {}",
+            s.content
+        );
+        // There must NOT be a module script synthesized from the
+        // commented-out `<script lang="ts">`. `context="module"`
+        // isn't set on either, but the important invariant is that
+        // we didn't error out on "duplicate script".
+    }
+
+    #[test]
+    fn style_inside_html_comment_not_picked_up() {
+        let src = r#"<style>.a{color:red}</style>
+<!-- <style>.b{color:blue}</style> -->"#;
+        let doc = parse_ok(src);
+        let s = doc.style.expect("real style");
+        assert!(s.content.contains(".a"));
+        assert!(!s.content.contains(".b"));
     }
 
     #[test]

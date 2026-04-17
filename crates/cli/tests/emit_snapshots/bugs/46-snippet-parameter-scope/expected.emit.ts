@@ -44,7 +44,7 @@ async function $$render_7cc45a4f() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         void ({
-            children: (isOpen, toggle) => {
+            children: (isOpen: any, toggle: any) => {
                 void ({open: (isOpen), onToggle: (toggle)} satisfies Partial<__SvnComponentProps<typeof Inner>>);
                 void isOpen;
                 void toggle;

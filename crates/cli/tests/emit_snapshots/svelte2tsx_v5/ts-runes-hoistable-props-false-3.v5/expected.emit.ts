@@ -14,5 +14,6 @@ async function $$render_cbdc5f31<T extends boolean>() {
 }
 $$render_cbdc5f31;
 declare const __svn_component_default: <T extends boolean>(__anchor: any, props: Partial<{ someProp: SomeType<T>; }>) => any;
+declare type __svn_component_default<T extends boolean> = import('svelte').SvelteComponent<{ someProp: SomeType<T>; }>;
 export default __svn_component_default;
 

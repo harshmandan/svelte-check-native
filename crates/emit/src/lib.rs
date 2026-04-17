@@ -455,6 +455,23 @@ fn emit_document_with_render_name(
             }
         }
     }
+    // Also definite-assign every store whose auto-subscribe alias
+    // `$store` got synthesized above. Svelte promises `$store` reads a
+    // value from the store runtime, but the UNDERLYING `store` local
+    // may be declared as `let store: Writable<T>` (no initializer) and
+    // only assigned inside a reactive branch. Without the `!`, TS2454
+    // fires at the type-declaration line because flow analysis sees
+    // `typeof store` being read before all branches assign. Safe to
+    // enable broadly: the definite-assign rewrite only touches `let
+    // NAME: Type` declarations with no initializer and no `!`, so
+    // store imports, store `const` declarations, and `let store =
+    // writable(0)` patterns are all unaffected.
+    for name in &store_refs {
+        let base = SmolStr::from(name.strip_prefix('$').unwrap_or(name));
+        if !def_assign_names.iter().any(|n| n == &base) {
+            def_assign_names.push(base);
+        }
+    }
     rewrite_definite_assignment_in_place(&mut out, &def_assign_names);
 
     out.push_str("    async function __svn_tpl_check() {\n");
@@ -533,32 +550,20 @@ fn emit_document_with_render_name(
     // the default import as a type (`let x: Foo`, `$state<Foo>(...)`)
     // doesn't fire TS2749. The alias resolves to a structurally
     // matching function-type.
-    // Three cases picked based on whether the Props source is a
-    // literal object-shape (`{ a: number }`) vs a named reference
-    // (`Props`, `MyProps<T>`):
+    // Three cases: typed+generic, typed non-generic, untyped.
     //
-    //   1. Typed Props + literal shape + generics: emit a generic
-    //      callable. Generic type parameters scope inside the function
-    //      signature, so references to them in the literal Props shape
-    //      resolve at module scope.
-    //   2. Typed Props (any shape) + no generics: emit a non-generic
-    //      callable. Named Props (`type Props = ...` in the body) are
-    //      hoisted by script_split when possible; when they can't be
-    //      hoisted (references to body-only names), this fires TS2304
-    //      and the user gets a clear signal to lift the type.
-    //   3. Typed Props + named reference + generics (rare): named
-    //      types that reference generics can't be hoisted (the generic
-    //      only binds inside $$render), so re-emitting the named
-    //      reference at module scope would leave `Props` undefined.
-    //      Fall back to `any`. Consumers lose contextual-typing flow
-    //      for this rare pattern; the tradeoff is zero false
-    //      positives.
-    //   4. Untyped (default): permissive `any` callable so consumers
-    //      can pass arbitrary prop shapes.
-    let ty_is_literal = prop_type_source
-        .as_deref()
-        .map(|t| t.trim_start().starts_with('{'))
-        .unwrap_or(false);
+    // In the generic case, the Props source has to be "safe" to
+    // reference at module scope — either a literal shape (`{ item: T }`)
+    // or a named type that carries its own generic parameters
+    // (`Props<T>`). A bare named type (`Props` that references the
+    // script's T without re-binding it) can't be hoisted by
+    // script_split and thus isn't visible at module scope, so we fall
+    // back to `any` for the default-export declaration. Consumers lose
+    // contextual-typing flow in that rare case; zero false positives.
+    let ty_safe_in_generic_scope = prop_type_source.as_deref().is_some_and(|t| {
+        let t = t.trim();
+        t.starts_with('{') || t.contains('<')
+    });
     // Default export typed as Svelte 5's `Component<Props>` (function
     // form). This shape is chosen to satisfy the constraint on
     // svelte's built-in `ComponentProps<T>` helper — which accepts
@@ -582,11 +587,25 @@ fn emit_document_with_render_name(
     // `__svn_ensure_component` call). Validated end-to-end in
     // design/phase_a/ — including classes imported from third-party
     // libraries (lucide-svelte, phosphor-svelte, bits-ui).
+    // A same-named type alias is emitted alongside the value so user
+    // code that uses the default import as a type
+    // (`let ref: MyComp`, `$state<MyComp>(...)`, `(el as MyComp)`)
+    // resolves without firing TS2749 "refers to a value, but is
+    // being used as a type here". The alias resolves to the
+    // InstanceType of the Component's construct wrapper — roughly
+    // `{ $on?, $set? } & Exports` for real-svelte `Component<Props>`
+    // — which is what upstream's svelte2tsx surfaces under the same
+    // name. Consumer code that writes `let x: MyComp` picks up the
+    // instance shape, same as before the callable-shape refactor.
     match (&prop_type_source, &generics) {
-        (Some(ty), Some(g)) if ty_is_literal => {
+        (Some(ty), Some(g)) if ty_safe_in_generic_scope => {
             let _ = writeln!(
                 out,
                 "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{ty}>) => any;"
+            );
+            let _ = writeln!(
+                out,
+                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<{ty}>;"
             );
         }
         (Some(ty), None) => {
@@ -594,10 +613,17 @@ fn emit_document_with_render_name(
                 out,
                 "declare const __svn_component_default: import('svelte').Component<{ty}>;"
             );
+            let _ = writeln!(
+                out,
+                "declare type __svn_component_default = import('svelte').SvelteComponent<{ty}>;"
+            );
         }
         _ => {
             out.push_str(
                 "declare const __svn_component_default: import('svelte').Component<Record<string, any>>;\n",
+            );
+            out.push_str(
+                "declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;\n",
             );
         }
     }

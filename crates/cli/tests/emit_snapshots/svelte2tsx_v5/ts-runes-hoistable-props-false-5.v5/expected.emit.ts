@@ -15,5 +15,6 @@ async function $$render_86a0cb14() {
 }
 $$render_86a0cb14;
 declare const __svn_component_default: import('svelte').Component<{ someProp: Shadowed }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ someProp: Shadowed }>;
 export default __svn_component_default;
 

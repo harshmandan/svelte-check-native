@@ -23,5 +23,6 @@ let { data }: Props = $props();
 }
 $$render_654e105f;
 declare const __svn_component_default: import('svelte').Component<Props>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Props>;
 export default __svn_component_default;
 

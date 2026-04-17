@@ -14,5 +14,6 @@ async function $$render_39303eb1() {
 }
 $$render_39303eb1;
 declare const __svn_component_default: import('svelte').Component<{ world?: any; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ world?: any; }>;
 export default __svn_component_default;
 

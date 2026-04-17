@@ -26,6 +26,7 @@ async function $$render_a4d674e0() {
 }
 $$render_a4d674e0;
 declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
 export default __svn_component_default;
 
 // === Panel.svelte ===
@@ -60,6 +61,9 @@ async function $$render_6e910aea() {
 }
 $$render_6e910aea;
 declare const __svn_component_default: import('svelte').Component<{
+        config: PanelConfig;
+    }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{
         config: PanelConfig;
     }>;
 export default __svn_component_default;

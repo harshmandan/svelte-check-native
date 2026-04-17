@@ -240,29 +240,31 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
                 hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
             }
             // `type Foo = ...` and `interface Foo { ... }` — hoist so
-            // the emitted `declare const __svn_component_default:
-            // Component<Foo>` at module level can reference them.
-            // Scripts typically declare `interface Props { ... }` right
-            // before `let { ... }: Props = $props()`; without the
-            // hoist, the overlay's typed default export reads "Cannot
-            // find name 'Props'" at module top.
+            // the emitted default-export's `Component<Foo>` at module
+            // scope can reference them.
             //
-            // Exception: when the component has `<script
-            // generics="T...">`, the script's type aliases likely
-            // reference those type parameters. Hoisting a
-            // `type Props = { item: T }` out of `$$render<T>()`
-            // into the module scope leaves `T` unbound at the use
-            // site. Keep those in the body; the caller then types the
-            // default export as `any` (giving up
-            // `ComponentProps<typeof X>` flow for generic components,
-            // which is rare enough to accept).
+            // Hoist decision when the script carries
+            // `<script generics="T...">`:
+            //   - The type re-binds its OWN generic (`interface
+            //     Props<T> { item: T[] }`) — HOIST. The inner T is
+            //     self-contained after hoisting and the Svelte
+            //     convention is to parameterize the Props interface
+            //     this way.
+            //   - The type is bare and might reference the script's
+            //     generic (`type Props = { item: T }`) — KEEP in body.
+            //     Hoisting would leave `T` unbound at module scope.
+            //     The caller falls back to an `any`-typed default.
+            //
+            // Without generics, always hoist (no T to worry about).
             Statement::TSTypeAliasDeclaration(decl) => {
-                if !has_generics {
+                let hoist_safe = !has_generics || decl.type_parameters.is_some();
+                if hoist_safe {
                     hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
                 }
             }
             Statement::TSInterfaceDeclaration(decl) => {
-                if !has_generics {
+                let hoist_safe = !has_generics || decl.type_parameters.is_some();
+                if hoist_safe {
                     hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
                 }
             }

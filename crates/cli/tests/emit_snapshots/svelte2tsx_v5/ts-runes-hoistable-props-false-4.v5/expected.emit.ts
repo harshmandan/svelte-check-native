@@ -14,5 +14,6 @@ async function $$render_bf18a5c0() {
 }
 $$render_bf18a5c0;
 declare const __svn_component_default: import('svelte').Component<{ someProp: typeof a }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ someProp: typeof a }>;
 export default __svn_component_default;
 

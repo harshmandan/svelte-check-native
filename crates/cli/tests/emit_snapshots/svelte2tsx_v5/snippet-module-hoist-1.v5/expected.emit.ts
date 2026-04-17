@@ -33,31 +33,31 @@ async function $$render_3d709d05() {
             const not_hoistable: any = undefined;
             void not_hoistable;
             {
-                void ((bar: any) => { void [bar]; });
-                const bar: any = undefined;
-                void bar;
+                void ((bar: any) => {
+                    void bar;
+                });
             }
             {
-                void ((bar: string) => { void [bar]; });
-                const bar: any = undefined;
-                void bar;
+                void ((bar: string) => {
+                    void bar;
+                });
             }
             {
-                void ((foo: any) => { void [foo]; });
-                const foo: any = undefined;
-                void foo;
+                void ((foo: any) => {
+                    void foo;
+                });
             }
             {
-                void ((props: HTMLAttributes<HTMLDivElement>) => { void [props]; });
-                const props: any = undefined;
-                void props;
+                void ((props: HTMLAttributes<HTMLDivElement>) => {
+                    void props;
+                });
             }
             {
-                void ((foo: any) => { void [foo]; });
-                const foo: any = undefined;
-                const bar = foo;
-                void bar;
-                void foo;
+                void ((foo: any) => {
+                    const bar = foo;
+                    void bar;
+                    void foo;
+                });
             }
         }
     }

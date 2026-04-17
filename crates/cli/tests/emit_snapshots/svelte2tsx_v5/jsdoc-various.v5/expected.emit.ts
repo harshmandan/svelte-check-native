@@ -11,9 +11,9 @@ async function $$render_edb4eb12<T>() {
             const foo: any = undefined;
             void foo;
             {
-                void ((bar: any) => { void [bar]; });
-                const bar: any = undefined;
-                void bar;
+                void ((bar: any) => {
+                    void bar;
+                });
             }
         }
     }

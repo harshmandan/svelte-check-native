@@ -39,43 +39,41 @@ async function $$render_43de206c() {
                 void error;
             }
             {
-                void ((bar: string) => { void [bar]; });
-                const bar: any = undefined;
-                void bar;
+                void ((bar: string) => {
+                    void bar;
+                });
             }
             {
-                void ((bar : string) => { void [bar]; });
-                const bar: any = undefined;
-                void bar;
+                void ((bar : string) => {
+                    void bar;
+                });
             }
             {
-                void ((bar    : string | number) => { void [bar]; });
-                const bar: any = undefined;
-                void bar;
+                void ((bar    : string | number) => {
+                    void bar;
+                });
             }
             {
-                void ((bar    : string | number, baz     : (str: string)=>void) => { void [bar, baz]; });
-                const bar: any = undefined;
-                const baz: any = undefined;
-                void bar;
-                void baz;
+                void ((bar    : string | number, baz     : (str: string)=>void) => {
+                    void bar;
+                    void baz;
+                });
             }
             {
-                void ((bar: {baz: string}) => { void [bar]; });
-                const bar: any = undefined;
-                void bar;
+                void ((bar: {baz: string}) => {
+                    void bar;
+                });
             }
             {
-                void ((bar?: string) => { void [bar]; });
-                const bar: any = undefined;
-                void bar;
+                void ((bar?: string) => {
+                    void bar;
+                });
             }
             {
-                void ((bar: any, baz: any = '') => { void [bar, baz]; });
-                const bar: any = undefined;
-                const baz: any = undefined;
-                void bar;
-                void baz;
+                void ((bar: any, baz: any = '') => {
+                    void bar;
+                    void baz;
+                });
             }
             void ({attr: (attr as boolean)} satisfies Partial<__SvnComponentProps<typeof Component>>);
             void ({} satisfies Partial<__SvnComponentProps<typeof Component>>);

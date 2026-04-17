@@ -84,6 +84,17 @@ tsgo invocation, diagnostics mapping back to `.svelte` source.
 6. **Synthesized-name prefix:** `__svn_*`. Used for every name the emit
    crate creates so they're trivially distinguishable from user code in
    diagnostics.
+7. **New emit shapes are tsgo-validated on a hand-written fixture
+   before implementation.** Any change to what the emit crate produces
+   — new helper, new component-call shape, new binding pattern — is
+   first expressed as hand-written TS in a throwaway fixture and
+   compiled with tsgo. The validation must prove (a) the clean case
+   produces zero diagnostics and (b) a deliberately-broken companion
+   file produces exactly the expected diagnostics with the expected TS
+   codes at the expected positions. Only after the fixture gates green
+   does implementation in Rust begin. `design/phase_a/` is the
+   reference for this discipline; the validator for the callable-shape
+   emit landed as part of Phase A's deliverable.
 
 ## Testing discipline
 

@@ -704,15 +704,18 @@ fn emit_document_with_render_name(
     }
     out.push_str("export default __svn_component_default;\n");
 
-    // Rewrite every `.svelte` extension on import / export specifiers
-    // to `.svelte.ts` so TS resolves the import to our generated
-    // overlay file rather than to the `*.svelte` ambient module
-    // declaration that the `svelte` package ships (which only knows
-    // about the default export — named imports otherwise fire TS2614).
+    // `.svelte` import specifiers are left unchanged. TS resolves
+    // them via `allowArbitraryExtensions` + the ambient
+    // `Foo.d.svelte.ts` sidecar written by the typecheck cache writer,
+    // which re-exports from the real overlay at `Foo.svelte.svn.ts`.
     //
-    // Requires `allowImportingTsExtensions: true` in the overlay
-    // tsconfig (set in svn-typecheck::overlay::build).
-    let out = rewrite_svelte_imports(&out);
+    // Not rewriting also preserves the bundler-mode auto-append path
+    // for `import X from './Foo.svelte'` where `Foo.svelte.ts` is the
+    // user's runes module (Svelte 5 convention, e.g. bits-ui,
+    // shadcn-svelte) — TS tries `.svelte` literal, then `.svelte.ts`,
+    // then our ambient, in that order. Rewriting to
+    // `./Foo.svelte.svn.ts` would short-circuit the runes-module
+    // fallback.
 
     EmitOutput {
         typescript: out,
@@ -813,17 +816,6 @@ fn root_type_name(ty: &str) -> Option<String> {
         end += 1;
     }
     Some(ty[..end].to_string())
-}
-
-/// Append `.ts` to every `.svelte` extension that appears as a module
-/// specifier suffix. Safe-by-substring: only matches when followed by
-/// a quote or close-paren, which covers `import './x.svelte'`,
-/// `import "./x.svelte"`, `import('./x.svelte')`, and
-/// `export ... from './x.svelte'`.
-fn rewrite_svelte_imports(src: &str) -> String {
-    src.replace(".svelte\"", ".svelte.ts\"")
-        .replace(".svelte'", ".svelte.ts'")
-        .replace(".svelte)", ".svelte.ts)")
 }
 
 /// 1-based line number of the next character that would be appended to `s`.

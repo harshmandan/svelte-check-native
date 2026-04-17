@@ -65,6 +65,11 @@ pub struct ComponentInstantiation {
     pub component_root: SmolStr,
     /// Plain attributes only (no bind/on/use/etc directives, no spread).
     pub props: Vec<PropShape>,
+    /// Byte offset of the `<Component` token in the source. Emit keys
+    /// the prop-check on this to locate the correct enclosing scope
+    /// (i.e. inside the right `{#each}` / `{#if}` / `{#snippet}` body)
+    /// when re-walking the template fragment.
+    pub node_start: u32,
 }
 
 /// One prop on a component instantiation.
@@ -387,6 +392,7 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
         .push(ComponentInstantiation {
             component_root: c.name.clone(),
             props,
+            node_start: c.range.start,
         });
 }
 

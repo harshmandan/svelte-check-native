@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "{#each items as item, i} declares both `item` AND `i` in the loop scope, and a component inside the loop (like `<Inner index={i} label={item.text} />`) must have its prop-check emitted inside that same scope — otherwise `item` / `i` read as 'Cannot find name'."
+}

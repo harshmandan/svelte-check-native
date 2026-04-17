@@ -4,13 +4,13 @@ async function $$render_ba1a20ec() {
 
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ({extends: true, string: true} satisfies Partial<__SvnComponentProps<typeof T>>);
-        void ({extends: true, "|": true, "|": true, Set: true} satisfies Partial<__SvnComponentProps<typeof T>>);
+        T(__svn_any(), {extends: true, string: true});
+        T(__svn_any(), {extends: true, "|": true, "|": true, Set: true});
     }
     void __svn_tpl_check;
 }
 $$render_ba1a20ec;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

@@ -3,12 +3,12 @@
 async function $$render_ed2b916f() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ({type: "radio", value: "Plain"} satisfies Partial<__SvnComponentProps<typeof Component>>);
+        Component(__svn_any(), {type: "radio", value: "Plain"});
     }
     void __svn_tpl_check;
 }
 $$render_ed2b916f;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

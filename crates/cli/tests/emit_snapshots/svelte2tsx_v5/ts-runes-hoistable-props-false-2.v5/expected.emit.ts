@@ -20,7 +20,7 @@ async function $$render_320c81b9() {
     void foo;
 }
 $$render_320c81b9;
-declare const __svn_component_default: import('svelte').Component<Props>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Props>;
+declare function __svn_component_default(__anchor: any, props: Props): any;
+declare type __svn_component_default = (__anchor: any, props: Props) => any;
 export default __svn_component_default;
 

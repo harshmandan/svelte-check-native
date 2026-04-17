@@ -3,15 +3,15 @@
 async function $$render_d9f25341() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ({type: "text"} satisfies Partial<__SvnComponentProps<typeof Input>>);
-        void ({type: "text"} satisfies Partial<__SvnComponentProps<typeof Input>>);
-        void ({type: "text"} satisfies Partial<__SvnComponentProps<typeof Input>>);
-        void ({type: "text"} satisfies Partial<__SvnComponentProps<typeof Input>>);
+        Input(__svn_any(), {type: "text"});
+        Input(__svn_any(), {type: "text"});
+        Input(__svn_any(), {type: "text"});
+        Input(__svn_any(), {type: "text"});
     }
     void __svn_tpl_check;
 }
 $$render_d9f25341;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

@@ -31,7 +31,7 @@ async function $$render_200dbc4a<T>() {
             } else if ((await promise)) {
                 void [promise];
             }
-            void ({prop: (await promise)} satisfies Partial<__SvnComponentProps<typeof Component>>);
+            Component(__svn_any(), {prop: (await promise)});
             if ((true)) {
                 const x = await promise;
                 void x;
@@ -44,7 +44,7 @@ async function $$render_200dbc4a<T>() {
     void promise;
 }
 $$render_200dbc4a;
-declare const __svn_component_default: any;
-declare type __svn_component_default = any;
+declare function __svn_component_default<T>(__anchor: any, props: { prop?: T }): any;
+declare type __svn_component_default<T> = (__anchor: any, props: { prop?: T }) => any;
 export default __svn_component_default;
 

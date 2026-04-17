@@ -3,12 +3,12 @@
 async function $$render_8be4fc9c() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ({"|-wtf": "foo"} satisfies Partial<__SvnComponentProps<typeof Hello>>);
+        Hello(__svn_any(), {"|-wtf": "foo"});
     }
     void __svn_tpl_check;
 }
 $$render_8be4fc9c;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

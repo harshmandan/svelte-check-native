@@ -3,12 +3,12 @@
 async function $$render_cfb295d3() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ({tabindex: "1"} satisfies Partial<__SvnComponentProps<typeof SomeComponent>>);
+        SomeComponent(__svn_any(), {tabindex: "1"});
     }
     void __svn_tpl_check;
 }
 $$render_cfb295d3;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

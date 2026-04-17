@@ -12,8 +12,8 @@ async function $$render_e2598f27() {
     void children;
 }
 $$render_e2598f27;
-declare const __svn_component_default: import('svelte').Component<{ children: Snippet<[isOpen: boolean, toggle: () => void]> }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ children: Snippet<[isOpen: boolean, toggle: () => void]> }>;
+declare function __svn_component_default(__anchor: any, props: { children: Snippet<[isOpen: boolean, toggle: () => void]> }): any;
+declare type __svn_component_default = (__anchor: any, props: { children: Snippet<[isOpen: boolean, toggle: () => void]> }) => any;
 export default __svn_component_default;
 
 // === Inner.svelte ===
@@ -29,8 +29,8 @@ async function $$render_ea3119be() {
     void onToggle;
 }
 $$render_ea3119be;
-declare const __svn_component_default: import('svelte').Component<{ open: boolean; onToggle: () => void }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ open: boolean; onToggle: () => void }>;
+declare function __svn_component_default(__anchor: any, props: { open: boolean; onToggle: () => void }): any;
+declare type __svn_component_default = (__anchor: any, props: { open: boolean; onToggle: () => void }) => any;
 export default __svn_component_default;
 
 // === input.svelte ===
@@ -43,21 +43,21 @@ async function $$render_7cc45a4f() {
                                        
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ({
-            children: (isOpen: any, toggle: any) => {
-                void ({open: (isOpen), onToggle: (toggle)} satisfies Partial<__SvnComponentProps<typeof Inner>>);
+        Wrapper(__svn_any(), {
+            children: (isOpen, toggle) => {
+                Inner(__svn_any(), {open: (isOpen), onToggle: (toggle)});
                 void isOpen;
                 void toggle;
-                return null as any;
+                return __svn_snippet_return();
             },
-        } satisfies Partial<__SvnComponentProps<typeof Wrapper>>);
+        });
     }
     void __svn_tpl_check;
     void Wrapper;
     void Inner;
 }
 $$render_7cc45a4f;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

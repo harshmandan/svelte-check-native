@@ -12,7 +12,7 @@ async function $$render_01d4c0b9() {
     void id;
 }
 $$render_01d4c0b9;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

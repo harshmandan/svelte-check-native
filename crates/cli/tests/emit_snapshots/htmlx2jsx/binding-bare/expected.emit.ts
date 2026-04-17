@@ -3,13 +3,13 @@
 async function $$render_6ce80dfb() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ({type: "text"} satisfies Partial<__SvnComponentProps<typeof Input>>);
-        void ({type: "checkbox"} satisfies Partial<__SvnComponentProps<typeof Input>>);
+        Input(__svn_any(), {type: "text"});
+        Input(__svn_any(), {type: "checkbox"});
     }
     void __svn_tpl_check;
 }
 $$render_6ce80dfb;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

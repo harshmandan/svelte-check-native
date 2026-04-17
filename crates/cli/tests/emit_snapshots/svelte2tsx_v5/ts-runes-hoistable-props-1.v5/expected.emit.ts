@@ -38,7 +38,7 @@ async function $$render_0d174cf5() {
     void b;
 }
 $$render_0d174cf5;
-declare const __svn_component_default: import('svelte').Component<Props<boolean>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Props<boolean>>;
+declare function __svn_component_default(__anchor: any, props: Props<boolean>): any;
+declare type __svn_component_default = (__anchor: any, props: Props<boolean>) => any;
 export default __svn_component_default;
 

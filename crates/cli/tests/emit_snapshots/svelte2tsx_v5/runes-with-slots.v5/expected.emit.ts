@@ -16,7 +16,7 @@ async function $$render_d2d4cb4e() {
     void y;
 }
 $$render_d2d4cb4e;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

@@ -3,7 +3,7 @@
         "children?: import('svelte').Snippet"
     ],
     "emit_not_contains": [
-        "declare const __svn_component_default: any;"
+        "declare function __svn_component_default(__anchor: any, props: any): any;"
     ],
     "_note": "+layout.svelte with only a children destructure. Emit synthesizes `{ children?: Snippet }` as the Props shape. Layouts implicitly receive a children snippet from SvelteKit, so even a destructure that only spells out `children` should carry the typed default."
 }

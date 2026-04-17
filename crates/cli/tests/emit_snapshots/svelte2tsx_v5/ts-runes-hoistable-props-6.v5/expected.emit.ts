@@ -22,7 +22,7 @@ async function $$render_f97f6f3e() {
     void __svn_tpl_check;
 }
 $$render_f97f6f3e;
-declare const __svn_component_default: import('svelte').Component<Props>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Props>;
+declare function __svn_component_default(__anchor: any, props: Props): any;
+declare type __svn_component_default = (__anchor: any, props: Props) => any;
 export default __svn_component_default;
 

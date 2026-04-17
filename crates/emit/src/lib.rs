@@ -507,58 +507,85 @@ fn emit_document_with_render_name(
     out.push_str("}\n");
     let _ = writeln!(out, "{render_name};");
 
-    // Default export so `import Foo from './Foo.svelte'` resolves to a
-    // valid module member (TS1192 otherwise). When the user's
-    // `$props()` call declares a type (either `: Props = $props()` or
-    // `$props<Props>()`), we type the default as
-    // `Component<Props>` — that way `ComponentProps<typeof X>` in
-    // downstream overlays resolves to `Props` and contextual typing
-    // flows into callback prop values (`onclick={(e) => ...}` gets
-    // `e` typed, destructure params don't read as implicit-any).
+    // Default export so `import Foo from './Foo.svelte'` resolves to
+    // a valid module member. Emits as a `declare function`: the props
+    // parameter of the call signature is what carries the Props type
+    // into consumers. A consumer's `<Foo prop={...}>` template becomes
+    // `Foo(__svn_any(), {prop: ...})`, and TS contextually types the
+    // prop object from the function's second parameter — which is the
+    // only shape that makes callback-prop destructures
+    // (`onclick={({x}) => ...}`) and snippet children contextually
+    // pick up their parameter types.
     //
-    // Fallback: type the default as `any`. The satisfies-check in
-    // component-prop emission then no-ops (Partial<any> = any) but
-    // doesn't cause false-positive implicit-any either. Previously
-    // this was the only path.
-    // Pair a value declaration with a same-named type alias so
-    // `export default <name>` carries both namespaces. Consumers
-    // often use the default import as a type (`$state<Foo>(...)`,
-    // `let ref: Foo = ...`) AND as a value (`<Foo prop={...}>`,
-    // `typeof Foo`); without the type-side declaration, using the
-    // imported name as a type fires TS2749 "refers to a value,
-    // but is being used as a type here".
+    // Three cases:
+    //   1. Typed Props + generics: emit
+    //        declare function __svn_component_default<T>(__anchor, props: Props): any
+    //      where Props may reference T. The generic's scope is the
+    //      function signature, so T resolves module-scope.
+    //   2. Typed Props only: same shape without the generic list.
+    //   3. Untyped (no $props() annotation): emit the permissive
+    //        declare function __svn_component_default(__anchor, props: any): any
+    //      — consumers can pass any shape. Preserves the pre-refactor
+    //      "silently accept" behaviour for Svelte-4-style or
+    //      <script>-less components.
     //
-    // When the user's `$props()` annotation is known, the value is
-    // typed `Component<Props>` (preserves contextual-typing flow
-    // through `ComponentProps<typeof X>`) and the type alias
-    // resolves to `SvelteComponent<Props>` (instance-shaped).
-    // Without a known annotation both sides fall back to `any`.
+    // A same-named type alias is also emitted so user code that uses
+    // the default import as a type (`let x: Foo`, `$state<Foo>(...)`)
+    // doesn't fire TS2749. The alias resolves to a structurally
+    // matching function-type.
+    // Three cases picked based on whether the Props source is a
+    // literal object-shape (`{ a: number }`) vs a named reference
+    // (`Props`, `MyProps<T>`):
     //
-    // Exception: when the component has `<script generics="T...">`,
-    // `Props` (or the inline `$props<...>()` type argument) likely
-    // references those type parameters. The typed-default declaration
-    // lives at module scope — outside the `$$render<T>()` wrapper —
-    // so `T` is unbound there and the declaration would fire "Cannot
-    // find name 'T'". Fall back to `any` for generic components:
-    // consumers still get a valid default import, just without the
-    // contextual-typing flow that `ComponentProps<typeof X>` would
-    // provide. The alternative (emitting a helper type that
-    // re-introduces the generic at module scope via a function-valued
-    // default export) would change the default's *shape* and break
-    // `ComponentProps<typeof X>` anyway, so the trade isn't worth it
-    // for what's a rare pattern.
-    if let (Some(ty), None) = (&prop_type_source, &generics) {
-        let _ = writeln!(
-            out,
-            "declare const __svn_component_default: import('svelte').Component<{ty}>;"
-        );
-        let _ = writeln!(
-            out,
-            "declare type __svn_component_default = import('svelte').SvelteComponent<{ty}>;"
-        );
-    } else {
-        out.push_str("declare const __svn_component_default: any;\n");
-        out.push_str("declare type __svn_component_default = any;\n");
+    //   1. Typed Props + literal shape + generics: emit a generic
+    //      callable. Generic type parameters scope inside the function
+    //      signature, so references to them in the literal Props shape
+    //      resolve at module scope.
+    //   2. Typed Props (any shape) + no generics: emit a non-generic
+    //      callable. Named Props (`type Props = ...` in the body) are
+    //      hoisted by script_split when possible; when they can't be
+    //      hoisted (references to body-only names), this fires TS2304
+    //      and the user gets a clear signal to lift the type.
+    //   3. Typed Props + named reference + generics (rare): named
+    //      types that reference generics can't be hoisted (the generic
+    //      only binds inside $$render), so re-emitting the named
+    //      reference at module scope would leave `Props` undefined.
+    //      Fall back to `any`. Consumers lose contextual-typing flow
+    //      for this rare pattern; the tradeoff is zero false
+    //      positives.
+    //   4. Untyped (default): permissive `any` callable so consumers
+    //      can pass arbitrary prop shapes.
+    let ty_is_literal = prop_type_source
+        .as_deref()
+        .map(|t| t.trim_start().starts_with('{'))
+        .unwrap_or(false);
+    match (&prop_type_source, &generics) {
+        (Some(ty), Some(g)) if ty_is_literal => {
+            let _ = writeln!(
+                out,
+                "declare function __svn_component_default<{g}>(__anchor: any, props: {ty}): any;"
+            );
+            let _ = writeln!(
+                out,
+                "declare type __svn_component_default<{g}> = (__anchor: any, props: {ty}) => any;"
+            );
+        }
+        (Some(ty), None) => {
+            let _ = writeln!(
+                out,
+                "declare function __svn_component_default(__anchor: any, props: {ty}): any;"
+            );
+            let _ = writeln!(
+                out,
+                "declare type __svn_component_default = (__anchor: any, props: {ty}) => any;"
+            );
+        }
+        _ => {
+            out.push_str(
+                "declare function __svn_component_default(__anchor: any, props: any): any;\n",
+            );
+            out.push_str("declare type __svn_component_default = any;\n");
+        }
     }
     out.push_str("export default __svn_component_default;\n");
 
@@ -1574,22 +1601,44 @@ fn emit_action_attrs_declarations(out: &mut String, summary: &TemplateSummary) {
     }
 }
 
-/// Emit a `<Component ...>` node: a prop-check satisfies-expression
-/// plus a walk of non-snippet children.
+/// Emit a `<Component ...>` node as a call to the component's typed
+/// default export:
 ///
-/// Direct-child `{#snippet name(params)}` blocks are woven into the
-/// component's satisfies-check prop literal as arrow callbacks
-/// (`name: (params) => { <snippet body> }`) so TypeScript's contextual
-/// typing fills the `Snippet<[...]>` parameter types into the user's
-/// snippet param bindings. Without this, the alternative (a scope with
-/// `const p: any = undefined` placeholders) kills contextual flow and
-/// fires "Binding element implicitly has an 'any' type" on any
-/// destructured snippet param.
+/// ```ts
+///     ComponentRoot(__svn_any(), {
+///         prop1: "lit",
+///         prop2: (expr),
+///         prop3,
+///         prop4: true,
+///         snippetName: (params) => {
+///             <snippet body>
+///             return __svn_snippet_return();
+///         },
+///     });
+/// ```
+///
+/// The callable shape is what makes TypeScript's contextual typing
+/// work here. The component's `.svelte.ts` overlay exports a
+/// `declare function __svn_component_default(anchor, props: Props)`;
+/// each prop slot's declared type flows into the consumer's expression
+/// at this call site. Callback props destructure the right parameter
+/// types (`onchange={({ checked }) => ...}` binds `checked: boolean`
+/// instead of implicit-any), snippet props pick up `Snippet<[...]>`
+/// contextual types for their arrow parameters, and excess properties
+/// fire TS2353 thanks to object-literal inference strictness.
+///
+/// Directive-attached props (`bind:value`, `on:click`, `use:action`,
+/// `class:active`, etc.) and spreads are skipped at analyze time — they
+/// don't contribute to the callable's props argument. `__svn_any()`
+/// returns a fresh `any`; the first argument slot simulates Svelte's
+/// mount-anchor parameter without constraining inference.
 ///
 /// Non-snippet children (text, elements, nested components, blocks) are
-/// walked AFTER the prop-check in the component's own scope. Snippets
-/// consumed as props are NOT walked a second time via the usual snippet
-/// path — their bodies live inside the arrow.
+/// walked AFTER the call-site scaffolding in the component's own scope.
+/// Direct-child `{#snippet name(params)}` blocks ARE consumed as props
+/// on the object literal — not walked a second time — so their param
+/// destructures pick up contextual types from the parent's Snippet prop
+/// shape instead of reading as implicit-any.
 fn emit_component_node(
     out: &mut String,
     source: &str,
@@ -1607,36 +1656,21 @@ fn emit_component_node(
         })
         .collect();
 
-    // Only consume snippets as satisfies-check prop values when there's a
-    // prop-check to weave them into. Components that analyze disqualified
-    // (multi-part interpolated attribute values) have no `inst`; fall back
-    // to the usual template-body walk so snippet hoists still emit there.
+    // Only emit the call when analyze collected an instantiation for
+    // this node. Components disqualified at analyze time (e.g.
+    // multi-part interpolated attribute values) fall back to a plain
+    // template-body walk so snippet hoists still emit there.
     let inst = insts.get(&c.range.start);
     if let Some(inst) = inst {
-        emit_component_prop_check(out, source, inst, depth, &snippet_children, insts);
+        emit_component_call(out, source, inst, depth, &snippet_children, insts);
     }
 
     if inst.is_none() || snippet_children.is_empty() {
         emit_template_body(out, source, &c.children, depth, insts);
         return;
     }
-    emit_children_without_snippets(out, source, &c.children, depth, insts);
-}
-
-/// Walk `c.children` but drop direct-child `SnippetBlock` nodes.
-///
-/// Used after the parent `<Component>`'s prop-check has already baked
-/// each direct-child snippet in as an arrow-callback — replaying the
-/// usual snippet-hoist and body emission would shadow the arrow and
-/// emit the body a second time.
-fn emit_children_without_snippets(
-    out: &mut String,
-    source: &str,
-    fragment: &Fragment,
-    depth: usize,
-    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
-) {
-    for node in &fragment.nodes {
+    // Snippet children consumed as props above — walk the rest.
+    for node in &c.children.nodes {
         if matches!(node, Node::SnippetBlock(_)) {
             continue;
         }
@@ -1644,46 +1678,12 @@ fn emit_children_without_snippets(
     }
 }
 
-/// Emit excess-property checks for `<Component prop=...>` instantiations.
+/// Emit the call-site scaffolding for one component instantiation.
 ///
-/// For each component instantiation collected by analyze, emit:
-///
-/// ```ts
-///     void ({
-///         prop1: "lit",
-///         prop2: <expr>,
-///         prop3,
-///         prop4: true,
-///         snippetName: (a, b) => { <snippet body> },
-///     } satisfies Partial<import('svelte').ComponentProps<typeof Component>>);
-/// ```
-///
-/// `Partial<>` is what makes this safe to enable broadly. It keeps
-/// the same property *names* as `ComponentProps<typeof X>` (so the
-/// excess-property check still fires when the user passes a name the
-/// component doesn't declare — that's the bug class we want) while
-/// making each one optional (so required props provided via `bind:`,
-/// `{...spread}`, or template children don't cause spurious "Property
-/// X is missing" errors). The earlier non-Partial form caused
-/// dozens of false positives in real component libraries for exactly
-/// that reason — it can't tell that `<TextInput bind:value={x} />`
-/// satisfies a `value`-required prop type because `bind:` lives
-/// outside the satisfies object.
-///
-/// Directive-attached props (`bind:value`, `on:click`, `use:action`,
-/// `class:active`, etc.) and spreads contribute nothing to the
-/// satisfies literal — they're skipped at analyze time. Their
-/// absence is harmless thanks to `Partial<>`.
-///
-/// `{#snippet name(params)}...{/snippet}` blocks that are direct
-/// children of the component become arrow-callback values on the
-/// satisfies object, with the snippet body emitted inside the arrow.
-/// That's what enables TS's contextual typing to flow the parent's
-/// `Snippet<[...]>` parameter list into each snippet param binding —
-/// a param destructure like `{#snippet row({ id })}` picks up the
-/// tuple-element shape from the consumer's declared Snippet type
-/// instead of falling through to implicit-any.
-fn emit_component_prop_check(
+/// Compact single-line form when there are no snippet children, or a
+/// multi-line form when there are (each snippet gets its own arrow
+/// body with a nested template-body walk).
+fn emit_component_call(
     out: &mut String,
     source: &str,
     inst: &svn_analyze::ComponentInstantiation,
@@ -1692,52 +1692,45 @@ fn emit_component_prop_check(
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
 ) {
     let indent = "    ".repeat(depth);
-    if !snippet_children.is_empty() {
-        // Multi-line form — each snippet gets its own arrow body and
-        // nested template-body walk, so readability and downstream
-        // diagnostics positioning both benefit from a line per prop.
-        let _ = writeln!(out, "{indent}void ({{");
-        let inner_indent = "    ".repeat(depth + 1);
-        for p in &inst.props {
-            out.push_str(&inner_indent);
-            write_prop_shape(out, source, p);
-            let _ = writeln!(out, ",");
-        }
-        for s in snippet_children {
-            out.push_str(&inner_indent);
-            write_snippet_arrow_prop(out, source, s, depth + 1, insts);
-            let _ = writeln!(out, ",");
-        }
-        let _ = writeln!(
-            out,
-            "{indent}}} satisfies Partial<__SvnComponentProps<typeof {}>>);",
-            inst.component_root
-        );
+    let comp = &inst.component_root;
+
+    if snippet_children.is_empty() && inst.props.is_empty() {
+        // No props, no snippets — still emit the call so "Component
+        // not found" and other reference errors surface. The empty
+        // object literal satisfies any `props` parameter type.
+        let _ = writeln!(out, "{indent}{comp}(__svn_any(), {{}});");
         return;
     }
 
-    // No snippet children — compact single-line form.
-    let _ = write!(out, "{indent}void ({{");
-    let mut first = true;
-    for p in &inst.props {
-        if !first {
-            let _ = write!(out, ", ");
+    if snippet_children.is_empty() {
+        // Compact single-line form.
+        let _ = write!(out, "{indent}{comp}(__svn_any(), {{");
+        let mut first = true;
+        for p in &inst.props {
+            if !first {
+                let _ = write!(out, ", ");
+            }
+            first = false;
+            write_prop_shape(out, source, p);
         }
-        first = false;
-        write_prop_shape(out, source, p);
+        let _ = writeln!(out, "}});");
+        return;
     }
-    // `__SvnComponentProps<T>` (declared in svelte_shims_core.d.ts)
-    // is used instead of `import('svelte').ComponentProps<T>` to
-    // dodge the built-in's `T extends Component | SvelteComponent`
-    // constraint. Third-party packages that re-export a component
-    // via a namespace or a non-Component class shape (bits-ui,
-    // svelte-portal, etc.) hit the constraint and fire TS2344 on
-    // every prop check; our extractor falls through to `any` instead.
-    let _ = writeln!(
-        out,
-        "}} satisfies Partial<__SvnComponentProps<typeof {}>>);",
-        inst.component_root
-    );
+
+    // Multi-line form with snippets-as-arrow-props.
+    let _ = writeln!(out, "{indent}{comp}(__svn_any(), {{");
+    let inner_indent = "    ".repeat(depth + 1);
+    for p in &inst.props {
+        out.push_str(&inner_indent);
+        write_prop_shape(out, source, p);
+        let _ = writeln!(out, ",");
+    }
+    for s in snippet_children {
+        out.push_str(&inner_indent);
+        write_snippet_arrow_prop(out, source, s, depth + 1, insts);
+        let _ = writeln!(out, ",");
+    }
+    let _ = writeln!(out, "{indent}}});");
 }
 
 /// Write a single property of a component-prop-check object literal,
@@ -1771,83 +1764,6 @@ fn write_prop_shape(out: &mut String, source: &str, p: &svn_analyze::PropShape) 
     }
 }
 
-/// Write a `{#snippet name(params)}...{/snippet}` block as an
-/// arrow-callback property value on the parent component's prop-check
-/// object:
-///
-/// ```ts
-///     name: (params) => {
-///         <snippet body>
-///     }
-/// ```
-///
-/// The parameter text is spliced verbatim from the source — that
-/// preserves user-provided type annotations, destructure patterns, and
-/// default values. TypeScript's contextual typing reads the parent
-/// component's declared `Snippet<[...]>` parameter shape through the
-/// satisfies-target (`__SvnComponentProps<typeof Wrapper>`) and flows
-/// each tuple element into the matching arrow parameter, so destructured
-/// snippet params pick up real types instead of implicit-any.
-///
-/// An empty parameter list emits `() =>` cleanly. The closing `}` is
-/// written without a trailing newline so the caller can append `,\n` at
-/// the property-value column.
-fn write_snippet_arrow_prop(
-    out: &mut String,
-    source: &str,
-    s: &SnippetBlock,
-    depth: usize,
-    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
-) {
-    let indent = "    ".repeat(depth);
-    let body_indent = "    ".repeat(depth + 1);
-    let params_text = source
-        .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
-        .unwrap_or("")
-        .trim();
-    write_object_key(out, &s.name);
-    if params_text.is_empty() {
-        let _ = writeln!(out, ": () => {{");
-        emit_template_body(out, source, &s.body, depth + 1, insts);
-        let _ = writeln!(out, "{body_indent}return null as any;");
-        let _ = write!(out, "{indent}}}");
-        return;
-    }
-    // When the user didn't annotate the snippet parameters, the arrow
-    // gets its param types entirely from the parent's `Snippet<[...]>`
-    // contextual type — which only helps when the parent component
-    // actually types its prop. When `ComponentProps<typeof Parent>`
-    // collapses to `any` (the common case — most user components don't
-    // write `Snippet<[T, U]>` annotations), contextual typing falls
-    // back to no-context and the un-annotated params fire TS7006
-    // implicit-any. Append `: any` to every top-level comma-separated
-    // param that lacks a top-level `:` so the arrow has an explicit
-    // annotation. The user's own `(x: string)` annotation is passed
-    // through unchanged — we only annotate the gaps.
-    let annotated = annotate_snippet_params(params_text);
-    let _ = writeln!(out, ": ({annotated}) => {{");
-    emit_template_body(out, source, &s.body, depth + 1, insts);
-    // `void <ident>;` for each identifier in the param list. The arrow
-    // body has no structural representation of the snippet's template
-    // content beyond scaffolding, so any user-introduced snippet param
-    // (destructured `{ id, label }`, positional `columns`, etc.) looks
-    // "declared but never read" to TS. Voiding each one consumes the
-    // binding without interfering with contextual-typing flow from
-    // the satisfies target.
-    for ident in all_identifiers(params_text) {
-        let _ = writeln!(out, "{body_indent}void {ident};");
-    }
-    // The Snippet<[...]> type brands its return as an opaque exotic
-    // (`{ '{@render ...} must be called with a Snippet': string } &
-    // typeof SnippetReturn`), which a bare arrow body
-    // (`(args) => void`) cannot satisfy structurally. Returning `any`
-    // widens the arrow's return type so it assigns cleanly through the
-    // parent's `Snippet<[...]>` prop slot while contextual typing still
-    // flows into the parameters from the satisfies target.
-    let _ = writeln!(out, "{body_indent}return null as any;");
-    let _ = write!(out, "{indent}}}");
-}
-
 /// Split `params_text` on top-level commas and, for each part that
 /// doesn't already carry a top-level type annotation, append `: any`.
 /// "Top-level" here means depth 0 in balanced `()`, `[]`, `{}`, `<>` —
@@ -1855,8 +1771,12 @@ fn write_snippet_arrow_prop(
 /// unannotated part (inner `:` colons are inside braces) and get
 /// `{ a, b }: any` appended.
 ///
-/// Pre-existing user annotations pass through unchanged — we only
-/// widen the implicit-any gap.
+/// Used only by top-level `{#snippet}` blocks whose params have no
+/// parent `Snippet<[...]>` contextual type to flow from. Snippets
+/// consumed as direct children of a `<Component>` go through
+/// `write_snippet_arrow_prop`, which uses the parent's declared prop
+/// type via the callable component shape and therefore doesn't need
+/// explicit `: any` annotations.
 fn annotate_snippet_params(params_text: &str) -> String {
     let bytes = params_text.as_bytes();
     let mut parts: Vec<(usize, usize)> = Vec::new();
@@ -1886,7 +1806,6 @@ fn annotate_snippet_params(params_text: &str) -> String {
         if part.is_empty() {
             continue;
         }
-        // Detect a top-level `:` annotation inside THIS part.
         let part_bytes = part.as_bytes();
         let mut d = 0i32;
         let mut has_top_colon = false;
@@ -1903,10 +1822,7 @@ fn annotate_snippet_params(params_text: &str) -> String {
         }
         out.push_str(part);
         if !has_top_colon {
-            // Skip the `= default` tail if present — can't suffix `: any` AFTER
-            // the default, it belongs on the binding itself: `x: any = 1`.
             if let Some(eq) = find_top_level_eq(part) {
-                // Split around the `=` and re-insert the annotation.
                 let before = part[..eq].trim_end();
                 let after = &part[eq..];
                 out.truncate(out.len() - part.len());
@@ -1921,8 +1837,7 @@ fn annotate_snippet_params(params_text: &str) -> String {
     out
 }
 
-/// Find the byte offset of the first top-level `=` in `s`, or None.
-/// Used to place type annotations before a default-value initializer.
+/// First top-level `=` in `s`, or `None`. Skips `==` / `===` / `=>`.
 fn find_top_level_eq(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut d = 0i32;
@@ -1931,7 +1846,6 @@ fn find_top_level_eq(s: &str) -> Option<usize> {
             b'(' | b'[' | b'{' | b'<' => d += 1,
             b')' | b']' | b'}' | b'>' if d > 0 => d -= 1,
             b'=' if d == 0 => {
-                // Skip `==`/`===` — not initializers.
                 let next = bytes.get(i + 1).copied();
                 if next == Some(b'=') || next == Some(b'>') {
                     continue;
@@ -1942,6 +1856,68 @@ fn find_top_level_eq(s: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// Write a `{#snippet name(params)}...{/snippet}` block as an
+/// arrow-callback property value on the parent component's call-site
+/// props object:
+///
+/// ```ts
+///     name: (params) => {
+///         <snippet body>
+///         return __svn_snippet_return();
+///     }
+/// ```
+///
+/// The parameter text is spliced verbatim from the source — that
+/// preserves user-provided type annotations, destructure patterns, and
+/// default values. TypeScript's contextual typing reads the parent
+/// component's declared `Snippet<[...]>` parameter shape through the
+/// call signature's props slot and flows each tuple element into the
+/// matching arrow parameter, so destructured snippet params pick up
+/// real types instead of implicit-any. Parents that type their snippet
+/// prop as `Snippet<[any]>` (or parents with no type annotation at all)
+/// produce `any`-typed params, which is the correct "silently accept"
+/// degradation.
+///
+/// No more per-parameter `: any` injection. The old satisfies-shape
+/// lost the contextual type through `Partial<ComponentProps<typeof X>>`
+/// extraction, forcing us to explicitly annotate each param. The
+/// callable shape flows the type directly, so a user-written
+/// `(x: string)` or an un-annotated `(item)` both type correctly.
+///
+/// `__svn_snippet_return()` returns `any`, which structurally satisfies
+/// the opaque branded return type Svelte's `Snippet<[...]>` expects.
+/// The closing `}` is written without a trailing newline so the caller
+/// can append `,\n` at the property-value column.
+fn write_snippet_arrow_prop(
+    out: &mut String,
+    source: &str,
+    s: &SnippetBlock,
+    depth: usize,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+) {
+    let indent = "    ".repeat(depth);
+    let body_indent = "    ".repeat(depth + 1);
+    let params_text = source
+        .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
+        .unwrap_or("")
+        .trim();
+    write_object_key(out, &s.name);
+    if params_text.is_empty() {
+        let _ = writeln!(out, ": () => {{");
+        emit_template_body(out, source, &s.body, depth + 1, insts);
+        let _ = writeln!(out, "{body_indent}return __svn_snippet_return();");
+        let _ = write!(out, "{indent}}}");
+        return;
+    }
+    let _ = writeln!(out, ": ({params_text}) => {{");
+    emit_template_body(out, source, &s.body, depth + 1, insts);
+    for ident in all_identifiers(params_text) {
+        let _ = writeln!(out, "{body_indent}void {ident};");
+    }
+    let _ = writeln!(out, "{body_indent}return __svn_snippet_return();");
+    let _ = write!(out, "{indent}}}");
 }
 
 /// Write an object-literal key. Plain JS identifiers are emitted bare;

@@ -15,14 +15,14 @@ async function $$render_a4d674e0() {
     const cfg: PanelConfig = { section: current, count: 3 };
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ({config: (cfg)} satisfies Partial<__SvnComponentProps<typeof Panel>>);
+        Panel(__svn_any(), {config: (cfg)});
     }
     void __svn_tpl_check;
     void Panel;
     void cfg;
 }
 $$render_a4d674e0;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 
@@ -57,11 +57,11 @@ async function $$render_6e910aea() {
     void config;
 }
 $$render_6e910aea;
-declare const __svn_component_default: import('svelte').Component<{
+declare function __svn_component_default(__anchor: any, props: {
         config: PanelConfig;
-    }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{
+    }): any;
+declare type __svn_component_default = (__anchor: any, props: {
         config: PanelConfig;
-    }>;
+    }) => any;
 export default __svn_component_default;
 

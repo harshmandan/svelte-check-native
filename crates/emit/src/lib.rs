@@ -877,9 +877,16 @@ fn emit_one_component_prop_check(
             }
         }
     }
+    // `__SvnComponentProps<T>` (declared in svelte_shims_core.d.ts)
+    // is used instead of `import('svelte').ComponentProps<T>` to
+    // dodge the built-in's `T extends Component | SvelteComponent`
+    // constraint. Third-party packages that re-export a component
+    // via a namespace or a non-Component class shape (bits-ui,
+    // svelte-portal, etc.) hit the constraint and fire TS2344 on
+    // every prop check; our extractor falls through to `any` instead.
     let _ = writeln!(
         out,
-        "}} satisfies Partial<import('svelte').ComponentProps<typeof {}>>);",
+        "}} satisfies Partial<__SvnComponentProps<typeof {}>>);",
         inst.component_root
     );
 }

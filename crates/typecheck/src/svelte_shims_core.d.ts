@@ -105,6 +105,24 @@ declare function $host<T = HTMLElement>(): T;
 /** Iterable wrapper for `{#each}` blocks. Accepts arrays, ArrayLike (`{ length: N }`), and any other iterable. */
 declare function __svn_each_items<T>(value: T): Iterable<__SvnEachItem<T>>;
 
+/**
+ * Emit-only prop-shape extractor used by `satisfies Partial<__SvnComponentProps<typeof X>>`.
+ *
+ * Matches svelte's built-in `ComponentProps<T>` behaviour when `T` is a
+ * `Component<Props>` or `SvelteComponent<Props>` — extracts `Props`.
+ * Unlike the built-in, has no `T extends Component | SvelteComponent`
+ * constraint at the type-parameter level, so component shapes that don't
+ * fit either (namespace re-exports from third-party libs, custom class
+ * shapes, etc.) degrade to `any` rather than firing TS2344.
+ *
+ * `0 extends 1 & T` preserves `any` (matches __SvnEachItem's trick).
+ */
+type __SvnComponentProps<T> =
+    0 extends 1 & T ? any :
+    T extends import('svelte').Component<infer P, any, any> ? P :
+    T extends import('svelte').SvelteComponent<infer P, any, any> ? P :
+    any;
+
 /** Resolved item type for `__svn_each_items`. The `0 extends 1 & T` guard preserves `any` (avoids the conditional-type-distribution-collapses-to-unknown trap). */
 type __SvnEachItem<T> = 0 extends 1 & T
     ? any

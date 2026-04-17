@@ -321,25 +321,26 @@ fn is_ident_continue(c: char) -> bool {
 
 /// Inspect a `<Component ...>` site and, if it's a shape we know how to
 /// generate a satisfies-check for, push a `ComponentInstantiation` to
-/// the summary. Skipped shapes:
+/// the summary.
 ///
-///   - any directive (`bind:`, `on:`, `use:`, `class:`, `style:`,
-///     `transition:`, `in:`, `out:`, `animate:`, `let:`) — those affect
-///     the prop set in ways our simple satisfies-object can't model
-///     without false positives
-///   - any spread (`{...obj}`) — the spread provides unknown props at
-///     runtime; satisfies wouldn't catch excess on the explicit ones
-///     accurately because the spread might intentionally add them
-///   - dotted component names (`<ui.MyButton />`) — `typeof ui.MyButton`
-///     would parse but we'd need to emit the dotted form carefully;
-///     v0.1 punts and skips
-///   - non-quoted plain attribute values containing interpolations
-///     (e.g. `class="a {b}"`) — value isn't a single string literal
+/// Only emits when the component name is a simple identifier (no
+/// dotted forms like `<ui.MyButton />` — `typeof ui.MyButton` would
+/// require careful expression emission which v0.1 punts on).
 ///
-/// What survives: `<Comp prop="lit" prop2={expr} {short} bool />`-style
-/// instantiations. These are exactly the shapes that catch the
-/// "user passed an unknown prop" class of bug we see in real
-/// component libraries.
+/// Each plain attribute (including boolean shorthand and `{shorthand}`)
+/// contributes a `PropShape` to the literal. Directive attributes
+/// (`bind:`, `on:`, `use:`, `class:`, `style:`, `transition:`, etc.)
+/// and spreads (`{...obj}`) are silently DROPPED — they provide
+/// runtime values that we can't model statically. Their absence from
+/// the literal is harmless because emit wraps the satisfies target
+/// in `Partial<>`, so missing-required-prop never fires; only the
+/// explicit props the user wrote get checked for excess.
+///
+/// One disqualifier remains: a plain attribute with a multi-part value
+/// (`class="a {b} c"`-style interpolation in a quoted attr). The value
+/// isn't representable as a single TS expression without re-emitting
+/// the template's interpolation pipeline; the whole instantiation is
+/// skipped so the satisfies object stays correct on the rest.
 fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut TemplateSummary) {
     if c.name.contains('.') {
         return;
@@ -362,8 +363,8 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
                         continue;
                     }
                 }
-                // Anything else (multi-part, interpolation in unquoted) is
-                // out of scope for v0.1 prop-checking.
+                // Multi-part interpolated attribute value — disqualify the
+                // whole component for this pass.
                 return;
             }
             Attribute::Expression(e) => {
@@ -375,10 +376,10 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
             Attribute::Shorthand(s) => {
                 props.push(PropShape::Shorthand { name: s.name.clone() });
             }
-            // Spread or any directive disqualifies the whole instantiation.
-            Attribute::Spread(_) | Attribute::Directive(_) => {
-                return;
-            }
+            // Spread / directive — silently dropped. The Partial<> wrap
+            // in emit means we don't need to model the props they would
+            // contribute; we only check what the user wrote explicitly.
+            Attribute::Spread(_) | Attribute::Directive(_) => {}
         }
     }
     summary

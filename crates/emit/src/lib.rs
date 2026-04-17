@@ -409,17 +409,7 @@ fn emit_document_with_render_name(
     emit_action_attrs_declarations(&mut out, summary);
     emit_bind_pair_declarations(&mut out, summary);
     emit_template_body(&mut out, doc.source, fragment, 2);
-    // Component-instantiation prop checking is collected by analyze
-    // (`summary.component_instantiations`) but not yet emitted. A
-    // first-cut `satisfies ComponentProps<typeof Component>` emit
-    // surfaced too many false positives in real component libraries
-    // (libraries that intentionally accept arbitrary props via spread
-    // types, classes that take ClassValue but get string literals,
-    // boolean-shorthand props the lib types as a union, etc.) — net
-    // worse than the v0.1 baseline of "don't check component props at
-    // all." The collection still happens so the data is available;
-    // wiring an emit pass that's net-positive is queued for v0.2.
-    let _ = &summary.component_instantiations;
+    emit_component_prop_checks(&mut out, doc.source, summary);
     out.push_str("    }\n");
 
     let exported_locals: Vec<SmolStr> = split
@@ -644,27 +634,29 @@ fn emit_action_attrs_declarations(out: &mut String, summary: &TemplateSummary) {
 
 /// Emit excess-property checks for `<Component prop=...>` instantiations.
 ///
-/// Wired off in v0.1: a first-cut pass produced too many false
-/// positives in real component libraries (excess-property semantics
-/// against ComponentProps don't match what users expect when libs
-/// accept arbitrary HTML attrs via spread types). Kept around as
-/// scaffolding for the v0.2 implementation that will need the same
-/// shape — analyze still populates summary.component_instantiations.
-#[allow(dead_code)]
-///
 /// For each component instantiation collected by analyze, emit:
 ///
 /// ```ts
 ///     void ({ prop1: "lit", prop2: <expr>, prop3, prop4: true } satisfies
-///         import('svelte').ComponentProps<typeof Component>);
+///         Partial<import('svelte').ComponentProps<typeof Component>>);
 /// ```
 ///
-/// `satisfies` checks the literal against the component's prop type
-/// without widening — TS fires `Object literal may only specify known
-/// properties` when the user passes a name the component doesn't
-/// declare. Required props missing from the literal are accepted (for
-/// v0.1; full required-prop checking would need to know which props
-/// are bound via directives we deliberately exclude).
+/// `Partial<>` is what makes this safe to enable broadly. It keeps
+/// the same property *names* as `ComponentProps<typeof X>` (so the
+/// excess-property check still fires when the user passes a name the
+/// component doesn't declare — that's the bug class we want) while
+/// making each one optional (so required props provided via `bind:`,
+/// `{...spread}`, or template children don't cause spurious "Property
+/// X is missing" errors). The earlier non-Partial form caused
+/// dozens of false positives in real component libraries for exactly
+/// that reason — it can't tell that `<TextInput bind:value={x} />`
+/// satisfies a `value`-required prop type because `bind:` lives
+/// outside the satisfies object.
+///
+/// Directive-attached props (`bind:value`, `on:click`, `use:action`,
+/// `class:active`, etc.) and spreads contribute nothing to the
+/// satisfies literal — they're skipped at analyze time. Their
+/// absence is harmless thanks to `Partial<>`.
 fn emit_component_prop_checks(out: &mut String, source: &str, summary: &TemplateSummary) {
     for inst in &summary.component_instantiations {
         let _ = write!(out, "        void ({{");
@@ -703,7 +695,7 @@ fn emit_component_prop_checks(out: &mut String, source: &str, summary: &Template
         }
         let _ = writeln!(
             out,
-            "}} satisfies import('svelte').ComponentProps<typeof {}>);",
+            "}} satisfies Partial<import('svelte').ComponentProps<typeof {}>>);",
             inst.component_root
         );
     }
@@ -712,7 +704,6 @@ fn emit_component_prop_checks(out: &mut String, source: &str, summary: &Template
 /// Write an object-literal key. Plain JS identifiers are emitted bare;
 /// anything with a hyphen, a non-ident character, or a JS reserved
 /// word lookalike is double-quoted (always safe).
-#[allow(dead_code)]
 fn write_object_key(out: &mut String, name: &str) {
     if is_simple_js_identifier(name) {
         out.push_str(name);
@@ -724,7 +715,6 @@ fn write_object_key(out: &mut String, name: &str) {
 /// True for ASCII identifiers `[A-Za-z_$][A-Za-z0-9_$]*`. We don't try
 /// to enumerate JS reserved words — modern JS (ES5+) allows reserved
 /// words as bare property names anyway.
-#[allow(dead_code)]
 fn is_simple_js_identifier(s: &str) -> bool {
     let mut chars = s.chars();
     let Some(first) = chars.next() else { return false };
@@ -737,7 +727,6 @@ fn is_simple_js_identifier(s: &str) -> bool {
 /// Write `value` as a JS double-quoted string literal, escaping the
 /// usual unsafe characters. Pure ASCII assumption — Svelte attribute
 /// values are decoded earlier in the pipeline.
-#[allow(dead_code)]
 fn write_js_string_literal(out: &mut String, value: &str) {
     out.push('"');
     for c in value.chars() {

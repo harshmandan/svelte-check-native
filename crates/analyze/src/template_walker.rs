@@ -355,7 +355,9 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
         match attr {
             Attribute::Plain(p) => {
                 let Some(v) = &p.value else {
-                    props.push(PropShape::BoolShorthand { name: p.name.clone() });
+                    props.push(PropShape::BoolShorthand {
+                        name: p.name.clone(),
+                    });
                     continue;
                 };
                 // Single literal text part (no interpolations) — keep it.
@@ -379,7 +381,9 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
                 });
             }
             Attribute::Shorthand(s) => {
-                props.push(PropShape::Shorthand { name: s.name.clone() });
+                props.push(PropShape::Shorthand {
+                    name: s.name.clone(),
+                });
             }
             // Spread / directive — silently dropped. The Partial<> wrap
             // in emit means we don't need to model the props they would

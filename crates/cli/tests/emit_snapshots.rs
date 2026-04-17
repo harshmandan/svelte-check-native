@@ -99,10 +99,7 @@ fn emit_snapshots_suite() {
         let actual = match run_emit(bin, &sample.input_dir) {
             Ok(out) => out,
             Err(err) => {
-                failures.push((
-                    sample.name.clone(),
-                    format!("binary failed: {err}"),
-                ));
+                failures.push((sample.name.clone(), format!("binary failed: {err}")));
                 continue;
             }
         };
@@ -137,10 +134,7 @@ fn emit_snapshots_suite() {
                 ),
             ));
         } else if actual != expected {
-            failures.push((
-                sample.name.clone(),
-                format_diff(&expected, &actual),
-            ));
+            failures.push((sample.name.clone(), format_diff(&expected, &actual)));
         } else {
             passed += 1;
         }
@@ -246,10 +240,7 @@ fn collect_samples(crate_dir: &Path, snapshots_root: &Path) -> Vec<Sample> {
     }
 
     // Corpus 3: our own bug fixtures (any sample with an input.svelte).
-    let bugs_root = crate_dir
-        .join("../../fixtures/bugs")
-        .canonicalize()
-        .ok();
+    let bugs_root = crate_dir.join("../../fixtures/bugs").canonicalize().ok();
     if let Some(root) = bugs_root {
         for entry in read_dir_sorted(&root) {
             let name = entry

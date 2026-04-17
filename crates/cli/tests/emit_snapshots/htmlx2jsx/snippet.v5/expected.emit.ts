@@ -28,38 +28,38 @@ async function $$render_0bc1cb85() {
                     void x;
                 });
             }
-            void ({
-                bar: (x: any) => {
+            Component(__svn_any(), {
+                bar: (x) => {
                     void x;
-                    return null as any;
+                    return __svn_snippet_return();
                 },
-            } satisfies Partial<__SvnComponentProps<typeof Component>>);
-            void ({
+            });
+            List(__svn_any(), {
                 data: ([1, 2, 3]),
-                row: (item: any) => {
+                row: (item) => {
                     void item;
-                    return null as any;
+                    return __svn_snippet_return();
                 },
                 await_inside: () => {
                     {
                         const bar: any = undefined;
                         void bar;
                     }
-                    return null as any;
+                    return __svn_snippet_return();
                 },
-            } satisfies Partial<__SvnComponentProps<typeof List>>);
-            void ({} satisfies Partial<__SvnComponentProps<typeof List>>);
-            void ({
+            });
+            List(__svn_any(), {});
+            List(__svn_any(), {
                 data: ([1, 2, 3]),
-                row1: (item: any) => {
+                row1: (item) => {
                     void item;
-                    return null as any;
+                    return __svn_snippet_return();
                 },
-                row2: (item: any) => {
+                row2: (item) => {
                     void item;
-                    return null as any;
+                    return __svn_snippet_return();
                 },
-            } satisfies Partial<__SvnComponentProps<typeof List>>);
+            });
             {
                 void ((/**@type {number}*/a: any) => {
                     void type;
@@ -72,7 +72,7 @@ async function $$render_0bc1cb85() {
     void __svn_tpl_check;
 }
 $$render_0bc1cb85;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

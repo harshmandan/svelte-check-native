@@ -21,7 +21,7 @@ async function $$render_406d5f3a() {
     void __svn_tpl_check;
 }
 $$render_406d5f3a;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

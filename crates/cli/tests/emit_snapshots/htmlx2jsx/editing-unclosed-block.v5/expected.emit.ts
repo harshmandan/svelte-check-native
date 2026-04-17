@@ -8,7 +8,7 @@ async function $$render_b5e30ee7() {
             for (const item of __svn_each_items(array)) {
                 if ((i)) {
                     void [i];
-                    void ({} satisfies Partial<__SvnComponentProps<typeof Component>>);
+                    Component(__svn_any(), {});
                 }
                 void item;
             }
@@ -17,7 +17,7 @@ async function $$render_b5e30ee7() {
     void __svn_tpl_check;
 }
 $$render_b5e30ee7;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

@@ -28,7 +28,7 @@ async function $$render_c6382cf7() {
     void shape;
 }
 $$render_c6382cf7;
-declare const __svn_component_default: import('svelte').Component<{ shape: Shape }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ shape: Shape }>;
+declare function __svn_component_default(__anchor: any, props: { shape: Shape }): any;
+declare type __svn_component_default = (__anchor: any, props: { shape: Shape }) => any;
 export default __svn_component_default;
 

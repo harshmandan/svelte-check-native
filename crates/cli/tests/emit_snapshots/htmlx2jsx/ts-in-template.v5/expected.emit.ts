@@ -75,14 +75,14 @@ async function $$render_43de206c() {
                     void baz;
                 });
             }
-            void ({attr: (attr as boolean)} satisfies Partial<__SvnComponentProps<typeof Component>>);
-            void ({} satisfies Partial<__SvnComponentProps<typeof Component>>);
+            Component(__svn_any(), {attr: (attr as boolean)});
+            Component(__svn_any(), {});
         }
     }
     void __svn_tpl_check;
 }
 $$render_43de206c;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

@@ -41,17 +41,17 @@ async function $$render_df3e76f3() {
                 const foo: any = undefined;
                 void foo;
             }
-            void ({
+            Component(__svn_any(), {
                 foo: () => {
-                    return null as any;
+                    return __svn_snippet_return();
                 },
-            } satisfies Partial<__SvnComponentProps<typeof Component>>);
+            });
         }
     }
     void __svn_tpl_check;
 }
 $$render_df3e76f3;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

@@ -9,7 +9,7 @@ async function $$render_378650a6() {
     void __svn_tpl_check;
 }
 $$render_378650a6;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

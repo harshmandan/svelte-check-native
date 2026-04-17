@@ -7,7 +7,7 @@ async function $$render_3cecb40c() {
     void __svn_tpl_check;
 }
 $$render_3cecb40c;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

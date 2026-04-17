@@ -22,7 +22,7 @@ async function $$render_50f1c2a8() {
     void foo;
 }
 $$render_50f1c2a8;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

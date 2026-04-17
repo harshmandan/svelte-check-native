@@ -16,14 +16,14 @@ async function $$render_22446700() {
     void header;
 }
 $$render_22446700;
-declare const __svn_component_default: import('svelte').Component<{
+declare function __svn_component_default(__anchor: any, props: {
         row: Snippet<[{ id: number; label: string }]>;
         header: Snippet<[columns: readonly string[]]>;
-    }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{
+    }): any;
+declare type __svn_component_default = (__anchor: any, props: {
         row: Snippet<[{ id: number; label: string }]>;
         header: Snippet<[columns: readonly string[]]>;
-    }>;
+    }) => any;
 export default __svn_component_default;
 
 // === input.svelte ===
@@ -41,17 +41,17 @@ async function $$render_8568e182() {
     }
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ({
-            row: ({ id, label }: any) => {
+        Wrapper(__svn_any(), {
+            row: ({ id, label }) => {
                 void id;
                 void label;
-                return null as any;
+                return __svn_snippet_return();
             },
-            header: (columns: any) => {
+            header: (columns) => {
                 void columns;
-                return null as any;
+                return __svn_snippet_return();
             },
-        } satisfies Partial<__SvnComponentProps<typeof Wrapper>>);
+        });
     }
     void __svn_tpl_check;
     void Wrapper;
@@ -59,7 +59,7 @@ async function $$render_8568e182() {
     void joinLabels;
 }
 $$render_8568e182;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

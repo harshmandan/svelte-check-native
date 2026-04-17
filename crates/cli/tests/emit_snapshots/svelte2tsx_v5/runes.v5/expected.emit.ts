@@ -14,7 +14,7 @@ async function $$render_89e4dbc4() {
     void b;
 }
 $$render_89e4dbc4;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

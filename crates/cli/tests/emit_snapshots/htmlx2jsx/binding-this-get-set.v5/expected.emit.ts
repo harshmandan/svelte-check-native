@@ -11,13 +11,13 @@ async function $$render_c159a31e() {
         void __svn_bind_pair_2;
         let __svn_bind_pair_3: [() => any, (v: any) => void] = [() => undefined as any, () => {}];
         void __svn_bind_pair_3;
-        void ({} satisfies Partial<__SvnComponentProps<typeof Input>>);
-        void ({} satisfies Partial<__SvnComponentProps<typeof Input>>);
+        Input(__svn_any(), {});
+        Input(__svn_any(), {});
     }
     void __svn_tpl_check;
 }
 $$render_c159a31e;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

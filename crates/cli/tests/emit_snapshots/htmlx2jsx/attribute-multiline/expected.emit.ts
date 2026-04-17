@@ -3,13 +3,13 @@
 async function $$render_04fb2c94() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ({multilineattr: "hello\nworld"} satisfies Partial<__SvnComponentProps<typeof Comp>>);
-        void ({multilineattr: "he`llo\nworld"} satisfies Partial<__SvnComponentProps<typeof Comp>>);
+        Comp(__svn_any(), {multilineattr: "hello\nworld"});
+        Comp(__svn_any(), {multilineattr: "he`llo\nworld"});
     }
     void __svn_tpl_check;
 }
 $$render_04fb2c94;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

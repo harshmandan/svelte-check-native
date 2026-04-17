@@ -203,23 +203,6 @@ declare function __svn_snippet_return(): any;
  */
 type __SvnProps<F> = F extends (anchor: any, props: infer P) => any ? P : never;
 
-/**
- * Legacy prop-shape extractor — the broken pre-refactor path. Kept
- * alive only until Phase B.2 swaps the emit crate to the callable
- * component shape; once emission stops referencing it, remove.
- *
- * Matches svelte's built-in `ComponentProps<T>` for `Component<Props>`
- * and `SvelteComponent<Props>` shapes, degrades to `any` on third-party
- * namespace re-exports instead of firing TS2344. The `0 extends 1 & T`
- * guard preserves `any` at the call site.
- */
-type __SvnComponentProps<T> =
-    0 extends 1 & T ? any :
-    T extends new (...args: any[]) => import('svelte').SvelteComponent<infer P, any, any> ? P :
-    T extends new (...args: any[]) => { $$prop_def: infer P } ? P :
-    T extends import('svelte').Component<infer P, any, any> ? P :
-    T extends import('svelte').SvelteComponent<infer P, any, any> ? P :
-    any;
 
 //
 // We declare only what's needed to make type-checking succeed for code

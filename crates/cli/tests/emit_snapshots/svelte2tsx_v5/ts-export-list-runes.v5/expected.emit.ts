@@ -36,7 +36,7 @@ async function $$render_677076f2() {
     void renamebaz;
 }
 $$render_677076f2;
-declare const __svn_component_default: any;
+declare function __svn_component_default(__anchor: any, props: any): any;
 declare type __svn_component_default = any;
 export default __svn_component_default;
 

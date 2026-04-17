@@ -22,7 +22,7 @@ let { data }: Props = $props();
     void data;
 }
 $$render_654e105f;
-declare const __svn_component_default: import('svelte').Component<Props>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Props>;
+declare function __svn_component_default(__anchor: any, props: Props): any;
+declare type __svn_component_default = (__anchor: any, props: Props) => any;
 export default __svn_component_default;
 

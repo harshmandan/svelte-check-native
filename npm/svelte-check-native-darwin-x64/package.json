@@ -1,6 +1,6 @@
 {
   "name": "svelte-check-native-darwin-x64",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "darwin-x64 binary for svelte-check-native. Do not install directly — depend on `svelte-check-native` instead.",
   "homepage": "https://github.com/harshmandan/svelte-check-native",
   "repository": {

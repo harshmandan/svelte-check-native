@@ -251,6 +251,23 @@ pub fn check(
         // to the overlay's types via TS's `allowArbitraryExtensions`
         // mechanism. Content is a one-shot re-export from the
         // overlay; no diagnostic should ever fire on this file.
+        //
+        // KNOWN LIMITATION: this ambient doesn't help in the
+        // sibling-collision case where the user has both `Foo.svelte`
+        // AND `Foo.svelte.ts` (a Svelte 5 runes module) in the same
+        // directory. tsgo's resolver picks the workspace as the
+        // `rootDirs` match for `./Foo.svelte` (because the physical
+        // file lives there, not in cache) and searches WITHIN the
+        // workspace — so it finds the runes module via bundler
+        // auto-extension (`.svelte` → `.svelte.ts`) before our
+        // cache-resident ambient is tried. Writing a `.d.svelte.ts`
+        // into the cache at the mirrored path is unreachable for
+        // this specific import. Affects cnblocks `add`/`code` (2
+        // errors) and ui's `root.svelte` barrels (8 errors) at time
+        // of writing. Real fix would require either writing ambients
+        // into the user's source tree (invasive) or pre-rewriting
+        // every user-owned `.ts` file that imports `.svelte` (high
+        // scope). Deferred.
         let ambient_path = layout.ambient_path(&input.source_path);
         let overlay_file_name = gen_path
             .file_name()

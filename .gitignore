@@ -49,3 +49,8 @@ Thumbs.db
 # Local benchmark workspaces (cloned third-party repos used to dogfood
 # the binary against real-world codebases — never committed)
 bench/
+
+# Private working notes — architecture post-mortems, refactor plans,
+# session context meant for future Claude Code sessions. Not part of
+# the shipped repo.
+REFACTOR.md

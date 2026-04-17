@@ -469,13 +469,31 @@ fn emit_document_with_render_name(
     // component-prop emission then no-ops (Partial<any> = any) but
     // doesn't cause false-positive implicit-any either. Previously
     // this was the only path.
+    // Pair a value declaration with a same-named type alias so
+    // `export default <name>` carries both namespaces. Consumers
+    // often use the default import as a type (`$state<Foo>(...)`,
+    // `let ref: Foo = ...`) AND as a value (`<Foo prop={...}>`,
+    // `typeof Foo`); without the type-side declaration, using the
+    // imported name as a type fires TS2749 "refers to a value,
+    // but is being used as a type here".
+    //
+    // When the user's `$props()` annotation is known, the value is
+    // typed `Component<Props>` (preserves contextual-typing flow
+    // through `ComponentProps<typeof X>`) and the type alias
+    // resolves to `SvelteComponent<Props>` (instance-shaped).
+    // Without a known annotation both sides fall back to `any`.
     if let Some(ty) = &prop_type_source {
         let _ = writeln!(
             out,
             "declare const __svn_component_default: import('svelte').Component<{ty}>;"
         );
+        let _ = writeln!(
+            out,
+            "declare type __svn_component_default = import('svelte').SvelteComponent<{ty}>;"
+        );
     } else {
         out.push_str("declare const __svn_component_default: any;\n");
+        out.push_str("declare type __svn_component_default = any;\n");
     }
     out.push_str("export default __svn_component_default;\n");
 

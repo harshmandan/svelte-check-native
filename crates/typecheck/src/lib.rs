@@ -204,6 +204,7 @@ pub fn check(
     workspace: &Path,
     user_tsconfig: &Path,
     inputs: Vec<CheckInput>,
+    extended_diagnostics: bool,
 ) -> Result<CheckOutput, CheckError> {
     let layout = CacheLayout::for_workspace(workspace);
     std::fs::create_dir_all(&layout.svelte_dir)?;
@@ -291,7 +292,12 @@ pub fn check(
 
     // Step 3: spawn tsgo.
     let tsgo = discover(workspace)?;
-    let run = run_tsgo(&tsgo, &layout.overlay_tsconfig, workspace)?;
+    let run = run_tsgo(
+        &tsgo,
+        &layout.overlay_tsconfig,
+        workspace,
+        extended_diagnostics,
+    )?;
 
     // Step 4: map diagnostics back to source paths + apply line map.
     // Drop diagnostics that are about our overlay tsconfig itself —
@@ -308,6 +314,7 @@ pub fn check(
     Ok(CheckOutput {
         diagnostics,
         program_file_count: run.program_file_count,
+        extended_diagnostics: run.extended_diagnostics,
     })
 }
 
@@ -315,6 +322,11 @@ pub fn check(
 #[derive(Debug)]
 pub struct CheckOutput {
     pub diagnostics: Vec<CheckDiagnostic>,
+    /// tsgo's `--extendedDiagnostics` stats block, present iff the
+    /// caller passed `extended_diagnostics = true` AND tsgo emitted a
+    /// recognizable block. The CLI prints this verbatim after the
+    /// normal output so users see tsgo's native perf/memory stats.
+    pub extended_diagnostics: Option<String>,
     /// File count from tsgo's program (`--listFiles`). Reported in the
     /// COMPLETED line's `<N> FILES` field so the denominator matches
     /// upstream svelte-check's.

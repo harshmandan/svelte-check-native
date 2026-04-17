@@ -1,4 +1,13 @@
-# svelte-check-native
+<div align="center">
+
+  <img src="./svelte-check-native.webp" alt="svelte-check-native" width="300" />
+
+  <h1>svelte-check-native</h1>
+
+[![version](http://img.shields.io/npm/v/svelte-check-native.svg)](https://www.npmjs.com/package/svelte-check-native)
+[![downloads](http://img.shields.io/npm/dm/svelte-check-native.svg)](https://www.npmjs.com/package/svelte-check-native)
+
+</div>
 
 Fast CLI type-checker for **Svelte 5+** projects. Drop-in replacement
 for [`svelte-check`](https://www.npmjs.com/package/svelte-check) —
@@ -18,11 +27,11 @@ same flags, same output formats, same exit codes. Powered by Rust +
 Measured on a private SvelteKit + TypeScript project
 with 1206 `.svelte` files, M1 Pro 8C, median of 3 runs each:
 
-| Tool                     |      Cold |      Warm |     Dirty | Errors | Warnings | Files w/ issues |
-| :----------------------- | --------: | --------: | --------: | -----: | -------: | --------------: |
-| `svelte-check-native`    | **9.7 s** | **3.5 s** | **3.3 s** |  **0** |       44 |              15 |
-| `svelte-check-rs`        |    14.9 s |     5.4 s |     4.6 s |    732 |       44 |             261 |
-| `svelte-check` (default) |    41.6 s |    40.1 s |    41.2 s |      0 |       48 |              17 |
+| Tool                    |      Cold |      Warm |     Dirty | Errors | Warnings | Files w/ issues |
+| :---------------------- | --------: | --------: | --------: | -----: | -------: | --------------: |
+| `svelte-check-native`   | **8.1 s** | **2.9 s** | **3.0 s** |  **0** |       44 |              15 |
+| `svelte-check` 4.4.6    |    39.4 s |    38.2 s |    38.0 s |      0 |       44 |              15 |
+| `svelte-check-rs` 0.9.7 |    15.0 s |     5.5 s |     4.4 s |    732 |       44 |             261 |
 
 - **Cold** = empty cache, fresh `bun` / `node` import.
 - **Warm** = re-run, no source changes.

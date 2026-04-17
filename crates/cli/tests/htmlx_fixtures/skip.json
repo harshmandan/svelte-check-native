@@ -1,0 +1,27 @@
+{
+    "_doc": "Samples from upstream svelte2tsx/test/htmlx2jsx/samples that we intentionally skip because they exercise Svelte 4 features we dropped from our scope (see CLAUDE.md — no slots, no on: directives, no export let, no $: reactive statements). When upstream adds new Svelte 4-specific samples they should be added here too.",
+    "skip": [
+        "component-default-slot-empty",
+        "component-default-slot-let",
+        "component-default-slot-let-destructure",
+        "component-multi-slot",
+        "component-named-slot",
+        "component-slot-infer-props",
+        "component-slot-shadowed-prop",
+        "directive-quoted",
+        "editing-event-handler",
+        "event-handler",
+        "event-handler-bare",
+        "event-handler-component",
+        "event-handler-component-bare",
+        "event-handler-component-infer-props",
+        "event-handler-customname",
+        "event-handler-modifiers",
+        "event-handler-quoted",
+        "event-handler-svelte-component",
+        "if-nested-slot-let",
+        "if-nested-slot-let-shadowed",
+        "quotes-inside-quotes",
+        "svelte-fragment"
+    ]
+}

@@ -260,7 +260,7 @@ fn emit_document_with_render_name(
         collect_top_level_bindings(&parsed_mod.program, &mut script_bindings);
     }
 
-    let prop_names: Vec<SmolStr> =
+    let (prop_names, prop_type_source): (Vec<SmolStr>, Option<String>) =
         if let (Some(_s), Some(instance)) = (&split, &doc.instance_script) {
             // Scan bindings + props against the *original* script content
             // (imports included). Using the imports-blanked body would
@@ -274,10 +274,19 @@ fn emit_document_with_render_name(
                 .map(|p| p.local_name)
                 .collect();
 
+            // Capture the `$props()` type annotation (if any) so the
+            // default export below can be typed as
+            // `Component<PropType>`. Without this, `typeof X` for our
+            // overlay default resolves to the weak declared type and
+            // every `<X cb={(arg) => ...}>` destructure binding reads
+            // as implicit-any via `ComponentProps<any> = any`.
+            let ty = svn_analyze::find_props_type_source(&parsed_orig.program, instance.content)
+                .map(|s| s.to_string());
+
             collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
-            props
+            (props, ty)
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
 
     // Store auto-subscribe scan happens AFTER both module + instance
@@ -448,14 +457,26 @@ fn emit_document_with_render_name(
     let _ = writeln!(out, "{render_name};");
 
     // Default export so `import Foo from './Foo.svelte'` resolves to a
-    // valid module member (TS1192 otherwise). Named exports come from
-    // the user's preserved module-script `export const/function/...`
-    // declarations, which the emit pass already lifts verbatim above
-    // the wrapper. Typing the default as `any` is a v0.1 simplification
-    // — a richer `__SvelteComponent<Props, Exports>`-shaped type would
-    // let consumers see proper prop / event typing too, but `any` is
-    // enough to clear TS1192 across the project.
-    out.push_str("declare const __svn_component_default: any;\n");
+    // valid module member (TS1192 otherwise). When the user's
+    // `$props()` call declares a type (either `: Props = $props()` or
+    // `$props<Props>()`), we type the default as
+    // `Component<Props>` — that way `ComponentProps<typeof X>` in
+    // downstream overlays resolves to `Props` and contextual typing
+    // flows into callback prop values (`onclick={(e) => ...}` gets
+    // `e` typed, destructure params don't read as implicit-any).
+    //
+    // Fallback: type the default as `any`. The satisfies-check in
+    // component-prop emission then no-ops (Partial<any> = any) but
+    // doesn't cause false-positive implicit-any either. Previously
+    // this was the only path.
+    if let Some(ty) = &prop_type_source {
+        let _ = writeln!(
+            out,
+            "declare const __svn_component_default: import('svelte').Component<{ty}>;"
+        );
+    } else {
+        out.push_str("declare const __svn_component_default: any;\n");
+    }
     out.push_str("export default __svn_component_default;\n");
 
     // Rewrite every `.svelte` extension on import / export specifiers

@@ -24,6 +24,7 @@
 //! recursively; every leaf identifier is recorded.
 
 use oxc_ast::ast::{BindingPatternKind, BindingProperty, Expression, PropertyKey, Statement};
+use oxc_span::GetSpan;
 use smol_str::SmolStr;
 use svn_core::Range;
 
@@ -38,6 +39,57 @@ pub struct PropInfo {
     pub range: Range,
     /// True for `...rest` elements.
     pub is_rest: bool,
+}
+
+/// Find the *type source text* for the component's `$props()` type
+/// annotation, if declared with one.
+///
+/// Two recognized shapes (first match wins):
+///
+/// - `let { ... }: PropType = $props()` — return PropType's source.
+/// - `let { ... } = $props<PropType>()` — return PropType's source.
+///
+/// Anything else (plain `let { ... } = $props()` with no annotation,
+/// `$props<{ a: ... }>()` we don't know how to look at, multiple
+/// `$props()` calls) → `None`. Callers treat `None` as "no typed prop
+/// shape available; emit default as `any`".
+///
+/// The returned string is a slice of `source` — caller can embed it
+/// directly into generated TypeScript. We don't parse the type content;
+/// we just hand the raw source text back, trusting the user's original
+/// syntax.
+pub fn find_props_type_source<'src>(
+    program: &oxc_ast::ast::Program<'_>,
+    source: &'src str,
+) -> Option<&'src str> {
+    for stmt in &program.body {
+        let Statement::VariableDeclaration(decl) = stmt else {
+            continue;
+        };
+        for declarator in &decl.declarations {
+            let Some(init) = declarator.init.as_ref() else {
+                continue;
+            };
+            if !is_props_call_like(init) {
+                continue;
+            }
+            // Shape 1: annotation on the destructure pattern.
+            if let Some(ty) = declarator.id.type_annotation.as_ref() {
+                let span = ty.type_annotation.span();
+                return source.get(span.start as usize..span.end as usize);
+            }
+            // Shape 2: generic arg on the $props call.
+            if let Expression::CallExpression(call) = init {
+                if let Some(tp) = call.type_parameters.as_ref() {
+                    if let Some(arg) = tp.params.first() {
+                        let span = arg.span();
+                        return source.get(span.start as usize..span.end as usize);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Find every `let { ... } = $props()` destructuring in `program` and

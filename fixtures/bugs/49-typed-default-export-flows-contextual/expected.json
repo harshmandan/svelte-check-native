@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A parent passes an inline arrow to a typed prop (`onchange={({ checked }) => ...}`). For the destructure binding `checked` to be typed rather than flagged as implicit-any, the Switch overlay's default export must carry the component's Props — typed as `Component<Props>`, not `any`. Our emit extracts the `$props()` type annotation (destructure form or `$props<T>()` generic arg) and wires it into the default export so `ComponentProps<typeof Switch>` resolves to the real Props shape."
+}

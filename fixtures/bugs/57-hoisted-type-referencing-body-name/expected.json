@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Body-level const/function names referenced from a type alias or interface must resolve at module scope. We hoist the type alias / interface to module top (needed for the synthesized `Component<Props>` default export) but the referenced name stays inside `$$render`. Emit a `declare const <name>: any;` stub at module scope so the hoisted type resolves. Without the stub tsgo fires TS2304 on every hoisted `typeof` / `keyof typeof` / indexed-type-access referencing a body-local identifier."
+}

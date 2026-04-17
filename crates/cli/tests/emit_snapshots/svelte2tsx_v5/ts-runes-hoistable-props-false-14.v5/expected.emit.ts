@@ -3,6 +3,7 @@
 
     enum A {
     }
+declare const Abc: any;
 interface A {
     Abc: number
 }

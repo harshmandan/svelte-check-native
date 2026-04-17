@@ -4,6 +4,7 @@
     namespace A {
         export type Abd = number
     }
+declare const Abc: any;
 interface A {
     Abc: number
 }

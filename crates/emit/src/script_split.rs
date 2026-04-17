@@ -17,6 +17,8 @@
 //! line/column positions inside the body stay aligned for source-map
 //! mapping.
 
+use std::collections::HashSet;
+
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{BindingPatternKind, Declaration, ImportOrExportKind, Statement};
 use oxc_span::GetSpan;
@@ -101,6 +103,24 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
         };
     }
 
+    // Names declared at the top level of the body — const/let/var,
+    // function, class. Populated as we iterate `parsed.program.body`.
+    // Imports aren't included: imports that get hoisted to module top
+    // level are already visible there, so type aliases referencing them
+    // resolve without needing a `declare` stub.
+    //
+    // Used at the end of this function to decide which names need a
+    // module-level `declare const <name>: any;` stub so that hoisted
+    // type aliases / interfaces referring to them resolve. Example: the
+    // user writes
+    //   ```
+    //   const standaloneChartTypes = ['a', 'b'] as const
+    //   type StandaloneChartType = (typeof standaloneChartTypes)[number]
+    //   ```
+    // We hoist the `type` but keep the `const` in the `$$render` body.
+    // Without a stub, the hoisted `type` fires "Cannot find name
+    // 'standaloneChartTypes'" at module scope.
+    let mut body_decl_names: Vec<SmolStr> = Vec::new();
     // Spans we hoist verbatim to module top level. For statements that
     // are pure module-shape (no references to body locals): imports,
     // `export { x } from 'mod'`, `export * from 'mod'`.
@@ -125,6 +145,23 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
         match stmt {
             Statement::ImportDeclaration(decl) => {
                 hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+            }
+            Statement::VariableDeclaration(decl) => {
+                // Body-level `const/let/var` — stays in body. Record its
+                // names for the `declare const` stub pass.
+                for d in &decl.declarations {
+                    collect_binding_pattern_names(&d.id.kind, &mut body_decl_names);
+                }
+            }
+            Statement::FunctionDeclaration(decl) => {
+                if let Some(id) = &decl.id {
+                    body_decl_names.push(SmolStr::from(id.name.as_str()));
+                }
+            }
+            Statement::ClassDeclaration(decl) => {
+                if let Some(id) = &decl.id {
+                    body_decl_names.push(SmolStr::from(id.name.as_str()));
+                }
             }
             Statement::ExportNamedDeclaration(decl) => {
                 let span = (decl.span.start as usize, decl.span.end as usize);
@@ -155,6 +192,12 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
                         strip_keyword_spans.push((span.0, inner_start));
                     }
                     collect_declaration_names(d, &mut exported_locals);
+                    // Record body-level names too: the declaration stays
+                    // in the body after the `export ` prefix is stripped,
+                    // so a hoisted `type X = typeof name` needs a
+                    // `declare` stub just like for a non-exported
+                    // body-level const.
+                    collect_declaration_names(d, &mut body_decl_names);
                 } else if decl.source.is_some() {
                     // `export { x } from 'mod'` — pure module re-export,
                     // no local name references. Hoist.
@@ -243,6 +286,71 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
     // diagnostics inside should map back to the right source line.
     let mut hoisted = String::new();
     let mut hoisted_byte_offsets: Vec<u32> = Vec::with_capacity(hoist_spans.len());
+
+    // `declare const` stubs for body-level names referenced from inside
+    // hoisted type aliases / interfaces. The stubs go FIRST (ahead of
+    // the real hoisted statements) so a subsequent `type X = typeof
+    // name` resolves its reference at module scope. We only scan the
+    // hoisted spans that correspond to type aliases / interfaces /
+    // namespaces — value-shape hoists (imports, `export { x } from`,
+    // `export * from`) can't reference body-local names anyway.
+    //
+    // No source-line mapping for these — they're synthetic and tsgo is
+    // expected to never fire a diagnostic on them (`any`-typed
+    // placeholders).
+    let body_names_set: HashSet<SmolStr> = body_decl_names.iter().cloned().collect();
+    let referenced: HashSet<SmolStr> = if body_names_set.is_empty() {
+        HashSet::new()
+    } else {
+        // Only scan hoisted spans whose statement kind is a type alias,
+        // interface, or namespace (the only shapes where a body-local
+        // identifier reference resolves to module scope). Scanning
+        // import specifiers, for example, would let a local named the
+        // same as an imported symbol produce a spurious `declare const`
+        // stub that collides with the import.
+        let mut scan_text = String::new();
+        for stmt in &parsed.program.body {
+            let span = match stmt {
+                Statement::TSTypeAliasDeclaration(d) if !has_generics => (d.span.start, d.span.end),
+                Statement::TSInterfaceDeclaration(d) if !has_generics => (d.span.start, d.span.end),
+                Statement::TSModuleDeclaration(d) => (d.span.start, d.span.end),
+                Statement::ExportNamedDeclaration(d) => {
+                    // Only `export type` / `export interface` — those
+                    // are the value-free shapes we hoist verbatim.
+                    if let Some(inner) = &d.declaration {
+                        if matches!(
+                            inner,
+                            Declaration::TSTypeAliasDeclaration(_)
+                                | Declaration::TSInterfaceDeclaration(_)
+                        ) {
+                            (d.span.start, d.span.end)
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                }
+                _ => continue,
+            };
+            scan_text.push_str(&content[span.0 as usize..span.1 as usize]);
+            scan_text.push('\n');
+        }
+        collect_ident_refs(&scan_text)
+            .into_iter()
+            .filter(|n| body_names_set.contains(n))
+            .collect()
+    };
+    // Emit stubs in original declaration order, to keep diffs stable.
+    let mut stub_seen: HashSet<SmolStr> = HashSet::new();
+    for name in &body_decl_names {
+        if referenced.contains(name) && stub_seen.insert(name.clone()) {
+            hoisted.push_str("declare const ");
+            hoisted.push_str(name);
+            hoisted.push_str(": any;\n");
+        }
+    }
+
     for &(start, end) in &hoist_spans {
         hoisted_byte_offsets.push(start as u32);
         hoisted.push_str(&content[start..end]);
@@ -312,6 +420,227 @@ fn collect_declaration_names(decl: &Declaration<'_>, out: &mut Vec<SmolStr>) {
         // voiding them would fire TS2693.
         _ => {}
     }
+}
+
+/// Byte-scan a JS/TS source slice for identifier references.
+///
+/// Returns every identifier that appears NOT after a `.` or `?.` (so
+/// `obj.prop` yields `obj`, not `prop`). Skips string literals,
+/// template-literal text (but recurses into `${...}` substitutions),
+/// and line/block comments. A keyword/built-in list is filtered out
+/// so `typeof`, `keyof`, etc. don't leak into the result.
+///
+/// The scanner is intentionally lenient — false positives (e.g. a
+/// property key in an object literal) are acceptable because the
+/// caller intersects with a known set of body-declared names.
+fn collect_ident_refs(text: &str) -> Vec<SmolStr> {
+    let mut seen: HashSet<SmolStr> = HashSet::new();
+    let mut out: Vec<SmolStr> = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    let mut after_dot = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        // Line comment.
+        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // Block comment.
+        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            if i + 1 < bytes.len() {
+                i += 2;
+            }
+            continue;
+        }
+        // String literal.
+        if b == b'"' || b == b'\'' {
+            let q = b;
+            i += 1;
+            while i < bytes.len() && bytes[i] != q {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            if i < bytes.len() {
+                i += 1;
+            }
+            after_dot = false;
+            continue;
+        }
+        // Template literal.
+        if b == b'`' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'`' {
+                if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                    i += 2;
+                    let inner_start = i;
+                    let mut depth = 1usize;
+                    while i < bytes.len() {
+                        match bytes[i] {
+                            b'{' => depth += 1,
+                            b'}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                    let inner = &text[inner_start..i];
+                    for sub in collect_ident_refs(inner) {
+                        if seen.insert(sub.clone()) {
+                            out.push(sub);
+                        }
+                    }
+                    if i < bytes.len() {
+                        i += 1; // past `}`
+                    }
+                } else if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            if i < bytes.len() {
+                i += 1;
+            }
+            after_dot = false;
+            continue;
+        }
+        // Identifier-like start.
+        if b.is_ascii_alphabetic() || b == b'_' || b == b'$' {
+            let start = i;
+            while i < bytes.len() {
+                let c = bytes[i];
+                if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            let name = &text[start..i];
+            if !after_dot && !is_ref_scan_keyword(name) {
+                let s = SmolStr::from(name);
+                if seen.insert(s.clone()) {
+                    out.push(s);
+                }
+            }
+            after_dot = false;
+            continue;
+        }
+        // Member access — suppress next identifier.
+        if b == b'.' {
+            after_dot = true;
+            i += 1;
+            continue;
+        }
+        if !b.is_ascii_whitespace() {
+            after_dot = false;
+        }
+        i += 1;
+    }
+
+    out
+}
+
+/// Keywords/built-ins that appear frequently in TS type annotations
+/// and should never be treated as a reference.
+fn is_ref_scan_keyword(s: &str) -> bool {
+    matches!(
+        s,
+        "true"
+            | "false"
+            | "null"
+            | "undefined"
+            | "this"
+            | "void"
+            | "typeof"
+            | "keyof"
+            | "infer"
+            | "extends"
+            | "in"
+            | "of"
+            | "as"
+            | "is"
+            | "let"
+            | "const"
+            | "var"
+            | "function"
+            | "if"
+            | "else"
+            | "for"
+            | "while"
+            | "do"
+            | "return"
+            | "yield"
+            | "await"
+            | "async"
+            | "delete"
+            | "throw"
+            | "try"
+            | "catch"
+            | "finally"
+            | "switch"
+            | "case"
+            | "default"
+            | "break"
+            | "continue"
+            | "class"
+            | "super"
+            | "import"
+            | "export"
+            | "from"
+            | "satisfies"
+            | "readonly"
+            | "type"
+            | "interface"
+            | "namespace"
+            | "module"
+            | "declare"
+            | "public"
+            | "private"
+            | "protected"
+            | "new"
+            | "instanceof"
+            | "any"
+            | "unknown"
+            | "never"
+            | "number"
+            | "string"
+            | "boolean"
+            | "symbol"
+            | "object"
+            | "bigint"
+            | "Array"
+            | "ReadonlyArray"
+            | "Record"
+            | "Partial"
+            | "Required"
+            | "Pick"
+            | "Omit"
+            | "Exclude"
+            | "Extract"
+            | "NonNullable"
+            | "Parameters"
+            | "ReturnType"
+            | "InstanceType"
+            | "Awaited"
+            | "Promise"
+    )
 }
 
 fn collect_binding_pattern_names(pat: &BindingPatternKind<'_>, out: &mut Vec<SmolStr>) {
@@ -611,6 +940,86 @@ let x = 1;
             "type specifier must not be voided:\n{:?}",
             s.exported_locals
         );
+    }
+
+    #[test]
+    fn hoisted_type_referencing_body_const_emits_declare_stub() {
+        // `type X = (typeof arr)[number]` is hoisted to module scope, but
+        // `arr` is a body-level const and stays in $$render. Without a
+        // module-level `declare const arr: any;`, the hoisted type fires
+        // "Cannot find name 'arr'".
+        let src = "const arr = [1, 2, 3] as const;\ntype X = (typeof arr)[number];";
+        let s = split_imports(src, ScriptLang::Ts, false);
+        assert!(
+            s.hoisted.contains("declare const arr: any;"),
+            "expected declare stub for body-local const:\n{}",
+            s.hoisted
+        );
+        assert!(
+            s.hoisted.contains("type X ="),
+            "type alias should still be hoisted:\n{}",
+            s.hoisted
+        );
+        // Stub must come before the type alias so the reference resolves.
+        let stub_pos = s.hoisted.find("declare const arr").unwrap();
+        let type_pos = s.hoisted.find("type X").unwrap();
+        assert!(stub_pos < type_pos);
+    }
+
+    #[test]
+    fn hoisted_type_referencing_body_function_emits_declare_stub() {
+        // `typeof foo` inside a hoisted interface resolves once we emit
+        // a module-level `declare const foo: any;` stub.
+        let src = "async function foo() { return 1; }\ninterface Props { cb: typeof foo }\n";
+        let s = split_imports(src, ScriptLang::Ts, false);
+        assert!(
+            s.hoisted.contains("declare const foo: any;"),
+            "expected declare stub for body-local function:\n{}",
+            s.hoisted
+        );
+        assert!(s.hoisted.contains("interface Props"));
+    }
+
+    #[test]
+    fn no_declare_stub_for_names_not_referenced_by_hoisted_types() {
+        // `unused` is a body-local const but no hoisted type references
+        // it, so we don't emit a stub (avoids clutter + prevents
+        // collisions with names that happen to match imports).
+        let src = "const unused = 1;\ntype X = number;";
+        let s = split_imports(src, ScriptLang::Ts, false);
+        assert!(
+            !s.hoisted.contains("declare const unused"),
+            "no stub should be emitted for unreferenced body names:\n{}",
+            s.hoisted
+        );
+    }
+
+    #[test]
+    fn declare_stub_skipped_for_import_names() {
+        // Imported names are already at module scope; we must NOT emit
+        // a `declare const foo: any;` for them (would collide with the
+        // import).
+        let src = "import { foo } from 'mod';\ntype X = typeof foo;";
+        let s = split_imports(src, ScriptLang::Ts, false);
+        assert!(
+            !s.hoisted.contains("declare const foo"),
+            "no stub for imported name:\n{}",
+            s.hoisted
+        );
+        assert!(s.hoisted.contains("import { foo }"));
+        assert!(s.hoisted.contains("type X"));
+    }
+
+    #[test]
+    fn declare_stub_not_emitted_from_value_hoist_scanning() {
+        // An import specifier containing a name that matches a body-level
+        // const must NOT trigger a stub. The scan only runs on type-alias
+        // / interface spans (no value shape).
+        let src = "import { arr } from 'mod';\nconst arr2 = 1;\nconsole.log(arr2);\n";
+        let s = split_imports(src, ScriptLang::Ts, false);
+        // arr2 is a body const; `import { arr }` is a hoisted value span.
+        // No hoisted type references arr2 → no stub.
+        assert!(!s.hoisted.contains("declare const arr2"));
     }
 
     #[test]

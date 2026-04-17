@@ -514,7 +514,34 @@ fn run_typecheck(
     let phase_start = std::time::Instant::now();
 
     let mark = std::time::Instant::now();
-    let svelte_files = discover_svelte_files(workspace, ignore);
+    // TS project scope: honor the tsconfig's `include`/`exclude`
+    // patterns so files outside the user's declared project don't get
+    // fed into the overlay. Real-world pattern — pixzip-lite — has a
+    // root tsconfig whose `include` only covers the electron app tree
+    // (`src/renderer/**/*.svelte`) and a separate `website/tsconfig.json`
+    // with its own paths; upstream svelte-check respects include and
+    // silently skips website files when run at root, but we used to
+    // feed them all to tsgo, firing a cascade of "Cannot find module
+    // '$lib/…'" errors because the root tsconfig's `$lib` alias
+    // points at the wrong tree for those files.
+    let project_scope = svn_core::tsconfig::load(tsconfig).ok().map(|tc| {
+        (
+            build_glob_set(workspace, tc.include.as_deref()),
+            build_glob_set(workspace, tc.exclude.as_deref()),
+        )
+    });
+    let svelte_files: Vec<PathBuf> = discover_svelte_files(workspace, ignore)
+        .into_iter()
+        .filter(|path| match &project_scope {
+            Some((include, exclude)) => {
+                let rel = path.strip_prefix(workspace).unwrap_or(path);
+                let included = include.as_ref().is_none_or(|set| set.is_match(rel));
+                let excluded = exclude.as_ref().is_some_and(|set| set.is_match(rel));
+                included && !excluded
+            }
+            None => true,
+        })
+        .collect();
     let t_discovery = mark.elapsed();
 
     // Read every source up-front; we need the bytes for both the
@@ -652,8 +679,8 @@ fn run_typecheck(
     // Prefer tsgo's program file count (matches upstream svelte-check's
     // denominator). Fall back to a workspace walk only when tsgo was
     // skipped via `--diagnostic-sources` opting out of `js`.
-    let files_for_completed = program_file_count
-        .unwrap_or_else(|| count_project_files(workspace, ignore));
+    let files_for_completed =
+        program_file_count.unwrap_or_else(|| count_project_files(workspace, ignore));
     print_diagnostics(
         workspace,
         &diagnostics,
@@ -1032,6 +1059,63 @@ fn discover_svelte_files(workspace: &Path, ignore: Option<&globset::GlobSet>) ->
         })
         .map(|e| e.path().to_path_buf())
         .collect()
+}
+
+/// Build a [`globset::GlobSet`] from tsconfig `include`/`exclude`
+/// patterns, returning `None` if the slice is empty or unset.
+///
+/// TypeScript's glob dialect differs subtly from globset's default:
+///   - A bare directory path like `"src"` means `"src/**/*"` — all
+///     files recursively. globset treats `"src"` as a literal name
+///     match, which returns `false` for any file under `src/`.
+///   - `**/*.ts` matches files at any depth.
+///   - Patterns with leading `../` come from a `.svelte-kit/tsconfig.json`
+///     that declares `"include": ["../src/**/*.svelte"]` (real-world
+///     pattern via SvelteKit auto-generated config). TypeScript resolves
+///     these against the config file's directory; when we match them
+///     against workspace-relative file paths, stripping the leading
+///     `../` until the resolved prefix lives inside the workspace lets
+///     the glob actually hit.
+///
+/// Unparseable patterns are silently dropped (matching TS's tolerance
+/// for minor typos — better to over-include than error on config).
+fn build_glob_set(workspace: &Path, patterns: Option<&[String]>) -> Option<globset::GlobSet> {
+    let patterns = patterns?;
+    if patterns.is_empty() {
+        return None;
+    }
+    let mut builder = globset::GlobSetBuilder::new();
+    let mut any = false;
+    for pat in patterns {
+        let mut p = pat.trim_start_matches("./").to_string();
+        // Strip leading `../` segments. Each `../` ascends one level
+        // from the tsconfig file; by the time the pattern resolves
+        // into the workspace, the `../`s have consumed the ancestry
+        // and the remaining segments are workspace-relative.
+        while let Some(rest) = p.strip_prefix("../") {
+            p = rest.to_string();
+        }
+        // Normalize a bare directory / simple path (no glob metacharacters)
+        // to a recursive match. TS's include treats these as "all files
+        // under this dir".
+        if !p.contains('*') && !p.contains('?') && !p.contains('[') {
+            let resolved = workspace.join(&p);
+            if resolved.is_dir() {
+                if !p.ends_with('/') {
+                    p.push('/');
+                }
+                p.push_str("**/*");
+            }
+        }
+        if let Ok(glob) = globset::Glob::new(&p) {
+            builder.add(glob);
+            any = true;
+        }
+    }
+    if !any {
+        return None;
+    }
+    builder.build().ok()
 }
 
 /// Count every TS-family source file in the workspace (svelte, ts, tsx,

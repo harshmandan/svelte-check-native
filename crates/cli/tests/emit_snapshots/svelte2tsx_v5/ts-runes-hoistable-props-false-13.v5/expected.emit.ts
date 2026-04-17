@@ -4,7 +4,7 @@
     namespace A {
         export type Abd = number
     }
-declare const Abc: any;
+declare const Abc: { [key: string]: any } & ((...args: any[]) => any);
 interface A {
     Abc: number
 }

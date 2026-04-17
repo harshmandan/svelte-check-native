@@ -302,38 +302,23 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
     let referenced: HashSet<SmolStr> = if body_names_set.is_empty() {
         HashSet::new()
     } else {
-        // Only scan hoisted spans whose statement kind is a type alias,
-        // interface, or namespace (the only shapes where a body-local
-        // identifier reference resolves to module scope). Scanning
-        // import specifiers, for example, would let a local named the
-        // same as an imported symbol produce a spurious `declare const`
-        // stub that collides with the import.
+        // Scan every HOISTED span (i.e. what we're actually about to
+        // emit to module scope) and find body-level name references.
+        // Only type-alias / interface / namespace / `export type`
+        // hoists can reference body locals in a TS sense; plain
+        // `import`/`export … from 'mod'` spans live in their own
+        // module-level namespace. Over-scanning is harmless — the
+        // intersection with `body_names_set` filters non-matches.
+        //
+        // Importantly, the pending-type-span pass above already
+        // REMOVED body-referencing type aliases from `hoist_spans`
+        // (they stay in body to preserve type identity). So this
+        // scan only finds names from types that the decision pass
+        // kept hoistable — ones where we're confident a `declare
+        // const` stub won't degrade a `typeof`/`keyof` into `any`.
         let mut scan_text = String::new();
-        for stmt in &parsed.program.body {
-            let span = match stmt {
-                Statement::TSTypeAliasDeclaration(d) if !has_generics => (d.span.start, d.span.end),
-                Statement::TSInterfaceDeclaration(d) if !has_generics => (d.span.start, d.span.end),
-                Statement::TSModuleDeclaration(d) => (d.span.start, d.span.end),
-                Statement::ExportNamedDeclaration(d) => {
-                    // Only `export type` / `export interface` — those
-                    // are the value-free shapes we hoist verbatim.
-                    if let Some(inner) = &d.declaration {
-                        if matches!(
-                            inner,
-                            Declaration::TSTypeAliasDeclaration(_)
-                                | Declaration::TSInterfaceDeclaration(_)
-                        ) {
-                            (d.span.start, d.span.end)
-                        } else {
-                            continue;
-                        }
-                    } else {
-                        continue;
-                    }
-                }
-                _ => continue,
-            };
-            scan_text.push_str(&content[span.0 as usize..span.1 as usize]);
+        for &(start, end) in &hoist_spans {
+            scan_text.push_str(&content[start..end]);
             scan_text.push('\n');
         }
         collect_ident_refs(&scan_text)
@@ -342,12 +327,22 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
             .collect()
     };
     // Emit stubs in original declaration order, to keep diffs stable.
+    //
+    // The stub's type is `{ [key: string]: any }` rather than plain
+    // `any` so downstream `typeof <name>` / `keyof typeof <name>`
+    // patterns retain enough structure for TS to reason about. On the
+    // stub-as-`any` path, `keyof typeof <name>` widens to
+    // `string | number | symbol` and the user's `<name>[stringKey]`
+    // then fires "Type 'symbol' cannot be used as an index type".
+    // Using an index signature preserves `keyof <stub> = string` and
+    // still yields `any` on subscript, which is what the user
+    // actually wants when we can't see the real type.
     let mut stub_seen: HashSet<SmolStr> = HashSet::new();
     for name in &body_decl_names {
         if referenced.contains(name) && stub_seen.insert(name.clone()) {
             hoisted.push_str("declare const ");
             hoisted.push_str(name);
-            hoisted.push_str(": any;\n");
+            hoisted.push_str(": { [key: string]: any } & ((...args: any[]) => any);\n");
         }
     }
 
@@ -946,12 +941,15 @@ let x = 1;
     fn hoisted_type_referencing_body_const_emits_declare_stub() {
         // `type X = (typeof arr)[number]` is hoisted to module scope, but
         // `arr` is a body-level const and stays in $$render. Without a
-        // module-level `declare const arr: any;`, the hoisted type fires
-        // "Cannot find name 'arr'".
+        // module-level stub the hoisted type fires "Cannot find name
+        // 'arr'". Using an index-signature + callable intersection (not
+        // plain `any`) preserves `keyof typeof arr = string` so
+        // downstream user code like `arr[key]` doesn't fire "symbol
+        // cannot be used as an index type".
         let src = "const arr = [1, 2, 3] as const;\ntype X = (typeof arr)[number];";
         let s = split_imports(src, ScriptLang::Ts, false);
         assert!(
-            s.hoisted.contains("declare const arr: any;"),
+            s.hoisted.contains("declare const arr:"),
             "expected declare stub for body-local const:\n{}",
             s.hoisted
         );
@@ -969,11 +967,11 @@ let x = 1;
     #[test]
     fn hoisted_type_referencing_body_function_emits_declare_stub() {
         // `typeof foo` inside a hoisted interface resolves once we emit
-        // a module-level `declare const foo: any;` stub.
+        // a module-level stub.
         let src = "async function foo() { return 1; }\ninterface Props { cb: typeof foo }\n";
         let s = split_imports(src, ScriptLang::Ts, false);
         assert!(
-            s.hoisted.contains("declare const foo: any;"),
+            s.hoisted.contains("declare const foo:"),
             "expected declare stub for body-local function:\n{}",
             s.hoisted
         );

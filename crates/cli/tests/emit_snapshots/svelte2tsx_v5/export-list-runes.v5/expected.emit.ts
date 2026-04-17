@@ -33,7 +33,7 @@ async function $$render_031ccee2() {
     void renamebaz;
 }
 $$render_031ccee2;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<{ name1?: any; name2: any; renamed1?: any; renamed2: any; Foo: any; bar: any; baz?: any; RenamedFoo: any; renamedbar: any; renamedbaz?: any; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ name1?: any; name2: any; renamed1?: any; renamed2: any; Foo: any; bar: any; baz?: any; RenamedFoo: any; renamedbar: any; renamedbaz?: any; }>;
 export default __svn_component_default;
 

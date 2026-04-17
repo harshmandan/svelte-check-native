@@ -140,26 +140,6 @@ declare function $host<El extends HTMLElement = HTMLElement>(): El;
 /** Iterable wrapper for `{#each}` blocks. Accepts arrays, ArrayLike (`{ length: N }`), and any other iterable. */
 declare function __svn_each_items<T>(value: T): Iterable<__SvnEachItem<T>>;
 
-/**
- * Emit-only prop-shape extractor used by `satisfies Partial<__SvnComponentProps<typeof X>>`.
- *
- * Matches svelte's built-in `ComponentProps<T>` behaviour when `T` is a
- * `Component<Props>` or `SvelteComponent<Props>` — extracts `Props`.
- * Unlike the built-in, has no `T extends Component | SvelteComponent`
- * constraint at the type-parameter level, so component shapes that don't
- * fit either (namespace re-exports from third-party libs, custom class
- * shapes, etc.) degrade to `any` rather than firing TS2344.
- *
- * `0 extends 1 & T` preserves `any` (matches __SvnEachItem's trick).
- */
-type __SvnComponentProps<T> =
-    0 extends 1 & T ? any :
-    T extends new (...args: any[]) => import('svelte').SvelteComponent<infer P, any, any> ? P :
-    T extends new (...args: any[]) => { $$prop_def: infer P } ? P :
-    T extends import('svelte').Component<infer P, any, any> ? P :
-    T extends import('svelte').SvelteComponent<infer P, any, any> ? P :
-    any;
-
 /** Resolved item type for `__svn_each_items`. The `0 extends 1 & T` guard preserves `any` (avoids the conditional-type-distribution-collapses-to-unknown trap). */
 type __SvnEachItem<T> = 0 extends 1 & T
     ? any
@@ -168,6 +148,78 @@ type __SvnEachItem<T> = 0 extends 1 & T
         : T extends Iterable<infer U>
             ? U
             : never;
+
+/**
+ * Fresh `any` placeholder. Used as the first argument to the
+ * component-as-callable emission shape:
+ *
+ *     Comp(__svn_any(), { prop1, prop2 });
+ *
+ * Declared generic with `T = any` so callers can narrow the return at
+ * the call site when needed (e.g. to satisfy an opaque target type);
+ * default usage gets plain `any`.
+ */
+declare function __svn_any<T = any>(): T;
+
+/**
+ * Assert that a `bind:this` target's declared type accepts the element
+ * shape produced at the bind site. Called as:
+ *
+ *     __svn_bind_this_check<HTMLInputElement>(inputEl);
+ *
+ * `target: El | null | undefined` requires `inputEl`'s declared type to
+ * be a subtype of `El | null | undefined`, matching the runtime
+ * contract: Svelte assigns either the element or nothing. Accepts
+ * `HTMLInputElement`, `HTMLInputElement | null`, `HTMLInputElement |
+ * undefined`, and the full triplet; rejects a wrong element type
+ * (`HTMLDivElement` vs `HTMLInputElement`).
+ *
+ * Replaces the pre-refactor habit of emitting
+ * `inputEl = null as any as HTMLElement | null`, which forced `null`
+ * onto the user's variable type and mis-fired on `HTMLElement |
+ * undefined`-typed targets (control-repo bug #3).
+ */
+declare function __svn_bind_this_check<El>(target: El | null | undefined): void;
+
+/**
+ * Branded-`any` return for snippet arrow-callback bodies. Svelte's
+ * `Snippet<[...]>` type brands its return shape so a bare
+ * `(args) => void` can't structurally satisfy it. The arrow emits a
+ * `return __svn_snippet_return();` tail so the callback assigns
+ * cleanly into a `Snippet<[...]>` prop slot while contextual typing
+ * still flows from the slot's signature into the parameters.
+ */
+declare function __svn_snippet_return(): any;
+
+/**
+ * Extract the `props` parameter type from a component-as-callable
+ * default export. Used by bind:prop emission to declare a local with
+ * the exact prop-slot type so assignment can be checked in both
+ * directions.
+ *
+ * For generic components, `Parameters<typeof Foo>` resolves the
+ * generic at each call site; a concrete `__SvnProps<typeof Foo>['key']`
+ * access picks up the generic's inferred value from context.
+ */
+type __SvnProps<F> = F extends (anchor: any, props: infer P) => any ? P : never;
+
+/**
+ * Legacy prop-shape extractor — the broken pre-refactor path. Kept
+ * alive only until Phase B.2 swaps the emit crate to the callable
+ * component shape; once emission stops referencing it, remove.
+ *
+ * Matches svelte's built-in `ComponentProps<T>` for `Component<Props>`
+ * and `SvelteComponent<Props>` shapes, degrades to `any` on third-party
+ * namespace re-exports instead of firing TS2344. The `0 extends 1 & T`
+ * guard preserves `any` at the call site.
+ */
+type __SvnComponentProps<T> =
+    0 extends 1 & T ? any :
+    T extends new (...args: any[]) => import('svelte').SvelteComponent<infer P, any, any> ? P :
+    T extends new (...args: any[]) => { $$prop_def: infer P } ? P :
+    T extends import('svelte').Component<infer P, any, any> ? P :
+    T extends import('svelte').SvelteComponent<infer P, any, any> ? P :
+    any;
 
 //
 // We declare only what's needed to make type-checking succeed for code

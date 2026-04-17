@@ -13,7 +13,7 @@ async function $$render_cbdc5f31<T extends boolean>() {
     void someProp;
 }
 $$render_cbdc5f31;
-declare const __svn_component_default: import('svelte').Component<{ someProp: SomeType<T>; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ someProp: SomeType<T>; }>;
+declare const __svn_component_default: any;
+declare type __svn_component_default = any;
 export default __svn_component_default;
 

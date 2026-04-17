@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "`<script generics=\"T extends { id: string }\">` plus a `type Props = { item: T; label: string }` declaration — before emit threaded the generics attribute through to split_imports, the `type Props` got hoisted to module scope where `T` was unbound, producing \"Cannot find name 'T'\" on every use of `T` in the overlay's Props definition and its typed default export. Fix: keep bare `type`/`interface` declarations in the render body when the component declares generic type parameters, and fall back to `any` for the default export's Component<Props> type so the module-scope declaration doesn't surface unbound `T` either."
+}

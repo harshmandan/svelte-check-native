@@ -13,7 +13,7 @@ async function $$render_6b1a6441<T>() {
     void b;
 }
 $$render_6b1a6441;
-declare const __svn_component_default: import('svelte').Component<{ a: T, b: string }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ a: T, b: string }>;
+declare const __svn_component_default: any;
+declare type __svn_component_default = any;
 export default __svn_component_default;
 

@@ -54,36 +54,30 @@ declare function __svn_type_ref<T>(): T;
 
 /** `$state<T>(initial?)` declares reactive state. Macro.
  *
- * Four overloads, in order:
- *   1–2. `$state(null)` / `$state(undefined)` — literal-nullish initial.
- *        T is inferred purely from contextual type (the variable's
- *        annotation), NOT from the argument. This is the key fix for
- *        the common bind-this pattern:
- *          `let el: HTMLInputElement | null = $state(null);`
- *        With the naive single overload `<T>(initial: T): T`, TS binds
- *        T to `null`, narrows the initializer's type to `null`, and
- *        CFA then narrows `el` to `null`. Later `if (el) el.focus()`
- *        sees `el: never` — because the declared annotation was
- *        merely a widening hint, not a fresh type. Splitting
- *        null/undefined into their own overloads lets T remain a free
- *        type variable that TS can fill from the assignment context,
- *        so the returned type matches the annotation verbatim and no
- *        narrowing collapse happens.
- *   3. `$state(value)` — normal initial. T inferred from the argument.
- *   4. `$state()` — no initial. Return is `T | undefined`.
+ * Two overloads:
+ *   - `$state(value)` — normal initial. T inferred from the argument
+ *     (or the explicit generic when one is given).
+ *   - `$state()` — no initial. Return is `T | undefined`.
  *
  * Calls like `$state<T>(0)` where T is a generic parameter and 0 isn't
- * assignable to T still fire TS2345 — matches Svelte's own behavior.
+ * assignable to T fire TS2345 — matches Svelte's own behavior.
  *
- * Known tsgo limitation: `let x: Record<K, V> = $state(fromEntries(...))`
- * where the inner generic call depends on outer-context binding fails
- * to infer — tsgo doesn't propagate context through the `$state` wrapper
- * into the inner generic. No shim-level fix: tightening overloads
- * breaks D1 bind:this patterns; widening them breaks simple
- * `$state(boolVar)` inference.
+ * Historical note: we previously had two additional overloads for
+ * `initial: null` and `initial: undefined` literal types, there to
+ * preserve `T` against the variable's annotation in the bind:this
+ * pattern (`let el: HTMLInputElement | null = $state(null)`). Those
+ * overloads trip a separate tsgo inference bug: the presence of
+ * literal-type overloads disables contextual-type propagation from
+ * an explicit generic argument (`$state<Promise<T>>(new Promise(() =>
+ * {}))`) through to the argument, making the `new Promise`
+ * initializer widen to `Promise<unknown>` and fail overload
+ * resolution. The emit crate now rewrites
+ * `let X: Type = $state(null | undefined)` to
+ * `let X: Type = $state<Type>(null | undefined)` (see
+ * `state_nullish_rewrite`), which lets this single-T shim handle
+ * both the bind:this pattern and the `$state<Promise<T>>(...)`
+ * pattern without conflict.
  */
-declare function $state<T>(initial: null): T;
-declare function $state<T>(initial: undefined): T;
 declare function $state<T>(initial: T): T;
 declare function $state<T>(): T | undefined;
 declare namespace $state {

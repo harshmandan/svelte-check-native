@@ -47,6 +47,7 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 mod script_split;
+mod state_nullish_rewrite;
 mod sveltekit;
 
 use std::fmt::Write;
@@ -166,12 +167,26 @@ fn emit_document_with_render_name(
             .and_then(|t| root_type_name(t.trim()))
     });
 
+    // Rewrite `let X: Type = $state(null | undefined)` to
+    // `$state<Type>(null | undefined)` so the single-T `$state` shim
+    // overload picks `T` from the explicit generic (sourced from the
+    // annotation) rather than collapsing to `null` from the argument.
+    // See `state_nullish_rewrite` for the full reasoning — this pass
+    // is the reason we can drop the literal-type overloads that were
+    // masking a separate tsgo inference bug on
+    // `$state<Promise<T>>(new Promise(() => {}))`.
+    let rewritten_content: Option<String> = doc
+        .instance_script
+        .as_ref()
+        .map(|s| state_nullish_rewrite::rewrite(s.content, s.lang));
+
     // Hoist imports out of the instance script. Required because the
     // instance body gets wrapped in `function $$render() { ... }` and ES
     // `import` declarations can't appear inside a function (TS1232).
     let split = doc.instance_script.as_ref().map(|s| {
+        let content = rewritten_content.as_deref().unwrap_or(s.content);
         split_imports(
-            s.content,
+            content,
             s.lang,
             generics.is_some(),
             prop_type_root_for_split.as_deref(),

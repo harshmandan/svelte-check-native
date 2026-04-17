@@ -4,6 +4,25 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2]
+
+### Fixed
+
+- **`$state<Promise<T>>(new Promise(() => {}))` no longer fires a
+  spurious TS2769 "Promise<unknown> not assignable" diagnostic.** The
+  `$state` shim now has two overloads (normal `T` + no-arg) instead of
+  four; the `null` / `undefined` literal-type overloads turned out to
+  disable tsgo's contextual-type propagation from an explicit
+  generic argument down to the initializer, widening
+  `new Promise(() => {})` to `Promise<unknown>`. The emit layer now
+  rewrites `let X: Type = $state(null | undefined)` to
+  `let X: Type = $state<Type>(null | undefined)` so the bind:this
+  pattern those overloads were originally protecting still works —
+  explicit generic wins without the inference-blocking overloads.
+  Net: real-world parity bench picks up 2 errors on the reference
+  SvelteKit project (which just landed a `$state<Promise<T>>(…)`
+  trendline refactor) and 2 errors on `inference-playground`.
+
 ## [0.1.1] — docs update
 
 ## [0.1.0] — first public release

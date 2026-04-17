@@ -25,7 +25,7 @@ pub mod template_refs;
 pub mod template_walker;
 pub mod void_refs;
 
-pub use props::{PropInfo, find_props};
+pub use props::{PropInfo, find_props, find_props_type_source};
 pub use rune::{RuneCall, RuneKind, find_runes};
 pub use store::{collect_top_level_bindings, find_store_refs, find_store_refs_with_bindings};
 pub use template_refs::find_template_refs;

@@ -69,10 +69,17 @@ declare module 'svelte' {
         (...args: Parameters): any;
     };
 
-    // Shape-preserving in the real svelte package; permissive here so
-    // emit's `satisfies Partial<ComponentProps<typeof X>>` type-checks
-    // even against our stand-in Component/default-export type.
-    export type ComponentProps<T> = any;
+    // Mirrors svelte's real `ComponentProps<T>` shape closely enough
+    // that `satisfies Partial<ComponentProps<typeof X>>` flows the
+    // declared prop shape through to arrow-function destructure
+    // binding inference. `T = any` (fallback for untyped overlay
+    // defaults) degrades to `any`, so satisfies is a no-op there
+    // rather than firing false-positive contextual-typing errors.
+    export type ComponentProps<T> =
+        0 extends 1 & T ? any :
+        T extends Component<infer Props, any, any> ? Props :
+        T extends SvelteComponent<infer Props, any, any> ? Props :
+        any;
 
     export function onMount(fn: () => void | (() => void)): void;
     export function onDestroy(fn: () => void): void;

@@ -47,8 +47,18 @@ pub struct SplitScript {
 /// Re-parses the body once with oxc. If parsing panics on malformed user
 /// code, the content is passed through unchanged.
 pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
-    // Fast path: no import/export keyword at all → nothing to hoist.
-    if !content.contains("import") && !content.contains("export") {
+    // Fast path: none of the hoistable shapes appear as substrings →
+    // skip the parse. `type ` and `interface ` catch TS type/interface
+    // declarations which we now hoist too (so the module-level default
+    // export can reference a user-declared `Props` type). `namespace`/
+    // `module` cover the `TSModuleDeclaration` case.
+    if !content.contains("import")
+        && !content.contains("export")
+        && !content.contains("interface ")
+        && !content.contains("type ")
+        && !content.contains("namespace ")
+        && !content.contains("module ")
+    {
         return SplitScript {
             hoisted: String::new(),
             body: content.to_string(),
@@ -137,6 +147,19 @@ pub fn split_imports(content: &str, _lang: ScriptLang) -> SplitScript {
             // `module Foo { ... }`). Allowed only at the module level
             // (TS1235 inside a function); hoist verbatim.
             Statement::TSModuleDeclaration(decl) => {
+                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+            }
+            // `type Foo = ...` and `interface Foo { ... }` — hoist so
+            // the emitted `declare const __svn_component_default:
+            // Component<Foo>` at module level can reference them.
+            // Scripts typically declare `interface Props { ... }` right
+            // before `let { ... }: Props = $props()`; without the
+            // hoist, the overlay's typed default export reads "Cannot
+            // find name 'Props'" at module top.
+            Statement::TSTypeAliasDeclaration(decl) => {
+                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+            }
+            Statement::TSInterfaceDeclaration(decl) => {
                 hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
             }
             _ => {}

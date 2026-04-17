@@ -54,14 +54,35 @@ declare function __svn_type_ref<T>(): T;
 
 /** `$state<T>(initial?)` declares reactive state. Macro.
  *
- * Matches svelte's real `$state` signature — strict inference from the
- * initial value when no explicit generic is given. Calls like
- * `$state<T>(0)` where T is a generic parameter and 0 isn't assignable
- * to T do fire TS2345; that matches Svelte's own type behavior.
+ * Four overloads, in order:
+ *   1–2. `$state(null)` / `$state(undefined)` — literal-nullish initial.
+ *        T is inferred purely from contextual type (the variable's
+ *        annotation), NOT from the argument. This is the key fix for
+ *        the common bind-this pattern:
+ *          `let el: HTMLInputElement | null = $state(null);`
+ *        With the naive single overload `<T>(initial: T): T`, TS binds
+ *        T to `null`, narrows the initializer's type to `null`, and
+ *        CFA then narrows `el` to `null`. Later `if (el) el.focus()`
+ *        sees `el: never` — because the declared annotation was
+ *        merely a widening hint, not a fresh type. Splitting
+ *        null/undefined into their own overloads lets T remain a free
+ *        type variable that TS can fill from the assignment context,
+ *        so the returned type matches the annotation verbatim and no
+ *        narrowing collapse happens.
+ *   3. `$state(value)` — normal initial. T inferred from the argument.
+ *   4. `$state()` — no initial. Return is `T | undefined`.
+ *
+ * Calls like `$state<T>(0)` where T is a generic parameter and 0 isn't
+ * assignable to T still fire TS2345 — matches Svelte's own behavior.
  */
+declare function $state<T>(initial: null): T;
+declare function $state<T>(initial: undefined): T;
 declare function $state<T>(initial: T): T;
 declare function $state<T>(): T | undefined;
 declare namespace $state {
+    function eager<T>(value: T): T;
+    function raw<T>(initial: null): T;
+    function raw<T>(initial: undefined): T;
     function raw<T>(initial: T): T;
     function raw<T>(): T | undefined;
     function snapshot<T>(value: T): T;
@@ -79,6 +100,7 @@ declare namespace $effect {
     function pre(fn: () => void | (() => void)): void;
     function root(fn: () => void | (() => void)): () => void;
     function tracking(): boolean;
+    function pending(): number;
 }
 
 /** `$props<T>()` declares the component's prop bag. */
@@ -90,13 +112,26 @@ declare namespace $props {
 /** `$bindable<T>(fallback?)` marks a prop as two-way bindable. */
 declare function $bindable<T>(fallback?: T): T;
 
-/** `$inspect(...values)` logs values whenever they change in dev. */
+/** `$inspect(...values)` logs values whenever they change in dev.
+ *
+ * `with` is declared as a property (arrow function type), not a method.
+ * Matches real svelte: the property form is contravariant in its
+ * parameter type, which matters when the returned object is assigned
+ * to a stricter handler shape — method form would be bivariant and
+ * silently accept looser callbacks.
+ */
 declare function $inspect<T extends any[]>(
     ...values: T
-): { with(fn: (type: 'init' | 'update', ...values: T) => void): void };
+): { with: (fn: (type: 'init' | 'update', ...values: T) => void) => void };
+declare namespace $inspect {
+    function trace(name?: string): void;
+}
 
-/** `$host<T>()` returns the host element for a custom-element component. */
-declare function $host<T = HTMLElement>(): T;
+/** `$host<El>()` returns the host element for a custom-element component.
+ *
+ * Constraint matches real svelte: the parameter must extend `HTMLElement`.
+ */
+declare function $host<El extends HTMLElement = HTMLElement>(): El;
 
 // Internal helpers emitted by svelte-check-native into generated `.svelte.ts`
 // files. Declared here so the generated code type-checks. The `__svn_*`

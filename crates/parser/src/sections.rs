@@ -386,6 +386,15 @@ fn build_script_section<'src>(
 ) -> ScriptSection<'src> {
     let context = parse_context_attr(&raw.attrs, errors);
     let lang = parse_lang_attr(&raw.attrs, errors);
+    // `generics="T extends ..."` is only meaningful on the INSTANCE
+    // script; ignore it on `<script module>` where type parameters
+    // wouldn't have anything to apply to (the render function lives in
+    // the instance scope).
+    let generics = if context == ScriptContext::Instance {
+        parse_generics_attr(&raw.attrs)
+    } else {
+        None
+    };
     ScriptSection {
         open_tag_range: raw.open_tag_range,
         content_range: raw.content_range,
@@ -393,6 +402,7 @@ fn build_script_section<'src>(
         content: raw.content,
         lang,
         context,
+        generics,
         attrs: raw.attrs,
     }
 }
@@ -438,6 +448,20 @@ fn parse_context_attr(attrs: &[ScriptAttr], errors: &mut Vec<ParseError>) -> Scr
             });
             ScriptContext::Instance
         }
+    }
+}
+
+/// Extract the `generics="..."` attribute value. Returns the trimmed
+/// string when present and non-empty; `None` otherwise.
+fn parse_generics_attr(attrs: &[ScriptAttr]) -> Option<String> {
+    let attr = attrs
+        .iter()
+        .find(|a| a.name.eq_ignore_ascii_case("generics"))?;
+    let value = attr.value.as_deref()?.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
     }
 }
 
@@ -600,6 +624,54 @@ let x: number = 1;
         );
         assert_eq!(errors.len(), 1);
         assert!(matches!(errors[0], ParseError::UnknownScriptContext { .. }));
+    }
+
+    #[test]
+    fn generics_attr_extracted_on_instance_script() {
+        let src = r#"<script lang="ts" generics="T extends { id: string }, K extends keyof T">let x = 1;</script>"#;
+        let doc = parse_ok(src);
+        let s = doc.instance_script.unwrap();
+        assert_eq!(
+            s.generics.as_deref(),
+            Some("T extends { id: string }, K extends keyof T")
+        );
+    }
+
+    #[test]
+    fn generics_attr_trimmed() {
+        // Leading/trailing whitespace around the attribute value is
+        // stripped — the parser treats `"  T  "` as `"T"`.
+        let doc = parse_ok(r#"<script lang="ts" generics="  T  ">x</script>"#);
+        assert_eq!(doc.instance_script.unwrap().generics.as_deref(), Some("T"));
+    }
+
+    #[test]
+    fn empty_generics_attr_is_none() {
+        // `generics=""` is indistinguishable from absence — both yield
+        // no-generics emission. Keeping `None` in the field avoids
+        // downstream branches guarding against whitespace-only values.
+        let doc = parse_ok(r#"<script lang="ts" generics="">x</script>"#);
+        assert!(doc.instance_script.unwrap().generics.is_none());
+    }
+
+    #[test]
+    fn missing_generics_attr_is_none() {
+        let doc = parse_ok(r#"<script lang="ts">let x = 1;</script>"#);
+        assert!(doc.instance_script.unwrap().generics.is_none());
+    }
+
+    #[test]
+    fn generics_attr_ignored_on_module_script() {
+        // Svelte 5 rejects `<script module generics="T">`; the generic
+        // has no render function to apply to. We silently drop it.
+        let src = r#"<script module generics="T">export const x = 1;</script>"#;
+        let doc = parse_ok(src);
+        let ms = doc.module_script.unwrap();
+        assert!(
+            ms.generics.is_none(),
+            "generics on <script module> should be ignored, got {:?}",
+            ms.generics
+        );
     }
 
     #[test]

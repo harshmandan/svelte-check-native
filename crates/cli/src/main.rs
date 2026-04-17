@@ -104,6 +104,14 @@ struct Cli {
     /// expected version.
     #[arg(long = "tsgo-version", default_value_t = false)]
     tsgo_version: bool,
+
+    /// Print tsgo's extended compilation diagnostics (file/line/symbol
+    /// counts, memory use, phase timings) after the normal output.
+    /// Passes `--extendedDiagnostics` through to the tsgo subprocess
+    /// and prints the trailing stats block verbatim. Useful for
+    /// performance investigation on large projects.
+    #[arg(long = "tsgo-diagnostics", default_value_t = false)]
+    tsgo_diagnostics: bool,
 }
 
 fn main() -> ExitCode {
@@ -193,6 +201,7 @@ fn main() -> ExitCode {
         ignore_set.as_ref(),
         color,
         cli.timings,
+        cli.tsgo_diagnostics,
     )
 }
 
@@ -510,6 +519,7 @@ fn run_typecheck(
     ignore: Option<&globset::GlobSet>,
     color: ColorMode,
     timings: bool,
+    tsgo_diagnostics: bool,
 ) -> ExitCode {
     let phase_start = std::time::Instant::now();
 
@@ -586,9 +596,13 @@ fn run_typecheck(
     // call so each `generated_ts` string drops as soon as it has been
     // written to the cache — see svn_typecheck::check docs.
     let mark = std::time::Instant::now();
-    let (mut diagnostics, program_file_count) = if sources.js {
-        match svn_typecheck::check(workspace, tsconfig, inputs) {
-            Ok(out) => (out.diagnostics, Some(out.program_file_count)),
+    let (mut diagnostics, program_file_count, tsgo_diag_block) = if sources.js {
+        match svn_typecheck::check(workspace, tsconfig, inputs, tsgo_diagnostics) {
+            Ok(out) => (
+                out.diagnostics,
+                Some(out.program_file_count),
+                out.extended_diagnostics,
+            ),
             Err(err) => {
                 eprintln!("svelte-check-native: type-check failed: {err}");
                 return ExitCode::from(2);
@@ -598,7 +612,7 @@ fn run_typecheck(
         // When tsgo is skipped, drop `inputs` early too so we don't
         // hold the generated TS strings through the bridge phase.
         drop(inputs);
-        (Vec::new(), None)
+        (Vec::new(), None, None)
     };
     let t_typecheck = mark.elapsed();
 
@@ -689,6 +703,15 @@ fn run_typecheck(
         color,
         files_for_completed,
     );
+
+    // `--tsgo-diagnostics` block — printed to stderr so machine-output
+    // consumers parsing stdout (editors, CI wrappers) don't have to
+    // skip past perf stats. Same stream choice as `--timings`.
+    if let Some(block) = tsgo_diag_block.as_deref() {
+        eprintln!();
+        eprintln!("tsgo --extendedDiagnostics");
+        eprintln!("{block}");
+    }
 
     if timings {
         let total = phase_start.elapsed();

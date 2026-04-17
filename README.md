@@ -1,22 +1,52 @@
 # svelte-check-native
 
 Fast CLI type-checker for **Svelte 5+** projects. Drop-in replacement
-for [`svelte-check`](https://www.npmjs.com/package/svelte-check) — same
-flags, same output formats, same exit codes.
+for [`svelte-check`](https://www.npmjs.com/package/svelte-check) —
+same flags, same output formats, same exit codes. Powered by Rust +
+[tsgo](https://github.com/microsoft/typescript-go).
 
-Powered by Rust + [tsgo](https://github.com/microsoft/typescript-go).
+| What it is                                  | What it isn't                                     |
+| ------------------------------------------- | ------------------------------------------------- |
+| CLI type-checker for Svelte 5+ projects     | An LSP / editor integration                       |
+| Drop-in for `svelte-check` (flags + output) | A full Svelte 4 type-checker (partial — see v0.2) |
+| Single Rust binary, tsgo-powered            | A CSS linter                                      |
+| Byte-identical diagnostics to upstream      | A formatter                                       |
+| Incremental via tsgo's `tsbuildinfo`        | A watch-mode runner (pair with `watchexec`)       |
+
+## Speed
+
+Measured on a private SvelteKit + TypeScript project
+with 1206 `.svelte` files, M1 Pro 8C, median of 3 runs each:
+
+| Tool                     |      Cold |      Warm |     Dirty | Errors | Warnings | Files w/ issues |
+| :----------------------- | --------: | --------: | --------: | -----: | -------: | --------------: |
+| `svelte-check-native`    | **9.7 s** | **3.5 s** | **3.3 s** |  **0** |       44 |              15 |
+| `svelte-check-rs`        |    14.9 s |     5.4 s |     4.6 s |    732 |       44 |             261 |
+| `svelte-check` (default) |    41.6 s |    40.1 s |    41.2 s |      0 |       48 |              17 |
+
+- **Cold** = empty cache, fresh `bun` / `node` import.
+- **Warm** = re-run, no source changes.
+- **Dirty** = one `.svelte` file `touch`ed between runs.
+
+**Diagnostic sources:** `js,svelte` on `svelte-check-native` vs
+`js,svelte,css` by default on upstream `svelte-check`. The 4-warning
+gap is entirely CSS vendor-prefix compat checks — we do not ship a
+CSS linter. Error counts match upstream `svelte-check` exactly on
+this project (0 vs 0). Upstream `--tsgo` trips on a spurious
+`TS2688` because it doesn't filter unresolvable `types` entries from
+the tsconfig chain; we do.
+
+Diagnostic output is byte-equivalent to upstream `svelte-check` with
+the same flags.
 
 ## Install
 
 ```sh
-npm i -D svelte-check-native
+npm i -D svelte-check-native @typescript/native-preview
 ```
 
-Also requires `@typescript/native-preview` (tsgo)
-
-```
-npm i -D @typescript/native-preview
-```
+`@typescript/native-preview` is the tsgo binary — required at check
+time, never imported at runtime.
 
 ## Use
 
@@ -25,25 +55,6 @@ svelte-check-native --workspace .
 ```
 
 Same flags as `svelte-check`. See `svelte-check-native --help`.
-
-## Speed
-
-A heavy SvelteKit + TypeScript app (~1200 `.svelte` files, M-series
-8-core, median of 3 runs each):
-
-|                          | Cold     | Warm     | Dirty    |
-| ------------------------ | -------- | -------- | -------- |
-| `svelte-check-native`    | **~7 s** | **~3 s** | **~3 s** |
-| `svelte-check-rs`        | ~19 s    | ~11 s    | ~10 s    |
-| `svelte-check --tsgo`    | ~13 s    | ~13 s    | ~13 s    |
-| `svelte-check` (default) | ~43 s    | ~39 s    | ~39 s    |
-
-- **Cold** = empty cache, fresh `bun` / `node` import.
-- **Warm** = re-run with no source changes.
-- **Dirty** = one `.svelte` file `touch`ed between runs.
-
-Diagnostic output is byte-equivalent to upstream `svelte-check` with
-the same flags.
 
 ## How it works
 
@@ -61,14 +72,9 @@ flowchart LR
 1. Parse each `.svelte` into script + template sections
 2. Emit a `.svelte.ts` overlay file per source
 3. Run `tsgo` once against an overlay tsconfig
-4. Run `svelte/compiler` (via N parallel `bun`/`node` worker subprocesses)
-   for compiler warnings
+4. Run `svelte/compiler` (via N parallel `bun`/`node` worker
+   subprocesses) for compiler warnings
 5. Map every diagnostic back to its `.svelte` line:column
-
-The overlay cache lives at
-`<workspace>/node_modules/.cache/svelte-check-native/` (gitignored
-implicitly) — falls back to `<workspace>/.svelte-check/` if there is no
-`node_modules/`.
 
 ## Flags
 
@@ -85,6 +91,7 @@ implicitly) — falls back to `<workspace>/.svelte-check/` if there is no
 --timings                     Print phase-by-phase wall-clock breakdown
 --debug-paths                 Print resolved binaries, exit
 --tsgo-version                Print tsgo version, exit
+--tsgo-diagnostics            Print tsgo's perf/memory stats after the run
 --emit-ts                     Print generated TypeScript per file, exit
 ```
 
@@ -94,13 +101,56 @@ Output defaults to `machine` when run from a coding-agent CLI:
 `CLAUDECODE=1` (Claude Code), `GEMINI_CLI=1` (Gemini CLI), or
 `CODEX_CI=1` (OpenAI Codex CLI).
 
-## Not included
+## Environment variables
 
-- Watch mode — pair with `watchexec` or your editor
-- LSP / autocomplete — use the official Svelte for VS Code extension
-- Svelte 4 syntax (`export let`, `$:`, `<slot>`, `on:` directives)
-- CSS linting (`--diagnostic-sources css` is hard-rejected)
-- `tsc` fallback (tsgo is the only TypeScript backend)
+- `TSGO_BIN` — override tsgo discovery; accepts an absolute path to a
+  platform-native tsgo binary. Useful when `@typescript/native-preview`
+  isn't in `node_modules` (e.g. a monorepo where tsgo lives elsewhere).
+- `SVN_BRIDGE_WORKERS` — number of `svelte/compiler` worker
+  subprocesses. Default `cores/2`, capped at 8; tracks the perf-core
+  count on Apple Silicon. Override if you hit IPC contention on very
+  large core counts.
+- `CLAUDECODE` / `GEMINI_CLI` / `CODEX_CI` — any set forces `machine`
+  output for agent-friendly parsing.
+
+## Exit codes
+
+- `0` — no errors (and no warnings if `--fail-on-warnings`)
+- `1` — errors detected (or warnings with `--fail-on-warnings`)
+- `2` — invocation error (bad flag, missing tsconfig, tsgo not found)
+
+## On deck for v0.2
+
+- Full Svelte 4 syntax compat (`<slot>` → children snippet, `on:event`
+  → event-handler prop typing, `$:` reactive statements → `$derived` /
+  `$effect`). Today `export let` and `export { name as alias }` already
+  work.
+- Targeted CSS diagnostics via `lightningcss` — vendor-prefix
+  compatibility warnings only. We are explicitly **not** reimplementing
+  stylelint; if the narrow rule set isn't tractable, CSS stays out.
+- Reproducible perf-benchmark script across more reference projects.
+
+## Troubleshooting
+
+**Stale errors after editing `tsconfig.json` or path aliases** — wipe
+the cache: `rm -rf node_modules/.cache/svelte-check-native` and re-run.
+The overlay config is regenerated from your live tsconfig on every
+run, but tsgo's `tsbuildinfo` can hold onto stale resolution state.
+
+**Svelte 4 component errors on a mid-migration codebase** — `export
+let` and renamed exports (`export { X as Y }`) work today; `<slot>`,
+`on:event` directives, and `$:` reactive statements don't yet.
+Tracked for v0.2.
+
+## Prior art
+
+- [`svelte2tsx`](https://github.com/sveltejs/language-tools/tree/master/packages/svelte2tsx)
+  / [`svelte-check`](https://github.com/sveltejs/language-tools/tree/master/packages/svelte-check)
+  — transpiler + CLI whose output shape and flags we
+  match. The `.v5` fixture corpus from `svelte2tsx` is our parity gate.
+- [tsgo](https://github.com/microsoft/typescript-go) — the Go-based
+  TypeScript compiler that does the actual type-checking. Shipped as
+  `@typescript/native-preview`.
 
 ## License
 

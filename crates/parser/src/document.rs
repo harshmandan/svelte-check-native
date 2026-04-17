@@ -50,6 +50,18 @@ pub struct ScriptSection<'src> {
     /// Parsed `context=` attribute.
     pub context: ScriptContext,
 
+    /// Parsed `generics="..."` attribute (Svelte 5 only). Holds the raw
+    /// type-parameter-list string verbatim — e.g. `"T, K extends keyof T"`
+    /// — trimmed of surrounding whitespace. `None` if the attribute is
+    /// absent or empty. The value is spliced directly into the wrapping
+    /// render function as `function $$render<T, K extends keyof T>() { ... }`.
+    ///
+    /// Per Svelte 5, the attribute is only meaningful on the INSTANCE
+    /// script; setting it on a `<script module>` is a user error (we
+    /// don't emit a diagnostic for it yet, but the field is only
+    /// populated on instance scripts).
+    pub generics: Option<String>,
+
     /// Every attribute found on the opening tag, including ones we don't
     /// interpret. Preserved so diagnostics can echo them back and the
     /// emitter has full fidelity if ever needed.

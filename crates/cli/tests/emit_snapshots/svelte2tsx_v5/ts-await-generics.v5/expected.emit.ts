@@ -44,7 +44,7 @@ async function $$render_200dbc4a<T>() {
     void promise;
 }
 $$render_200dbc4a;
-declare const __svn_component_default: import('svelte').Component<{ prop?: T }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ prop?: T }>;
+declare const __svn_component_default: any;
+declare type __svn_component_default = any;
 export default __svn_component_default;
 

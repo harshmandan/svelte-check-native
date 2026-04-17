@@ -84,7 +84,31 @@ tsgo invocation, diagnostics mapping back to `.svelte` source.
 6. **Synthesized-name prefix:** `__svn_*`. Used for every name the emit
    crate creates so they're trivially distinguishable from user code in
    diagnostics.
-7. **New emit shapes are tsgo-validated on a hand-written fixture
+7. **Component instantiations emit as `new $$_CN({target, props})`
+   through the `__svn_ensure_component` wrapper.** Each `<Comp ...>`
+   in the template emits as:
+
+   ```ts
+   { const __svn_CN = __svn_ensure_component(Comp);
+     new __svn_CN({ target: __svn_any(), props: { ... } }); }
+   ```
+
+   The wrapper handles both our callable-default overlays and
+   third-party Svelte-4-style classes uniformly. The intermediate
+   `const` local is load-bearing — it's what lets TS bind generic
+   components' `<T>` at the `new` site against concrete prop values
+   (dropped local → `T` resolves to `unknown`, snippet arrows fire
+   implicit-any). Constructor's `props?` slot is `Partial<Props>` so
+   required props stay optional at the call site (bind:directives,
+   spreads, implicit `children` from the template body don't show up
+   in the emitted object literal). Full rationale and rejected
+   alternatives in `design/phase_a/DESIGN.md`.
+
+   Overlay default exports are typed `import('svelte').Component<Props>`
+   — the function form. Matches `ComponentProps<typeof Foo>`'s
+   built-in constraint directly and keeps generics expressible.
+
+8. **New emit shapes are tsgo-validated on a hand-written fixture
    before implementation.** Any change to what the emit crate produces
    — new helper, new component-call shape, new binding pattern — is
    first expressed as hand-written TS in a throwaway fixture and

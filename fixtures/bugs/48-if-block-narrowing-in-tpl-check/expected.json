@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Our emit walks {#if}/{:else if}/{:else} but drops the condition expressions. A satisfies-check on a `<CircleView radius={shape.radius} />` inside `{#if shape.kind === 'circle'}` reports TS2339 'Property radius does not exist on type Shape' because tsgo never sees the narrowing gate. Emit must wrap each arm in a real `if ((cond)) { ... }` / `else if ((cond)) { ... }` / `else { ... }` so TS's control-flow analysis narrows the union inside the arm."
+}

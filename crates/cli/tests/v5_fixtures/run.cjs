@@ -60,6 +60,19 @@ const baselines = (() => {
     }
 })();
 
+// The binary forces `--output machine` when it sees CLAUDECODE / GEMINI_CLI /
+// CODEX_CI set to `"1"` in its environment (see crates/cli/src/main.rs). This
+// runner parses `machine-verbose` JSON from stdout, so inheriting those vars
+// from an agentic parent shell would make every diagnostic invisible and
+// every fixture falsely "pass". Blank them out (not delete — the binary only
+// rejects literal `"1"`, so `""` is the minimal override).
+const CHILD_ENV = {
+    ...process.env,
+    CLAUDECODE: '',
+    GEMINI_CLI: '',
+    CODEX_CI: ''
+};
+
 let passed = 0;
 let passedBaseline = 0; // passed because within baseline budget
 let failed = 0;
@@ -100,7 +113,7 @@ function runFixture(name, fixtureDir) {
             stdout = execFileSync(
                 BIN,
                 ['--workspace', workspace, '--tsconfig', tsconfigPath, '--output', 'machine-verbose'],
-                { encoding: 'utf-8', timeout: 60_000 }
+                { encoding: 'utf-8', timeout: 60_000, env: CHILD_ENV }
             );
         } catch (err) {
             stdout = err.stdout || '';

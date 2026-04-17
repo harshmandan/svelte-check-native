@@ -771,12 +771,7 @@ fn emit_template_node(
         Node::KeyBlock(b) => emit_template_body(out, source, &b.body, depth, insts),
         Node::SnippetBlock(b) => emit_snippet_block(out, source, b, depth, insts),
         Node::Element(e) => emit_template_body(out, source, &e.children, depth, insts),
-        Node::Component(c) => {
-            if let Some(inst) = insts.get(&c.range.start) {
-                emit_one_component_prop_check(out, source, inst, depth);
-            }
-            emit_template_body(out, source, &c.children, depth, insts);
-        }
+        Node::Component(c) => emit_component_node(out, source, c, depth, insts),
         Node::SvelteElement(s) => emit_template_body(out, source, &s.children, depth, insts),
         Node::Text(_) | Node::Interpolation(_) | Node::Comment(_) => {}
     }
@@ -1266,13 +1261,88 @@ fn emit_action_attrs_declarations(out: &mut String, summary: &TemplateSummary) {
     }
 }
 
+/// Emit a `<Component ...>` node: a prop-check satisfies-expression
+/// plus a walk of non-snippet children.
+///
+/// Direct-child `{#snippet name(params)}` blocks are woven into the
+/// component's satisfies-check prop literal as arrow callbacks
+/// (`name: (params) => { <snippet body> }`) so TypeScript's contextual
+/// typing fills the `Snippet<[...]>` parameter types into the user's
+/// snippet param bindings. Without this, the alternative (a scope with
+/// `const p: any = undefined` placeholders) kills contextual flow and
+/// fires "Binding element implicitly has an 'any' type" on any
+/// destructured snippet param.
+///
+/// Non-snippet children (text, elements, nested components, blocks) are
+/// walked AFTER the prop-check in the component's own scope. Snippets
+/// consumed as props are NOT walked a second time via the usual snippet
+/// path — their bodies live inside the arrow.
+fn emit_component_node(
+    out: &mut String,
+    source: &str,
+    c: &svn_parser::Component,
+    depth: usize,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+) {
+    let snippet_children: Vec<&SnippetBlock> = c
+        .children
+        .nodes
+        .iter()
+        .filter_map(|n| match n {
+            Node::SnippetBlock(b) => Some(b),
+            _ => None,
+        })
+        .collect();
+
+    // Only consume snippets as satisfies-check prop values when there's a
+    // prop-check to weave them into. Components that analyze disqualified
+    // (multi-part interpolated attribute values) have no `inst`; fall back
+    // to the usual template-body walk so snippet hoists still emit there.
+    let inst = insts.get(&c.range.start);
+    if let Some(inst) = inst {
+        emit_component_prop_check(out, source, inst, depth, &snippet_children, insts);
+    }
+
+    if inst.is_none() || snippet_children.is_empty() {
+        emit_template_body(out, source, &c.children, depth, insts);
+        return;
+    }
+    emit_children_without_snippets(out, source, &c.children, depth, insts);
+}
+
+/// Walk `c.children` but drop direct-child `SnippetBlock` nodes.
+///
+/// Used after the parent `<Component>`'s prop-check has already baked
+/// each direct-child snippet in as an arrow-callback — replaying the
+/// usual snippet-hoist and body emission would shadow the arrow and
+/// emit the body a second time.
+fn emit_children_without_snippets(
+    out: &mut String,
+    source: &str,
+    fragment: &Fragment,
+    depth: usize,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+) {
+    for node in &fragment.nodes {
+        if matches!(node, Node::SnippetBlock(_)) {
+            continue;
+        }
+        emit_template_node(out, source, node, depth, insts);
+    }
+}
+
 /// Emit excess-property checks for `<Component prop=...>` instantiations.
 ///
 /// For each component instantiation collected by analyze, emit:
 ///
 /// ```ts
-///     void ({ prop1: "lit", prop2: <expr>, prop3, prop4: true } satisfies
-///         Partial<import('svelte').ComponentProps<typeof Component>>);
+///     void ({
+///         prop1: "lit",
+///         prop2: <expr>,
+///         prop3,
+///         prop4: true,
+///         snippetName: (a, b) => { <snippet body> },
+///     } satisfies Partial<import('svelte').ComponentProps<typeof Component>>);
 /// ```
 ///
 /// `Partial<>` is what makes this safe to enable broadly. It keeps
@@ -1291,13 +1361,49 @@ fn emit_action_attrs_declarations(out: &mut String, summary: &TemplateSummary) {
 /// `class:active`, etc.) and spreads contribute nothing to the
 /// satisfies literal — they're skipped at analyze time. Their
 /// absence is harmless thanks to `Partial<>`.
-fn emit_one_component_prop_check(
+///
+/// `{#snippet name(params)}...{/snippet}` blocks that are direct
+/// children of the component become arrow-callback values on the
+/// satisfies object, with the snippet body emitted inside the arrow.
+/// That's what enables TS's contextual typing to flow the parent's
+/// `Snippet<[...]>` parameter list into each snippet param binding —
+/// a param destructure like `{#snippet row({ id })}` picks up the
+/// tuple-element shape from the consumer's declared Snippet type
+/// instead of falling through to implicit-any.
+fn emit_component_prop_check(
     out: &mut String,
     source: &str,
     inst: &svn_analyze::ComponentInstantiation,
     depth: usize,
+    snippet_children: &[&SnippetBlock],
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
 ) {
     let indent = "    ".repeat(depth);
+    if !snippet_children.is_empty() {
+        // Multi-line form — each snippet gets its own arrow body and
+        // nested template-body walk, so readability and downstream
+        // diagnostics positioning both benefit from a line per prop.
+        let _ = writeln!(out, "{indent}void ({{");
+        let inner_indent = "    ".repeat(depth + 1);
+        for p in &inst.props {
+            out.push_str(&inner_indent);
+            write_prop_shape(out, source, p);
+            let _ = writeln!(out, ",");
+        }
+        for s in snippet_children {
+            out.push_str(&inner_indent);
+            write_snippet_arrow_prop(out, source, s, depth + 1, insts);
+            let _ = writeln!(out, ",");
+        }
+        let _ = writeln!(
+            out,
+            "{indent}}} satisfies Partial<__SvnComponentProps<typeof {}>>);",
+            inst.component_root
+        );
+        return;
+    }
+
+    // No snippet children — compact single-line form.
     let _ = write!(out, "{indent}void ({{");
     let mut first = true;
     for p in &inst.props {
@@ -1305,32 +1411,7 @@ fn emit_one_component_prop_check(
             let _ = write!(out, ", ");
         }
         first = false;
-        match p {
-            svn_analyze::PropShape::Literal { name, value } => {
-                write_object_key(out, name);
-                out.push_str(": ");
-                write_js_string_literal(out, value);
-            }
-            svn_analyze::PropShape::Expression { name, expr_range } => {
-                let expr = &source[expr_range.start as usize..expr_range.end as usize];
-                write_object_key(out, name);
-                let _ = write!(out, ": ({expr})");
-            }
-            svn_analyze::PropShape::Shorthand { name } => {
-                // `{foo}` shorthand is only valid when the key is also a
-                // valid JS identifier — otherwise expand to `"foo": foo`.
-                if is_simple_js_identifier(name) {
-                    out.push_str(name);
-                } else {
-                    write_object_key(out, name);
-                    let _ = write!(out, ": {name}");
-                }
-            }
-            svn_analyze::PropShape::BoolShorthand { name } => {
-                write_object_key(out, name);
-                out.push_str(": true");
-            }
-        }
+        write_prop_shape(out, source, p);
     }
     // `__SvnComponentProps<T>` (declared in svelte_shims_core.d.ts)
     // is used instead of `import('svelte').ComponentProps<T>` to
@@ -1344,6 +1425,102 @@ fn emit_one_component_prop_check(
         "}} satisfies Partial<__SvnComponentProps<typeof {}>>);",
         inst.component_root
     );
+}
+
+/// Write a single property of a component-prop-check object literal,
+/// dispatching on the analyze-side `PropShape` variant.
+fn write_prop_shape(out: &mut String, source: &str, p: &svn_analyze::PropShape) {
+    match p {
+        svn_analyze::PropShape::Literal { name, value } => {
+            write_object_key(out, name);
+            out.push_str(": ");
+            write_js_string_literal(out, value);
+        }
+        svn_analyze::PropShape::Expression { name, expr_range } => {
+            let expr = &source[expr_range.start as usize..expr_range.end as usize];
+            write_object_key(out, name);
+            let _ = write!(out, ": ({expr})");
+        }
+        svn_analyze::PropShape::Shorthand { name } => {
+            // `{foo}` shorthand is only valid when the key is also a
+            // valid JS identifier — otherwise expand to `"foo": foo`.
+            if is_simple_js_identifier(name) {
+                out.push_str(name);
+            } else {
+                write_object_key(out, name);
+                let _ = write!(out, ": {name}");
+            }
+        }
+        svn_analyze::PropShape::BoolShorthand { name } => {
+            write_object_key(out, name);
+            out.push_str(": true");
+        }
+    }
+}
+
+/// Write a `{#snippet name(params)}...{/snippet}` block as an
+/// arrow-callback property value on the parent component's prop-check
+/// object:
+///
+/// ```ts
+///     name: (params) => {
+///         <snippet body>
+///     }
+/// ```
+///
+/// The parameter text is spliced verbatim from the source — that
+/// preserves user-provided type annotations, destructure patterns, and
+/// default values. TypeScript's contextual typing reads the parent
+/// component's declared `Snippet<[...]>` parameter shape through the
+/// satisfies-target (`__SvnComponentProps<typeof Wrapper>`) and flows
+/// each tuple element into the matching arrow parameter, so destructured
+/// snippet params pick up real types instead of implicit-any.
+///
+/// An empty parameter list emits `() =>` cleanly. The closing `}` is
+/// written without a trailing newline so the caller can append `,\n` at
+/// the property-value column.
+fn write_snippet_arrow_prop(
+    out: &mut String,
+    source: &str,
+    s: &SnippetBlock,
+    depth: usize,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+) {
+    let indent = "    ".repeat(depth);
+    let body_indent = "    ".repeat(depth + 1);
+    let params_text = source
+        .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
+        .unwrap_or("")
+        .trim();
+    write_object_key(out, &s.name);
+    if params_text.is_empty() {
+        let _ = writeln!(out, ": () => {{");
+        emit_template_body(out, source, &s.body, depth + 1, insts);
+        let _ = writeln!(out, "{body_indent}return null as any;");
+        let _ = write!(out, "{indent}}}");
+        return;
+    }
+    let _ = writeln!(out, ": ({params_text}) => {{");
+    emit_template_body(out, source, &s.body, depth + 1, insts);
+    // `void <ident>;` for each identifier in the param list. The arrow
+    // body has no structural representation of the snippet's template
+    // content beyond scaffolding, so any user-introduced snippet param
+    // (destructured `{ id, label }`, positional `columns`, etc.) looks
+    // "declared but never read" to TS. Voiding each one consumes the
+    // binding without interfering with contextual-typing flow from
+    // the satisfies target.
+    for ident in all_identifiers(params_text) {
+        let _ = writeln!(out, "{body_indent}void {ident};");
+    }
+    // The Snippet<[...]> type brands its return as an opaque exotic
+    // (`{ '{@render ...} must be called with a Snippet': string } &
+    // typeof SnippetReturn`), which a bare arrow body
+    // (`(args) => void`) cannot satisfy structurally. Returning `any`
+    // widens the arrow's return type so it assigns cleanly through the
+    // parent's `Snippet<[...]>` prop slot while contextual typing still
+    // flows into the parameters from the satisfies target.
+    let _ = writeln!(out, "{body_indent}return null as any;");
+    let _ = write!(out, "{indent}}}");
 }
 
 /// Write an object-literal key. Plain JS identifiers are emitted bare;

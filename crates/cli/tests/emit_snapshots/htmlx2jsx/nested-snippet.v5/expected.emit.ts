@@ -41,11 +41,11 @@ async function $$render_df3e76f3() {
                 const foo: any = undefined;
                 void foo;
             }
-            void ({} satisfies Partial<__SvnComponentProps<typeof Component>>);
-            {
-                const foo: any = undefined;
-                void foo;
-            }
+            void ({
+                foo: () => {
+                    return null as any;
+                },
+            } satisfies Partial<__SvnComponentProps<typeof Component>>);
         }
     }
     void __svn_tpl_check;

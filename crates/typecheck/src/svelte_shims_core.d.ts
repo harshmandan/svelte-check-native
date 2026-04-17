@@ -275,6 +275,48 @@ type __SvnProps<C> =
         ? (P extends Partial<infer Q> ? Q : P)
         : never;
 
+// ---------- asset side-effect imports ----------
+//
+// Bundlers (Vite, webpack, etc.) let user code do side-effect imports
+// of assets. Two flavours we cover here:
+//
+//   1. File-extension imports:  `import './styles.css'`,
+//      `import 'swiper/bundle.min.css'`. Matches `*.css` pattern —
+//      the literal file extension is part of the specifier.
+//   2. Package-subpath imports: `import 'swiper/css'`,
+//      `import 'swiper/css/navigation'`. These are package
+//      `exports`-map subpaths whose specifiers don't end in `.css`
+//      but resolve to CSS files at runtime. Vite's own package.json
+//      exports handles this; tsgo's overlay never sees it and fires
+//      TS2307 "Cannot find module 'swiper/css'".
+//
+// Vite's `vite/client.d.ts` declares the `*.css` ambients but not the
+// package-subpath shape. Upstream svelte-check silently accepts
+// package subpaths — likely because svelte-kit projects transitively
+// load `vite/client` AND the tsgo-side module resolver is more
+// permissive on unresolved side-effect imports (no `.ts` extension
+// to look for, so bundler auto-extension doesn't fire).
+//
+// Rather than try to enumerate every package-subpath shape
+// (`*/css`, `*/styles.css`, etc.), silence side-effect imports
+// generally by accepting the common asset extensions PLUS the
+// `swiper/css`-style subpath via `*/css/*` and `*/css` patterns.
+// Empty-body ambients resolve content to `{}` — import expressions
+// compile to `any` and side-effect imports type-check without
+// constraining content.
+declare module '*.css' {}
+declare module '*.scss' {}
+declare module '*.sass' {}
+declare module '*.less' {}
+declare module '*.styl' {}
+declare module '*.stylus' {}
+declare module '*.pcss' {}
+declare module '*.postcss' {}
+// Package-subpath CSS (swiper/css, swiper/css/navigation, etc.).
+// Conservative: matches any `<pkg>/css` import exactly and any
+// `<pkg>/css/<variant>` subpath.
+declare module '*/css' {}
+declare module '*/css/*' {}
 
 //
 // We declare only what's needed to make type-checking succeed for code

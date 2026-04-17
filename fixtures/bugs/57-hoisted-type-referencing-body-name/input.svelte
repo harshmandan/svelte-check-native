@@ -1,0 +1,24 @@
+<script lang="ts">
+    // A body-level const whose *name* is referenced from a TS type alias.
+    // The type alias is hoisted to module scope (so hoisted `interface
+    // Props`-style exports can reference it); the const stays in the
+    // `$$render` body. Without a `declare const` stub at module scope
+    // the hoisted type fires "Cannot find name 'chartKinds'".
+    const chartKinds = ['line', 'bar', 'area'] as const
+    type ChartKind = (typeof chartKinds)[number]
+
+    // Second pattern: `typeof fn` inside a hoisted interface referencing
+    // a body-level function declaration.
+    async function fetchChart(): Promise<ChartKind> {
+        return 'line'
+    }
+    interface Api {
+        fetch: typeof fetchChart
+    }
+
+    const kind: ChartKind = 'bar'
+    const api: Api = { fetch: fetchChart }
+    void kind
+    void api
+    void chartKinds
+</script>

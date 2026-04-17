@@ -342,6 +342,13 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
         if referenced.contains(name) && stub_seen.insert(name.clone()) {
             hoisted.push_str("declare const ");
             hoisted.push_str(name);
+            // Stub type: index-signature + callable intersection so
+            // `typeof <name>` is both indexable (for `X[key]`
+            // subscripts, with `keyof = string`) and callable (for
+            // `typeof fn` references inside a hoisted
+            // `Snippet<[{ fn: typeof fn }]>`). A plain `any` would
+            // widen `keyof typeof X` to `string | number | symbol`
+            // and trip TS1023 on user `X[stringKey]` subscripts.
             hoisted.push_str(": { [key: string]: any } & ((...args: any[]) => any);\n");
         }
     }

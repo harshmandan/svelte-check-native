@@ -26,46 +26,38 @@ async function $$render_0bc1cb85() {
                 const x: any = undefined;
                 void x;
             }
-            void ({} satisfies Partial<__SvnComponentProps<typeof Component>>);
-            {
-                const bar: any = undefined;
-                void bar;
-                {
-                    const x: any = undefined;
+            void ({
+                bar: (x) => {
                     void x;
-                }
-            }
-            void ({data: ([1, 2, 3])} satisfies Partial<__SvnComponentProps<typeof List>>);
-            {
-                const row: any = undefined;
-                void row;
-                const await_inside: any = undefined;
-                void await_inside;
-                {
-                    const item: any = undefined;
+                    return null as any;
+                },
+            } satisfies Partial<__SvnComponentProps<typeof Component>>);
+            void ({
+                data: ([1, 2, 3]),
+                row: (item) => {
                     void item;
-                }
-                {
-                    const bar: any = undefined;
-                    void bar;
-                }
-            }
+                    return null as any;
+                },
+                await_inside: () => {
+                    {
+                        const bar: any = undefined;
+                        void bar;
+                    }
+                    return null as any;
+                },
+            } satisfies Partial<__SvnComponentProps<typeof List>>);
             void ({} satisfies Partial<__SvnComponentProps<typeof List>>);
-            void ({data: ([1, 2, 3])} satisfies Partial<__SvnComponentProps<typeof List>>);
-            {
-                const row1: any = undefined;
-                void row1;
-                const row2: any = undefined;
-                void row2;
-                {
-                    const item: any = undefined;
+            void ({
+                data: ([1, 2, 3]),
+                row1: (item) => {
                     void item;
-                }
-                {
-                    const item: any = undefined;
+                    return null as any;
+                },
+                row2: (item) => {
                     void item;
-                }
-            }
+                    return null as any;
+                },
+            } satisfies Partial<__SvnComponentProps<typeof List>>);
             {
                 const type: any = undefined;
                 const number: any = undefined;

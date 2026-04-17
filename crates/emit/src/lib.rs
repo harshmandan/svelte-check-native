@@ -568,9 +568,38 @@ fn emit_template_body(
     depth: usize,
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
 ) {
-    for node in &fragment.nodes {
-        emit_template_node(out, source, node, depth, insts);
+    // Hoist `{#snippet name(...)}` names declared at this fragment so
+    // sibling component-prop checks (`<X slot={name}>`) resolve them.
+    // When any hoist happens, the whole walk is wrapped in a fresh `{}`
+    // lexical scope so the declarations don't leak to other fragments
+    // at the same depth — e.g. two `<Wrapper>{#snippet action()}...`
+    // siblings would otherwise redeclare `action` in the same scope
+    // and fire TS2451.
+    let snippets: Vec<&SnippetBlock> = fragment
+        .nodes
+        .iter()
+        .filter_map(|n| match n {
+            Node::SnippetBlock(b) => Some(b),
+            _ => None,
+        })
+        .collect();
+    if snippets.is_empty() {
+        for node in &fragment.nodes {
+            emit_template_node(out, source, node, depth, insts);
+        }
+        return;
     }
+    let indent = "    ".repeat(depth);
+    let inner = "    ".repeat(depth + 1);
+    let _ = writeln!(out, "{indent}{{");
+    for s in &snippets {
+        let _ = writeln!(out, "{inner}const {}: any = undefined;", s.name);
+        let _ = writeln!(out, "{inner}void {};", s.name);
+    }
+    for node in &fragment.nodes {
+        emit_template_node(out, source, node, depth + 1, insts);
+    }
+    let _ = writeln!(out, "{indent}}}");
 }
 
 fn emit_template_node(
@@ -583,13 +612,35 @@ fn emit_template_node(
     match node {
         Node::EachBlock(b) => emit_each_block(out, source, b, depth, insts),
         Node::IfBlock(b) => {
-            emit_template_body(out, source, &b.consequent, depth, insts);
+            // Emit as a real `if/else if/else` chain so TS's control-flow
+            // analysis narrows union / nullable / type-guard references
+            // inside each arm. Without this, `{#if shape.kind === 'circle'}`
+            // leaves `shape.radius` reading as "Property 'radius' does not
+            // exist on type 'Shape'" inside the nested component-prop
+            // check, and `{#if maybe}{...maybe...}{/if}` reads as "`maybe`
+            // is possibly undefined". Conditions are wrapped in an extra
+            // pair of parens to stay robust against operator-precedence
+            // oddities in the raw source text.
+            let indent = "    ".repeat(depth);
+            let main_cond = source
+                .get(b.condition_range.start as usize..b.condition_range.end as usize)
+                .unwrap_or("true")
+                .trim();
+            let _ = writeln!(out, "{indent}if (({main_cond})) {{");
+            emit_template_body(out, source, &b.consequent, depth + 1, insts);
             for arm in &b.elseif_arms {
-                emit_template_body(out, source, &arm.body, depth, insts);
+                let arm_cond = source
+                    .get(arm.condition_range.start as usize..arm.condition_range.end as usize)
+                    .unwrap_or("true")
+                    .trim();
+                let _ = writeln!(out, "{indent}}} else if (({arm_cond})) {{");
+                emit_template_body(out, source, &arm.body, depth + 1, insts);
             }
             if let Some(alt) = &b.alternate {
-                emit_template_body(out, source, alt, depth, insts);
+                let _ = writeln!(out, "{indent}}} else {{");
+                emit_template_body(out, source, alt, depth + 1, insts);
             }
+            let _ = writeln!(out, "{indent}}}");
         }
         Node::AwaitBlock(b) => {
             if let Some(p) = &b.pending {
@@ -700,13 +751,17 @@ fn emit_snippet_block(
     let indent = "    ".repeat(depth);
     let params_text = source
         .get(b.parameters_range.start as usize..b.parameters_range.end as usize)
-        .unwrap_or("");
-    let idents = all_identifiers(params_text);
-    if idents.is_empty() {
-        // No params — no scope needed; just walk the body.
+        .unwrap_or("")
+        .trim();
+    // `{#snippet name()}` with an empty parameter list — skip the
+    // scope + placeholder binding entirely. `all_identifiers` never
+    // returns an empty vec (it falls back to `__svn_each_unused`),
+    // so we intercept the empty-params case before calling it.
+    if params_text.is_empty() {
         emit_template_body(out, source, &b.body, depth, insts);
         return;
     }
+    let idents = all_identifiers(params_text);
     let _ = writeln!(out, "{indent}{{");
     for ident in &idents {
         let _ = writeln!(out, "{indent}    const {ident}: any = undefined;");

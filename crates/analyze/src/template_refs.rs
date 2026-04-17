@@ -430,8 +430,18 @@ fn extract_idents(source: &str, range: Range, seen: &mut HashSet<SmolStr>, out: 
             after_dot = false;
             continue;
         }
-        // Member access — suppress the next ident.
+        // Member access — suppress the next ident. But NOT when `.` is
+        // part of a `...` spread/rest operator — the identifier after
+        // `...` is a real reference (e.g. `{[...selection].toString()}`
+        // spreads `selection`, so `selection` must flow into the
+        // template-ref set).
         if b == b'.' {
+            let is_spread = i + 2 < bytes.len() && bytes[i + 1] == b'.' && bytes[i + 2] == b'.';
+            if is_spread {
+                i += 3;
+                after_dot = false;
+                continue;
+            }
             after_dot = true;
             i += 1;
             continue;

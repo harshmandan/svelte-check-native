@@ -8,6 +8,7 @@ async function $$render_e5ad478b() {
             void failed;
             void ({} satisfies Partial<__SvnComponentProps<typeof ComponentThatFails>>);
             {
+                void ((e: any) => { void [e]; });
                 const e: any = undefined;
                 void e;
             }

@@ -61,22 +61,46 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
                 Ok(raw) => {
                     let section = build_script_section(source, raw, &mut errors);
                     let is_module = section.context == ScriptContext::Module;
-                    if is_module {
-                        if module_script.is_some() {
+                    let open_range = section.open_tag_range;
+                    let close_range = section.close_tag_range;
+                    let is_duplicate_script = if is_module {
+                        let dup = module_script.is_some();
+                        if dup {
                             errors.push(ParseError::DuplicateScript {
                                 descriptor: " context=\"module\"",
-                                range: section.open_tag_range,
+                                range: open_range,
                             });
                         } else {
                             module_script = Some(section);
                         }
+                        dup
                     } else if instance_script.is_some() {
                         errors.push(ParseError::DuplicateScript {
                             descriptor: "",
-                            range: section.open_tag_range,
+                            range: open_range,
                         });
+                        true
                     } else {
                         instance_script = Some(section);
+                        false
+                    };
+                    // A "duplicate" script is almost always a `<script>`
+                    // element that lives INSIDE the template (typically
+                    // nested under `<svelte:head>` for analytics / Google
+                    // Identity Services tags). Its opening-tag attributes
+                    // often reference script-local bindings — e.g.
+                    // `onload={useManualGoogleAuth('signin')}` — which
+                    // must be scanned by the template-ref pass so the
+                    // import isn't flagged as TS6133 "declared but never
+                    // read". Add the opening tag's span to the template
+                    // runs; the template parser then picks it up as
+                    // normal element content and its attribute expressions
+                    // flow through the usual walker.
+                    if is_duplicate_script {
+                        template_runs.push(Range::new(open_range.start, open_range.end));
+                        if close_range.start < close_range.end {
+                            template_runs.push(Range::new(close_range.start, close_range.end));
+                        }
                     }
                     template_cursor = scanner.pos();
                 }

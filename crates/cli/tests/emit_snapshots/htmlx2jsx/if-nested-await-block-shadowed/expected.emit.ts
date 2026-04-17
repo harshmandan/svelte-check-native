@@ -3,8 +3,6 @@
 async function $$render_bdea4648() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        let hello: any = undefined;
-        void hello;
         if ((hello)) {
             void [hello];
             {
@@ -13,6 +11,8 @@ async function $$render_bdea4648() {
             }
             {
                 const foo: any = undefined;
+                const hello = foo;
+                void hello;
                 void foo;
             }
             {
@@ -40,6 +40,8 @@ async function $$render_bdea4648() {
                     }
                     {
                         const foo: any = undefined;
+                        const hello = foo;
+                        void hello;
                         if ((hello)) {
                             void [hello];
                         }

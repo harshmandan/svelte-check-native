@@ -3,9 +3,9 @@
 async function $$render_3d229222() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        let lower: any = undefined;
-        void lower;
         for (const str of __svn_each_items([''])) {
+            const lower = str.;
+            void lower;
             void str;
         }
     }

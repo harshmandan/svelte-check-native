@@ -47,6 +47,7 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 mod script_split;
+mod sveltekit;
 
 use std::fmt::Write;
 use std::path::Path;
@@ -108,7 +109,7 @@ pub fn emit_document(
     source_path: &Path,
 ) -> EmitOutput {
     let render_name = render_function_name(source_path);
-    emit_document_with_render_name(doc, fragment, summary, render_name)
+    emit_document_with_render_name(doc, fragment, summary, render_name, source_path)
 }
 
 fn emit_document_with_render_name(
@@ -116,6 +117,7 @@ fn emit_document_with_render_name(
     fragment: &Fragment,
     summary: &TemplateSummary,
     render_name: SmolStr,
+    source_path: &Path,
 ) -> EmitOutput {
     let estimated_capacity = doc.source.len().saturating_mul(2).saturating_add(256);
     let mut out = String::with_capacity(estimated_capacity);
@@ -287,7 +289,25 @@ fn emit_document_with_render_name(
             // overlay default resolves to the weak declared type and
             // every `<X cb={(arg) => ...}>` destructure binding reads
             // as implicit-any via `ComponentProps<any> = any`.
-            let ty = svn_analyze::find_props_type_source(&parsed_orig.program, instance.content);
+            let mut ty =
+                svn_analyze::find_props_type_source(&parsed_orig.program, instance.content);
+
+            // SvelteKit auto-typing: when the file is a route component
+            // (`+page.svelte`, `+layout.svelte`, …) and the user wrote
+            // an untyped `$props()` destructure, synthesize a Props
+            // shape from the known kit-auto-typed prop names so `data`
+            // gets `PageData` / `LayoutData`, `form` gets `ActionData`,
+            // etc. Users writing `let { data } = $props()` expect this
+            // without writing the annotation themselves — upstream
+            // svelte2tsx injects the same shape. No-op when the user
+            // already wrote their own `$props()` annotation or when the
+            // file is non-route.
+            if ty.is_none() {
+                if let Some(kind) = sveltekit::route_kind(source_path) {
+                    let names_borrow: Vec<&str> = props.iter().map(|s| s.as_str()).collect();
+                    ty = sveltekit::synthesize_route_props_type(kind, &names_borrow);
+                }
+            }
 
             collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
             (props, ty)
@@ -439,13 +459,17 @@ fn emit_document_with_render_name(
 
     out.push_str("    async function __svn_tpl_check() {\n");
     out.push_str("        // template type-check body (incremental)\n");
-    // Template-scope locals from `{@const NAME = ...}` tags. Declared
-    // here so subsequent `{#each NAME as ...}` and `{#if NAME.x}`
-    // emissions resolve.
-    for name in &summary.at_const_names {
-        let _ = writeln!(out, "        let {name}: any = undefined;");
-        let _ = writeln!(out, "        void {name};");
-    }
+    // `{@const}` declarations are emitted INLINE in the template-walk
+    // pass (see `emit_at_const_if_any`) — as a `const <pattern> =
+    // <expr>;` at the exact point in the template where the tag
+    // appears. Inline emission pins the inferred type so subsequent
+    // `{#if NAME === '...'}` narrows via TS control-flow analysis,
+    // and destructuring patterns (`{@const [a, { b }] = tuple}`) work
+    // for free. A top-level `let NAME: any = undefined;` stub
+    // (previous behavior) would shadow the inline const — every
+    // block-scope `const` re-use would fire TS6133 on the unused
+    // outer `let`. References out of the declaring block's scope are
+    // now (correctly) "name not found" errors.
     emit_action_attrs_declarations(&mut out, summary);
     emit_bind_pair_declarations(&mut out, summary);
     // Index component instantiations by source byte offset so the
@@ -773,8 +797,271 @@ fn emit_template_node(
         Node::Element(e) => emit_template_body(out, source, &e.children, depth, insts),
         Node::Component(c) => emit_component_node(out, source, c, depth, insts),
         Node::SvelteElement(s) => emit_template_body(out, source, &s.children, depth, insts),
-        Node::Text(_) | Node::Interpolation(_) | Node::Comment(_) => {}
+        Node::Interpolation(i) => emit_at_const_if_any(out, source, i, depth),
+        Node::Text(_) | Node::Comment(_) => {}
     }
+}
+
+/// If `interp` is an `{@const <pattern> = <expr>}` tag, emit it inline
+/// as a real `const <pattern> = <expr>;` statement in the current
+/// template-check scope.
+///
+/// Without inline emission, the `@const`-declared name lives only as a
+/// top-of-function `let NAME: any = undefined;` stub (see
+/// `at_const_names` in the analyze crate). That works for "does the
+/// name resolve?" checks but drops the expression's inferred type. A
+/// pattern like
+///     `{@const featureType = persistentFeature.settings.type}`
+///     `{#if featureType === 'persistent-comment'}`
+/// needs `featureType` to carry the discriminant literal type so TS's
+/// control-flow analysis narrows it inside the `{#if}`. Emitting
+/// inline pins the type. The top-level `let NAME: any` stub stays in
+/// place so forward references (rare but possible) still resolve; the
+/// inline `const` shadows it inside the block.
+///
+/// Destructured patterns (`{@const [a, { b }] = tuple}`) fall out for
+/// free — we copy the source text verbatim and TS handles the pattern.
+fn emit_at_const_if_any(
+    out: &mut String,
+    source: &str,
+    interp: &svn_parser::Interpolation,
+    depth: usize,
+) {
+    // Peek at the raw source for `{@const ` — the parser collapsed every
+    // `{@*}` tag into an `Interpolation`, so we can't distinguish by
+    // AST shape alone.
+    let tag_start = interp.range.start as usize;
+    let tag_end = interp.range.end as usize;
+    let Some(full) = source.get(tag_start..tag_end) else {
+        return;
+    };
+    let prefix = "{@const";
+    if !full.starts_with(prefix) {
+        return;
+    }
+    let after_prefix = &full[prefix.len()..];
+    // Require a whitespace boundary after `@const` so we don't match a
+    // hypothetical `{@constfoo ...}` token.
+    if !after_prefix.starts_with(|c: char| c.is_ascii_whitespace()) {
+        return;
+    }
+    // Body = expression_range (parser already trimmed the keyword).
+    let body_start = interp.expression_range.start as usize;
+    let body_end = interp.expression_range.end as usize;
+    let Some(body) = source.get(body_start..body_end) else {
+        return;
+    };
+    let body = body.trim();
+    if body.is_empty() {
+        return;
+    }
+    let indent = "    ".repeat(depth);
+    // `const <pattern> = <expr>` — the body already carries `X = Y`
+    // (pattern-or-name on the left of `=`, expression on the right).
+    // Re-emitting inside the template-check `const` keyword pins the
+    // inferred type so downstream `{#if NAME === '…'}` narrows.
+    let _ = writeln!(out, "{indent}const {body};");
+
+    // Void every binding introduced by the pattern. Without this tsgo
+    // fires TS6133 ("declared but never read") on `@const` tags whose
+    // binding isn't referenced elsewhere in the enclosing block —
+    // which can happen when the user only uses the binding inside a
+    // conditional branch that isn't taken in a given type narrowing,
+    // or when the `@const` is a side-effect helper like `{@const _ =
+    // track()}`. Scanning the pattern LHS is the minimal fix; the
+    // real-runtime semantics treat `{@const}` as a reactive value so
+    // users don't expect the "unused local" warning to fire.
+    // Take everything up to the first top-level `=` as the binding
+    // pattern. Inside destructure brackets/braces `=` is a default
+    // value, not the initializer — so track depth. Also trim a
+    // top-level type annotation (`foo: SomeType`) because emitting
+    // `void SomeType` would fire TS2693 ("only refers to a type").
+    let lhs = split_lhs(body);
+    for name in collect_pattern_names(&lhs) {
+        let _ = writeln!(out, "{indent}void {name};");
+    }
+}
+
+/// Extract the binding-pattern prefix of an `{@const}` body, discarding
+/// the type annotation and the initializer.
+///
+/// Examples:
+///   - `foo = 1` → `foo`
+///   - `foo: Record<A, B> = {}` → `foo`
+///   - `[a, { b }] = tuple` → `[a, { b }]`
+///   - `{ a = 1, b } = obj` → `{ a = 1, b }`
+///
+/// A top-level `:` terminates the pattern, preserving `:` inside
+/// destructures (`{ key: binding }`). A top-level `=` outside any
+/// brackets terminates the pattern. Depth-tracked so defaults and
+/// nested types don't trip the scan.
+fn split_lhs(body: &str) -> String {
+    let bytes = body.as_bytes();
+    let mut depth = 0i32;
+    let mut end = bytes.len();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' | b'[' | b'(' | b'<' => depth += 1,
+            b'}' | b']' | b')' | b'>' if depth > 0 => depth -= 1,
+            b'=' if depth == 0 => {
+                end = i;
+                break;
+            }
+            b':' if depth == 0 => {
+                end = i;
+                break;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    body[..end].trim().to_string()
+}
+
+/// Collect every identifier introduced by a (possibly destructuring)
+/// binding pattern on the LHS of an `{@const}` tag.
+///
+/// Examples of what's collected:
+///   - `foo` → [foo]
+///   - `{ a, b: c, ...rest }` → [a, c, rest]
+///   - `[a, { b }, ...rest]` → [a, b, rest]
+///
+/// Byte-scanning is enough for this lenient use — tsgo catches
+/// anything we'd miss as a real diagnostic on the user's pattern, and
+/// the only downstream consumer is `void <name>;` which is
+/// forgiving.
+fn collect_pattern_names(lhs: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let bytes = lhs.as_bytes();
+    let mut i = 0usize;
+    // In object-pattern `{ key: value }`, the binding is on the RHS of
+    // the colon; track that state.
+    let mut after_colon = false;
+    // Track whether the previous non-space char was a comma, opener,
+    // or `...` — those positions are where a new binding starts in
+    // array/object patterns.
+    let mut at_binding_start = true;
+    let mut depth = 0i32;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        match b {
+            b'{' | b'[' => {
+                depth += 1;
+                i += 1;
+                at_binding_start = true;
+                after_colon = false;
+                continue;
+            }
+            b'}' | b']' => {
+                depth -= 1;
+                i += 1;
+                after_colon = false;
+                at_binding_start = false;
+                continue;
+            }
+            b',' => {
+                i += 1;
+                at_binding_start = true;
+                after_colon = false;
+                continue;
+            }
+            b':' => {
+                // `key: value` inside an object pattern — the next
+                // ident is the binding, not the key.
+                i += 1;
+                after_colon = true;
+                at_binding_start = false;
+                continue;
+            }
+            b'=' if depth > 0 => {
+                // Default value in a destructure (`{ a = 1 }`); skip
+                // until the next `,` or closing brace.
+                let mut paren_depth = 0i32;
+                i += 1;
+                while i < bytes.len() {
+                    match bytes[i] {
+                        b'(' | b'[' | b'{' => paren_depth += 1,
+                        b')' | b']' | b'}' if paren_depth > 0 => paren_depth -= 1,
+                        b',' | b'}' | b']' if paren_depth == 0 => break,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+            b'.' if i + 2 < bytes.len() && &bytes[i..i + 3] == b"..." => {
+                // Rest element. The following ident is a binding.
+                i += 3;
+                at_binding_start = true;
+                after_colon = false;
+                continue;
+            }
+            b if b.is_ascii_whitespace() => {
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+        // Identifier?
+        if b.is_ascii_alphabetic() || b == b'_' || b == b'$' {
+            let start = i;
+            while i < bytes.len() {
+                let c = bytes[i];
+                if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            let is_top_level = depth == 0;
+            let is_binding = if is_top_level {
+                // Plain `const foo = ...` — the ident is the binding.
+                true
+            } else {
+                // Inside a pattern. Peek past whitespace to the next
+                // non-space char:
+                //   `{ a, b }`       → ident followed by `,`/`}` → binding.
+                //   `{ a: b }`       → ident followed by `:`     → KEY (not a binding).
+                //                     The `b` after `:` (after_colon) is the binding.
+                //   `{ a = 1 }`      → ident followed by `=`     → binding with default.
+                //   `[a, b]`         → at_binding_start true     → binding.
+                //   `...rest`        → at_binding_start set true → binding.
+                let mut j = i;
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                let next = bytes.get(j).copied();
+                if after_colon {
+                    // `{ key: binding }` — the ident after `:` is always
+                    // a binding unless the next char opens a nested
+                    // pattern (handled separately by the `{`/`[` cases
+                    // above).
+                    true
+                } else if at_binding_start {
+                    // Ambiguity: object-pattern position could be either
+                    // shorthand (`{ a }`, binding) or key-with-renamed
+                    // binding (`{ a: b }`, key).
+                    !matches!(next, Some(b':'))
+                } else {
+                    // Not at start, not after colon — not a binding.
+                    false
+                }
+            };
+            if is_binding {
+                out.push(lhs[start..i].to_string());
+            }
+            at_binding_start = false;
+            after_colon = false;
+            continue;
+        }
+        // Anything else — reset markers and advance.
+        at_binding_start = false;
+        after_colon = false;
+        i += 1;
+    }
+    out
 }
 
 /// Emit a `void [<access>, …];` statement listing every identifier /

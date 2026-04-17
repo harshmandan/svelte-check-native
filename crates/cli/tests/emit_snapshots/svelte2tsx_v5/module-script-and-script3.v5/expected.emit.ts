@@ -13,7 +13,7 @@ async function $$render_39303eb1() {
     void world;
 }
 $$render_39303eb1;
-declare const __svn_component_default: import('svelte').Component<{ world?: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ world?: any; }>;
+declare const __svn_component_default: import('svelte').Component<{ world?: any; }, { world: any; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ world?: any; }> & { world: any; };
 export default __svn_component_default;
 

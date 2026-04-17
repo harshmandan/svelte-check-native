@@ -4,6 +4,8 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — docs update
+
 ## [0.1.0] — first public release
 
 First publishable cut: drop-in CLI replacement for upstream `svelte-check`,

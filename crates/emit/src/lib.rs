@@ -1534,31 +1534,26 @@ fn emit_snippet_block(
     // cast erases anyway).
     let annotated = annotate_snippet_params(params_text);
     let idents = all_identifiers(params_text);
+    // Emit the body INSIDE a no-op arrow function expression whose
+    // params carry the user's type annotations. This serves two
+    // purposes simultaneously:
+    //   1. The arrow params are the binding introductions — their
+    //      type annotations flow into the body, so a snippet like
+    //      `{#snippet state(state: VideoState)}` gets `state: VideoState`
+    //      bindings rather than `state: any`.
+    //   2. Any type imported solely for a snippet param annotation
+    //      (e.g. `MouseEventHandler<HTMLButtonElement>`) shows up as
+    //      a reference in the emitted code, suppressing TS6133.
+    //
+    // We use a function *expression* (not a type) so default values
+    // and optional-after-required orderings remain legal.
     let _ = writeln!(out, "{indent}{{");
-    // Consume the user's types inside a no-op arrow function
-    // *expression* (not a type) so any type imported solely to
-    // annotate a snippet parameter counts as "referenced". Using an
-    // expression instead of a type (`() => void`) keeps default
-    // values and optional-after-required orderings legal — those are
-    // syntax errors in function-TYPE syntax but valid in function
-    // *implementation* syntax. The body references every top-level
-    // binding so TS6133 doesn't fire on the arrow's own params.
-    let idents_voided: String = idents
-        .iter()
-        .map(|s| s.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let _ = writeln!(
-        out,
-        "{indent}    void (({annotated}) => {{ void [{idents_voided}]; }});"
-    );
+    let _ = writeln!(out, "{indent}    void (({annotated}) => {{");
+    emit_template_body(out, source, &b.body, depth + 2, insts);
     for ident in &idents {
-        let _ = writeln!(out, "{indent}    const {ident}: any = undefined;");
+        let _ = writeln!(out, "{indent}        void {ident};");
     }
-    emit_template_body(out, source, &b.body, depth + 1, insts);
-    for ident in &idents {
-        let _ = writeln!(out, "{indent}    void {ident};");
-    }
+    let _ = writeln!(out, "{indent}    }});");
     let _ = writeln!(out, "{indent}}}");
 }
 

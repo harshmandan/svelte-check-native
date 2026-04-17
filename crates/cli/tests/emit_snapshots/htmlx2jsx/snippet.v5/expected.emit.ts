@@ -15,18 +15,18 @@ async function $$render_0bc1cb85() {
             const jsDoc: any = undefined;
             void jsDoc;
             {
-                void ((x: any) => { void [x]; });
-                const x: any = undefined;
-                void x;
+                void ((x: any) => {
+                    void x;
+                });
             }
             {
                 const bar: any = undefined;
                 void bar;
             }
             {
-                void ((x: any = '') => { void [x]; });
-                const x: any = undefined;
-                void x;
+                void ((x: any = '') => {
+                    void x;
+                });
             }
             void ({
                 bar: (x: any) => {
@@ -61,13 +61,11 @@ async function $$render_0bc1cb85() {
                 },
             } satisfies Partial<__SvnComponentProps<typeof List>>);
             {
-                void ((/**@type {number}*/a: any) => { void [type, number, a]; });
-                const type: any = undefined;
-                const number: any = undefined;
-                const a: any = undefined;
-                void type;
-                void number;
-                void a;
+                void ((/**@type {number}*/a: any) => {
+                    void type;
+                    void number;
+                    void a;
+                });
             }
         }
     }

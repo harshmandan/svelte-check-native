@@ -218,10 +218,16 @@ fn walk_directive(
             // Shorthand expansions:
             //   - `bind:value`     → `bind:value={value}`     — value is local
             //   - `class:active`   → `class:active={active}`  — active is local
+            //   - `style:height`   → `style:height={height}`  — height is local
             //
-            // For `on:click`, `style:left`, `let:foo` the name is an
-            // event/CSS-name/new-binding, NOT a script-level reference.
-            let bare_is_shorthand = matches!(d.kind, DirectiveKind::Bind | DirectiveKind::Class);
+            // For `on:click`, `let:foo` the name is an event/new-binding,
+            // NOT a script-level reference. Svelte 5 permits a bare
+            // `style:<prop>` that pulls the value from a same-named
+            // script binding, so we treat it the same as `bind`/`class`.
+            let bare_is_shorthand = matches!(
+                d.kind,
+                DirectiveKind::Bind | DirectiveKind::Class | DirectiveKind::Style
+            );
             if bare_is_shorthand {
                 push_ident(&d.name, seen, out);
             }

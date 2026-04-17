@@ -344,16 +344,91 @@ pub fn split_imports(
     //     than the lossy stub, preserving literal-keyed precision.
     //   - Types that don't reference body locals via typeof hoist
     //     normally.
+    // Hoist decision per type, distinguishing two independent causes:
+    //
+    //   (A) DIRECT `typeof <body-local-var>` in the type body. The
+    //       type CAN hoist via the `declare const <name>: { [k:
+    //       string]: any } & ((...args) => any)` stub — the stub is
+    //       lossy (literal-key precision is replaced by `string |
+    //       number`) but structurally callable/indexable. Consumers
+    //       of the default export still get a USABLE Props type.
+    //       This is what makes control-repo's `interface Props { children:
+    //       Snippet<[{ingestFeedback: typeof ingestFeedback, ...}]> }`
+    //       work — consumers' snippet arrows destructure from the
+    //       stubbed callable shape, which is good enough.
+    //
+    //   (B) Reference to another type by NAME that can't be hoisted.
+    //       cnblocks web/code's `type Props = { variant?: Variant }`
+    //       with `type Variant = VariantProps<typeof style>["variant"]`
+    //       — Variant has a direct typeof, so it's body-scoped. Props
+    //       referencing `Variant` at module scope fires TS2304
+    //       "Cannot find name 'Variant'" — no stub for type names.
+    //
+    // Logic: compute two sets separately.
+    //   - `direct_typeof_body` (Case A): types with direct
+    //      `typeof <body-local-var>`.
+    //   - `transitive_name_body` (Case B): types that reference a
+    //      body-scoped type name (fixed-point). Body-scoped type
+    //      names are those in `direct_typeof_body` plus anything
+    //      already in `transitive_name_body`.
+    //
+    // Hoist if NOT in `transitive_name_body`. Types in
+    // `direct_typeof_body` but not `transitive_name_body` still hoist
+    // (stub carries the approximate shape). This preserves Phase B's
+    // goal of surfacing typed defaults while avoiding TS2304 noise
+    // on chains of body-scoped type names.
     let body_names_set: HashSet<SmolStr> = body_decl_names.iter().cloned().collect();
+    // Seed "must stay in body" with types containing `keyof typeof
+    // <body-local-var>`. That specific shape is what the declare-const
+    // stub can't approximate: stubbed `keyof typeof X` widens to
+    // `string | number` (from the `{[k: string]: any}` index
+    // signature), losing the literal-key union the real body-scoped
+    // const has. User code that destructures or indexes with the
+    // resulting type then fires TS7053 or TS2322 (ProgressiveBlur,
+    // hero-four, logocloud-three).
+    //
+    // Plain `typeof <body-local-var>` (without a surrounding `keyof`)
+    // stubs OK — the synthesized `{[k: string]: any} & ((...args) =>
+    // any)` carries a callable/indexable shape that's structurally
+    // sufficient for consumer use cases like
+    // `Snippet<[{fn: typeof body_fn}]>` (control-repo PreviewDataIngestor).
+    //
+    // And any type that references ANOTHER must-stay-body type by
+    // name must itself stay in body (fixed-point propagation). Chain
+    // from cnblocks web/code: `type Variant = ...keyof...typeof
+    // style...` → Variant must stay body; `type Props = { variant?:
+    // Variant }` references Variant by name → Props joins.
+    let mut must_stay_body: HashSet<SmolStr> = HashSet::new();
+    for (start, end, name) in &pending_type_spans {
+        if !body_names_set.is_empty()
+            && keyof_typeof_targets(&content[*start..*end])
+                .iter()
+                .any(|n| body_names_set.contains(n))
+        {
+            must_stay_body.insert(name.clone());
+        }
+    }
+    loop {
+        let mut added = false;
+        for (start, end, name) in &pending_type_spans {
+            if must_stay_body.contains(name) {
+                continue;
+            }
+            let refs_stay_body = collect_ident_refs(&content[*start..*end])
+                .iter()
+                .any(|n| must_stay_body.contains(n));
+            if refs_stay_body {
+                must_stay_body.insert(name.clone());
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
     let mut hoisted_type_names: HashSet<SmolStr> = HashSet::new();
     for (start, end, name) in pending_type_spans {
-        let is_props = props_type_root == Some(name.as_str());
-        let refs_body_local = !is_props
-            && !body_names_set.is_empty()
-            && typeof_targets(&content[start..end])
-                .iter()
-                .any(|n| body_names_set.contains(n));
-        if !refs_body_local {
+        if !must_stay_body.contains(&name) {
             hoist_spans.push((start, end));
             hoisted_type_names.insert(name);
         }
@@ -624,6 +699,56 @@ fn collect_declaration_names(decl: &Declaration<'_>, out: &mut Vec<SmolStr>) {
         // voiding them would fire TS2693.
         _ => {}
     }
+}
+
+/// Byte-scan a JS/TS source slice for `keyof typeof IDENT` targets
+/// — the names that appear in the specific `keyof typeof <name>`
+/// shape where the intervening whitespace allows arbitrary spacing.
+/// This pattern is special because it's the one form our declare-
+/// const stub can't preserve: stubbed `{ [k: string]: any }` has
+/// `keyof = string | number`, losing the real const's literal-key
+/// precision.
+fn keyof_typeof_targets(text: &str) -> Vec<SmolStr> {
+    let bytes = text.as_bytes();
+    let mut out: Vec<SmolStr> = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"keyof") {
+            let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
+            let after_keyof = i + b"keyof".len();
+            let after_ok = after_keyof < bytes.len() && !is_ident_byte(bytes[after_keyof]);
+            if before_ok && after_ok {
+                let mut j = after_keyof;
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if bytes[j..].starts_with(b"typeof") {
+                    let after_typeof = j + b"typeof".len();
+                    if after_typeof < bytes.len() && !is_ident_byte(bytes[after_typeof]) {
+                        let mut k = after_typeof;
+                        while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                            k += 1;
+                        }
+                        if k < bytes.len()
+                            && (bytes[k].is_ascii_alphabetic()
+                                || bytes[k] == b'_'
+                                || bytes[k] == b'$')
+                        {
+                            let start = k;
+                            while k < bytes.len() && is_ident_byte(bytes[k]) {
+                                k += 1;
+                            }
+                            out.push(SmolStr::from(&text[start..k]));
+                            i = k;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    out
 }
 
 /// Byte-scan a JS/TS source slice for `typeof IDENT` targets — the

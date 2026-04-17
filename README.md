@@ -27,23 +27,22 @@ same flags, same output formats, same exit codes. Powered by Rust +
 Measured on a private SvelteKit + TypeScript project
 with 1206 `.svelte` files, M1 Pro 8C, median of 3 runs each:
 
-| Tool                    |      Cold |      Warm |     Dirty | Errors | Warnings | Files w/ issues |
-| :---------------------- | --------: | --------: | --------: | -----: | -------: | --------------: |
-| `svelte-check-native`   | **8.1 s** | **2.9 s** | **3.0 s** |  **0** |       44 |              15 |
-| `svelte-check` 4.4.6    |    39.4 s |    38.2 s |    38.0 s |      0 |       44 |              15 |
-| `svelte-check-rs` 0.9.7 |    15.0 s |     5.5 s |     4.4 s |    732 |       44 |             261 |
+| Tool                    |      Cold |      Warm |     Dirty |   Speedup | Errors | Warnings | Files w/ issues |
+| :---------------------- | --------: | --------: | --------: | --------: | -----: | -------: | --------------: |
+| `svelte-check-native`   | **8.1 s** | **2.9 s** | **3.0 s** | **13.2×** |  **0** |       44 |              15 |
+| `svelte-check` 4.4.6    |    39.4 s |    38.2 s |    38.0 s |      1.0× |      0 |       44 |              15 |
+| `svelte-check-rs` 0.9.7 |    15.0 s |     5.5 s |     4.4 s |      6.9× |    732 |       44 |             261 |
 
 - **Cold** = empty cache, fresh `bun` / `node` import.
 - **Warm** = re-run, no source changes.
 - **Dirty** = one `.svelte` file `touch`ed between runs.
 
-**Diagnostic sources:** `js,svelte` on `svelte-check-native` vs
-`js,svelte,css` by default on upstream `svelte-check`. The 4-warning
-gap is entirely CSS vendor-prefix compat checks — we do not ship a
-CSS linter. Error counts match upstream `svelte-check` exactly on
-this project (0 vs 0). Upstream `--tsgo` trips on a spurious
-`TS2688` because it doesn't filter unresolvable `types` entries from
-the tsconfig chain; we do.
+**Diagnostic sources:** both tools run with CSS disabled for a fair
+comparison (`--diagnostic-sources 'ts,svelte'` on ours; `'js,svelte'`
+on upstream — semantically identical, our `ts` aliases to their `js`).
+Running upstream with its default `js,svelte,css` would add ~4 CSS
+vendor-prefix compat warnings — we do not ship a CSS linter. Error
+counts match upstream exactly (0 vs 0).
 
 Diagnostic output is byte-equivalent to upstream `svelte-check` with
 the same flags.

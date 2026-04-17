@@ -668,10 +668,31 @@ fn emit_template_node(
                 emit_template_body(out, source, p, depth, insts);
             }
             if let Some(t) = &b.then_branch {
-                emit_template_body(out, source, &t.body, depth, insts);
+                // `{:then v}` binds `v` to the resolved value for the
+                // duration of the then-branch body. Declare each
+                // identifier the context pattern destructures so
+                // references inside the branch (component-prop checks,
+                // each-blocks iterating over `v`, etc.) resolve. Walk
+                // the body inside a fresh lexical scope so the binding
+                // doesn't leak to sibling branches.
+                emit_branch_with_binding(
+                    out,
+                    source,
+                    t.context_range.as_ref(),
+                    &t.body,
+                    depth,
+                    insts,
+                );
             }
             if let Some(c) = &b.catch_branch {
-                emit_template_body(out, source, &c.body, depth, insts);
+                emit_branch_with_binding(
+                    out,
+                    source,
+                    c.context_range.as_ref(),
+                    &c.body,
+                    depth,
+                    insts,
+                );
             }
         }
         Node::KeyBlock(b) => emit_template_body(out, source, &b.body, depth, insts),
@@ -745,6 +766,48 @@ fn emit_each_block(
     if let Some(alt) = &b.alternate {
         emit_template_body(out, source, alt, depth, insts);
     }
+}
+
+/// Walk `{:then v}` / `{:catch e}` body in a fresh lexical scope that
+/// declares the branch's context binding as `any`. Without the
+/// declaration, references to the bound name inside the branch (a
+/// component-prop check that passes `v` as a prop, a subsequent
+/// `{#each v as item}`) fire TS2304.
+///
+/// Supports destructure patterns (`{:then { a, b }}`, `{:then [x]}`)
+/// via `all_identifiers`. An absent context range (`{:then}` with no
+/// binding) skips the scope and just walks the body inline.
+fn emit_branch_with_binding(
+    out: &mut String,
+    source: &str,
+    context_range: Option<&svn_core::Range>,
+    body: &Fragment,
+    depth: usize,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+) {
+    let Some(range) = context_range else {
+        emit_template_body(out, source, body, depth, insts);
+        return;
+    };
+    let binding_text = source
+        .get(range.start as usize..range.end as usize)
+        .unwrap_or("")
+        .trim();
+    if binding_text.is_empty() {
+        emit_template_body(out, source, body, depth, insts);
+        return;
+    }
+    let idents = all_identifiers(binding_text);
+    let indent = "    ".repeat(depth);
+    let _ = writeln!(out, "{indent}{{");
+    for ident in &idents {
+        let _ = writeln!(out, "{indent}    const {ident}: any = undefined;");
+    }
+    emit_template_body(out, source, body, depth + 1, insts);
+    for ident in &idents {
+        let _ = writeln!(out, "{indent}    void {ident};");
+    }
+    let _ = writeln!(out, "{indent}}}");
 }
 
 /// Emit a lexical-scope block wrapping a `{#snippet name(params)}` body

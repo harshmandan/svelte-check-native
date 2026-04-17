@@ -29,7 +29,9 @@ async function $$render_200dbc4a<T>() {
                 void __svn_each_unused;
             }
             if ((await promise)) {
+                void [promise];
             } else if ((await promise)) {
+                void [promise];
             }
             void ({prop: (await promise)} satisfies Partial<__SvnComponentProps<typeof Component>>);
             if ((true)) {

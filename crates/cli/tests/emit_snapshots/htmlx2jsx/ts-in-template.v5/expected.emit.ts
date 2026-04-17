@@ -20,7 +20,9 @@ async function $$render_43de206c() {
             const foo7: any = undefined;
             void foo7;
             if ((foo as true)) {
+                void [foo];
             } else if ((bar as false)) {
+                void [bar];
             }
             for (const [''] as item: string of __svn_each_items(items)) {
                 const i: number = 0;

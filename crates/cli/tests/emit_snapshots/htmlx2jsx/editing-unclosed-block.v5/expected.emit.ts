@@ -4,8 +4,10 @@ async function $$render_b5e30ee7() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         if ((foo)) {
+            void [foo];
             for (const item of __svn_each_items(array)) {
                 if ((i)) {
+                    void [i];
                     void ({} satisfies Partial<__SvnComponentProps<typeof Component>>);
                 }
                 void item;

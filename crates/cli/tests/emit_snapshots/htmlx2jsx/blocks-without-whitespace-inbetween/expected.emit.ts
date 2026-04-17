@@ -4,6 +4,7 @@ async function $$render_03f92358() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         if ((name == "world")) {
+            void [name];
         }
         for (const y of __svn_each_items(x)) {
             void y;
@@ -13,6 +14,7 @@ async function $$render_03f92358() {
             void y;
         }
         if ((bla)) {
+            void [bla];
         }
     }
     void __svn_tpl_check;

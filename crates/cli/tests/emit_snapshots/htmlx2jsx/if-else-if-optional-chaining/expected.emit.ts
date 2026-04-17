@@ -4,7 +4,9 @@ async function $$render_c146fe3a() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         if ((obj?.name1 == "world")) {
+            void [obj?.name1];
         } else if ((obj?.name3 == "person")) {
+            void [obj?.name3];
         }
     }
     void __svn_tpl_check;

@@ -4,6 +4,7 @@ async function $$render_b67cf125() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         if ((hello)) {
+            void [hello];
             {
                 const y: any = undefined;
                 void y;
@@ -13,11 +14,13 @@ async function $$render_b67cf125() {
                 void y;
             }
             if ((hi && bye)) {
+                void [hi, bye];
                 {
                     const y: any = undefined;
                     void y;
                 }
             } else if ((cool)) {
+                void [cool];
                 {
                     const y: any = undefined;
                     void y;

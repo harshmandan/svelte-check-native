@@ -5,6 +5,7 @@ async function $$render_27b7be6d() {
         // template type-check body (incremental)
         if (((name1 ?? "bla") == "world")) {
         } else if ((name3 ?? "blubb")) {
+            void [name3];
         }
     }
     void __svn_tpl_check;

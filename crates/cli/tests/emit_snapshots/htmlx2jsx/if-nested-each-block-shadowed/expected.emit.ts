@@ -6,16 +6,20 @@ async function $$render_64a5d390() {
         let hello: any = undefined;
         void hello;
         if ((hello)) {
+            void [hello];
             for (const hello of __svn_each_items(items)) {
                 const i: number = 0;
                 if ((hello)) {
+                    void [hello];
                     for (const hello of __svn_each_items(items)) {
                         if ((hello)) {
+                            void [hello];
                         }
                         void hello;
                     }
                     for (const foo of __svn_each_items(items)) {
                         if ((hello)) {
+                            void [hello];
                         }
                         void foo;
                     }
@@ -24,14 +28,18 @@ async function $$render_64a5d390() {
                 void i;
             }
             if ((hello)) {
+                void [hello];
             }
             if ((hi && bye)) {
+                void [hi, bye];
                 for (const bye of __svn_each_items(items)) {
                     void bye;
                 }
                 if ((bye)) {
+                    void [bye];
                 }
             } else if ((cool)) {
+                void [cool];
                 for (const item of __svn_each_items(items)) {
                     const cool: number = 0;
                     void item;
@@ -46,14 +54,18 @@ async function $$render_64a5d390() {
         for (const hello of __svn_each_items(items)) {
             const i: number = 0;
             if ((hello && i && bye)) {
+                void [hello, i, bye];
             } else if ((hello && i && bye)) {
+                void [hello, i, bye];
             } else {
             }
             void hello;
             void i;
         }
         if ((hello && i && bye)) {
+            void [hello, i, bye];
         } else if ((hello && i && bye)) {
+            void [hello, i, bye];
         } else {
         }
     }

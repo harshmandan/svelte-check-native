@@ -13,7 +13,7 @@ async function $$render_ef638edf() {
     void name2;
 }
 $$render_ef638edf;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<{ name3?: any; name4?: any; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ name3?: any; name4?: any; }>;
 export default __svn_component_default;
 

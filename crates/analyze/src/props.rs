@@ -24,8 +24,8 @@
 //! recursively; every leaf identifier is recorded.
 
 use oxc_ast::ast::{
-    BindingPatternKind, BindingProperty, Declaration, Expression, PropertyKey, Statement,
-    VariableDeclaration,
+    BindingPatternKind, BindingProperty, Declaration, Expression, ModuleExportName, PropertyKey,
+    Statement, VariableDeclaration,
 };
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
@@ -138,10 +138,18 @@ fn synthesize_props_type_from_export_let(
         let Statement::ExportNamedDeclaration(export_decl) = stmt else {
             continue;
         };
-        let Some(Declaration::VariableDeclaration(var_decl)) = &export_decl.declaration else {
-            continue;
-        };
-        append_props_from_var_decl(var_decl, source, &mut parts);
+        if let Some(Declaration::VariableDeclaration(var_decl)) = &export_decl.declaration {
+            append_props_from_var_decl(var_decl, source, &mut parts);
+        }
+        // `export { name as alias, ... }` specifier form. Svelte 4
+        // components use this to expose a local under a JS reserved
+        // name, most commonly `export { className as class }` so
+        // consumers can pass `class={...}` without hitting `class`
+        // being a keyword in the source. Each specifier contributes
+        // one prop; the local's declared type (if any) is preserved.
+        for spec in &export_decl.specifiers {
+            append_prop_from_export_specifier(spec, program, source, &mut parts);
+        }
     }
     if parts.is_empty() {
         return None;
@@ -156,6 +164,80 @@ fn synthesize_props_type_from_export_let(
     }
     out.push_str(" }");
     Some(out)
+}
+
+/// Extract a single property from `export { local as alias }`. Looks up
+/// `local` in the program's top-level `let`/`const`/`var` declarations
+/// to pick up its type annotation and initializer (which decides the
+/// optional marker). When `local` can't be found or has no annotation,
+/// the prop is typed `any`. The alias becomes the public key so
+/// consumers write `<Foo {alias}=...>`.
+fn append_prop_from_export_specifier(
+    spec: &oxc_ast::ast::ExportSpecifier<'_>,
+    program: &oxc_ast::ast::Program<'_>,
+    source: &str,
+    out: &mut Vec<String>,
+) {
+    // Re-export `export { X } from 'mod'` (source specifier on the
+    // parent statement) and namespace re-exports don't declare a
+    // component prop — the parent's `source` field catches re-exports;
+    // here we only care about local-to-alias renames.
+    let Some(alias) = module_export_name_str(&spec.exported) else {
+        return;
+    };
+    let Some(local) = module_export_name_str(&spec.local) else {
+        return;
+    };
+    let (ty_text, has_init) = find_local_type_and_init(program, source, local);
+    let optional_marker = if has_init { "?" } else { "" };
+    let ty_src = ty_text.unwrap_or("any");
+    out.push(format!("{alias}{optional_marker}: {ty_src};"));
+}
+
+/// Readable `str` from a `ModuleExportName` variant. Returns `None` for
+/// `StringLiteral` — a string-literal alias like `export { foo as 'a-b' }`
+/// isn't usable as an object-type key here (we'd have to quote it, and
+/// the Svelte idiom doesn't produce them).
+fn module_export_name_str<'a>(name: &'a ModuleExportName<'_>) -> Option<&'a str> {
+    match name {
+        ModuleExportName::IdentifierName(id) => Some(id.name.as_str()),
+        ModuleExportName::IdentifierReference(id) => Some(id.name.as_str()),
+        ModuleExportName::StringLiteral(_) => None,
+    }
+}
+
+/// Walk the program's top-level `let`/`const`/`var` declarations looking
+/// for one that binds `name`. Returns `(type_text, has_init)` — the type
+/// annotation's source slice when present, and whether the declarator
+/// has an initializer (so the caller can mark the prop optional vs
+/// required the same way `append_props_from_var_decl` does for the
+/// `export let` form).
+fn find_local_type_and_init<'s>(
+    program: &oxc_ast::ast::Program<'_>,
+    source: &'s str,
+    name: &str,
+) -> (Option<&'s str>, bool) {
+    for stmt in &program.body {
+        let Statement::VariableDeclaration(decl) = stmt else {
+            continue;
+        };
+        for declarator in &decl.declarations {
+            let BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind else {
+                continue;
+            };
+            if id.name.as_str() != name {
+                continue;
+            }
+            let ty_text = declarator
+                .id
+                .type_annotation
+                .as_ref()
+                .map(|ty| ty.type_annotation.span())
+                .and_then(|span| source.get(span.start as usize..span.end as usize));
+            return (ty_text, declarator.init.is_some());
+        }
+    }
+    (None, false)
 }
 
 fn append_props_from_var_decl(
@@ -498,5 +580,42 @@ mod tests {
     fn export_type_alias_does_not_contribute_props() {
         let src = "export type Foo = number;";
         assert_eq!(props_type(src), None);
+    }
+
+    #[test]
+    fn export_specifier_rename_contributes_class_prop() {
+        // Svelte 4 pattern: rename a local to a JS reserved name so it
+        // can be used as a component prop.
+        let src = "let className: any = \"\";\nexport { className as class };";
+        assert_eq!(props_type(src).as_deref(), Some("{ class?: any; }"));
+    }
+
+    #[test]
+    fn export_specifier_preserves_local_type() {
+        let src = "let n: number = 0;\nexport { n as count };";
+        assert_eq!(props_type(src).as_deref(), Some("{ count?: number; }"));
+    }
+
+    #[test]
+    fn export_specifier_missing_init_marks_required() {
+        let src = "let n: number;\nexport { n as count };";
+        assert_eq!(props_type(src).as_deref(), Some("{ count: number; }"));
+    }
+
+    #[test]
+    fn export_specifier_missing_local_falls_back_to_any() {
+        // Export of an undeclared local — pathological but don't panic.
+        let src = "export { missing as foo };";
+        assert_eq!(props_type(src).as_deref(), Some("{ foo: any; }"));
+    }
+
+    #[test]
+    fn export_specifier_combined_with_export_let() {
+        let src =
+            "export let width = 40;\nlet className: any = \"\";\nexport { className as class };";
+        assert_eq!(
+            props_type(src).as_deref(),
+            Some("{ width?: any; class?: any; }")
+        );
     }
 }

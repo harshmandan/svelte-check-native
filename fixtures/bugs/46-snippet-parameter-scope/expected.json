@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "{#snippet name(param1, param2)} body} must declare each parameter as a binding inside the snippet body — otherwise `param1`/`param2` references inside the body report TS2304 'Cannot find name'."
+}

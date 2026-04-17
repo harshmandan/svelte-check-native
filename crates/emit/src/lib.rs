@@ -60,7 +60,7 @@ use svn_analyze::{
     find_template_refs,
 };
 use svn_parser::Document;
-use svn_parser::{EachBlock, Fragment, Node, parse_script_body};
+use svn_parser::{EachBlock, Fragment, Node, SnippetBlock, parse_script_body};
 
 use crate::script_split::split_imports;
 
@@ -408,8 +408,27 @@ fn emit_document_with_render_name(
     }
     emit_action_attrs_declarations(&mut out, summary);
     emit_bind_pair_declarations(&mut out, summary);
-    emit_template_body(&mut out, doc.source, fragment, 2);
-    emit_component_prop_checks(&mut out, doc.source, summary);
+    // Index component instantiations by source byte offset so the
+    // template walker can emit each prop-check inline at the component
+    // node's position — i.e. inside the enclosing `{#each}` / `{#if}` /
+    // `{#snippet}` scope. Emitting the checks as a flat block after the
+    // walk put every check at the top level of `__svn_tpl_check`, which
+    // silently broke any check whose prop expressions referenced a
+    // binding introduced by a block (each-as item, each-index, snippet
+    // param, etc.).
+    let instantiations_by_start: std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation> =
+        summary
+            .component_instantiations
+            .iter()
+            .map(|i| (i.node_start, i))
+            .collect();
+    emit_template_body(
+        &mut out,
+        doc.source,
+        fragment,
+        2,
+        &instantiations_by_start,
+    );
     out.push_str("    }\n");
 
     let exported_locals: Vec<SmolStr> = split
@@ -539,42 +558,60 @@ fn extract_generics_attr(doc: &Document<'_>) -> Option<SmolStr> {
 /// Walk the fragment tree and emit per-construct scaffolding.
 ///
 /// Currently emits a `for`-of loop for each `{#each}` block and recurses
-/// into other block bodies / element children. Element- and component-level
-/// type-checking is not yet implemented.
-fn emit_template_body(out: &mut String, source: &str, fragment: &Fragment, depth: usize) {
+/// into other block bodies / element children. Component-prop excess
+/// checks are emitted inline at each `<Component>` position so they
+/// sit inside the correct enclosing block scope.
+fn emit_template_body(
+    out: &mut String,
+    source: &str,
+    fragment: &Fragment,
+    depth: usize,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+) {
     for node in &fragment.nodes {
-        emit_template_node(out, source, node, depth);
+        emit_template_node(out, source, node, depth, insts);
     }
 }
 
-fn emit_template_node(out: &mut String, source: &str, node: &Node, depth: usize) {
+fn emit_template_node(
+    out: &mut String,
+    source: &str,
+    node: &Node,
+    depth: usize,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+) {
     match node {
-        Node::EachBlock(b) => emit_each_block(out, source, b, depth),
+        Node::EachBlock(b) => emit_each_block(out, source, b, depth, insts),
         Node::IfBlock(b) => {
-            emit_template_body(out, source, &b.consequent, depth);
+            emit_template_body(out, source, &b.consequent, depth, insts);
             for arm in &b.elseif_arms {
-                emit_template_body(out, source, &arm.body, depth);
+                emit_template_body(out, source, &arm.body, depth, insts);
             }
             if let Some(alt) = &b.alternate {
-                emit_template_body(out, source, alt, depth);
+                emit_template_body(out, source, alt, depth, insts);
             }
         }
         Node::AwaitBlock(b) => {
             if let Some(p) = &b.pending {
-                emit_template_body(out, source, p, depth);
+                emit_template_body(out, source, p, depth, insts);
             }
             if let Some(t) = &b.then_branch {
-                emit_template_body(out, source, &t.body, depth);
+                emit_template_body(out, source, &t.body, depth, insts);
             }
             if let Some(c) = &b.catch_branch {
-                emit_template_body(out, source, &c.body, depth);
+                emit_template_body(out, source, &c.body, depth, insts);
             }
         }
-        Node::KeyBlock(b) => emit_template_body(out, source, &b.body, depth),
-        Node::SnippetBlock(b) => emit_template_body(out, source, &b.body, depth),
-        Node::Element(e) => emit_template_body(out, source, &e.children, depth),
-        Node::Component(c) => emit_template_body(out, source, &c.children, depth),
-        Node::SvelteElement(s) => emit_template_body(out, source, &s.children, depth),
+        Node::KeyBlock(b) => emit_template_body(out, source, &b.body, depth, insts),
+        Node::SnippetBlock(b) => emit_snippet_block(out, source, b, depth, insts),
+        Node::Element(e) => emit_template_body(out, source, &e.children, depth, insts),
+        Node::Component(c) => {
+            if let Some(inst) = insts.get(&c.range.start) {
+                emit_one_component_prop_check(out, source, inst, depth);
+            }
+            emit_template_body(out, source, &c.children, depth, insts);
+        }
+        Node::SvelteElement(s) => emit_template_body(out, source, &s.children, depth, insts),
         Node::Text(_) | Node::Interpolation(_) | Node::Comment(_) => {}
     }
 }
@@ -584,7 +621,13 @@ fn emit_template_node(out: &mut String, source: &str, node: &Node, depth: usize)
 /// `{#each items}` without an `as` clause is legal Svelte (iterate N times,
 /// discard the value); we use `__svn_each_unused` as a placeholder binding
 /// so the emitted TypeScript stays syntactically valid.
-fn emit_each_block(out: &mut String, source: &str, b: &EachBlock, depth: usize) {
+fn emit_each_block(
+    out: &mut String,
+    source: &str,
+    b: &EachBlock,
+    depth: usize,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+) {
     let indent = "    ".repeat(depth);
     let expr_text = source
         .get(b.expression_range.start as usize..b.expression_range.end as usize)
@@ -597,22 +640,82 @@ fn emit_each_block(out: &mut String, source: &str, b: &EachBlock, depth: usize) 
             .to_string(),
         None => "__svn_each_unused".to_string(),
     };
+    // `{#each items as item, i}` — `i` is the zero-based iteration index.
+    // `__svn_each_items` returns a plain Iterable, which doesn't expose
+    // `.entries()`, so declaring the index as a `const i: number` inside
+    // the loop body is simpler than rewriting the for-of pattern to
+    // destructure an [index, item] pair. Using `0` for the value is a
+    // type-only trick — the generated function is never executed.
+    let index_binding: Option<&str> = b
+        .as_clause
+        .as_ref()
+        .and_then(|c| c.index_range)
+        .and_then(|r| source.get(r.start as usize..r.end as usize));
     let _ = writeln!(
         out,
         "{indent}for (const {binding_text} of __svn_each_items({expr_text})) {{"
     );
-    emit_template_body(out, source, &b.body, depth + 1);
+    if let Some(ix) = index_binding {
+        let _ = writeln!(out, "{indent}    const {ix}: number = 0;");
+    }
+    emit_template_body(out, source, &b.body, depth + 1, insts);
     // Void every identifier that the binding pattern destructures, not
     // just the first. `[id, label]` and `[id, { label }]` both bind two
     // names and TS6133 fires on each unused one.
     for ident in all_identifiers(&binding_text) {
         let _ = writeln!(out, "{indent}    void {ident};");
     }
+    if let Some(ix) = index_binding {
+        let _ = writeln!(out, "{indent}    void {ix};");
+    }
     let _ = writeln!(out, "{indent}}}");
 
     if let Some(alt) = &b.alternate {
-        emit_template_body(out, source, alt, depth);
+        emit_template_body(out, source, alt, depth, insts);
     }
+}
+
+/// Emit a lexical-scope block wrapping a `{#snippet name(params)}` body
+/// so the snippet's parameter identifiers are in scope for references
+/// inside the body (including component-prop checks on `<Component>`
+/// nodes nested below the snippet).
+///
+/// Parameters are typed as `any` — we don't resolve their types from
+/// the declared `Snippet<[...]>` shape here. For excess-prop and
+/// "cannot find name" detection that's sufficient; precise param
+/// typing would require threading the consumer's `Snippet<...>` into
+/// the snippet body's type context, which v0.1 punts on.
+///
+/// Handles both identifier params (`foo, bar`) and destructure params
+/// (`{months, weekdays}`, `[a, b]`) via `all_identifiers`. Default
+/// values (`foo = 1`) have the default expression stripped before
+/// identifier extraction.
+fn emit_snippet_block(
+    out: &mut String,
+    source: &str,
+    b: &SnippetBlock,
+    depth: usize,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+) {
+    let indent = "    ".repeat(depth);
+    let params_text = source
+        .get(b.parameters_range.start as usize..b.parameters_range.end as usize)
+        .unwrap_or("");
+    let idents = all_identifiers(params_text);
+    if idents.is_empty() {
+        // No params — no scope needed; just walk the body.
+        emit_template_body(out, source, &b.body, depth, insts);
+        return;
+    }
+    let _ = writeln!(out, "{indent}{{");
+    for ident in &idents {
+        let _ = writeln!(out, "{indent}    const {ident}: any = undefined;");
+    }
+    emit_template_body(out, source, &b.body, depth + 1, insts);
+    for ident in &idents {
+        let _ = writeln!(out, "{indent}    void {ident};");
+    }
+    let _ = writeln!(out, "{indent}}}");
 }
 
 /// Emit `let __svn_action_attrs_N: any = {};` declarations inside
@@ -657,48 +760,52 @@ fn emit_action_attrs_declarations(out: &mut String, summary: &TemplateSummary) {
 /// `class:active`, etc.) and spreads contribute nothing to the
 /// satisfies literal — they're skipped at analyze time. Their
 /// absence is harmless thanks to `Partial<>`.
-fn emit_component_prop_checks(out: &mut String, source: &str, summary: &TemplateSummary) {
-    for inst in &summary.component_instantiations {
-        let _ = write!(out, "        void ({{");
-        let mut first = true;
-        for p in &inst.props {
-            if !first {
-                let _ = write!(out, ", ");
+fn emit_one_component_prop_check(
+    out: &mut String,
+    source: &str,
+    inst: &svn_analyze::ComponentInstantiation,
+    depth: usize,
+) {
+    let indent = "    ".repeat(depth);
+    let _ = write!(out, "{indent}void ({{");
+    let mut first = true;
+    for p in &inst.props {
+        if !first {
+            let _ = write!(out, ", ");
+        }
+        first = false;
+        match p {
+            svn_analyze::PropShape::Literal { name, value } => {
+                write_object_key(out, name);
+                out.push_str(": ");
+                write_js_string_literal(out, value);
             }
-            first = false;
-            match p {
-                svn_analyze::PropShape::Literal { name, value } => {
+            svn_analyze::PropShape::Expression { name, expr_range } => {
+                let expr = &source[expr_range.start as usize..expr_range.end as usize];
+                write_object_key(out, name);
+                let _ = write!(out, ": ({expr})");
+            }
+            svn_analyze::PropShape::Shorthand { name } => {
+                // `{foo}` shorthand is only valid when the key is also a
+                // valid JS identifier — otherwise expand to `"foo": foo`.
+                if is_simple_js_identifier(name) {
+                    out.push_str(name);
+                } else {
                     write_object_key(out, name);
-                    out.push_str(": ");
-                    write_js_string_literal(out, value);
+                    let _ = write!(out, ": {name}");
                 }
-                svn_analyze::PropShape::Expression { name, expr_range } => {
-                    let expr = &source[expr_range.start as usize..expr_range.end as usize];
-                    write_object_key(out, name);
-                    let _ = write!(out, ": ({expr})");
-                }
-                svn_analyze::PropShape::Shorthand { name } => {
-                    // `{foo}` shorthand is only valid when the key is also a
-                    // valid JS identifier — otherwise expand to `"foo": foo`.
-                    if is_simple_js_identifier(name) {
-                        out.push_str(name);
-                    } else {
-                        write_object_key(out, name);
-                        let _ = write!(out, ": {name}");
-                    }
-                }
-                svn_analyze::PropShape::BoolShorthand { name } => {
-                    write_object_key(out, name);
-                    out.push_str(": true");
-                }
+            }
+            svn_analyze::PropShape::BoolShorthand { name } => {
+                write_object_key(out, name);
+                out.push_str(": true");
             }
         }
-        let _ = writeln!(
-            out,
-            "}} satisfies Partial<import('svelte').ComponentProps<typeof {}>>);",
-            inst.component_root
-        );
     }
+    let _ = writeln!(
+        out,
+        "}} satisfies Partial<import('svelte').ComponentProps<typeof {}>>);",
+        inst.component_root
+    );
 }
 
 /// Write an object-literal key. Plain JS identifiers are emitted bare;
@@ -853,6 +960,33 @@ fn all_identifiers(binding: &str) -> Vec<String> {
             b'}' => {
                 depth_brace = depth_brace.saturating_sub(1);
                 i += 1;
+            }
+            b'?' if depth_brace == 0 => {
+                // Optional-parameter marker in TS snippet params: `name?:
+                // Type`. No-op; the following `:` handles the type skip.
+                // Each-block `as` clauses don't use `?`, so this branch
+                // is inert for that caller.
+                i += 1;
+            }
+            b':' if depth_brace == 0 => {
+                // Top-level `:` on a snippet parameter introduces a TS
+                // type annotation (`name: Foo<Bar>`). Skip until the
+                // next top-level `,` — tracking paren/bracket/brace/
+                // angle nesting so commas inside `Array<A, B>` or
+                // `(a: X) => Y` don't terminate the annotation early.
+                // Each-block `as` clauses never hit this (Svelte grammar
+                // forbids type annotations on destructure targets).
+                i += 1;
+                let mut depth = 0usize;
+                while i < bytes.len() {
+                    match bytes[i] {
+                        b'(' | b'[' | b'{' | b'<' => depth += 1,
+                        b')' | b']' | b'}' | b'>' if depth > 0 => depth -= 1,
+                        b',' if depth == 0 => break,
+                        _ => {}
+                    }
+                    i += 1;
+                }
             }
             b'=' => {
                 // Skip default value `name = expr` — advance past expr to

@@ -69,6 +69,11 @@ declare module 'svelte' {
         (...args: Parameters): any;
     };
 
+    // Shape-preserving in the real svelte package; permissive here so
+    // emit's `satisfies Partial<ComponentProps<typeof X>>` type-checks
+    // even against our stand-in Component/default-export type.
+    export type ComponentProps<T> = any;
+
     export function onMount(fn: () => void | (() => void)): void;
     export function onDestroy(fn: () => void): void;
     export function beforeUpdate(fn: () => void): void;

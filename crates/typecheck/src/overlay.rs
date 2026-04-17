@@ -144,21 +144,17 @@ pub fn build(
     }
     if !paths_map.is_empty() {
         compiler_options.insert("paths".into(), Value::Object(paths_map));
-        // baseUrl is set to the WORKSPACE root. This serves two
-        // purposes: (1) tsgo's onetime requirement that `paths` and
-        // `baseUrl` appear together (the deprecation warning that fires
-        // is filtered as overlay noise); (2) tsgo limits diagnostic
-        // emission to files under baseUrl, which is the right scope
-        // for "type-check the user's project" — files outside the
-        // workspace are dependencies that we shouldn't flag.
-        //
-        // Pointing baseUrl at the cache root (an earlier choice) was
-        // wrong: it confined diagnostics to the cache directory, so
-        // tsgo loaded user TS files for resolution but never emitted
-        // errors on them, silently zeroing meaningful counts on any
-        // project whose include patterns brought in standalone
-        // .ts/.svelte.ts modules.
-        compiler_options.insert("baseUrl".into(), json!(layout.workspace.to_string_lossy()));
+        // Intentionally NOT setting `baseUrl`. TypeScript 5.0 removed
+        // `baseUrl` as a top-level compiler option (TS5102) and tsgo
+        // (the TS 7.0 dev preview that this binary targets) doesn't
+        // require it for `paths` to resolve — every paths-target value
+        // we emit is absolute. Setting baseUrl had a real, hidden
+        // cost: tsgo silently suppresses diagnostic emission for
+        // files outside `baseUrl`'s tree AND, in some configurations,
+        // suppresses diagnostics on overlay files entirely. The TS5102
+        // deprecation that tsgo emits when paths is set without
+        // baseUrl is filtered as overlay noise in
+        // svn-typecheck::map_diagnostic.
     }
 
     // Pull the user's `include` patterns into our overlay so tsgo also
@@ -491,22 +487,31 @@ fn collect_user_types(tsconfig: &Path) -> Option<Vec<String>> {
 }
 
 /// True when a `types` entry will resolve under tsgo's lookup rules.
-/// Package-name entries (no slash, or scoped like `@types/foo`) are
-/// resolved through `node_modules/@types/<name>` etc. — we accept them
-/// optimistically without filesystem checks because the alternative
-/// (walking node_modules) is expensive and usually right.
 ///
-/// Relative path entries (start with `.` or contain a path separator)
-/// are required to point at an existing file. tsgo's `types` lookup
-/// for relative entries does NOT add `.d.ts` automatically when the
-/// path already includes an extension, so we test the literal path
-/// first and `<path>.d.ts` as a fallback.
+/// **Package-name entries** (e.g. `"node"`, `"@types/foo"`, `"foo"`)
+/// are resolved through the workspace's `node_modules` chain. We walk
+/// up from the declaring tsconfig's directory looking for either
+/// `node_modules/@types/<name>/package.json` (the conventional types
+/// package layout) or `node_modules/<name>/package.json` (a runtime
+/// package that ships its own .d.ts files). Either match means tsgo
+/// will find it; otherwise we drop the entry. This matters because
+/// SvelteKit's auto-generated `.svelte-kit/tsconfig.json` declares
+/// `types: ["node"]` even when the host project doesn't actually
+/// depend on `@types/node` — without filtering, tsgo treats the
+/// missing entry as fatal TS2688 and stops emitting diagnostics for
+/// the entire program.
+///
+/// **Relative path entries** (start with `.` or `/`, or contain a
+/// path separator and aren't scoped) must point at an existing file.
+/// tsgo's `types` lookup for relative entries does NOT add `.d.ts`
+/// automatically when the path already includes an extension, so we
+/// test the literal path first and `<path>.d.ts` as a fallback.
 fn is_resolvable_types_entry(entry: &str, declaring_dir: &Path) -> bool {
     let looks_relative = entry.starts_with('.')
         || entry.starts_with('/')
         || (entry.contains('/') && !entry.starts_with('@'));
     if !looks_relative {
-        return true;
+        return package_types_entry_resolves(entry, declaring_dir);
     }
     let candidate = if Path::new(entry).is_absolute() {
         PathBuf::from(entry)
@@ -528,6 +533,29 @@ fn is_resolvable_types_entry(entry: &str, declaring_dir: &Path) -> bool {
     let mut as_dts = candidate.clone();
     as_dts.as_mut_os_string().push(".d.ts");
     as_dts.is_file()
+}
+
+/// True when a bare-name `types` entry resolves to either an `@types`
+/// package or a runtime package shipping its own .d.ts files in the
+/// workspace's `node_modules` chain. Walks up from the declaring
+/// tsconfig's directory; first match wins.
+fn package_types_entry_resolves(name: &str, declaring_dir: &Path) -> bool {
+    let mut cur: Option<&Path> = Some(declaring_dir);
+    while let Some(dir) = cur {
+        let nm = dir.join("node_modules");
+        if nm.is_dir() {
+            // Conventional types package: node_modules/@types/<name>.
+            if nm.join("@types").join(name).join("package.json").is_file() {
+                return true;
+            }
+            // Runtime package shipping its own types: node_modules/<name>.
+            if nm.join(name).join("package.json").is_file() {
+                return true;
+            }
+        }
+        cur = dir.parent();
+    }
+    false
 }
 
 /// Collapse `..` segments without touching the filesystem. Pure path

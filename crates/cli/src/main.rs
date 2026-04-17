@@ -654,7 +654,7 @@ fn run_typecheck(
         &diagnostics,
         output_format,
         color,
-        svelte_files.len(),
+        count_project_files(workspace, ignore),
     );
 
     if timings {
@@ -1027,6 +1027,41 @@ fn discover_svelte_files(workspace: &Path, ignore: Option<&globset::GlobSet>) ->
         })
         .map(|e| e.path().to_path_buf())
         .collect()
+}
+
+/// Count every TS-family source file in the workspace (svelte, ts, tsx,
+/// cts, mts, js, jsx, cjs, mjs). Used for the COMPLETED line's
+/// `<N> FILES` display so the figure matches what upstream `svelte-check`
+/// reports — upstream counts everything in the LanguageService program,
+/// not just `.svelte`. Reporting only `.svelte` (~1.2k on a real
+/// monorepo while upstream prints ~7k for the same project) gave a
+/// misleadingly small denominator and made the tool look like it was
+/// checking a fraction of what it actually checks.
+fn count_project_files(workspace: &Path, ignore: Option<&globset::GlobSet>) -> usize {
+    WalkDir::new(workspace)
+        .into_iter()
+        .filter_entry(|e| {
+            if is_excluded_dir(e.path()) {
+                return false;
+            }
+            if let Some(set) = ignore {
+                if let Ok(rel) = e.path().strip_prefix(workspace) {
+                    if set.is_match(rel) {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            matches!(
+                e.path().extension().and_then(|s| s.to_str()),
+                Some("svelte" | "ts" | "tsx" | "cts" | "mts" | "js" | "jsx" | "cjs" | "mjs")
+            )
+        })
+        .count()
 }
 
 fn is_excluded_dir(path: &Path) -> bool {

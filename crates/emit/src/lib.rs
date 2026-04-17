@@ -280,8 +280,7 @@ fn emit_document_with_render_name(
             // overlay default resolves to the weak declared type and
             // every `<X cb={(arg) => ...}>` destructure binding reads
             // as implicit-any via `ComponentProps<any> = any`.
-            let ty = svn_analyze::find_props_type_source(&parsed_orig.program, instance.content)
-                .map(|s| s.to_string());
+            let ty = svn_analyze::find_props_type_source(&parsed_orig.program, instance.content);
 
             collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
             (props, ty)

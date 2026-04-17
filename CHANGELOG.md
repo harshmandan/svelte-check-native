@@ -31,9 +31,24 @@ warnings.
 - **Per-region source maps** that translate every overlay diagnostic
   back to the precise `.svelte:line:column` it came from.
 - **Real-world parity verified** against a heavy SvelteKit + TypeScript
-  app (~1200 `.svelte` files): same diagnostic content as upstream
-  `svelte-check` with the same flags (`0 errors / 10 warnings / 7 files`
-  on that workload).
+  app (1206 `.svelte` files): byte-equivalent diagnostic content to
+  upstream `svelte-check` with CSS disabled on both
+  (`--diagnostic-sources 'js,svelte'` upstream, `'ts,svelte'` ours —
+  semantically identical) → `0 errors / 44 warnings / 15 files with
+  issues` from both tools.
+- **`--tsgo-version`** — print resolved tsgo binary path + its
+  `--version` output, for verifying `@typescript/native-preview` is
+  at the expected version.
+- **`--tsgo-diagnostics`** — forward `--extendedDiagnostics` to tsgo
+  and print its perf/memory stats block (file/line/symbol counts,
+  memory, phase timings) after the run. Same intent as upstream
+  `svelte-check-rs`'s flag of the same name.
+- **`--tsgo`** — accepted as a no-op for command-line compatibility
+  with upstream `svelte-check` (tsgo is always on in our pipeline).
+- **Partial Svelte 4 syntax compat** — `export let foo` and
+  `export { name as alias }` specifier form are lifted into the
+  synthesized `Props` type. Full Svelte 4 support (`<slot>`,
+  `on:event`, `$:` reactive statements) lands in v0.2.
 - **Coding-agent CLI auto-detection**: output defaults to `machine`
   when `CLAUDECODE=1`, `GEMINI_CLI=1`, or `CODEX_CI=1` is set.
 

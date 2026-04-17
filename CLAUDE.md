@@ -1,8 +1,9 @@
 # Working conventions for Claude Code / AI-assisted contributions
 
 This file is loaded into every Claude Code session in this repo. Read
-`README.md` for the public-facing overview. This file is the shorter
-"rules of engagement" layer on top of that.
+`README.md` for the public-facing overview, and `ROADMAP.md` (local,
+gitignored) for the v0.2 plan, scoreboard, and documented limitations.
+This file is the shorter "rules of engagement" layer on top of both.
 
 ## Project at a glance
 
@@ -180,6 +181,11 @@ by the suites above. Their error counts are not a shipping metric.
 ## When in doubt
 
 - Read `README.md` for the public-facing overview.
+- Read `ROADMAP.md` for current scoreboard, v0.2 plan, explicit
+  out-of-scope items, and documented won't-fix limitations. This file
+  is gitignored — it's the private working notes that stay in the
+  local checkout only, not part of the shipped repo. Always treat it
+  as the source of truth for "what's next" and "known limits".
 - Check `language-tools/packages/svelte-check/src/` for how upstream
   solves CLI/output problems.
 - Check `language-tools/packages/svelte2tsx/src/` for how the upstream

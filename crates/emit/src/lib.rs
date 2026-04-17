@@ -512,6 +512,40 @@ fn emit_document_with_render_name(
         .as_ref()
         .map(|s| s.exported_locals.clone())
         .unwrap_or_default();
+
+    // Build the `{ name: sig; ... }` object type for collected exports.
+    // Used two places below:
+    //   - as the Exports type parameter of `Component<Props, Exports>`
+    //     on the VALUE declaration, so `ReturnType<typeof Foo>` carries
+    //     user exports (common pattern: `let ref: ReturnType<typeof X>
+    //     = $state()` for bind:this targets).
+    //   - as an `& { name: sig }` intersection on the TYPE alias, so
+    //     `let ref: Foo` picks up the same shape.
+    let exports_object: Option<String> = split.as_ref().and_then(|s| {
+        if s.export_type_infos.is_empty() {
+            return None;
+        }
+        let mut buf = String::from("{ ");
+        for info in &s.export_type_infos {
+            buf.push_str(info.name.as_str());
+            buf.push_str(": ");
+            match &info.type_source {
+                Some(t) => buf.push_str(t),
+                None => buf.push_str("any"),
+            }
+            buf.push_str("; ");
+        }
+        buf.push('}');
+        Some(buf)
+    });
+    let exports_clause = exports_object
+        .as_deref()
+        .map(|e| format!(" & {e}"))
+        .unwrap_or_default();
+    let component_exports_arg = exports_object
+        .as_deref()
+        .map(|e| format!(", {e}"))
+        .unwrap_or_default();
     emit_void_block(
         &mut out,
         summary,
@@ -552,18 +586,36 @@ fn emit_document_with_render_name(
     // matching function-type.
     // Three cases: typed+generic, typed non-generic, untyped.
     //
-    // In the generic case, the Props source has to be "safe" to
-    // reference at module scope — either a literal shape (`{ item: T }`)
-    // or a named type that carries its own generic parameters
-    // (`Props<T>`). A bare named type (`Props` that references the
-    // script's T without re-binding it) can't be hoisted by
-    // script_split and thus isn't visible at module scope, so we fall
-    // back to `any` for the default-export declaration. Consumers lose
-    // contextual-typing flow in that rare case; zero false positives.
-    let ty_safe_in_generic_scope = prop_type_source.as_deref().is_some_and(|t| {
-        let t = t.trim();
-        t.starts_with('{') || t.contains('<')
+    // The Props source has to be "safe" to reference at module scope:
+    // either a literal shape (`{ item: T }`) or a named type whose
+    // declaration was hoisted by script_split. Bare named types that
+    // stay body-scoped (either because they reference the script's
+    // generic without re-binding it, or because they reference a
+    // body-level const via `typeof`) can't be named from the
+    // default-export declaration — emit falls back to `any` for
+    // those.
+    let prop_ty_is_literal = prop_type_source
+        .as_deref()
+        .is_some_and(|t| t.trim().starts_with('{'));
+    let prop_ty_root_name = prop_type_source
+        .as_deref()
+        .and_then(|t| root_type_name(t.trim()));
+    // Consider a named Props type module-scope-visible if either (a)
+    // script_split hoisted it out of the instance script, or (b) it's
+    // declared in the `<script module>` section (which emits verbatim
+    // at module scope), or (c) it's imported as a type at the module
+    // top level. The last case is the common
+    // `import type { FooProps } from './types'` pattern.
+    let module_script_text = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
+    let prop_ty_module_visible = prop_ty_root_name.as_deref().is_some_and(|n| {
+        split
+            .as_ref()
+            .is_some_and(|s| s.hoisted_type_names.contains(n))
+            || module_script_declares_type(module_script_text, n)
+            || split.as_ref().is_some_and(|s| imports_name(&s.hoisted, n))
     });
+    let ty_safe_in_generic_scope = prop_ty_is_literal || prop_ty_module_visible;
+    let ty_safe_in_module_scope = prop_ty_is_literal || prop_ty_module_visible;
     // Default export typed as Svelte 5's `Component<Props>` (function
     // form). This shape is chosen to satisfy the constraint on
     // svelte's built-in `ComponentProps<T>` helper — which accepts
@@ -601,29 +653,32 @@ fn emit_document_with_render_name(
         (Some(ty), Some(g)) if ty_safe_in_generic_scope => {
             let _ = writeln!(
                 out,
-                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{ty}>) => any;"
+                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{ty}>) => {};",
+                exports_object.as_deref().unwrap_or("any"),
             );
             let _ = writeln!(
                 out,
-                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<{ty}>;"
+                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<{ty}>{exports_clause};"
             );
         }
-        (Some(ty), None) => {
+        (Some(ty), None) if ty_safe_in_module_scope => {
             let _ = writeln!(
                 out,
-                "declare const __svn_component_default: import('svelte').Component<{ty}>;"
+                "declare const __svn_component_default: import('svelte').Component<{ty}{component_exports_arg}>;"
             );
             let _ = writeln!(
                 out,
-                "declare type __svn_component_default = import('svelte').SvelteComponent<{ty}>;"
+                "declare type __svn_component_default = import('svelte').SvelteComponent<{ty}>{exports_clause};"
             );
         }
         _ => {
-            out.push_str(
-                "declare const __svn_component_default: import('svelte').Component<Record<string, any>>;\n",
+            let _ = writeln!(
+                out,
+                "declare const __svn_component_default: import('svelte').Component<Record<string, any>{component_exports_arg}>;"
             );
-            out.push_str(
-                "declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;\n",
+            let _ = writeln!(
+                out,
+                "declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>{exports_clause};"
             );
         }
     }
@@ -644,6 +699,100 @@ fn emit_document_with_render_name(
         render_name,
         line_map,
     }
+}
+
+/// Byte-scan a script section for `type NAME`, `interface NAME`,
+/// `export type NAME`, or `export interface NAME` declarations.
+/// Returns true if `name` appears as a declared type. Used by emit to
+/// check whether a Props type referenced from a consumer-scope
+/// declaration will resolve at module scope.
+///
+/// Not a full parser — matches the common case of a top-of-line type
+/// keyword followed by whitespace and the identifier. String-literal
+/// and comment false-positives (writing `// interface Foo` in a
+/// comment) resolve toward "visible"; emit then declares `Component<Foo>`
+/// which fires TS2304 only if the user genuinely forgot to declare
+/// Foo, a clear error they can fix.
+fn module_script_declares_type(text: &str, name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    for prefix in ["type ", "interface "] {
+        let needle = format!("{prefix}{name}");
+        for (idx, _) in text.match_indices(&needle) {
+            let before_ok = idx == 0 || {
+                let b = text.as_bytes()[idx - 1];
+                !b.is_ascii_alphanumeric() && b != b'_' && b != b'$'
+            };
+            let after_idx = idx + needle.len();
+            let after_ok = after_idx == text.len() || {
+                let b = text.as_bytes()[after_idx];
+                !b.is_ascii_alphanumeric() && b != b'_' && b != b'$'
+            };
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Byte-scan hoisted import declarations for `name` appearing in an
+/// `import type { ... }` or `import { ... }` clause. Used to check
+/// whether a Props type referenced by the consumer emit comes from a
+/// type-only module import.
+fn imports_name(hoisted: &str, name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    // Fast path: check any `import` statement that mentions the name
+    // as a braced specifier. Matches `{ name }`, `{ name, ... }`,
+    // `{ ..., name }`, `{ name as Alias }`, `{ type name }`, etc.
+    for (idx, _) in hoisted.match_indices(name) {
+        let before = idx.checked_sub(1).map(|i| hoisted.as_bytes()[i]);
+        let after = hoisted.as_bytes().get(idx + name.len()).copied();
+        let bounded = before.is_none_or(|b| !b.is_ascii_alphanumeric() && b != b'_' && b != b'$')
+            && after.is_none_or(|b| !b.is_ascii_alphanumeric() && b != b'_' && b != b'$');
+        if !bounded {
+            continue;
+        }
+        // Scan backward to the nearest `import`, stopping at a prior
+        // `;` or `\n\n` (statement boundary). If we hit `import` with
+        // an open `{` between it and the name, it's an import
+        // specifier.
+        let before_text = &hoisted[..idx];
+        if let Some(import_pos) = before_text.rfind("import") {
+            let between = &before_text[import_pos + "import".len()..];
+            if between.contains('{') && !between.contains('}') {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Extract the leading identifier of a TypeScript type source, if the
+/// source starts with a reference to a named type (e.g. `Props`,
+/// `Props<T>`, `ChannelMessageProps`). Returns `None` for literal
+/// shapes (`{ ... }`), tuple/array (`[...]`), and other non-reference
+/// starts. Used by emit to decide whether a named-type Props can be
+/// safely mentioned at module scope.
+fn root_type_name(ty: &str) -> Option<String> {
+    let bytes = ty.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let first = bytes[0];
+    if !(first.is_ascii_alphabetic() || first == b'_' || first == b'$') {
+        return None;
+    }
+    let mut end = 0usize;
+    while end < bytes.len()
+        && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_' || bytes[end] == b'$')
+    {
+        end += 1;
+    }
+    Some(ty[..end].to_string())
 }
 
 /// Append `.ts` to every `.svelte` extension that appears as a module

@@ -41,6 +41,27 @@ pub struct SplitScript {
     pub body: String,
     pub exported_locals: Vec<SmolStr>,
     pub hoisted_byte_offsets: Vec<u32>,
+    /// Per-export type info for assembling the component's Exports
+    /// intersection on the default-export type alias. `type_source` is
+    /// `None` when the user didn't annotate the declaration (or when
+    /// we couldn't extract a safe-to-hoist annotation); the caller
+    /// falls back to `any` for those slots.
+    pub export_type_infos: Vec<ExportedLocalInfo>,
+    /// Names of `type`/`interface` declarations that were hoisted to
+    /// module scope. Emit consults this set before referencing a
+    /// user-declared type in the default-export declaration — if the
+    /// user's Props type wasn't hoistable (it references a body-local
+    /// via `typeof`), emit must fall back to `any` instead of firing
+    /// "Cannot find name 'Props'" at module scope.
+    pub hoisted_type_names: std::collections::HashSet<SmolStr>,
+}
+
+/// Surface-facing type info for one `export function/let/const` — what
+/// consumers of `bind:this={x}` see as `x.name` instance access.
+#[derive(Debug, Clone)]
+pub struct ExportedLocalInfo {
+    pub name: SmolStr,
+    pub type_source: Option<String>,
 }
 
 /// Split out every module-level statement (imports, exports of all
@@ -83,6 +104,8 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
             body: content.to_string(),
             exported_locals: Vec::new(),
             hoisted_byte_offsets: Vec::new(),
+            export_type_infos: Vec::new(),
+            hoisted_type_names: HashSet::new(),
         };
     }
 
@@ -100,6 +123,8 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
             body: content.to_string(),
             exported_locals: Vec::new(),
             hoisted_byte_offsets: Vec::new(),
+            export_type_infos: Vec::new(),
+            hoisted_type_names: HashSet::new(),
         };
     }
 
@@ -140,6 +165,11 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
     // expression-vs-name without more parsing — drop is safer).
     let mut drop_spans: Vec<(usize, usize)> = Vec::new();
     let mut exported_locals: Vec<SmolStr> = Vec::new();
+    let mut export_type_infos: Vec<ExportedLocalInfo> = Vec::new();
+    // Type aliases / interfaces whose hoist decision is deferred until
+    // after body_decl_names is fully populated (post-pass below).
+    // Tuple: (span_start, span_end, declared_name).
+    let mut pending_type_spans: Vec<(usize, usize, SmolStr)> = Vec::new();
 
     for stmt in &parsed.program.body {
         match stmt {
@@ -192,6 +222,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
                         strip_keyword_spans.push((span.0, inner_start));
                     }
                     collect_declaration_names(d, &mut exported_locals);
+                    collect_export_type_infos(d, content, &mut export_type_infos);
                     // Record body-level names too: the declaration stays
                     // in the body after the `export ` prefix is stripped,
                     // so a hoisted `type X = typeof name` needs a
@@ -259,16 +290,83 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
             Statement::TSTypeAliasDeclaration(decl) => {
                 let hoist_safe = !has_generics || decl.type_parameters.is_some();
                 if hoist_safe {
-                    hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+                    pending_type_spans.push((
+                        decl.span.start as usize,
+                        decl.span.end as usize,
+                        SmolStr::from(decl.id.name.as_str()),
+                    ));
                 }
             }
             Statement::TSInterfaceDeclaration(decl) => {
                 let hoist_safe = !has_generics || decl.type_parameters.is_some();
                 if hoist_safe {
-                    hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+                    pending_type_spans.push((
+                        decl.span.start as usize,
+                        decl.span.end as usize,
+                        SmolStr::from(decl.id.name.as_str()),
+                    ));
                 }
             }
             _ => {}
+        }
+    }
+
+    // Post-pass: decide which pending type spans to hoist. A type that
+    // references a body-level name via `typeof <name>` must stay in
+    // body — module-scope `declare const <name>: { [k: string]: any }`
+    // stubs degrade `keyof typeof <name>` to `string | number` (instead
+    // of the literal union the REAL body-scoped const has), which then
+    // fires TS7053 on `computeTriangles[corner as Corner](...)` because
+    // `Corner` resolves to `string | number` at the hoisted site. By
+    // keeping these types body-scoped, `typeof <name>` resolves
+    // against the real value and `keyof` produces the literal union.
+    //
+    // The heuristic: scan the type's source for `typeof ` followed by
+    // an identifier that's in body_decl_names. False positives
+    // (matching inside nested types that aren't indexed) are
+    // acceptable — worst case, a hoistable type stays body-scoped.
+    // All pending types hoist. Types that reference body-locals via
+    // `typeof <name>` still work at module scope thanks to the
+    // `declare const <name>: { [key: string]: any } & ((...args) =>
+    // any)` stubs emitted below. The stub loses some precision (a
+    // literal-keyed `keyof typeof X` collapses to `string | number`),
+    // but keeping the type hoisted preserves contextual-typing flow
+    // for consumers of this component's snippet props — which is a
+    // larger net win than preserving `keyof` precision inside the
+    // component's own body.
+    let mut hoisted_type_names: HashSet<SmolStr> = HashSet::new();
+    for (start, end, name) in pending_type_spans {
+        hoist_spans.push((start, end));
+        hoisted_type_names.insert(name);
+    }
+
+    // Also register any `export type` / `export interface` spans as
+    // hoisted — those went direct into hoist_spans without passing
+    // through pending_type_spans. Parse the first identifier after
+    // `type ` / `interface ` to pick up the name.
+    for &(start, end) in &hoist_spans {
+        let span_text = &content[start..end];
+        let trimmed = span_text.trim_start_matches(|c: char| {
+            c == 'e'
+                || c == 'x'
+                || c == 'p'
+                || c == 'o'
+                || c == 'r'
+                || c == 't'
+                || c.is_whitespace()
+        });
+        for kw in ["type ", "interface "] {
+            if let Some(rest) = trimmed.strip_prefix(kw) {
+                let ident: String = rest
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+                    .collect();
+                if !ident.is_empty() {
+                    hoisted_type_names.insert(SmolStr::from(ident));
+                }
+                break;
+            }
         }
     }
 
@@ -278,6 +376,8 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
             body: content.to_string(),
             exported_locals,
             hoisted_byte_offsets: Vec::new(),
+            export_type_infos,
+            hoisted_type_names: HashSet::new(),
         };
     }
 
@@ -399,6 +499,87 @@ pub fn split_imports(content: &str, _lang: ScriptLang, has_generics: bool) -> Sp
         body,
         exported_locals,
         hoisted_byte_offsets,
+        export_type_infos,
+        hoisted_type_names,
+    }
+}
+
+/// Extract per-declaration type info for `export function/let/const/var`.
+/// Used downstream to build the component's Exports intersection on
+/// the overlay's default-export type alias.
+///
+/// For functions: splice `(params): retType` out of the source and
+/// present as an arrow-function type (`(params) => retType` — default
+/// `void` for un-annotated returns). Type parameters preserved.
+///
+/// For variables: use the declaration's TypeScript annotation if
+/// present. Destructure patterns and un-annotated `const x = expr`
+/// fall back to `None` (caller emits `any`).
+///
+/// Class exports also fall back to `None`; surfacing an instance type
+/// from a class export needs `InstanceType<typeof ClassName>`, which
+/// requires a module-scope reference we don't have (the class body is
+/// body-scoped after the `export` prefix is stripped).
+fn collect_export_type_infos(
+    decl: &Declaration<'_>,
+    content: &str,
+    out: &mut Vec<ExportedLocalInfo>,
+) {
+    match decl {
+        Declaration::FunctionDeclaration(f) => {
+            let Some(id) = &f.id else { return };
+            let name = SmolStr::from(id.name.as_str());
+            let type_params = f
+                .type_parameters
+                .as_deref()
+                .map(|tp| {
+                    let span = GetSpan::span(tp);
+                    content[span.start as usize..span.end as usize].to_string()
+                })
+                .unwrap_or_default();
+            let params_span = GetSpan::span(f.params.as_ref());
+            let params_text = &content[params_span.start as usize..params_span.end as usize];
+            let ret_type = f
+                .return_type
+                .as_deref()
+                .map(|rt| {
+                    let span = GetSpan::span(&rt.type_annotation);
+                    content[span.start as usize..span.end as usize].to_string()
+                })
+                .unwrap_or_else(|| "void".to_string());
+            let sig = format!("{type_params}{params_text} => {ret_type}");
+            out.push(ExportedLocalInfo {
+                name,
+                type_source: Some(sig),
+            });
+        }
+        Declaration::VariableDeclaration(v) => {
+            for d in &v.declarations {
+                // Only simple `name: T = ...` patterns — destructures
+                // and anonymous-binding cases we surface as `any`.
+                let BindingPatternKind::BindingIdentifier(id) = &d.id.kind else {
+                    continue;
+                };
+                let name = SmolStr::from(id.name.as_str());
+                let type_source = d.id.type_annotation.as_deref().map(|ta| {
+                    let span = GetSpan::span(&ta.type_annotation);
+                    content[span.start as usize..span.end as usize].to_string()
+                });
+                out.push(ExportedLocalInfo { name, type_source });
+            }
+        }
+        // `export class Foo {}` — surface as `any`. Classes exported
+        // from a component are rare and their instance shape requires
+        // body-scope reference we don't have at module scope.
+        Declaration::ClassDeclaration(c) => {
+            if let Some(id) = &c.id {
+                out.push(ExportedLocalInfo {
+                    name: SmolStr::from(id.name.as_str()),
+                    type_source: None,
+                });
+            }
+        }
+        _ => {}
     }
 }
 

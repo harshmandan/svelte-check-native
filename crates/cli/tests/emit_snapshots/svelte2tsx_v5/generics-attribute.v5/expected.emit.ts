@@ -18,7 +18,7 @@ async function $$render_cf56d9b2<A, B extends keyof A, C extends boolean>() {
     void getA;
 }
 $$render_cf56d9b2;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>, { getA: () => void; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>> & { getA: () => void; };
 export default __svn_component_default;
 

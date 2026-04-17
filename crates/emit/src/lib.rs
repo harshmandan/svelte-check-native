@@ -1519,8 +1519,39 @@ fn emit_snippet_block(
         emit_template_body(out, source, &b.body, depth, insts);
         return;
     }
+    // Open a fresh block, then reference the ORIGINAL params text
+    // inside an arrow function's signature — that keeps the user's
+    // type annotations (e.g. `MouseEventHandler<HTMLButtonElement>`)
+    // bound as references. Without this, types only used in a
+    // snippet parameter list (and never in the script body) fire
+    // TS6133 "declared but never read" on their import.
+    //
+    // We don't try to thread contextual typing through — top-level
+    // snippets have no parent satisfies target to flow from. Each
+    // user-named parameter gets re-declared inside the body as `const
+    // <name>: any` so the snippet body type-checks without depending
+    // on the arrow's inferred param types (which the `null as any`
+    // cast erases anyway).
+    let annotated = annotate_snippet_params(params_text);
     let idents = all_identifiers(params_text);
     let _ = writeln!(out, "{indent}{{");
+    // Consume the user's types inside a no-op arrow function
+    // *expression* (not a type) so any type imported solely to
+    // annotate a snippet parameter counts as "referenced". Using an
+    // expression instead of a type (`() => void`) keeps default
+    // values and optional-after-required orderings legal — those are
+    // syntax errors in function-TYPE syntax but valid in function
+    // *implementation* syntax. The body references every top-level
+    // binding so TS6133 doesn't fire on the arrow's own params.
+    let idents_voided: String = idents
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let _ = writeln!(
+        out,
+        "{indent}    void (({annotated}) => {{ void [{idents_voided}]; }});"
+    );
     for ident in &idents {
         let _ = writeln!(out, "{indent}    const {ident}: any = undefined;");
     }

@@ -150,13 +150,33 @@ fn emit_document_with_render_name(
     // lifted to module scope).
     let generics = extract_generics_attr(doc);
 
+    // Extract the Props type's root name (if any) up front so
+    // script_split can decide whether a given `type`/`interface`
+    // declaration IS the Props annotation — Props always hoists, even
+    // when its body references locals via `typeof`, because consumers
+    // need the Props type visible at module scope to get typed
+    // contextual flow. Non-Props types that reference body-locals via
+    // `typeof` stay body-scoped so `keyof typeof X` resolves against
+    // the real declaration rather than the lossy declare-const stub.
+    let prop_type_root_for_split: Option<String> = doc.instance_script.as_ref().and_then(|s| {
+        let alloc = Allocator::default();
+        let parsed = parse_script_body(&alloc, s.content, s.lang);
+        svn_analyze::find_props_type_source(&parsed.program, s.content)
+            .as_deref()
+            .and_then(|t| root_type_name(t.trim()))
+    });
+
     // Hoist imports out of the instance script. Required because the
     // instance body gets wrapped in `function $$render() { ... }` and ES
     // `import` declarations can't appear inside a function (TS1232).
-    let split = doc
-        .instance_script
-        .as_ref()
-        .map(|s| split_imports(s.content, s.lang, generics.is_some()));
+    let split = doc.instance_script.as_ref().map(|s| {
+        split_imports(
+            s.content,
+            s.lang,
+            generics.is_some(),
+            prop_type_root_for_split.as_deref(),
+        )
+    });
 
     if let Some(s) = &split {
         if !s.hoisted.is_empty() {

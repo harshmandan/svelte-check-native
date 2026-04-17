@@ -399,12 +399,37 @@ fn emit_document_with_render_name(
         }
     }
 
-    let bind_target_names: Vec<SmolStr> = summary
+    // Collect every `let <name>: T;` that needs a `!` definite-assignment
+    // assertion to satisfy strict flow analysis. Two sources:
+    //
+    //   1. `bind:this` targets — the user's `bind:this={x}` pattern
+    //      assigns `x` asynchronously after mount; TS can't see that.
+    //   2. `export`-stripped locals — `export let foo: T` in the
+    //      script becomes `let foo: T` in the body after
+    //      script_split removes the `export` keyword. The symbol is
+    //      consumed by the template (`{#if foo}`, `<X prop={foo}>`)
+    //      but never initialized in the body. Post-Phase-1 we emit
+    //      template `{#if foo}` as a real TS `if ((foo))`, which
+    //      reads the uninitialized `let foo: T;` and fires TS2454.
+    //
+    // The `rewrite_definite_assignment_in_place` pass only touches
+    // declarations that have a `:` type annotation and NO `=`
+    // initializer, so adding names here is safe for `export let foo
+    // = defaultValue` and `export let foo` (no annotation) — both
+    // skip the rewrite.
+    let mut def_assign_names: Vec<SmolStr> = summary
         .bind_this_targets
         .iter()
         .map(|t| t.name.clone())
         .collect();
-    rewrite_definite_assignment_in_place(&mut out, &bind_target_names);
+    if let Some(s) = &split {
+        for name in &s.exported_locals {
+            if !def_assign_names.iter().any(|n| n == name) {
+                def_assign_names.push(name.clone());
+            }
+        }
+    }
+    rewrite_definite_assignment_in_place(&mut out, &def_assign_names);
 
     out.push_str("    async function __svn_tpl_check() {\n");
     out.push_str("        // template type-check body (incremental)\n");
@@ -1285,6 +1310,8 @@ fn try_match_let_decl(bytes: &[u8], i: usize, target_names: &[SmolStr]) -> Optio
     // Walk forward through the type annotation looking for `=` (= initializer)
     // before `;` or newline. Tracks `<>{}[]()` depth so generic args like
     // `Foo<T = U>` and object types like `{ k: V }` don't trigger false hits.
+    // Skips `=>` (arrow function types) and `==`/`===` (equality operators
+    // in conditional types) — none of those start an initializer.
     let mut s = q + 1;
     let mut paren_depth: i32 = 0;
     while s < bytes.len() {
@@ -1292,7 +1319,15 @@ fn try_match_let_decl(bytes: &[u8], i: usize, target_names: &[SmolStr]) -> Optio
         match c {
             b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
             b')' | b']' | b'}' | b'>' => paren_depth -= 1,
-            b'=' if paren_depth == 0 => return None, // has initializer
+            b'=' if paren_depth == 0 => {
+                let next = bytes.get(s + 1).copied();
+                // `=>` arrow, `==`/`===` equality — not initializers.
+                if next != Some(b'>') && next != Some(b'=') {
+                    return None;
+                }
+                // Skip the second `=` so a later `=>` doesn't re-trigger.
+                s += 1;
+            }
             b';' | b'\n' if paren_depth == 0 => break,
             _ => {}
         }

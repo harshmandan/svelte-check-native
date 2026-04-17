@@ -1,0 +1,193 @@
+{
+    "_doc": "Per-sample error-count baselines for the htmlx_fixtures suite. Many samples reference undeclared identifiers by design (e.g. `{#each items as item}` has no surrounding <script> declaring `items`), so tsgo reports TS2304 `Cannot find name` on every run. Baselines capture the expected noise floor; a pass means `errors ≤ max_errors`. The first authoritative run populates this file; subsequent edits to emit should never increase any entry's count without an explicit baseline bump and a comment explaining why.",
+    "samples": {
+        "attachments.v5": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "attribute-bare": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "attribute-foreign-ns": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "attribute-invalid-jsx-name": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "attribute-multiline": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "attribute-number": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "attribute-shorthand": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "attribute-text": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "binding": {
+            "max_errors": 4,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "binding-bare": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "binding-get-set.v5": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "binding-this-component": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "binding-this-get-set.v5": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "blocks-without-whitespace-inbetween": {
+            "max_errors": 3,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "component-default-slot": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "component-no-slots": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "each-block-basic": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "each-block-basic-sequence": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "each-block-index": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "each-block-key": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "each-block-key-else": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "each-block-nullish-coalescing": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "each-block-optional-chaining": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "each-block-without-as.v5": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "editing-animation": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "editing-binding": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "editing-empty-expression.v5": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "editing-if": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "editing-mustache": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "editing-props": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "editing-unclosed-block.v5": {
+            "max_errors": 4,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "if-block": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "if-block-const": {
+            "max_errors": 5,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "if-comma-block": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "if-else-block": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "if-else-block-nested": {
+            "max_errors": 27,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "if-else-if-block": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "if-else-if-nullish-coalescing": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "if-else-if-optional-chaining": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "if-nested-await-block": {
+            "max_errors": 4,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "if-nested-await-block-shadowed": {
+            "max_errors": 4,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "if-nested-each-block": {
+            "max_errors": 8,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "if-nested-each-block-shadowed": {
+            "max_errors": 17,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "nested-snippet.v5": {
+            "max_errors": 2,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "snippet.v5": {
+            "max_errors": 4,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "svelte-boundary.v5": {
+            "max_errors": 1,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        },
+        "ts-in-template.v5": {
+            "max_errors": 6,
+            "reason": "bootstrap baseline — samples reference undeclared identifiers by design (no surrounding <script> providing `items`/`Input`/`Component`/etc.); emit-shape test for upstream, type-check noise for us"
+        }
+    }
+}

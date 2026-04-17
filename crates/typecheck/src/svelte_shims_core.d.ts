@@ -74,6 +74,13 @@ declare function __svn_type_ref<T>(): T;
  *
  * Calls like `$state<T>(0)` where T is a generic parameter and 0 isn't
  * assignable to T still fire TS2345 — matches Svelte's own behavior.
+ *
+ * Known tsgo limitation: `let x: Record<K, V> = $state(fromEntries(...))`
+ * where the inner generic call depends on outer-context binding fails
+ * to infer — tsgo doesn't propagate context through the `$state` wrapper
+ * into the inner generic. Affects inference-playground (~2 errors).
+ * No shim-level fix: tightening overloads breaks D1 bind:this
+ * patterns; widening them breaks simple `$state(boolVar)` inference.
  */
 declare function $state<T>(initial: null): T;
 declare function $state<T>(initial: undefined): T;

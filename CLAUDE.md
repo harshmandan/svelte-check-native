@@ -1,8 +1,8 @@
 # Working conventions for Claude Code / AI-assisted contributions
 
 This file is loaded into every Claude Code session in this repo. Read
-`README.md` and `PLAN.md` for the full project context. This file is the
-shorter "rules of engagement" layer on top of those.
+`README.md` for the public-facing overview. This file is the shorter
+"rules of engagement" layer on top of that.
 
 ## Project at a glance
 
@@ -57,8 +57,9 @@ tsgo invocation, diagnostics mapping back to `.svelte` source.
   invariant comment. Binary entry points (`main.rs`) may use
   `anyhow::Result` and propagate. Test code may use both freely (it's
   supposed to panic loudly on unexpected states).
-- No `TODO:` / `FIXME:` comments checked in without a tracking task in
-  `PLAN.md`. Scratch TODOs belong in a working branch, not main.
+- No `TODO:` / `FIXME:` comments checked in without a tracking task
+  somewhere (issue, PR description, or local `ROADMAP.md`). Scratch
+  TODOs belong in a working branch, not main.
 
 ## Architecture rules
 
@@ -179,7 +180,6 @@ by the suites above. Their error counts are not a shipping metric.
 ## When in doubt
 
 - Read `README.md` for the public-facing overview.
-- Read `PLAN.md` for the implementation plan and architectural decisions.
 - Check `language-tools/packages/svelte-check/src/` for how upstream
   solves CLI/output problems.
 - Check `language-tools/packages/svelte2tsx/src/` for how the upstream

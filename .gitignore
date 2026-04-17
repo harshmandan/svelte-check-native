@@ -54,3 +54,4 @@ bench/
 # session context meant for future Claude Code sessions. Not part of
 # the shipped repo.
 REFACTOR.md
+ROADMAP.md

@@ -218,7 +218,8 @@ pub fn check(
     let shim_text = if has_real_svelte(workspace) {
         SVELTE_SHIMS_CORE.to_string()
     } else {
-        let mut combined = String::with_capacity(SVELTE_SHIMS_CORE.len() + SVELTE_SHIMS_FALLBACK.len() + 1);
+        let mut combined =
+            String::with_capacity(SVELTE_SHIMS_CORE.len() + SVELTE_SHIMS_FALLBACK.len() + 1);
         combined.push_str(SVELTE_SHIMS_CORE);
         combined.push('\n');
         combined.push_str(SVELTE_SHIMS_FALLBACK);

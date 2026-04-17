@@ -450,19 +450,15 @@ fn emit_document_with_render_name(
     // silently broke any check whose prop expressions referenced a
     // binding introduced by a block (each-as item, each-index, snippet
     // param, etc.).
-    let instantiations_by_start: std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation> =
-        summary
-            .component_instantiations
-            .iter()
-            .map(|i| (i.node_start, i))
-            .collect();
-    emit_template_body(
-        &mut out,
-        doc.source,
-        fragment,
-        2,
-        &instantiations_by_start,
-    );
+    let instantiations_by_start: std::collections::HashMap<
+        u32,
+        &svn_analyze::ComponentInstantiation,
+    > = summary
+        .component_instantiations
+        .iter()
+        .map(|i| (i.node_start, i))
+        .collect();
+    emit_template_body(&mut out, doc.source, fragment, 2, &instantiations_by_start);
     out.push_str("    }\n");
 
     let exported_locals: Vec<SmolStr> = split
@@ -685,12 +681,27 @@ fn emit_template_node(
             // is possibly undefined". Conditions are wrapped in an extra
             // pair of parens to stay robust against operator-precedence
             // oddities in the raw source text.
+            //
+            // Immediately inside each branch we emit a `void [<ident>, …]`
+            // statement listing every root identifier from the condition.
+            // tsgo fires TS2774 ("this condition will always return true
+            // since this function is always defined") on `&&` operands of
+            // non-nullable function type — but the check is suppressed if
+            // the same identifier symbol appears in the block body.
+            // Svelte templates that poll a context object for component
+            // references (`{#if editable && ctx.GhostButton}<ctx.GhostButton/>`)
+            // tend to USE those references inside the block; the synthesized
+            // list mirrors that usage when the user's body doesn't otherwise
+            // reference every condition operand by value. Wrapping as a
+            // plain array literal avoids re-introducing the `&&` chain that
+            // triggered the check in the first place.
             let indent = "    ".repeat(depth);
             let main_cond = source
                 .get(b.condition_range.start as usize..b.condition_range.end as usize)
                 .unwrap_or("true")
                 .trim();
             let _ = writeln!(out, "{indent}if (({main_cond})) {{");
+            emit_condition_ref_marker(out, source, b.condition_range, depth + 1);
             emit_template_body(out, source, &b.consequent, depth + 1, insts);
             for arm in &b.elseif_arms {
                 let arm_cond = source
@@ -698,6 +709,7 @@ fn emit_template_node(
                     .unwrap_or("true")
                     .trim();
                 let _ = writeln!(out, "{indent}}} else if (({arm_cond})) {{");
+                emit_condition_ref_marker(out, source, arm.condition_range, depth + 1);
                 emit_template_body(out, source, &arm.body, depth + 1, insts);
             }
             if let Some(alt) = &b.alternate {
@@ -750,6 +762,325 @@ fn emit_template_node(
         Node::SvelteElement(s) => emit_template_body(out, source, &s.children, depth, insts),
         Node::Text(_) | Node::Interpolation(_) | Node::Comment(_) => {}
     }
+}
+
+/// Emit a `void [<access>, …];` statement listing every identifier /
+/// property-access chain referenced inside the condition expression at
+/// `range`. A no-op at runtime but a required pacifier for tsgo's
+/// TS2774 check, which flags non-nullable-function operands of a
+/// conditional `&&`/`||` chain unless the same symbol appears as a
+/// value reference inside the enclosing block body.
+///
+/// We extract identifier chains (`foo`, `foo.bar`, `foo.bar.baz`) rather
+/// than whole logical operands because re-emitting a comparison like
+/// `displayMode !== 'full'` inside a block that already narrowed
+/// `displayMode` to exclude `'full'` fires TS2367 ("this comparison
+/// appears to be unintentional because the types have no overlap").
+/// Identifier-chain references are narrowing-neutral and still satisfy
+/// the check: `isSymbolUsedInConditionBody` walks identifiers in the
+/// body and matches on property-access chains with the same symbol.
+///
+/// We skip negated (`!(…)`) conditions entirely: TS2774 doesn't fire
+/// reliably when the condition lives behind `!`, and emitting a
+/// property-access marker inside the negated branch can surface type
+/// errors (TS18047 / TS2339) that the user's inverted narrowing would
+/// normally make unreachable.
+fn emit_condition_ref_marker(out: &mut String, source: &str, range: svn_core::Range, depth: usize) {
+    let Some(cond_text) = source.get(range.start as usize..range.end as usize) else {
+        return;
+    };
+    if cond_text.trim_start().starts_with('!') {
+        return;
+    }
+    let chains = extract_property_chains(cond_text);
+    if chains.is_empty() {
+        return;
+    }
+    let indent = "    ".repeat(depth);
+    out.push_str(&indent);
+    out.push_str("void [");
+    for (i, chain) in chains.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(chain);
+    }
+    out.push_str("];\n");
+}
+
+/// Extract every top-level identifier-or-property-access chain from
+/// `text`, deduplicated and in source order. Skips string literals,
+/// template literals, regex literals, comments, and anything inside
+/// balanced parens / brackets / braces (so inner-scope bindings from an
+/// arrow parameter list, object literal, or array literal don't leak
+/// into the marker). Suppresses keywords and the Svelte auto-subscribe
+/// `$ident` form (which isn't a real property reference).
+///
+/// Chain suffixes after an identifier (`.prop`, `?.prop`) are included
+/// so `ctx.GhostButton` emits as a single ref. Call-expression argument
+/// lists and property-access subscripts are skipped because re-emitting
+/// them can introduce TS18047 / TS2339 from partial narrowing when the
+/// enclosing block inverts the original condition (`{#if !(…)}`).
+///
+/// Examples:
+/// - `editable && ctx.GhostButton && options.length < max` →
+///   `editable`, `ctx.GhostButton`, `options.length`, `max`
+/// - `messages.some((m) => m.role === 'x')` → `messages.some`
+///   (contents of `(…)` ignored, so `m` / `m.role` don't leak)
+fn extract_property_chains(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        // Line comment.
+        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // Block comment.
+        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+            continue;
+        }
+        // String / template literals — entirely skipped (their
+        // identifier refs rarely participate in the `&&` chain that
+        // triggers TS2774).
+        if b == b'\'' || b == b'"' {
+            let quote = b;
+            i += 1;
+            while i < bytes.len() && bytes[i] != quote {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'`' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'`' {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                    i += 2;
+                    let mut d = 1;
+                    while i < bytes.len() && d > 0 {
+                        match bytes[i] {
+                            b'{' => d += 1,
+                            b'}' => d -= 1,
+                            _ => {}
+                        }
+                        if d > 0 {
+                            i += 1;
+                        }
+                    }
+                    if i < bytes.len() {
+                        i += 1;
+                    }
+                    continue;
+                }
+                i += 1;
+            }
+            if i < bytes.len() {
+                i += 1;
+            }
+            continue;
+        }
+        // Skip balanced parens / braces / brackets entirely — arguments,
+        // arrow bodies, object/array literals don't participate in the
+        // outer `&&` chain and their inner identifiers reference scoped
+        // bindings (`messages.some((m) => m.role)` — `m` is an arrow
+        // parameter, not a script binding). This keeps us from emitting
+        // references to block-scoped names in the marker.
+        if b == b'(' || b == b'[' || b == b'{' {
+            let (open, close) = match b {
+                b'(' => (b'(', b')'),
+                b'[' => (b'[', b']'),
+                _ => (b'{', b'}'),
+            };
+            i += 1;
+            let mut d = 1i32;
+            while i < bytes.len() && d > 0 {
+                match bytes[i] {
+                    x if x == open => d += 1,
+                    x if x == close => d -= 1,
+                    b'\'' | b'"' => {
+                        let quote = bytes[i];
+                        i += 1;
+                        while i < bytes.len() && bytes[i] != quote {
+                            if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                                i += 2;
+                                continue;
+                            }
+                            i += 1;
+                        }
+                    }
+                    _ => {}
+                }
+                if d > 0 {
+                    i += 1;
+                }
+            }
+            if i < bytes.len() {
+                i += 1;
+            }
+            continue;
+        }
+        // Identifier start?
+        if !is_ident_start_byte(b) {
+            i += 1;
+            continue;
+        }
+        // Previous non-whitespace byte: if it's `.`, we're in a property
+        // position — skip; the containing chain has already captured
+        // this identifier.
+        let prev = previous_non_ws(bytes, i);
+        if prev == Some(b'.') {
+            i = skip_ident(bytes, i);
+            continue;
+        }
+        // Start of a fresh chain. Walk forward through `.ident` and
+        // `?.ident` segments. Bracket and call-argument suffixes are
+        // NOT swallowed so a call expression like `f(x)` yields just
+        // `f`, matching the existing template-refs pass convention.
+        let chain_start = i;
+        i = skip_ident(bytes, i);
+        loop {
+            let mut j = i;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j >= bytes.len() {
+                break;
+            }
+            // `.ident`
+            if bytes[j] == b'.' && j + 1 < bytes.len() && is_ident_start_byte(bytes[j + 1]) {
+                i = skip_ident(bytes, j + 1);
+                continue;
+            }
+            // `?.ident`
+            if bytes[j] == b'?'
+                && j + 2 < bytes.len()
+                && bytes[j + 1] == b'.'
+                && is_ident_start_byte(bytes[j + 2])
+            {
+                i = skip_ident(bytes, j + 2);
+                continue;
+            }
+            break;
+        }
+        let chain = text[chain_start..i].trim();
+        if chain.is_empty() {
+            continue;
+        }
+        // Filter identifier-only chains that are keywords or the
+        // auto-subscribe `$ident` shorthand (handled separately by the
+        // store-ref pass).
+        let looks_like_keyword = !chain.contains('.') && is_keyword_or_special(chain);
+        if looks_like_keyword {
+            continue;
+        }
+        let key = chain.to_string();
+        if seen.insert(key.clone()) {
+            out.push(key);
+        }
+    }
+    out
+}
+
+#[inline]
+fn is_ident_start_byte(b: u8) -> bool {
+    b.is_ascii_alphabetic() || b == b'_' || b == b'$'
+}
+
+#[inline]
+fn is_ident_continue_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+}
+
+fn skip_ident(bytes: &[u8], start: usize) -> usize {
+    let mut i = start;
+    while i < bytes.len() && is_ident_continue_byte(bytes[i]) {
+        i += 1;
+    }
+    i
+}
+
+fn previous_non_ws(bytes: &[u8], i: usize) -> Option<u8> {
+    let mut j = i;
+    while j > 0 {
+        j -= 1;
+        if !bytes[j].is_ascii_whitespace() {
+            return Some(bytes[j]);
+        }
+    }
+    None
+}
+
+/// Keywords and reserved identifiers that should never appear in a
+/// ref-marker void-array. Mirrors the filter in `template_refs` so a
+/// condition like `{#if typeof x === 'string'}` doesn't emit a stray
+/// `typeof` reference.
+fn is_keyword_or_special(s: &str) -> bool {
+    matches!(
+        s,
+        "true"
+            | "false"
+            | "null"
+            | "undefined"
+            | "this"
+            | "void"
+            | "typeof"
+            | "new"
+            | "instanceof"
+            | "in"
+            | "of"
+            | "as"
+            | "let"
+            | "const"
+            | "var"
+            | "function"
+            | "if"
+            | "else"
+            | "for"
+            | "while"
+            | "do"
+            | "return"
+            | "yield"
+            | "await"
+            | "async"
+            | "delete"
+            | "throw"
+            | "try"
+            | "catch"
+            | "finally"
+            | "switch"
+            | "case"
+            | "default"
+            | "break"
+            | "continue"
+            | "class"
+            | "extends"
+            | "super"
+            | "import"
+            | "export"
+            | "from"
+            | "satisfies"
+    ) || s.starts_with('$')
 }
 
 /// Emit a `for`-of loop for an `{#each}` block.
@@ -1013,7 +1344,9 @@ fn write_object_key(out: &mut String, name: &str) {
 /// words as bare property names anyway.
 fn is_simple_js_identifier(s: &str) -> bool {
     let mut chars = s.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !(first.is_ascii_alphabetic() || first == '_' || first == '$') {
         return false;
     }

@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "`{#if editable && ctx.GhostButton && items.length < maxItems}` / `{#if items.length > 0 && imgFn}` — `ctx.GhostButton` and `imgFn` resolve to non-nullable function types. tsgo's TS2774 check (`This condition will always return true since this function is always defined`) fires on `&&` operands of that shape unless the same symbol appears as a value reference inside the enclosing if-block body. Our template-check emits `typeof GhostButton` in type-position only, so without a `void [editable, ctx.GhostButton, items.length, maxItems];` marker immediately inside each branch the check fired on control-repo's Choice / ChoiceItemLabel / HotspotPollItem / Question components. Tracks the fix in emit_condition_ref_marker / extract_property_chains."
+}

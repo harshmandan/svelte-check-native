@@ -4,16 +4,19 @@ async function $$render_481b7e3c() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         if ((hello)) {
+            void [hello];
             for (const item of __svn_each_items(items)) {
                 const i: number = 0;
                 void item;
                 void i;
             }
             if ((hi && bye)) {
+                void [hi, bye];
                 for (const item of __svn_each_items(items)) {
                     void item;
                 }
             } else if ((cool)) {
+                void [cool];
                 for (const item of __svn_each_items(items)) {
                     const i: number = 0;
                     void item;

@@ -4,6 +4,7 @@ async function $$render_31770ada() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         if ((name == "world")) {
+            void [name];
         }
     }
     void __svn_tpl_check;

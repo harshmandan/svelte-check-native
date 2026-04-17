@@ -6,6 +6,7 @@ async function $$render_bdea4648() {
         let hello: any = undefined;
         void hello;
         if ((hello)) {
+            void [hello];
             {
                 const hello: any = undefined;
                 void hello;
@@ -25,6 +26,7 @@ async function $$render_bdea4648() {
             {
                 const hello: any = undefined;
                 if ((hello)) {
+                    void [hello];
                     {
                         const hello: any = undefined;
                         void hello;
@@ -32,12 +34,14 @@ async function $$render_bdea4648() {
                     {
                         const hello: any = undefined;
                         if ((hello)) {
+                            void [hello];
                         }
                         void hello;
                     }
                     {
                         const foo: any = undefined;
                         if ((hello)) {
+                            void [hello];
                         }
                         void foo;
                     }
@@ -45,6 +49,7 @@ async function $$render_bdea4648() {
                 void hello;
             }
             if ((hi && bye)) {
+                void [hi, bye];
                 {
                     const bye: any = undefined;
                     void bye;
@@ -52,13 +57,16 @@ async function $$render_bdea4648() {
                 {
                     const hello: any = undefined;
                     if ((hello)) {
+                        void [hello];
                     }
                     void hello;
                 }
             } else if ((cool)) {
+                void [cool];
                 {
                     const cool: any = undefined;
                     if ((cool)) {
+                        void [cool];
                     }
                     void cool;
                 }
@@ -74,25 +82,32 @@ async function $$render_bdea4648() {
                 {
                     const hello: any = undefined;
                     if ((hello)) {
+                        void [hello];
                     }
                     void hello;
                 }
             }
         }
         if ((cool)) {
+            void [cool];
         } else if ((hello)) {
+            void [hello];
         }
         {
             const cool: any = undefined;
             if ((cool)) {
+                void [cool];
             } else if ((hello)) {
+                void [hello];
             }
             void cool;
         }
         {
             const cool: any = undefined;
             if ((cool)) {
+                void [cool];
             } else if ((hello)) {
+                void [hello];
             }
             void cool;
         }

@@ -12,15 +12,20 @@ async function $$render_d92c900a() {
         let aNum: any = undefined;
         void aNum;
         if ((name == "world")) {
+            void [name];
         } else if ((true)) {
         } else {
         }
         if ((typeof a === 'string')) {
+            void [a];
         } else if ((typeof a === 'number')) {
+            void [a];
         }
         if ((typeof a === 'string')) {
+            void [a];
         }
         if ((typeof a === 'string')) {
+            void [a];
         } else {
         }
     }

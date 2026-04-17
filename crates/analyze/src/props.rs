@@ -23,7 +23,10 @@
 //! Nested destructuring (`let { foo: { bar } } = $props()`) is walked
 //! recursively; every leaf identifier is recorded.
 
-use oxc_ast::ast::{BindingPatternKind, BindingProperty, Expression, PropertyKey, Statement};
+use oxc_ast::ast::{
+    BindingPatternKind, BindingProperty, Declaration, Expression, PropertyKey, Statement,
+    VariableDeclaration,
+};
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
 use svn_core::Range;
@@ -41,27 +44,35 @@ pub struct PropInfo {
     pub is_rest: bool,
 }
 
-/// Find the *type source text* for the component's `$props()` type
-/// annotation, if declared with one.
+/// Find the *type source text* for the component's Props bag — either
+/// the explicit `$props()` type annotation (Svelte 5) or a synthesized
+/// object type built from Svelte 4-style `export let` declarations.
 ///
-/// Two recognized shapes (first match wins):
+/// Priority order (first match wins):
 ///
-/// - `let { ... }: PropType = $props()` — return PropType's source.
-/// - `let { ... } = $props<PropType>()` — return PropType's source.
+/// 1. `let { ... }: PropType = $props()` — return PropType's source.
+/// 2. `let { ... } = $props<PropType>()` — return PropType's source.
+/// 3. `export let foo: T; export let bar = 42;` (Svelte 4 style) —
+///    synthesize `{ foo: T; bar?: any; ... }` from each top-level
+///    `export let`/`export const` declaration.
+/// 4. None of the above → `None`. Callers treat `None` as "no typed
+///    prop shape available; emit default as `any`".
 ///
-/// Anything else (plain `let { ... } = $props()` with no annotation,
-/// `$props<{ a: ... }>()` we don't know how to look at, multiple
-/// `$props()` calls) → `None`. Callers treat `None` as "no typed prop
-/// shape available; emit default as `any`".
+/// Returned shapes 1-2 are a slice of `source` cloned into a `String`
+/// (trusting the user's original syntax verbatim). Shape 3 is freshly
+/// synthesized from the declarator name + optional type annotation;
+/// declarations without an explicit type fall back to `any`.
 ///
-/// The returned string is a slice of `source` — caller can embed it
-/// directly into generated TypeScript. We don't parse the type content;
-/// we just hand the raw source text back, trusting the user's original
-/// syntax.
-pub fn find_props_type_source<'src>(
-    program: &oxc_ast::ast::Program<'_>,
-    source: &'src str,
-) -> Option<&'src str> {
+/// `export const foo: T = ...` is handled identically to `export let`
+/// here — upstream treats `export const` as a read-only prop (a
+/// getter); for the purposes of the default export's Props shape the
+/// distinction is irrelevant. Both contribute a property to the
+/// synthesized object type.
+pub fn find_props_type_source(program: &oxc_ast::ast::Program<'_>, source: &str) -> Option<String> {
+    // Shape 1 / Shape 2: prefer an explicit `$props()` annotation when
+    // present. Svelte 5 components win over any accidental stray
+    // `export let` in the body (which would be a user error anyway —
+    // Svelte 5 doesn't use `export let` for props).
     for stmt in &program.body {
         let Statement::VariableDeclaration(decl) = stmt else {
             continue;
@@ -73,23 +84,106 @@ pub fn find_props_type_source<'src>(
             if !is_props_call_like(init) {
                 continue;
             }
-            // Shape 1: annotation on the destructure pattern.
             if let Some(ty) = declarator.id.type_annotation.as_ref() {
                 let span = ty.type_annotation.span();
-                return source.get(span.start as usize..span.end as usize);
+                if let Some(slice) = source.get(span.start as usize..span.end as usize) {
+                    return Some(slice.to_string());
+                }
             }
-            // Shape 2: generic arg on the $props call.
             if let Expression::CallExpression(call) = init {
                 if let Some(tp) = call.type_parameters.as_ref() {
                     if let Some(arg) = tp.params.first() {
                         let span = arg.span();
-                        return source.get(span.start as usize..span.end as usize);
+                        if let Some(slice) = source.get(span.start as usize..span.end as usize) {
+                            return Some(slice.to_string());
+                        }
                     }
                 }
             }
         }
     }
-    None
+    // Shape 3: Svelte 4 fallback. Walk top-level `export let` / `export
+    // const` declarations and synthesize an inline object type. Only
+    // runs when no `$props()` call was seen above.
+    synthesize_props_type_from_export_let(program, source)
+}
+
+/// Build an inline object type literal from top-level `export let` /
+/// `export const` declarations in an instance script. Returns `None`
+/// when there are no such declarations.
+///
+/// `program` here is the instance script AST. Module-script `export
+/// let`s are NOT component props — those are module-scope exports.
+/// Callers must pass the instance-script program, not the module
+/// script's.
+///
+/// Each declarator becomes one property on the synthesized type:
+///
+/// - `export let foo: T;` → `foo: T;` (required)
+/// - `export let foo: T = v;` → `foo?: T;` (optional — has default)
+/// - `export let foo = v;` → `foo?: any;` (no type; inference is
+///   nontrivial without tsgo, so we pick `any` over mislabeling)
+/// - `export let foo;` → `foo: any;` (no type, no default)
+/// - `export const foo: T = v;` → `foo?: T;` (has initializer; `const`
+///   always has one, so always optional for defaulting)
+///
+/// Non-identifier patterns (e.g. `export let { a } = obj;`) are skipped:
+/// destructured exports are not valid Svelte prop declarations.
+fn synthesize_props_type_from_export_let(
+    program: &oxc_ast::ast::Program<'_>,
+    source: &str,
+) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for stmt in &program.body {
+        let Statement::ExportNamedDeclaration(export_decl) = stmt else {
+            continue;
+        };
+        let Some(Declaration::VariableDeclaration(var_decl)) = &export_decl.declaration else {
+            continue;
+        };
+        append_props_from_var_decl(var_decl, source, &mut parts);
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let mut out = String::with_capacity(parts.iter().map(|p| p.len() + 2).sum::<usize>() + 4);
+    out.push_str("{ ");
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(part);
+    }
+    out.push_str(" }");
+    Some(out)
+}
+
+fn append_props_from_var_decl(
+    var_decl: &VariableDeclaration<'_>,
+    source: &str,
+    out: &mut Vec<String>,
+) {
+    for declarator in &var_decl.declarations {
+        let BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind else {
+            // Destructured exports aren't valid Svelte prop declarations;
+            // skip them rather than invent a synthetic name.
+            continue;
+        };
+        let name = id.name.as_str();
+        let has_init = declarator.init.is_some();
+        let ty_text: Option<&str> = declarator
+            .id
+            .type_annotation
+            .as_ref()
+            .map(|ty| ty.type_annotation.span())
+            .and_then(|span| source.get(span.start as usize..span.end as usize));
+        // An initializer makes the prop optional (caller can omit and
+        // the default kicks in). No initializer + no type → required
+        // `any`. No initializer + type → required of that type.
+        let optional_marker = if has_init { "?" } else { "" };
+        let ty_src = ty_text.unwrap_or("any");
+        out.push(format!("{name}{optional_marker}: {ty_src};"));
+    }
 }
 
 /// Find every `let { ... } = $props()` destructuring in `program` and
@@ -316,5 +410,93 @@ mod tests {
         let info = find_props(&parsed.program);
         assert_eq!(info.len(), 1);
         assert_eq!(info[0].range.slice(src), "foo");
+    }
+
+    fn props_type(src: &str) -> Option<String> {
+        let alloc = Allocator::default();
+        let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
+        find_props_type_source(&parsed.program, src)
+    }
+
+    #[test]
+    fn props_type_from_destructure_annotation() {
+        let src = "let { foo }: { foo: string } = $props();";
+        assert_eq!(props_type(src).as_deref(), Some("{ foo: string }"));
+    }
+
+    #[test]
+    fn props_type_from_generic_arg() {
+        let src = "let { foo } = $props<{ foo: string }>();";
+        assert_eq!(props_type(src).as_deref(), Some("{ foo: string }"));
+    }
+
+    #[test]
+    fn props_type_none_for_untyped_props_call() {
+        assert_eq!(props_type("let { foo } = $props();"), None);
+    }
+
+    #[test]
+    fn synth_props_type_from_single_export_let_with_type() {
+        let src = "export let b: (v: string) => void;";
+        assert_eq!(
+            props_type(src).as_deref(),
+            Some("{ b: (v: string) => void; }")
+        );
+    }
+
+    #[test]
+    fn synth_props_type_makes_default_initialized_optional() {
+        let src = "export let count: number = 0;";
+        assert_eq!(props_type(src).as_deref(), Some("{ count?: number; }"));
+    }
+
+    #[test]
+    fn synth_props_type_no_type_no_default_is_any_required() {
+        let src = "export let data;";
+        assert_eq!(props_type(src).as_deref(), Some("{ data: any; }"));
+    }
+
+    #[test]
+    fn synth_props_type_no_type_with_default_is_any_optional() {
+        let src = "export let count = 42;";
+        assert_eq!(props_type(src).as_deref(), Some("{ count?: any; }"));
+    }
+
+    #[test]
+    fn synth_props_type_multiple_export_lets() {
+        let src = "export let a: string;\nexport let b: number = 1;";
+        assert_eq!(
+            props_type(src).as_deref(),
+            Some("{ a: string; b?: number; }")
+        );
+    }
+
+    #[test]
+    fn synth_props_type_treats_export_const_like_export_let() {
+        // `export const foo: T = v` → read-only prop; still contributes
+        // a (optional) property to the synthesized type.
+        let src = "export const foo: string = 'x';";
+        assert_eq!(props_type(src).as_deref(), Some("{ foo?: string; }"));
+    }
+
+    #[test]
+    fn props_call_wins_over_export_let() {
+        // A script with BOTH `$props()` (annotated) and a stray `export
+        // let` should prefer the explicit `$props()` annotation.
+        let src = "export let stray: number;\nlet { foo }: { foo: string } = $props();";
+        assert_eq!(props_type(src).as_deref(), Some("{ foo: string }"));
+    }
+
+    #[test]
+    fn export_fn_does_not_contribute_props() {
+        // `export function` is an exported helper, not a prop; ignored.
+        let src = "export function helper() {}";
+        assert_eq!(props_type(src), None);
+    }
+
+    #[test]
+    fn export_type_alias_does_not_contribute_props() {
+        let src = "export type Foo = number;";
+        assert_eq!(props_type(src), None);
     }
 }

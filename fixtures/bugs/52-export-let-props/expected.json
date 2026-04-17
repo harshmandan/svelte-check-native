@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A Svelte 4-style Legacy.svelte uses `export let onChange: (value: string) => void`. Without Task C, our overlay typed the default export as `any`, so Consumer's inline `onChange={(value) => ...}` arrow saw `value` as implicit-any under strict. With Task C, analyze synthesizes a Props type `{ onChange: ...; initial?: string; count?: any }` from the `export let`s and the overlay default becomes `Component<Props>`, restoring contextual typing."
+}

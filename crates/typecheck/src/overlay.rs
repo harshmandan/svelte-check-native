@@ -114,6 +114,21 @@ pub fn build(
     let mut compiler_options = serde_json::Map::new();
     compiler_options.insert("noEmit".into(), json!(true));
     compiler_options.insert("allowArbitraryExtensions".into(), json!(true));
+    // Disable case-consistency enforcement in the overlay. The user's
+    // own tsconfig typically turns it on, and for pure .ts/.tsx code
+    // that's the right default — but our overlay pipeline writes
+    // generated files to a cache dir mirrored from user paths. On
+    // case-insensitive filesystems (default macOS), resolving
+    // `./Code.svelte` (user import) via bundler auto-extension can
+    // case-insensitively hit a sibling `code.svelte.ts` runes module,
+    // and tsgo then logs a TS1149 "file name differs only in casing"
+    // against the user. Upstream svelte-check uses an in-memory
+    // compiler host and sidesteps this entirely. We don't have that
+    // luxury, so we relax the check project-wide in the overlay.
+    // User's actual case-inconsistency bugs still get caught by
+    // running tsc directly on their source; this only affects the
+    // overlay pass.
+    compiler_options.insert("forceConsistentCasingInFileNames".into(), json!(false));
     // `allowImportingTsExtensions` lets emit rewrite
     // `import './X.svelte'` → `import './X.svelte.ts'` so the import
     // lands on our generated overlay file rather than resolving to the

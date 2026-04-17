@@ -7,8 +7,6 @@ async function $$render_de15df1d() {
     const promise = fetch('/bar');
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        let x: any = undefined;
-        void x;
         {
             const x: any = undefined;
             void x;
@@ -35,6 +33,8 @@ async function $$render_de15df1d() {
             }
             void ({prop: (await promise)} satisfies Partial<__SvnComponentProps<typeof Component>>);
             if ((true)) {
+                const x = await promise;
+                void x;
             }
         }
     }

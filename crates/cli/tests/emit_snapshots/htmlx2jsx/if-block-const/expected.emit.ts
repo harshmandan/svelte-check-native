@@ -3,29 +3,37 @@
 async function $$render_d92c900a() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        let hello: any = undefined;
-        void hello;
-        let aStr: any = undefined;
-        void aStr;
-        let aStr2: any = undefined;
-        void aStr2;
-        let aNum: any = undefined;
-        void aNum;
         if ((name == "world")) {
             void [name];
+            const hello = name;
+            void hello;
         } else if ((true)) {
+            const hello = name;
+            void hello;
         } else {
+            const hello = name;
+            void hello;
         }
         if ((typeof a === 'string')) {
             void [a];
+            const aStr = a;
+            void aStr;
+            const aStr2 = aStr;
+            void aStr2;
         } else if ((typeof a === 'number')) {
             void [a];
+            const aNum = a;
+            void aNum;
         }
         if ((typeof a === 'string')) {
             void [a];
+            const aStr = a;
+            void aStr;
         }
         if ((typeof a === 'string')) {
             void [a];
+            const aStr = a;
+            void aStr;
         } else {
         }
     }

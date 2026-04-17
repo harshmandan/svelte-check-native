@@ -9,8 +9,6 @@ async function $$render_3d709d05() {
     let foo = true;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        let bar: any = undefined;
-        void bar;
         {
             const hoistable1: any = undefined;
             void hoistable1;
@@ -52,6 +50,8 @@ async function $$render_3d709d05() {
             }
             {
                 const foo: any = undefined;
+                const bar = foo;
+                void bar;
                 void foo;
             }
         }

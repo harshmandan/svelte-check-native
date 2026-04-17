@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "`{@const}` tags need inline emission in the template-check body so TS narrowing can see the inferred type. A `{@const [a, { b }, ...rest] = ...}` pattern also needs each introduced binding voided so TS6133 doesn't fire on bindings the user only happens to reference on a subset of arms."
+}

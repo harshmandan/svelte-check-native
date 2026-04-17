@@ -3,8 +3,6 @@
 async function $$render_64a5d390() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        let hello: any = undefined;
-        void hello;
         if ((hello)) {
             void [hello];
             for (const hello of __svn_each_items(items)) {
@@ -18,6 +16,8 @@ async function $$render_64a5d390() {
                         void hello;
                     }
                     for (const foo of __svn_each_items(items)) {
+                        const hello = foo;
+                        void hello;
                         if ((hello)) {
                             void [hello];
                         }

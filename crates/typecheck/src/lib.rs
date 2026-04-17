@@ -517,4 +517,197 @@ mod tests {
         };
         assert_eq!(map_diagnostic(raw_after, &layout, &map).line, 5);
     }
+
+    #[test]
+    fn maps_between_multiple_mapped_ranges_uses_matching_range() {
+        // Three contiguous source regions map to three overlay regions.
+        // A diagnostic inside the second overlay range maps through the
+        // second range's source-start, not the first or third.
+        let gen_path = "/proj/.svelte-check/svelte/++X.svelte.ts";
+        let layout = CacheLayout::for_workspace("/proj");
+        let map = line_maps_for(
+            gen_path,
+            vec![
+                LineMapEntry {
+                    overlay_start_line: 1,
+                    overlay_end_line: 3,
+                    source_start_line: 1,
+                },
+                LineMapEntry {
+                    overlay_start_line: 10,
+                    overlay_end_line: 20,
+                    source_start_line: 50,
+                },
+                LineMapEntry {
+                    overlay_start_line: 30,
+                    overlay_end_line: 40,
+                    source_start_line: 100,
+                },
+            ],
+        );
+        let raw = RawDiagnostic {
+            file: PathBuf::from(gen_path),
+            line: 15,
+            column: 0,
+            severity: Severity::Error,
+            code: 1,
+            message: "x".to_string(),
+            span_length: None,
+        };
+        // 15 is in range [10, 20) — offset 5 from overlay_start (10),
+        // applied to source_start (50) = source line 55.
+        assert_eq!(map_diagnostic(raw, &layout, &map).line, 55);
+    }
+
+    #[test]
+    fn maps_between_gaps_clamps_to_previous_range() {
+        // A diagnostic lands in the gap between mapped ranges — clamps
+        // to the source-start of the nearest preceding range.
+        let gen_path = "/proj/.svelte-check/svelte/++X.svelte.ts";
+        let layout = CacheLayout::for_workspace("/proj");
+        let map = line_maps_for(
+            gen_path,
+            vec![
+                LineMapEntry {
+                    overlay_start_line: 1,
+                    overlay_end_line: 3,
+                    source_start_line: 1,
+                },
+                LineMapEntry {
+                    overlay_start_line: 10,
+                    overlay_end_line: 20,
+                    source_start_line: 50,
+                },
+            ],
+        );
+        let raw = RawDiagnostic {
+            file: PathBuf::from(gen_path),
+            line: 5, // in the gap between [1,3) and [10,20)
+            column: 0,
+            severity: Severity::Error,
+            code: 1,
+            message: "x".to_string(),
+            span_length: None,
+        };
+        // Preceding range ended at overlay 3 with source_start 1.
+        assert_eq!(map_diagnostic(raw, &layout, &map).line, 1);
+    }
+
+    #[test]
+    fn empty_line_map_passes_line_through() {
+        // When a generated file has no line-map entries at all, the
+        // mapper falls through to "line stays as tsgo reported it"
+        // rather than erroring.
+        let gen_path = "/proj/.svelte-check/svelte/src/X.svelte.ts";
+        let layout = CacheLayout::for_workspace("/proj");
+        let map = line_maps_for(gen_path, Vec::new());
+        let raw = RawDiagnostic {
+            file: PathBuf::from(gen_path),
+            line: 42,
+            column: 0,
+            severity: Severity::Error,
+            code: 1,
+            message: "x".to_string(),
+            span_length: None,
+        };
+        let mapped = map_diagnostic(raw, &layout, &map);
+        // Path is still mapped back to the .svelte source.
+        assert_eq!(mapped.source_path, PathBuf::from("/proj/src/X.svelte"));
+        // With no entries to translate the overlay line, the raw line
+        // passes through (clamped to >= 1). This preserves tsgo's
+        // line for files that went missing from the line-map — better
+        // than silently collapsing to 1 and losing the signal.
+        assert_eq!(mapped.line, 42);
+    }
+
+    #[test]
+    fn generated_path_reverse_maps_to_source_even_without_line_map() {
+        // The path-reverse mapping is independent of the line map —
+        // a file we emitted lives at <cache>/svelte/<rel>/<name>.svelte.ts
+        // and reverses to <workspace>/<rel>/<name>.svelte regardless of
+        // whether tsgo's diagnostic has a corresponding line-map entry.
+        let gen_path = "/proj/.svelte-check/svelte/lib/components/Foo.svelte.ts";
+        let layout = CacheLayout::for_workspace("/proj");
+        let raw = RawDiagnostic {
+            file: PathBuf::from(gen_path),
+            line: 1,
+            column: 1,
+            severity: Severity::Error,
+            code: 1,
+            message: "x".to_string(),
+            span_length: None,
+        };
+        let mapped = map_diagnostic(raw, &layout, &HashMap::new());
+        assert_eq!(
+            mapped.source_path,
+            PathBuf::from("/proj/lib/components/Foo.svelte")
+        );
+    }
+
+    #[test]
+    fn column_and_severity_and_code_pass_through_unchanged() {
+        // The mapper only rewrites path and line. Column, severity,
+        // code, and message must pass through verbatim.
+        let gen_path = "/proj/.svelte-check/svelte/src/X.svelte.ts";
+        let layout = CacheLayout::for_workspace("/proj");
+        let map = line_maps_for(
+            gen_path,
+            vec![LineMapEntry {
+                overlay_start_line: 5,
+                overlay_end_line: 15,
+                source_start_line: 1,
+            }],
+        );
+        let raw = RawDiagnostic {
+            file: PathBuf::from(gen_path),
+            line: 7,
+            column: 42,
+            severity: Severity::Warning,
+            code: 2345,
+            message: "original message".to_string(),
+            span_length: None,
+        };
+        let mapped = map_diagnostic(raw, &layout, &map);
+        assert_eq!(mapped.column, 42);
+        assert_eq!(mapped.severity, Severity::Warning);
+        assert!(
+            matches!(mapped.code, DiagnosticCode::Numeric(2345)),
+            "numeric code should survive the mapper unchanged; got {:?}",
+            mapped.code
+        );
+        assert_eq!(mapped.message, "original message");
+    }
+
+    #[test]
+    fn cache_layout_generated_path_round_trips_through_reverse() {
+        // Round-trip: a .svelte path → generated_path → original_from_generated
+        // must return the same .svelte path. This is the invariant the
+        // diagnostic mapper depends on, exercised here independent of
+        // map_diagnostic itself.
+        let layout = CacheLayout::for_workspace("/proj");
+        let svelte_path = PathBuf::from("/proj/src/lib/components/Button.svelte");
+        let generated = layout.generated_path(&svelte_path);
+        let back = layout
+            .original_from_generated(&generated)
+            .expect("reverse mapping must succeed for a path we generated");
+        assert_eq!(back, svelte_path);
+    }
+
+    #[test]
+    fn cache_layout_reverse_rejects_paths_outside_svelte_dir() {
+        // Paths that don't live under <cache>/svelte/ aren't ours and
+        // should reverse to None — the mapper then skips the rewrite
+        // and passes the path through as-is.
+        let layout = CacheLayout::for_workspace("/proj");
+        assert!(
+            layout
+                .original_from_generated(Path::new("/proj/src/plain.ts"))
+                .is_none()
+        );
+        assert!(
+            layout
+                .original_from_generated(Path::new("/elsewhere/X.ts"))
+                .is_none()
+        );
+    }
 }

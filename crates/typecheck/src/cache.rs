@@ -89,8 +89,8 @@ impl CacheLayout {
     /// The `.svn.ts` middle segment is what keeps this overlay from
     /// colliding with a user's same-named `.svelte.ts` runes module
     /// (Svelte 5 convention: `Foo.svelte` paired with `Foo.svelte.ts`
-    /// for shared runes logic — cnblocks, shadcn-svelte, bits-ui all
-    /// use it). A plain `.svelte.ts` overlay would live at the exact
+    /// for shared runes logic — widely used across the Svelte UI
+    /// component-library ecosystem). A plain `.svelte.ts` overlay would live at the exact
     /// virtual path as the user's runes module; with `rootDirs`
     /// cache-first, the overlay shadowed the runes module and
     /// consumers writing `import { useFoo } from './Foo.svelte.js'`

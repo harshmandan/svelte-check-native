@@ -57,7 +57,7 @@ Three constraints pinned the choice:
    destructures and snippet arrow params.** The old satisfies-
    Partial-ComponentProps path collapsed Props through a conditional
    extractor chain to `any`, which is why `onchange={({ checked }) =>
-   ...}` fired TS7031 implicit-any in a-sveltekit-app. A callable shape where
+   ...}` fired TS7031 implicit-any on real-world code. A callable shape where
    the parent signature carries Props directly is the only shape that
    preserves this flow in tsgo's strict mode.
 

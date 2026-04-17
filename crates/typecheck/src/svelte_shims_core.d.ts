@@ -78,9 +78,9 @@ declare function __svn_type_ref<T>(): T;
  * Known tsgo limitation: `let x: Record<K, V> = $state(fromEntries(...))`
  * where the inner generic call depends on outer-context binding fails
  * to infer — tsgo doesn't propagate context through the `$state` wrapper
- * into the inner generic. Affects inference-playground (~2 errors).
- * No shim-level fix: tightening overloads breaks D1 bind:this
- * patterns; widening them breaks simple `$state(boolVar)` inference.
+ * into the inner generic. No shim-level fix: tightening overloads
+ * breaks D1 bind:this patterns; widening them breaks simple
+ * `$state(boolVar)` inference.
  */
 declare function $state<T>(initial: null): T;
 declare function $state<T>(initial: undefined): T;
@@ -243,7 +243,7 @@ type __SvnPropsPartial<P> = { [K in keyof P]?: P[K] | null };
  * Replaces the pre-refactor habit of emitting
  * `inputEl = null as any as HTMLElement | null`, which forced `null`
  * onto the user's variable type and mis-fired on `HTMLElement |
- * undefined`-typed targets (a-sveltekit-app bug #3).
+ * undefined`-typed targets.
  */
 declare function __svn_bind_this_check<El>(target: El | null | undefined): void;
 

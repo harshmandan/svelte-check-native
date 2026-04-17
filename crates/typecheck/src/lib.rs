@@ -263,12 +263,11 @@ pub fn check(
         // auto-extension (`.svelte` → `.svelte.ts`) before our
         // cache-resident ambient is tried. Writing a `.d.svelte.ts`
         // into the cache at the mirrored path is unreachable for
-        // this specific import. Affects cnblocks `add`/`code` (2
-        // errors) and ui's `root.svelte` barrels (8 errors) at time
-        // of writing. Real fix would require either writing ambients
-        // into the user's source tree (invasive) or pre-rewriting
-        // every user-owned `.ts` file that imports `.svelte` (high
-        // scope). Deferred.
+        // this specific import. Observed on shadcn-svelte-style
+        // barrel `index.ts` re-exports in the wild. Real fix would
+        // require either writing ambients into the user's source
+        // tree (invasive) or pre-rewriting every user-owned `.ts`
+        // file that imports `.svelte` (high scope). Deferred.
         let ambient_path = layout.ambient_path(&input.source_path);
         let overlay_file_name = gen_path
             .file_name()

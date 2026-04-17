@@ -352,17 +352,19 @@ pub fn split_imports(
     //       lossy (literal-key precision is replaced by `string |
     //       number`) but structurally callable/indexable. Consumers
     //       of the default export still get a USABLE Props type.
-    //       This is what makes a-sveltekit-app's `interface Props { children:
-    //       Snippet<[{ingestFeedback: typeof ingestFeedback, ...}]> }`
-    //       work — consumers' snippet arrows destructure from the
-    //       stubbed callable shape, which is good enough.
+    //       This is what makes a real-world pattern like
+    //       `interface Props { children: Snippet<[{ingestFeedback:
+    //       typeof ingestFeedback, ...}]> }` work — consumers' snippet
+    //       arrows destructure from the stubbed callable shape, which
+    //       is good enough.
     //
     //   (B) Reference to another type by NAME that can't be hoisted.
-    //       cnblocks web/code's `type Props = { variant?: Variant }`
-    //       with `type Variant = VariantProps<typeof style>["variant"]`
-    //       — Variant has a direct typeof, so it's body-scoped. Props
-    //       referencing `Variant` at module scope fires TS2304
-    //       "Cannot find name 'Variant'" — no stub for type names.
+    //       A component library pattern like `type Props = { variant?:
+    //       Variant }` with `type Variant = VariantProps<typeof
+    //       style>["variant"]` — Variant has a direct typeof, so it's
+    //       body-scoped. Props referencing `Variant` at module scope
+    //       fires TS2304 "Cannot find name 'Variant'" — no stub for
+    //       type names.
     //
     // Logic: compute two sets separately.
     //   - `direct_typeof_body` (Case A): types with direct
@@ -384,20 +386,19 @@ pub fn split_imports(
     // `string | number` (from the `{[k: string]: any}` index
     // signature), losing the literal-key union the real body-scoped
     // const has. User code that destructures or indexes with the
-    // resulting type then fires TS7053 or TS2322 (ProgressiveBlur,
-    // hero-four, logocloud-three).
+    // resulting type then fires TS7053 or TS2322.
     //
     // Plain `typeof <body-local-var>` (without a surrounding `keyof`)
     // stubs OK — the synthesized `{[k: string]: any} & ((...args) =>
     // any)` carries a callable/indexable shape that's structurally
     // sufficient for consumer use cases like
-    // `Snippet<[{fn: typeof body_fn}]>` (a-sveltekit-app PreviewDataIngestor).
+    // `Snippet<[{fn: typeof body_fn}]>`.
     //
     // And any type that references ANOTHER must-stay-body type by
-    // name must itself stay in body (fixed-point propagation). Chain
-    // from cnblocks web/code: `type Variant = ...keyof...typeof
-    // style...` → Variant must stay body; `type Props = { variant?:
-    // Variant }` references Variant by name → Props joins.
+    // name must itself stay in body (fixed-point propagation). Example
+    // chain: `type Variant = ...keyof...typeof style...` → Variant
+    // must stay body; `type Props = { variant?: Variant }` references
+    // Variant by name → Props joins.
     let mut must_stay_body: HashSet<SmolStr> = HashSet::new();
     for (start, end, name) in &pending_type_spans {
         if !body_names_set.is_empty()

@@ -516,12 +516,13 @@ fn run_typecheck(
     let mark = std::time::Instant::now();
     // TS project scope: honor the tsconfig's `include`/`exclude`
     // patterns so files outside the user's declared project don't get
-    // fed into the overlay. Real-world pattern — pixzip-lite — has a
-    // root tsconfig whose `include` only covers the electron app tree
-    // (`src/renderer/**/*.svelte`) and a separate `website/tsconfig.json`
-    // with its own paths; upstream svelte-check respects include and
-    // silently skips website files when run at root, but we used to
-    // feed them all to tsgo, firing a cascade of "Cannot find module
+    // fed into the overlay. Real-world pattern: a monorepo-style
+    // project has a root tsconfig whose `include` only covers an app
+    // subtree (e.g. `src/renderer/**/*.svelte`) and a separate
+    // sub-project `tsconfig.json` with its own paths; upstream
+    // svelte-check respects include and silently skips out-of-scope
+    // files when run at root, but we used to feed them all to tsgo,
+    // firing a cascade of "Cannot find module
     // '$lib/…'" errors because the root tsconfig's `$lib` alias
     // points at the wrong tree for those files.
     let project_scope = svn_core::tsconfig::load(tsconfig).ok().map(|tc| {

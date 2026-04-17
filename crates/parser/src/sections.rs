@@ -52,13 +52,11 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
         // HTML comment content is opaque — must not be scanned for
         // `<script>` / `<style>` tags. Real-world pattern: a
         // component's reference / legacy code kept as commented-out
-        // `<!-- <script>...</script>...{#if x}...-->` (cnblocks'
-        // integration-* and logocloud-three use this convention).
-        // Without this skip, the sections pass picks up the inner
-        // `<script>` as the instance script and the template parser
-        // picks up inner `{#if}` blocks referencing names that only
-        // exist in the commented-out code, firing TS2304 in the
-        // overlay.
+        // `<!-- <script>...</script>...{#if x}...-->`. Without this
+        // skip, the sections pass picks up the inner `<script>` as
+        // the instance script and the template parser picks up inner
+        // `{#if}` blocks referencing names that only exist in the
+        // commented-out code, firing TS2304 in the overlay.
         if scanner.peek_byte() == Some(b'<') && scanner.starts_with("<!--") {
             let after_open = scanner.pos() as usize + 4;
             match scanner.source()[after_open..].find("-->") {

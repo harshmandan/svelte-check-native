@@ -119,6 +119,8 @@ declare function __svn_each_items<T>(value: T): Iterable<__SvnEachItem<T>>;
  */
 type __SvnComponentProps<T> =
     0 extends 1 & T ? any :
+    T extends new (...args: any[]) => import('svelte').SvelteComponent<infer P, any, any> ? P :
+    T extends new (...args: any[]) => { $$prop_def: infer P } ? P :
     T extends import('svelte').Component<infer P, any, any> ? P :
     T extends import('svelte').SvelteComponent<infer P, any, any> ? P :
     any;

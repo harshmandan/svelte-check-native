@@ -87,18 +87,59 @@ tsgo invocation, diagnostics mapping back to `.svelte` source.
 
 ## Testing discipline
 
-- **Spec-first.** Write the test before the implementation. Tests live
-  under `crates/<crate>/tests/` and `fixtures/`.
-- **Parity corpus:** the 63 `.v5` fixtures under
-  `language-tools/packages/svelte2tsx/test/svelte2tsx/samples/*.v5/`.
-  Each is a known-good Svelte 5 component; our binary should produce
-  zero tsgo errors against any of them.
-- **Grey-box regression fixtures** in `fixtures/bugs/<NN>-<slug>/` —
-  small focused fixtures targeting specific emit-shape behaviors
-  (void-references, definite-assignment rewrites, for-of fallback for
-  empty `{#each}`).
-- **`cargo test` is the scoreboard.** Count of passing integration
-  tests under `crates/cli/tests/` shows in `README.md`.
+Our binary has three internal stages — `parse → emit → tsgo → map`.
+The test strategy mirrors those stages. Each layer is tested
+independently so a red signal points at exactly one stage.
+
+**Stage 1 — emit shape (`emit_snapshots`).** Primary gate. Per-sample
+`expected.emit.ts` snapshots locked against our binary's `--emit-ts`
+output. No tsgo in the loop. Mirrors upstream svelte2tsx's
+`expectedv2.js` pattern against *our* emit. `UPDATE_SNAPSHOTS=1
+cargo test --test emit_snapshots` accepts deliberate emit changes;
+default mode fails on any mismatch with a contextual diff. ~190
+snapshots across three corpora:
+
+  - `svelte2tsx_v5/` — upstream's 63 `.v5` samples (full-component).
+  - `htmlx2jsx/` — upstream's ~125 template-control-flow samples,
+    filtered against a 22-sample Svelte-4 skip list.
+  - `bugs/` — our grey-box fixtures.
+
+  Runs in <1 s. Any emit change that's not deliberate must fail this
+  gate before anything else is considered.
+
+**Stage 2 — tsgo is trusted.** No tests; it's the TypeScript team's
+code. Integration tests below cover "does the emit work end-to-end"
+without pretending to test tsgo itself.
+
+**Stage 3 — error mapping (unit tests).** `crates/typecheck/src/lib.rs`'s
+test module exercises `map_diagnostic` in isolation — line-map
+translation, path reverse, edge cases (empty map, gaps, synthesized
+lines). 42 unit tests, no subprocess, no samples.
+
+**Integration — targeted, small (`bug_fixtures`, `v5_fixtures`,
+`v5_stores_fixtures`).** Self-contained fixtures that do go through
+the whole pipeline including tsgo. Each asserts either zero errors
+or an exact expected-errors list. These catch "emit-plus-tsgo
+interaction" bugs — the kind where emit looks fine and tsgo looks
+fine but the combination has a surprise. Kept small on purpose;
+broad type-check surveying is the emit_snapshots job, not these.
+
+**End-to-end — `upstream_sanity`.** Reuses upstream's
+`test-sanity.js` unmodified via a node shim. Submodule bump =
+upstream test update applied for free. Known-failing today on
+SvelteKit-ambient-typing cases (scoped out for v0.1).
+
+**Discovery (not tests).** Real-world repos in `bench/` are *not*
+part of `cargo test`. They're used interactively to find bug classes
+that get extracted into new `bug_fixtures/<NN>-*` entries and locked
+by the suites above. Their error counts are not a shipping metric.
+
+- **Spec-first.** Write the test (snapshot or fixture) before the
+  implementation. Snapshot workflow: add `input.svelte`, run
+  `UPDATE_SNAPSHOTS=1 cargo test --test emit_snapshots` once the
+  emit is right, review `git diff`, commit.
+- **`cargo test` is the scoreboard.** `emit_snapshots` count and
+  `bug_fixtures` count both show in `README.md`.
 
 ## When in doubt
 

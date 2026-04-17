@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Snippet params inside <Component>{#snippet name(params)}...{/snippet}</Component> must receive their types from the consumer's declared Snippet<[...]> signature via contextual typing. We weave each snippet into the parent's prop-check satisfies object as an arrow callback (name: (params) => { body }); the satisfies target pins the arrow's contextual type so destructured/positional params resolve to the tuple element types instead of implicit-any."
+}

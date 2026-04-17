@@ -43,18 +43,14 @@ async function $$render_7cc45a4f() {
                                        
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ({} satisfies Partial<__SvnComponentProps<typeof Wrapper>>);
-        {
-            const children: any = undefined;
-            void children;
-            {
-                const isOpen: any = undefined;
-                const toggle: any = undefined;
+        void ({
+            children: (isOpen, toggle) => {
                 void ({open: (isOpen), onToggle: (toggle)} satisfies Partial<__SvnComponentProps<typeof Inner>>);
                 void isOpen;
                 void toggle;
-            }
-        }
+                return null as any;
+            },
+        } satisfies Partial<__SvnComponentProps<typeof Wrapper>>);
     }
     void __svn_tpl_check;
     void Wrapper;

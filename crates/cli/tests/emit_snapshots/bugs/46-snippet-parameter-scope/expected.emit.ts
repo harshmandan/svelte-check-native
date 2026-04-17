@@ -12,8 +12,7 @@ async function $$render_e2598f27() {
     void children;
 }
 $$render_e2598f27;
-declare function __svn_component_default(__anchor: any, props: { children: Snippet<[isOpen: boolean, toggle: () => void]> }): any;
-declare type __svn_component_default = (__anchor: any, props: { children: Snippet<[isOpen: boolean, toggle: () => void]> }) => any;
+declare const __svn_component_default: import('svelte').Component<{ children: Snippet<[isOpen: boolean, toggle: () => void]> }>;
 export default __svn_component_default;
 
 // === Inner.svelte ===
@@ -29,8 +28,7 @@ async function $$render_ea3119be() {
     void onToggle;
 }
 $$render_ea3119be;
-declare function __svn_component_default(__anchor: any, props: { open: boolean; onToggle: () => void }): any;
-declare type __svn_component_default = (__anchor: any, props: { open: boolean; onToggle: () => void }) => any;
+declare const __svn_component_default: import('svelte').Component<{ open: boolean; onToggle: () => void }>;
 export default __svn_component_default;
 
 // === input.svelte ===
@@ -43,21 +41,29 @@ async function $$render_7cc45a4f() {
                                        
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        Wrapper(__svn_any(), {
-            children: (isOpen, toggle) => {
-                Inner(__svn_any(), {open: (isOpen), onToggle: (toggle)});
-                void isOpen;
-                void toggle;
-                return __svn_snippet_return();
-            },
-        });
+        {
+            const __svn_C_72 = __svn_ensure_component(Wrapper);
+            new __svn_C_72({
+                target: __svn_any(),
+                props: {
+                    children: (isOpen, toggle) => {
+                        {
+                            const __svn_C_ac = __svn_ensure_component(Inner);
+                            new __svn_C_ac({ target: __svn_any(), props: {open: (isOpen), onToggle: (toggle)} });
+                        }
+                        void isOpen;
+                        void toggle;
+                        return __svn_snippet_return();
+                    },
+                },
+            });
+        }
     }
     void __svn_tpl_check;
     void Wrapper;
     void Inner;
 }
 $$render_7cc45a4f;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

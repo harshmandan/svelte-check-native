@@ -22,6 +22,35 @@
  */
 declare function __svn_any<T = any>(): T;
 
+/**
+ * Normalize any component shape to a constructible. After wrapping,
+ * `new $$_Comp({ target, props })` works uniformly regardless of
+ * whether the source component was a class (Svelte-4 style) or a
+ * callable (Svelte-5 function / `Component<Props>` type).
+ *
+ * Two overloads:
+ *   1. Class (including our overlay defaults): passthrough — preserves
+ *      generics so `new Class<T>({...})` infers T from props.
+ *   2. Callable (third-party `Component<Props>` values, including
+ *      those typed inline in user-declared contexts): synthesize a
+ *      construct signature that carries the same Props.
+ *
+ * Consumer emits each instantiation as:
+ *     { const $$_C0 = __svn_ensure_component(Comp);
+ *       new $$_C0({ target: __svn_any(), props: { ... } }); }
+ *
+ * The extra `const` local is what makes generic inference work: TS
+ * binds the helper's return-type generics at the `new` site rather
+ * than at the `ensure_component` site.
+ */
+declare function __svn_ensure_component<C extends new (...args: any[]) => any>(c: C): C;
+declare function __svn_ensure_component<P>(c: (anchor: any, props: P) => any):
+    new (options: { target?: any; props?: P }) => { $$prop_def: P };
+declare function __svn_ensure_component<P>(c: import('svelte').Component<P>):
+    new (options: { target?: any; props?: P }) => { $$prop_def: P };
+declare function __svn_ensure_component(c: unknown):
+    new (options: { target?: any; props?: any }) => { $$prop_def: any };
+
 // ---------- template iteration ----------
 
 /** Iterable wrapper for `{#each}` blocks. */
@@ -84,7 +113,12 @@ declare function __svn_snippet_return(): any;
  * For generic components, `Parameters<typeof Foo>` already handles the
  * generic parameter correctly — TS resolves it per call site.
  */
-type __SvnProps<F> = F extends (anchor: any, props: infer P) => any ? P : never;
+type __SvnProps<C> =
+    C extends new (...args: any[]) => { $$prop_def: infer P } ? P :
+    C extends (anchor: any, props: infer P) => any
+        ? (P extends Partial<infer Q> ? Q : P)
+        : C extends import('svelte').Component<infer P> ? P :
+    Record<string, any>;
 
 // ---------- rune ambients (mirror svelte_shims_core.d.ts, slimmed for Phase A) ----------
 

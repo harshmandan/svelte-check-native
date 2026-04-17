@@ -15,15 +15,17 @@ async function $$render_a4d674e0() {
     const cfg: PanelConfig = { section: current, count: 3 };
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        Panel(__svn_any(), {config: (cfg)});
+        {
+            const __svn_C_1e3 = __svn_ensure_component(Panel);
+            new __svn_C_1e3({ target: __svn_any(), props: {config: (cfg)} });
+        }
     }
     void __svn_tpl_check;
     void Panel;
     void cfg;
 }
 $$render_a4d674e0;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 
 // === Panel.svelte ===
@@ -57,11 +59,8 @@ async function $$render_6e910aea() {
     void config;
 }
 $$render_6e910aea;
-declare function __svn_component_default(__anchor: any, props: {
+declare const __svn_component_default: import('svelte').Component<{
         config: PanelConfig;
-    }): any;
-declare type __svn_component_default = (__anchor: any, props: {
-        config: PanelConfig;
-    }) => any;
+    }>;
 export default __svn_component_default;
 

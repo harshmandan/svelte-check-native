@@ -150,16 +150,66 @@ type __SvnEachItem<T> = 0 extends 1 & T
             : never;
 
 /**
- * Fresh `any` placeholder. Used as the first argument to the
- * component-as-callable emission shape:
- *
- *     Comp(__svn_any(), { prop1, prop2 });
+ * Fresh `any` placeholder. Used as the anchor / target argument in the
+ * emitted `new Comp({ target: __svn_any(), props: {...} })` call.
  *
  * Declared generic with `T = any` so callers can narrow the return at
- * the call site when needed (e.g. to satisfy an opaque target type);
- * default usage gets plain `any`.
+ * the call site when needed; default usage gets plain `any`.
  */
 declare function __svn_any<T = any>(): T;
+
+/**
+ * Normalize any component shape to a constructible so a single emission
+ * (`new $$_C({ target, props })`) works across the shapes a real Svelte
+ * codebase mixes:
+ *
+ *   - Svelte-4-style class (lucide-svelte, phosphor-svelte, bits-ui,
+ *     and anything still extending SvelteComponent) — passthrough; the
+ *     class already is constructible, and its generic parameters stay
+ *     on the return type so `new $$_C<T>(...)` infers T from props.
+ *   - Svelte-5 callable (our overlay defaults, bare `Component<Props>`
+ *     values from user-typed contexts) — wrapped in a synthesized
+ *     construct signature whose props slot carries the original Props.
+ *
+ * The per-call-site form is:
+ *
+ *     { const $$_C0 = __svn_ensure_component(Comp);
+ *       new $$_C0({ target: __svn_any(), props: { ... } }); }
+ *
+ * The intermediate local is what makes generic inference work: TS
+ * binds the construct-signature's generics at the `new` site (seeing
+ * the concrete prop values) rather than at the `__svn_ensure_component`
+ * site (where only the component type is visible). Tried without the
+ * local — generic components' `T` gets unified as `unknown` and
+ * snippet arrows over the generic read as implicit-any.
+ */
+// Overload order matters: TS tries each in turn and picks the first
+// match. The Component<P> overload has to come BEFORE the generic
+// `(anchor, props: P)` overload — a value typed `Component<P>` has
+// signature `(...args: any[]) => ...`, which structurally matches the
+// `(anchor, props)` overload with P inferred as `any`, killing the
+// contextual-type flow. Putting Component<P> first forces TS to bind
+// P from the Component's generic slot.
+// `props?: Partial<P>` on the synthesized constructor is what keeps
+// required props optional at the `new $$_C({...})` call site — real
+// components routinely receive props via bind: directives, spreads, or
+// implicit `children` snippets from the body, none of which show up in
+// the emitted object literal. Partial preserves the excess-property
+// check (typo'd prop names still fire TS2353) and contextual-typing
+// flow (callback destructures, snippet params). For third-party class
+// components (overload 2 below), the class's own constructor signature
+// governs — typically ComponentConstructorOptions<Props>.props?: Props,
+// which is already non-required at the field level.
+declare function __svn_ensure_component<P extends Record<string, any>>(
+    c: import('svelte').Component<P>,
+): new (options: { target?: any; props?: Partial<P> }) => { $$prop_def: P };
+declare function __svn_ensure_component<C extends new (...args: any[]) => any>(c: C): C;
+declare function __svn_ensure_component<P>(
+    c: (anchor: any, props: P) => any,
+): new (options: { target?: any; props?: Partial<P> }) => { $$prop_def: P };
+declare function __svn_ensure_component(
+    c: unknown,
+): new (options: { target?: any; props?: any }) => { $$prop_def: any };
 
 /**
  * Assert that a `bind:this` target's declared type accepts the element
@@ -201,7 +251,11 @@ declare function __svn_snippet_return(): any;
  * generic at each call site; a concrete `__SvnProps<typeof Foo>['key']`
  * access picks up the generic's inferred value from context.
  */
-type __SvnProps<F> = F extends (anchor: any, props: infer P) => any ? P : never;
+type __SvnProps<C> =
+    C extends new (...args: any[]) => { $$prop_def: infer P } ? P :
+    C extends (anchor: any, props: infer P) => any
+        ? (P extends Partial<infer Q> ? Q : P)
+        : never;
 
 
 //

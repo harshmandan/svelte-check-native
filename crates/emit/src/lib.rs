@@ -559,32 +559,46 @@ fn emit_document_with_render_name(
         .as_deref()
         .map(|t| t.trim_start().starts_with('{'))
         .unwrap_or(false);
+    // Default export typed as Svelte 5's `Component<Props>` (function
+    // form). This shape is chosen to satisfy the constraint on
+    // svelte's built-in `ComponentProps<T>` helper — which accepts
+    // `T extends Component<any, any, string> | SvelteComponent<...>`
+    // — so user code that writes `ComponentProps<typeof Foo>`
+    // resolves Props correctly. A class-based default with narrower
+    // Props fails `SvelteComponent<any>`'s invariant-in-Props
+    // constraint; the function form sidesteps that entirely.
+    //
+    // Consumer-side emission wraps the value through
+    // `__svn_ensure_component`, which synthesizes a construct
+    // signature for callable components and passes class components
+    // through unchanged:
+    //
+    //     { const $$_C0 = __svn_ensure_component(Comp);
+    //       new $$_C0({ target: __svn_any(), props: { ... } }); }
+    //
+    // The wrapper's intermediate local is what makes generic
+    // components' `<T>` resolve at the `new` site (TS binds generics
+    // against the concrete prop values there, not at the
+    // `__svn_ensure_component` call). Validated end-to-end in
+    // design/phase_a/ — including classes imported from third-party
+    // libraries (lucide-svelte, phosphor-svelte, bits-ui).
     match (&prop_type_source, &generics) {
         (Some(ty), Some(g)) if ty_is_literal => {
             let _ = writeln!(
                 out,
-                "declare function __svn_component_default<{g}>(__anchor: any, props: {ty}): any;"
-            );
-            let _ = writeln!(
-                out,
-                "declare type __svn_component_default<{g}> = (__anchor: any, props: {ty}) => any;"
+                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{ty}>) => any;"
             );
         }
         (Some(ty), None) => {
             let _ = writeln!(
                 out,
-                "declare function __svn_component_default(__anchor: any, props: {ty}): any;"
-            );
-            let _ = writeln!(
-                out,
-                "declare type __svn_component_default = (__anchor: any, props: {ty}) => any;"
+                "declare const __svn_component_default: import('svelte').Component<{ty}>;"
             );
         }
         _ => {
             out.push_str(
-                "declare function __svn_component_default(__anchor: any, props: any): any;\n",
+                "declare const __svn_component_default: import('svelte').Component<Record<string, any>>;\n",
             );
-            out.push_str("declare type __svn_component_default = any;\n");
         }
     }
     out.push_str("export default __svn_component_default;\n");
@@ -1678,11 +1692,24 @@ fn emit_component_node(
     }
 }
 
-/// Emit the call-site scaffolding for one component instantiation.
+/// Emit the call-site scaffolding for one component instantiation as
 ///
-/// Compact single-line form when there are no snippet children, or a
-/// multi-line form when there are (each snippet gets its own arrow
-/// body with a nested template-body walk).
+///     { const $$_CN = __svn_ensure_component(Comp);
+///       new $$_CN({ target: __svn_any(), props: { ... } }); }
+///
+/// — the wrapper + local + `new` form chosen so a single emission
+/// handles both our overlay-declared class defaults and third-party
+/// `extends SvelteComponent` classes (and bare `Component<Props>`
+/// values from user-typed contexts). The intermediate local is what
+/// makes generic components' `<T>` resolve at the `new` site — TS
+/// binds the construct signature's generics against the concrete prop
+/// values there, not at the `__svn_ensure_component` site. See
+/// design/phase_a/DESIGN.md for the validation.
+///
+/// Each instantiation gets its own block scope `{ ... }` so the
+/// synthesized `$$_CN` local is siloed from sibling instantiations —
+/// avoids shadowing / redeclaration when the same parent fragment
+/// contains multiple components.
 fn emit_component_call(
     out: &mut String,
     source: &str,
@@ -1692,19 +1719,30 @@ fn emit_component_call(
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
 ) {
     let indent = "    ".repeat(depth);
+    let inner = "    ".repeat(depth + 1);
     let comp = &inst.component_root;
+    // Per-call-site synthesized local. Using the instantiation's byte
+    // offset keeps each one unique without threading a counter through
+    // the walker.
+    let local = format!("__svn_C_{:x}", inst.node_start);
+
+    let _ = writeln!(out, "{indent}{{");
+    let _ = writeln!(
+        out,
+        "{inner}const {local} = __svn_ensure_component({comp});"
+    );
 
     if snippet_children.is_empty() && inst.props.is_empty() {
-        // No props, no snippets — still emit the call so "Component
-        // not found" and other reference errors surface. The empty
-        // object literal satisfies any `props` parameter type.
-        let _ = writeln!(out, "{indent}{comp}(__svn_any(), {{}});");
+        let _ = writeln!(
+            out,
+            "{inner}new {local}({{ target: __svn_any(), props: {{}} }});"
+        );
+        let _ = writeln!(out, "{indent}}}");
         return;
     }
 
     if snippet_children.is_empty() {
-        // Compact single-line form.
-        let _ = write!(out, "{indent}{comp}(__svn_any(), {{");
+        let _ = write!(out, "{inner}new {local}({{ target: __svn_any(), props: {{");
         let mut first = true;
         for p in &inst.props {
             if !first {
@@ -1713,24 +1751,30 @@ fn emit_component_call(
             first = false;
             write_prop_shape(out, source, p);
         }
-        let _ = writeln!(out, "}});");
+        let _ = writeln!(out, "}} }});");
+        let _ = writeln!(out, "{indent}}}");
         return;
     }
 
     // Multi-line form with snippets-as-arrow-props.
-    let _ = writeln!(out, "{indent}{comp}(__svn_any(), {{");
-    let inner_indent = "    ".repeat(depth + 1);
+    let _ = writeln!(out, "{inner}new {local}({{");
+    let opts_inner = "    ".repeat(depth + 2);
+    let props_inner = "    ".repeat(depth + 3);
+    let _ = writeln!(out, "{opts_inner}target: __svn_any(),");
+    let _ = writeln!(out, "{opts_inner}props: {{");
     for p in &inst.props {
-        out.push_str(&inner_indent);
+        out.push_str(&props_inner);
         write_prop_shape(out, source, p);
         let _ = writeln!(out, ",");
     }
     for s in snippet_children {
-        out.push_str(&inner_indent);
-        write_snippet_arrow_prop(out, source, s, depth + 1, insts);
+        out.push_str(&props_inner);
+        write_snippet_arrow_prop(out, source, s, depth + 3, insts);
         let _ = writeln!(out, ",");
     }
-    let _ = writeln!(out, "{indent}}});");
+    let _ = writeln!(out, "{opts_inner}}},");
+    let _ = writeln!(out, "{inner}}});");
+    let _ = writeln!(out, "{indent}}}");
 }
 
 /// Write a single property of a component-prop-check object literal,

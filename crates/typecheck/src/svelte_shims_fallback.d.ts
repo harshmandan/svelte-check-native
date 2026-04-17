@@ -17,11 +17,17 @@ declare module 'svelte' {
         intro?: boolean;
     }
 
-    export interface SvelteComponent<
-        Props extends Record<string, unknown> = Record<string, unknown>,
-        Events extends Record<string, unknown> = Record<string, unknown>,
-        Slots extends Record<string, unknown> = Record<string, unknown>,
+    // Real svelte ships SvelteComponent as a CLASS (not an interface),
+    // and our emit's generated default-export extends it. Declaring as
+    // a class here so the fallback shim doesn't fire "Cannot extend an
+    // interface" on fixtures that don't have the real svelte package
+    // installed.
+    export class SvelteComponent<
+        Props extends Record<string, any> = Record<string, any>,
+        Events extends Record<string, any> = Record<string, any>,
+        Slots extends Record<string, any> = Record<string, any>,
     > {
+        constructor(options: ComponentConstructorOptions<Props>);
         $set(props: Partial<Props>): void;
         $on<K extends Extract<keyof Events, string>>(
             type: K,

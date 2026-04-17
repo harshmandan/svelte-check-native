@@ -8,7 +8,10 @@ async function $$render_b5e30ee7() {
             for (const item of __svn_each_items(array)) {
                 if ((i)) {
                     void [i];
-                    Component(__svn_any(), {});
+                    {
+                        const __svn_C_54 = __svn_ensure_component(Component);
+                        new __svn_C_54({ target: __svn_any(), props: {} });
+                    }
                 }
                 void item;
             }
@@ -17,7 +20,6 @@ async function $$render_b5e30ee7() {
     void __svn_tpl_check;
 }
 $$render_b5e30ee7;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

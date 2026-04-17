@@ -13,7 +13,6 @@ async function $$render_cbdc5f31<T extends boolean>() {
     void someProp;
 }
 $$render_cbdc5f31;
-declare function __svn_component_default<T extends boolean>(__anchor: any, props: { someProp: SomeType<T>; }): any;
-declare type __svn_component_default<T extends boolean> = (__anchor: any, props: { someProp: SomeType<T>; }) => any;
+declare const __svn_component_default: <T extends boolean>(__anchor: any, props: Partial<{ someProp: SomeType<T>; }>) => any;
 export default __svn_component_default;
 

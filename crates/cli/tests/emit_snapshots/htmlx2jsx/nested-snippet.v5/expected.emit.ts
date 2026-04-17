@@ -41,17 +41,22 @@ async function $$render_df3e76f3() {
                 const foo: any = undefined;
                 void foo;
             }
-            Component(__svn_any(), {
-                foo: () => {
-                    return __svn_snippet_return();
-                },
-            });
+            {
+                const __svn_C_1f7 = __svn_ensure_component(Component);
+                new __svn_C_1f7({
+                    target: __svn_any(),
+                    props: {
+                        foo: () => {
+                            return __svn_snippet_return();
+                        },
+                    },
+                });
+            }
         }
     }
     void __svn_tpl_check;
 }
 $$render_df3e76f3;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

@@ -31,7 +31,10 @@ async function $$render_de15df1d() {
             } else if ((await promise)) {
                 void [promise];
             }
-            Component(__svn_any(), {prop: (await promise)});
+            {
+                const __svn_C_1d8 = __svn_ensure_component(Component);
+                new __svn_C_1d8({ target: __svn_any(), props: {prop: (await promise)} });
+            }
             if ((true)) {
                 const x = await promise;
                 void x;
@@ -44,7 +47,6 @@ async function $$render_de15df1d() {
     void promise;
 }
 $$render_de15df1d;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

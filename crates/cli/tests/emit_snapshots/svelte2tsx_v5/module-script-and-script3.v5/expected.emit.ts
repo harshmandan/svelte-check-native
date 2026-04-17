@@ -13,7 +13,6 @@ async function $$render_39303eb1() {
     void world;
 }
 $$render_39303eb1;
-declare function __svn_component_default(__anchor: any, props: { world?: any; }): any;
-declare type __svn_component_default = (__anchor: any, props: { world?: any; }) => any;
+declare const __svn_component_default: import('svelte').Component<{ world?: any; }>;
 export default __svn_component_default;
 

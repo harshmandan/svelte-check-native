@@ -3,12 +3,14 @@
 async function $$render_b80130f4() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        Input(__svn_any(), {});
+        {
+            const __svn_C_34 = __svn_ensure_component(Input);
+            new __svn_C_34({ target: __svn_any(), props: {} });
+        }
     }
     void __svn_tpl_check;
 }
 $$render_b80130f4;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

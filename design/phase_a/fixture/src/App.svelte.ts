@@ -68,10 +68,16 @@ async function $$render_app() {
         // contextual type `(event: { checked: boolean }) => void` from
         // the call signature's props.onchange slot. `{ checked }` is
         // typed boolean — no implicit-any.
-        Switch(__svn_any(), {
-            checked: isOn,
-            onchange: ({ checked }) => (isOn = checked),
-        });
+        {
+            const $$_C0 = __svn_ensure_component(Switch);
+            new $$_C0({
+                target: __svn_any(),
+                props: {
+                    checked: isOn,
+                    onchange: ({ checked }) => (isOn = checked),
+                },
+            });
+        }
 
         // <input bind:this={inputEl} />
         // Asserts inputEl's declared type accepts HTMLInputElement | null | undefined.
@@ -109,34 +115,46 @@ async function $$render_app() {
         // </Wrapper>
         // Snippet contextually typed as Snippet<[{id, label}]>, so the
         // arrow's destructure binds id:number, label:string.
-        Wrapper(__svn_any(), {
-            items: items,
-            row: ({ id, label }) => {
-                void id;
-                void label;
-                return __svn_snippet_return();
-            },
-        });
+        {
+            const $$_C1 = __svn_ensure_component(Wrapper);
+            new $$_C1({
+                target: __svn_any(),
+                props: {
+                    items: items,
+                    row: ({ id, label }) => {
+                        void id;
+                        void label;
+                        return __svn_snippet_return();
+                    },
+                },
+            });
+        }
 
         // <VirtualList items={items}>
         //     {#snippet children(item)} ... {/snippet}
         // </VirtualList>
         // Generic VirtualList: T inferred from items (= Row), flows into
         // snippet's param type (= Row). `item.label` type-checks.
-        VirtualList(__svn_any(), {
-            items: items,
-            children: (item) => {
-                void item.label;
-                return __svn_snippet_return();
-            },
-        });
+        {
+            const $$_C2 = __svn_ensure_component(VirtualList);
+            new $$_C2({
+                target: __svn_any(),
+                props: {
+                    items: items,
+                    children: (item) => {
+                        void item.label;
+                        return __svn_snippet_return();
+                    },
+                },
+            });
+        }
 
         // bind:prop round-trip pair for completeness: bind the Switch's
         // `checked` prop to a local. Uses __SvnProps<>.
-        Switch(__svn_any(), {
-            checked: isOn,
-            onchange: () => {},
-        });
+        {
+            const $$_C3 = __svn_ensure_component(Switch);
+            new $$_C3({ target: __svn_any(), props: { checked: isOn, onchange: () => {} } });
+        }
         let __svn_bind_checked_0!: __SvnProps<typeof Switch>['checked'];
         isOn = __svn_bind_checked_0;
         void __svn_bind_checked_0;

@@ -3,12 +3,14 @@
 async function $$render_ed2b916f() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        Component(__svn_any(), {type: "radio", value: "Plain"});
+        {
+            const __svn_C_0 = __svn_ensure_component(Component);
+            new __svn_C_0({ target: __svn_any(), props: {type: "radio", value: "Plain"} });
+        }
     }
     void __svn_tpl_check;
 }
 $$render_ed2b916f;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

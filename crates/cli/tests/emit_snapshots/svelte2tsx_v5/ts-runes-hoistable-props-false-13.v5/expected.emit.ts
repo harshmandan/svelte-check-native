@@ -22,7 +22,6 @@ let {Abc}: A = $props()
     void Abc;
 }
 $$render_3dcf5b80;
-declare function __svn_component_default(__anchor: any, props: A): any;
-declare type __svn_component_default = (__anchor: any, props: A) => any;
+declare const __svn_component_default: import('svelte').Component<A>;
 export default __svn_component_default;
 

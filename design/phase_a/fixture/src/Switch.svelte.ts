@@ -40,12 +40,16 @@ $$render_switch;
 // Return type is `any` — we don't model Svelte's component-instance
 // handle for now; the only thing consumers care about is the props
 // contract carried by the second parameter.
-declare function __svn_component_default(
-    __anchor: any,
-    props: {
+import { SvelteComponent as $$_SC } from 'svelte';
+
+declare class __svn_component_default extends $$_SC<{
+    checked: boolean;
+    onchange: (event: { checked: boolean }) => void;
+}> {
+    constructor(options: { target?: any; props?: Partial<{
         checked: boolean;
         onchange: (event: { checked: boolean }) => void;
-    },
-): any;
+    }> });
+}
 
 export default __svn_component_default;

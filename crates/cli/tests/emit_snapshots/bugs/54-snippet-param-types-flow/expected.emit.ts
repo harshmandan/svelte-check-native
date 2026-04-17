@@ -16,14 +16,10 @@ async function $$render_22446700() {
     void header;
 }
 $$render_22446700;
-declare function __svn_component_default(__anchor: any, props: {
+declare const __svn_component_default: import('svelte').Component<{
         row: Snippet<[{ id: number; label: string }]>;
         header: Snippet<[columns: readonly string[]]>;
-    }): any;
-declare type __svn_component_default = (__anchor: any, props: {
-        row: Snippet<[{ id: number; label: string }]>;
-        header: Snippet<[columns: readonly string[]]>;
-    }) => any;
+    }>;
 export default __svn_component_default;
 
 // === input.svelte ===
@@ -41,17 +37,23 @@ async function $$render_8568e182() {
     }
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        Wrapper(__svn_any(), {
-            row: ({ id, label }) => {
-                void id;
-                void label;
-                return __svn_snippet_return();
-            },
-            header: (columns) => {
-                void columns;
-                return __svn_snippet_return();
-            },
-        });
+        {
+            const __svn_C_f9 = __svn_ensure_component(Wrapper);
+            new __svn_C_f9({
+                target: __svn_any(),
+                props: {
+                    row: ({ id, label }) => {
+                        void id;
+                        void label;
+                        return __svn_snippet_return();
+                    },
+                    header: (columns) => {
+                        void columns;
+                        return __svn_snippet_return();
+                    },
+                },
+            });
+        }
     }
     void __svn_tpl_check;
     void Wrapper;
@@ -59,7 +61,6 @@ async function $$render_8568e182() {
     void joinLabels;
 }
 $$render_8568e182;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

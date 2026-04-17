@@ -7,7 +7,6 @@ async function $$render_bed93296() {
     void __svn_tpl_check;
 }
 $$render_bed93296;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

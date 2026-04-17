@@ -11,13 +11,18 @@ async function $$render_c159a31e() {
         void __svn_bind_pair_2;
         let __svn_bind_pair_3: [() => any, (v: any) => void] = [() => undefined as any, () => {}];
         void __svn_bind_pair_3;
-        Input(__svn_any(), {});
-        Input(__svn_any(), {});
+        {
+            const __svn_C_54 = __svn_ensure_component(Input);
+            new __svn_C_54({ target: __svn_any(), props: {} });
+        }
+        {
+            const __svn_C_7a = __svn_ensure_component(Input);
+            new __svn_C_7a({ target: __svn_any(), props: {} });
+        }
     }
     void __svn_tpl_check;
 }
 $$render_c159a31e;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

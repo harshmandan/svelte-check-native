@@ -26,36 +26,41 @@ import Wrapper from './Wrapper.svelte.ts';
 async function $$render_errors() {
     async function __svn_tpl_check() {
         // Error 1: TS2322 — string not assignable to boolean.
-        Switch(__svn_any(), {
-            checked: 'not-a-boolean',
-            onchange: () => {},
-        });
+        {
+            const $$_C0 = __svn_ensure_component(Switch);
+            new $$_C0({ target: __svn_any(), props: { checked: 'not-a-boolean', onchange: () => {} } });
+        }
 
         // Error 2: TS2339 — property 'nope' does not exist on type '{ checked: boolean }'.
-        Switch(__svn_any(), {
-            checked: true,
-            onchange: ({ nope }) => nope,
-        });
+        {
+            const $$_C1 = __svn_ensure_component(Switch);
+            new $$_C1({ target: __svn_any(), props: { checked: true, onchange: ({ nope }) => nope } });
+        }
 
         // Error 3: TS2353 — object literal may only specify known properties,
         //                   'foo' does not exist in type '{ checked, onchange }'.
-        Switch(__svn_any(), {
-            checked: true,
-            onchange: () => {},
-            foo: 'bar',
-        });
+        {
+            const $$_C2 = __svn_ensure_component(Switch);
+            new $$_C2({ target: __svn_any(), props: { checked: true, onchange: () => {}, foo: 'bar' } });
+        }
 
         // Error 4: TS2339 — property 'missing' does not exist on
         //                   '{ id: number; label: string }'.
-        Wrapper(__svn_any(), {
-            items: [],
-            row: ({ id, label, missing }) => {
-                void id;
-                void label;
-                void missing;
-                return __svn_snippet_return();
-            },
-        });
+        {
+            const $$_C3 = __svn_ensure_component(Wrapper);
+            new $$_C3({
+                target: __svn_any(),
+                props: {
+                    items: [],
+                    row: ({ id, label, missing }) => {
+                        void id;
+                        void label;
+                        void missing;
+                        return __svn_snippet_return();
+                    },
+                },
+            });
+        }
     }
     void __svn_tpl_check;
 }

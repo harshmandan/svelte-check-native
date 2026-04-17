@@ -3,13 +3,18 @@
 async function $$render_04fb2c94() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        Comp(__svn_any(), {multilineattr: "hello\nworld"});
-        Comp(__svn_any(), {multilineattr: "he`llo\nworld"});
+        {
+            const __svn_C_0 = __svn_ensure_component(Comp);
+            new __svn_C_0({ target: __svn_any(), props: {multilineattr: "hello\nworld"} });
+        }
+        {
+            const __svn_C_25 = __svn_ensure_component(Comp);
+            new __svn_C_25({ target: __svn_any(), props: {multilineattr: "he`llo\nworld"} });
+        }
     }
     void __svn_tpl_check;
 }
 $$render_04fb2c94;
-declare function __svn_component_default(__anchor: any, props: any): any;
-declare type __svn_component_default = any;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
 export default __svn_component_default;
 

@@ -185,7 +185,16 @@ fn classify_and_rewrite(
                     let rhs_span = assign.right.span();
                     let rhs = &content[rhs_span.start as usize..rhs_span.end as usize];
 
-                    if declared.contains(&SmolStr::from(name)) {
+                    // `$foo` identifier (starts with `$`) — in Svelte-4
+                    // this is a store auto-subscribe alias. The emit
+                    // crate forward-declares it as `let $foo!: …` at
+                    // the top of the render function; a reactive
+                    // assignment `$: $foo = expr` is a store `.set()`
+                    // shorthand, not a fresh declaration. Emitting a
+                    // second `let $foo = …` would fire TS2451
+                    // "redeclare block-scoped variable". Treat as
+                    // re-assignment.
+                    if declared.contains(&SmolStr::from(name)) || name.starts_with('$') {
                         // Re-assignment: drop the `$:` label, keep the
                         // assignment statement as-is. Emit `NAME = EXPR;`.
                         return Edit {

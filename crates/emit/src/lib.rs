@@ -3047,7 +3047,26 @@ fn try_process_let_statement_for_denarrow(
                         }
                     }
                 }
-                b',' | b';' | b'\n' if paren_depth == 0 => break,
+                b',' | b';' if paren_depth == 0 => break,
+                // `\n` terminates in most cases — but a multi-line
+                // initializer like `let x: T =\n  value;` where `=`
+                // is the last non-whitespace before the newline
+                // needs to continue. Check previous non-whitespace
+                // byte: if `=`, the expression is continued; else
+                // treat as a normal statement-end.
+                b'\n' if paren_depth == 0 => {
+                    let mut prev = s;
+                    while prev > 0 {
+                        prev -= 1;
+                        let b = bytes[prev];
+                        if b != b' ' && b != b'\t' {
+                            break;
+                        }
+                    }
+                    if bytes[prev] != b'=' {
+                        break;
+                    }
+                }
                 _ => {}
             }
             s += 1;

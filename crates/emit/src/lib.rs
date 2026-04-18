@@ -2536,23 +2536,46 @@ fn try_process_let_statement(
         // otherwise `let name1: T = v\n  let name2: T;` would be read
         // as a single declarator and the second `let` swallowed.
         //
-        // Space/tab whitespace is meaningful only insofar as it
-        // doesn't disrupt the char-by-char scan.
+        // Paren/brace tracking spans `() [] {}` plus generic-args `<>`.
+        // Subtlety with `>`: TypeScript uses it for both generic close
+        // (`Foo<T>` — closes the `<`) and arrow return (`() => R` —
+        // not a closer). Distinguishing purely by byte-scan: if the
+        // character BEFORE a `>` is `=`, it's the arrow; otherwise
+        // treat as generic close. That heuristic holds for hand-
+        // written TS and avoids the failure where `((...) => R) | U =
+        // v;` scans `=>`'s `>` as if it closed an opener, flipping
+        // depth negative and missing the real `=` initializer.
         let mut has_initializer = false;
         let mut paren_depth: i32 = 0;
         while s < bytes.len() {
             let c = bytes[s];
             match c {
                 b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
-                b')' | b']' | b'}' | b'>' => paren_depth -= 1,
+                b')' | b']' | b'}' => paren_depth -= 1,
+                b'>' => {
+                    // `=>` arrow — the `>` is arrow syntax, not a
+                    // generic close.
+                    let prev = if s > 0 { Some(bytes[s - 1]) } else { None };
+                    if prev != Some(b'=') {
+                        paren_depth -= 1;
+                    }
+                }
                 b'=' if paren_depth == 0 => {
                     let next = bytes.get(s + 1).copied();
-                    // `=>` arrow, `==`/`===` equality — not initializers.
-                    if next != Some(b'>') && next != Some(b'=') {
-                        has_initializer = true;
-                    }
-                    if next == Some(b'=') {
-                        s += 1;
+                    match next {
+                        Some(b'>') => {
+                            // `=>` arrow at depth 0 — scan past both.
+                            s += 2;
+                            continue;
+                        }
+                        Some(b'=') => {
+                            // `==` / `===` equality — not an
+                            // initializer. Skip one ahead.
+                            s += 1;
+                        }
+                        _ => {
+                            has_initializer = true;
+                        }
                     }
                 }
                 b',' | b';' | b'\n' if paren_depth == 0 => break,
@@ -2694,6 +2717,42 @@ mod tests {
     fn def_assign_inside_function_type_not_tripped_by_arrow() {
         let got = def_assign("let foo: () => void;", &["foo"]);
         assert_eq!(got, "let foo!: () => void;");
+    }
+
+    #[test]
+    fn def_assign_arrow_in_type_plus_initializer_correctly_detected() {
+        // Real-world regression: `let foo: (x: T) => R = () => ...;`
+        // has a `=` inside `=>`, a `>` after it, AND a real `=` before
+        // the initializer. The scanner must not flip paren_depth
+        // negative on the arrow's `>`, and must detect the real `=`.
+        let got = def_assign("let foo: () => void = () => {};", &["foo"]);
+        assert_eq!(got, "let foo: () => void = () => {};", "has init → no !");
+    }
+
+    #[test]
+    fn def_assign_complex_function_type_with_init() {
+        let got = def_assign(
+            "let onclick: ((e: MouseEvent) => void) | undefined = undefined;",
+            &["onclick"],
+        );
+        assert_eq!(
+            got,
+            "let onclick: ((e: MouseEvent) => void) | undefined = undefined;",
+            "union of function type + initializer → no !",
+        );
+    }
+
+    #[test]
+    fn def_assign_fn_type_with_nested_object_and_init() {
+        let got = def_assign(
+            "let onclick: (e: MouseEvent, { data }: { data: any }) => any = () => {};",
+            &["onclick"],
+        );
+        assert_eq!(
+            got,
+            "let onclick: (e: MouseEvent, { data }: { data: any }) => any = () => {};",
+            "function type with destructure param + arrow-body init → no !",
+        );
     }
 
     #[test]

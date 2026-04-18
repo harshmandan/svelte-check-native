@@ -7,7 +7,7 @@
 //! |---|---|---|
 //! | Declaration | `$: b = count * 2` (b not yet declared) | `let b = $derived(count * 2)` |
 //! | Re-assignment | `$: count += 1` (count declared earlier) | `count += 1;` (drop label) |
-//! | Statement / block | `$: { … }`, `$: console.log(a)` | `() => { $: … }` (upstream's never-called arrow trick) |
+//! | Statement / block | `$: { … }`, `$: console.log(a)` | `{ $: … };` (plain block wrapper) |
 //!
 //! Why `$derived` and not `__sveltets_2_invalidate` (upstream's helper)?
 //! Our shim is a Svelte-5 world. `$derived<T>(expr: T): T` is already
@@ -15,11 +15,19 @@
 //! what users would write in Svelte 5 and avoids pulling in an
 //! upstream-only helper. Type-level semantics are identical.
 //!
-//! Why the `() => { $: … }` wrapper for statement/block? `$: X` is a
-//! label-prefixed statement in JavaScript (where `$` is the label
-//! name). TypeScript type-checks the body but never invokes the arrow,
-//! so runtime semantics are irrelevant. Upstream svelte2tsx uses this
-//! trick; we match it verbatim.
+//! Why the block-statement wrapper `{ $: … };` instead of an arrow?
+//! The arrow form `(() => { $: … });` was rejected after it produced
+//! TS1005 parse errors whenever the preceding line ended with `)`
+//! (the `(…) → (…)` looked like a call-chain continuation, no ASI).
+//! A single stray TS1005 anywhere in the overlay suppressed tsgo's
+//! type-checking for every other file in the program — the overlay
+//! pass effectively stopped reporting semantic errors.
+//!
+//! A plain block statement `{ $: … };` avoids both traps: it can't be
+//! parsed as a call target, and the trailing `;` prevents any ASI-ish
+//! continuation with whatever follows. TypeScript still type-checks
+//! the body (the `$` label is just a no-op wrapper), so the diagnostic
+//! surface is identical.
 //!
 //! Scope of rewrites: **only top-level `$:` statements** in the instance
 //! script body. Labels inside nested functions, classes, or blocks are
@@ -175,14 +183,16 @@ fn classify_and_rewrite(
     }
 
     // Case 2: anything else — block, expression statement without
-    // `IDENT = expr`, etc. Wrap in `() => { $: ORIGINAL }` so TS
-    // type-checks the body without parsing complaints about the label
-    // at module scope.
+    // `IDENT = expr`, etc. Wrap in `{ $: ORIGINAL };` (plain block
+    // statement). The `$` label is harmless; TS type-checks the body.
+    // Block form is picked over an arrow wrap to keep the opening `{`
+    // unambiguous as a statement — otherwise a preceding line ending
+    // in `)` splices into a call chain (see module docstring).
     let original = &content[full_start..full_end];
     Edit {
         start: full_start,
         end: full_end,
-        replacement: format!("() => {{ {original} }};"),
+        replacement: format!("{{ {original} }};"),
     }
 }
 
@@ -222,22 +232,40 @@ mod tests {
     }
 
     #[test]
-    fn expression_statement_wrapped_in_arrow() {
+    fn expression_statement_wrapped_in_block() {
         let src = "$: console.log(count);";
         let got = ts(src);
         assert!(
-            got.starts_with("() => { $: console.log(count); };"),
+            got.starts_with("{ $: console.log(count); };"),
             "expression statement wrapped: {got:?}",
         );
     }
 
     #[test]
-    fn block_wrapped_in_arrow() {
+    fn block_wrapped_in_block() {
         let src = "$: { a = b; c = d; }";
         let got = ts(src);
         assert!(
-            got.starts_with("() => { $: { a = b; c = d; } };"),
+            got.starts_with("{ $: { a = b; c = d; } };"),
             "block wrapped: {got:?}",
+        );
+    }
+
+    #[test]
+    fn wrap_survives_call_chain_preceding_line() {
+        // Regression: a preceding `get(…).then(…)` followed by an
+        // arrow wrap `() => { $: … }` parses as `…then(…)(() => {…})`
+        // because there's no ASI before `(`. Block form `{ … };`
+        // can't continue a call chain, so it's safe.
+        let src = "get(`k`).then((v) => {})\n$: set(`k`, v)";
+        let got = ts(src);
+        assert!(
+            !got.contains("() =>"),
+            "block wrap, no arrow: {got:?}",
+        );
+        assert!(
+            got.contains("{ $: set(`k`, v) };"),
+            "block-wrapped reactive: {got:?}",
         );
     }
 

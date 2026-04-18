@@ -2428,10 +2428,18 @@ fn rewrite_definite_assignment_in_place(out: &mut String, target_names: &[SmolSt
     let bytes = original.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if let Some(end) = try_match_let_decl(bytes, i, target_names) {
-            out.push_str(&original[i..end]);
-            out.push('!');
-            i = end;
+        if let Some((stmt_end, insertions)) = try_process_let_statement(bytes, i, target_names) {
+            // Emit the let statement with `!` inserted after each matched
+            // binding identifier. Insertions are in ascending order by
+            // byte position — emit segments between them verbatim.
+            let mut cursor = i;
+            for pos in &insertions {
+                out.push_str(&original[cursor..*pos]);
+                out.push('!');
+                cursor = *pos;
+            }
+            out.push_str(&original[cursor..stmt_end]);
+            i = stmt_end;
         } else {
             let ch_len = utf8_char_len(bytes[i]);
             out.push_str(&original[i..i + ch_len]);
@@ -2440,13 +2448,28 @@ fn rewrite_definite_assignment_in_place(out: &mut String, target_names: &[SmolSt
     }
 }
 
-/// At byte position `i`, try to match `let <name>` where `<name>` is one
-/// of `target_names` AND is followed by `:` (after optional whitespace)
-/// AND has NO `=` initializer before the next `;` or newline (TS1263:
-/// "Declarations with initializers cannot also have definite assignment
-/// assertions"). Returns the byte position immediately after the matched
-/// name on success.
-fn try_match_let_decl(bytes: &[u8], i: usize, target_names: &[SmolStr]) -> Option<usize> {
+/// At byte position `i`, try to recognize an entire `let …;` statement
+/// and collect every binding identifier that needs a `!` definite-
+/// assignment assertion. Returns `Some((stmt_end, insertions))` on
+/// success, where `insertions` are byte positions (ascending) at which
+/// to splice `!`. `stmt_end` is the byte position AFTER the terminating
+/// `;` (or at newline / EOF if no `;`).
+///
+/// A declarator qualifies for insertion when its binding is a target
+/// name AND it has a `:` type annotation AND has NO `=` initializer
+/// before the next `,` or `;` (per TS1263: definite-assignment
+/// assertions are illegal with initializers).
+///
+/// Handles both the simple shape `let foo: T;` and the multi-
+/// declarator shape `let a: A = v, b: B, c: C = v;` — each declarator
+/// is checked independently.
+fn try_process_let_statement(
+    bytes: &[u8],
+    i: usize,
+    target_names: &[SmolStr],
+) -> Option<(usize, Vec<usize>)> {
+    // Match the `let ` keyword at this position — not part of a larger
+    // identifier (`alphalet` shouldn't trigger) and followed by whitespace.
     if i + 3 > bytes.len() || &bytes[i..i + 3] != b"let" {
         return None;
     }
@@ -2457,56 +2480,107 @@ fn try_match_let_decl(bytes: &[u8], i: usize, target_names: &[SmolStr]) -> Optio
     if after_let >= bytes.len() || !is_ascii_ws(bytes[after_let]) {
         return None;
     }
+
+    // Walk the declarator list. Each iteration consumes one `NAME:
+    // type [= init]` declarator and advances past the trailing `,` or
+    // stops at the `;`. Depth tracking keeps `,` inside type args
+    // (`Map<K, V>`), object types (`{ k: V }`), and call-signature
+    // parens from splitting declarators incorrectly.
+    let mut insertions: Vec<usize> = Vec::new();
     let mut p = after_let;
-    while p < bytes.len() && is_ascii_ws(bytes[p]) {
-        p += 1;
-    }
-    let name_start = p;
-    while p < bytes.len() && is_ident_byte(bytes[p]) {
-        p += 1;
-    }
-    let name_end = p;
-    if name_end == name_start {
-        return None;
-    }
-    let name = &bytes[name_start..name_end];
-    if !target_names.iter().any(|t| t.as_bytes() == name) {
-        return None;
-    }
-    let mut q = name_end;
-    while q < bytes.len() && is_ascii_ws(bytes[q]) {
-        q += 1;
-    }
-    if q >= bytes.len() || bytes[q] != b':' {
-        return None;
-    }
-    // Walk forward through the type annotation looking for `=` (= initializer)
-    // before `;` or newline. Tracks `<>{}[]()` depth so generic args like
-    // `Foo<T = U>` and object types like `{ k: V }` don't trigger false hits.
-    // Skips `=>` (arrow function types) and `==`/`===` (equality operators
-    // in conditional types) — none of those start an initializer.
-    let mut s = q + 1;
-    let mut paren_depth: i32 = 0;
-    while s < bytes.len() {
-        let c = bytes[s];
-        match c {
-            b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
-            b')' | b']' | b'}' | b'>' => paren_depth -= 1,
-            b'=' if paren_depth == 0 => {
-                let next = bytes.get(s + 1).copied();
-                // `=>` arrow, `==`/`===` equality — not initializers.
-                if next != Some(b'>') && next != Some(b'=') {
-                    return None;
-                }
-                // Skip the second `=` so a later `=>` doesn't re-trigger.
-                s += 1;
-            }
-            b';' | b'\n' if paren_depth == 0 => break,
-            _ => {}
+    loop {
+        // Skip whitespace before the binding identifier.
+        while p < bytes.len() && is_ascii_ws(bytes[p]) {
+            p += 1;
         }
-        s += 1;
+        // Only handle the simple-identifier binding shape; `let { a }`
+        // and `let [ a ]` destructuring are covered by other passes and
+        // aren't target-name candidates here anyway.
+        if p >= bytes.len() || !(bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] == b'$') {
+            return None;
+        }
+        let name_start = p;
+        while p < bytes.len() && is_ident_byte(bytes[p]) {
+            p += 1;
+        }
+        let name_end = p;
+        let name = &bytes[name_start..name_end];
+
+        // Phase 1: advance past name, looking for `:` type-annotation
+        // start. Whitespace INCLUDING newlines is allowed before `:`
+        // (multi-line `let foo\n  : string` is legal TS, if rare).
+        let mut s = name_end;
+        while s < bytes.len() && is_ascii_ws(bytes[s]) {
+            s += 1;
+        }
+        let has_type_annotation = s < bytes.len() && bytes[s] == b':';
+        if has_type_annotation {
+            s += 1;
+        }
+
+        // Phase 2: scan the declarator body for initializer detection
+        // and declarator/statement terminator. In this phase, NEWLINE
+        // at depth 0 terminates the declarator per JS ASI semantics —
+        // otherwise `let name1: T = v\n  let name2: T;` would be read
+        // as a single declarator and the second `let` swallowed.
+        //
+        // Space/tab whitespace is meaningful only insofar as it
+        // doesn't disrupt the char-by-char scan.
+        let mut has_initializer = false;
+        let mut paren_depth: i32 = 0;
+        while s < bytes.len() {
+            let c = bytes[s];
+            match c {
+                b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
+                b')' | b']' | b'}' | b'>' => paren_depth -= 1,
+                b'=' if paren_depth == 0 => {
+                    let next = bytes.get(s + 1).copied();
+                    // `=>` arrow, `==`/`===` equality — not initializers.
+                    if next != Some(b'>') && next != Some(b'=') {
+                        has_initializer = true;
+                    }
+                    if next == Some(b'=') {
+                        s += 1;
+                    }
+                }
+                b',' | b';' | b'\n' if paren_depth == 0 => break,
+                _ => {}
+            }
+            s += 1;
+        }
+
+        // Qualify the declarator for `!` insertion: name is a target,
+        // has a `:` annotation, and no initializer in THIS declarator.
+        if has_type_annotation
+            && !has_initializer
+            && target_names.iter().any(|t| t.as_bytes() == name)
+        {
+            insertions.push(name_end);
+        }
+
+        // Advance past trailing `,` (another declarator follows) or
+        // break on `;` / newline / EOF. Newline is a valid terminator
+        // per JS ASI — `let foo: string\nnextStatement();` ends at
+        // the newline even without an explicit `;`.
+        if s >= bytes.len() {
+            return Some((s, insertions));
+        }
+        match bytes[s] {
+            b',' => {
+                p = s + 1;
+                continue;
+            }
+            b';' => {
+                return Some((s + 1, insertions));
+            }
+            b'\n' => {
+                return Some((s, insertions));
+            }
+            _ => {
+                return Some((s, insertions));
+            }
+        }
     }
-    Some(name_end)
 }
 
 #[inline]
@@ -2538,6 +2612,107 @@ mod tests {
     use std::path::PathBuf;
     use svn_analyze::walk_template;
     use svn_parser::{parse_all_template_runs, parse_sections};
+
+    fn def_assign(src: &str, targets: &[&str]) -> String {
+        let mut out = String::from(src);
+        let targets: Vec<SmolStr> = targets.iter().map(|s| SmolStr::from(*s)).collect();
+        rewrite_definite_assignment_in_place(&mut out, &targets);
+        out
+    }
+
+    #[test]
+    fn def_assign_single_declarator() {
+        let got = def_assign("let foo: string;", &["foo"]);
+        assert_eq!(got, "let foo!: string;");
+    }
+
+    #[test]
+    fn def_assign_skips_declaration_with_initializer() {
+        // Has `=` before `;` → TS1263 forbids `!`, so leave alone.
+        let got = def_assign("let foo: string = 'hi';", &["foo"]);
+        assert_eq!(got, "let foo: string = 'hi';");
+    }
+
+    #[test]
+    fn def_assign_skips_untyped_declaration() {
+        // No `:`, no type annotation → no assertion site.
+        let got = def_assign("let foo;", &["foo"]);
+        assert_eq!(got, "let foo;");
+    }
+
+    #[test]
+    fn def_assign_skips_non_target_name() {
+        let got = def_assign("let other: string;", &["foo"]);
+        assert_eq!(got, "let other: string;");
+    }
+
+    #[test]
+    fn def_assign_multi_declarator_mixed_init() {
+        // Core regression: second declarator is uninitialized-typed.
+        let got = def_assign(
+            "let name3: string = '', name4: string;",
+            &["name3", "name4"],
+        );
+        assert_eq!(got, "let name3: string = '', name4!: string;");
+    }
+
+    #[test]
+    fn def_assign_multi_declarator_all_need_assertion() {
+        let got = def_assign("let a: string, b: number, c: boolean;", &["a", "b", "c"]);
+        assert_eq!(got, "let a!: string, b!: number, c!: boolean;");
+    }
+
+    #[test]
+    fn def_assign_multi_declarator_only_targets_assert() {
+        let got = def_assign(
+            "let a: string, b: number, c: boolean;",
+            &["a", "c"],
+        );
+        assert_eq!(got, "let a!: string, b: number, c!: boolean;");
+    }
+
+    #[test]
+    fn def_assign_inside_generic_types_not_tripped_by_angle_brackets() {
+        // `<T = U>` is a default-type-param, not a let-initializer.
+        let got = def_assign("let foo: Map<string, number>;", &["foo"]);
+        assert_eq!(got, "let foo!: Map<string, number>;");
+    }
+
+    #[test]
+    fn def_assign_inside_function_type_not_tripped_by_arrow() {
+        let got = def_assign("let foo: () => void;", &["foo"]);
+        assert_eq!(got, "let foo!: () => void;");
+    }
+
+    #[test]
+    fn def_assign_real_emit_shape() {
+        // The exact body shape our emit produces for ts-export-list-runes.v5.
+        // ASI-terminated name1 initializer must not swallow name2 through.
+        let src = "    let name1: string = \"world\"\n    let name2: string;\n    let name3: string = '', name4: string;\n";
+        let got = def_assign(src, &["name1", "name2", "name3", "name4"]);
+        // name1 has init → no !. name2, name4 typed-no-init → ! each.
+        assert!(
+            got.contains("let name2!: string;"),
+            "name2 should get !, got: {got:?}"
+        );
+        assert!(
+            got.contains("name4!: string;"),
+            "name4 should get !, got: {got:?}"
+        );
+        assert!(
+            got.contains("let name1: string = \"world\""),
+            "name1 unchanged (has init): {got:?}"
+        );
+    }
+
+    #[test]
+    fn def_assign_preserves_surrounding_content() {
+        let got = def_assign(
+            "before();\nlet name: string;\nafter();\n",
+            &["name"],
+        );
+        assert_eq!(got, "before();\nlet name!: string;\nafter();\n");
+    }
 
     fn emit_str(src: &str) -> String {
         emit_str_with_path(src, "/test/Anonymous.svelte")

@@ -57,10 +57,6 @@
             "max_errors": 1,
             "reason": "`<script module>export const foo = _foo</script>` with `_foo` declared as a snippet in the template. Upstream visibility-merges snippets into module scope via its hoist pipeline; we don't. Deferred."
         },
-        "ts-export-list-runes.v5": {
-            "max_errors": 1,
-            "reason": "`let name3: string = '', name4: string; export { name4 }` — multi-declarator variable statement where the second declarator is uninitialized. Our definite-assignment rewrite only matches the first declarator of each `let` statement; `name4` keeps the strict-null check and fires TS2454. Fix would extend the rewrite pass to walk comma-separated declarators; tracked as a regression."
-        },
         "ts-runes-hoistable-props-false-2.v5": {
             "max_errors": 2,
             "reason": "`interface Props { [index: typeof a]: boolean }` — index-signature key whose type is `typeof a` (a const). TS1268 per spec: index signature parameters must be `string | number | symbol | template literal`. User-code error preserved verbatim."

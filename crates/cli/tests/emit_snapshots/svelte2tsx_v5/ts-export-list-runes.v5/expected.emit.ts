@@ -4,7 +4,7 @@ async function $$render_677076f2() {
 
     let name1: string = "world"
     let name2!: string;
-    let name3: string = '', name4: string;
+    let name3: string = '', name4!: string;
 
     let rename1: string = '';
     let rename2!: string;

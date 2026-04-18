@@ -427,6 +427,18 @@ pub fn split_imports(
             break;
         }
     }
+    // Props-annotation override: if the user's `$props()` annotation
+    // names a hoistable type (`let { … }: Foo = $props()` →
+    // `props_type_root = "Foo"`), that type MUST hoist so consumers
+    // see it at module scope for typed contextual flow. Even when its
+    // body references a body-scoped type via `typeof`, the
+    // declare-const stub path in the body covers the reference —
+    // slightly lossy on literal-union precision, but far better than
+    // leaving Props invisible to the default-export declaration.
+    if let Some(root) = props_type_root {
+        let root_key = SmolStr::from(root);
+        must_stay_body.remove(&root_key);
+    }
     let mut hoisted_type_names: HashSet<SmolStr> = HashSet::new();
     for (start, end, name) in pending_type_spans {
         if !must_stay_body.contains(&name) {
@@ -744,45 +756,6 @@ fn keyof_typeof_targets(text: &str) -> Vec<SmolStr> {
                             continue;
                         }
                     }
-                }
-            }
-        }
-        i += 1;
-    }
-    out
-}
-
-/// Byte-scan a JS/TS source slice for `typeof IDENT` targets — the
-/// names the text queries via TypeScript's `typeof` type operator.
-/// Returns each IDENT, skipping whitespace between `typeof` and the
-/// following identifier. Callers intersect with a known body-name set,
-/// so the scan's occasional false positives (property keys that happen
-/// to spell `typeof` inside a string literal, which shouldn't occur in
-/// normal source) don't cause real problems.
-fn typeof_targets(text: &str) -> Vec<SmolStr> {
-    let bytes = text.as_bytes();
-    let mut out: Vec<SmolStr> = Vec::new();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i..].starts_with(b"typeof") {
-            let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
-            let after_idx = i + b"typeof".len();
-            let after_ok = after_idx < bytes.len() && !is_ident_byte(bytes[after_idx]);
-            if before_ok && after_ok {
-                let mut j = after_idx;
-                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                    j += 1;
-                }
-                if j < bytes.len()
-                    && (bytes[j].is_ascii_alphabetic() || bytes[j] == b'_' || bytes[j] == b'$')
-                {
-                    let start = j;
-                    while j < bytes.len() && is_ident_byte(bytes[j]) {
-                        j += 1;
-                    }
-                    out.push(SmolStr::from(&text[start..j]));
-                    i = j;
-                    continue;
                 }
             }
         }

@@ -3,10 +3,13 @@
 async function $$render_677076f2() {
 
     let name1: string = "world"
+name1 = undefined as any;
     let name2!: string;
     let name3: string = '', name4!: string;
+name3 = undefined as any;
 
     let rename1: string = '';
+rename1 = undefined as any;
     let rename2!: string;
 
     class Foo {}

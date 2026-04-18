@@ -549,6 +549,19 @@ fn emit_document_with_render_name(
         widen_untyped_exported_props_in_place(&mut out, &s.exported_locals);
     }
     rewrite_definite_assignment_in_place(&mut out, &def_assign_names);
+    // SVELTE-4-COMPAT: de-narrow typed exported props with literal
+    // initializers. `export let size: Size = 'medium'` in Svelte 4
+    // says "default to 'medium' when consumer omits" — at runtime
+    // `size` can be any value of type Size. But TS's control-flow
+    // analysis narrows the declared symbol to the literal `'medium'`
+    // after `let size: Size = 'medium';`, so later `size === 'large'`
+    // fires TS2367 "no overlap". Inserting `size = undefined as any;`
+    // immediately after the declaration de-narrows via the
+    // `any`-cast: TS widens the flow-tracked type back to the
+    // declared annotation (Size), and subsequent comparisons work.
+    if let Some(s) = &split {
+        denarrow_typed_exported_props_in_place(&mut out, &s.exported_locals);
+    }
 
     out.push_str("    async function __svn_tpl_check() {\n");
     out.push_str("        // template type-check body (incremental)\n");
@@ -2898,6 +2911,160 @@ fn has_double_dollar_interface(src: &str) -> bool {
     src.contains("interface $$Props")
         || src.contains("interface $$Events")
         || src.contains("interface $$Slots")
+}
+
+/// SVELTE-4-COMPAT: de-narrow a typed-with-initializer exported
+/// declaration. Scans `out` for `let NAME: T = EXPR;` where NAME is
+/// in `target_names`, then inserts `NAME = undefined as any;`
+/// immediately after the terminating `;`. The cast widens TS's
+/// flow-narrowed type back to the declared annotation, so later
+/// comparisons like `NAME === 'other-literal'` don't fire TS2367.
+///
+/// Declarations without a type annotation or without an initializer
+/// are skipped — those are already handled by the widen / definite-
+/// assign passes.
+fn denarrow_typed_exported_props_in_place(out: &mut String, target_names: &[SmolStr]) {
+    if target_names.is_empty() {
+        return;
+    }
+    let original = std::mem::take(out);
+    let bytes = original.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some((stmt_end, matched_names)) =
+            try_process_let_statement_for_denarrow(bytes, i, target_names)
+        {
+            // Emit the original statement verbatim (start..stmt_end)
+            // then append `NAME = undefined as any;\n` for each matched
+            // name. Keeps byte positions of the original unchanged —
+            // only appends.
+            out.push_str(&original[i..stmt_end]);
+            for name in &matched_names {
+                out.push_str("\n");
+                out.push_str(name);
+                out.push_str(" = undefined as any;");
+            }
+            i = stmt_end;
+        } else {
+            let ch_len = utf8_char_len(bytes[i]);
+            out.push_str(&original[i..i + ch_len]);
+            i += ch_len;
+        }
+    }
+}
+
+/// Declarator scanner matched to `try_process_let_statement_*` twins.
+/// Qualifies a declarator when: name IS a target AND has a `:` type
+/// annotation AND has an `=` initializer. Returns the matched names
+/// so the caller can append assignments after the statement.
+fn try_process_let_statement_for_denarrow(
+    bytes: &[u8],
+    i: usize,
+    target_names: &[SmolStr],
+) -> Option<(usize, Vec<SmolStr>)> {
+    if i + 3 > bytes.len() || &bytes[i..i + 3] != b"let" {
+        return None;
+    }
+    if i > 0 && is_ident_byte(bytes[i - 1]) {
+        return None;
+    }
+    let after_let = i + 3;
+    if after_let >= bytes.len() || !is_ascii_ws(bytes[after_let]) {
+        return None;
+    }
+
+    let mut matched: Vec<SmolStr> = Vec::new();
+    let mut p = after_let;
+    loop {
+        while p < bytes.len() && is_ascii_ws(bytes[p]) {
+            p += 1;
+        }
+        if p >= bytes.len() || !(bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] == b'$') {
+            return None;
+        }
+        let name_start = p;
+        while p < bytes.len() && is_ident_byte(bytes[p]) {
+            p += 1;
+        }
+        let name_end = p;
+        let name_bytes = &bytes[name_start..name_end];
+
+        let mut s = name_end;
+        while s < bytes.len() && is_ascii_ws(bytes[s]) {
+            s += 1;
+        }
+        // Definite-assign `!` follows the name before `:` in
+        // declarations already rewritten by the def-assign pass.
+        // Skip it so we still see the type annotation.
+        if s < bytes.len() && bytes[s] == b'!' {
+            s += 1;
+            while s < bytes.len() && is_ascii_ws(bytes[s]) {
+                s += 1;
+            }
+        }
+        let has_type_annotation = s < bytes.len() && bytes[s] == b':';
+        if has_type_annotation {
+            s += 1;
+        }
+
+        let mut has_initializer = false;
+        let mut paren_depth: i32 = 0;
+        while s < bytes.len() {
+            let c = bytes[s];
+            match c {
+                b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
+                b')' | b']' | b'}' => paren_depth -= 1,
+                b'>' => {
+                    let prev = if s > 0 { Some(bytes[s - 1]) } else { None };
+                    if prev != Some(b'=') {
+                        paren_depth -= 1;
+                    }
+                }
+                b'=' if paren_depth == 0 => {
+                    let next = bytes.get(s + 1).copied();
+                    match next {
+                        Some(b'>') => {
+                            s += 2;
+                            continue;
+                        }
+                        Some(b'=') => {
+                            s += 1;
+                        }
+                        _ => {
+                            has_initializer = true;
+                        }
+                    }
+                }
+                b',' | b';' | b'\n' if paren_depth == 0 => break,
+                _ => {}
+            }
+            s += 1;
+        }
+
+        if has_type_annotation
+            && has_initializer
+            && target_names
+                .iter()
+                .any(|t| t.as_bytes() == name_bytes)
+        {
+            if let Ok(name_str) = std::str::from_utf8(name_bytes) {
+                matched.push(SmolStr::from(name_str));
+            }
+        }
+
+        if s >= bytes.len() {
+            return Some((s, matched));
+        }
+        match bytes[s] {
+            b',' => {
+                p = s + 1;
+                continue;
+            }
+            b';' => return Some((s + 1, matched)),
+            b'\n' => return Some((s, matched)),
+            _ => return Some((s, matched)),
+        }
+    }
 }
 
 /// SVELTE-4-COMPAT: emit `let $$slots = …; let $$props = …; let

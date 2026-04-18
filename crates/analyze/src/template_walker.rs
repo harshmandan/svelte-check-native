@@ -409,13 +409,28 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
                 // remain silently dropped — the `Partial<>` wrap in
                 // emit accepts their absence, and they provide
                 // runtime values we can't model statically.
+                //
+                // Svelte-4 allowed multiple `on:event={…}` listeners
+                // on the same component — all fire. Rewriting each
+                // to a prop-keyed entry in the same object literal
+                // creates duplicate keys and fires TS1117. Drop an
+                // earlier entry with the same name so only the last
+                // survives; the emit still type-checks the handler,
+                // just only against the final listener.
                 if let Some(name) = crate::svelte4::on_directive::prop_name_for(d) {
                     if let Some(svn_parser::DirectiveValue::Expression {
                         expression_range, ..
                     }) = &d.value
                     {
+                        let target = smol_str::SmolStr::from(name);
+                        props.retain(|p| match p {
+                            PropShape::BoolShorthand { name }
+                            | PropShape::Literal { name, .. }
+                            | PropShape::Expression { name, .. }
+                            | PropShape::Shorthand { name } => name != &target,
+                        });
                         props.push(PropShape::Expression {
-                            name: smol_str::SmolStr::from(name),
+                            name: target,
                             expr_range: *expression_range,
                         });
                     }

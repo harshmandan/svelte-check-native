@@ -41,6 +41,7 @@
 //! precision loss is acceptable.
 
 use std::collections::HashSet;
+use std::fmt::Write;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
@@ -64,6 +65,7 @@ pub fn rewrite(content: &str, lang: ScriptLang) -> String {
     let declared_vars = collect_top_level_var_names(&parsed.program);
 
     let mut edits: Vec<Edit> = Vec::new();
+    let mut hoisted_names: Vec<SmolStr> = Vec::new();
     for stmt in &parsed.program.body {
         let Statement::LabeledStatement(labeled) = stmt else {
             continue;
@@ -71,7 +73,7 @@ pub fn rewrite(content: &str, lang: ScriptLang) -> String {
         if labeled.label.name.as_str() != "$" {
             continue;
         }
-        let edit = classify_and_rewrite(labeled, content, &declared_vars);
+        let edit = classify_and_rewrite(labeled, content, &declared_vars, &mut hoisted_names);
         edits.push(edit);
     }
 
@@ -86,6 +88,7 @@ pub fn rewrite(content: &str, lang: ScriptLang) -> String {
     for edit in edits {
         out.replace_range(edit.start..edit.end, &edit.replacement);
     }
+    let _ = hoisted_names;
     out
 }
 
@@ -101,10 +104,27 @@ struct Edit {
 fn collect_top_level_var_names(program: &oxc_ast::ast::Program<'_>) -> HashSet<SmolStr> {
     let mut out = HashSet::new();
     for stmt in &program.body {
-        if let Statement::VariableDeclaration(decl) = stmt {
-            for d in &decl.declarations {
-                collect_binding_names(d, &mut out);
+        match stmt {
+            Statement::VariableDeclaration(decl) => {
+                for d in &decl.declarations {
+                    collect_binding_names(d, &mut out);
+                }
             }
+            // `export let X = …` / `export const X = …` — Svelte 4
+            // prop declarations. Their `X` IS declared at module scope
+            // after our script_split strips the export keyword, so a
+            // subsequent `$: X = …` must be treated as re-assignment
+            // (drop the label) rather than a fresh declaration.
+            Statement::ExportNamedDeclaration(decl) => {
+                if let Some(oxc_ast::ast::Declaration::VariableDeclaration(vd)) =
+                    &decl.declaration
+                {
+                    for d in &vd.declarations {
+                        collect_binding_names(d, &mut out);
+                    }
+                }
+            }
+            _ => {}
         }
     }
     out
@@ -142,6 +162,7 @@ fn classify_and_rewrite(
     labeled: &LabeledStatement<'_>,
     content: &str,
     declared: &HashSet<SmolStr>,
+    hoisted_names: &mut Vec<SmolStr>,
 ) -> Edit {
     let full_start = labeled.span.start as usize;
     let full_end = labeled.span.end as usize;
@@ -176,11 +197,24 @@ fn classify_and_rewrite(
                         // Declaration: `$: NAME = EXPR` introduces a
                         // fresh binding typed by EXPR. Rewrite to a
                         // `$derived` call so tsgo sees the same type
-                        // flow without the label syntax.
+                        // flow without the label syntax. Append
+                        // `void NAME;` — the name may be referenced
+                        // only in the template (which emits as a
+                        // separate function), so without the void
+                        // TS fires TS6133 under `noUnusedLocals`.
+                        //
+                        // We deliberately do NOT hoist to the top
+                        // as `let NAME!: any;`: the `any` annotation
+                        // defeats TS's inference from `EXPR`, and
+                        // any `.map(x => …)` using NAME then gets
+                        // implicit-any. TS2454 "used before assigned"
+                        // on script lines above the `$:` position
+                        // is accepted as a narrow real-bug signal.
+                        let _ = hoisted_names;
                         return Edit {
                             start: full_start,
                             end: full_end,
-                            replacement: format!("let {name} = $derived({rhs});"),
+                            replacement: format!("let {name} = $derived({rhs}); void {name};"),
                         };
                     }
                 }
@@ -217,10 +251,21 @@ fn classify_and_rewrite(
                     } else {
                         lhs_trimmed
                     };
+                    // Emit `void NAME;` for each destructured name
+                    // so TS6133 doesn't fire when the name is used
+                    // only in the template (separate function scope
+                    // later in the emit). Hoisting to `let NAME!: any`
+                    // at the top is DELIBERATELY skipped — see the
+                    // matching branch for the simple-identifier case.
+                    let _ = hoisted_names;
+                    let voids: String = destructure_names
+                        .iter()
+                        .map(|n| format!(" void {n};"))
+                        .collect();
                     return Edit {
                         start: full_start,
                         end: full_end,
-                        replacement: format!("let {lhs_unwrap} = {rhs};"),
+                        replacement: format!("let {lhs_unwrap} = {rhs};{voids}"),
                     };
                 }
             }
@@ -321,13 +366,13 @@ mod tests {
     #[test]
     fn declaration_form_becomes_derived() {
         let src = "$: b = count * 2;";
-        assert_eq!(ts(src), "let b = $derived(count * 2);");
+        assert_eq!(ts(src), "let b = $derived(count * 2); void b;");
     }
 
     #[test]
     fn declaration_form_without_semicolon() {
         let src = "$: b = count * 2";
-        assert_eq!(ts(src), "let b = $derived(count * 2);");
+        assert_eq!(ts(src), "let b = $derived(count * 2); void b;");
     }
 
     #[test]
@@ -386,24 +431,26 @@ mod tests {
     #[test]
     fn destructure_object_auto_declares() {
         // `$: ({a, b} = obj)` becomes `let {a, b} = obj;` — Svelte 4
-        // auto-declares each destructured name at module scope.
+        // auto-declares each destructured name at module scope. Each
+        // name gets a trailing `void` so TS6133 doesn't fire when the
+        // name is only referenced in the template.
         let src = "$: ({ a, b } = question);";
         let got = ts(src);
-        assert_eq!(got, "let { a, b } = question;");
+        assert_eq!(got, "let { a, b } = question; void a; void b;");
     }
 
     #[test]
     fn destructure_with_renaming_auto_declares() {
         let src = "$: ({ a, b: renamed } = question);";
         let got = ts(src);
-        assert_eq!(got, "let { a, b: renamed } = question;");
+        assert_eq!(got, "let { a, b: renamed } = question; void a; void renamed;");
     }
 
     #[test]
     fn destructure_array_auto_declares() {
         let src = "$: ([x, y] = pair());";
         let got = ts(src);
-        assert_eq!(got, "let [x, y] = pair();");
+        assert_eq!(got, "let [x, y] = pair(); void x; void y;");
     }
 
     #[test]
@@ -447,8 +494,8 @@ mod tests {
     fn multiple_reactive_declarations() {
         let src = "$: a = 1;\n$: b = 2;";
         let got = ts(src);
-        assert!(got.contains("let a = $derived(1);"), "a derived: {got:?}");
-        assert!(got.contains("let b = $derived(2);"), "b derived: {got:?}");
+        assert!(got.contains("let a = $derived(1); void a;"), "a derived: {got:?}");
+        assert!(got.contains("let b = $derived(2); void b;"), "b derived: {got:?}");
     }
 
     #[test]
@@ -460,7 +507,7 @@ mod tests {
             got.contains("x = x + 1;") && !got.contains("$: x ="),
             "x reassignment: {got:?}",
         );
-        assert!(got.contains("let y = $derived(x * 2);"), "y derived: {got:?}");
+        assert!(got.contains("let y = $derived(x * 2); void y;"), "y derived: {got:?}");
     }
 
     #[test]
@@ -469,6 +516,6 @@ mod tests {
         let got = ts(src);
         assert!(got.contains("const a = 1;"), "a preserved: {got:?}");
         assert!(got.contains("const c = 3;"), "c preserved: {got:?}");
-        assert!(got.contains("let b = $derived(a * 2);"), "b derived: {got:?}");
+        assert!(got.contains("let b = $derived(a * 2); void b;"), "b derived: {got:?}");
     }
 }

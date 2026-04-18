@@ -164,10 +164,26 @@ declare type ConstructorOfATypedSvelteComponent = any;
 // function-to-function assignability check treats `(v: string) =>
 // void` as compatible with `(e: any) => any` via bivariance, so the
 // index-signature conflict doesn't fire.
-declare type __SvnSvelte4PropsWiden<P> = { [K in `on${string}`]?: (e: any) => any }
+declare type __SvnSvelte4PropsWiden<P> = {
+    [K in `on${string}`]?:
+        | ((...args: any[]) => any)
+        | boolean
+        | null
+        | undefined
+        | string
+        | number;
+}
     & ('slot' extends keyof P ? {} : { slot?: string })
     & ('class' extends keyof P ? {} : { class?: string })
-    & ('style' extends keyof P ? {} : { style?: string });
+    & ('style' extends keyof P ? {} : { style?: string })
+    & { [index: string]: any };
+
+// SVELTE-4-COMPAT: `$$Generic<T>` is Svelte 4's pre-Svelte-5-generics-attr
+// syntax for declaring a generic type parameter on a component — written
+// as `type T = $$Generic<any>`. The syntax has no Svelte 5 equivalent;
+// we alias to `any` so the reference resolves and the user's type usage
+// downstream type-checks (loosely).
+declare type $$Generic<T = any> = T;
 
 /** `$state<T>(initial?)` declares reactive state. Macro.
  *

@@ -2919,9 +2919,11 @@ fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document<'_>) {
     let src = doc.source;
     if src.contains("$$slots") {
         out.push_str("    let $$slots: Record<string, boolean | undefined> = {};\n");
+        out.push_str("    void $$slots;\n");
     }
     if src.contains("$$restProps") {
         out.push_str("    let $$restProps: Record<string, any> = {};\n");
+        out.push_str("    void $$restProps;\n");
     }
     // `$$props` detection has to avoid `$$restProps` — the word
     // boundary check: must not be preceded by `rest` (the only
@@ -2931,6 +2933,7 @@ fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document<'_>) {
         let is_rest = matches!(prev, Some(b"rest"));
         if !is_rest || src.matches("$$props").count() > src.matches("$$restProps").count() {
             out.push_str("    let $$props: Record<string, any> = {};\n");
+            out.push_str("    void $$props;\n");
         }
     }
 }

@@ -455,6 +455,16 @@ fn emit_document_with_render_name(
         let _ = writeln!(out, "    let {name}!: __SvnStoreValue<typeof {base}>;");
     }
 
+    // SVELTE-4-COMPAT: `$$slots`, `$$props`, `$$restProps` ambients.
+    // Only inject the declaration when the source actually references
+    // the name — keeps the overlay tight on Svelte-5-only codebases
+    // and avoids shadowing the user's own `$$slots` local if any.
+    // Detection is a substring check against the full document source
+    // (script + template). Ambiguity risk: a literal `$$slots` inside
+    // a string or comment would trigger the declaration, but that's
+    // harmless — the `let` just goes unused in the overlay.
+    emit_svelte4_ambients(&mut out, doc);
+
     if let Some(s) = &split {
         if let Some(instance) = &doc.instance_script {
             let overlay_line = current_line(&out);
@@ -2669,6 +2679,41 @@ fn try_process_let_statement(
 /// `: any` instead of `!`) differs. Multi-declarator `let a, b: T, c;`
 /// targets each declarator independently — `a` and `c` get widened,
 /// `b` keeps its explicit type.
+/// SVELTE-4-COMPAT: emit `let $$slots = …; let $$props = …; let
+/// $$restProps = …;` at the top of the render function when the source
+/// references them.
+///
+/// Substring detection is deliberately loose — we don't parse to see
+/// whether the occurrence is a real identifier vs. string content. A
+/// spurious injection is harmless (the declared local just goes
+/// unused), whereas a missed one fires TS2304 across every reference
+/// and cascades through the surrounding expression's typing.
+///
+/// Types: `Record<string, any>` for all three. Upstream's
+/// `__sveltets_2_slotsType({…slot names…})` is more precise (each
+/// slot is typed as `boolean | ''`), but that requires walking the
+/// template to collect slot names and emit a shape literal. We'll do
+/// that in Phase 2 if the loose ambient isn't sufficient.
+fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document<'_>) {
+    let src = doc.source;
+    if src.contains("$$slots") {
+        out.push_str("    let $$slots: Record<string, boolean | undefined> = {};\n");
+    }
+    if src.contains("$$restProps") {
+        out.push_str("    let $$restProps: Record<string, any> = {};\n");
+    }
+    // `$$props` detection has to avoid `$$restProps` — the word
+    // boundary check: must not be preceded by `rest` (the only
+    // Svelte-4 form where $$props appears as a suffix).
+    if let Some(idx) = src.find("$$props") {
+        let prev = src.as_bytes().get(idx.saturating_sub(4)..idx);
+        let is_rest = matches!(prev, Some(b"rest"));
+        if !is_rest || src.matches("$$props").count() > src.matches("$$restProps").count() {
+            out.push_str("    let $$props: Record<string, any> = {};\n");
+        }
+    }
+}
+
 fn widen_untyped_exported_props_in_place(out: &mut String, target_names: &[SmolStr]) {
     if target_names.is_empty() {
         return;

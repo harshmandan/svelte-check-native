@@ -1,4 +1,19 @@
+/// <reference lib="dom" />
+/// <reference lib="dom.iterable" />
+
 // Core Svelte type shims — always shipped into the project cache.
+//
+// The two reference directives above forcibly include the DOM lib
+// regardless of the user's `compilerOptions.lib` setting. Rationale:
+// Svelte components always run in a browser-like context (real DOM
+// or a minimal polyfill), and the emit references DOM types via
+// bind:this handlers, event handlers, `svelteHTML.createElement`
+// paths, etc. Projects that narrow `lib` to exotic values like
+// `["WebWorker"]` (seen in service-worker-only apps) would otherwise
+// lose access to HTMLElement/document/alert/etc. at type-check time,
+// firing TS2304 "Cannot find name" on every element binding. Upstream
+// svelte-check takes the same approach in svelte-jsx-v4.d.ts; mirror it.
+//
 //
 // Holds the Svelte 5 rune ambients ($state, $derived, $effect, $props,
 // $bindable, $inspect, $host) plus the helper types emit references
@@ -51,6 +66,63 @@ type __SvnStoreValue<S> =
  * pure type expression — no runtime cost.
  */
 declare function __svn_type_ref<T>(): T;
+
+// SVELTE-4-COMPAT: the `ConstructorOfATypedSvelteComponent` type is a
+// Svelte-4 typing convention from upstream svelte-check's shims. User
+// code in mid-migration codebases types props that hold component
+// constructors as `export let icon: ConstructorOfATypedSvelteComponent;`
+// — the prop receives the class-form component, which consumers
+// render via `<svelte:component this={icon} />`. Svelte 5 replaces the
+// pattern with `Component<Props>` typing, but until the migration is
+// complete we mirror upstream's declaration so tsgo resolves the name
+// at the use site rather than firing TS2304.
+//
+// The shape mirrors upstream verbatim — `$$prop_def`, `$$events_def`,
+// `$$slot_def` are compile-time-only fields that never exist at
+// runtime; they carry per-component Props / Events / Slots types for
+// the Svelte-4 class-form component world. Projects can inspect the
+// property types via `ComponentProps<typeof X>` / `ComponentEvents<…>`
+// etc. without pulling DOM / browser bindings.
+/**
+ * @internal This is for type checking capabilities only and does not
+ * exist at runtime. Don't use this property.
+ */
+declare type ATypedSvelteComponent = {
+    /** @internal */
+    $$prop_def: any;
+    /** @internal */
+    $$events_def: any;
+    /** @internal */
+    $$slot_def: any;
+    $set(props?: any): void;
+    $on(event: string, handler: ((e: any) => any) | null | undefined): () => void;
+    $destroy(): void;
+    $capture_state(): void;
+    $inject_state(): void;
+};
+
+/**
+ * Constructor type for Svelte-4-style class-form components. Users
+ * type props as `ConstructorOfATypedSvelteComponent` when the prop
+ * carries a `<Component />` to dynamically render.
+ *
+ * The strict Svelte-4 shape (`new (args: { target, props? }) =>
+ * ATypedSvelteComponent`) doesn't accept Svelte-5-compiled component
+ * imports (tabler-icons, lucide-svelte, phosphor-svelte, etc.)
+ * because those declare `Component<Props>` function types. Keeping
+ * the strict shape fires dozens of false-positive TS2322 assignment
+ * errors on any Svelte-4 codebase that imports a Svelte-5 icon
+ * library.
+ *
+ * Widening to a broad "any component constructor" shape matches
+ * upstream svelte-check's effective behavior (where the type only
+ * surfaces inside `__sveltets_2_ensureComponent`'s union, which
+ * accepts both forms). Users still get the name resolved at the use
+ * site; the more specific type check was a false-positive
+ * generator, not a real safety net — real type errors come from the
+ * component's own props declaration, not from this top-level holder.
+ */
+declare type ConstructorOfATypedSvelteComponent = any;
 
 /** `$state<T>(initial?)` declares reactive state. Macro.
  *

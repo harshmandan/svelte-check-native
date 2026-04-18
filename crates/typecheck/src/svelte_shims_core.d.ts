@@ -124,6 +124,43 @@ declare type ATypedSvelteComponent = {
  */
 declare type ConstructorOfATypedSvelteComponent = any;
 
+// SVELTE-4-COMPAT: additive props-type widening for Svelte-4 components.
+// A parent's `<Foo on:close={fn}>` is rewritten by our analyze pass to
+// `{onclose: fn}` on the child's props object; a parent's
+// `<Foo slot="x">` lands as `{slot: "x"}`. Neither key exists on Foo's
+// declared Props when Foo uses Svelte-4 `createEventDispatcher` or
+// upstream slot syntax. Intersecting `__SvnSvelte4PropsWiden<Props>`
+// into the Props type argument of a Svelte-4 component's default
+// export silences TS2353 on those keys without opening every
+// component to any-prop abuse (only files that trip
+// `is_svelte4_component` get the widen).
+//
+// `Omit<…, keyof P>` is load-bearing: WITHOUT it, a declared prop
+// `onChange: (v: string) => void` intersects with the widen's
+// `on${string}` signature `(e: CustomEvent<any>) => any`, collapsing
+// the union to `never` and rejecting every caller's handler. With
+// the Omit, already-declared on* keys pass through unchanged; the
+// widen only introduces BRAND-NEW keys (handlers for events the
+// component dispatches but doesn't declare as props, like Svelte-4
+// `createEventDispatcher` usage).
+//
+// Handler type is deliberately lax: `CustomEvent<any>` rather than
+// `CustomEvent<Detail>` for each specific event name — synthesising
+// the exact detail shape from `createEventDispatcher<…>()`
+// introspection is a later refinement.
+// The `any` value-type here is load-bearing: using a narrower type
+// (e.g. `(e: CustomEvent<any>) => any`) creates an index-signature
+// conflict with a declared `onChange: (v: string) => void` prop — TS
+// reports "Property onChange is incompatible with index signature"
+// even when combined via `Omit`. `any` sidesteps the conflict because
+// it's assignable to / from any function type. Downside: the handler
+// passed for an undeclared event name is typed `any` rather than
+// `(e: CustomEvent<any>) => any`, so `({detail}) => ...` gives
+// implicit-any on `detail`. The widen still silences TS2353 which is
+// the dominant bug class on Svelte-4 codebases.
+declare type __SvnSvelte4PropsWiden<P> = { [K in `on${string}`]?: any }
+    & ('slot' extends keyof P ? {} : { slot?: string });
+
 /** `$state<T>(initial?)` declares reactive state. Macro.
  *
  * Two overloads:

@@ -725,26 +725,48 @@ fn emit_document_with_render_name(
     // — which is what upstream's svelte2tsx surfaces under the same
     // name. Consumer code that writes `let x: MyComp` picks up the
     // instance shape, same as before the callable-shape refactor.
+    // SVELTE-4-COMPAT: detect whether this file uses Svelte-4
+    // conventions. Consumers of such files pass `on:event` directives
+    // (rewritten to `on<event>` prop keys by us) and `<Foo slot="x">`
+    // slot-name attrs, neither of which are declared in the component's
+    // actual Props type. Widening this component's exported Props with
+    // an `on${string}` index signature + an optional `slot` key keeps
+    // those consumer-side writes valid without opening the door on
+    // Svelte-5 codebases (where widening would mask real typos).
+    let svelte4_style = is_svelte4_component(doc, split.as_ref());
+    // Widen strings emit as ` & __SvnSvelte4PropsWiden<P>` where P is
+    // the base Props type so the shim can omit already-declared on*
+    // keys from the widening (otherwise typed callbacks intersect with
+    // the widen's lax signature and collapse to never).
+    let widen_for = |base: &str| -> String {
+        if svelte4_style {
+            format!(" & __SvnSvelte4PropsWiden<{base}>")
+        } else {
+            String::new()
+        }
+    };
     match (&prop_type_source, &generics) {
         (Some(ty), Some(g)) if ty_safe_in_generic_scope => {
+            let widen = widen_for(ty);
             let _ = writeln!(
                 out,
-                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{ty}>) => {};",
+                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{ty}{widen}>) => {};",
                 exports_object.as_deref().unwrap_or("any"),
             );
             let _ = writeln!(
                 out,
-                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<{ty}>{exports_clause};"
+                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<{ty}{widen}>{exports_clause};"
             );
         }
         (Some(ty), None) if ty_safe_in_module_scope => {
+            let widen = widen_for(ty);
             let _ = writeln!(
                 out,
-                "declare const __svn_component_default: import('svelte').Component<{ty}{component_exports_arg}>;"
+                "declare const __svn_component_default: import('svelte').Component<{ty}{widen}{component_exports_arg}>;"
             );
             let _ = writeln!(
                 out,
-                "declare type __svn_component_default = import('svelte').SvelteComponent<{ty}>{exports_clause};"
+                "declare type __svn_component_default = import('svelte').SvelteComponent<{ty}{widen}>{exports_clause};"
             );
         }
         (_, Some(g)) => {
@@ -754,24 +776,26 @@ fn emit_document_with_render_name(
             // would float `TData` unresolved at module scope if we took
             // the plain fallback. Wrap the whole declaration in the
             // generic scope so the references bind.
+            let widen = widen_for("Record<string, any>");
             let _ = writeln!(
                 out,
-                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<Record<string, any>>) => {};",
+                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<Record<string, any>{widen}>) => {};",
                 exports_object.as_deref().unwrap_or("any"),
             );
             let _ = writeln!(
                 out,
-                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<Record<string, any>>{exports_clause};"
+                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<Record<string, any>{widen}>{exports_clause};"
             );
         }
         _ => {
+            let widen = widen_for("Record<string, any>");
             let _ = writeln!(
                 out,
-                "declare const __svn_component_default: import('svelte').Component<Record<string, any>{component_exports_arg}>;"
+                "declare const __svn_component_default: import('svelte').Component<Record<string, any>{widen}{component_exports_arg}>;"
             );
             let _ = writeln!(
                 out,
-                "declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>{exports_clause};"
+                "declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>{widen}>{exports_clause};"
             );
         }
     }
@@ -2786,6 +2810,96 @@ fn try_process_let_statement(
 /// `: any` instead of `!`) differs. Multi-declarator `let a, b: T, c;`
 /// targets each declarator independently — `a` and `c` get widened,
 /// `b` keeps its explicit type.
+/// SVELTE-4-COMPAT: heuristic detector for components that use Svelte-4
+/// conventions, i.e. ones whose consumers are likely to pass `on:event`
+/// directives (rewritten to `on<event>` prop keys), `slot="x"` named-slot
+/// attrs, and similar Svelte-4-specific surface our Svelte-5 emit doesn't
+/// model as declared props. Signals, any of which trips detection:
+///
+/// 1. Any `export let` declaration — strongest signal; Svelte 5 uses
+///    `$props()` and `export { … }` instead.
+/// 2. Any `<slot>` element in the template — Svelte 5 uses snippets.
+/// 3. `createEventDispatcher` imported or called — Svelte 5 uses prop
+///    callbacks instead of the dispatcher.
+/// 4. `$$Props` / `$$Events` / `$$Slots` interface declared — explicit
+///    Svelte-4 typing convention.
+/// 5. `$$slots` / `$$props` / `$$restProps` ambients referenced.
+///
+/// False positives (a genuinely Svelte-5 file containing one of those
+/// substrings in a comment) just add a widen clause that's structurally
+/// a no-op against well-formed Svelte-5 consumer code. The reverse is
+/// costlier — a missed Svelte-4 file surfaces hundreds of TS2353
+/// "property does not exist" errors on every consumer.
+fn is_svelte4_component(
+    doc: &svn_parser::Document<'_>,
+    split: Option<&script_split::SplitScript>,
+) -> bool {
+    // Signal 1: export let
+    let instance_src = doc.instance_script.as_ref().map(|s| s.content).unwrap_or("");
+    let module_src = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
+    if contains_export_let(instance_src) || contains_export_let(module_src) {
+        return true;
+    }
+    // Signal 2: <slot> element — substring check on the whole source
+    // (the template doesn't live in a separate string, but the source
+    // as a whole is fine; `<slot` will only appear in template or a
+    // comment).
+    if doc.source.contains("<slot") {
+        return true;
+    }
+    // Signal 3: createEventDispatcher
+    if instance_src.contains("createEventDispatcher") || module_src.contains("createEventDispatcher")
+    {
+        return true;
+    }
+    // Signal 4: $$Props / $$Events / $$Slots interface
+    if has_double_dollar_interface(instance_src) || has_double_dollar_interface(module_src) {
+        return true;
+    }
+    // Signal 5: $$slots / $$props / $$restProps referenced
+    if doc.source.contains("$$slots")
+        || doc.source.contains("$$restProps")
+        || doc.source.contains("$$props")
+    {
+        return true;
+    }
+    // Signal (synthetic): `exported_locals` from split — catches
+    // `export function` / `export const` used as component methods on
+    // Svelte-4 class form.
+    if let Some(s) = split {
+        if !s.exported_locals.is_empty() {
+            return true;
+        }
+    }
+    false
+}
+
+fn contains_export_let(src: &str) -> bool {
+    // Loose: we want `export let` at word boundaries. Using substring is
+    // too permissive (e.g. `/* export let X */` in a comment), but
+    // comments would only false-positive, not false-negative — safe.
+    let mut rest = src;
+    while let Some(idx) = rest.find("export") {
+        let after = &rest[idx + 6..];
+        if let Some(non_ws) = after.find(|c: char| !c.is_whitespace()) {
+            if after[non_ws..].starts_with("let") {
+                let next = after[non_ws + 3..].chars().next();
+                if matches!(next, Some(c) if c.is_whitespace() || c == '/') {
+                    return true;
+                }
+            }
+        }
+        rest = &rest[idx + 6..];
+    }
+    false
+}
+
+fn has_double_dollar_interface(src: &str) -> bool {
+    src.contains("interface $$Props")
+        || src.contains("interface $$Events")
+        || src.contains("interface $$Slots")
+}
+
 /// SVELTE-4-COMPAT: emit `let $$slots = …; let $$props = …; let
 /// $$restProps = …;` at the top of the render function when the source
 /// references them.

@@ -15,19 +15,25 @@
 //! what users would write in Svelte 5 and avoids pulling in an
 //! upstream-only helper. Type-level semantics are identical.
 //!
-//! Why the block-statement wrapper `{ $: … };` instead of an arrow?
-//! The arrow form `(() => { $: … });` was rejected after it produced
-//! TS1005 parse errors whenever the preceding line ended with `)`
-//! (the `(…) → (…)` looked like a call-chain continuation, no ASI).
-//! A single stray TS1005 anywhere in the overlay suppressed tsgo's
-//! type-checking for every other file in the program — the overlay
-//! pass effectively stopped reporting semantic errors.
+//! Why the arrow wrapper `;() => { $: … };` (and the leading `;`)?
 //!
-//! A plain block statement `{ $: … };` avoids both traps: it can't be
-//! parsed as a call target, and the trailing `;` prevents any ASI-ish
-//! continuation with whatever follows. TypeScript still type-checks
-//! the body (the `$` label is just a no-op wrapper), so the diagnostic
-//! surface is identical.
+//! A naive block wrapper (`{ $: … };`) runs at top-level execution
+//! time in TypeScript's control-flow analysis. References inside
+//! the block to reactive-declared names later in the script fire
+//! TS2454 / TS2448 "used before being assigned / used before its
+//! declaration" — TS follows the sequential order of statements.
+//! An arrow body, by contrast, is NEVER invoked at type-check time,
+//! so TDZ analysis doesn't apply to its contents. Upstream
+//! svelte2tsx uses the same arrow trick in
+//! `ImplicitTopLevelNames.handleReactiveStatement`.
+//!
+//! The leading `;` defeats an ASI hazard that initially pushed us
+//! toward the block wrap: without the semi, a preceding line ending
+//! in `)` — think `get(`k`).then((v) => {})` — followed by
+//! `() => { $: set(…) }` parses as `…then(…)(() => {…})`, the
+//! arrow getting consumed as an argument to the prior call. The
+//! leading `;` forces the prior statement to terminate before the
+//! arrow begins.
 //!
 //! Scope of rewrites: **only top-level `$:` statements** in the instance
 //! script body. Labels inside nested functions, classes, or blocks are
@@ -56,8 +62,22 @@ use svn_parser::{ScriptLang, parse_script_body};
 /// `$:` literal substring at all (the common case on pure Svelte 5
 /// components), returns `content.to_string()` without a parse.
 pub fn rewrite(content: &str, lang: ScriptLang) -> String {
+    rewrite_with_touched_names(content, lang).0
+}
+
+/// Like `rewrite`, but ALSO returns the set of identifier names that
+/// the rewrite TOUCHED on the LHS of a reactive-destructure or a
+/// reactive-reassignment to an already-declared name. Callers can
+/// feed these names to the downstream definite-assign pass so the
+/// pre-existing `let X: T;` declarations (Svelte-4's bare-typed prop
+/// pattern) get a `!` — the reactive assignment counts as "assigned"
+/// at runtime, but from TS's perspective the declaration is an
+/// uninitialized let + later branch assignment hidden inside an
+/// uncalled arrow body. Without the `!`, references elsewhere in
+/// the script fire TS2454 "used before being assigned".
+pub fn rewrite_with_touched_names(content: &str, lang: ScriptLang) -> (String, Vec<SmolStr>) {
     if !content.contains("$:") {
-        return content.to_string();
+        return (content.to_string(), Vec::new());
     }
     let alloc = Allocator::default();
     let parsed = parse_script_body(&alloc, content, lang);
@@ -66,6 +86,7 @@ pub fn rewrite(content: &str, lang: ScriptLang) -> String {
 
     let mut edits: Vec<Edit> = Vec::new();
     let mut hoisted_names: Vec<SmolStr> = Vec::new();
+    let mut touched_names: Vec<SmolStr> = Vec::new();
     for stmt in &parsed.program.body {
         let Statement::LabeledStatement(labeled) = stmt else {
             continue;
@@ -73,12 +94,13 @@ pub fn rewrite(content: &str, lang: ScriptLang) -> String {
         if labeled.label.name.as_str() != "$" {
             continue;
         }
+        collect_touched_names_for_statement(labeled, &declared_vars, &mut touched_names);
         let edit = classify_and_rewrite(labeled, content, &declared_vars, &mut hoisted_names);
         edits.push(edit);
     }
 
     if edits.is_empty() {
-        return content.to_string();
+        return (content.to_string(), touched_names);
     }
 
     // Apply edits in reverse byte order so earlier positions don't
@@ -89,7 +111,51 @@ pub fn rewrite(content: &str, lang: ScriptLang) -> String {
         out.replace_range(edit.start..edit.end, &edit.replacement);
     }
     let _ = hoisted_names;
-    out
+    (out, touched_names)
+}
+
+/// Walk a single `$:` labeled statement; if the LHS identifies (or
+/// destructures) ALREADY-declared names, those names need a `!`
+/// assertion on their original declaration — the reactive assignment
+/// is hidden inside an arrow body and TS's flow analysis can't see
+/// it. Names NOT already declared aren't added here (they get a
+/// fresh `let NAME = $derived(…)` at the same position).
+fn collect_touched_names_for_statement(
+    labeled: &LabeledStatement<'_>,
+    declared: &HashSet<SmolStr>,
+    out: &mut Vec<SmolStr>,
+) {
+    let Statement::ExpressionStatement(expr_stmt) = &labeled.body else {
+        return;
+    };
+    let inner_expr = match &expr_stmt.expression {
+        Expression::ParenthesizedExpression(p) => &p.expression,
+        other => other,
+    };
+    let Expression::AssignmentExpression(assign) = inner_expr else {
+        return;
+    };
+    if !matches!(assign.operator, oxc_ast::ast::AssignmentOperator::Assign) {
+        return;
+    }
+    // Case A: simple identifier LHS, already declared → re-assignment.
+    if let oxc_ast::ast::AssignmentTarget::AssignmentTargetIdentifier(id) = &assign.left {
+        let name = SmolStr::from(id.name.as_str());
+        if declared.contains(&name) && !out.iter().any(|n| n == &name) {
+            out.push(name);
+        }
+        return;
+    }
+    // Case B: destructure LHS — every destructured name counts (the
+    // names might be pre-declared via bare `let X: T;` or freshly
+    // introduced. For pre-declared ones we need the `!`; for fresh
+    // ones the rewriter itself emits `let {…} = expr` which already
+    // initialises, so the `!` is harmless in either case).
+    for name in collect_destructure_names(&assign.left) {
+        if declared.contains(&name) && !out.iter().any(|n| n == &name) {
+            out.push(name);
+        }
+    }
 }
 
 struct Edit {
@@ -282,16 +348,30 @@ fn classify_and_rewrite(
     }
 
     // Case 2: anything else — block, expression statement without
-    // `IDENT = expr`, etc. Wrap in `{ $: ORIGINAL };` (plain block
-    // statement). The `$` label is harmless; TS type-checks the body.
-    // Block form is picked over an arrow wrap to keep the opening `{`
-    // unambiguous as a statement — otherwise a preceding line ending
-    // in `)` splices into a call chain (see module docstring).
+    // `IDENT = expr`, etc. Wrap in `;() => { $: ORIGINAL };` — the
+    // arrow form matches upstream svelte2tsx's emit (see its
+    // ImplicitTopLevelNames.handleReactiveStatement). Two key
+    // properties:
+    //
+    // - The arrow body is NEVER invoked at runtime, so TypeScript's
+    //   control-flow analysis doesn't apply TDZ checks to its
+    //   contents. A `$: if (…actuallySubmitted…)` that references a
+    //   reactive-declared name later in the script resolves cleanly
+    //   because `actuallySubmitted` only has to exist in the
+    //   enclosing scope, not be ASSIGNED before the arrow runs. A
+    //   block wrap (`{ $: … }`) would run at top-level execution
+    //   time and fire TS2454.
+    //
+    // - Leading `;` defeats the ASI trap — a preceding line ending
+    //   in `)` (like `get(…).then((v) => {})`) would otherwise
+    //   splice with the arrow into a call chain
+    //   `…then(…)(() => {…})`. The semicolon forces the prior
+    //   statement to terminate.
     let original = &content[full_start..full_end];
     Edit {
         start: full_start,
         end: full_end,
-        replacement: format!("{{ {original} }};"),
+        replacement: format!(";() => {{ {original} }};"),
     }
 }
 
@@ -400,40 +480,36 @@ mod tests {
     }
 
     #[test]
-    fn expression_statement_wrapped_in_block() {
+    fn expression_statement_wrapped_in_arrow() {
         let src = "$: console.log(count);";
         let got = ts(src);
         assert!(
-            got.starts_with("{ $: console.log(count); };"),
+            got.starts_with(";() => { $: console.log(count); };"),
             "expression statement wrapped: {got:?}",
         );
     }
 
     #[test]
-    fn block_wrapped_in_block() {
+    fn block_wrapped_in_arrow() {
         let src = "$: { a = b; c = d; }";
         let got = ts(src);
         assert!(
-            got.starts_with("{ $: { a = b; c = d; } };"),
+            got.starts_with(";() => { $: { a = b; c = d; } };"),
             "block wrapped: {got:?}",
         );
     }
 
     #[test]
     fn wrap_survives_call_chain_preceding_line() {
-        // Regression: a preceding `get(…).then(…)` followed by an
-        // arrow wrap `() => { $: … }` parses as `…then(…)(() => {…})`
-        // because there's no ASI before `(`. Block form `{ … };`
-        // can't continue a call chain, so it's safe.
+        // A preceding `get(…).then(…)` followed by `() => { $: … }`
+        // parses as `…then(…)(() => {…})` when no semi intervenes —
+        // the arrow gets consumed as a call argument. Leading `;`
+        // on the wrap forces the prior statement to terminate.
         let src = "get(`k`).then((v) => {})\n$: set(`k`, v)";
         let got = ts(src);
         assert!(
-            !got.contains("() =>"),
-            "block wrap, no arrow: {got:?}",
-        );
-        assert!(
-            got.contains("{ $: set(`k`, v) };"),
-            "block-wrapped reactive: {got:?}",
+            got.contains(";() => { $: set(`k`, v) };"),
+            "arrow wrap with leading semi: {got:?}",
         );
     }
 
@@ -471,8 +547,8 @@ mod tests {
         let got = ts(src);
         assert!(got.contains("let a = 0;"), "prior decl preserved: {got:?}");
         assert!(
-            got.contains("{ $: ({ a, b } = question); };"),
-            "block wrap fallback: {got:?}"
+            got.contains(";() => { $: ({ a, b } = question); };"),
+            "arrow wrap fallback: {got:?}"
         );
     }
 

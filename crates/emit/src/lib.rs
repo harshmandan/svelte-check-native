@@ -177,8 +177,11 @@ fn emit_document_with_render_name(
     //   - `$: count++`     → `count++;`                (re-assignment, label dropped)
     //   - `$: console.log` → `() => { $: console.log };` (expr/block wrap)
     // See crates/emit/src/svelte4/reactive.rs.
+    let mut reactive_touched_names: Vec<SmolStr> = Vec::new();
     let rewritten_content: Option<String> = doc.instance_script.as_ref().map(|s| {
-        let after_reactive = svelte4::reactive::rewrite(s.content, s.lang);
+        let (after_reactive, touched) =
+            svelte4::reactive::rewrite_with_touched_names(s.content, s.lang);
+        reactive_touched_names = touched;
         // Rewrite `let X: Type = $state(null | undefined)` to
         // `$state<Type>(null | undefined)` so the single-T `$state`
         // shim overload picks `T` from the explicit generic (sourced
@@ -541,6 +544,18 @@ fn emit_document_with_render_name(
         let base = SmolStr::from(name.strip_prefix('$').unwrap_or(name));
         if !def_assign_names.iter().any(|n| n == &base) {
             def_assign_names.push(base);
+        }
+    }
+    // SVELTE-4-COMPAT: names touched by reactive destructure or
+    // reactive re-assignment (`$: ({a, b} = expr)` or `$: a = expr`
+    // where `a` is already declared) also need `!`. The reactive
+    // rewrite wraps block/expr-form `$:` in `;() => { … };` — an
+    // uncalled arrow — so TS's flow analysis doesn't see the
+    // assignment inside. A pre-existing `let a: T;` without
+    // initializer then fires TS2454 on every read of `a`.
+    for name in &reactive_touched_names {
+        if !def_assign_names.iter().any(|n| n == name) {
+            def_assign_names.push(name.clone());
         }
     }
     // Widen Svelte-4-style untyped uninitialized exported props to `any`.

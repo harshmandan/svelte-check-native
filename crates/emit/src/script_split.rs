@@ -427,18 +427,17 @@ pub fn split_imports(
             break;
         }
     }
-    // Props-annotation override: if the user's `$props()` annotation
-    // names a hoistable type (`let { … }: Foo = $props()` →
-    // `props_type_root = "Foo"`), that type MUST hoist so consumers
-    // see it at module scope for typed contextual flow. Even when its
-    // body references a body-scoped type via `typeof`, the
-    // declare-const stub path in the body covers the reference —
-    // slightly lossy on literal-union precision, but far better than
-    // leaving Props invisible to the default-export declaration.
-    if let Some(root) = props_type_root {
-        let root_key = SmolStr::from(root);
-        must_stay_body.remove(&root_key);
-    }
+    // NOTE: `props_type_root` is intentionally NOT used here. An
+    // earlier iteration force-hoisted the user's Props type even
+    // when its body referenced body-scoped locals via `keyof typeof
+    // X` — the declare-const stub at module scope widens
+    // `keyof typeof X` to `string | number`, which then fires
+    // TS7053 downstream on real-world components that index the
+    // stubbed type. Leaving Props body-scoped when it transitively
+    // references body locals keeps the precision correct; consumers
+    // get a less-specific default-export declaration but no
+    // false-positive index-signature errors.
+    let _ = props_type_root;
     let mut hoisted_type_names: HashSet<SmolStr> = HashSet::new();
     for (start, end, name) in pending_type_spans {
         if !must_stay_body.contains(&name) {

@@ -165,7 +165,9 @@ declare type ConstructorOfATypedSvelteComponent = any;
 // void` as compatible with `(e: any) => any` via bivariance, so the
 // index-signature conflict doesn't fire.
 declare type __SvnSvelte4PropsWiden<P> = { [K in `on${string}`]?: (e: any) => any }
-    & ('slot' extends keyof P ? {} : { slot?: string });
+    & ('slot' extends keyof P ? {} : { slot?: string })
+    & ('class' extends keyof P ? {} : { class?: string })
+    & ('style' extends keyof P ? {} : { style?: string });
 
 /** `$state<T>(initial?)` declares reactive state. Macro.
  *

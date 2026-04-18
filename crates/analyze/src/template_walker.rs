@@ -354,6 +354,18 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
     for attr in &c.attributes {
         match attr {
             Attribute::Plain(p) => {
+                // SVELTE-4-COMPAT: `slot="x"` on a component is a
+                // POSITIONAL marker for the Svelte compiler (places
+                // the child into a named slot of its parent), not a
+                // prop of the child itself. Emitting it as a prop
+                // fires TS2353 on every Svelte-5 child that doesn't
+                // declare a `slot` prop. Skip entirely — the
+                // Svelte-4 widen on the ENCLOSING parent already
+                // handles the case where `slot` *is* explicitly
+                // passed as a prop name.
+                if p.name.as_str() == "slot" {
+                    continue;
+                }
                 let Some(v) = &p.value else {
                     props.push(PropShape::BoolShorthand {
                         name: p.name.clone(),

@@ -359,6 +359,18 @@ fn emit_document_with_render_name(
             }
 
             collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
+            // Also collect bindings from the rewritten content —
+            // reactive-destructure statements (`$: ({a, b} = expr)`)
+            // become `let {a, b} = expr;` after the reactive rewrite
+            // runs and introduce module-scope names that the original
+            // script didn't have. Without this, later template-side
+            // store-alias detection (`$a` → `a` in script_bindings)
+            // misses these names and fires TS2304.
+            if let Some(rewritten) = &rewritten_content {
+                let alloc_rw = Allocator::default();
+                let parsed_rw = parse_script_body(&alloc_rw, rewritten, instance.lang);
+                collect_top_level_bindings(&parsed_rw.program, &mut script_bindings);
+            }
             (props, ty)
         } else {
             (Vec::new(), None)

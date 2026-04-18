@@ -375,7 +375,20 @@ declare function __svn_ensure_component(
  * Excess-property checks (typo'd prop names) and contextual-typing
  * flow (callback destructures, snippet params) are preserved.
  */
-type __SvnPropsPartial<P> = { [K in keyof P]?: P[K] | null };
+type __SvnPropsPartial<P> = { [K in keyof P]?: P[K] | null }
+    // SVELTE-4-COMPAT: accept any `on${string}` key not declared by
+    // P. Svelte-4 consumers use `on:event={handler}` directives on
+    // Svelte-5 children that don't declare the matching `on<event>`
+    // prop — our analyze pass rewrites the directive to a prop key,
+    // and without this union Tsgo fires TS2353 and TS7031
+    // (implicit-any on `{detail}` destructure). The handler value
+    // type is the permissive union matching `__SvnSvelte4PropsWiden`
+    // (arrow, primitives, nullish) so the widen's contextual typing
+    // works for both declared and ad-hoc listeners.
+    & Partial<Record<
+        `on${string}`,
+        ((...args: any[]) => any) | boolean | null | undefined | string | number
+    >>;
 
 /**
  * Assert that a `bind:this` target's declared type accepts the element

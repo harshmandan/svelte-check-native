@@ -148,17 +148,23 @@ declare type ConstructorOfATypedSvelteComponent = any;
 // `CustomEvent<Detail>` for each specific event name — synthesising
 // the exact detail shape from `createEventDispatcher<…>()`
 // introspection is a later refinement.
-// The `any` value-type here is load-bearing: using a narrower type
-// (e.g. `(e: CustomEvent<any>) => any`) creates an index-signature
-// conflict with a declared `onChange: (v: string) => void` prop — TS
-// reports "Property onChange is incompatible with index signature"
-// even when combined via `Omit`. `any` sidesteps the conflict because
-// it's assignable to / from any function type. Downside: the handler
-// passed for an undeclared event name is typed `any` rather than
-// `(e: CustomEvent<any>) => any`, so `({detail}) => ...` gives
-// implicit-any on `detail`. The widen still silences TS2353 which is
-// the dominant bug class on Svelte-4 codebases.
-declare type __SvnSvelte4PropsWiden<P> = { [K in `on${string}`]?: any }
+// The handler signature `(e: any) => any` is load-bearing. Narrower
+// signatures like `(e: CustomEvent<any>) => any` create an
+// index-signature conflict with declared props like
+// `onChange: (v: string) => void` — TS reports "Property onChange
+// is incompatible with index signature" even when combined via
+// `Omit`. Wider values (`any`) avoid the conflict but cause TS7031
+// "binding element implicitly has an 'any' type" on destructures
+// like `({detail}) => …` because destructuring a raw `any`
+// parameter fires implicit-any in strict mode.
+//
+// `(e: any) => any` threads the needle: the parameter is
+// explicitly-`any`-typed, so `({detail})` destructuring
+// contextually types `detail: any` (not implicit). And the
+// function-to-function assignability check treats `(v: string) =>
+// void` as compatible with `(e: any) => any` via bivariance, so the
+// index-signature conflict doesn't fire.
+declare type __SvnSvelte4PropsWiden<P> = { [K in `on${string}`]?: (e: any) => any }
     & ('slot' extends keyof P ? {} : { slot?: string });
 
 /** `$state<T>(initial?)` declares reactive state. Macro.

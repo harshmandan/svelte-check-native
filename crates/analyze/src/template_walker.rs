@@ -385,10 +385,34 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
                     name: s.name.clone(),
                 });
             }
-            // Spread / directive — silently dropped. The Partial<> wrap
-            // in emit means we don't need to model the props they would
+            Attribute::Directive(d) => {
+                // SVELTE-4-COMPAT: `on:event={handler}` on a component
+                // is semantically identical to Svelte 5's `onevent={
+                // handler}` at the type level. Rename the directive to
+                // a regular prop so the component's Props (which
+                // declares `oncustom: EventHandler<…>` in Svelte 5
+                // shape) actually type-checks the handler against it.
+                //
+                // Other directives (`bind:`, `use:`, `class:`, etc.)
+                // remain silently dropped — the `Partial<>` wrap in
+                // emit accepts their absence, and they provide
+                // runtime values we can't model statically.
+                if let Some(name) = crate::svelte4::on_directive::prop_name_for(d) {
+                    if let Some(svn_parser::DirectiveValue::Expression {
+                        expression_range, ..
+                    }) = &d.value
+                    {
+                        props.push(PropShape::Expression {
+                            name: smol_str::SmolStr::from(name),
+                            expr_range: *expression_range,
+                        });
+                    }
+                }
+            }
+            // Spread — silently dropped. The Partial<> wrap in emit
+            // means we don't need to model the props it would
             // contribute; we only check what the user wrote explicitly.
-            Attribute::Spread(_) | Attribute::Directive(_) => {}
+            Attribute::Spread(_) => {}
         }
     }
     summary

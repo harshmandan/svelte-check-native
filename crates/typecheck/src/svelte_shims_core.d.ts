@@ -185,6 +185,27 @@ declare type __SvnSvelte4PropsWiden<P> = {
 // downstream type-checks (loosely).
 declare type $$Generic<T = any> = T;
 
+// SVELTE-4-COMPAT: `__svn_invalidate(() => expr)` wraps the RHS of a
+// reactive declaration (`$: NAME = expr`) in a lazy thunk. The
+// purpose is purely type-checking: the thunk body is NEVER invoked,
+// so TS's control-flow analysis treats any identifier references
+// inside as lazy. That matters when `expr` references a `const`
+// function declared LATER in the script — e.g.:
+//
+//     $: foo = helper(x)
+//     const helper = (x: X) => …
+//
+// Without the wrap, TS fires TS2448 "used before its declaration"
+// on `helper` because `$: foo = …` becomes `let foo = helper(x)`
+// at source position, and the `const helper` at a later position
+// triggers TDZ. With the wrap (`let foo = __svn_invalidate(() =>
+// helper(x))`), the reference is inside an uncalled arrow; TDZ
+// analysis doesn't apply, and the return type still flows out as
+// the inferred `T` of the thunk.
+//
+// Mirrors upstream svelte2tsx's `__sveltets_2_invalidate` helper.
+declare function __svn_invalidate<T>(fn: () => T): T;
+
 /** `$state<T>(initial?)` declares reactive state. Macro.
  *
  * Two overloads:

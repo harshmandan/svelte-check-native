@@ -270,26 +270,29 @@ fn classify_and_rewrite(
                         };
                     } else {
                         // Declaration: `$: NAME = EXPR` introduces a
-                        // fresh binding typed by EXPR. Rewrite to a
-                        // `$derived` call so tsgo sees the same type
-                        // flow without the label syntax. Append
-                        // `void NAME;` — the name may be referenced
-                        // only in the template (which emits as a
-                        // separate function), so without the void
-                        // TS fires TS6133 under `noUnusedLocals`.
+                        // fresh binding. Rewrite to
+                        // `let NAME = __svn_invalidate(() => EXPR)`.
                         //
-                        // We deliberately do NOT hoist to the top
-                        // as `let NAME!: any;`: the `any` annotation
-                        // defeats TS's inference from `EXPR`, and
-                        // any `.map(x => …)` using NAME then gets
-                        // implicit-any. TS2454 "used before assigned"
-                        // on script lines above the `$:` position
-                        // is accepted as a narrow real-bug signal.
+                        // Why `__svn_invalidate(() => EXPR)` instead
+                        // of `$derived(EXPR)`? The thunk wrap makes
+                        // TS's flow analysis lazy: any identifier
+                        // inside EXPR that's declared LATER in the
+                        // script (e.g. a const-arrow helper) doesn't
+                        // fire TS2448 "used before its declaration".
+                        // The return type still flows out as the
+                        // inferred `T` of the thunk, so template-
+                        // side type-checking against NAME is
+                        // unchanged. Mirrors upstream svelte2tsx's
+                        // `__sveltets_2_invalidate` helper. `void
+                        // NAME;` suppresses TS6133 when NAME is only
+                        // used in the template.
                         let _ = hoisted_names;
                         return Edit {
                             start: full_start,
                             end: full_end,
-                            replacement: format!("let {name} = $derived({rhs}); void {name};"),
+                            replacement: format!(
+                                "let {name} = __svn_invalidate(() => ({rhs})); void {name};"
+                            ),
                         };
                     }
                 }
@@ -340,7 +343,9 @@ fn classify_and_rewrite(
                     return Edit {
                         start: full_start,
                         end: full_end,
-                        replacement: format!("let {lhs_unwrap} = {rhs};{voids}"),
+                        replacement: format!(
+                            "let {lhs_unwrap} = __svn_invalidate(() => ({rhs}));{voids}"
+                        ),
                     };
                 }
             }
@@ -453,15 +458,21 @@ mod tests {
     }
 
     #[test]
-    fn declaration_form_becomes_derived() {
+    fn declaration_form_becomes_invalidate() {
         let src = "$: b = count * 2;";
-        assert_eq!(ts(src), "let b = $derived(count * 2); void b;");
+        assert_eq!(
+            ts(src),
+            "let b = __svn_invalidate(() => (count * 2)); void b;"
+        );
     }
 
     #[test]
     fn declaration_form_without_semicolon() {
         let src = "$: b = count * 2";
-        assert_eq!(ts(src), "let b = $derived(count * 2); void b;");
+        assert_eq!(
+            ts(src),
+            "let b = __svn_invalidate(() => (count * 2)); void b;"
+        );
     }
 
     #[test]
@@ -515,27 +526,37 @@ mod tests {
 
     #[test]
     fn destructure_object_auto_declares() {
-        // `$: ({a, b} = obj)` becomes `let {a, b} = obj;` — Svelte 4
-        // auto-declares each destructured name at module scope. Each
-        // name gets a trailing `void` so TS6133 doesn't fire when the
-        // name is only referenced in the template.
+        // `$: ({a, b} = obj)` becomes `let {a, b} = __svn_invalidate(
+        // () => obj);` — Svelte 4 auto-declares each destructured name
+        // at module scope. The invalidate wrap defers flow analysis of
+        // the RHS so forward references to later-declared consts don't
+        // fire TS2448.
         let src = "$: ({ a, b } = question);";
         let got = ts(src);
-        assert_eq!(got, "let { a, b } = question; void a; void b;");
+        assert_eq!(
+            got,
+            "let { a, b } = __svn_invalidate(() => (question)); void a; void b;"
+        );
     }
 
     #[test]
     fn destructure_with_renaming_auto_declares() {
         let src = "$: ({ a, b: renamed } = question);";
         let got = ts(src);
-        assert_eq!(got, "let { a, b: renamed } = question; void a; void renamed;");
+        assert_eq!(
+            got,
+            "let { a, b: renamed } = __svn_invalidate(() => (question)); void a; void renamed;"
+        );
     }
 
     #[test]
     fn destructure_array_auto_declares() {
         let src = "$: ([x, y] = pair());";
         let got = ts(src);
-        assert_eq!(got, "let [x, y] = pair(); void x; void y;");
+        assert_eq!(
+            got,
+            "let [x, y] = __svn_invalidate(() => (pair())); void x; void y;"
+        );
     }
 
     #[test]
@@ -579,8 +600,8 @@ mod tests {
     fn multiple_reactive_declarations() {
         let src = "$: a = 1;\n$: b = 2;";
         let got = ts(src);
-        assert!(got.contains("let a = $derived(1); void a;"), "a derived: {got:?}");
-        assert!(got.contains("let b = $derived(2); void b;"), "b derived: {got:?}");
+        assert!(got.contains("let a = __svn_invalidate(() => (1)); void a;"), "a invalidate: {got:?}");
+        assert!(got.contains("let b = __svn_invalidate(() => (2)); void b;"), "b invalidate: {got:?}");
     }
 
     #[test]
@@ -592,7 +613,10 @@ mod tests {
             got.contains("x = x + 1;") && !got.contains("$: x ="),
             "x reassignment: {got:?}",
         );
-        assert!(got.contains("let y = $derived(x * 2); void y;"), "y derived: {got:?}");
+        assert!(
+            got.contains("let y = __svn_invalidate(() => (x * 2)); void y;"),
+            "y invalidate: {got:?}"
+        );
     }
 
     #[test]
@@ -601,6 +625,9 @@ mod tests {
         let got = ts(src);
         assert!(got.contains("const a = 1;"), "a preserved: {got:?}");
         assert!(got.contains("const c = 3;"), "c preserved: {got:?}");
-        assert!(got.contains("let b = $derived(a * 2); void b;"), "b derived: {got:?}");
+        assert!(
+            got.contains("let b = __svn_invalidate(() => (a * 2)); void b;"),
+            "b invalidate: {got:?}"
+        );
     }
 }

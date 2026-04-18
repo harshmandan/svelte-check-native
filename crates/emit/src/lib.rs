@@ -48,6 +48,9 @@
 
 mod script_split;
 mod state_nullish_rewrite;
+// SVELTE-4-COMPAT: droppable submodule for Svelte-4 emit rewrites.
+// See design/phase_g/DESIGN.md.
+mod svelte4;
 mod sveltekit;
 
 use std::fmt::Write;
@@ -167,20 +170,29 @@ fn emit_document_with_render_name(
             .and_then(|t| root_type_name(t.trim()))
     });
 
-    // Rewrite `let X: Type = $state(null | undefined)` to
-    // `$state<Type>(null | undefined)` so the single-T `$state` shim
-    // overload picks `T` from the explicit generic (sourced from the
-    // annotation) rather than collapsing to `null` from the argument.
-    // See `state_nullish_rewrite` for the full reasoning — this pass
-    // is the reason we can keep `$state` as a single-T overload: the
-    // literal-type overloads we'd otherwise need for the bind:this
-    // pattern collide with TypeScript's overload resolution on
-    // `$state<Promise<T>>(new Promise(() => {}))`, where the explicit
-    // `<T>` no longer propagates as contextual type to the argument.
-    let rewritten_content: Option<String> = doc
-        .instance_script
-        .as_ref()
-        .map(|s| state_nullish_rewrite::rewrite(s.content, s.lang));
+    // SVELTE-4-COMPAT: rewrite `$: ...` reactive statements before
+    // the Svelte-5-shaped passes run, so downstream code sees the
+    // Svelte-5 equivalents:
+    //   - `$: b = expr`    → `let b = $derived(expr)` (declaration)
+    //   - `$: count++`     → `count++;`                (re-assignment, label dropped)
+    //   - `$: console.log` → `() => { $: console.log };` (expr/block wrap)
+    // See crates/emit/src/svelte4/reactive.rs.
+    let rewritten_content: Option<String> = doc.instance_script.as_ref().map(|s| {
+        let after_reactive = svelte4::reactive::rewrite(s.content, s.lang);
+        // Rewrite `let X: Type = $state(null | undefined)` to
+        // `$state<Type>(null | undefined)` so the single-T `$state`
+        // shim overload picks `T` from the explicit generic (sourced
+        // from the annotation) rather than collapsing to `null` from
+        // the argument. See `state_nullish_rewrite` for the full
+        // reasoning — this pass is the reason we can keep `$state`
+        // as a single-T overload: the literal-type overloads we'd
+        // otherwise need for the bind:this pattern collide with
+        // TypeScript's overload resolution on
+        // `$state<Promise<T>>(new Promise(() => {}))`, where the
+        // explicit `<T>` no longer propagates as contextual type to
+        // the argument.
+        state_nullish_rewrite::rewrite(&after_reactive, s.lang)
+    });
 
     // Hoist imports out of the instance script. Required because the
     // instance body gets wrapped in `function $$render() { ... }` and ES

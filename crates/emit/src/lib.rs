@@ -2067,23 +2067,12 @@ fn emit_component_node(
         })
         .collect();
 
-    // Only emit the call when analyze collected an instantiation for
-    // this node. Components disqualified at analyze time (e.g.
-    // multi-part interpolated attribute values) fall back to a plain
-    // template-body walk so snippet hoists still emit there.
     let inst = insts.get(&c.range.start);
-    if let Some(inst) = inst {
-        emit_component_call(out, source, inst, depth, &snippet_children, insts);
-    }
-
-    if inst.is_none() || snippet_children.is_empty() {
-        // SVELTE-4-COMPAT: `<Foo let:item>…</Foo>` binds `item` for the
-        // subtree body. Route through the let-binding helper.
-        emit_children_with_let_bindings(out, source, &c.attributes, &c.children, depth, insts);
-        return;
-    }
-    // Snippet children consumed as props above — walk the rest,
-    // with let-bindings in scope if the component declared any.
+    // SVELTE-4-COMPAT: `<Foo let:item on:click={() => item.x}>` passes
+    // `item` inside the `onclick` prop expression. The slot-let
+    // binding must be in scope BEFORE emit_component_call runs, so
+    // open the block scope + declare let-bindings up front, then
+    // emit the call + children inside.
     let let_names = collect_let_directive_names(source, &c.attributes);
     let (indent, inner_depth) = if let_names.is_empty() {
         (String::new(), depth)
@@ -2097,6 +2086,26 @@ fn emit_component_node(
         }
         (indent, depth + 1)
     };
+
+    // Only emit the call when analyze collected an instantiation for
+    // this node. Components disqualified at analyze time (e.g.
+    // multi-part interpolated attribute values) fall back to a plain
+    // template-body walk so snippet hoists still emit there.
+    if let Some(inst) = inst {
+        emit_component_call(out, source, inst, inner_depth, &snippet_children, insts);
+    }
+
+    if inst.is_none() || snippet_children.is_empty() {
+        // Walk children at the same let-binding scope depth.
+        for node in &c.children.nodes {
+            emit_template_node(out, source, node, inner_depth, insts);
+        }
+        if !let_names.is_empty() {
+            let _ = writeln!(out, "{indent}}}");
+        }
+        return;
+    }
+    // Snippet children consumed as props above — walk the rest.
     for node in &c.children.nodes {
         if matches!(node, Node::SnippetBlock(_)) {
             continue;

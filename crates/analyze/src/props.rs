@@ -102,6 +102,19 @@ pub fn find_props_type_source(program: &oxc_ast::ast::Program<'_>, source: &str)
             }
         }
     }
+    // SVELTE-4-COMPAT: `interface $$Props { … }` at module scope is
+    // the pre-Svelte-5 convention for declaring component props. When
+    // no `$props()` call was found above, use `$$Props` as the Props
+    // type source. The interface declaration itself gets hoisted by
+    // script_split alongside other user interfaces, so module-scope
+    // consumers of the emitted `Component<$$Props>` can resolve it.
+    for stmt in &program.body {
+        if let Statement::TSInterfaceDeclaration(iface) = stmt {
+            if iface.id.name == "$$Props" {
+                return Some("$$Props".to_string());
+            }
+        }
+    }
     // Shape 3: Svelte 4 fallback. Walk top-level `export let` / `export
     // const` declarations and synthesize an inline object type. Only
     // runs when no `$props()` call was seen above.
@@ -580,6 +593,29 @@ mod tests {
     fn export_type_alias_does_not_contribute_props() {
         let src = "export type Foo = number;";
         assert_eq!(props_type(src), None);
+    }
+
+    #[test]
+    fn dollar_dollar_props_fallback_when_no_props_call() {
+        // Svelte-4 `interface $$Props { ... }` convention. With no
+        // `$props()` call, $$Props is the Props type source.
+        let src = "interface $$Props { foo: number }";
+        assert_eq!(props_type(src).as_deref(), Some("$$Props"));
+    }
+
+    #[test]
+    fn props_call_wins_over_dollar_dollar_props() {
+        // If both are present, the explicit `$props()` annotation wins.
+        let src = "interface $$Props { foo: number }\nlet { bar }: { bar: string } = $props();";
+        assert_eq!(props_type(src).as_deref(), Some("{ bar: string }"));
+    }
+
+    #[test]
+    fn export_let_wins_over_nothing_but_not_over_dollar_dollar_props() {
+        // $$Props wins over the export-let fallback (both are Svelte-4
+        // conventions, but $$Props is more explicit and newer).
+        let src = "interface $$Props { foo: number }\nexport let stray: number;";
+        assert_eq!(props_type(src).as_deref(), Some("$$Props"));
     }
 
     #[test]

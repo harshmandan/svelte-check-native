@@ -557,14 +557,7 @@ pub fn split_imports(
             // `Snippet<[{ fn: typeof fn }]>`). A plain `any` would
             // widen `keyof typeof X` to `string | number | symbol`
             // and trip TS1023 on user `X[stringKey]` subscripts.
-            // Third brand — `_output: any` — rescues `z.infer<typeof
-            // <name>>`, which resolves to `T['_output']`. Without the
-            // brand, DataType becomes `{}` and later `data.length`
-            // fires TS2339. Harmless on non-zod stubs; just an extra
-            // property nobody references.
-            hoisted.push_str(
-                ": { [key: string]: any } & ((...args: any[]) => any) & { _output: any };\n",
-            );
+            hoisted.push_str(": { [key: string]: any } & ((...args: any[]) => any);\n");
         }
     }
 

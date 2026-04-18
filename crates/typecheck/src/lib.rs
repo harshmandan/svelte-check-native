@@ -310,6 +310,7 @@ pub fn check(
         .into_iter()
         .filter(|d| !is_overlay_tsconfig_noise(d, &layout))
         .map(|d| map_diagnostic(d, &layout, &line_maps))
+        .filter(|d| !is_svelte4_reactive_noop_comma(d))
         .collect();
     Ok(CheckOutput {
         diagnostics,
@@ -385,6 +386,37 @@ fn is_overlay_tsconfig_noise(raw: &RawDiagnostic, layout: &CacheLayout) -> bool 
         }
     }
     false
+}
+
+/// SVELTE-4-COMPAT: suppress TS2695 "Left side of comma operator is
+/// unused and has no side effects" on `.svelte` files.
+///
+/// Svelte 4 projects routinely use the `void (a, b, c)` pattern inside
+/// `$: ...` blocks to tell the Svelte compiler "this reactive runs
+/// when a, b, or c changes" — a dependency-tracking idiom that's a
+/// noop at the value level but necessary for the reactive subscription
+/// graph. Tsgo's TS2695 fires on the left comma operands because they
+/// don't contribute a value. Upstream svelte-check filters these
+/// specifically in `expandRemainingNoopWarnings` of
+/// language-server/src/plugins/typescript/features/DiagnosticsProvider.ts,
+/// keeping only the warnings whose identifiers aren't `let`-declared
+/// reactives.
+///
+/// Our blanket filter (drop TS2695 for any `.svelte` source) is
+/// coarser than upstream's: a user writing `void (realBug, thing)`
+/// in a non-reactive context would no longer see the warning. The
+/// trade-off is acceptable here — TS2695 is an advisory lint, the
+/// Svelte-4 comma-list-in-reactives pattern is the dominant usage,
+/// and a precise filter would need an AST walk to identify `$:`
+/// enclosing scope. If the precise-filter version is needed later,
+/// see upstream's `isInReactiveStatement` helper for the pattern.
+fn is_svelte4_reactive_noop_comma(diag: &CheckDiagnostic) -> bool {
+    if !matches!(diag.code, DiagnosticCode::Numeric(2695)) {
+        return false;
+    }
+    diag.source_path
+        .extension()
+        .is_some_and(|ext| ext == "svelte")
 }
 
 fn map_diagnostic(

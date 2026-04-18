@@ -22,7 +22,7 @@ async function $$render_edb4eb12<T>() {
     void rect;
 }
 $$render_edb4eb12;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: <T>(__anchor: any, props: Partial<Record<string, any>>) => any;
+declare type __svn_component_default<T> = import('svelte').SvelteComponent<Record<string, any>>;
 export default __svn_component_default;
 

@@ -521,6 +521,23 @@ fn emit_document_with_render_name(
             def_assign_names.push(base);
         }
     }
+    // Widen Svelte-4-style untyped uninitialized exported props to `any`.
+    // `export let data;` → `let data: any;`. Without this, strict-mode
+    // TS infers the symbol's type as `undefined` and every template
+    // reference fires TS2339/TS18048; Svelte 4's actual semantics are
+    // that an un-annotated `export let X` is typed `any`. Only exported
+    // locals participate — body-local `let x;` keeps its `undefined`
+    // inference, because that IS the user's intent for internal state.
+    //
+    // Runs BEFORE definite-assign: widen inserts `: any` at the name
+    // position, and the downstream definite-assign pass looks for a
+    // `:` annotation to decide whether to add `!`. Running the passes
+    // in the other order means definite-assign inserts `!` first and
+    // hides the original `:` annotation from widen's scanner, which
+    // then wrongly widens typed declarations into `let foo: any!: T`.
+    if let Some(s) = &split {
+        widen_untyped_exported_props_in_place(&mut out, &s.exported_locals);
+    }
     rewrite_definite_assignment_in_place(&mut out, &def_assign_names);
 
     out.push_str("    async function __svn_tpl_check() {\n");
@@ -718,6 +735,23 @@ fn emit_document_with_render_name(
             let _ = writeln!(
                 out,
                 "declare type __svn_component_default = import('svelte').SvelteComponent<{ty}>{exports_clause};"
+            );
+        }
+        (_, Some(g)) => {
+            // Props type isn't safe at module scope (or not present), but
+            // the component declares generics. The exports_object still
+            // references the generics verbatim — so `{ data: TData[] }`
+            // would float `TData` unresolved at module scope if we took
+            // the plain fallback. Wrap the whole declaration in the
+            // generic scope so the references bind.
+            let _ = writeln!(
+                out,
+                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<Record<string, any>>) => {};",
+                exports_object.as_deref().unwrap_or("any"),
+            );
+            let _ = writeln!(
+                out,
+                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<Record<string, any>>{exports_clause};"
             );
         }
         _ => {
@@ -2618,6 +2652,152 @@ fn try_process_let_statement(
     }
 }
 
+/// Scan `out` for `let NAME;` / `let NAME\n` / `let NAME, …` declarations
+/// where NAME is in `target_names` AND the declarator has no type
+/// annotation AND no initializer. Insert `: any` directly after the
+/// binding identifier so strict-mode TS types the symbol as `any`
+/// instead of `undefined`.
+///
+/// The typical source is Svelte 4 `export let data;` — unwrapped by
+/// script_split into `let data;` in the body. In strict mode that's
+/// inferred as `undefined`, and every template reference
+/// (`{#if data}`, `<X data={data}>`) then fires "possibly undefined"
+/// despite Svelte-4's actual semantic being "untyped prop is `any`".
+///
+/// Uses the same declarator scanner as
+/// `rewrite_definite_assignment_in_place`; only the decision (insert
+/// `: any` instead of `!`) differs. Multi-declarator `let a, b: T, c;`
+/// targets each declarator independently — `a` and `c` get widened,
+/// `b` keeps its explicit type.
+fn widen_untyped_exported_props_in_place(out: &mut String, target_names: &[SmolStr]) {
+    if target_names.is_empty() {
+        return;
+    }
+    let original = std::mem::take(out);
+    let bytes = original.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some((stmt_end, insertions)) =
+            try_process_let_statement_for_widening(bytes, i, target_names)
+        {
+            let mut cursor = i;
+            for pos in &insertions {
+                out.push_str(&original[cursor..*pos]);
+                out.push_str(": any");
+                cursor = *pos;
+            }
+            out.push_str(&original[cursor..stmt_end]);
+            i = stmt_end;
+        } else {
+            let ch_len = utf8_char_len(bytes[i]);
+            out.push_str(&original[i..i + ch_len]);
+            i += ch_len;
+        }
+    }
+}
+
+/// Declarator scanner twin of `try_process_let_statement`. The
+/// traversal is byte-for-byte identical; only the qualification rule
+/// flips: widen when name IS a target AND has NO type AND NO
+/// initializer.
+fn try_process_let_statement_for_widening(
+    bytes: &[u8],
+    i: usize,
+    target_names: &[SmolStr],
+) -> Option<(usize, Vec<usize>)> {
+    if i + 3 > bytes.len() || &bytes[i..i + 3] != b"let" {
+        return None;
+    }
+    if i > 0 && is_ident_byte(bytes[i - 1]) {
+        return None;
+    }
+    let after_let = i + 3;
+    if after_let >= bytes.len() || !is_ascii_ws(bytes[after_let]) {
+        return None;
+    }
+
+    let mut insertions: Vec<usize> = Vec::new();
+    let mut p = after_let;
+    loop {
+        while p < bytes.len() && is_ascii_ws(bytes[p]) {
+            p += 1;
+        }
+        if p >= bytes.len() || !(bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] == b'$') {
+            return None;
+        }
+        let name_start = p;
+        while p < bytes.len() && is_ident_byte(bytes[p]) {
+            p += 1;
+        }
+        let name_end = p;
+        let name = &bytes[name_start..name_end];
+
+        let mut s = name_end;
+        while s < bytes.len() && is_ascii_ws(bytes[s]) {
+            s += 1;
+        }
+        let has_type_annotation = s < bytes.len() && bytes[s] == b':';
+        if has_type_annotation {
+            s += 1;
+        }
+
+        let mut has_initializer = false;
+        let mut paren_depth: i32 = 0;
+        while s < bytes.len() {
+            let c = bytes[s];
+            match c {
+                b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
+                b')' | b']' | b'}' => paren_depth -= 1,
+                b'>' => {
+                    let prev = if s > 0 { Some(bytes[s - 1]) } else { None };
+                    if prev != Some(b'=') {
+                        paren_depth -= 1;
+                    }
+                }
+                b'=' if paren_depth == 0 => {
+                    let next = bytes.get(s + 1).copied();
+                    match next {
+                        Some(b'>') => {
+                            s += 2;
+                            continue;
+                        }
+                        Some(b'=') => {
+                            s += 1;
+                        }
+                        _ => {
+                            has_initializer = true;
+                        }
+                    }
+                }
+                b',' | b';' | b'\n' if paren_depth == 0 => break,
+                _ => {}
+            }
+            s += 1;
+        }
+
+        // Widen only when: target name, NO type annotation, NO initializer.
+        if !has_type_annotation
+            && !has_initializer
+            && target_names.iter().any(|t| t.as_bytes() == name)
+        {
+            insertions.push(name_end);
+        }
+
+        if s >= bytes.len() {
+            return Some((s, insertions));
+        }
+        match bytes[s] {
+            b',' => {
+                p = s + 1;
+                continue;
+            }
+            b';' => return Some((s + 1, insertions)),
+            b'\n' => return Some((s, insertions)),
+            _ => return Some((s, insertions)),
+        }
+    }
+}
+
 #[inline]
 fn is_ascii_ws(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r')
@@ -2653,6 +2833,78 @@ mod tests {
         let targets: Vec<SmolStr> = targets.iter().map(|s| SmolStr::from(*s)).collect();
         rewrite_definite_assignment_in_place(&mut out, &targets);
         out
+    }
+
+    fn widen(src: &str, targets: &[&str]) -> String {
+        let mut out = String::from(src);
+        let targets: Vec<SmolStr> = targets.iter().map(|s| SmolStr::from(*s)).collect();
+        widen_untyped_exported_props_in_place(&mut out, &targets);
+        out
+    }
+
+    #[test]
+    fn widen_untyped_uninitialized_target() {
+        // Svelte-4 `export let data;` lands in body as `let data;` —
+        // untyped, uninitialized. Widen to `let data: any;` so strict
+        // mode treats it as `any` rather than `undefined`.
+        let got = widen("let data;", &["data"]);
+        assert_eq!(got, "let data: any;");
+    }
+
+    #[test]
+    fn widen_skips_typed_declaration() {
+        // Already has `: Type` — don't double up.
+        let got = widen("let foo: string;", &["foo"]);
+        assert_eq!(got, "let foo: string;");
+    }
+
+    #[test]
+    fn widen_skips_initialized_declaration() {
+        // Has `= init` — TS will infer a type.
+        let got = widen("let foo = 0;", &["foo"]);
+        assert_eq!(got, "let foo = 0;");
+    }
+
+    #[test]
+    fn widen_skips_untarget_name() {
+        // Name not in the widen list — body-local, user intent is
+        // undefined-inference. Leave alone.
+        let got = widen("let temp;", &["data"]);
+        assert_eq!(got, "let temp;");
+    }
+
+    #[test]
+    fn widen_multi_declarator_per_decl() {
+        // Three declarators, mixed shapes. Only the untyped-uninitialized
+        // exported ones get widened.
+        let got = widen(
+            "let a, b: string, c = 0, d;",
+            &["a", "b", "c", "d"],
+        );
+        assert_eq!(got, "let a: any, b: string, c = 0, d: any;");
+    }
+
+    #[test]
+    fn widen_then_def_assign_composes_cleanly() {
+        // Pipeline order: widen runs first, then definite-assign.
+        // `let data;` → `let data: any;` (widen) → `let data!: any;` (def_assign).
+        let mut out = String::from("let data;");
+        let targets: Vec<SmolStr> = vec![SmolStr::from("data")];
+        widen_untyped_exported_props_in_place(&mut out, &targets);
+        rewrite_definite_assignment_in_place(&mut out, &targets);
+        assert_eq!(out, "let data!: any;");
+    }
+
+    #[test]
+    fn widen_preserves_arrow_typed_prop() {
+        // Regression: naive scanner that hides the `:` annotation behind
+        // `!` would re-widen already-typed props. With widen running
+        // BEFORE def-assign, the typed declarator is left alone.
+        let got = widen(
+            "let onChange: (value: string) => void;",
+            &["onChange"],
+        );
+        assert_eq!(got, "let onChange: (value: string) => void;");
     }
 
     #[test]

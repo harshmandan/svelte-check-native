@@ -20,7 +20,7 @@ async function $$render_f45a6d7c<T extends { a: string }>() {
     void prop;
 }
 $$render_f45a6d7c;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: <T extends { a: string }>(__anchor: any, props: Partial<Record<string, any>>) => any;
+declare type __svn_component_default<T extends { a: string }> = import('svelte').SvelteComponent<Record<string, any>>;
 export default __svn_component_default;
 

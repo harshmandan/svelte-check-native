@@ -6,7 +6,7 @@ async function $$render_031ccee2() {
     let name2
 
     let rename1 = '';
-    let rename2;
+    let rename2!: any;
 
     class Foo {}
     function bar() {}

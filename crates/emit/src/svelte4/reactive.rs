@@ -149,7 +149,13 @@ fn classify_and_rewrite(
     // Case 1: body is `IDENT = expr` (as an expression statement).
     // Distinguish declaration (IDENT not yet declared) vs re-assignment.
     if let Statement::ExpressionStatement(expr_stmt) = &labeled.body {
-        if let Expression::AssignmentExpression(assign) = &expr_stmt.expression {
+        // Destructure LHS forms (`({a, b} = expr)`) parse as a
+        // ParenthesizedExpression wrapping the assignment.
+        let inner_expr = match &expr_stmt.expression {
+            Expression::ParenthesizedExpression(p) => &p.expression,
+            other => other,
+        };
+        if let Expression::AssignmentExpression(assign) = inner_expr {
             if matches!(assign.operator, oxc_ast::ast::AssignmentOperator::Assign) {
                 if let oxc_ast::ast::AssignmentTarget::AssignmentTargetIdentifier(id) =
                     &assign.left
@@ -178,6 +184,45 @@ fn classify_and_rewrite(
                         };
                     }
                 }
+                // Case 1b: destructuring LHS — `$: ({a, b} = expr)` or
+                // `$: ([a, b] = expr)`. Svelte 4 auto-declares each
+                // destructured name at module scope; without a
+                // rewrite, TS sees the names as undeclared and every
+                // template reference to `a` / `b` fires TS2304.
+                //
+                // Rewrite to `let { a, b } = expr;` (or `let [a, b]`)
+                // which declares AND initialises in one step. If any
+                // name is already declared elsewhere in the script,
+                // fall through to Case 2 (block wrap) — we can't
+                // safely emit a fresh `let` for already-bound names.
+                let destructure_names =
+                    collect_destructure_names(&assign.left);
+                if !destructure_names.is_empty()
+                    && destructure_names
+                        .iter()
+                        .all(|n| !declared.contains(n))
+                {
+                    let rhs_span = assign.right.span();
+                    let rhs = &content[rhs_span.start as usize..rhs_span.end as usize];
+                    let lhs_span = assign.left.span();
+                    let lhs = &content[lhs_span.start as usize..lhs_span.end as usize];
+                    // Strip an outer `(...)` wrap — the JS form
+                    // `({a, b} = expr)` parenthesises the object pattern
+                    // so it parses as an expression rather than a block
+                    // statement. TS's `let` declaration doesn't want
+                    // that outer parens.
+                    let lhs_trimmed = lhs.trim();
+                    let lhs_unwrap = if lhs_trimmed.starts_with('(') && lhs_trimmed.ends_with(')') {
+                        lhs_trimmed[1..lhs_trimmed.len() - 1].trim()
+                    } else {
+                        lhs_trimmed
+                    };
+                    return Edit {
+                        start: full_start,
+                        end: full_end,
+                        replacement: format!("let {lhs_unwrap} = {rhs};"),
+                    };
+                }
             }
         }
     }
@@ -193,6 +238,75 @@ fn classify_and_rewrite(
         start: full_start,
         end: full_end,
         replacement: format!("{{ {original} }};"),
+    }
+}
+
+/// Collect every identifier name introduced by a destructuring
+/// assignment-target pattern. Handles object patterns `{a, b: renamed}`,
+/// array patterns `[a, b]`, nested patterns, and rest elements.
+/// Returns the names in declaration order. Used only to decide whether
+/// a `$: ({...} = expr)` reactive statement can be safely rewritten to
+/// a `let {...} = expr;` declaration.
+fn collect_destructure_names(
+    target: &oxc_ast::ast::AssignmentTarget<'_>,
+) -> Vec<SmolStr> {
+    use oxc_ast::ast::{AssignmentTarget, AssignmentTargetProperty};
+    let mut out = Vec::new();
+    match target {
+        AssignmentTarget::ArrayAssignmentTarget(arr) => {
+            for elt in &arr.elements {
+                let Some(elt) = elt else { continue };
+                collect_from_maybe_default(elt, &mut out);
+            }
+            if let Some(rest) = &arr.rest {
+                if let AssignmentTarget::AssignmentTargetIdentifier(id) = &rest.target {
+                    out.push(SmolStr::from(id.name.as_str()));
+                }
+            }
+        }
+        AssignmentTarget::ObjectAssignmentTarget(obj) => {
+            for prop in &obj.properties {
+                match prop {
+                    AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(p) => {
+                        out.push(SmolStr::from(p.binding.name.as_str()));
+                    }
+                    AssignmentTargetProperty::AssignmentTargetPropertyProperty(p) => {
+                        collect_from_maybe_default(&p.binding, &mut out);
+                    }
+                }
+            }
+            if let Some(rest) = &obj.rest {
+                if let AssignmentTarget::AssignmentTargetIdentifier(id) = &rest.target {
+                    out.push(SmolStr::from(id.name.as_str()));
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+fn collect_from_maybe_default(
+    node: &oxc_ast::ast::AssignmentTargetMaybeDefault<'_>,
+    out: &mut Vec<SmolStr>,
+) {
+    use oxc_ast::ast::{AssignmentTarget, AssignmentTargetMaybeDefault};
+    let target = match node {
+        AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(d) => &d.binding,
+        _ => match node.as_assignment_target() {
+            Some(t) => t,
+            None => return,
+        },
+    };
+    match target {
+        AssignmentTarget::AssignmentTargetIdentifier(id) => {
+            out.push(SmolStr::from(id.name.as_str()));
+        }
+        AssignmentTarget::ArrayAssignmentTarget(_)
+        | AssignmentTarget::ObjectAssignmentTarget(_) => {
+            out.extend(collect_destructure_names(target));
+        }
+        _ => {}
     }
 }
 
@@ -266,6 +380,43 @@ mod tests {
         assert!(
             got.contains("{ $: set(`k`, v) };"),
             "block-wrapped reactive: {got:?}",
+        );
+    }
+
+    #[test]
+    fn destructure_object_auto_declares() {
+        // `$: ({a, b} = obj)` becomes `let {a, b} = obj;` — Svelte 4
+        // auto-declares each destructured name at module scope.
+        let src = "$: ({ a, b } = question);";
+        let got = ts(src);
+        assert_eq!(got, "let { a, b } = question;");
+    }
+
+    #[test]
+    fn destructure_with_renaming_auto_declares() {
+        let src = "$: ({ a, b: renamed } = question);";
+        let got = ts(src);
+        assert_eq!(got, "let { a, b: renamed } = question;");
+    }
+
+    #[test]
+    fn destructure_array_auto_declares() {
+        let src = "$: ([x, y] = pair());";
+        let got = ts(src);
+        assert_eq!(got, "let [x, y] = pair();");
+    }
+
+    #[test]
+    fn destructure_with_already_declared_name_falls_back_to_wrap() {
+        // If any destructured name is already a module-scope declaration,
+        // don't emit a fresh `let` (duplicate declaration). Fall back to
+        // block wrap, which preserves the assignment semantics.
+        let src = "let a = 0;\n$: ({ a, b } = question);";
+        let got = ts(src);
+        assert!(got.contains("let a = 0;"), "prior decl preserved: {got:?}");
+        assert!(
+            got.contains("{ $: ({ a, b } = question); };"),
+            "block wrap fallback: {got:?}"
         );
     }
 

@@ -1005,6 +1005,90 @@ fn emit_template_body(
     let _ = writeln!(out, "{indent}}}");
 }
 
+/// SVELTE-4-COMPAT: when a template element carries `let:name` or
+/// `let:name={alias}` directives, those names bind for the duration
+/// of the element's subtree. Upstream svelte2tsx destructures them
+/// from the child component's `$$slot_def` — a precise, typed
+/// binding. We emit a looser `let name: any;` block so the names
+/// resolve inside the subtree. Type precision is lost (the narrower
+/// flow-sensitive typing upstream does is the next iteration's
+/// job), but TS2304 goes away and any expression referencing the
+/// let-name type-checks as `any`.
+///
+/// If there are no `let:` directives, this is a straight passthrough
+/// to `emit_template_body`.
+fn emit_children_with_let_bindings(
+    out: &mut String,
+    source: &str,
+    attributes: &[svn_parser::Attribute],
+    children: &Fragment,
+    depth: usize,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+) {
+    let let_names = collect_let_directive_names(source, attributes);
+    if let_names.is_empty() {
+        emit_template_body(out, source, children, depth, insts);
+        return;
+    }
+    let indent = "    ".repeat(depth);
+    let inner = "    ".repeat(depth + 1);
+    let _ = writeln!(out, "{indent}{{");
+    for name in &let_names {
+        let _ = writeln!(out, "{inner}let {name}: any;");
+        let _ = writeln!(out, "{inner}void {name};");
+    }
+    for node in &children.nodes {
+        emit_template_node(out, source, node, depth + 1, insts);
+    }
+    let _ = writeln!(out, "{indent}}}");
+}
+
+/// Extract every binding name introduced by `let:X` directives on
+/// `attributes`. Handles both shorthand (`let:item` → "item") and
+/// aliased form (`let:item={i}` → "i"). Non-identifier destructure
+/// patterns (`let:item={{a, b}}`) aren't narrowed — we take the
+/// original directive name as the binding instead, which is a
+/// harmless no-op but avoids parse-ambiguity.
+fn collect_let_directive_names(
+    source: &str,
+    attributes: &[svn_parser::Attribute],
+) -> Vec<SmolStr> {
+    use svn_parser::{Attribute, Directive, DirectiveKind, DirectiveValue};
+    let mut out: Vec<SmolStr> = Vec::new();
+    for attr in attributes {
+        if let Attribute::Directive(Directive { kind: DirectiveKind::Let, name, value, .. }) = attr
+        {
+            let bound = match value {
+                Some(DirectiveValue::Expression { expression_range, .. }) => {
+                    let start = expression_range.start as usize;
+                    let end = expression_range.end as usize;
+                    let slice = source.get(start..end).unwrap_or("").trim();
+                    if is_simple_identifier(slice) {
+                        SmolStr::from(slice)
+                    } else {
+                        name.clone()
+                    }
+                }
+                _ => name.clone(),
+            };
+            if !out.iter().any(|n| n == &bound) {
+                out.push(bound);
+            }
+        }
+    }
+    out
+}
+
+#[inline]
+fn is_simple_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
 fn emit_template_node(
     out: &mut String,
     source: &str,
@@ -1095,9 +1179,13 @@ fn emit_template_node(
         }
         Node::KeyBlock(b) => emit_template_body(out, source, &b.body, depth, insts),
         Node::SnippetBlock(b) => emit_snippet_block(out, source, b, depth, insts),
-        Node::Element(e) => emit_template_body(out, source, &e.children, depth, insts),
+        Node::Element(e) => {
+            emit_children_with_let_bindings(out, source, &e.attributes, &e.children, depth, insts);
+        }
         Node::Component(c) => emit_component_node(out, source, c, depth, insts),
-        Node::SvelteElement(s) => emit_template_body(out, source, &s.children, depth, insts),
+        Node::SvelteElement(s) => {
+            emit_children_with_let_bindings(out, source, &s.attributes, &s.children, depth, insts);
+        }
         Node::Interpolation(i) => emit_at_const_if_any(out, source, i, depth),
         Node::Text(_) | Node::Comment(_) => {}
     }
@@ -1940,15 +2028,34 @@ fn emit_component_node(
     }
 
     if inst.is_none() || snippet_children.is_empty() {
-        emit_template_body(out, source, &c.children, depth, insts);
+        // SVELTE-4-COMPAT: `<Foo let:item>…</Foo>` binds `item` for the
+        // subtree body. Route through the let-binding helper.
+        emit_children_with_let_bindings(out, source, &c.attributes, &c.children, depth, insts);
         return;
     }
-    // Snippet children consumed as props above — walk the rest.
+    // Snippet children consumed as props above — walk the rest,
+    // with let-bindings in scope if the component declared any.
+    let let_names = collect_let_directive_names(source, &c.attributes);
+    let (indent, inner_depth) = if let_names.is_empty() {
+        (String::new(), depth)
+    } else {
+        let indent = "    ".repeat(depth);
+        let inner = "    ".repeat(depth + 1);
+        let _ = writeln!(out, "{indent}{{");
+        for name in &let_names {
+            let _ = writeln!(out, "{inner}let {name}: any;");
+            let _ = writeln!(out, "{inner}void {name};");
+        }
+        (indent, depth + 1)
+    };
     for node in &c.children.nodes {
         if matches!(node, Node::SnippetBlock(_)) {
             continue;
         }
-        emit_template_node(out, source, node, depth, insts);
+        emit_template_node(out, source, node, inner_depth, insts);
+    }
+    if !let_names.is_empty() {
+        let _ = writeln!(out, "{indent}}}");
     }
 }
 

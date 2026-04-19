@@ -47,7 +47,6 @@
 //! precision loss is acceptable.
 
 use std::collections::HashSet;
-use std::fmt::Write;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
@@ -58,23 +57,20 @@ use smol_str::SmolStr;
 use svn_parser::{ScriptLang, parse_script_body};
 
 /// Rewrite the Svelte-4 `$: ...` forms in `content` and return the
-/// resulting source text. Cheap early-out: if the source contains no
-/// `$:` literal substring at all (the common case on pure Svelte 5
-/// components), returns `content.to_string()` without a parse.
-pub fn rewrite(content: &str, lang: ScriptLang) -> String {
-    rewrite_with_touched_names(content, lang).0
-}
-
-/// Like `rewrite`, but ALSO returns the set of identifier names that
-/// the rewrite TOUCHED on the LHS of a reactive-destructure or a
+/// resulting source text + the set of identifier names the rewrite
+/// TOUCHED on the LHS of a reactive-destructure or a
 /// reactive-reassignment to an already-declared name. Callers can
-/// feed these names to the downstream definite-assign pass so the
-/// pre-existing `let X: T;` declarations (Svelte-4's bare-typed prop
-/// pattern) get a `!` — the reactive assignment counts as "assigned"
-/// at runtime, but from TS's perspective the declaration is an
-/// uninitialized let + later branch assignment hidden inside an
-/// uncalled arrow body. Without the `!`, references elsewhere in
+/// feed the touched names to the downstream definite-assign pass so
+/// the pre-existing `let X: T;` declarations (Svelte-4's bare-typed
+/// prop pattern) get a `!` — the reactive assignment counts as
+/// "assigned" at runtime, but from TS's perspective the declaration
+/// is an uninitialized let + later branch assignment hidden inside
+/// an uncalled arrow body. Without the `!`, references elsewhere in
 /// the script fire TS2454 "used before being assigned".
+///
+/// Cheap early-out: if the source contains no `$:` literal substring
+/// at all (the common case on pure Svelte 5 components), returns
+/// `(content.to_string(), Vec::new())` without a parse.
 pub fn rewrite_with_touched_names(content: &str, lang: ScriptLang) -> (String, Vec<SmolStr>) {
     if !content.contains("$:") {
         return (content.to_string(), Vec::new());
@@ -454,7 +450,7 @@ mod tests {
     use super::*;
 
     fn ts(src: &str) -> String {
-        rewrite(src, ScriptLang::Ts)
+        rewrite_with_touched_names(src, ScriptLang::Ts).0
     }
 
     #[test]

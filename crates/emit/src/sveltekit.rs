@@ -125,41 +125,57 @@ pub fn kit_prop_decl(name: &str, kind: RouteKind) -> Option<String> {
 /// user doesn't destructure it (upstream does this too). Layouts
 /// always receive a `children` snippet from SvelteKit at runtime.
 pub fn synthesize_route_props_type(kind: RouteKind, prop_names: &[&str]) -> Option<String> {
-    let mut parts: Vec<String> = Vec::new();
+    use std::fmt::Write;
+
+    // Two-pass so we can bail with `None` without allocating the
+    // output buffer if nothing Kit-specific landed. First pass
+    // classifies each prop + tracks whether a Layout's implicit
+    // `children` slot is already covered.
     let mut saw_kit_prop = false;
     let mut saw_children = false;
     for &name in prop_names {
-        if let Some(decl) = kit_prop_decl(name, kind) {
-            parts.push(format!("{decl};"));
+        if kit_prop_decl(name, kind).is_some() {
             saw_kit_prop = true;
             if name == "children" {
                 saw_children = true;
             }
+        }
+    }
+    let need_implicit_children = matches!(kind, RouteKind::Layout) && !saw_children;
+    if !saw_kit_prop && !need_implicit_children {
+        return None;
+    }
+
+    // Second pass: write directly into the output buffer via `write!`,
+    // no intermediate `Vec<String>`. Capacity is a rough overestimate
+    // (avg ~28 bytes per declaration + separators) — beats a
+    // per-item `format!` allocation.
+    let mut out = String::with_capacity(prop_names.len() * 40 + 32);
+    out.push_str("{ ");
+    let mut first = true;
+    let push_sep = |buf: &mut String, first: &mut bool| {
+        if !*first {
+            buf.push(' ');
+        }
+        *first = false;
+    };
+    for &name in prop_names {
+        if let Some(decl) = kit_prop_decl(name, kind) {
+            push_sep(&mut out, &mut first);
+            let _ = write!(out, "{decl};");
         } else {
             // Preserve user-defined props with the conservative `?: any`
             // shape. Losing them from the synthesized type would shrink
             // the overlay default's Props and fire spurious
             // "Property 'foo' does not exist" at callers that pass
             // `foo` down from a parent layout's data flow.
-            parts.push(format!("{name}?: any;"));
+            push_sep(&mut out, &mut first);
+            let _ = write!(out, "{name}?: any;");
         }
     }
-    if matches!(kind, RouteKind::Layout) && !saw_children {
-        parts.push("children?: import('svelte').Snippet;".into());
-        saw_kit_prop = true;
-    }
-    if !saw_kit_prop {
-        // Nothing SvelteKit-specific to add. Let the caller fall back
-        // to its default (untyped → `any`).
-        return None;
-    }
-    let mut out = String::with_capacity(parts.iter().map(|p| p.len() + 2).sum::<usize>() + 4);
-    out.push_str("{ ");
-    for (i, part) in parts.iter().enumerate() {
-        if i > 0 {
-            out.push(' ');
-        }
-        out.push_str(part);
+    if need_implicit_children {
+        push_sep(&mut out, &mut first);
+        out.push_str("children?: import('svelte').Snippet;");
     }
     out.push_str(" }");
     Some(out)

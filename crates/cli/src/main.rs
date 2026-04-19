@@ -555,23 +555,52 @@ fn run_typecheck(
     // '$lib/…'" errors because the root tsconfig's `$lib` alias
     // points at the wrong tree for those files.
     let project_scope = svn_core::tsconfig::load(tsconfig).ok().map(|tc| {
+        // Files explicitly listed in tsconfig's `files` field bypass
+        // both `include` glob matching AND `exclude` filtering (TS
+        // spec: https://www.typescriptlang.org/tsconfig/#exclude —
+        // "A file specified by exclude can still become part of your
+        // codebase due to … being specified in the files list").
+        // Resolve each entry against the tsconfig's directory so a
+        // `"./Index.svelte"` in /path/to/app/tsconfig.json becomes
+        // /path/to/app/Index.svelte.
+        let tsconfig_dir = tsconfig.parent().unwrap_or(Path::new("."));
+        let explicit_files: std::collections::HashSet<PathBuf> = tc
+            .files
+            .iter()
+            .flatten()
+            .map(|p| tsconfig_dir.join(p))
+            .filter_map(|p| p.canonicalize().ok().or(Some(p)))
+            .collect();
         (
             build_glob_set(workspace, tc.include.as_deref()),
             build_glob_set(workspace, tc.exclude.as_deref()),
+            explicit_files,
         )
     });
+    let in_project_scope = |path: &Path| -> bool {
+        let Some((include, exclude, files)) = &project_scope else {
+            return true;
+        };
+        // `files` bypasses exclude. Match against both the literal
+        // walker path and its canonical form (the explicit list was
+        // canonicalized where possible above).
+        if files.contains(path)
+            || path
+                .canonicalize()
+                .ok()
+                .is_some_and(|abs| files.contains(&abs))
+        {
+            return true;
+        }
+        let rel = path.strip_prefix(workspace).unwrap_or(path);
+        let included = include.as_ref().is_none_or(|set| set.is_match(rel));
+        let excluded = exclude.as_ref().is_some_and(|set| set.is_match(rel));
+        included && !excluded
+    };
     let (svelte_files_raw, kit_files_raw) = discover_relevant_files(workspace, ignore);
     let svelte_files: Vec<PathBuf> = svelte_files_raw
         .into_iter()
-        .filter(|path| match &project_scope {
-            Some((include, exclude)) => {
-                let rel = path.strip_prefix(workspace).unwrap_or(path);
-                let included = include.as_ref().is_none_or(|set| set.is_match(rel));
-                let excluded = exclude.as_ref().is_some_and(|set| set.is_match(rel));
-                included && !excluded
-            }
-            None => true,
-        })
+        .filter(|p| in_project_scope(p))
         .collect();
     // Kit files (route modules, hooks, params) get counted toward the
     // COMPLETED denominator to match upstream svelte-check's counting,
@@ -580,15 +609,7 @@ fn run_typecheck(
     // our count reflects only files tsgo would see.
     let kit_files: Vec<PathBuf> = kit_files_raw
         .into_iter()
-        .filter(|path| match &project_scope {
-            Some((include, exclude)) => {
-                let rel = path.strip_prefix(workspace).unwrap_or(path);
-                let included = include.as_ref().is_none_or(|set| set.is_match(rel));
-                let excluded = exclude.as_ref().is_some_and(|set| set.is_match(rel));
-                included && !excluded
-            }
-            None => true,
-        })
+        .filter(|p| in_project_scope(p))
         .collect();
     let t_discovery = mark.elapsed();
 

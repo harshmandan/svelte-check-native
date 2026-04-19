@@ -3062,7 +3062,7 @@ fn denarrow_typed_exported_props_in_place(out: &mut String, target_names: &[Smol
             // only appends.
             out.push_str(&original[i..stmt_end]);
             for name in &matched_names {
-                out.push_str("\n");
+                out.push('\n');
                 out.push_str(name);
                 out.push_str(" = undefined as any;");
             }

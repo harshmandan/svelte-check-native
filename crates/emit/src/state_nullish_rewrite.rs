@@ -86,7 +86,7 @@ pub fn rewrite(content: &str, lang: ScriptLang) -> String {
 /// If `declarator` is `let NAME: TYPE = $state(null | undefined)` with no
 /// existing type arguments on the call, return the byte position at which
 /// to splice `<TYPE>` and the text to splice.
-fn detect_site(declarator: &VariableDeclarator, source: &str) -> Option<(usize, String)> {
+fn detect_site(declarator: &VariableDeclarator<'_>, source: &str) -> Option<(usize, String)> {
     // Binding must carry a type annotation — that's where we pull the
     // explicit generic from.
     let type_anno = declarator.id.type_annotation.as_ref()?;

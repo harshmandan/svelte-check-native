@@ -3,9 +3,12 @@
 async function $$render_6cdf582f() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        __svn_any_as<HTMLMediaElement['duration']>(duration);
         __svn_any_as<import('svelte/elements').SvelteMediaTimeRange[]>(buffered);
         __svn_any_as<import('svelte/elements').SvelteMediaTimeRange[]>(seekable);
+        __svn_any_as<HTMLMediaElement['seeking']>(seeking);
         __svn_any_as<import('svelte/elements').SvelteMediaTimeRange[]>(played);
+        __svn_any_as<HTMLMediaElement['ended']>(ended);
     }
     void __svn_tpl_check;
 }

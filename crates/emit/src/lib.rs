@@ -1002,6 +1002,7 @@ fn emit_document_with_render_name(
     // is unambiguous.
     let mut token_map = collect_satisfies_token_map(&out, &instantiations_by_start);
     token_map.extend(collect_on_event_token_map(&out, &instantiations_by_start));
+    token_map.extend(collect_dom_binding_token_map(&out, doc.source, summary));
 
     EmitOutput {
         typescript: out,
@@ -1109,6 +1110,74 @@ fn collect_on_event_token_map(
 /// Byte length of `.$on("` — the prefix we skip past to land on the
 /// event-name string inside the call.
 const PREFIX_ON_PREFIX_LEN: usize = 6;
+
+/// Post-walk scan: find every `__svn_any_as<TYPE>(expr);` line emitted
+/// by `emit_dom_binding_checks` and push a token-map entry covering
+/// the `expr` span → the user's `={expr}` source byte range. Without
+/// this, a TS2345 firing on a wrong-typed bind target (`<div
+/// bind:clientWidth={stringVar}>` where clientWidth is `number`)
+/// lands in the synthesized `__svn_tpl_check` body with no line-map
+/// coverage and gets dropped by the diagnostic mapper.
+///
+/// Matches the Nth `__svn_any_as<...>(...)` occurrence to
+/// `summary.dom_bindings[N]` via emit-order invariance. Only Range-
+/// form expressions (user-authored `bind:NAME={expr}`) get an entry
+/// — the Identifier-form bare shorthand (`bind:NAME`) doesn't carry
+/// a source range, so those diagnostics stay dropped. Acceptable:
+/// the declaration-site `NAME!` rewrite + `BindThisTarget` handle
+/// the definite-assign half of the shorthand's type-check flow.
+fn collect_dom_binding_token_map(
+    out: &str,
+    source: &str,
+    summary: &TemplateSummary,
+) -> Vec<TokenMapEntry> {
+    const PREFIX: &str = "__svn_any_as<";
+    let mut entries: Vec<TokenMapEntry> = Vec::new();
+    let mut cursor = 0usize;
+    let mut binding_idx = 0usize;
+    while let Some(rel) = out[cursor..].find(PREFIX) {
+        let prefix_start = cursor + rel;
+        // Advance past `__svn_any_as<`, then find the matching `>(`.
+        let after_prefix = prefix_start + PREFIX.len();
+        let Some(close_rel) = out[after_prefix..].find(">(") else {
+            break;
+        };
+        let paren_open = after_prefix + close_rel + 2; // past `>(`
+        let Some(binding) = summary.dom_bindings.get(binding_idx) else {
+            break;
+        };
+        binding_idx += 1;
+        let svn_analyze::DomBindingExpression::Range(expr_range) = &binding.expression else {
+            // Bare-shorthand identifier form has no source range;
+            // skip the entry but advance past this call site.
+            let Some(semi_rel) = out[paren_open..].find(");") else {
+                break;
+            };
+            cursor = paren_open + semi_rel + 2;
+            continue;
+        };
+        // Emit copies `.trim()`-ed source (see emit_dom_binding_checks);
+        // recompute the trimmed source range so overlay/source widths
+        // match and the byte-offset arithmetic lines up.
+        let Some(slice) = source.get(expr_range.start as usize..expr_range.end as usize) else {
+            cursor = paren_open;
+            continue;
+        };
+        let leading_ws = slice.len() - slice.trim_start().len();
+        let trimmed_len = slice.trim().len();
+        let overlay_end = paren_open + trimmed_len;
+        let source_start = expr_range.start + leading_ws as u32;
+        let source_end = source_start + trimmed_len as u32;
+        entries.push(TokenMapEntry {
+            overlay_byte_start: paren_open as u32,
+            overlay_byte_end: overlay_end as u32,
+            source_byte_start: source_start,
+            source_byte_end: source_end,
+        });
+        cursor = overlay_end;
+    }
+    entries
+}
 
 /// Post-walk scan: find every `satisfies InstanceType<typeof
 /// __svn_C_<hex>>['$$prop_def']` in the emitted overlay and push a

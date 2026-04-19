@@ -598,9 +598,25 @@ fn run_typecheck(
         included && !excluded
     };
     let (svelte_files_raw, kit_files_raw) = discover_relevant_files(workspace, ignore);
-    let svelte_files: Vec<PathBuf> = svelte_files_raw
-        .into_iter()
+    // Svelte-file emit: we walk ALL discovered `.svelte` files, not
+    // just the in-scope subset. An out-of-scope file might be
+    // imported by an in-scope one — upstream's LanguageService
+    // follows that import and type-checks the target. For us to
+    // match, tsgo needs to find an overlay for the target; that's
+    // what the SvelteAuxiliary kind provides (writes the overlay +
+    // ambient sidecar, but doesn't list the path in the overlay
+    // tsconfig's `files`, so the out-of-scope file is only
+    // type-checked if something in scope reaches it).
+    let svelte_files_all: Vec<PathBuf> = svelte_files_raw;
+    let svelte_files: Vec<PathBuf> = svelte_files_all
+        .iter()
         .filter(|p| in_project_scope(p))
+        .cloned()
+        .collect();
+    let svelte_files_aux: Vec<PathBuf> = svelte_files_all
+        .iter()
+        .filter(|p| !in_project_scope(p))
+        .cloned()
         .collect();
     // Kit files (route modules, hooks, params) get counted toward the
     // COMPLETED denominator to match upstream svelte-check's counting,
@@ -615,8 +631,24 @@ fn run_typecheck(
 
     // Read every source up-front; we need the bytes for both the
     // tsgo-typecheck path and the svelte/compiler bridge.
-    let mut svelte_sources: Vec<(PathBuf, String)> = Vec::with_capacity(svelte_files.len());
+    //
+    // `svelte_sources` contains in-scope + auxiliary entries back to
+    // back. Entries up to `svelte_sources_in_scope_end` are listed in
+    // the overlay tsconfig's `files` (and run through the compiler
+    // warning bridge); the tail past that are auxiliary overlays
+    // that only exist so tsgo's import-following can reach them.
+    let mut svelte_sources: Vec<(PathBuf, String)> =
+        Vec::with_capacity(svelte_files.len() + svelte_files_aux.len());
     for file in &svelte_files {
+        match std::fs::read_to_string(file) {
+            Ok(s) => svelte_sources.push((file.clone(), s)),
+            Err(err) => {
+                eprintln!("failed to read {}: {err}", file.display());
+            }
+        }
+    }
+    let svelte_sources_in_scope_end = svelte_sources.len();
+    for file in &svelte_files_aux {
         match std::fs::read_to_string(file) {
             Ok(s) => svelte_sources.push((file.clone(), s)),
             Err(err) => {
@@ -634,17 +666,23 @@ fn run_typecheck(
     let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::with_capacity(svelte_sources.len());
     svelte_sources
         .par_iter()
-        .map(|(file, source)| {
+        .enumerate()
+        .map(|(idx, (file, source))| {
             let (doc, _parse_errors) = svn_parser::parse_sections(source);
             let (fragment, _template_errors) =
                 svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
             let summary = svn_analyze::walk_template(&fragment, source);
             let emitted = svn_emit::emit_document(&doc, &fragment, &summary, file);
+            let kind = if idx < svelte_sources_in_scope_end {
+                svn_typecheck::InputKind::Svelte
+            } else {
+                svn_typecheck::InputKind::SvelteAuxiliary
+            };
             svn_typecheck::CheckInput {
                 source_path: file.clone(),
                 generated_ts: emitted.typescript,
                 line_map: emitted.line_map,
-                kind: svn_typecheck::InputKind::Svelte,
+                kind,
             }
         })
         .collect_into_vec(&mut inputs);
@@ -700,7 +738,11 @@ fn run_typecheck(
     if sources.svelte {
         // Move svelte_sources into the bridge — we don't need it after
         // this point and the bridge takes the PathBufs by value to avoid
-        // re-cloning them inside the result vec.
+        // re-cloning them inside the result vec. Truncate to the
+        // in-scope prefix so auxiliary (out-of-scope) files don't run
+        // through the compiler-warning bridge — their diagnostics would
+        // be user-unactionable noise against files the user excluded.
+        svelte_sources.truncate(svelte_sources_in_scope_end);
         match svn_svelte_compiler::compile_batch(workspace, std::mem::take(&mut svelte_sources)) {
             Ok(per_file) => {
                 for (path, warnings) in per_file {

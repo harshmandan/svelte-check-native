@@ -174,7 +174,10 @@ pub fn split_imports(
     // Type aliases / interfaces whose hoist decision is deferred until
     // after body_decl_names is fully populated (post-pass below).
     // Tuple: (span_start, span_end, declared_name).
-    let mut pending_type_spans: Vec<(usize, usize, SmolStr)> = Vec::new();
+    // (start, end, name, is_exported). Non-exported types that
+    // reference body locals via plain `typeof` stay body-scoped;
+    // exported ones hoist (consumers need them at module scope).
+    let mut pending_type_spans: Vec<(usize, usize, SmolStr, bool)> = Vec::new();
 
     for stmt in &parsed.program.body {
         match stmt {
@@ -299,6 +302,7 @@ pub fn split_imports(
                         decl.span.start as usize,
                         decl.span.end as usize,
                         SmolStr::from(decl.id.name.as_str()),
+                        false, // not exported
                     ));
                 }
             }
@@ -309,6 +313,7 @@ pub fn split_imports(
                         decl.span.start as usize,
                         decl.span.end as usize,
                         SmolStr::from(decl.id.name.as_str()),
+                        false,
                     ));
                 }
             }
@@ -399,19 +404,85 @@ pub fn split_imports(
     // chain: `type Variant = ...keyof...typeof style...` → Variant
     // must stay body; `type Props = { variant?: Variant }` references
     // Variant by name → Props joins.
+    // Types transitively reachable from the Props type root MUST
+    // hoist — they show up in the hoisted `Component<Props>`
+    // default-export declaration, and body-scoped types would fire
+    // TS2304 there. Collect the reachable set by fixed-point walk.
+    let mut props_reachable: HashSet<SmolStr> = HashSet::new();
+    if let Some(root) = props_type_root {
+        props_reachable.insert(SmolStr::from(root));
+    }
+    // Svelte-4-style: `export let state: TypeFilter | undefined`.
+    // No single `Props` root — each exported local's annotation
+    // contributes type names to the reachable set. The emit
+    // synthesizes Props from these annotations at module scope, so
+    // every referenced type must also be hoisted (otherwise TS2304).
+    for info in &export_type_infos {
+        if let Some(ty) = &info.type_source {
+            for ident in collect_ident_refs(ty) {
+                if pending_type_spans
+                    .iter()
+                    .any(|(_, _, n, _)| n == &ident)
+                {
+                    props_reachable.insert(ident);
+                }
+            }
+        }
+    }
+    if !props_reachable.is_empty() {
+        loop {
+            let mut added = false;
+            for (start, end, name, _) in &pending_type_spans {
+                if !props_reachable.contains(name) {
+                    continue;
+                }
+                for ident in collect_ident_refs(&content[*start..*end]) {
+                    // Track any referenced type by name; the hoist
+                    // walk below will hoist them.
+                    if pending_type_spans
+                        .iter()
+                        .any(|(_, _, n, _)| n == &ident)
+                        && !props_reachable.contains(&ident)
+                    {
+                        props_reachable.insert(ident);
+                        added = true;
+                    }
+                }
+            }
+            if !added {
+                break;
+            }
+        }
+    }
+
     let mut must_stay_body: HashSet<SmolStr> = HashSet::new();
-    for (start, end, name) in &pending_type_spans {
-        if !body_names_set.is_empty()
-            && keyof_typeof_targets(&content[*start..*end])
+    for (start, end, name, _is_exported) in &pending_type_spans {
+        if body_names_set.is_empty() {
+            continue;
+        }
+        let type_src = &content[*start..*end];
+        // Always stay-body: `keyof typeof <body-local>` (stubbed
+        // `any` widens `keyof` to `string | number | symbol`).
+        let has_keyof_typeof = keyof_typeof_targets(type_src)
+            .iter()
+            .any(|n| body_names_set.contains(n));
+        // Also stay-body: plain `typeof <body-local>` — UNLESS
+        // the type is transitively reachable from Props
+        // (hoisted declarations need it visible at module
+        // scope). This catches local-only type aliases like
+        // `type MomentDoc = typeof moments; function f(xs:
+        // MomentDoc)` where the stub `any` loses all shape info.
+        let has_plain_typeof = !props_reachable.contains(name)
+            && typeof_targets(type_src)
                 .iter()
-                .any(|n| body_names_set.contains(n))
-        {
+                .any(|n| body_names_set.contains(n));
+        if has_keyof_typeof || has_plain_typeof {
             must_stay_body.insert(name.clone());
         }
     }
     loop {
         let mut added = false;
-        for (start, end, name) in &pending_type_spans {
+        for (start, end, name, _) in &pending_type_spans {
             if must_stay_body.contains(name) {
                 continue;
             }
@@ -427,19 +498,11 @@ pub fn split_imports(
             break;
         }
     }
-    // NOTE: `props_type_root` is intentionally NOT used here. An
-    // earlier iteration force-hoisted the user's Props type even
-    // when its body referenced body-scoped locals via `keyof typeof
-    // X` — the declare-const stub at module scope widens
-    // `keyof typeof X` to `string | number`, which then fires
-    // TS7053 downstream on real-world components that index the
-    // stubbed type. Leaving Props body-scoped when it transitively
-    // references body locals keeps the precision correct; consumers
-    // get a less-specific default-export declaration but no
-    // false-positive index-signature errors.
-    let _ = props_type_root;
+    // `props_type_root` IS used above — to compute `props_reachable`
+    // for the hoist-decision logic. Types in that set bypass the
+    // plain-typeof body-keep rule.
     let mut hoisted_type_names: HashSet<SmolStr> = HashSet::new();
-    for (start, end, name) in pending_type_spans {
+    for (start, end, name, _is_exported) in pending_type_spans {
         if !must_stay_body.contains(&name) {
             hoist_spans.push((start, end));
             hoisted_type_names.insert(name);
@@ -721,40 +784,71 @@ fn collect_declaration_names(decl: &Declaration<'_>, out: &mut Vec<SmolStr>) {
 /// `keyof = string | number`, losing the real const's literal-key
 /// precision.
 fn keyof_typeof_targets(text: &str) -> Vec<SmolStr> {
+    typeof_targets_inner(text, true)
+}
+
+/// Collect every identifier following a bare `typeof` keyword in a
+/// type position (no preceding `keyof`, `&`, `|`, etc. are fine — we
+/// just need the symbol name). Used with the plain-`any` hoisted-stub
+/// policy: when a type alias references `typeof <body-local>`, the
+/// module-scope stub loses all structural info (it's `any`), so the
+/// user's `type X = typeof moments` resolves to `any` and downstream
+/// cascades into implicit-any errors. Keeping such types body-scoped
+/// preserves the real `typeof` reference against the live `let`.
+fn typeof_targets(text: &str) -> Vec<SmolStr> {
+    typeof_targets_inner(text, false)
+}
+
+fn typeof_targets_inner(text: &str, require_keyof: bool) -> Vec<SmolStr> {
     let bytes = text.as_bytes();
     let mut out: Vec<SmolStr> = Vec::new();
     let mut i = 0usize;
     while i < bytes.len() {
-        if bytes[i..].starts_with(b"keyof") {
+        let start_of_typeof_clause = if require_keyof {
+            if !bytes[i..].starts_with(b"keyof") {
+                i += 1;
+                continue;
+            }
             let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
             let after_keyof = i + b"keyof".len();
             let after_ok = after_keyof < bytes.len() && !is_ident_byte(bytes[after_keyof]);
+            if !(before_ok && after_ok) {
+                i += 1;
+                continue;
+            }
+            let mut j = after_keyof;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            j
+        } else {
+            i
+        };
+        if bytes[start_of_typeof_clause..].starts_with(b"typeof") {
+            // `typeof` must not be preceded by an ident char AND must
+            // be followed by a non-ident char.
+            let before_ok = start_of_typeof_clause == 0
+                || !is_ident_byte(bytes[start_of_typeof_clause - 1]);
+            let after_typeof = start_of_typeof_clause + b"typeof".len();
+            let after_ok =
+                after_typeof < bytes.len() && !is_ident_byte(bytes[after_typeof]);
             if before_ok && after_ok {
-                let mut j = after_keyof;
-                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                    j += 1;
+                let mut k = after_typeof;
+                while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                    k += 1;
                 }
-                if bytes[j..].starts_with(b"typeof") {
-                    let after_typeof = j + b"typeof".len();
-                    if after_typeof < bytes.len() && !is_ident_byte(bytes[after_typeof]) {
-                        let mut k = after_typeof;
-                        while k < bytes.len() && bytes[k].is_ascii_whitespace() {
-                            k += 1;
-                        }
-                        if k < bytes.len()
-                            && (bytes[k].is_ascii_alphabetic()
-                                || bytes[k] == b'_'
-                                || bytes[k] == b'$')
-                        {
-                            let start = k;
-                            while k < bytes.len() && is_ident_byte(bytes[k]) {
-                                k += 1;
-                            }
-                            out.push(SmolStr::from(&text[start..k]));
-                            i = k;
-                            continue;
-                        }
+                if k < bytes.len()
+                    && (bytes[k].is_ascii_alphabetic()
+                        || bytes[k] == b'_'
+                        || bytes[k] == b'$')
+                {
+                    let start = k;
+                    while k < bytes.len() && is_ident_byte(bytes[k]) {
+                        k += 1;
                     }
+                    out.push(SmolStr::from(&text[start..k]));
+                    i = k;
+                    continue;
                 }
             }
         }

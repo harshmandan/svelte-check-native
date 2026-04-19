@@ -4,8 +4,6 @@ declare const data: any;
 type Props = {
     data: {cfg: string};
 };
-type A = typeof data.cfg;
-type B = (typeof data)['cfg'];
 async function $$render_654e105f() {
 
               
@@ -13,8 +11,8 @@ async function $$render_654e105f() {
   
 let { data }: Props = $props();
 
-                         
-                              
+type A = typeof data.cfg;
+type B = (typeof data)['cfg'];
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }

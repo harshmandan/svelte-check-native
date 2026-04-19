@@ -33,7 +33,7 @@ async function $$render_de15df1d() {
             }
             {
                 const __svn_C_1d8 = __svn_ensure_component(Component);
-                new __svn_C_1d8({ target: __svn_any(), props: {prop: (await promise)} });
+                new __svn_C_1d8({ target: __svn_any(), props: {prop: (await promise)} satisfies InstanceType<typeof __svn_C_1d8>['$$prop_def'] });
             }
             if ((true)) {
                 const x = await promise;

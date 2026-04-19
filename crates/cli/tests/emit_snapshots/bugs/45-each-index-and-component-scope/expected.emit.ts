@@ -28,7 +28,7 @@ async function $$render_45e0d54d() {
             const i: number = 0;
             {
                 const __svn_C_a9 = __svn_ensure_component(Inner);
-                new __svn_C_a9({ target: __svn_any(), props: {label: (item.text), index: (i)} });
+                new __svn_C_a9({ target: __svn_any(), props: {label: (item.text), index: (i)} satisfies InstanceType<typeof __svn_C_a9>['$$prop_def'] });
             }
             void item;
             void i;

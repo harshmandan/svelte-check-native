@@ -5,7 +5,7 @@ async function $$render_ed2b916f() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(Component);
-            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {type: "radio", value: "Plain"} });
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {type: "radio", value: "Plain"} satisfies InstanceType<typeof __svn_C_0>['$$prop_def'] });
             element = __svn_inst_0;
         }
     }

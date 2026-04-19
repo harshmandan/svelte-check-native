@@ -5,11 +5,11 @@ async function $$render_de3de6ae() {
         // template type-check body (incremental)
         {
             const __svn_C_33 = __svn_ensure_component(Component);
-            new __svn_C_33({ target: __svn_any(), props: {prop: ()} });
+            new __svn_C_33({ target: __svn_any(), props: {prop: ()} satisfies InstanceType<typeof __svn_C_33>['$$prop_def'] });
         }
         {
             const __svn_C_53 = __svn_ensure_component(Component);
-            new __svn_C_53({ target: __svn_any(), props: {} });
+            new __svn_C_53({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_53>['$$prop_def'] });
         }
     }
     void __svn_tpl_check;

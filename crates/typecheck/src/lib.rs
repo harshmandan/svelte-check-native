@@ -381,7 +381,7 @@ pub fn check(
         .diagnostics
         .into_iter()
         .filter(|d| !is_overlay_tsconfig_noise(d, &layout))
-        .map(|d| map_diagnostic(d, &layout, &line_maps))
+        .filter_map(|d| map_diagnostic(d, &layout, &line_maps))
         .filter(|d| !is_svelte4_reactive_noop_comma(d))
         .collect();
     Ok(CheckOutput {
@@ -490,7 +490,7 @@ fn map_diagnostic(
     raw: RawDiagnostic,
     layout: &CacheLayout,
     line_maps: &std::collections::HashMap<PathBuf, Vec<LineMapEntry>>,
-) -> CheckDiagnostic {
+) -> Option<CheckDiagnostic> {
     // tsgo emits paths relative to the working directory when the input
     // tsconfig path is itself relative (which it usually is). Absolutize
     // against the workspace root so cache-layout lookups work uniformly.
@@ -501,19 +501,27 @@ fn map_diagnostic(
     };
     let (source_path, line) = match layout.original_from_generated(&absolute_file) {
         Some(orig) => {
-            // Use the per-file line map if we have one; fall back to the
-            // raw line clamped to >=1 if this overlay file wasn't part
-            // of the current run (shouldn't happen, but be safe).
-            let mapped = line_maps
+            // For overlay files, require the line to fall inside a verbatim
+            // user-source range. Diagnostics against synthesized scaffolding
+            // (component ctor calls, default-export type, wrapper, void
+            // blocks) have no user-source origin and get dropped — mirrors
+            // upstream svelte-check's source-map-driven filter. Without
+            // this, bench repos using libraries with complex Prop unions
+            // (bits-ui, shadcn-style) surface dozens of false positives
+            // against synthesized `new $$_C({...})` sites that upstream
+            // silently filters.
+            match line_maps
                 .get(&absolute_file)
                 .and_then(|map| translate_line(map, raw.line))
-                .unwrap_or(raw.line.max(1));
-            (orig, mapped)
+            {
+                Some(mapped) => (orig, mapped),
+                None => return None,
+            }
         }
         None => (absolute_file, raw.line),
     };
     let span = raw.span_length.unwrap_or(0);
-    CheckDiagnostic {
+    Some(CheckDiagnostic {
         source_path,
         line,
         column: raw.column,
@@ -533,7 +541,7 @@ fn map_diagnostic(
         // empty for now — IDEs that want links can derive them from
         // the numeric code.
         code_description_url: None,
-    }
+    })
 }
 
 /// Translate an overlay line into a source line via the line map.
@@ -556,14 +564,13 @@ fn translate_line(map: &[LineMapEntry], overlay_line: u32) -> Option<u32> {
             return Some(entry.source_start_line + delta);
         }
     }
-    // Outside any range — clamp to nearest preceding entry.
-    let mut nearest_source = 1u32;
-    for entry in map {
-        if entry.overlay_start_line <= overlay_line {
-            nearest_source = entry.source_start_line;
-        }
-    }
-    Some(nearest_source)
+    // Outside any verbatim-content range: the diagnostic fired against
+    // synthesized scaffolding (component ctor calls, wrapper function,
+    // void block, default-export type) with no user-source origin.
+    // Signal this by returning None; `map_diagnostic` drops the
+    // diagnostic rather than clamping it to a nearby line — mirrors
+    // upstream svelte-check's source-map-driven filter.
+    None
 }
 
 #[cfg(test)]
@@ -602,7 +609,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        let mapped = map_diagnostic(raw, &layout, &map);
+        let mapped = map_diagnostic(raw, &layout, &map).expect("mapped");
         assert_eq!(mapped.source_path, PathBuf::from("/proj/src/Foo.svelte"));
         // overlay line 10 - overlay_start (5) = 5, + source_start (1) = 6.
         assert_eq!(mapped.line, 6);
@@ -620,17 +627,16 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        let mapped = map_diagnostic(raw, &layout, &HashMap::new());
+        let mapped = map_diagnostic(raw, &layout, &HashMap::new()).expect("mapped");
         assert_eq!(mapped.source_path, PathBuf::from("/proj/src/plain.ts"));
         assert_eq!(mapped.line, 4); // no offset applied to non-generated files
     }
 
     #[test]
-    fn diagnostics_outside_any_mapped_range_clamp_to_nearest_preceding_source() {
-        // Synthesized lines (header, function wrapper, void block) have
-        // no exact source location. We place them at the source-start
-        // line of the nearest preceding mapped range, defaulting to 1
-        // when none precedes.
+    fn diagnostics_outside_any_mapped_range_are_dropped() {
+        // Synthesized lines (header, function wrapper, void block,
+        // component ctor scaffolding) have no user-source origin.
+        // Dropping mirrors upstream svelte-check's source-map filter.
         let gen_path = "/proj/.svelte-check/svelte/++X.svelte.ts";
         let layout = CacheLayout::for_workspace("/proj");
         let map = line_maps_for(
@@ -641,7 +647,6 @@ mod tests {
                 source_start_line: 5,
             }],
         );
-        // Before any mapped range — clamps to source line 1.
         let raw_before = RawDiagnostic {
             file: PathBuf::from(gen_path),
             line: 1,
@@ -651,8 +656,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        assert_eq!(map_diagnostic(raw_before, &layout, &map).line, 1);
-        // After all mapped ranges — clamps to source line of last entry (5).
+        assert!(map_diagnostic(raw_before, &layout, &map).is_none());
         let raw_after = RawDiagnostic {
             file: PathBuf::from(gen_path),
             line: 30,
@@ -662,7 +666,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        assert_eq!(map_diagnostic(raw_after, &layout, &map).line, 5);
+        assert!(map_diagnostic(raw_after, &layout, &map).is_none());
     }
 
     #[test]
@@ -703,13 +707,13 @@ mod tests {
         };
         // 15 is in range [10, 20) — offset 5 from overlay_start (10),
         // applied to source_start (50) = source line 55.
-        assert_eq!(map_diagnostic(raw, &layout, &map).line, 55);
+        assert_eq!(map_diagnostic(raw, &layout, &map).expect("mapped").line, 55);
     }
 
     #[test]
-    fn maps_between_gaps_clamps_to_previous_range() {
-        // A diagnostic lands in the gap between mapped ranges — clamps
-        // to the source-start of the nearest preceding range.
+    fn maps_between_gaps_drops_the_diagnostic() {
+        // A diagnostic in the gap between mapped ranges has no
+        // user-source origin — drop it (was previously clamped).
         let gen_path = "/proj/.svelte-check/svelte/++X.svelte.ts";
         let layout = CacheLayout::for_workspace("/proj");
         let map = line_maps_for(
@@ -736,8 +740,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        // Preceding range ended at overlay 3 with source_start 1.
-        assert_eq!(map_diagnostic(raw, &layout, &map).line, 1);
+        assert!(map_diagnostic(raw, &layout, &map).is_none());
     }
 
     #[test]
@@ -758,13 +761,10 @@ mod tests {
             span_length: None,
         };
         let mapped = map_diagnostic(raw, &layout, &map);
-        // Path is still mapped back to the .svelte source.
-        assert_eq!(mapped.source_path, PathBuf::from("/proj/src/X.svelte"));
-        // With no entries to translate the overlay line, the raw line
-        // passes through (clamped to >= 1). This preserves tsgo's
-        // line for files that went missing from the line-map — better
-        // than silently collapsing to 1 and losing the signal.
-        assert_eq!(mapped.line, 42);
+        // Empty line map for an overlay file now drops the diagnostic
+        // entirely (same principle as outside-any-range: no evidence
+        // the tsgo diagnostic originated from user source).
+        assert!(mapped.is_none());
     }
 
     #[test]
@@ -785,10 +785,10 @@ mod tests {
             span_length: None,
         };
         let mapped = map_diagnostic(raw, &layout, &HashMap::new());
-        assert_eq!(
-            mapped.source_path,
-            PathBuf::from("/proj/lib/components/Foo.svelte")
-        );
+        // Without any line-map entry, diagnostics against an overlay
+        // file are dropped — the path-reverse logic itself still
+        // works but there's no user-source line to attribute to.
+        assert!(mapped.is_none());
     }
 
     #[test]
@@ -814,7 +814,7 @@ mod tests {
             message: "original message".to_string(),
             span_length: None,
         };
-        let mapped = map_diagnostic(raw, &layout, &map);
+        let mapped = map_diagnostic(raw, &layout, &map).expect("mapped");
         assert_eq!(mapped.column, 42);
         assert_eq!(mapped.severity, Severity::Warning);
         assert!(

@@ -3,7 +3,7 @@
 
     enum A {
     }
-declare const Abc: any;
+declare const Abc: { [key: string]: any } & ((...args: any[]) => any);
 interface A {
     Abc: number
 }

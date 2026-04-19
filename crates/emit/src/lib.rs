@@ -2810,8 +2810,10 @@ fn emit_component_node(
 
 /// Emit the call-site scaffolding for one component instantiation as
 ///
-///     { const $$_CN = __svn_ensure_component(Comp);
-///       new $$_CN({ target: __svn_any(), props: { ... } }); }
+/// ```text
+/// { const $$_CN = __svn_ensure_component(Comp);
+///   new $$_CN({ target: __svn_any(), props: { ... } }); }
+/// ```
 ///
 /// — the wrapper + local + `new` form chosen so a single emission
 /// handles both our overlay-declared class defaults and third-party

@@ -4,6 +4,147 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0]
+
+### Added — component-prop + event typing
+
+- **Phase 5 `satisfies ComponentProps<typeof Comp>` trailer.**
+  Every `<Component ... />` in a template emits a `props: {...}
+  satisfies InstanceType<typeof __svn_C_N>['$$prop_def']` in the
+  overlay. Missing required props fire TS2741 at the user's
+  `<Component>` opening tag position (new `TokenMapEntry`
+  byte-span source map surfaces the diagnostic at the user-visible
+  site instead of dropping it in the synthesized region). Closes
+  the reverted `af30c56` / `4f4e613` cycle from v0.2.5.
+- **Typed event-handler narrowing via `$$Events`.** When a child
+  component declares `interface $$Events` or `type $$Events`, the
+  consumer's `<Child on:myevent={handler}>` narrows `handler`'s
+  parameter to `(e: CustomEvent<E[K]>) => any`. Wrong-payload
+  handlers fire TS2345 at the `on:event={handler}` directive
+  position.
+- **DOM `bind:` coverage expanded.** In addition to the v0.2
+  `bind:contentRect` / `bind:contentBoxSize` / etc. family:
+  - HTMLImageElement: `naturalWidth`, `naturalHeight`.
+  - HTMLMediaElement: `duration`, `seeking`, `ended`, `readyState`.
+  - HTMLElement layout: `clientWidth`, `clientHeight`,
+    `offsetWidth`, `offsetHeight` (emitted inline at the
+    bind-site so block-scoped iterator names in
+    `bind:clientWidth={items[i].width}` resolve correctly).
+  - Bidirectional fixed-type: `bind:checked` (boolean),
+    `bind:files` (FileList | null).
+  - Bidirectional attribute-aware: `bind:value` on `<input
+    type="number">` / `<input type="range">` → number; on
+    `<input>` default / `<input type="text">` / `<textarea>` →
+    string.
+- **`bind:this` on DOM elements.** Both simple-identifier and
+  member-expression targets (`bind:this={refs.input}`) get a
+  type-check emitted inline at the bind-site. Matches upstream's
+  assignment-direction semantics.
+- **`bind:X={getter, setter}` get/set form.** Svelte 5's two-
+  function bind syntax modeled as `PropShape::GetSetBinding`
+  emitting `name: (getter)()` so phase-5 `satisfies` sees the
+  required prop present.
+- **Byte-span source maps.** New `TokenMapEntry` alongside
+  `LineMapEntry` in the typecheck mapper. Diagnostics in
+  synthesized regions get remapped to tightest-matching source
+  byte spans; drops only when neither token-map nor line-map
+  covers. Per-feature post-scans (`collect_satisfies_token_map`,
+  `collect_on_event_token_map`, `collect_dom_binding_token_map`,
+  `collect_bind_this_check_token_map`) pair overlay sites 1:1
+  with user source.
+
+### Added — bench tooling
+
+- **`scripts/bench.mjs --mode parity`.** Runs our binary +
+  upstream `svelte-check` + `svelte-check --tsgo` (when the
+  workspace's svelte-check version supports it) on the same
+  workspace; prints a side-by-side comparison of FILES, ERRORS,
+  WARNINGS, FILES_WITH_PROBLEMS counts. Exits non-zero on drift
+  from the best-available upstream baseline. Solution-style
+  tsconfig redirects are detected + propagated so upstream runs
+  from the same effective workspace our binary hops to.
+- **Goal, per NEXT.md:** diagnostic counts match upstream
+  `svelte-check` (preferred) or at minimum `svelte-check
+  --tsgo`. Current status: control-svelte-4 matches `svelte-check
+  --tsgo` exactly (1124 FILES, 1 ERROR, 2 WARNINGS, 3
+  FILES_WITH_PROBLEMS).
+
+### Fixed — pre-existing test failures
+
+- **Hoisted-type stubs use richer type annotation.**
+  `script_split`'s `declare const <body-local>` stub emitted for
+  body-local names referenced by hoisted types now uses
+  `{ [key: string]: any } & ((...args: any[]) => any)` instead
+  of plain `any`. Preserves `keyof typeof <local> = string`
+  (previously widened to `string | number | symbol`, tripping
+  TS1023 on user `<local>[stringKey]` subscripts) and callable
+  references (`typeof fn`). Closes two pre-existing test
+  failures.
+- **Doctest fence.** Illustrative TypeScript code in
+  `emit_component_call`'s doc comment now lives in a
+  ```` ```text ```` fenced block; rustdoc no longer tries to
+  compile it as Rust.
+
+### Fixed — corner cases
+
+- **`bind:NAME` shorthand on components.** Bare-shorthand form
+  (`<Child bind:items />` desugaring to `<Child
+  bind:items={items}>`) now emits as `PropShape::Shorthand`
+  rather than being silently dropped. Closed 36 false positives
+  on the initial phase-5 `satisfies` bench pass where
+  consumers of v0.2.5 bind-supporting components were reported
+  as missing the bound prop.
+- **`bind:X={getter, setter}` consumer-side.** Svelte 5's
+  two-function bind form is now modeled; consumers of children
+  with required props that the user passes via get/set no
+  longer fire spurious "missing required prop" TS2741.
+
+### Known limitations (match upstream behavior)
+
+These are intentional gaps where upstream `svelte-check` is
+deliberately permissive; our tool matches that laxity to
+preserve drop-in parity. Users who want stricter checks should
+file a request for an opt-in flag.
+
+- **`bind:value` on `<select>`.** Accepts any type (upstream
+  types `HTMLSelectAttributes['value']` as `any`). Would need
+  `<option>` value-type union inference to be stricter.
+- **`bind:group`** on `<input type="checkbox|radio">`. Silent;
+  no target-type check. Upstream's Binding.ts:99-108 emits
+  `EXPR = __sveltets_2_any(null);` (widen-to-any). Our
+  skip-entirely produces the same observable no-error
+  behavior.
+- **Cross-HTML*Element distinctions for `bind:this`.** TS's DOM
+  lib treats HTML element subtypes as structurally compatible
+  (HTMLDivElement and HTMLInputElement share all of HTMLElement
+  + HTMLDivElement's only unique field `align` is optional).
+  `<input bind:this={divRef}>` where `divRef: HTMLDivElement`
+  accepts silently. Matches upstream; not fixable without
+  inventing our own DOM hierarchy.
+- **Simple-identifier `bind:` target checks.** For `let num:
+  number = 0; <input type="number" bind:value={num}>`, the
+  pre-existing definite-assign rewrite (`num = undefined as
+  any;`) widens `num`'s flow type to `any` before the bind
+  contract check runs inside `__svn_tpl_check`, so wrong-typed
+  targets don't fire on simple identifiers. Member-expression
+  targets (`state.num`) skip the rewrite and DO get checked.
+
+### Known bench discrepancies
+
+- **Upstream default `svelte-check` reports ~5× more FILES** on
+  large workspaces (control-svelte-4: 6511 FILES vs ours 1124
+  vs `svelte-check --tsgo` 1125). Upstream default crawls all
+  `.svelte/.ts/.js/.d.ts` on disk, including declaration files
+  that aren't part of the type-check surface. Our FILES matches
+  `svelte-check --tsgo` (the meaningful "what was actually
+  type-checked" count). Users who need default-svelte-check
+  denominator parity should benchmark against `--tsgo`.
+
+### Performance
+
+- control-svelte-4 bench (1124 files): warm 2.31s median (v0.2.5
+  baseline: 2.30s, within noise). Cold 3.4s, dirty 2.4s.
+
 ## [0.2.5]
 
 ### Fixed — monorepo parity

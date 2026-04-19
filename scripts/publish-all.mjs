@@ -30,9 +30,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, '..');
 const dryRun = process.argv.includes('--dry-run');
 
-const wrapperDir = join(repoRoot, 'npm', 'svelte-check-native');
+const pkgsRoot = join(repoRoot, 'dist-packs', 'pkgs');
+const wrapperDir = join(pkgsRoot, 'svelte-check-native');
 const platformDirs = TARGETS.map((t) =>
-  join(repoRoot, 'npm', `svelte-check-native-${t.npmPlatform}`),
+  join(pkgsRoot, `svelte-check-native-${t.npmPlatform}`),
 );
 
 // Sanity: all six packages must be pinned to the same version. If the

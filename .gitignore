@@ -3,11 +3,11 @@ target/
 *.rs.bk
 **/*.rs.bk
 
-# npm packaging build artifacts (binary copied in by scripts/copy-binary.mjs,
-# tarballs produced by scripts/pack-all.mjs)
+# npm packaging build artifacts — entire dist layout is generator-driven
+# from scripts/prepare-release.mjs into dist-packs/pkgs/, binaries copied
+# in by scripts/copy-binary.mjs / scripts/build-all.mjs, tarballs produced
+# by scripts/pack-all.mjs at dist-packs/*.tgz.
 dist-packs/
-npm/svelte-check-native-*/bin/svelte-check-native
-npm/svelte-check-native-*/bin/svelte-check-native.exe
 
 # Claude Code: track command/skill definitions, ignore per-session state
 .claude/*

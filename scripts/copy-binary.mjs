@@ -1,9 +1,14 @@
 // Copy the host's freshly-built `target/release/<bin>` into the
-// matching npm platform package's bin/. Used by `npm run build:native`
-// for fast single-target iteration on the dev's own machine.
+// matching platform package's bin/ under dist-packs/pkgs/. Used by
+// `npm run build:native` for fast single-target iteration on the
+// dev's own machine.
 //
 // For cross-platform builds use `npm run build:all` instead — that
 // uses cargo-zigbuild and the targets.mjs map to handle every target.
+//
+// Note: run `npm run prepare-release` first so the platform package
+// dir (and its package.json) exists at dist-packs/pkgs/; otherwise
+// we're copying a binary into a half-formed package.
 
 import { copyFileSync, chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -23,7 +28,13 @@ if (!target) {
 }
 
 const sourceBin = join(repoRoot, 'target', 'release', target.binName);
-const destDir = join(repoRoot, 'npm', `svelte-check-native-${target.npmPlatform}`, 'bin');
+const destDir = join(
+  repoRoot,
+  'dist-packs',
+  'pkgs',
+  `svelte-check-native-${target.npmPlatform}`,
+  'bin',
+);
 const destBin = join(destDir, target.binName);
 
 if (!existsSync(sourceBin)) {

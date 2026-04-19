@@ -48,7 +48,13 @@ for (const t of list) {
     process.exit(1);
   }
 
-  const destDir = join(repoRoot, 'npm', `svelte-check-native-${t.npmPlatform}`, 'bin');
+  const destDir = join(
+    repoRoot,
+    'dist-packs',
+    'pkgs',
+    `svelte-check-native-${t.npmPlatform}`,
+    'bin',
+  );
   if (!existsSync(destDir)) {
     mkdirSync(destDir, { recursive: true });
   }

@@ -2,27 +2,32 @@
 //
 // Single source of truth for every version number + README in the npm
 // distribution layout. Run before `npm run pack` or before pushing a
-// tag — the output is idempotent, so commit the diff if anything
-// changed.
+// tag — the output lives entirely under gitignored `dist-packs/pkgs/`,
+// so every run is equivalent to a clean regeneration.
 //
 // Outputs (ALL are regenerated on every run):
-//   - npm/svelte-check-native/package.json             (main package)
-//   - npm/svelte-check-native/README.md                (mirror of /README.md)
-//   - npm/svelte-check-native-<platform>/package.json  (× 5 platforms)
+//   - dist-packs/pkgs/svelte-check-native/package.json         (main)
+//   - dist-packs/pkgs/svelte-check-native/README.md            (mirror of /README.md)
+//   - dist-packs/pkgs/svelte-check-native/bin/svelte-check-native.js  (copy of scripts/templates/wrapper.js)
+//   - dist-packs/pkgs/svelte-check-native-<platform>/package.json   (× 5 platforms)
+//
+// Binaries (copied separately by `copy-binary.mjs` / `build-all.mjs`)
+// land at `dist-packs/pkgs/svelte-check-native-<platform>/bin/<bin>`.
 //
 // Does NOT touch: crates/**/Cargo.toml (workspace inherits version
-// from root Cargo.toml; bump that one instead), npm wrapper JS.
+// from root Cargo.toml; bump that one instead), the hand-written JS
+// wrapper at scripts/templates/wrapper.js.
 //
 // Usage:
-//   node scripts/prepare-release.mjs               # derives version from Cargo.toml
+//   node scripts/prepare-release.mjs               # derive version from Cargo.toml
 //   node scripts/prepare-release.mjs 0.2.0         # override explicit version
-//   node scripts/prepare-release.mjs --check       # dry-run: fail if diffs vs current files
+//   node scripts/prepare-release.mjs --check       # dry-run: fail if dist-packs/pkgs/
+//                                                    doesn't match the generator's output
 //
-// The `--check` mode is for CI — ensures the committed npm/ state
-// matches what the generator would produce, so a version bump can't
-// silently leave a package.json out of sync.
+// The `--check` mode is for CI — pairs with `pack-all.mjs` to catch
+// stale generator output before tarballs get produced.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -36,7 +41,8 @@ const CHECK_MODE = ARGS.includes('--check');
 const VERSION_ARG = ARGS.find((a) => !a.startsWith('--'));
 
 const MAIN_PKG = 'svelte-check-native';
-const NPM_DIR = join(repoRoot, 'npm');
+const PKGS_DIR = join(repoRoot, 'dist-packs', 'pkgs');
+const WRAPPER_SRC = join(__dirname, 'templates', 'wrapper.js');
 
 function parseWorkspaceVersion() {
   const cargo = readFileSync(join(repoRoot, 'Cargo.toml'), 'utf8');
@@ -151,18 +157,15 @@ function copyFile(src, dst) {
 }
 
 // Main package
-writeJson(join(NPM_DIR, MAIN_PKG, 'package.json'), mainPackageJson(version));
-copyFile(
-  join(repoRoot, 'README.md'),
-  join(NPM_DIR, MAIN_PKG, 'README.md'),
-);
+const mainPkgDir = join(PKGS_DIR, MAIN_PKG);
+writeJson(join(mainPkgDir, 'package.json'), mainPackageJson(version));
+copyFile(join(repoRoot, 'README.md'), join(mainPkgDir, 'README.md'));
+copyFile(WRAPPER_SRC, join(mainPkgDir, 'bin', `${MAIN_PKG}.js`));
 
 // Platform packages
 for (const target of TARGETS) {
-  writeJson(
-    join(NPM_DIR, `${MAIN_PKG}-${target.npmPlatform}`, 'package.json'),
-    platformPackageJson(target, version),
-  );
+  const pkgDir = join(PKGS_DIR, `${MAIN_PKG}-${target.npmPlatform}`);
+  writeJson(join(pkgDir, 'package.json'), platformPackageJson(target, version));
 }
 
 if (CHECK_MODE) {
@@ -176,7 +179,7 @@ if (CHECK_MODE) {
     console.error(`run 'node scripts/prepare-release.mjs' to regenerate.`);
     process.exit(1);
   }
-  console.log(`[prepare-release] npm/ is in sync at ${version}`);
+  console.log(`[prepare-release] dist-packs/pkgs/ is in sync at ${version}`);
 } else {
-  console.log(`[prepare-release] regenerated npm/ at ${version}`);
+  console.log(`[prepare-release] regenerated dist-packs/pkgs/ at ${version}`);
 }

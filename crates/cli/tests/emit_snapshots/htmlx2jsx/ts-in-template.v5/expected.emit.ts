@@ -81,7 +81,8 @@ async function $$render_43de206c() {
             }
             {
                 const __svn_C_392 = __svn_ensure_component(Component);
-                new __svn_C_392({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_392>['$$prop_def'] });
+                const __svn_inst_392 = new __svn_C_392({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_392>['$$prop_def'] });
+                x as any = __svn_inst_392;
             }
             void ((): void => { x as any = null as any as HTMLElement['clientWidth']; });
         }

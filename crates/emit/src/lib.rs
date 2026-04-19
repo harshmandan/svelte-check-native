@@ -2917,7 +2917,7 @@ fn emit_component_call(
             out,
             "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{}}{satisfies_trailer} }});"
         );
-        emit_bind_this_assignment(out, inst, &inst_local, &inner);
+        emit_bind_this_assignment(out, source, inst, &inst_local, &inner);
         emit_on_event_calls(out, source, inst, &inst_local, &inner);
         let _ = writeln!(out, "{indent}}}");
         return;
@@ -2943,7 +2943,7 @@ fn emit_component_call(
             let _ = write!(out, "children: () => __svn_snippet_return()");
         }
         let _ = writeln!(out, "}}{satisfies_trailer} }});");
-        emit_bind_this_assignment(out, inst, &inst_local, &inner);
+        emit_bind_this_assignment(out, source, inst, &inst_local, &inner);
         emit_on_event_calls(out, source, inst, &inst_local, &inner);
         let _ = writeln!(out, "{indent}}}");
         return;
@@ -2975,7 +2975,7 @@ fn emit_component_call(
     }
     let _ = writeln!(out, "{opts_inner}}}{satisfies_trailer},");
     let _ = writeln!(out, "{inner}}});");
-    emit_bind_this_assignment(out, inst, &inst_local, &inner);
+    emit_bind_this_assignment(out, source, inst, &inst_local, &inner);
     emit_on_event_calls(out, source, inst, &inst_local, &inner);
     let _ = writeln!(out, "{indent}}}");
 }
@@ -3019,23 +3019,36 @@ fn emit_on_event_calls(
     }
 }
 
-/// Emit a `target = $inst;` assignment for `bind:this={target}` on a
-/// component — the JS-scope part of the binding. Combined with the
-/// definite-assign rewrite on the user's `let target` declaration,
-/// this gives tsgo enough signal to type-check the binding without
-/// tripping TS2741 / unused-local warnings.
+/// Emit a `<EXPR> = $inst;` assignment for `bind:this={EXPR}` on a
+/// component. EXPR is the verbatim user-source range — covers both
+/// simple-identifier (`bind:this={refs}`) and member-expression
+/// (`bind:this={refs.instance}`) forms.
+///
+/// For simple identifiers the declaration-site `!` rewrite (via the
+/// `bind_this_targets` collection) handles definite-assignment;
+/// member expressions don't have a declaration to rewrite, but the
+/// assignment itself provides the async-bind contract and the
+/// type-check (LHS accepts RHS = component instance type).
 ///
 /// No-op when the instantiation has no `bind:this` — the caller also
 /// skips hoisting the instance into a local in that case, so there's
 /// nothing to assign.
 fn emit_bind_this_assignment(
     out: &mut String,
+    source: &str,
     inst: &svn_analyze::ComponentInstantiation,
     inst_local: &str,
     inner: &str,
 ) {
-    if let Some(target) = &inst.bind_this_target {
-        let _ = writeln!(out, "{inner}{target} = {inst_local};");
+    if let Some(range) = &inst.bind_this_target {
+        let Some(expr) = source.get(range.start as usize..range.end as usize) else {
+            return;
+        };
+        let expr = expr.trim();
+        if expr.is_empty() {
+            return;
+        }
+        let _ = writeln!(out, "{inner}{expr} = {inst_local};");
     }
 }
 

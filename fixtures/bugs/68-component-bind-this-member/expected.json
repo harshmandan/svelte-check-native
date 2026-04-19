@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "v0.3 §1.5: Parent uses bind:this={refs.child} (member expression). Previously only simple-identifier bind:this targets were recorded; member expressions got silently dropped. Analyze now records the full expression range regardless of shape; emit reads the source verbatim and produces `refs.child = $inst;` inside the component-call block. The declared type of refs.child accepts the instance type, so no errors fire. This is the member-expression companion to the v0.3 Item 7 DOM-element shipping (bind:this on DOM elements already supported both forms)."
+}

@@ -17,7 +17,13 @@
             "line": 19,
             "column": 22,
             "code": 2322
+        },
+        {
+            "file": "SimpleIdMismatch.svelte",
+            "line": 9,
+            "column": 33,
+            "code": 2322
         }
     ],
-    "_note": "v0.3 Item 8 extended: bind:value dispatches the target type from (tag, literal type attribute). <input type='number'> → number; <input type='range'> → number; <input> / <input type='text'> / <textarea> → string. Simple-identifier targets (`let x: T = ...`) skip the check — the definite-assign rewrite widens their flow type to any. Member expressions (`state.x`) survive since they skip the rewrite."
+    "_note": "v0.3 Item 8 extended + §1.3 denarrow fix: bind:value dispatches the target type from (tag, literal type attribute). <input type='number'> → number; <input type='range'> → number; <input> / <input type='text'> / <textarea> → string. After §1.3, simple-identifier targets (`let strForNumber: string = ''`) ALSO fire — the denarrow rewrite no longer widens non-null/undefined-init lets to `any`. Only `let X: T = null` and `let X: T = undefined` literal patterns still get denarrowed (those need the widen to prevent TS's flow-narrowing to the literal null/undefined)."
 }

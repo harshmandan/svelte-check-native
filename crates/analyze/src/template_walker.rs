@@ -99,13 +99,21 @@ pub struct ComponentInstantiation {
     /// path. Pure whitespace (indentation / newlines between open
     /// and close) also doesn't count.
     pub has_implicit_children: bool,
-    /// Identifier name from `<Comp bind:this={x}>` when `x` is a
-    /// simple identifier. Emit writes `x = $$_inst;` after
-    /// construction to type-check `x`'s declared type against the
-    /// component instance. Member-expression forms (`bind:this={refs.x}`)
-    /// stay `None` for now — upstream handles those with a
-    /// `(setter)(instance)` shape we haven't ported.
-    pub bind_this_target: Option<SmolStr>,
+    /// Source byte range of the expression inside `<Comp
+    /// bind:this={EXPR}>`. Covers BOTH simple-identifier
+    /// (`bind:this={refs}`) and member-expression
+    /// (`bind:this={refs.instance}`) forms. Emit writes `<EXPR> =
+    /// $$_inst;` after construction to type-check EXPR's declared
+    /// type against the component instance.
+    ///
+    /// Simple-identifier sites ALSO appear in
+    /// `TemplateSummary.bind_this_targets` (populated by
+    /// `walk_directive`) for the definite-assign `!` rewrite on the
+    /// user's `let x: T` declaration — only simple identifiers have
+    /// a declaration to rewrite. Member expressions skip that
+    /// path; the assignment emitted here is the only type-check
+    /// flow for them.
+    pub bind_this_target: Option<Range>,
     /// SVELTE-4-COMPAT: `on:event={handler}` directives on this
     /// component. Emit binds each via `$inst.$on("event", handler)`
     /// on the hoisted instance local, mirroring upstream svelte2tsx's
@@ -619,7 +627,7 @@ fn is_ident_continue(c: char) -> bool {
 /// skipped so the satisfies object stays correct on the rest.
 fn collect_component_instantiation(
     c: &svn_parser::Component,
-    source: &str,
+    _source: &str,
     summary: &mut TemplateSummary,
 ) {
     if c.name.contains('.') {
@@ -627,7 +635,7 @@ fn collect_component_instantiation(
     }
     let mut props: Vec<PropShape> = Vec::with_capacity(c.attributes.len());
     let mut on_events: Vec<OnEventDirective> = Vec::new();
-    let mut bind_this_target: Option<SmolStr> = None;
+    let mut bind_this_target: Option<Range> = None;
     // Detect "implicit children": any non-snippet, non-whitespace
     // child node between the open/close tags. Pure `{#snippet}`
     // children hoist as explicit props (different code path); pure
@@ -733,9 +741,16 @@ fn collect_component_instantiation(
                     if let Some(svn_parser::DirectiveValue::Expression {
                         expression_range, ..
                     }) = &d.value
-                        && let Some(id) = simple_identifier_in(source, *expression_range)
                     {
-                        bind_this_target = Some(id);
+                        // Record the full expression range regardless
+                        // of shape (simple identifier OR member
+                        // expression). Emit renders source verbatim.
+                        // The sibling `bind_this_targets` collection
+                        // via `walk_directive` still filters for
+                        // simple-identifier names — that's for the
+                        // declaration-site `!` rewrite which only
+                        // applies to simple `let` declarations.
+                        bind_this_target = Some(*expression_range);
                     }
                     continue;
                 }

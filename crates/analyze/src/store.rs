@@ -144,27 +144,45 @@ pub fn collect_typed_uninit_lets(
     program: &oxc_ast::ast::Program<'_>,
     out: &mut Vec<smol_str::SmolStr>,
 ) {
-    collect_typed_lets_impl(program, out, true);
+    collect_typed_lets_impl(program, out, NarrowableFilter::UninitOnly);
 }
 
-/// Collect every top-level `let NAME: Type[= init];` (typed, with or
-/// without initializer) binding name. Used to seed the de-narrow
-/// rewriter: `let X: T | null = null;` otherwise narrows to the
-/// literal `null` via TS's control-flow analysis, so a subsequent
-/// `if (X) X.foo` fires TS2339 on `never`. Inserting `X = undefined
-/// as any;` after the declaration widens the flow-tracked type back
-/// to the declared annotation.
+#[derive(Copy, Clone)]
+enum NarrowableFilter {
+    UninitOnly,
+    OnlyNullUndefined,
+}
+
+/// Collect every top-level `let NAME: Type = null;` / `let NAME: Type
+/// = undefined;` binding — the subset where TS's control-flow analysis
+/// narrows the variable's flow type to the literal (`null` /
+/// `undefined`) on subsequent reads. These need the denarrow rewrite
+/// so a later `if (X) X.foo` doesn't fire TS2339 on `never`.
+///
+/// Narrower than the old full-typed-let collection: `let num: number
+/// = 0;` and `let flag: boolean = false;` don't need denarrow because
+/// TS widens numeric/string/boolean literals to their primitive types
+/// when assigned to a `let` binding (no `as const`). Only `null` and
+/// `undefined` initializers stick as the narrow type.
+///
+/// This matters for v0.3 bind: contract checks: our inline emit
+/// `void ((): void => { EXPR = null as any as TYPE; });` sees EXPR
+/// as flow-narrowed after the previous denarrow `X = undefined as
+/// any;` rewrite. For bind targets that AREN'T `null`/`undefined`-
+/// initialized (the common case `let myRef: HTMLInputElement | null
+/// = null` IS narrowable; `let num: number = 0` is NOT), skipping
+/// the denarrow preserves the check's effectiveness.
 pub fn collect_typed_top_level_lets(
     program: &oxc_ast::ast::Program<'_>,
     out: &mut Vec<smol_str::SmolStr>,
 ) {
-    collect_typed_lets_impl(program, out, false);
+    collect_typed_lets_impl(program, out, NarrowableFilter::OnlyNullUndefined);
 }
 
 fn collect_typed_lets_impl(
     program: &oxc_ast::ast::Program<'_>,
     out: &mut Vec<smol_str::SmolStr>,
-    uninit_only: bool,
+    filter: NarrowableFilter,
 ) {
     for stmt in &program.body {
         let Statement::VariableDeclaration(decl) = stmt else {
@@ -174,8 +192,22 @@ fn collect_typed_lets_impl(
             continue;
         }
         for declarator in &decl.declarations {
-            if uninit_only && declarator.init.is_some() {
-                continue;
+            match filter {
+                NarrowableFilter::UninitOnly => {
+                    if declarator.init.is_some() {
+                        continue;
+                    }
+                }
+                NarrowableFilter::OnlyNullUndefined => {
+                    // Must HAVE an initializer AND it must be
+                    // literal null / identifier `undefined`.
+                    let Some(init) = declarator.init.as_ref() else {
+                        continue;
+                    };
+                    if !is_null_or_undefined_literal(init) {
+                        continue;
+                    }
+                }
             }
             // Only top-level simple identifier with a type annotation.
             let oxc_ast::ast::BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind
@@ -190,6 +222,19 @@ fn collect_typed_lets_impl(
                 out.push(name);
             }
         }
+    }
+}
+
+/// True when the expression is literal `null` or the `undefined`
+/// identifier. These are the only primitive initializers TS narrows
+/// to the literal type for `let NAME: T = init;` bindings — numeric/
+/// string/boolean literals widen to their primitive types and don't
+/// need the denarrow rewrite.
+fn is_null_or_undefined_literal(expr: &oxc_ast::ast::Expression<'_>) -> bool {
+    match expr {
+        oxc_ast::ast::Expression::NullLiteral(_) => true,
+        oxc_ast::ast::Expression::Identifier(id) => id.name == "undefined",
+        _ => false,
     }
 }
 

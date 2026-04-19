@@ -3,7 +3,6 @@
 async function $$render_f9bfbac1() {
 
 let a: 1 | 2 = 1;
-a = undefined as any;
 ;() => { $: {
     console.log(a + 1);
 } };

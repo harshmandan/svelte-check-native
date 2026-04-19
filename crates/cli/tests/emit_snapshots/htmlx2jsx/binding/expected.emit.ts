@@ -3,7 +3,7 @@
 async function $$render_d9f25341() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ((): void => { test = null as any as string; });
+        test = null as any as string;
         {
             const __svn_C_7a = __svn_ensure_component(Input);
             new __svn_C_7a({ target: __svn_any(), props: {type: "text", value: (test)} satisfies InstanceType<typeof __svn_C_7a>['$$prop_def'] });

@@ -3,16 +3,16 @@
 async function $$render_6cdf582f() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ((): void => { width = null as any as HTMLElement['clientWidth']; });
-        void ((): void => { height = null as any as HTMLElement['clientHeight']; });
-        void ((): void => { offsetWidth = null as any as HTMLElement['offsetWidth']; });
-        void ((): void => { offsetHeight = null as any as HTMLElement['offsetHeight']; });
-        void ((): void => { duration = null as any as HTMLMediaElement['duration']; });
-        void ((): void => { buffered = null as any as import('svelte/elements').SvelteMediaTimeRange[]; });
-        void ((): void => { seekable = null as any as import('svelte/elements').SvelteMediaTimeRange[]; });
-        void ((): void => { seeking = null as any as HTMLMediaElement['seeking']; });
-        void ((): void => { played = null as any as import('svelte/elements').SvelteMediaTimeRange[]; });
-        void ((): void => { ended = null as any as HTMLMediaElement['ended']; });
+        width = null as any as HTMLElement['clientWidth'];
+        height = null as any as HTMLElement['clientHeight'];
+        offsetWidth = null as any as HTMLElement['offsetWidth'];
+        offsetHeight = null as any as HTMLElement['offsetHeight'];
+        duration = null as any as HTMLMediaElement['duration'];
+        buffered = null as any as import('svelte/elements').SvelteMediaTimeRange[];
+        seekable = null as any as import('svelte/elements').SvelteMediaTimeRange[];
+        seeking = null as any as HTMLMediaElement['seeking'];
+        played = null as any as import('svelte/elements').SvelteMediaTimeRange[];
+        ended = null as any as HTMLMediaElement['ended'];
     }
     void __svn_tpl_check;
 }

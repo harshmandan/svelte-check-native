@@ -1181,78 +1181,77 @@ fn collect_bind_this_check_token_map(
     entries
 }
 
-/// Post-walk scan: find every `__svn_any_as<TYPE>(expr);` line emitted
-/// by `emit_dom_binding_checks` and push a token-map entry covering
-/// the `expr` span → the user's `={expr}` source byte range. Without
-/// this, a TS2345 firing on a wrong-typed bind target (`<div
-/// bind:clientWidth={stringVar}>` where clientWidth is `number`)
-/// lands in the synthesized `__svn_tpl_check` body with no line-map
-/// coverage and gets dropped by the diagnostic mapper.
+/// Post-walk scan: find every `EXPR = null as any as TYPE;` line
+/// emitted by `emit_dom_binding_checks_inline` and push a token-map
+/// entry covering the `EXPR` span → the user's `={expr}` source byte
+/// range. Without this, TS2322 firing on a wrong-typed bind target
+/// (`<img bind:naturalHeight={boolVar}>` where naturalHeight is
+/// `number`) lands in the synthesized `__svn_tpl_check` body with
+/// no line-map coverage and gets dropped by the diagnostic mapper.
 ///
-/// Matches the Nth `__svn_any_as<...>(...)` occurrence to
-/// `summary.dom_bindings[N]` via emit-order invariance. Only Range-
-/// form expressions (user-authored `bind:NAME={expr}`) get an entry
-/// — the Identifier-form bare shorthand (`bind:NAME`) doesn't carry
-/// a source range, so those diagnostics stay dropped. Acceptable:
-/// the declaration-site `NAME!` rewrite + `BindThisTarget` handle
-/// the definite-assign half of the shorthand's type-check flow.
+/// Matches the Nth `MID` occurrence to `summary.dom_bindings[N]` via
+/// emit-order invariance. Only Range-form expressions (user-authored
+/// `bind:NAME={expr}`) get an entry — the Identifier-form bare
+/// shorthand (`bind:NAME`) has no source range.
+///
+/// Emit shape (post-§3.1-residual-alignment): direct assignment, not
+/// wrapped in a never-called lambda. Upstream emits the same direct
+/// form (`Binding.ts:97-146`) — crucially, the assignment narrows
+/// EXPR's flow type for subsequent uses, matching upstream's control-
+/// flow behavior on patterns like `let x = $state<number>();
+/// <img bind:clientWidth={x}/> <Child {x}/>` where x flows as
+/// `number` (not `number | undefined`) at the <Child> site.
 fn collect_dom_binding_token_map(
     out: &str,
     source: &str,
     summary: &TemplateSummary,
 ) -> Vec<TokenMapEntry> {
-    // v0.3 Item 6: the emit shape is
-    //   `void ((): void => { EXPR = null as any as TYPE; });`
-    // The user expression EXPR is the LHS of the assignment after
-    // `{ ` and before ` = null as any as`. Scan for that anchor
-    // sequence and compute the EXPR span from it.
-    const LEAD: &str = "void ((): void => { ";
     const MID: &str = " = null as any as ";
     let mut entries: Vec<TokenMapEntry> = Vec::new();
     let mut cursor = 0usize;
     let mut binding_idx = 0usize;
-    while let Some(rel) = out[cursor..].find(LEAD) {
-        let lead_start = cursor + rel;
-        let expr_overlay_start = lead_start + LEAD.len();
-        // Find the ` = null as any as ` separator that terminates EXPR.
-        let Some(mid_rel) = out[expr_overlay_start..].find(MID) else {
-            break;
+    let bytes = out.as_bytes();
+    while let Some(rel) = out[cursor..].find(MID) {
+        let mid_pos = cursor + rel;
+        // Back up from MID to the start of EXPR. EXPR is written after
+        // a leading indent, which is whitespace only. Walk backwards
+        // through bytes that aren't whitespace (they're EXPR chars),
+        // then stop at the first whitespace/newline.
+        let mut expr_start = mid_pos;
+        while expr_start > 0 {
+            let b = bytes[expr_start - 1];
+            if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
+                break;
+            }
+            expr_start -= 1;
+        }
+        let expr_overlay_end = mid_pos;
+        let advance_to = match out[expr_overlay_end..].find(';') {
+            Some(off) => expr_overlay_end + off + 1,
+            None => expr_overlay_end,
         };
-        let expr_overlay_end = expr_overlay_start + mid_rel;
         let Some(binding) = summary.dom_bindings.get(binding_idx) else {
             break;
         };
         binding_idx += 1;
-        // Advance cursor past the whole emit statement in all cases;
-        // the closing `});` terminates it.
-        let advance_to = match out[expr_overlay_end..].find(");") {
-            Some(off) => expr_overlay_end + off + 2,
-            None => expr_overlay_end,
-        };
         let svn_analyze::DomBindingExpression::Range(expr_range) = &binding.expression else {
-            // Bare-shorthand form has no source range; skip.
             cursor = advance_to;
             continue;
         };
-        // Trimmed-source arithmetic: emit writes `expr.trim()`, so the
-        // overlay EXPR text length equals the trimmed source range
-        // length. Recompute the trimmed source span.
         let Some(slice) = source.get(expr_range.start as usize..expr_range.end as usize) else {
             cursor = advance_to;
             continue;
         };
         let leading_ws = slice.len() - slice.trim_start().len();
         let trimmed_len = slice.trim().len();
-        // Sanity: overlay span length should equal trimmed_len.
-        // Skip on mismatch (belt-and-suspenders — emit guarantees this).
-        if expr_overlay_end - expr_overlay_start != trimmed_len {
+        if expr_overlay_end - expr_start != trimmed_len {
             cursor = advance_to;
             continue;
         }
         let source_start = expr_range.start + leading_ws as u32;
         let source_end = source_start + trimmed_len as u32;
         entries.push(TokenMapEntry {
-            overlay_byte_start: expr_overlay_start as u32,
+            overlay_byte_start: expr_start as u32,
             overlay_byte_end: expr_overlay_end as u32,
             source_byte_start: source_start,
             source_byte_end: source_end,
@@ -2614,9 +2613,20 @@ fn emit_dom_binding_checks_inline(
         if expr.is_empty() {
             continue;
         }
+        // Direct assignment (NOT wrapped in a never-called lambda).
+        // Upstream emits `EXPR = $$_elN.clientWidth;` as a plain
+        // statement in the render body — both type-checks the LHS
+        // accepts the binding's value type AND narrows EXPR's flow
+        // type for subsequent uses. A `let x = $state<number>()`
+        // (type `number | undefined`) passed through `bind:clientWidth`
+        // then flows as `number` at the later `<Child {x}/>` site.
+        // The earlier `void (() => { ... })` wrapper isolated the
+        // assignment from narrowing, which produced spurious
+        // "possibly undefined" errors on consumer prop-passing sites
+        // against upstream's behavior (bench: FigmaPopup mainWidth).
         let _ = writeln!(
             out,
-            "{indent}void ((): void => {{ {expr} = null as any as {ty}; }});"
+            "{indent}{expr} = null as any as {ty};"
         );
     }
 }

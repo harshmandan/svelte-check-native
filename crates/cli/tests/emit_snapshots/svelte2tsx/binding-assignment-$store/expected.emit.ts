@@ -3,8 +3,8 @@
 async function $$render_13e7324c() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void ((): void => { $compile_options = null as any as HTMLElement['offsetHeight']; });
-        void ((): void => { $compile_options.foo = null as any as HTMLElement['offsetHeight']; });
+        $compile_options = null as any as HTMLElement['offsetHeight'];
+        $compile_options.foo = null as any as HTMLElement['offsetHeight'];
         void /* bind:this */ ((): void => { $compile_options = null as any as HTMLElementTagNameMap['div']; });
         void /* bind:this */ ((): void => { $compile_options.foo = null as any as HTMLElementTagNameMap['div']; });
     }

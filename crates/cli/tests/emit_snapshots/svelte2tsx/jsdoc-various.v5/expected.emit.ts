@@ -15,7 +15,7 @@ async function $$render_edb4eb12<T>() {
                     void bar;
                 });
             }
-            void ((): void => { rect = null as any as DOMRectReadOnly; });
+            rect = null as any as DOMRectReadOnly;
         }
     }
     void __svn_tpl_check;

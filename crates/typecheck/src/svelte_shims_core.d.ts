@@ -164,10 +164,44 @@ declare type ConstructorOfATypedSvelteComponent = any;
 // function-to-function assignability check treats `(v: string) =>
 // void` as compatible with `(e: any) => any` via bivariance, so the
 // index-signature conflict doesn't fire.
-declare type __SvnSvelte4PropsWiden<P> = ('slot' extends keyof P ? {} : { slot?: string })
-    & ('class' extends keyof P ? {} : { class?: string })
-    & ('style' extends keyof P ? {} : { style?: string })
-    & { [index: string]: any };
+// Matches upstream's `__sveltets_2_PropsWithChildren<Props, Slots>`
+// shape (svelte-shims-v4.d.ts:258-266) — only adds `children?: any`
+// when the component has a default slot. Everything else (class, style,
+// slot, on*) must be declared in user Props or users hit TS2353 —
+// same strictness as upstream.
+//
+// Prior version intersected {slot?, class?, style?, children?} +
+// {[index: string]: any} unconditionally; ANY non-empty intersection
+// contaminated tsgo's assignability check for missing-required-prop
+// cases — tsgo reported TS2322 "Type '{}' is not assignable" at the
+// top level with the precise TS2741 as a sub-message (observed on
+// language-tools/.../test-error/Index.svelte's `<Jsdoc />`). Matching
+// upstream's minimal widen lets TS2741 surface directly.
+declare type __SvnSvelte4PropsWiden<P> = 'children' extends keyof P
+    ? {}
+    : { children?: any };
+
+// Applied CONDITIONALLY at the emit site (intersected into the widen
+// only when the child component uses `$$props` / `$$restProps`). Mirror
+// of upstream's `SvelteAllProps` (svelte-shims-v4.d.ts:39), which
+// upstream applies via `__sveltets_2_with_any(…)` or
+// `__sveltets_2_partial_with_any(…)` factory functions when the child's
+// `uses$$props` flag is set. Components that DON'T reference those
+// identifiers keep strict Props — matching upstream's TS2353 on
+// undeclared attrs.
+declare type __SvnAllProps = { [index: string]: any };
+// `children?: any` mirrors upstream's `__sveltets_2_PropsWithChildren`
+// widen (svelte-shims-v4.d.ts:258-266) — lets the consumer-side
+// implicit-children emission (`children: () => __svn_snippet_return()`
+// on `<Foo>body</Foo>` patterns) type-check against Svelte 4
+// components that have `<slot>` usage. Previously we included a
+// catch-all `{ [index: string]: any }` which accepted `children` but
+// also contaminated tsgo's assignability check — TS2322 top-level
+// error fired instead of the precise TS2741 on missing required props
+// (observed on language-tools/.../test-error/Index.svelte's
+// `<Jsdoc />` vs expected TS2741). Dropping the index sig requires
+// users of Svelte 4 components to not pass undeclared attrs — same
+// strictness as upstream.
 
 // SVELTE-4-COMPAT: `$$Generic<T>` is Svelte 4's pre-Svelte-5-generics-attr
 // syntax for declaring a generic type parameter on a component — written

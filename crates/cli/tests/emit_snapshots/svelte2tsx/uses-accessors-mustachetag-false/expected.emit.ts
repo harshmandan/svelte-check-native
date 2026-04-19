@@ -13,7 +13,7 @@ foo = undefined as any;
     void bar;
 }
 $$render_96849c5d;
-declare const __svn_component_default: import('svelte').Component<{ foo?: number; bar?: string; } & __SvnSvelte4PropsWiden<{ foo?: number; bar?: string; }>, { foo: number; bar: string; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ foo?: number; bar?: string; } & __SvnSvelte4PropsWiden<{ foo?: number; bar?: string; }>> & { foo: number; bar: string; };
+declare const __svn_component_default: import('svelte').Component<{ foo?: number; bar?: string; }, { foo: number; bar: string; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ foo?: number; bar?: string; }> & { foo: number; bar: string; };
 export default __svn_component_default;
 

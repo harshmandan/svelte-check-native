@@ -10,7 +10,7 @@ async function $$render_389427c4<T extends Record<string, any>>() {
     void init;
 }
 $$render_389427c4;
-declare const __svn_component_default: <T extends Record<string, any>>(__anchor: any, props: Partial<{ init: T; } & __SvnSvelte4PropsWiden<{ init: T; }>>) => { init: T; };
-declare type __svn_component_default<T extends Record<string, any>> = import('svelte').SvelteComponent<{ init: T; } & __SvnSvelte4PropsWiden<{ init: T; }>> & { init: T; };
+declare const __svn_component_default: <T extends Record<string, any>>(__anchor: any, props: Partial<{ init: T; }>) => { init: T; };
+declare type __svn_component_default<T extends Record<string, any>> = import('svelte').SvelteComponent<{ init: T; }> & { init: T; };
 export default __svn_component_default;
 

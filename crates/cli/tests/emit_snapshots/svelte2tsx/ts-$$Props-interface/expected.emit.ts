@@ -63,7 +63,7 @@ rename1 = undefined as any;
     void renamebaz;
 }
 $$render_a154bb54;
-declare const __svn_component_default: import('svelte').Component<{ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; } & __SvnSvelte4PropsWiden<{ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }>, { exported1: string; exported2: string; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; } & __SvnSvelte4PropsWiden<{ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }>> & { exported1: string; exported2: string; };
+declare const __svn_component_default: import('svelte').Component<{ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }, { exported1: string; exported2: string; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }> & { exported1: string; exported2: string; };
 export default __svn_component_default;
 

@@ -18,7 +18,7 @@ store = undefined as any;
     void store;
 }
 $$render_9827a5f8;
-declare const __svn_component_default: import('svelte').Component<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>, { store: Writable<string[]> | null; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>> & { store: Writable<string[]> | null; };
+declare const __svn_component_default: import('svelte').Component<Record<string, any>, { store: Writable<string[]> | null; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>> & { store: Writable<string[]> | null; };
 export default __svn_component_default;
 

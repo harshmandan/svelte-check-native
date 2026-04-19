@@ -9,7 +9,7 @@ async function $$render_a8746c92() {
     void __svn_tpl_check;
 }
 $$render_a8746c92;
-declare const __svn_component_default: import('svelte').Component<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>;
+declare const __svn_component_default: import('svelte').Component<Record<string, any> & __SvnAllProps>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any> & __SvnAllProps>;
 export default __svn_component_default;
 

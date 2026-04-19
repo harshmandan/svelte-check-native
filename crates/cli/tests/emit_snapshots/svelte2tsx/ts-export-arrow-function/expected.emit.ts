@@ -13,7 +13,7 @@ async function $$render_36541f4e() {
     void f;
 }
 $$render_36541f4e;
-declare const __svn_component_default: import('svelte').Component<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>, { f: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>> & { f: any; };
+declare const __svn_component_default: import('svelte').Component<Record<string, any>, { f: any; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>> & { f: any; };
 export default __svn_component_default;
 

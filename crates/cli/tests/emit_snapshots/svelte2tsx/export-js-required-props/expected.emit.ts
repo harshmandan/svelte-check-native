@@ -14,7 +14,7 @@ async function $$render_6a73bb59() {
     void c;
 }
 $$render_6a73bb59;
-declare const __svn_component_default: import('svelte').Component<{ a: any; b: any; c?: any; } & __SvnSvelte4PropsWiden<{ a: any; b: any; c?: any; }>, { a: any; b: any; c: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ a: any; b: any; c?: any; } & __SvnSvelte4PropsWiden<{ a: any; b: any; c?: any; }>> & { a: any; b: any; c: any; };
+declare const __svn_component_default: import('svelte').Component<{ a: any; b: any; c?: any; }, { a: any; b: any; c: any; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ a: any; b: any; c?: any; }> & { a: any; b: any; c: any; };
 export default __svn_component_default;
 

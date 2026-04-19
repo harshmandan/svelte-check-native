@@ -13,7 +13,7 @@ async function $$render_5c38c881() {
     void a;
 }
 $$render_5c38c881;
-declare const __svn_component_default: import('svelte').Component<{ a: A; } & __SvnSvelte4PropsWiden<{ a: A; }>, { a: A; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ a: A; } & __SvnSvelte4PropsWiden<{ a: A; }>> & { a: A; };
+declare const __svn_component_default: import('svelte').Component<{ a: A; }, { a: A; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ a: A; }> & { a: A; };
 export default __svn_component_default;
 

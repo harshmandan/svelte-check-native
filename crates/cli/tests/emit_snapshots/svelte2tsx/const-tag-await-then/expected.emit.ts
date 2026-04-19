@@ -45,7 +45,7 @@ async function $$render_e1dcebf1() {
     void promise2;
 }
 $$render_e1dcebf1;
-declare const __svn_component_default: import('svelte').Component<{ promise1?: any; promise2?: any; constant?: any; } & __SvnSvelte4PropsWiden<{ promise1?: any; promise2?: any; constant?: any; }>, { promise1: any; promise2: any; constant: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ promise1?: any; promise2?: any; constant?: any; } & __SvnSvelte4PropsWiden<{ promise1?: any; promise2?: any; constant?: any; }>> & { promise1: any; promise2: any; constant: any; };
+declare const __svn_component_default: import('svelte').Component<{ promise1?: any; promise2?: any; constant?: any; }, { promise1: any; promise2: any; constant: any; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ promise1?: any; promise2?: any; constant?: any; }> & { promise1: any; promise2: any; constant: any; };
 export default __svn_component_default;
 

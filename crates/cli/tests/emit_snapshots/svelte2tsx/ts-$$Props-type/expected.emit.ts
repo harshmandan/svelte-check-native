@@ -63,7 +63,7 @@ rename1 = undefined as any;
     void renamebaz;
 }
 $$render_02fefb5b;
-declare const __svn_component_default: import('svelte').Component<$$Props & __SvnSvelte4PropsWiden<$$Props>, { exported1: string; exported2: string; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<$$Props & __SvnSvelte4PropsWiden<$$Props>> & { exported1: string; exported2: string; };
+declare const __svn_component_default: import('svelte').Component<$$Props, { exported1: string; exported2: string; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<$$Props> & { exported1: string; exported2: string; };
 export default __svn_component_default;
 

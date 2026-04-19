@@ -10,7 +10,7 @@ async function $$render_063ede7a<const T extends readonly string[]>() {
     void items;
 }
 $$render_063ede7a;
-declare const __svn_component_default: <const T extends readonly string[]>(__anchor: any, props: Partial<{ items: T; } & __SvnSvelte4PropsWiden<{ items: T; }>>) => { items: T; };
-declare type __svn_component_default<const T extends readonly string[]> = import('svelte').SvelteComponent<{ items: T; } & __SvnSvelte4PropsWiden<{ items: T; }>> & { items: T; };
+declare const __svn_component_default: <const T extends readonly string[]>(__anchor: any, props: Partial<{ items: T; }>) => { items: T; };
+declare type __svn_component_default<const T extends readonly string[]> = import('svelte').SvelteComponent<{ items: T; }> & { items: T; };
 export default __svn_component_default;
 

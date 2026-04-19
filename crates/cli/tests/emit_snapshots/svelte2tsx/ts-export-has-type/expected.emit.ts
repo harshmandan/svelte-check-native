@@ -15,7 +15,7 @@ b = undefined as any;
     void b;
 }
 $$render_7a575470;
-declare const __svn_component_default: import('svelte').Component<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>, { a: A; b: A; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>> & { a: A; b: A; };
+declare const __svn_component_default: import('svelte').Component<Record<string, any>, { a: A; b: A; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>> & { a: A; b: A; };
 export default __svn_component_default;
 

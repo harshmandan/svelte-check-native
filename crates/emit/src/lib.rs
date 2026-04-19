@@ -886,11 +886,45 @@ fn emit_document_with_render_name(
     // the base Props type so the shim can omit already-declared on*
     // keys from the widening (otherwise typed callbacks intersect with
     // the widen's lax signature and collapse to never).
+    //
+    // Conditional index-signature widen: mirror upstream's
+    // `__sveltets_2_with_any(…)` factory (svelte-shims-v4.d.ts:89)
+    // which adds `SvelteAllProps = {[index: string]: any}` ONLY when
+    // the child component uses `$$props` / `$$restProps`. Components
+    // that don't reference those keep strict Props — matching
+    // upstream's TS2353 on undeclared attrs. Detection mirrors
+    // upstream's `uses$$props` flag: check if the instance or module
+    // script references `$$props` or `$$restProps` as identifiers
+    // (substring check is accurate here because these aren't valid
+    // user-chosen names — the `$$` prefix is Svelte-reserved).
+    // Scan the WHOLE document source, not just script blocks: a
+    // Svelte 4 component can spread `{...$$props}` / `{...$$restProps}`
+    // in the TEMPLATE (`bench/control-svelte-4/.../MenuItem.svelte` is
+    // the canonical example — scripts define typed props, template
+    // spreads `{...$$props}` onto the root element so arbitrary extra
+    // attrs pass through at runtime). Upstream's `uses$$props`
+    // detection runs over the whole parsed tree, not just scripts.
+    // Substring check over `doc.source` is accurate because the `$$`
+    // prefix is Svelte-reserved — no valid user identifier starts with
+    // `$$`.
+    let uses_any_props =
+        doc.source.contains("$$props") || doc.source.contains("$$restProps");
+    let has_slots = svelte4_style && doc.source.contains("<slot");
+    // Match upstream's factory-pattern: intersections ONLY when the
+    // component shape actually needs them. ANY non-empty intersection
+    // (even a benign `{children?: any}`) contaminates tsgo's
+    // assignability check — missing-required-prop fires TS2322 top-
+    // level with TS2741 as sub-message, instead of TS2741 directly.
+    // Confirmed via `/tmp/repro-diag` hand-tests.
     let widen_for = |base: &str| -> String {
-        if svelte4_style {
-            format!(" & __SvnSvelte4PropsWiden<{base}>")
-        } else {
-            String::new()
+        if !svelte4_style {
+            return String::new();
+        }
+        match (has_slots, uses_any_props) {
+            (false, false) => String::new(),
+            (true, false) => format!(" & __SvnSvelte4PropsWiden<{base}>"),
+            (false, true) => " & __SvnAllProps".to_string(),
+            (true, true) => format!(" & __SvnSvelte4PropsWiden<{base}> & __SvnAllProps"),
         }
     };
     // SVELTE-4-COMPAT: Svelte-4 components that render a `<slot>` are

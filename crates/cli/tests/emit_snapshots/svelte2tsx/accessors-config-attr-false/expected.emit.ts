@@ -11,7 +11,7 @@ foo = undefined as any;
     void foo;
 }
 $$render_9f697d02;
-declare const __svn_component_default: import('svelte').Component<{ foo?: number; } & __SvnSvelte4PropsWiden<{ foo?: number; }>, { foo: number; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ foo?: number; } & __SvnSvelte4PropsWiden<{ foo?: number; }>> & { foo: number; };
+declare const __svn_component_default: import('svelte').Component<{ foo?: number; }, { foo: number; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ foo?: number; }> & { foo: number; };
 export default __svn_component_default;
 

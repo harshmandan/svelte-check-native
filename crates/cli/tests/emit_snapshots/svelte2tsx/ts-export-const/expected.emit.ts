@@ -13,7 +13,7 @@ async function $$render_71583bab() {
     void CONSTANT;
 }
 $$render_71583bab;
-declare const __svn_component_default: import('svelte').Component<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>, { name: string; SOME: any; CONSTANT: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>> & { name: string; SOME: any; CONSTANT: any; };
+declare const __svn_component_default: import('svelte').Component<Record<string, any>, { name: string; SOME: any; CONSTANT: any; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>> & { name: string; SOME: any; CONSTANT: any; };
 export default __svn_component_default;
 

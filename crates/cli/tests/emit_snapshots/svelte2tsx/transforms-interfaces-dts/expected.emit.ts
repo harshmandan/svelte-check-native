@@ -38,7 +38,7 @@ async function $$render_a34657fb() {
     void bar;
 }
 $$render_a34657fb;
-declare const __svn_component_default: import('svelte').Component<{ foo: Foo; bar: Bar3; } & __SvnSvelte4PropsWiden<{ foo: Foo; bar: Bar3; }>, { foo: Foo; bar: Bar3; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ foo: Foo; bar: Bar3; } & __SvnSvelte4PropsWiden<{ foo: Foo; bar: Bar3; }>> & { foo: Foo; bar: Bar3; };
+declare const __svn_component_default: import('svelte').Component<{ foo: Foo; bar: Bar3; }, { foo: Foo; bar: Bar3; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ foo: Foo; bar: Bar3; }> & { foo: Foo; bar: Bar3; };
 export default __svn_component_default;
 

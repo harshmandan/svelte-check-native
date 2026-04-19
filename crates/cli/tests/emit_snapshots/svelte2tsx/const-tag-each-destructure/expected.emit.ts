@@ -34,7 +34,7 @@ async function $$render_f39ccf3a() {
     void constant;
 }
 $$render_f39ccf3a;
-declare const __svn_component_default: import('svelte').Component<{ boxes?: any; constant?: any; } & __SvnSvelte4PropsWiden<{ boxes?: any; constant?: any; }>, { boxes: any; constant: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ boxes?: any; constant?: any; } & __SvnSvelte4PropsWiden<{ boxes?: any; constant?: any; }>> & { boxes: any; constant: any; };
+declare const __svn_component_default: import('svelte').Component<{ boxes?: any; constant?: any; }, { boxes: any; constant: any; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ boxes?: any; constant?: any; }> & { boxes: any; constant: any; };
 export default __svn_component_default;
 

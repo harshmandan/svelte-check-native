@@ -10,7 +10,7 @@ async function $$render_9a2c7966() {
     void world;
 }
 $$render_9a2c7966;
-declare const __svn_component_default: import('svelte').Component<{ world?: any; } & __SvnSvelte4PropsWiden<{ world?: any; }>, { world: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ world?: any; } & __SvnSvelte4PropsWiden<{ world?: any; }>> & { world: any; };
+declare const __svn_component_default: import('svelte').Component<{ world?: any; }, { world: any; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ world?: any; }> & { world: any; };
 export default __svn_component_default;
 

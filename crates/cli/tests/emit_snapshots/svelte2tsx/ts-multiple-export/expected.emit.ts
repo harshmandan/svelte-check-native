@@ -12,7 +12,7 @@ async function $$render_bbc70e42() {
     void number2;
 }
 $$render_bbc70e42;
-declare const __svn_component_default: import('svelte').Component<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>, { number1: number; number2: number; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>> & { number1: number; number2: number; };
+declare const __svn_component_default: import('svelte').Component<Record<string, any>, { number1: number; number2: number; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>> & { number1: number; number2: number; };
 export default __svn_component_default;
 

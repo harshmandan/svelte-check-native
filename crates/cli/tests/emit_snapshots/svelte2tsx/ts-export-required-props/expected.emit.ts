@@ -15,7 +15,7 @@ c = undefined as any;
     void c;
 }
 $$render_50fd1c6b;
-declare const __svn_component_default: import('svelte').Component<{ a: number; b: number | undefined; c?: number; } & __SvnSvelte4PropsWiden<{ a: number; b: number | undefined; c?: number; }>, { a: number; b: number | undefined; c: number; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ a: number; b: number | undefined; c?: number; } & __SvnSvelte4PropsWiden<{ a: number; b: number | undefined; c?: number; }>> & { a: number; b: number | undefined; c: number; };
+declare const __svn_component_default: import('svelte').Component<{ a: number; b: number | undefined; c?: number; }, { a: number; b: number | undefined; c: number; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ a: number; b: number | undefined; c?: number; }> & { a: number; b: number | undefined; c: number; };
 export default __svn_component_default;
 

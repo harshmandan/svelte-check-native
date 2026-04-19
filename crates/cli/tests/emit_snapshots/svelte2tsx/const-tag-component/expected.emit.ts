@@ -127,7 +127,7 @@ async function $$render_8a5774d3() {
     void constant;
 }
 $$render_8a5774d3;
-declare const __svn_component_default: import('svelte').Component<{ box?: any; constant?: any; } & __SvnSvelte4PropsWiden<{ box?: any; constant?: any; }>, { box: any; constant: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ box?: any; constant?: any; } & __SvnSvelte4PropsWiden<{ box?: any; constant?: any; }>> & { box: any; constant: any; };
+declare const __svn_component_default: import('svelte').Component<{ box?: any; constant?: any; }, { box: any; constant: any; }>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ box?: any; constant?: any; }> & { box: any; constant: any; };
 export default __svn_component_default;
 

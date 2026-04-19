@@ -71,6 +71,26 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed — pre-existing test failures
 
+- **SvelteKit kit-file diagnostics surface correctly.** Two bugs
+  that silently dropped diagnostics on `+page.ts` / `+layout.ts`
+  / `+server.ts` after `kit_inject` spliced `: T` annotations:
+  - `CacheLayout::original_from_generated` was stripping `.ts`
+    from kit mirror paths (`+page.ts` → `+page`), so tsgo's
+    reported path failed reverse-mapping and the diagnostic
+    never reached the user.
+  - Kit overlays carry empty `line_map`/`token_map`; the
+    position translator previously dropped any diagnostic
+    without a map entry. `MapData` now carries an
+    `identity_map: bool` flag (set for kit inputs) so positions
+    pass through unchanged — correct because `kit_inject`
+    splices only same-line `: T` annotations and never adds
+    lines.
+- **Hoisted-import columns match source.** `split_imports` now
+  preserves each hoist span's leading same-line whitespace, so
+  overlay imports keep the source indentation. Fixes column
+  drift on TS2307 module-resolution errors: `import nope from
+  '../../outside'` reports col 21 (matching upstream's expected)
+  instead of col 17 (overlay with stripped indent).
 - **Hoisted-type stubs use richer type annotation.**
   `script_split`'s `declare const <body-local>` stub emitted for
   body-local names referenced by hoisted types now uses

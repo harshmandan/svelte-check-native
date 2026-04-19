@@ -1101,6 +1101,7 @@ dependencies = [
  "svn-parser",
  "svn-svelte-compiler",
  "svn-typecheck",
+ "tempfile",
  "tokio",
  "walkdir",
 ]

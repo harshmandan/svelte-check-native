@@ -314,7 +314,6 @@ pub fn check(
         .collect();
     Ok(CheckOutput {
         diagnostics,
-        program_file_count: run.program_file_count,
         extended_diagnostics: run.extended_diagnostics,
     })
 }
@@ -328,10 +327,6 @@ pub struct CheckOutput {
     /// recognizable block. The CLI prints this verbatim after the
     /// normal output so users see tsgo's native perf/memory stats.
     pub extended_diagnostics: Option<String>,
-    /// File count from tsgo's program (`--listFiles`). Reported in the
-    /// COMPLETED line's `<N> FILES` field so the denominator matches
-    /// upstream svelte-check's.
-    pub program_file_count: usize,
 }
 
 /// Filter for diagnostics that come from our own overlay tsconfig and

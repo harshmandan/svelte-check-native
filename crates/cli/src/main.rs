@@ -10,12 +10,16 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod kit_files;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
 use rayon::prelude::*;
 use walkdir::WalkDir;
+
+use kit_files::{KitFilesSettings, is_kit_file};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -112,6 +116,13 @@ struct Cli {
     /// performance investigation on large projects.
     #[arg(long = "tsgo-diagnostics", default_value_t = false)]
     tsgo_diagnostics: bool,
+
+    /// Print every `.svelte` + SvelteKit Kit file the enumeration
+    /// finds (one absolute path per line), then exit. Used by the
+    /// `kit_file_parity` integration test to pin our discovery
+    /// against upstream's.
+    #[arg(long = "list-relevant", default_value_t = false, hide = true)]
+    list_relevant: bool,
 }
 
 fn main() -> ExitCode {
@@ -157,6 +168,14 @@ fn main() -> ExitCode {
 
     if cli.tsgo_version {
         return run_tsgo_version(&workspace);
+    }
+
+    if cli.list_relevant {
+        let (svelte, kit) = discover_relevant_files(&workspace, None);
+        for p in svelte.iter().chain(kit.iter()) {
+            println!("{}", p.display());
+        }
+        return ExitCode::from(0);
     }
 
     let tsconfig = match resolve_tsconfig(&workspace, cli.tsconfig.as_deref(), cli.no_tsconfig) {
@@ -541,7 +560,25 @@ fn run_typecheck(
             build_glob_set(workspace, tc.exclude.as_deref()),
         )
     });
-    let svelte_files: Vec<PathBuf> = discover_svelte_files(workspace, ignore)
+    let (svelte_files_raw, kit_files_raw) = discover_relevant_files(workspace, ignore);
+    let svelte_files: Vec<PathBuf> = svelte_files_raw
+        .into_iter()
+        .filter(|path| match &project_scope {
+            Some((include, exclude)) => {
+                let rel = path.strip_prefix(workspace).unwrap_or(path);
+                let included = include.as_ref().is_none_or(|set| set.is_match(rel));
+                let excluded = exclude.as_ref().is_some_and(|set| set.is_match(rel));
+                included && !excluded
+            }
+            None => true,
+        })
+        .collect();
+    // Kit files (route modules, hooks, params) get counted toward the
+    // COMPLETED denominator to match upstream svelte-check's counting,
+    // but we don't type-check them ourselves — tsgo processes them via
+    // regular `.ts` include. Apply the same project-scope filter so
+    // our count reflects only files tsgo would see.
+    let kit_files: Vec<PathBuf> = kit_files_raw
         .into_iter()
         .filter(|path| match &project_scope {
             Some((include, exclude)) => {
@@ -596,13 +633,9 @@ fn run_typecheck(
     // call so each `generated_ts` string drops as soon as it has been
     // written to the cache — see svn_typecheck::check docs.
     let mark = std::time::Instant::now();
-    let (mut diagnostics, program_file_count, tsgo_diag_block) = if sources.js {
+    let (mut diagnostics, tsgo_diag_block) = if sources.js {
         match svn_typecheck::check(workspace, tsconfig, inputs, tsgo_diagnostics) {
-            Ok(out) => (
-                out.diagnostics,
-                Some(out.program_file_count),
-                out.extended_diagnostics,
-            ),
+            Ok(out) => (out.diagnostics, out.extended_diagnostics),
             Err(err) => {
                 eprintln!("svelte-check-native: type-check failed: {err}");
                 return ExitCode::from(2);
@@ -612,7 +645,7 @@ fn run_typecheck(
         // When tsgo is skipped, drop `inputs` early too so we don't
         // hold the generated TS strings through the bridge phase.
         drop(inputs);
-        (Vec::new(), None, None)
+        (Vec::new(), None)
     };
     let t_typecheck = mark.elapsed();
 
@@ -691,11 +724,26 @@ fn run_typecheck(
         .count();
     let warning_count = diagnostics.len() - error_count;
 
-    // Prefer tsgo's program file count (matches upstream svelte-check's
-    // denominator). Fall back to a workspace walk only when tsgo was
-    // skipped via `--diagnostic-sources` opting out of `js`.
-    let files_for_completed =
-        program_file_count.unwrap_or_else(|| count_project_files(workspace, ignore));
+    // `<N> FILES` in the COMPLETED line mirrors upstream svelte-check's
+    // denominator exactly: it's `|entries ∪ files-with-diagnostics|`,
+    // where `entries` is every `.svelte` + SvelteKit "Kit file" we
+    // processed (route modules like `+page.ts`, hooks, params — see
+    // `kit_files` module) and files-with-diagnostics adds any NON-entry
+    // file that picked up a TS diagnostic at tsgo time (typically
+    // `tsconfig.json`-level errors). Both sets deduplicated against
+    // source_path.
+    let files_for_completed: usize = {
+        use std::collections::HashSet;
+        let mut seen: HashSet<&Path> = svelte_files
+            .iter()
+            .chain(kit_files.iter())
+            .map(PathBuf::as_path)
+            .collect();
+        for d in &diagnostics {
+            seen.insert(d.source_path.as_path());
+        }
+        seen.len()
+    };
     print_diagnostics(
         workspace,
         &diagnostics,
@@ -1046,7 +1094,26 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
 }
 
 fn discover_svelte_files(workspace: &Path, ignore: Option<&globset::GlobSet>) -> Vec<PathBuf> {
-    WalkDir::new(workspace)
+    discover_relevant_files(workspace, ignore).0
+}
+
+/// Walk the workspace once and return both `.svelte` files and Kit
+/// files (`.ts`/`.js` matching `is_kit_file`). Shares the single walker
+/// pass so callers that need both don't traverse the filesystem twice.
+///
+/// Kit-file detection uses `KitFilesSettings::default()` — the `kit.files`
+/// overrides in `svelte.config.js` aren't parsed yet (defaults cover the
+/// overwhelming majority of projects; overrides would require evaluating
+/// JS). Not a correctness issue for the denominator; files processed by
+/// tsgo via `include` globs are the same either way.
+fn discover_relevant_files(
+    workspace: &Path,
+    ignore: Option<&globset::GlobSet>,
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let kit_settings = KitFilesSettings::default();
+    let mut svelte_files = Vec::new();
+    let mut kit_files = Vec::new();
+    for e in WalkDir::new(workspace)
         .into_iter()
         .filter_entry(|e| {
             // Hard-coded exclusions for directories that are NEVER worth
@@ -1068,21 +1135,26 @@ fn discover_svelte_files(workspace: &Path, ignore: Option<&globset::GlobSet>) ->
         })
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            let path = e.path();
-            matches!(path.extension().and_then(|s| s.to_str()), Some("svelte"))
-        })
-        // Per-file glob check too, so `*.spec.svelte`-style patterns
-        // exclude individual files (not just directories).
-        .filter(|e| {
-            let Some(set) = ignore else { return true };
-            match e.path().strip_prefix(workspace) {
-                Ok(rel) => !set.is_match(rel),
-                Err(_) => true,
+    {
+        let path = e.path();
+        // Per-file glob check so `*.spec.svelte`-style patterns exclude
+        // individual files even when their parent dir isn't excluded.
+        if let Some(set) = ignore
+            && let Ok(rel) = path.strip_prefix(workspace)
+            && set.is_match(rel)
+        {
+            continue;
+        }
+        let ext = path.extension().and_then(|s| s.to_str());
+        match ext {
+            Some("svelte") => svelte_files.push(path.to_path_buf()),
+            Some("ts" | "js") if is_kit_file(path, &kit_settings) => {
+                kit_files.push(path.to_path_buf());
             }
-        })
-        .map(|e| e.path().to_path_buf())
-        .collect()
+            _ => {}
+        }
+    }
+    (svelte_files, kit_files)
 }
 
 /// Build a [`globset::GlobSet`] from tsconfig `include`/`exclude`
@@ -1140,41 +1212,6 @@ fn build_glob_set(workspace: &Path, patterns: Option<&[String]>) -> Option<globs
         return None;
     }
     builder.build().ok()
-}
-
-/// Count every TS-family source file in the workspace (svelte, ts, tsx,
-/// cts, mts, js, jsx, cjs, mjs). Used for the COMPLETED line's
-/// `<N> FILES` display so the figure matches what upstream `svelte-check`
-/// reports — upstream counts everything in the LanguageService program,
-/// not just `.svelte`. Reporting only `.svelte` (~1.2k on a real
-/// monorepo while upstream prints ~7k for the same project) gave a
-/// misleadingly small denominator and made the tool look like it was
-/// checking a fraction of what it actually checks.
-fn count_project_files(workspace: &Path, ignore: Option<&globset::GlobSet>) -> usize {
-    WalkDir::new(workspace)
-        .into_iter()
-        .filter_entry(|e| {
-            if is_excluded_dir(e.path()) {
-                return false;
-            }
-            if let Some(set) = ignore {
-                if let Ok(rel) = e.path().strip_prefix(workspace) {
-                    if set.is_match(rel) {
-                        return false;
-                    }
-                }
-            }
-            true
-        })
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            matches!(
-                e.path().extension().and_then(|s| s.to_str()),
-                Some("svelte" | "ts" | "tsx" | "cts" | "mts" | "js" | "jsx" | "cjs" | "mjs")
-            )
-        })
-        .count()
 }
 
 fn is_excluded_dir(path: &Path) -> bool {

@@ -118,12 +118,9 @@ Output defaults to `machine` when run from a coding-agent CLI:
 - `1` — errors detected (or warnings with `--fail-on-warnings`)
 - `2` — invocation error (bad flag, missing tsconfig, tsgo not found)
 
-## On deck for v0.3
+## Roadmap
 
-- Targeted CSS diagnostics via `lightningcss` — vendor-prefix
-  compatibility warnings only. We are explicitly **not** reimplementing
-  stylelint; if the narrow rule set isn't tractable, CSS stays out.
-- Reproducible perf-benchmark script across more reference projects.
+- [ ] CSS support
 
 ## Troubleshooting
 

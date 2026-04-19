@@ -1,53 +1,238 @@
 {
-    "_doc": "Same baseline format as v5_fixtures/baselines.json. Listed fixtures are expected to produce up to N errors. These are direct ports of upstream svelte2tsx fixtures that test verbatim-emit behavior — preserving user code character-for-character even when the user's code references undefined names, unresolved modules, or other things TS would flag.",
+    "_doc": "Same baseline format as v5_fixtures/baselines.json — exact-shape `expected_errors` list per entry. These are hand-converted Svelte-5 ports of upstream svelte2tsx store fixtures that test verbatim-emit behavior: preserving user code character-for-character even when the user's code references undefined names, unresolved modules, or other things TS would flag. Regenerate with `CAPTURE_BASELINES=1` on the runner when an emit change deliberately shifts the error shape; always `git diff` before committing.",
     "verbatim_emit_fixtures": {
         "$store-as-directive": {
-            "max_errors": 2,
-            "reason": "Tests store-name-as-directive emit shape; user code has TS oddities (unused comma operator side) that svelte2tsx preserves verbatim."
+            "reason": "Tests store-name-as-directive emit shape; user code has TS oddities (unused comma operator side) that svelte2tsx preserves verbatim.",
+            "expected_errors": []
         },
         "$store-assign": {
-            "max_errors": 2,
-            "reason": "User code references `writable` without importing it. Verbatim emit preserves the unresolved name."
+            "reason": "User code references `writable` without importing it. Verbatim emit preserves the unresolved name.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 18,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 12,
+                    "column": 4,
+                    "code": 2304
+                }
+            ]
         },
         "$store-inside-block-without-braces": {
-            "max_errors": 5,
-            "reason": "Multiple `$store` references where only some `store` names are declared in the fixture; verbatim emit preserves the unresolved ones. Raised from 3 to 5 after our store-auto-subscribe pass caught two additional `$store` references upstream misses."
+            "reason": "Multiple `$store` references where only some `store` names are declared in the fixture; verbatim emit preserves the unresolved ones. Raised from 3 to 5 after our store-auto-subscribe pass caught two additional `$store` references upstream misses.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 8,
+                    "column": 8,
+                    "code": 2552
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 10,
+                    "column": 8,
+                    "code": 2322
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 12,
+                    "column": 16,
+                    "code": 2339
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 17,
+                    "column": 20,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 20,
+                    "column": 20,
+                    "code": 2304
+                }
+            ]
         },
         "$store-nested-declaration": {
-            "max_errors": 2,
-            "reason": "Implicit-any in JSDoc-typed JS under strict mode. Verbatim emit doesn't add type annotations."
+            "reason": "Implicit-any in JSDoc-typed JS under strict mode. Verbatim emit doesn't add type annotations.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 15,
+                    "code": 7006
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 5,
+                    "column": 4,
+                    "code": 2304
+                }
+            ]
         },
         "$store-no-instance-only-module-script": {
-            "max_errors": 1,
-            "reason": "import from './somewhere' that doesn't exist. Verbatim emit preserves the unresolved import."
+            "reason": "import from './somewhere' that doesn't exist. Verbatim emit preserves the unresolved import.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 27,
+                    "code": 2307
+                }
+            ]
         },
         "store-destructuring": {
-            "max_errors": 5,
-            "reason": "User code references `fromSomewhere()` without import. Verbatim emit preserves the unresolved name."
+            "reason": "User code references `fromSomewhere()` without import. Verbatim emit preserves the unresolved name.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 18,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 2,
+                    "column": 28,
+                    "code": 2451
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 2,
+                    "column": 40,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 3,
+                    "column": 28,
+                    "code": 2451
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 3,
+                    "column": 40,
+                    "code": 2304
+                }
+            ]
         },
         "store-from-module": {
-            "max_errors": 5,
-            "reason": "import from './store' that doesn't exist. Verbatim emit preserves."
+            "reason": "import from './store' that doesn't exist. Verbatim emit preserves.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 33,
+                    "code": 2307
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 2,
+                    "column": 19,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 3,
+                    "column": 19,
+                    "code": 2304
+                }
+            ]
         },
         "store-import": {
-            "max_errors": 3,
-            "reason": "import from './store' that doesn't exist. Verbatim emit preserves."
+            "reason": "import from './store' that doesn't exist. Verbatim emit preserves.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 19,
+                    "code": 2307
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 2,
+                    "column": 23,
+                    "code": 2307
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 3,
+                    "column": 33,
+                    "code": 2307
+                }
+            ]
         },
         "store-property-access": {
-            "max_errors": 1,
-            "reason": "User code references `someStore` without declaration. Verbatim emit preserves."
+            "reason": "User code references `someStore` without declaration. Verbatim emit preserves.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 18,
+                    "code": 2304
+                }
+            ]
         },
         "uses-$store": {
-            "max_errors": 2,
-            "reason": "User code references `$b` where `b` is never declared (external store assumed). Verbatim emit preserves."
+            "reason": "User code references `$b` where `b` is never declared (external store assumed). Verbatim emit preserves.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 0,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 3,
+                    "code": 2304
+                }
+            ]
         },
         "typeof-$store": {
-            "max_errors": 1,
-            "reason": "`typeof $foo` with no `foo` store declared in the fixture — verbatim preservation of the undeclared reference."
+            "reason": "`typeof $foo` with no `foo` store declared in the fixture — verbatim preservation of the undeclared reference.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 3,
+                    "column": 18,
+                    "code": 2304
+                }
+            ]
         },
         "uses-$store-in-event-binding": {
-            "max_errors": 4,
-            "reason": "`<svelte:options runes />` + `on:event` directives referencing Component-typed expressions with no Svelte type imports. Mix of user-code-without-imports and Svelte-4 on-directive handling our emit doesn't yet cover (see phase G design doc for the full plan)."
+            "reason": "`<svelte:options runes />` + `on:event` directives referencing Component-typed expressions with no Svelte type imports. Mix of user-code-without-imports and Svelte-4 on-directive handling our emit doesn't yet cover (see phase G design doc for the full plan).",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 5,
+                    "column": 53,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 6,
+                    "column": 67,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 6,
+                    "column": 76,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 6,
+                    "column": 86,
+                    "code": 2304
+                }
+            ]
         }
     }
 }

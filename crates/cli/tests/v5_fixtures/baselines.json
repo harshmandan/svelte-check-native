@@ -1,81 +1,298 @@
 {
-    "_doc": "Per-fixture baselines for the v5 fixtures suite. Listed fixtures are expected to produce up to `max_errors` ERROR-severity diagnostics — they're testing svelte2tsx's verbatim-emit behavior (preserving user code character-for-character) rather than asserting that the output type-checks. svelte2tsx's own `expectedv2.ts` for these fixtures contains TS errors that match what the user wrote. A fixture in this list passes if our error count ≤ max_errors. Fixtures not in this list must produce zero errors to pass.",
+    "_doc": "Per-fixture baselines for the v5 fixtures suite. Listed fixtures are expected to produce the EXACT `expected_errors` set (same count, same {file, line, column, code} per entry, optional message_contains substring). These fixtures test svelte2tsx's verbatim-emit behavior — they preserve user code character-for-character even when that user code doesn't type-check, so the errors below match what tsgo fires on the preserved source. Fixtures not in this list must produce zero errors to pass. Regenerate with `CAPTURE_BASELINES=1` on the runner when an emit change deliberately shifts the error shape; always `git diff` the result before committing.",
     "verbatim_emit_fixtures": {
         "runes-best-effort-types.v5": {
-            "max_errors": 1,
-            "reason": "let { g = foo } = $props() — `foo` is undefined; the fixture preserves the user's reference verbatim. svelte2tsx emits the same error in expectedv2.ts."
+            "reason": "let { g = foo } = $props() — `foo` is undefined; the fixture preserves the user's reference verbatim. svelte2tsx emits the same error in expectedv2.ts.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 60,
+                    "code": 2304
+                }
+            ]
         },
         "ts-runes-best-effort-types.v5": {
-            "max_errors": 3,
-            "reason": "Same as runes-best-effort-types but with extra TS-typed defaults (h = null as Bar, i = null as any as Baz). All three undefined references preserved verbatim."
+            "reason": "Same as runes-best-effort-types but with extra TS-typed defaults (h = null as Bar, i = null as any as Baz). All three undefined references preserved verbatim.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 60,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 77,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 101,
+                    "code": 2304
+                }
+            ]
         },
         "ts-runes-generics.v5": {
-            "max_errors": 2,
-            "reason": "let x = $state<T>(0) where T is a generic. Real svelte's $state<T>(initial: T) signature flags this — 0 isn't assignable to generic T. svelte2tsx emits verbatim; our shim mirrors the real signature so the same TS2345 fires."
+            "reason": "let x = $state<T>(0) where T is a generic. Real svelte's $state<T>(initial: T) signature flags this — 0 isn't assignable to generic T. svelte2tsx emits verbatim; our shim mirrors the real signature so the same TS2345 fires.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 2,
+                    "column": 22,
+                    "code": 2345
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 3,
+                    "column": 21,
+                    "code": 2362
+                }
+            ]
         },
         "ts-runes-with-slot.v5": {
-            "max_errors": 2,
-            "reason": "Same $state<T>(0) pattern as ts-runes-generics, plus snippet handling."
+            "reason": "Same $state<T>(0) pattern as ts-runes-generics, plus snippet handling.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 3,
+                    "column": 22,
+                    "code": 2345
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 4,
+                    "column": 21,
+                    "code": 2362
+                }
+            ]
         },
         "snippet-module-hoist-2.v5": {
-            "max_errors": 1,
-            "reason": "import { imported } from './x' — './x' doesn't exist in the fixture. Tests that snippet hoisting works in the presence of unresolved imports; the import error itself is expected."
+            "reason": "import { imported } from './x' — './x' doesn't exist in the fixture. Tests that snippet hoisting works in the presence of unresolved imports; the import error itself is expected.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 25,
+                    "code": 2307
+                }
+            ]
         },
         "snippet-module-hoist-7.v5": {
-            "max_errors": 2,
-            "reason": "import { store } from './foo' — './foo' doesn't exist. Same pattern as snippet-module-hoist-2. Count raised from 1 to 2 after we started reporting the bad import on both the module-script declaration and the instance-script reference."
+            "reason": "import { store } from './foo' — './foo' doesn't exist. Same pattern as snippet-module-hoist-2. Count raised from 1 to 2 after we started reporting the bad import on both the module-script declaration and the instance-script reference.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 27,
+                    "code": 2307
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 5,
+                    "column": 22,
+                    "code": 2307
+                }
+            ]
         },
         "ts-runes-hoistable-props-5.v5": {
-            "max_errors": 1,
-            "reason": "import X from './X' — './X' doesn't exist. Tests prop type-extraction in presence of unresolved import."
+            "reason": "import X from './X' — './X' doesn't exist. Tests prop type-extraction in presence of unresolved import.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 18,
+                    "code": 2307
+                }
+            ]
         },
         "ts-runes-hoistable-props-false-11.v5": {
-            "max_errors": 1,
-            "reason": "interface A { Abc: typeof a }; let {}: Abc = $props(). The TS2713 'A.Abc' inside the fixture's outer interface uses A as a namespace — svelte2tsx preserves and the user error is the test target."
+            "reason": "interface A { Abc: typeof a }; let {}: Abc = $props(). The TS2713 'A.Abc' inside the fixture's outer interface uses A as a namespace — svelte2tsx preserves and the user error is the test target.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 7,
+                    "column": 9,
+                    "code": 2713
+                }
+            ]
         },
         "await.v5": {
-            "max_errors": 1,
-            "reason": "`{await promise}` / `{#each await promise as item}` — await in mustache expressions. Our template emit doesn't wrap these in an async arrow so tsgo fires TS2304 on a referenced helper name. Tracked for v0.2; verbatim-preserved in upstream."
+            "reason": "`{await promise}` / `{#each await promise as item}` — await in mustache expressions. Our template emit doesn't wrap these in an async arrow so tsgo fires TS2304 on a referenced helper name. Tracked for v0.2; verbatim-preserved in upstream.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 59,
+                    "code": 2304
+                }
+            ]
         },
         "ts-await-generics.v5": {
-            "max_errors": 1,
-            "reason": "Same await-in-mustache shape as await.v5, with an outer `<script generics>`."
+            "reason": "Same await-in-mustache shape as await.v5, with an outer `<script generics>`.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 59,
+                    "code": 2304
+                }
+            ]
         },
         "snippet-generics.v5": {
-            "max_errors": 3,
-            "reason": "`{#snippet generic<T extends string>(val: T)}` — snippets with explicit generic parameters. Our snippet emit doesn't carry the generic list through to the synthesized arrow; `T` is unbound in the body. Real emit gap, deferred."
+            "reason": "`{#snippet generic<T extends string>(val: T)}` — snippets with explicit generic parameters. Our snippet emit doesn't carry the generic list through to the synthesized arrow; `T` is unbound in the body. Real emit gap, deferred.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 54,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 54,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 84,
+                    "code": 1117
+                }
+            ]
         },
         "snippet-instance-script.v5": {
-            "max_errors": 1,
-            "reason": "Instance script body references `bar;` where `bar` is a snippet declared in the template. Upstream hoists snippet names into the body's declaration scope; we emit template-only. Deferred."
+            "reason": "Instance script body references `bar;` where `bar` is a snippet declared in the template. Upstream hoists snippet names into the body's declaration scope; we emit template-only. Deferred.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 2,
+                    "column": 4,
+                    "code": 2304
+                }
+            ]
         },
         "snippet-module-hoist-1.v5": {
-            "max_errors": 2,
-            "reason": "`import { imported } from './x'` — './x' doesn't exist. Same verbatim-preservation pattern as snippet-module-hoist-2; the higher count is from the second `./x` reference in this variant."
+            "reason": "`import { imported } from './x'` — './x' doesn't exist. Same verbatim-preservation pattern as snippet-module-hoist-2; the higher count is from the second `./x` reference in this variant.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 4,
+                    "column": 30,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 5,
+                    "column": 25,
+                    "code": 2307
+                }
+            ]
         },
         "snippet-module-hoist-6.v5": {
-            "max_errors": 1,
-            "reason": "`<script module>export const foo = _foo</script>` with `_foo` declared as a snippet in the template. Upstream visibility-merges snippets into module scope via its hoist pipeline; we don't. Deferred."
+            "reason": "`<script module>export const foo = _foo</script>` with `_foo` declared as a snippet in the template. Upstream visibility-merges snippets into module scope via its hoist pipeline; we don't. Deferred.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 23,
+                    "code": 2552
+                }
+            ]
         },
         "ts-runes-hoistable-props-false-2.v5": {
-            "max_errors": 2,
-            "reason": "`interface Props { [index: typeof a]: boolean }` — index-signature key whose type is `typeof a` (a const). TS1268 per spec: index signature parameters must be `string | number | symbol | template literal`. User-code error preserved verbatim."
+            "reason": "`interface Props { [index: typeof a]: boolean }` — index-signature key whose type is `typeof a` (a const). TS1268 per spec: index signature parameters must be `string | number | symbol | template literal`. User-code error preserved verbatim.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 3,
+                    "column": 9,
+                    "code": 1268
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 7,
+                    "column": 10,
+                    "code": 2339
+                }
+            ]
         },
         "ts-runes-hoistable-props-false-5.v5": {
-            "max_errors": 2,
-            "reason": "`type Shadowed` declared in both `<script module>` and `<script lang=\"ts\">` — duplicate identifier in the composed overlay. Our hoist emits both into the same module scope; upstream scopes module-script types separately. Deferred."
+            "reason": "`type Shadowed` declared in both `<script module>` and `<script lang=\"ts\">` — duplicate identifier in the composed overlay. Our hoist emits both into the same module scope; upstream scopes module-script types separately. Deferred.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 9,
+                    "code": 2300
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 5,
+                    "column": 5,
+                    "code": 2300
+                }
+            ]
         },
         "ts-runes-hoistable-props-false-7.v5": {
-            "max_errors": 1,
-            "reason": "`let { destructured } = {}; type Props = { prop: typeof destructured };` — property access on `{}` fires TS2339. User-code pattern, verbatim."
+            "reason": "`let { destructured } = {}; type Props = { prop: typeof destructured };` — property access on `{}` fires TS2339. User-code pattern, verbatim.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 7,
+                    "code": 2339
+                }
+            ]
         },
         "ts-runes-hoistable-props-false-14.v5": {
-            "max_errors": 5,
-            "reason": "`<script module>enum A {}</script>` + `<script lang=\"ts\">interface A { Abc: number }</script>` — enum + interface share the same name across module and instance scripts. TS2567 fires because both get hoisted into the same overlay scope. Same root cause as hoistable-props-false-5; deferred."
+            "reason": "`<script module>enum A {}</script>` + `<script lang=\"ts\">interface A { Abc: number }</script>` — enum + interface share the same name across module and instance scripts. TS2567 fires because both get hoisted into the same overlay scope. Same root cause as hoistable-props-false-5; deferred.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 9,
+                    "code": 2567
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 5,
+                    "column": 66,
+                    "code": 2344
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 5,
+                    "column": 72,
+                    "code": 2344
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 6,
+                    "column": 10,
+                    "code": 2567
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 10,
+                    "column": 5,
+                    "code": 2339
+                }
+            ]
         },
         "ts-runes-hoistable-props-false-15.v5": {
-            "max_errors": 1,
-            "reason": "`import { store } from './foo'` with './foo' missing — verbatim preservation of unresolved import."
+            "reason": "`import { store } from './foo'` with './foo' missing — verbatim preservation of unresolved import.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 5,
+                    "column": 22,
+                    "code": 2307
+                }
+            ]
         }
     }
 }

@@ -3,7 +3,7 @@
 async function $$render_0dda80aa() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void /* bind:this */ ((): void => { s = null as any as HTMLElementTagNameMap['slot']; });
+        /* bind:this */ s = null as any as HTMLElementTagNameMap['slot'];
     }
     void __svn_tpl_check;
 }

@@ -11,7 +11,7 @@ async function $$render_b44f0ee2() {
     focusLater();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        void /* bind:this */ ((): void => { inputEl = null as any as HTMLElementTagNameMap['div']; });
+        /* bind:this */ inputEl = null as any as HTMLElementTagNameMap['div'];
     }
     void __svn_tpl_check;
     void inputEl;

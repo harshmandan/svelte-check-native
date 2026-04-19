@@ -287,21 +287,68 @@ function parseCompleted(output) {
     };
 }
 
-/// Locate upstream `svelte-check` in the target's node_modules chain.
-/// Walks up the parent directories; covers both app-local (own
-/// node_modules/.bin) and workspace-hoisted (pnpm/yarn) layouts.
+/// Locate a `--tsgo`-capable upstream `svelte-check` in the target's
+/// node_modules chain. Walks up the parent directories, scanning:
+///   - `<dir>/node_modules/.bin/svelte-check`         (npm/yarn app-local)
+///   - `<dir>/node_modules/.pnpm/node_modules/.bin/…` (pnpm workspace-hoisted)
+///   - `<dir>/node_modules/.bun/svelte-check@X/…`     (bun install)
+///   - `<dir>/node_modules/.pnpm/svelte-check@X/…`    (pnpm per-package)
+///
+/// Prefers svelte-check 4.4+ (first `--tsgo`-capable release). Older
+/// hoisted versions (3.x / 4.0-4.3) get skipped via
+/// `upstreamSupportsTsgo` check further downstream; if multiple
+/// candidates exist, returns the first 4.4+ match it finds.
 function findUpstreamSvelteCheck(start) {
     let dir = start;
     while (dir !== '/' && dir !== '.') {
-        const candidate = join(dir, 'node_modules', '.bin', 'svelte-check');
-        if (existsSync(candidate)) return candidate;
-        const pnpmCandidate = join(dir, 'node_modules', '.pnpm', 'node_modules', '.bin', 'svelte-check');
-        if (existsSync(pnpmCandidate)) return pnpmCandidate;
+        // Standard hoist locations first.
+        for (const p of [
+            join(dir, 'node_modules', '.bin', 'svelte-check'),
+            join(dir, 'node_modules', '.pnpm', 'node_modules', '.bin', 'svelte-check'),
+        ]) {
+            if (existsSync(p)) return p;
+        }
+        // pnpm/bun per-package layouts — scan for 4.4+ versions.
+        for (const managerRoot of [
+            join(dir, 'node_modules', '.pnpm'),
+            join(dir, 'node_modules', '.bun'),
+        ]) {
+            if (!existsSync(managerRoot)) continue;
+            try {
+                const entries = readdirSync(managerRoot);
+                // Prefer 4.4+ (first --tsgo-capable release).
+                const candidates = entries
+                    .filter(e => /^svelte-check@\d/.test(e))
+                    .sort((a, b) => {
+                        const va = versionFromEntry(a);
+                        const vb = versionFromEntry(b);
+                        return compareVersions(vb, va); // descending
+                    });
+                for (const entry of candidates) {
+                    const bin = join(managerRoot, entry, 'node_modules', 'svelte-check', 'bin', 'svelte-check');
+                    if (existsSync(bin)) return bin;
+                }
+            } catch {
+                // readdir failed (permissions / symlink loop / etc.) — skip.
+            }
+        }
         const parent = resolve(dir, '..');
         if (parent === dir) break;
         dir = parent;
     }
     return null;
+}
+
+function versionFromEntry(entry) {
+    const m = entry.match(/^svelte-check@(\d+)\.(\d+)\.(\d+)/);
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [0, 0, 0];
+}
+
+function compareVersions(a, b) {
+    for (let i = 0; i < 3; i++) {
+        if (a[i] !== b[i]) return a[i] - b[i];
+    }
+    return 0;
 }
 
 function upstreamSupportsTsgo(bin) {

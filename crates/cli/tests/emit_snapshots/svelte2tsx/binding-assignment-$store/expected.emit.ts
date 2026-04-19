@@ -5,8 +5,8 @@ async function $$render_13e7324c() {
         // template type-check body (incremental)
         $compile_options = null as any as HTMLElement['offsetHeight'];
         $compile_options.foo = null as any as HTMLElement['offsetHeight'];
-        void /* bind:this */ ((): void => { $compile_options = null as any as HTMLElementTagNameMap['div']; });
-        void /* bind:this */ ((): void => { $compile_options.foo = null as any as HTMLElementTagNameMap['div']; });
+        /* bind:this */ $compile_options = null as any as HTMLElementTagNameMap['div'];
+        /* bind:this */ $compile_options.foo = null as any as HTMLElementTagNameMap['div'];
     }
     void __svn_tpl_check;
 }

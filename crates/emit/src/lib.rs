@@ -1165,11 +1165,11 @@ fn collect_bind_this_check_token_map(
     source: &str,
     summary: &TemplateSummary,
 ) -> Vec<TokenMapEntry> {
-    // Emit shape:
-    //     `void /* bind:this */ ((): void => { EXPR = null as any as TYPE; });`
-    // LEAD anchors the `bind:this` marker; the EXPR starts after the
-    // `{ ` that follows `((): void => `. MID terminates EXPR.
-    const LEAD: &str = "void /* bind:this */ ((): void => { ";
+    // Emit shape (post-narrowing-alignment):
+    //     `/* bind:this */ EXPR = null as any as TYPE;`
+    // LEAD anchors the `bind:this` marker; EXPR starts right after
+    // the marker + space. MID terminates EXPR.
+    const LEAD: &str = "/* bind:this */ ";
     const MID: &str = " = null as any as ";
     let mut entries: Vec<TokenMapEntry> = Vec::new();
     let mut cursor = 0usize;
@@ -1186,8 +1186,8 @@ fn collect_bind_this_check_token_map(
         };
         check_idx += 1;
         // Advance past the whole statement for every iteration.
-        let advance_to = match out[expr_overlay_end..].find(");") {
-            Some(off) => expr_overlay_end + off + 2,
+        let advance_to = match out[expr_overlay_end..].find(';') {
+            Some(off) => expr_overlay_end + off + 1,
             None => expr_overlay_end,
         };
         let Some(slice) = source
@@ -2727,14 +2727,25 @@ fn emit_bind_this_element_check_inline(
             continue;
         }
         let el_type = element_type_annotation(tag_name);
-        // Using `/* bind:this */` as a distinguishing marker vs Item
-        // 6's DOM-binding lambda emit (which uses the plain
-        // `void ((): void => { ... });` shape). The marker lets
-        // `collect_bind_this_check_token_map` scan uniquely for
-        // these without colliding with Item 6's scan pattern.
+        // Direct assignment (NOT wrapped in a never-called lambda) —
+        // same alignment as one-way DOM bindings (commit `61fb2f5`).
+        // Upstream emits `EXPR = ${element.name};` as a plain statement
+        // so TS flow analysis narrows `EXPR` from `T | null` to `T`
+        // after the assignment. Observed case on control-svelte-5
+        // `FolderTreeItem.svelte`: `let iconEl = $state<HTMLElement |
+        // null>(null)` declared, used via `<button bind:this={iconEl}>`
+        // then passed as `{iconEl}` to child expecting `HTMLElement`.
+        // Without the narrowing, tsgo fires TS2322 at the child-call
+        // site; upstream's direct-assignment shape narrows iconEl to
+        // `HTMLElement` for the downstream use.
+        //
+        // `/* bind:this */` comment marker preserved as anchor for
+        // `collect_bind_this_check_token_map` so it can distinguish
+        // this emit from one-way DOM-binding emits during the
+        // post-walk token-map scan.
         let _ = writeln!(
             out,
-            "{indent}void /* bind:this */ ((): void => {{ {expr} = null as any as {el_type}; }});"
+            "{indent}/* bind:this */ {expr} = null as any as {el_type};"
         );
     }
 }

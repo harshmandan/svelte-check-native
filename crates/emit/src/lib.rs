@@ -2777,10 +2777,19 @@ fn try_process_let_statement(
                 b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
                 b')' | b']' | b'}' => paren_depth -= 1,
                 b'>' => {
-                    // `=>` arrow — the `>` is arrow syntax, not a
-                    // generic close.
+                    // Two non-generic-close forms to guard against:
+                    //   `=>` — arrow return (prev byte is `=`)
+                    //   `>=` — greater-or-equal (next byte is `=`).
+                    // Both should NOT decrement paren_depth. Right-
+                    // shift operators (`>>`, `>>=`) are deliberately
+                    // NOT special-cased — they're rare in script-scope
+                    // code, and `>>` inside nested generic types like
+                    // `Partial<Record<K, V>>` must still decrement
+                    // correctly (twice).
                     let prev = if s > 0 { Some(bytes[s - 1]) } else { None };
-                    if prev != Some(b'=') {
+                    let next = bytes.get(s + 1).copied();
+                    let skip_decrement = prev == Some(b'=') || next == Some(b'=');
+                    if !skip_decrement {
                         paren_depth -= 1;
                     }
                 }

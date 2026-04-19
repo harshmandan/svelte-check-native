@@ -37,6 +37,7 @@ async function $$render_0bc1cb85() {
                             void x;
                             return __svn_snippet_return();
                         },
+                        children: () => __svn_snippet_return(),
                     },
                 });
             }
@@ -62,7 +63,7 @@ async function $$render_0bc1cb85() {
             }
             {
                 const __svn_C_219 = __svn_ensure_component(List);
-                new __svn_C_219({ target: __svn_any(), props: {} });
+                new __svn_C_219({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             }
             {
                 const __svn_C_23c = __svn_ensure_component(List);
@@ -78,6 +79,7 @@ async function $$render_0bc1cb85() {
                             void item;
                             return __svn_snippet_return();
                         },
+                        children: () => __svn_snippet_return(),
                     },
                 });
             }

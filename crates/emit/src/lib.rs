@@ -2269,7 +2269,30 @@ fn emit_component_call(
         "{inner}const {local} = __svn_ensure_component({comp});"
     );
 
-    if snippet_children.is_empty() && inst.props.is_empty() {
+    // Implicit-children synthesis: when the user has non-snippet
+    // body content, inject `"children": () => __svn_snippet_return()`
+    // into the props literal. Matches upstream svelte2tsx's behavior
+    // (`component.addProp(['children'], ['() => __sveltets_2_any(0)'])`)
+    // so components declaring `children: Snippet` (required) accept
+    // `<Comp>body</Comp>` without a TS2741 at the phase-5 satisfies
+    // trailer.
+    //
+    // Skipped when the user explicitly named a `children` prop OR
+    // wrote a `{#snippet children}` block — both paths already emit
+    // a `children:` key in the props literal; a second synthesis
+    // would fire TS1117 "duplicate property".
+    let user_named_children = inst
+        .props
+        .iter()
+        .any(|p| prop_shape_name(p).is_some_and(|n| n == "children"));
+    let user_named_children_snippet = snippet_children
+        .iter()
+        .any(|s| s.name.as_str() == "children");
+    let emit_implicit_children = inst.has_implicit_children
+        && !user_named_children
+        && !user_named_children_snippet;
+
+    if snippet_children.is_empty() && inst.props.is_empty() && !emit_implicit_children {
         let _ = writeln!(
             out,
             "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{}} }});"
@@ -2291,6 +2314,12 @@ fn emit_component_call(
             }
             first = false;
             write_prop_shape(out, source, p);
+        }
+        if emit_implicit_children {
+            if !first {
+                let _ = write!(out, ", ");
+            }
+            let _ = write!(out, "children: () => __svn_snippet_return()");
         }
         let _ = writeln!(out, "}} }});");
         emit_on_event_calls(out, source, inst, &inst_local, &inner);
@@ -2314,10 +2343,32 @@ fn emit_component_call(
         write_snippet_arrow_prop(out, source, s, depth + 3, insts);
         let _ = writeln!(out, ",");
     }
+    // Implicit children and explicit snippet children are mutually
+    // exclusive in practice — the user wrote either one or the other
+    // — but defensively emit only when we haven't already covered it
+    // via `snippet_children` above.
+    if emit_implicit_children {
+        out.push_str(&props_inner);
+        let _ = writeln!(out, "children: () => __svn_snippet_return(),");
+    }
     let _ = writeln!(out, "{opts_inner}}},");
     let _ = writeln!(out, "{inner}}});");
     emit_on_event_calls(out, source, inst, &inst_local, &inner);
     let _ = writeln!(out, "{indent}}}");
+}
+
+/// Extract the NAME from a `PropShape`, if it has one (spreads
+/// don't — they're positional). Used at emit time to detect whether
+/// the user explicitly named a prop we'd otherwise synthesize
+/// (e.g. `children`).
+fn prop_shape_name(p: &svn_analyze::PropShape) -> Option<&str> {
+    match p {
+        svn_analyze::PropShape::Literal { name, .. }
+        | svn_analyze::PropShape::Expression { name, .. }
+        | svn_analyze::PropShape::Shorthand { name }
+        | svn_analyze::PropShape::BoolShorthand { name } => Some(name),
+        svn_analyze::PropShape::Spread { .. } => None,
+    }
 }
 
 /// Emit one `$inst.$on("event", (handler))` line per `on:event`

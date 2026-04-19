@@ -73,8 +73,25 @@ pub struct ComponentInstantiation {
     /// Root identifier of the component name (e.g. `MyButton` from
     /// `<MyButton />` or `<ui.MyButton />`).
     pub component_root: SmolStr,
-    /// Plain attributes only (no bind/on/use/etc directives, no spread).
+    /// Plain attributes + translated `bind:NAME={x}` directives (as
+    /// `Expression` props) + `{...expr}` spreads. Excludes
+    /// `on:event` (tracked separately in `on_events`), `bind:this`,
+    /// `use:`, `class:`, transitions.
     pub props: Vec<PropShape>,
+    /// True when the user put NON-snippet, non-whitespace template
+    /// content between the component's open/close tags. At runtime
+    /// this becomes an implicit `children: Snippet` prop. Emit
+    /// synthesizes `"children": () => __svn_snippet_return()` in
+    /// the props literal when true so a component declaring
+    /// `children: Snippet` (required) accepts `<Comp>body</Comp>`
+    /// without firing a spurious TS2741 at phase 5's `satisfies`
+    /// trailer.
+    ///
+    /// Pure `{#snippet}` children do NOT count — they hoist as
+    /// their own explicit props via emit's snippet-as-arrow-prop
+    /// path. Pure whitespace (indentation / newlines between open
+    /// and close) also doesn't count.
+    pub has_implicit_children: bool,
     /// SVELTE-4-COMPAT: `on:event={handler}` directives on this
     /// component. Emit binds each via `$inst.$on("event", handler)`
     /// on the hoisted instance local, mirroring upstream svelte2tsx's
@@ -447,6 +464,15 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
     }
     let mut props: Vec<PropShape> = Vec::with_capacity(c.attributes.len());
     let mut on_events: Vec<OnEventDirective> = Vec::new();
+    // Detect "implicit children": any non-snippet, non-whitespace
+    // child node between the open/close tags. Pure `{#snippet}`
+    // children hoist as explicit props (different code path); pure
+    // whitespace (formatting indent) is ignored.
+    let has_implicit_children = c.children.nodes.iter().any(|n| match n {
+        Node::SnippetBlock(_) => false,
+        Node::Text(t) => !t.content.trim().is_empty(),
+        _ => true,
+    });
     for attr in &c.attributes {
         match attr {
             Attribute::Plain(p) => {
@@ -585,6 +611,7 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
         .push(ComponentInstantiation {
             component_root: c.name.clone(),
             props,
+            has_implicit_children,
             on_events,
             node_start: c.range.start,
         });

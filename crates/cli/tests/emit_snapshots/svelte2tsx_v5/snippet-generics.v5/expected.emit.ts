@@ -6,11 +6,11 @@ async function $$render_ba1a20ec() {
         // template type-check body (incremental)
         {
             const __svn_C_2f = __svn_ensure_component(T);
-            new __svn_C_2f({ target: __svn_any(), props: {extends: true, string: true} });
+            new __svn_C_2f({ target: __svn_any(), props: {extends: true, string: true, children: () => __svn_snippet_return()} });
         }
         {
             const __svn_C_77 = __svn_ensure_component(T);
-            new __svn_C_77({ target: __svn_any(), props: {extends: true, "|": true, "|": true, Set: true} });
+            new __svn_C_77({ target: __svn_any(), props: {extends: true, "|": true, "|": true, Set: true, children: () => __svn_snippet_return()} });
         }
     }
     void __svn_tpl_check;

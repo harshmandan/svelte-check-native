@@ -49,6 +49,7 @@ async function $$render_df3e76f3() {
                         foo: () => {
                             return __svn_snippet_return();
                         },
+                        children: () => __svn_snippet_return(),
                     },
                 });
             }

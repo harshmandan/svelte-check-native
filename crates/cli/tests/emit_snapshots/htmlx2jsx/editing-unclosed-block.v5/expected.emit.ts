@@ -10,7 +10,7 @@ async function $$render_b5e30ee7() {
                     void [i];
                     {
                         const __svn_C_54 = __svn_ensure_component(Component);
-                        new __svn_C_54({ target: __svn_any(), props: {} });
+                        new __svn_C_54({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                     }
                 }
                 void item;

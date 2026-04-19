@@ -1,0 +1,22 @@
+{
+    "compilerOptions": {
+        "target": "ESNext",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "strict": true,
+        "skipLibCheck": true,
+        "noEmit": true,
+        "lib": ["ESNext", "DOM"]
+    },
+    "files": [
+        "__shims.d.ts",
+        "Jsdoc.overlay.ts",
+        "Dispatcher.overlay.ts",
+        "GenericDispatcher.overlay.ts",
+        "01_clean.ts",
+        "02_missing_prop.ts",
+        "03_typed_dispatcher_clean.ts",
+        "04_typed_dispatcher_wrong.ts",
+        "05_generic_dispatcher.ts"
+    ]
+}

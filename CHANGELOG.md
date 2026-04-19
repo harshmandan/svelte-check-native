@@ -4,6 +4,107 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5]
+
+### Fixed — monorepo parity
+
+- **Monorepo-root parity closed.** Running `svelte-check-native
+  --workspace .` at the root of a TS project-references solution
+  (`tsconfig.json` with `"files": []` + `"references": [...]` — the
+  common SvelteKit-monorepo root shape) no longer misreports
+  thousands of `Cannot find module '$lib/...'` errors. The CLI
+  detects solution-style tsconfigs at resolve time and redirects
+  the tsconfig and workspace to a sub-project's `tsconfig.json`
+  that carries real `compilerOptions.paths`. Prints a diagnostic
+  line on stderr explaining the redirect. Root-workspace runs now
+  produce the same diagnostics as the app-scoped run
+  (`cd src/apps/foo && svelte-check-native --workspace .`) on the
+  reference SvelteKit monorepo — 0 user errors. Pass
+  `--tsconfig <path>` to override the heuristic.
+- **Diagnostic-mapper drop.** Overlay diagnostics whose position
+  falls outside every `LineMapEntry` (synthesized scaffolding —
+  component-call blocks, default-export type, template wrapper,
+  void block) are now dropped rather than clamped to the nearest
+  verbatim source line. Previously surfaced as FPs at positions
+  the user's code doesn't occupy. Mirrors upstream svelte-check's
+  source-map-driven filter. Biggest practical win: real-world
+  codebases using bits-ui / shadcn / tailwind-variants no longer
+  report "union type too complex" / "Omit'd prop doesn't exist"
+  at synthesized component-call sites.
+
+### Added — emit fidelity
+
+- **Spread props into component literal** (#41 phase 1).
+  `<Comp {...rest}>` emits `{...(rest)}` inside the props object
+  so TS checks spread against the target Props.
+- **Implicit children synthesis** (#41 phase 2). Component with
+  non-snippet body content emits a synthesized
+  `children: () => __svn_snippet_return()` key so Svelte-5
+  components declaring `children: Snippet` (required) accept
+  `<Comp>body</Comp>` cleanly.
+- **`bind:this` on components** (#41 phase 3) emits
+  `x = __svn_inst_N;` after construction. x's declared type now
+  gets checked against the component's instance shape; previous
+  `!` definite-assign rewrite handled the declaration side but
+  missed the type-compatibility signal.
+- **Svelte-4 with `<slot>`** (#41 phase 4) wraps default-export
+  Props in `Partial<>` — mirrors upstream's
+  `__sveltets_2_isomorphic_component_slots` vs plain variant.
+- **Component `bind:NAME`** emits as a regular prop key (e.g.
+  `bind:value={x}` → `value: x`), so child Props declarations
+  catch type mismatches.
+- **DOM one-way-not-on-element bindings** (`bind:contentRect`,
+  `bind:contentBoxSize`, `bind:borderBoxSize`,
+  `bind:devicePixelContentBoxSize`, `bind:buffered`,
+  `bind:played`, `bind:seekable`) emit phantom
+  `__svn_any_as<TYPE>(expr)` contract checks against the declared
+  target type.
+
+### Added — SvelteKit coverage
+
+- `$types` injection for `+server.ts` handler signatures.
+- `kit_inject` covers the full `+page.ts` / `+layout.ts` /
+  `+page.server.ts` / `+layout.server.ts` family: `ssr` / `csr` /
+  `prerender` / `trailingSlash` get their fixed-union types;
+  `load`'s first parameter gets
+  `{Page|Layout}{Server?}LoadEvent`.
+- Import-following via overlay-for-every-Svelte. User code
+  importing `type { Foo } from './Panel.svelte'` resolves to the
+  overlay's hoisted type rather than getting silently erased.
+
+### Added — tests + packaging
+
+- **Full upstream sample corpus**. 22 previously-skipped
+  htmlx2jsx samples unskipped (stale pre-v0.2 skip list); all 240
+  `.svelte`-bearing svelte2tsx samples now run (was 57 `.v5`-only).
+  387 emit snapshots total, pure emit-shape regression coverage.
+- **Exact-shape baselines for v5 / v5-stores fixtures**.
+  `baselines.json` now carries per-error
+  `{code, line, column, message_contains?}` lists;
+  `CAPTURE_BASELINES=1` regenerates on deliberate emit changes.
+- **npm dist generator-driven** via `scripts/prepare-release.mjs`
+  into a gitignored `dist-packs/pkgs/`; the repo no longer
+  commits per-platform package directories.
+
+## [0.2.0] — Svelte 4 + Svelte 5 parity
+
+### Added
+
+- **Svelte 4 surface support**: `export let`, `$:` reactive
+  declarations + statements, `on:event` directives,
+  `<slot>` / named slots with `let:` destructuring,
+  `createEventDispatcher`, `bind:` on components,
+  `bind:this={x}` on elements, renamed exports
+  (`export { name as alias }`), `$$Props` / `$$Events` /
+  `$$Slots` interfaces, `$$slots` / `$$props` / `$$restProps`
+  ambients, `export function` / `export const`. Every
+  Svelte-4-specific helper lives under
+  `crates/*/src/svelte4/` with a `// SVELTE-4-COMPAT` marker so
+  removal is mechanical when Svelte 4 is officially retired.
+- **Parity gate**: 1000-file mid-migration SvelteKit workspace
+  type-checks at 0 real errors, tying upstream
+  `svelte-check --tsgo`.
+
 ## [0.1.2]
 
 ### Fixed

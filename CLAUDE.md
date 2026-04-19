@@ -228,6 +228,22 @@ part of `cargo test`. They're used interactively to find bug classes
 that get extracted into new `bug_fixtures/<NN>-*` entries and locked
 by the suites above. Their error counts are not a shipping metric.
 
+**Bench targets for perf measurement (`scripts/bench.mjs`):**
+- `bench/control-svelte-4` — the 1000-file parity-gate target.
+  Mid-migration SvelteKit monorepo, mostly Svelte-4-syntax
+  components. The "1000-file mid-migration" number in the public
+  README and CHANGELOG refers to this workspace's sub-app subset
+  (`src/apps/sub-app`, ~1124 files after monorepo-root auto-
+  escape). Ties upstream `svelte-check --tsgo` at 0 user errors.
+- `bench/control-svelte-5` — the latest fresh extract from the
+  same upstream repo's `main` branch (Svelte 5.55+ and further
+  along the Svelte-5 migration). Used to spot regressions as the
+  codebase moves forward.
+
+The committed bench script (`scripts/bench.mjs`) takes
+`--target <path>` or `$BENCH_TARGET` — no project name hardcoded
+so the scenario is reproducible against any workspace.
+
 - **Spec-first.** Write the test (snapshot or fixture) before the
   implementation. Snapshot workflow: add `input.svelte`, run
   `UPDATE_SNAPSHOTS=1 cargo test --test emit_snapshots` once the

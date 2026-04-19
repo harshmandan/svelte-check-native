@@ -50,9 +50,6 @@ Thumbs.db
 # the binary against real-world codebases — never committed)
 bench/
 
-# Private working notes — architecture post-mortems, refactor plans,
-# session context meant for future Claude Code sessions. Not part of
-# the shipped repo.
-REFACTOR.md
+# Private working notes
 ROADMAP.md
-V4.md
+V0.3.md

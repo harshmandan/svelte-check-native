@@ -310,6 +310,69 @@ fn is_props_call_like(expr: &Expression<'_>) -> bool {
     matches!(&call.callee, Expression::Identifier(id) if id.name == "$props")
 }
 
+/// SVELTE-4-COMPAT — v0.3 Item 5. Find the first
+/// `createEventDispatcher<T>()` / `createEventDispatcher<T>(args)` call
+/// in a program and return the source slice of T.
+///
+/// Matches simple-identifier callee "createEventDispatcher". Import
+/// aliases (`import { createEventDispatcher as dispatchFactory }`) are
+/// NOT followed — rare in practice and the fall-through behavior (lax
+/// shim) remains correct if the call is missed. Upstream svelte2tsx
+/// tracks the import binding precisely; we accept the slight
+/// conservatism for the common case.
+///
+/// The return value is intended to be spliced into a synthesized
+/// `type $$Events = <that>;` at module scope of the overlay. Once
+/// `$$Events` is in scope, the existing Item 3 intersection
+/// (`& { readonly __svn_events: $$Events }`) on the default export
+/// flows through unchanged.
+///
+/// Returns `None` when no such call is found. Walks only top-level
+/// statements (the common `const dispatch = createEventDispatcher<T>()`
+/// pattern lives at instance-script top level). Returns the slice of
+/// the FIRST type argument only — multi-arg generics on this helper
+/// aren't meaningful.
+pub fn find_dispatcher_event_type_source(
+    program: &oxc_ast::ast::Program<'_>,
+    source: &str,
+) -> Option<String> {
+    for stmt in &program.body {
+        let maybe_slice = match stmt {
+            Statement::VariableDeclaration(decl) => decl
+                .declarations
+                .iter()
+                .filter_map(|d| d.init.as_ref())
+                .find_map(|e| dispatcher_type_arg_slice(e, source)),
+            Statement::ExpressionStatement(expr_stmt) => {
+                dispatcher_type_arg_slice(&expr_stmt.expression, source)
+            }
+            _ => None,
+        };
+        if let Some(slice) = maybe_slice {
+            return Some(slice);
+        }
+    }
+    None
+}
+
+/// If `expr` is a `createEventDispatcher<T>(...)` call with an explicit
+/// type argument, return the source text of `T`. Otherwise `None`.
+fn dispatcher_type_arg_slice(expr: &Expression<'_>, source: &str) -> Option<String> {
+    let Expression::CallExpression(call) = expr else {
+        return None;
+    };
+    match &call.callee {
+        Expression::Identifier(id) if id.name == "createEventDispatcher" => {}
+        _ => return None,
+    }
+    let tp = call.type_parameters.as_ref()?;
+    let arg = tp.params.first()?;
+    let span = arg.span();
+    source
+        .get(span.start as usize..span.end as usize)
+        .map(str::to_string)
+}
+
 fn collect_from_binding(pat: &BindingPatternKind<'_>, out: &mut Vec<PropInfo>) {
     match pat {
         BindingPatternKind::ObjectPattern(obj) => {

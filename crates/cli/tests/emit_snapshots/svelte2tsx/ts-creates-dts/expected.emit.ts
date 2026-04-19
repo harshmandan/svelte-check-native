@@ -4,6 +4,7 @@
     export const foo = 'foo';
 import Bar from './bar';
 import { createEventDispatcher } from 'svelte';
+type $$Events = {swipe: string};
 async function $$render_39dbed3c() {
 
                           
@@ -21,7 +22,7 @@ async function $$render_39dbed3c() {
     void foobar;
 }
 $$render_39dbed3c;
-declare const __svn_component_default: import('svelte').Component<Partial<{ bar: Bar; foobar?: any; } & __SvnSvelte4PropsWiden<{ bar: Bar; foobar?: any; }>>, { bar: Bar; foobar: any; }>;
+declare const __svn_component_default: import('svelte').Component<Partial<{ bar: Bar; foobar?: any; } & __SvnSvelte4PropsWiden<{ bar: Bar; foobar?: any; }>>, { bar: Bar; foobar: any; }> & { readonly __svn_events: $$Events };
 declare type __svn_component_default = import('svelte').SvelteComponent<Partial<{ bar: Bar; foobar?: any; } & __SvnSvelte4PropsWiden<{ bar: Bar; foobar?: any; }>>> & { bar: Bar; foobar: any; };
 export default __svn_component_default;
 

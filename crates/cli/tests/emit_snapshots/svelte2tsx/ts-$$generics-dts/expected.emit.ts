@@ -4,6 +4,7 @@ import { createEventDispatcher } from 'svelte';
 type A = $$Generic;
 type B = $$Generic<keyof A>;
 type C = $$Generic<boolean>;
+type $$Events = {a: A};
 async function $$render_960ff640() {
 
                                                    
@@ -31,7 +32,7 @@ async function $$render_960ff640() {
     void getA;
 }
 $$render_960ff640;
-declare const __svn_component_default: import('svelte').Component<Partial<{ a: A; b: B; c: C; } & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>, { a: A; b: B; c: C; getA: () => void; }>;
+declare const __svn_component_default: import('svelte').Component<Partial<{ a: A; b: B; c: C; } & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>, { a: A; b: B; c: C; getA: () => void; }> & { readonly __svn_events: $$Events };
 declare type __svn_component_default = import('svelte').SvelteComponent<Partial<{ a: A; b: B; c: C; } & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>> & { a: A; b: B; c: C; getA: () => void; };
 export default __svn_component_default;
 

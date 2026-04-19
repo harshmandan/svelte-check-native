@@ -14,7 +14,7 @@ async function $$render_ce1c3a62() {
             void c;
             {
                 const __svn_C_89 = __svn_ensure_component(Component);
-                new __svn_C_89({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_89>['$$prop_def'] });
+                new __svn_C_89({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             }
         }
         {

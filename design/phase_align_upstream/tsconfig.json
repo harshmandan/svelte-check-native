@@ -17,6 +17,7 @@
         "02_missing_prop.ts",
         "03_typed_dispatcher_clean.ts",
         "04_typed_dispatcher_wrong.ts",
-        "05_generic_dispatcher.ts"
+        "05_generic_dispatcher.ts",
+        "06_isomorphic_component.ts"
     ]
 }

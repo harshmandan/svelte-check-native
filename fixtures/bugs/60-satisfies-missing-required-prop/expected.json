@@ -3,9 +3,9 @@
         {
             "file": "Parent.svelte",
             "line": 10,
-            "column": 0,
+            "column": 1,
             "code": 2741
         }
     ],
-    "_note": "v0.3 Item 2: `satisfies InstanceType<typeof __svn_C_xx>['$$prop_def']` trailer on the component-call props literal makes tsgo catch missing required props. The TokenMapEntry pass in emit_document maps the satisfies span back to the `<Comp` opening tag, so the TS2741 surfaces at the user-visible call site instead of being dropped by the synthesized-region source-map filter."
+    "_note": "Missing required prop on a component call. Shim's `__svn_ensure_component` overload for `Component<P>` returns a ctor with `props?: P` (exact, no Partial widening), so TS2741 fires directly at the `new __svn_C_<hex>({props: {...}})` site with the precise error code. `collect_satisfies_token_map` (name kept for history; now scans `new __svn_C_<hex>(...)` calls) maps the overlay call span back to the component name's first byte in source — col 1 is `C` of `<Child>`, matching upstream. Prior v0.3 Item 2 emitted a `satisfies InstanceType<...>['$$prop_def']` trailer that fired TS1360 at col 0 (the `<`); replaced by direct prop-type check via shim exact-P + call-span mapping."
 }

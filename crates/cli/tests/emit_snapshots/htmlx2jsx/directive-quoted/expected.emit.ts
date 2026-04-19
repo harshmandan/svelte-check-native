@@ -7,7 +7,7 @@ async function $$render_a390b0ad() {
         void __svn_action_attrs_0;
         {
             const __svn_C_36 = __svn_ensure_component(Component);
-            new __svn_C_36({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_36>['$$prop_def'] });
+            new __svn_C_36({ target: __svn_any(), props: {} });
         }
     }
     void __svn_tpl_check;

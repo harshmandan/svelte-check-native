@@ -7,11 +7,11 @@ async function $$render_6ce80dfb() {
         checked = null as any as HTMLInputElement['checked'];
         {
             const __svn_C_49 = __svn_ensure_component(Input);
-            new __svn_C_49({ target: __svn_any(), props: {type: "text", value} satisfies InstanceType<typeof __svn_C_49>['$$prop_def'] });
+            new __svn_C_49({ target: __svn_any(), props: {type: "text", value} });
         }
         {
             const __svn_C_6a = __svn_ensure_component(Input);
-            new __svn_C_6a({ target: __svn_any(), props: {type: "checkbox", checked} satisfies InstanceType<typeof __svn_C_6a>['$$prop_def'] });
+            new __svn_C_6a({ target: __svn_any(), props: {type: "checkbox", checked} });
         }
     }
     void __svn_tpl_check;

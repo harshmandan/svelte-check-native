@@ -50,7 +50,7 @@ async function $$render_df3e76f3() {
                             return __svn_snippet_return();
                         },
                         children: () => __svn_snippet_return(),
-                    } satisfies InstanceType<typeof __svn_C_1f7>['$$prop_def'],
+                    },
                 });
             }
         }

@@ -38,7 +38,7 @@ async function $$render_0bc1cb85() {
                             return __svn_snippet_return();
                         },
                         children: () => __svn_snippet_return(),
-                    } satisfies InstanceType<typeof __svn_C_122>['$$prop_def'],
+                    },
                 });
             }
             {
@@ -58,12 +58,12 @@ async function $$render_0bc1cb85() {
                             }
                             return __svn_snippet_return();
                         },
-                    } satisfies InstanceType<typeof __svn_C_181>['$$prop_def'],
+                    },
                 });
             }
             {
                 const __svn_C_219 = __svn_ensure_component(List);
-                new __svn_C_219({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_219>['$$prop_def'] });
+                new __svn_C_219({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             }
             {
                 const __svn_C_23c = __svn_ensure_component(List);
@@ -80,7 +80,7 @@ async function $$render_0bc1cb85() {
                             return __svn_snippet_return();
                         },
                         children: () => __svn_snippet_return(),
-                    } satisfies InstanceType<typeof __svn_C_23c>['$$prop_def'],
+                    },
                 });
             }
             {

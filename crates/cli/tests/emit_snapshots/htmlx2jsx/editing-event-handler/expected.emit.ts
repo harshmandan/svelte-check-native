@@ -5,7 +5,7 @@ async function $$render_57b1c5e2() {
         // template type-check body (incremental)
         {
             const __svn_C_22 = __svn_ensure_component(Component);
-            const __svn_inst_22 = new __svn_C_22({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_22>['$$prop_def'] });
+            const __svn_inst_22 = new __svn_C_22({ target: __svn_any(), props: {} });
             __svn_inst_22.$on("click", (handlers.));
         }
     }

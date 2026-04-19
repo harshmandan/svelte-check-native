@@ -5,12 +5,12 @@ async function $$render_a97dd4dc() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(Component);
-            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {placeholder: "'"} satisfies InstanceType<typeof __svn_C_0>['$$prop_def'] });
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {placeholder: "'"} });
             __svn_inst_0.$on("keydown", (() => {}));
         }
         {
             const __svn_C_34 = __svn_ensure_component(Component);
-            const __svn_inst_34 = new __svn_C_34({ target: __svn_any(), props: {placeholder: "\""} satisfies InstanceType<typeof __svn_C_34>['$$prop_def'] });
+            const __svn_inst_34 = new __svn_C_34({ target: __svn_any(), props: {placeholder: "\""} });
             __svn_inst_34.$on("keydown", (() => {}));
         }
     }

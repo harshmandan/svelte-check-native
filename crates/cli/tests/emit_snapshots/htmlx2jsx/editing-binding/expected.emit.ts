@@ -6,7 +6,7 @@ async function $$render_b80130f4() {
         obj. = null as any as string;
         {
             const __svn_C_34 = __svn_ensure_component(Input);
-            new __svn_C_34({ target: __svn_any(), props: {value: (obj.)} satisfies InstanceType<typeof __svn_C_34>['$$prop_def'] });
+            new __svn_C_34({ target: __svn_any(), props: {value: (obj.)} });
         }
     }
     void __svn_tpl_check;

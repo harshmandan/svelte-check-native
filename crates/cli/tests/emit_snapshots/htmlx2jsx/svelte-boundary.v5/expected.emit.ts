@@ -8,7 +8,7 @@ async function $$render_e5ad478b() {
             void failed;
             {
                 const __svn_C_27 = __svn_ensure_component(ComponentThatFails);
-                new __svn_C_27({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_27>['$$prop_def'] });
+                new __svn_C_27({ target: __svn_any(), props: {} });
             }
             {
                 void ((e: any) => {

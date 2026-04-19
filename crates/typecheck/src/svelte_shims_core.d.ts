@@ -368,14 +368,14 @@ declare function __svn_any<T = any>(): T;
 // /tmp/svn-item3-fixture/real_component.ts.
 declare function __svn_ensure_component<P extends Record<string, any>, E>(
     c: import('svelte').Component<P> & { readonly __svn_events: E },
-): new (options: { target?: any; props?: __SvnPropsPartial<P> }) => __SvnInstanceTyped<P, E>;
+): new (options: { target?: any; props?: P }) => __SvnInstanceTyped<P, E>;
 declare function __svn_ensure_component<P extends Record<string, any>>(
     c: import('svelte').Component<P>,
-): new (options: { target?: any; props?: __SvnPropsPartial<P> }) => __SvnInstance<P>;
+): new (options: { target?: any; props?: P }) => __SvnInstance<P>;
 declare function __svn_ensure_component<C extends new (...args: any[]) => any>(c: C): C;
 declare function __svn_ensure_component<P>(
     c: (anchor: any, props: P) => any,
-): new (options: { target?: any; props?: __SvnPropsPartial<P> }) => __SvnInstance<P>;
+): new (options: { target?: any; props?: P }) => __SvnInstance<P>;
 declare function __svn_ensure_component(
     c: unknown,
 ): new (options: { target?: any; props?: any }) => __SvnInstance<any>;

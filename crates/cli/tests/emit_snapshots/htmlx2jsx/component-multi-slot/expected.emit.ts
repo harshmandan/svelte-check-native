@@ -8,7 +8,7 @@ async function $$render_8f62c0c3() {
             void new_var;
             {
                 const __svn_C_0 = __svn_ensure_component(Component);
-                new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_0>['$$prop_def'] });
+                new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             }
             {
                 let newvar: any;

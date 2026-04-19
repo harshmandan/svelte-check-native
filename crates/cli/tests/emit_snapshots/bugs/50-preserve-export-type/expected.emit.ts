@@ -17,7 +17,7 @@ async function $$render_a4d674e0() {
         // template type-check body (incremental)
         {
             const __svn_C_1e3 = __svn_ensure_component(Panel);
-            new __svn_C_1e3({ target: __svn_any(), props: {config: (cfg)} satisfies InstanceType<typeof __svn_C_1e3>['$$prop_def'] });
+            new __svn_C_1e3({ target: __svn_any(), props: {config: (cfg)} });
         }
     }
     void __svn_tpl_check;

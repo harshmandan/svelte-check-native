@@ -1261,58 +1261,66 @@ fn collect_dom_binding_token_map(
     entries
 }
 
-/// Post-walk scan: find every `satisfies InstanceType<typeof
-/// __svn_C_<hex>>['$$prop_def']` in the emitted overlay and push a
-/// token-map entry so the TS2741 diagnostic (which lands on the
-/// `satisfies` keyword — see `design/item_2_satisfies_fixture` in
-/// NEXT.md) surfaces at the `<Comp` opening tag position in the
-/// `.svelte` source instead of being dropped.
+/// Post-walk scan: find every `new __svn_C_<hex>(...)` call in the
+/// emitted overlay and push a token-map entry covering the entire
+/// call span, mapping back to the component-name start byte in the
+/// `.svelte` source. TS2741 "missing required prop" fires on the
+/// `props: {...}` literal inside the call; without this mapping, the
+/// diagnostic lives in a synthesized region and gets dropped by the
+/// source-map filter.
 ///
-/// The span covers the whole `satisfies ... ['$$prop_def']`
-/// expression so any future diagnostic landing inside it (end of
-/// `]` + `]` index-access, nested generic, etc.) also remaps.
-/// Tightest-span semantics in the mapper allow future per-prop
-/// splice entries to override this broader span when appropriate.
+/// Source span is `[node_start+1, node_start+2)` — 1-byte span on
+/// the component name's first character. `translate_position`'s
+/// `.min(source_end - 1)` clamp pins any overlay-byte inside the
+/// call to this one source position, which is col 1 (0-based) of
+/// `<Comp />` — matching upstream's TS2741 position.
+///
+/// Replaces the prior `satisfies InstanceType<…>['$$prop_def']`
+/// scanner. That trailer existed to restore required-prop tracking
+/// that `__SvnPropsPartial<P>` erased. Now the shim's exact `P` at
+/// the constructor's `props?` slot fires TS2741 directly, and this
+/// call-span mapping gives the correct source position with the
+/// correct error code.
 fn collect_satisfies_token_map(
     out: &str,
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
 ) -> Vec<TokenMapEntry> {
-    // Shape: " satisfies InstanceType<typeof __svn_C_<hex>>['$$prop_def']"
-    const PREFIX: &str = "satisfies InstanceType<typeof __svn_C_";
-    const SUFFIX: &str = ">['$$prop_def']";
+    const PREFIX: &str = "new __svn_C_";
     let mut entries: Vec<TokenMapEntry> = Vec::new();
     let mut cursor = 0usize;
+    let bytes = out.as_bytes();
     while let Some(rel) = out[cursor..].find(PREFIX) {
         let span_start = cursor + rel;
         let after_prefix = span_start + PREFIX.len();
-        // Hex node_start follows, terminated by `>`.
-        let Some(gt_rel) = out[after_prefix..].find('>') else {
+        let Some(paren_rel) = out[after_prefix..].find('(') else {
             break;
         };
-        let hex_end = after_prefix + gt_rel;
-        let hex = &out[after_prefix..hex_end];
+        let paren_open = after_prefix + paren_rel;
+        let hex = &out[after_prefix..paren_open];
         let Ok(node_start) = u32::from_str_radix(hex, 16) else {
-            cursor = hex_end;
+            cursor = paren_open;
             continue;
         };
-        // Verify the suffix matches — defends against `__svn_C_<hex>`
-        // identifiers that happen to appear in other positions.
-        if !out[hex_end..].starts_with(SUFFIX) {
-            cursor = hex_end;
-            continue;
+        // Match paren/brace/bracket depth to find the closing `)`.
+        let mut depth: i32 = 1;
+        let mut i = paren_open + 1;
+        while i < bytes.len() && depth > 0 {
+            match bytes[i] {
+                b'(' | b'{' | b'[' => depth += 1,
+                b')' | b'}' | b']' => depth -= 1,
+                _ => {}
+            }
+            i += 1;
         }
-        let span_end = hex_end + SUFFIX.len();
+        let span_end = i;
         if let Some(inst) = insts.get(&node_start) {
-            // Source byte span: the opening `<` + component name.
-            // Example: for `<Button class="x" />`, covers `<Button`.
-            // Mapping the span here means a TS2741 diagnostic on the
-            // satisfies keyword (where tsgo plants it — verified via
-            // the /tmp/svn-item2-fixture/ hand-written fixture)
-            // surfaces at the user's component tag position.
-            let source_start = inst.node_start;
-            let name_byte_len = inst.component_root.len() as u32;
-            // +1 for the `<` itself.
-            let source_end = source_start.saturating_add(1 + name_byte_len);
+            // Point-map to the component name's first character
+            // (`C` of `<Comp />`, 0-based col 1). The 1-byte source
+            // span collapses all diagnostics inside the synthesized
+            // call to this one position via translate_position's
+            // end-clamp, matching upstream's TS2741 col-1 target.
+            let source_start = inst.node_start.saturating_add(1);
+            let source_end = source_start.saturating_add(1);
             entries.push(TokenMapEntry {
                 overlay_byte_start: span_start as u32,
                 overlay_byte_end: span_end as u32,
@@ -2893,39 +2901,27 @@ fn emit_component_call(
     let emit_implicit_children =
         inst.has_implicit_children && !user_named_children && !user_named_children_snippet;
 
-    // Phase 5 trailer: `satisfies InstanceType<typeof $$_C>['$$prop_def']`
-    // on the props literal catches missing required props (TS2741).
-    // Requires phases 1-4 (shipped) to have synthesized the
-    // consumer-side surface the strict check needs: spreads, implicit
-    // template children, bind:this assignment, Partial-wrap for
-    // slot-based containers.
+    // Missing-required-prop detection is structural at the `new
+    // __svn_C({props: {...}})` site: ensure_component's return has
+    // `props?: P` (exact, no Partial) so `{}` missing required fields
+    // fires TS2741 directly. Matches upstream svelte2tsx's
+    // `InlineComponent.ts:96-115` shape (verified against real
+    // svelte2tsx output on `language-tools/packages/svelte-check/
+    // test-error/Index.svelte`).
     //
-    // Targets the ensured-component's instance shape rather than
-    // `ComponentProps<typeof Comp>` so the check works uniformly
-    // across callable Svelte-5 components AND third-party Svelte-4
-    // class imports. `__svn_ensure_component` returns a ctor whose
-    // instance has `$$prop_def: P`: for our shim-synthesized wrap
-    // it's the callable's Props; Svelte-4 classes declaring
-    // `$$prop_def` preserve it. Using `ComponentProps<typeof Comp>`
-    // directly regresses because bare `typeof SvelteComponent`-style
-    // ctor types fail svelte's `T extends SvelteComponent |
-    // Component<any, any>` constraint and surface opaque "missing
-    // properties" errors.
-    //
-    // The hex suffix in `__svn_C_{node_start:x}` makes the trailer
-    // unique per instantiation — the post-walk source-map pass
-    // scans for `InstanceType<typeof __svn_C_<hex>>['$$prop_def']`
-    // to find each satisfies span and push a TokenMapEntry mapping
-    // it to the `<Comp` opening tag in .svelte source, so TS2741
-    // surfaces at the user's tag position instead of being dropped
-    // by the synthesized-region filter. See
-    // `push_satisfies_token_map_entries`.
-    let satisfies_trailer = format!(" satisfies InstanceType<typeof {local}>['$$prop_def']");
+    // Earlier `satisfies InstanceType<typeof __svn_C>['$$prop_def']`
+    // trailer was a workaround for `__SvnPropsPartial<P>` erasing
+    // required props. The shim rewritten to exact `P` lets TS2741
+    // surface with the right code at the `new` site. The post-walk
+    // `collect_satisfies_token_map` (kept the name for history) now
+    // scans `new __svn_C_<hex>(...)` calls and maps them back to the
+    // `<Comp` tag position, so TS2741 lands at col 1 (the component-
+    // name start) matching upstream's expected position.
 
     if snippet_children.is_empty() && inst.props.is_empty() && !emit_implicit_children {
         let _ = writeln!(
             out,
-            "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{}}{satisfies_trailer} }});"
+            "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{}} }});"
         );
         emit_bind_this_assignment(out, source, inst, &inst_local, &inner);
         emit_on_event_calls(out, source, inst, &inst_local, &inner);
@@ -2952,7 +2948,7 @@ fn emit_component_call(
             }
             let _ = write!(out, "children: () => __svn_snippet_return()");
         }
-        let _ = writeln!(out, "}}{satisfies_trailer} }});");
+        let _ = writeln!(out, "}} }});");
         emit_bind_this_assignment(out, source, inst, &inst_local, &inner);
         emit_on_event_calls(out, source, inst, &inst_local, &inner);
         let _ = writeln!(out, "{indent}}}");
@@ -2983,7 +2979,7 @@ fn emit_component_call(
         out.push_str(&props_inner);
         let _ = writeln!(out, "children: () => __svn_snippet_return(),");
     }
-    let _ = writeln!(out, "{opts_inner}}}{satisfies_trailer},");
+    let _ = writeln!(out, "{opts_inner}}},");
     let _ = writeln!(out, "{inner}}});");
     emit_bind_this_assignment(out, source, inst, &inst_local, &inner);
     emit_on_event_calls(out, source, inst, &inst_local, &inner);

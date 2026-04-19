@@ -10,7 +10,7 @@ async function $$render_9b0c8b04() {
             void other_var;
             {
                 const __svn_C_0 = __svn_ensure_component(Component);
-                new __svn_C_0({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_0>['$$prop_def'] });
+                new __svn_C_0({ target: __svn_any(), props: {} });
             }
         }
     }

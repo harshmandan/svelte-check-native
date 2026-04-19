@@ -14,7 +14,7 @@ async function $$render_8a5774d3() {
         // template type-check body (incremental)
         {
             const __svn_C_fe = __svn_ensure_component(Component);
-            new __svn_C_fe({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_fe>['$$prop_def'] });
+            new __svn_C_fe({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} });
         }
         {
             let box: any;
@@ -62,7 +62,7 @@ async function $$render_8a5774d3() {
             void box;
             {
                 const __svn_C_530 = __svn_ensure_component(Component);
-                new __svn_C_530({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_530>['$$prop_def'] });
+                new __svn_C_530({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} });
             }
             {
                 let box: any;
@@ -107,7 +107,7 @@ async function $$render_8a5774d3() {
             void box;
             {
                 const __svn_C_911 = __svn_ensure_component(Component);
-                new __svn_C_911({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_911>['$$prop_def'] });
+                new __svn_C_911({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} });
             }
             const {area, volume} = calculate(width, height, constant);
             void area;

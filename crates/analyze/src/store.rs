@@ -144,6 +144,28 @@ pub fn collect_typed_uninit_lets(
     program: &oxc_ast::ast::Program<'_>,
     out: &mut Vec<smol_str::SmolStr>,
 ) {
+    collect_typed_lets_impl(program, out, true);
+}
+
+/// Collect every top-level `let NAME: Type[= init];` (typed, with or
+/// without initializer) binding name. Used to seed the de-narrow
+/// rewriter: `let X: T | null = null;` otherwise narrows to the
+/// literal `null` via TS's control-flow analysis, so a subsequent
+/// `if (X) X.foo` fires TS2339 on `never`. Inserting `X = undefined
+/// as any;` after the declaration widens the flow-tracked type back
+/// to the declared annotation.
+pub fn collect_typed_top_level_lets(
+    program: &oxc_ast::ast::Program<'_>,
+    out: &mut Vec<smol_str::SmolStr>,
+) {
+    collect_typed_lets_impl(program, out, false);
+}
+
+fn collect_typed_lets_impl(
+    program: &oxc_ast::ast::Program<'_>,
+    out: &mut Vec<smol_str::SmolStr>,
+    uninit_only: bool,
+) {
     for stmt in &program.body {
         let Statement::VariableDeclaration(decl) = stmt else {
             continue;
@@ -155,7 +177,7 @@ pub fn collect_typed_uninit_lets(
             continue;
         }
         for declarator in &decl.declarations {
-            if declarator.init.is_some() {
+            if uninit_only && declarator.init.is_some() {
                 continue;
             }
             // Only top-level simple identifier with a type annotation.

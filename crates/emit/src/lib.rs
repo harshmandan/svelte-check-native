@@ -61,8 +61,8 @@ use std::collections::HashSet;
 use oxc_allocator::Allocator;
 use smol_str::SmolStr;
 use svn_analyze::{
-    TemplateSummary, collect_top_level_bindings, collect_typed_uninit_lets, find_props,
-    find_store_refs_with_bindings,
+    TemplateSummary, collect_top_level_bindings, collect_typed_top_level_lets,
+    collect_typed_uninit_lets, find_props, find_store_refs_with_bindings,
     find_template_refs,
 };
 use svn_parser::Document;
@@ -605,7 +605,25 @@ fn emit_document_with_render_name(
     // `any`-cast: TS widens the flow-tracked type back to the
     // declared annotation (Size), and subsequent comparisons work.
     if let Some(s) = &split {
-        denarrow_typed_exported_props_in_place(&mut out, &s.exported_locals);
+        // De-narrow both exported props AND body-local `let X: T = lit;`
+        // declarations. Body-level `let discontinuousScale: T | null =
+        // null;` suffers the same literal-narrowing issue as exported
+        // props: TS narrows X's flow-tracked type to `null`, and a
+        // subsequent `if (X) X.foo` fires TS2339 on `never`. Reuse the
+        // same insertion.
+        let mut denarrow_targets: Vec<SmolStr> = s.exported_locals.clone();
+        if let Some(instance) = &doc.instance_script {
+            let alloc_dn = Allocator::default();
+            let parsed_dn = parse_script_body(&alloc_dn, instance.content, instance.lang);
+            let mut typed_lets: Vec<SmolStr> = Vec::new();
+            collect_typed_top_level_lets(&parsed_dn.program, &mut typed_lets);
+            for name in typed_lets {
+                if !denarrow_targets.iter().any(|n| n == &name) {
+                    denarrow_targets.push(name);
+                }
+            }
+        }
+        denarrow_typed_exported_props_in_place(&mut out, &denarrow_targets);
     }
 
     out.push_str("    async function __svn_tpl_check() {\n");
@@ -3099,12 +3117,20 @@ fn try_process_let_statement_for_denarrow(
                     }
                 }
                 b',' | b';' if paren_depth == 0 => break,
-                // `\n` terminates in most cases — but a multi-line
-                // initializer like `let x: T =\n  value;` where `=`
-                // is the last non-whitespace before the newline
-                // needs to continue. Check previous non-whitespace
-                // byte: if `=`, the expression is continued; else
-                // treat as a normal statement-end.
+                // `\n` terminates in most cases. Two continuation
+                // patterns need to survive the newline, because a
+                // `;` or `;`-less line-terminator would truncate a
+                // legitimate multi-line initializer:
+                //
+                //   Previous non-ws is `=` — `let x: T =\n  value;`
+                //     (dangling assignment, continuation is RHS).
+                //
+                //   Next non-ws is `?` or `:` (ternary continuation)
+                //     — `let x: T = cond\n  ? a\n  : b;`.
+                //
+                // Both survive by not treating `\n` as a terminator.
+                // Other cases — `let x = 1\nlet y = 2` — do terminate
+                // at the newline, per JS ASI.
                 b'\n' if paren_depth == 0 => {
                     let mut prev = s;
                     while prev > 0 {
@@ -3114,7 +3140,26 @@ fn try_process_let_statement_for_denarrow(
                             break;
                         }
                     }
-                    if bytes[prev] != b'=' {
+                    let prev_continues = bytes[prev] == b'=';
+                    let mut next = s + 1;
+                    while next < bytes.len()
+                        && (bytes[next] == b' ' || bytes[next] == b'\t' || bytes[next] == b'\n')
+                    {
+                        next += 1;
+                    }
+                    let next_continues = next < bytes.len()
+                        && matches!(
+                            bytes[next],
+                            // Ternary `?:`, optional-chain `?.`,
+                            // method/property access `.`, binary/
+                            // logical ops `&& || ?? + - * / % | & ^`,
+                            // type-assertion `as`. All valid line-
+                            // continuation starts that ASI won't
+                            // insert a break before.
+                            b'?' | b':' | b'.' | b'&' | b'|' | b'+' | b'-'
+                                | b'*' | b'/' | b'%' | b'^' | b'='
+                        );
+                    if !prev_continues && !next_continues {
                         break;
                     }
                 }

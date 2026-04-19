@@ -37,34 +37,12 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Samples from htmlx2jsx we skip because they test Svelte 4 features
-/// (slots, `on:` directives, slot-let) that are out of our scope.
-/// Mirrors crates/cli/tests/htmlx_fixtures/skip.json — kept inline
-/// here so the snapshot suite doesn't depend on json parsing.
-const SKIP_HTMLX: &[&str] = &[
-    "component-default-slot-empty",
-    "component-default-slot-let",
-    "component-default-slot-let-destructure",
-    "component-multi-slot",
-    "component-named-slot",
-    "component-slot-infer-props",
-    "component-slot-shadowed-prop",
-    "directive-quoted",
-    "editing-event-handler",
-    "event-handler",
-    "event-handler-bare",
-    "event-handler-component",
-    "event-handler-component-bare",
-    "event-handler-component-infer-props",
-    "event-handler-customname",
-    "event-handler-modifiers",
-    "event-handler-quoted",
-    "event-handler-svelte-component",
-    "if-nested-slot-let",
-    "if-nested-slot-let-shadowed",
-    "quotes-inside-quotes",
-    "svelte-fragment",
-];
+/// Samples from htmlx2jsx we skip. Originally 22 samples were skipped
+/// as out-of-scope (pre-v0.2, no Svelte-4 support). Now that Svelte-4
+/// surface features ship, the list is empty — kept as a seam so future
+/// work can park individual samples pending triage without ripping out
+/// the plumbing.
+const SKIP_HTMLX: &[&str] = &[];
 
 #[derive(Debug)]
 struct Sample {

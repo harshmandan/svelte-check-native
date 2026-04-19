@@ -18,6 +18,7 @@
 // Tests are allowed to panic loudly on setup failures.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
+pub mod dom_binding;
 pub mod props;
 pub mod rune;
 pub mod store;
@@ -36,7 +37,7 @@ pub use store::{
 };
 pub use template_refs::find_template_refs;
 pub use template_walker::{
-    BindThisTarget, ComponentInstantiation, OnEventDirective, PropShape, TemplateSummary,
-    walk_template,
+    BindThisTarget, ComponentInstantiation, DomBinding, DomBindingExpression, OnEventDirective,
+    PropShape, TemplateSummary, walk_template,
 };
 pub use void_refs::VoidRefRegistry;

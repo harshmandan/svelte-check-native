@@ -642,6 +642,7 @@ fn emit_document_with_render_name(
     // now (correctly) "name not found" errors.
     emit_action_attrs_declarations(&mut out, summary);
     emit_bind_pair_declarations(&mut out, summary);
+    emit_dom_binding_checks(&mut out, doc.source, summary);
     // Index component instantiations by source byte offset so the
     // template walker can emit each prop-check inline at the component
     // node's position — i.e. inside the enclosing `{#each}` / `{#if}` /
@@ -2061,6 +2062,54 @@ fn emit_action_attrs_declarations(out: &mut String, summary: &TemplateSummary) {
             let _ = writeln!(out, "        let {name}: any = {{}};");
             let _ = writeln!(out, "        void {name};");
         }
+    }
+}
+
+/// Emit a type-compatibility check for each recognized
+/// one-way-not-on-element DOM binding:
+///
+/// ```ts
+///     __svn_any_as<DOMRectReadOnly>(rect);
+/// ```
+///
+/// Assignment form isn't usable — `rect = __svn_any() as DOMRectReadOnly`
+/// would rewrite the variable's inferred type in every subsequent flow
+/// analysis position and fire spurious errors downstream. A phantom
+/// function call with the bound variable as its SOLE argument, typed
+/// against the binding's target type via a generic, checks the
+/// variable's declared type accepts the binding type without mutating
+/// the inferred narrowing. `__svn_any_as<T>(value: T): void` is
+/// ambient.
+///
+/// Only emit when the binding's source slice parses as a plain
+/// expression TS can evaluate in a call-argument slot. `bind:NAME`
+/// bare-shorthand forms give us the DIRECTIVE SPAN as the value
+/// range (because the user wrote no `={...}`), which includes the
+/// `bind:` prefix — not valid TS. Detect + skip those; the shorthand
+/// desugars to `bind:NAME={NAME}` at runtime, so the user's `NAME`
+/// local still has the bind-assigned type (checked by the
+/// corresponding `BindThisTarget`'s `!` rewrite).
+fn emit_dom_binding_checks(out: &mut String, source: &str, summary: &TemplateSummary) {
+    for binding in &summary.dom_bindings {
+        let expr: std::borrow::Cow<'_, str> = match &binding.expression {
+            svn_analyze::DomBindingExpression::Range(r) => {
+                let Some(s) = source.get(r.start as usize..r.end as usize) else {
+                    continue;
+                };
+                std::borrow::Cow::Borrowed(s.trim())
+            }
+            svn_analyze::DomBindingExpression::Identifier(id) => {
+                std::borrow::Cow::Borrowed(id.as_str())
+            }
+        };
+        if expr.is_empty() {
+            continue;
+        }
+        let _ = writeln!(
+            out,
+            "        __svn_any_as<{ty}>({expr});",
+            ty = binding.type_annotation,
+        );
     }
 }
 

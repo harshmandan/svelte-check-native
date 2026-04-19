@@ -409,6 +409,22 @@ type __SvnPropsPartial<P> = { [K in keyof P]?: P[K] | null };
 declare function __svn_bind_this_check<El>(target: El | null | undefined): void;
 
 /**
+ * Phantom type-compatibility check for one-way-not-on-element DOM
+ * bindings. Used in the template-check body for directives like
+ * `bind:contentRect={rect}` / `bind:buffered={buf}` where the runtime
+ * type lives on a separate browser API (ResizeObserver for
+ * content-rect, HTMLMediaElement SvelteMediaTimeRange for buffered).
+ *
+ * Called as `__svn_any_as<DOMRectReadOnly>(rect);`. The single
+ * argument being typed `T` means `rect`'s declared type must accept
+ * `T` — TS2322 fires on `let rect: string; __svn_any_as<DOMRectReadOnly>(rect);`.
+ * No return, no side effect, no mutation to `rect`'s inferred type:
+ * the call vanishes under `void`-free evaluation, and TS flow
+ * analysis sees only a "read rect" followed by no narrowing.
+ */
+declare function __svn_any_as<T>(value: T): void;
+
+/**
  * Branded-`any` return for snippet arrow-callback bodies. Svelte's
  * `Snippet<[...]>` type brands its return shape so a bare
  * `(args) => void` can't structurally satisfy it. The arrow emits a

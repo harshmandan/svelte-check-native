@@ -35,6 +35,16 @@ pub struct TemplateSummary {
     /// `bind:this={x}` targets where `x` is a simple identifier — eligible
     /// for the definite-assignment rewrite.
     pub bind_this_targets: Vec<BindThisTarget>,
+    /// DOM-element `bind:NAME={x}` directives on a narrow allowlist of
+    /// one-way-not-on-element bindings (`bind:contentRect`,
+    /// `bind:contentBoxSize`, etc. — see `dom_binding::type_for`).
+    /// These don't live on the element's own type, so upstream emits
+    /// `x = elem.NAME as <Type>` as an assertion. We emit a simpler
+    /// shape — `x = __svn_any() as <Type>` — which checks that the
+    /// binding target's declared type accepts the binding's value
+    /// type (TS2322 fires on `let rect: string; bind:contentRect={rect}`
+    /// because DOMRectReadOnly isn't assignable to string).
+    pub dom_bindings: Vec<DomBinding>,
     /// Number of `{#each}` blocks encountered. Emit uses this to allocate
     /// unique iteration helpers.
     pub each_block_count: usize,
@@ -115,6 +125,33 @@ pub struct BindThisTarget {
     pub name: SmolStr,
     /// Source range of the bind expression (the `x` part).
     pub range: Range,
+}
+
+/// One `bind:NAME={x}` site on a DOM element where NAME is in
+/// the one-way-not-on-element allowlist (e.g. `contentRect`,
+/// `contentBoxSize`). Emit uses this to generate the assignment
+/// type-check `__svn_any_as<TYPE>(x)`.
+#[derive(Debug, Clone)]
+pub struct DomBinding {
+    /// Either the user's `={expr}` range (when explicit) or a plain
+    /// identifier for the bare-shorthand form `bind:NAME` (which
+    /// desugars to `bind:NAME={NAME}`). Emit copies this into the
+    /// phantom helper call's argument slot.
+    pub expression: DomBindingExpression,
+    /// TypeScript type the phantom helper's generic uses (e.g.
+    /// `"DOMRectReadOnly"`). Comes from the per-binding table in
+    /// `dom_binding::type_for`.
+    pub type_annotation: &'static str,
+}
+
+#[derive(Debug, Clone)]
+pub enum DomBindingExpression {
+    /// Source range covering the user's `={expr}` value; emit reads
+    /// the source slice verbatim.
+    Range(Range),
+    /// Bare shorthand `bind:NAME` desugars to `bind:NAME={NAME}` —
+    /// the identifier to pass is the directive's own name.
+    Identifier(SmolStr),
 }
 
 /// Walk the template fragment, collecting synthesized-name registrations
@@ -303,6 +340,25 @@ fn walk_directive(
                         range: *expression_range,
                     });
                 }
+                // If the binding name is in our DOM-binding type
+                // table (contentRect, contentBoxSize, buffered, …),
+                // record the value range + its target type so the
+                // emit can generate `<x> = __svn_any() as <TYPE>;`
+                // in the template-check body. Catches shapes like
+                // `<div bind:contentRect={rect}>` where `rect`'s
+                // declared type doesn't accept DOMRectReadOnly.
+                //
+                // This runs IN ADDITION to the bind-target record
+                // above — the same variable needs BOTH the
+                // definite-assignment `!` rewrite (assignment is
+                // hidden inside a lifecycle callback, flow analysis
+                // can't see it) AND the type-compatibility check.
+                if let Some(type_annotation) = crate::dom_binding::type_for(d.name.as_str()) {
+                    summary.dom_bindings.push(DomBinding {
+                        expression: DomBindingExpression::Range(*expression_range),
+                        type_annotation,
+                    });
+                }
             }
             None => {
                 // Bare `bind:foo` is shorthand for `bind:foo={foo}` —
@@ -311,6 +367,15 @@ fn walk_directive(
                     name: d.name.clone(),
                     range: d.range,
                 });
+                // Also thread through the DOM-binding type check for
+                // bare shorthands like `<video bind:buffered>` which
+                // desugar to `bind:buffered={buffered}`.
+                if let Some(type_annotation) = crate::dom_binding::type_for(d.name.as_str()) {
+                    summary.dom_bindings.push(DomBinding {
+                        expression: DomBindingExpression::Identifier(d.name.clone()),
+                        type_annotation,
+                    });
+                }
             }
             _ => {}
         },

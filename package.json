@@ -1,8 +1,8 @@
 {
   "private": true,
   "name": "svelte-check-native-monorepo",
-  "version": "0.0.0",
-  "description": "Monorepo root for svelte-check-native — a fast CLI type-checker for Svelte 5+ projects, written in Rust, powered by tsgo. The published npm package lives at npm/svelte-check-native/.",
+  "version": "0.2.0",
+  "description": "Monorepo root for svelte-check-native — a fast CLI type-checker for Svelte 4 and Svelte 5 projects, written in Rust, powered by tsgo. The published npm package lives at npm/svelte-check-native/.",
   "keywords": [
     "svelte",
     "sveltekit",
@@ -32,7 +32,9 @@
     "build:rust": "cargo build --release -p svelte-check-native",
     "build:native": "npm run build:rust && node scripts/copy-binary.mjs",
     "build:all": "node scripts/build-all.mjs",
-    "pack:all": "node scripts/pack-all.mjs"
+    "prepare-release": "node scripts/prepare-release.mjs",
+    "check-release": "node scripts/prepare-release.mjs --check",
+    "pack:all": "npm run check-release && node scripts/pack-all.mjs"
   },
   "devDependencies": {
     "@typescript/native-preview": ">=7.0.0-dev.0"

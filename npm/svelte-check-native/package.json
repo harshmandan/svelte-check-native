@@ -1,7 +1,7 @@
 {
   "name": "svelte-check-native",
-  "version": "0.1.2",
-  "description": "Fast CLI type-checker for Svelte 5+ projects. Drop-in replacement for svelte-check, written in Rust, powered by tsgo.",
+  "version": "0.2.0",
+  "description": "Fast CLI type-checker for Svelte 4 and Svelte 5 projects. Drop-in replacement for svelte-check, written in Rust, powered by tsgo.",
   "keywords": [
     "svelte",
     "sveltekit",
@@ -37,11 +37,11 @@
     "node": ">=18"
   },
   "optionalDependencies": {
-    "svelte-check-native-darwin-arm64": "0.1.2",
-    "svelte-check-native-darwin-x64": "0.1.2",
-    "svelte-check-native-linux-arm64": "0.1.2",
-    "svelte-check-native-linux-x64": "0.1.2",
-    "svelte-check-native-win32-x64": "0.1.2"
+    "svelte-check-native-darwin-arm64": "0.2.0",
+    "svelte-check-native-darwin-x64": "0.2.0",
+    "svelte-check-native-linux-arm64": "0.2.0",
+    "svelte-check-native-linux-x64": "0.2.0",
+    "svelte-check-native-win32-x64": "0.2.0"
   },
   "peerDependencies": {
     "@typescript/native-preview": ">=7.0.0-dev.0"

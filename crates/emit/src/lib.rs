@@ -823,9 +823,27 @@ fn emit_document_with_render_name(
             String::new()
         }
     };
+    // SVELTE-4-COMPAT: Svelte-4 components that render a `<slot>` are
+    // content-containers — consumers typically write `<Foo>body</Foo>`
+    // and omit prop values entirely. Mirrors upstream's
+    // `__sveltets_2_isomorphic_component_slots` (Partial<P>) vs the
+    // plain `__sveltets_2_isomorphic_component` (P) split. Wrapping
+    // ComponentProps's source in `Partial<>` here is what keeps the
+    // phase-5 `satisfies ComponentProps<typeof Foo>` trailer from
+    // firing TS2741 on legitimate slot-only consumer sites while
+    // still catching missing required props on Svelte-5 components.
+    let svelte4_with_slot = svelte4_style && doc.source.contains("<slot");
+    let wrap_props = |inner: String| -> String {
+        if svelte4_with_slot {
+            format!("Partial<{inner}>")
+        } else {
+            inner
+        }
+    };
     match (&prop_type_source, &generics) {
         (Some(ty), Some(g)) if ty_safe_in_generic_scope => {
             let widen = widen_for(ty);
+            let props = wrap_props(format!("{ty}{widen}"));
             let _ = writeln!(
                 out,
                 "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{ty}{widen}>) => {};",
@@ -833,18 +851,19 @@ fn emit_document_with_render_name(
             );
             let _ = writeln!(
                 out,
-                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<{ty}{widen}>{exports_clause};"
+                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<{props}>{exports_clause};"
             );
         }
         (Some(ty), None) if ty_safe_in_module_scope => {
             let widen = widen_for(ty);
+            let props = wrap_props(format!("{ty}{widen}"));
             let _ = writeln!(
                 out,
-                "declare const __svn_component_default: import('svelte').Component<{ty}{widen}{component_exports_arg}>;"
+                "declare const __svn_component_default: import('svelte').Component<{props}{component_exports_arg}>;"
             );
             let _ = writeln!(
                 out,
-                "declare type __svn_component_default = import('svelte').SvelteComponent<{ty}{widen}>{exports_clause};"
+                "declare type __svn_component_default = import('svelte').SvelteComponent<{props}>{exports_clause};"
             );
         }
         (_, Some(g)) => {
@@ -855,6 +874,7 @@ fn emit_document_with_render_name(
             // the plain fallback. Wrap the whole declaration in the
             // generic scope so the references bind.
             let widen = widen_for("Record<string, any>");
+            let props = wrap_props(format!("Record<string, any>{widen}"));
             let _ = writeln!(
                 out,
                 "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<Record<string, any>{widen}>) => {};",
@@ -862,18 +882,19 @@ fn emit_document_with_render_name(
             );
             let _ = writeln!(
                 out,
-                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<Record<string, any>{widen}>{exports_clause};"
+                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<{props}>{exports_clause};"
             );
         }
         _ => {
             let widen = widen_for("Record<string, any>");
+            let props = wrap_props(format!("Record<string, any>{widen}"));
             let _ = writeln!(
                 out,
-                "declare const __svn_component_default: import('svelte').Component<Record<string, any>{widen}{component_exports_arg}>;"
+                "declare const __svn_component_default: import('svelte').Component<{props}{component_exports_arg}>;"
             );
             let _ = writeln!(
                 out,
-                "declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>{widen}>{exports_clause};"
+                "declare type __svn_component_default = import('svelte').SvelteComponent<{props}>{exports_clause};"
             );
         }
     }

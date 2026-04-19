@@ -16,7 +16,7 @@ async function $$render_d2d4cb4e() {
     void y;
 }
 $$render_d2d4cb4e;
-declare const __svn_component_default: import('svelte').Component<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>;
+declare const __svn_component_default: import('svelte').Component<Partial<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Partial<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>>;
 export default __svn_component_default;
 

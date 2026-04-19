@@ -24,6 +24,6 @@ async function $$render_edb4eb12<T>() {
 }
 $$render_edb4eb12;
 declare const __svn_component_default: <T>(__anchor: any, props: Partial<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>) => any;
-declare type __svn_component_default<T> = import('svelte').SvelteComponent<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>;
+declare type __svn_component_default<T> = import('svelte').SvelteComponent<Partial<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>>;
 export default __svn_component_default;
 

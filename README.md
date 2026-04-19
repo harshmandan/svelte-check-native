@@ -9,22 +9,22 @@
 
 </div>
 
-Fast CLI type-checker for **Svelte 5+** projects. Drop-in replacement
-for [`svelte-check`](https://www.npmjs.com/package/svelte-check) —
-same flags, same output formats, same exit codes. Powered by Rust +
-[tsgo](https://github.com/microsoft/typescript-go).
+Fast CLI type-checker for **Svelte 4 and Svelte 5** projects.
+Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check)
+— same flags, same output formats, same exit codes. Powered by
+Rust + [tsgo](https://github.com/microsoft/typescript-go).
 
-| What it is                                  | What it isn't                                     |
-| ------------------------------------------- | ------------------------------------------------- |
-| CLI type-checker for Svelte 5+ projects     | An LSP / editor integration                       |
-| Drop-in for `svelte-check` (flags + output) | A full Svelte 4 type-checker (partial — see v0.2) |
-| Single Rust binary, tsgo-powered            | A CSS linter                                      |
-| Byte-identical diagnostics to upstream      | A formatter                                       |
-| Incremental via tsgo's `tsbuildinfo`        | A watch-mode runner (pair with `watchexec`)       |
+| What it is                                  | What it isn't               |
+| ------------------------------------------- | --------------------------- |
+| CLI type-checker for Svelte 4 and 5         | An LSP / editor integration |
+| Drop-in for `svelte-check` (flags + output) | A CSS linter                |
+| Single Rust binary, tsgo-powered            | A formatter                 |
+| Byte-identical diagnostics upstream         |                             |
+| Incremental via tsgo's `tsbuildinfo`        |                             |
 
 ## Speed
 
-Measured on a private SvelteKit + TypeScript project
+Measured on a big SvelteKit + TypeScript project
 with 1206 `.svelte` files, M1 Pro 8C, median of 3 runs each:
 
 `svelte-check-native --tsconfig tsconfig.json --diagnostic-sources 'ts,svelte'`
@@ -118,12 +118,8 @@ Output defaults to `machine` when run from a coding-agent CLI:
 - `1` — errors detected (or warnings with `--fail-on-warnings`)
 - `2` — invocation error (bad flag, missing tsconfig, tsgo not found)
 
-## On deck for v0.2
+## On deck for v0.3
 
-- Full Svelte 4 syntax compat (`<slot>` → children snippet, `on:event`
-  → event-handler prop typing, `$:` reactive statements → `$derived` /
-  `$effect`). Today `export let` and `export { name as alias }` already
-  work.
 - Targeted CSS diagnostics via `lightningcss` — vendor-prefix
   compatibility warnings only. We are explicitly **not** reimplementing
   stylelint; if the narrow rule set isn't tractable, CSS stays out.
@@ -136,10 +132,9 @@ the cache: `rm -rf node_modules/.cache/svelte-check-native` and re-run.
 The overlay config is regenerated from your live tsconfig on every
 run, but tsgo's `tsbuildinfo` can hold onto stale resolution state.
 
-**Svelte 4 component errors on a mid-migration codebase** — `export
-let` and renamed exports (`export { X as Y }`) work today; `<slot>`,
-`on:event` directives, and `$:` reactive statements don't yet.
-Tracked for v0.2.
+**TS2321 "Excessive stack depth"** on your own types — usually a
+`UnionToRecord<T>` that round-trips through `UnionToTuple<T>[number]`.
+Iterate `T` directly in the mapped-type key instead.
 
 ## Prior art
 

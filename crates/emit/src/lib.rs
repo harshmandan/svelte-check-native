@@ -223,28 +223,6 @@ fn emit_document_with_render_name(
             .and_then(|t| root_type_name(t.trim()))
     });
 
-    // v0.3 Item 5: extract `createEventDispatcher<T>()`'s first type
-    // argument from the instance script. When the component DOESN'T
-    // already declare `interface $$Events` / `type $$Events` (Item 3's
-    // substring check in `has_strict_events`), synthesize `type
-    // $$Events = <T>;` at module scope so Item 3's intersection on
-    // the default export fires — giving consumers the same narrowed
-    // `$on` overload they'd get from an explicit interface.
-    //
-    // Skip the synthesis when `$$Events` is already declared — the
-    // existing hoist handles that case and we'd get a duplicate-
-    // identifier TS2300 otherwise. Substring probe here; the cost
-    // is one extra oxc parse amortized across emit steps.
-    let synthesized_events_type_source: Option<String> = if has_strict_events(doc) {
-        None
-    } else {
-        doc.instance_script.as_ref().and_then(|s| {
-            let alloc = Allocator::default();
-            let parsed = parse_script_body(&alloc, s.content, s.lang);
-            svn_analyze::find_dispatcher_event_type_source(&parsed.program, s.content)
-        })
-    };
-
     // SVELTE-4-COMPAT: rewrite `$: ...` reactive statements before
     // the Svelte-5-shaped passes run, so downstream code sees the
     // Svelte-5 equivalents:
@@ -357,15 +335,6 @@ fn emit_document_with_render_name(
                 out.push('\n');
             }
         }
-    }
-
-    // v0.3 Item 5: synthesize `type $$Events` at module scope when the
-    // component uses a typed `createEventDispatcher<T>()` without an
-    // explicit `$$Events` interface. Lets Item 3's default-export
-    // intersection + Item 3's `__svn_ensure_component` typed overload
-    // fire uniformly for both declaration styles.
-    if let Some(t) = synthesized_events_type_source.as_deref() {
-        let _ = writeln!(out, "type $$Events = {t};");
     }
 
     // `<script generics="T extends ...">` (extracted above) — expose
@@ -894,20 +863,17 @@ fn emit_document_with_render_name(
     // those consumer-side writes valid without opening the door on
     // Svelte-5 codebases (where widening would mask real typos).
     let svelte4_style = is_svelte4_component(doc, split.as_ref());
-    // v0.3 Item 3 + Item 5: when the child declares `$$Events`
-    // directly OR uses a typed `createEventDispatcher<T>()` (Item 5
-    // synthesizes `type $$Events = T` above), carry it as
+    // v0.3 Item 3: when the child declares `$$Events`, carry it as
     // `& { readonly __svn_events: $$Events }` on the default export.
     // Consumer-side `__svn_ensure_component` has a typed overload
     // that matches this marker and returns `__SvnInstanceTyped<P, E>`
     // — handlers then narrow `e.detail` against the declared payload.
     // Lax-shim fallback stays in place for all other children.
-    let typed_events_intersection =
-        if has_strict_events(doc) || synthesized_events_type_source.is_some() {
-            " & { readonly __svn_events: $$Events }"
-        } else {
-            ""
-        };
+    let typed_events_intersection = if has_strict_events(doc) {
+        " & { readonly __svn_events: $$Events }"
+    } else {
+        ""
+    };
     // Widen strings emit as ` & __SvnSvelte4PropsWiden<P>` where P is
     // the base Props type so the shim can omit already-declared on*
     // keys from the widening (otherwise typed callbacks intersect with

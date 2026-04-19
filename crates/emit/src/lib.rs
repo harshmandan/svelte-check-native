@@ -46,6 +46,7 @@
 
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
+pub mod kit_inject;
 mod script_split;
 mod state_nullish_rewrite;
 // SVELTE-4-COMPAT: droppable submodule for Svelte-4 emit rewrites.

@@ -644,9 +644,28 @@ fn run_typecheck(
                 source_path: file.clone(),
                 generated_ts: emitted.typescript,
                 line_map: emitted.line_map,
+                kind: svn_typecheck::InputKind::Svelte,
             }
         })
         .collect_into_vec(&mut inputs);
+
+    // Kit files (`+server.ts`, `+page.ts`, hooks, params): run them
+    // through the inject pass to splice in `$types` imports so the
+    // user's handler destructures (`{url}` / `{request}` / …)
+    // type-check against `RequestEvent` / `LoadEvent` / etc. If
+    // `inject` returns `None` (no handlers matched), skip — the
+    // file type-checks as the user wrote it and the original path
+    // stays in tsgo's program via the normal `include` glob.
+    inputs.extend(kit_files.iter().filter_map(|file| {
+        let source = std::fs::read_to_string(file).ok()?;
+        let generated = svn_emit::kit_inject::inject(file, &source)?;
+        Some(svn_typecheck::CheckInput {
+            source_path: file.clone(),
+            generated_ts: generated,
+            line_map: Vec::new(),
+            kind: svn_typecheck::InputKind::KitFile,
+        })
+    }));
     let t_emit = mark.elapsed();
 
     // Run tsgo (`js`/`ts` source). Skipped entirely when

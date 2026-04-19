@@ -116,6 +116,20 @@ impl CacheLayout {
         self.svelte_dir.join(parent).join(renamed)
     }
 
+    /// Mirror path for a Kit `.ts` source (route modules, hooks,
+    /// params). `<workspace>/src/routes/+server.ts` →
+    /// `<cache>/svelte/src/routes/+server.ts`. Same basename, same
+    /// extension — tsgo loads this via the overlay tsconfig's
+    /// `files` list, and the original source path is added to
+    /// `exclude` so tsgo doesn't pick up BOTH the original (untyped
+    /// handler destructures) and the overlay (with injected
+    /// RequestEvent / Load types) and produce duplicate-declaration
+    /// noise.
+    pub fn kit_overlay_path(&self, source: &Path) -> PathBuf {
+        let rel = source.strip_prefix(&self.workspace).unwrap_or(source);
+        self.svelte_dir.join(rel)
+    }
+
     /// Ambient-declaration path for a `.svelte` source, sibling to the
     /// overlay. `<workspace>/lib/Foo.svelte` →
     /// `<cache>/svelte/lib/Foo.d.svelte.ts`.

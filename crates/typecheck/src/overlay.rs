@@ -44,6 +44,7 @@ pub fn build(
     layout: &CacheLayout,
     user_tsconfig: &Path,
     generated_files: &[std::path::PathBuf],
+    kit_overlay_sources: &[std::path::PathBuf],
 ) -> Value {
     // `extends` is resolved relative to the overlay tsconfig dir.
     let extends_rel = relative_from(layout.root.as_path(), user_tsconfig);
@@ -192,6 +193,20 @@ pub fn build(
     overlay.insert("files".into(), json!(files));
     if !user_includes.is_empty() {
         overlay.insert("include".into(), json!(user_includes));
+    }
+    if !kit_overlay_sources.is_empty() {
+        // Exclude the original Kit files from the compile so tsgo
+        // only sees our type-injected overlay (mirrored at the same
+        // path under the cache svelte dir and listed in `files`).
+        // Without this, tsgo's `include` glob catches BOTH copies
+        // and tries to merge their exports — which fails because they
+        // have identical shapes but different injected-type
+        // annotations.
+        let excludes: Vec<String> = kit_overlay_sources
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        overlay.insert("exclude".into(), json!(excludes));
     }
     Value::Object(overlay)
 }
@@ -679,7 +694,7 @@ mod tests {
         let gen_files = vec![PathBuf::from(
             "/projects/app/.svelte-check/svelte/++Index.svelte.ts",
         )];
-        let overlay = build(&layout, &user_ts, &gen_files);
+        let overlay = build(&layout, &user_ts, &gen_files, &[]);
 
         let opts = &overlay["compilerOptions"];
         assert_eq!(opts["noEmit"], json!(true));
@@ -692,7 +707,7 @@ mod tests {
     fn build_overlay_extends_user_tsconfig_relatively() {
         let layout = CacheLayout::for_workspace("/projects/app");
         let user_ts = PathBuf::from("/projects/app/tsconfig.json");
-        let overlay = build(&layout, &user_ts, &[]);
+        let overlay = build(&layout, &user_ts, &[], &[]);
         // extends should point ../tsconfig.json (overlay is in
         // /projects/app/.svelte-check/, user ts in /projects/app/).
         assert_eq!(overlay["extends"], json!("../tsconfig.json"));
@@ -706,7 +721,7 @@ mod tests {
             PathBuf::from("/projects/app/.svelte-check/svelte/++A.svelte.ts"),
             PathBuf::from("/projects/app/.svelte-check/svelte/sub/++B.svelte.ts"),
         ];
-        let overlay = build(&layout, &user_ts, &gen_files);
+        let overlay = build(&layout, &user_ts, &gen_files, &[]);
         let files = overlay["files"].as_array().unwrap();
         // 2 generated + 1 svelte-shims.d.ts = 3.
         assert_eq!(files.len(), 3);
@@ -722,7 +737,7 @@ mod tests {
         // svelte/* modules.
         let layout = CacheLayout::for_workspace("/projects/app");
         let user_ts = PathBuf::from("/projects/app/tsconfig.json");
-        let overlay = build(&layout, &user_ts, &[]);
+        let overlay = build(&layout, &user_ts, &[], &[]);
         let files = overlay["files"].as_array().unwrap();
         assert_eq!(files.len(), 1);
         assert!(files[0].as_str().unwrap().ends_with("svelte-shims.d.ts"));

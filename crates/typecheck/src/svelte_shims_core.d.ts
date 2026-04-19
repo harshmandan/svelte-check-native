@@ -164,16 +164,7 @@ declare type ConstructorOfATypedSvelteComponent = any;
 // function-to-function assignability check treats `(v: string) =>
 // void` as compatible with `(e: any) => any` via bivariance, so the
 // index-signature conflict doesn't fire.
-declare type __SvnSvelte4PropsWiden<P> = {
-    [K in `on${string}`]?:
-        | ((...args: any[]) => any)
-        | boolean
-        | null
-        | undefined
-        | string
-        | number;
-}
-    & ('slot' extends keyof P ? {} : { slot?: string })
+declare type __SvnSvelte4PropsWiden<P> = ('slot' extends keyof P ? {} : { slot?: string })
     & ('class' extends keyof P ? {} : { class?: string })
     & ('style' extends keyof P ? {} : { style?: string })
     & { [index: string]: any };
@@ -382,9 +373,19 @@ type __SvnPropsPartial<P> = { [K in keyof P]?: P[K] | null }
     // prop — our analyze pass rewrites the directive to a prop key,
     // and without this union Tsgo fires TS2353 and TS7031
     // (implicit-any on `{detail}` destructure). The handler value
-    // type is the permissive union matching `__SvnSvelte4PropsWiden`
-    // (arrow, primitives, nullish) so the widen's contextual typing
-    // works for both declared and ad-hoc listeners.
+    // type is a permissive union (callable + primitives) so the
+    // widen's contextual typing works for both declared and ad-hoc
+    // listeners.
+    //
+    // A known-imperfect consequence: a user-declared prop whose
+    // name happens to start with `on` but holds a non-callable
+    // non-primitive value (e.g. `oneTouchReaction: { emojiId: … }`)
+    // fires TS2322 at the call site because TS checks the nested
+    // object against the Record's value union and finds no match.
+    // This pattern is rare enough we accept the false positive; a
+    // stricter fix would require per-component introspection of
+    // which on-prefix keys were REWRITTEN from `on:event`
+    // directives vs declared as plain props.
     & Partial<Record<
         `on${string}`,
         ((...args: any[]) => any) | boolean | null | undefined | string | number

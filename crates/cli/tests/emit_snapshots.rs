@@ -150,7 +150,10 @@ fn emit_snapshots_suite() {
 fn collect_samples(crate_dir: &Path, snapshots_root: &Path) -> Vec<Sample> {
     let mut out = Vec::new();
 
-    // Corpus 1: upstream svelte2tsx samples (filter to .v5).
+    // Corpus 1: upstream svelte2tsx samples. Both .v5 (Svelte 5) and
+    // non-.v5 (Svelte 4) are in scope now that v0.2 shipped Svelte-4
+    // parity. Samples without an `input.svelte` are upstream test-
+    // scaffolding and are skipped.
     let v5_root = crate_dir
         .join("../../language-tools/packages/svelte2tsx/test/svelte2tsx/samples")
         .canonicalize()
@@ -162,7 +165,7 @@ fn collect_samples(crate_dir: &Path, snapshots_root: &Path) -> Vec<Sample> {
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_string();
-            if !name.ends_with(".v5") {
+            if name.starts_with('_') || name.starts_with('.') {
                 continue;
             }
             if !entry.is_dir() {
@@ -172,10 +175,10 @@ fn collect_samples(crate_dir: &Path, snapshots_root: &Path) -> Vec<Sample> {
                 continue;
             }
             out.push(Sample {
-                name: format!("svelte2tsx_v5/{name}"),
+                name: format!("svelte2tsx/{name}"),
                 input_dir: entry,
                 snapshot_path: snapshots_root
-                    .join("svelte2tsx_v5")
+                    .join("svelte2tsx")
                     .join(name)
                     .join("expected.emit.ts"),
             });

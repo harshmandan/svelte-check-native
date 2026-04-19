@@ -128,6 +128,53 @@ pub fn collect_top_level_bindings(program: &oxc_ast::ast::Program<'_>, out: &mut
     }
 }
 
+/// Collect every top-level `let NAME: Type;` (typed, no initializer)
+/// binding name. Used to seed the definite-assign rewriter for
+/// Svelte-style "declare now, assign in a handler later" patterns —
+/// matches upstream svelte-check's effective treatment where TS2454
+/// doesn't fire on typed-uninit lets that the user assigns later in
+/// an event handler, reactive statement, or template binding.
+///
+/// Only `let` is walked (const/var can't be both typed and uninit at
+/// the same time: const requires init, var has no type annotation).
+/// Destructuring patterns (`let { a }: T`) are skipped — those can't
+/// carry `!` syntactically. Only simple-identifier bindings
+/// qualify.
+pub fn collect_typed_uninit_lets(
+    program: &oxc_ast::ast::Program<'_>,
+    out: &mut Vec<smol_str::SmolStr>,
+) {
+    for stmt in &program.body {
+        let Statement::VariableDeclaration(decl) = stmt else {
+            continue;
+        };
+        if !matches!(
+            decl.kind,
+            oxc_ast::ast::VariableDeclarationKind::Let
+        ) {
+            continue;
+        }
+        for declarator in &decl.declarations {
+            if declarator.init.is_some() {
+                continue;
+            }
+            // Only top-level simple identifier with a type annotation.
+            let oxc_ast::ast::BindingPatternKind::BindingIdentifier(id) =
+                &declarator.id.kind
+            else {
+                continue;
+            };
+            if declarator.id.type_annotation.is_none() {
+                continue;
+            }
+            let name = smol_str::SmolStr::from(id.name.as_str());
+            if !out.iter().any(|n| n == &name) {
+                out.push(name);
+            }
+        }
+    }
+}
+
 fn collect_from_statement(stmt: &Statement<'_>, out: &mut HashSet<String>) {
     match stmt {
         Statement::VariableDeclaration(decl) => {

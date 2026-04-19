@@ -61,7 +61,8 @@ use std::collections::HashSet;
 use oxc_allocator::Allocator;
 use smol_str::SmolStr;
 use svn_analyze::{
-    TemplateSummary, collect_top_level_bindings, find_props, find_store_refs_with_bindings,
+    TemplateSummary, collect_top_level_bindings, collect_typed_uninit_lets, find_props,
+    find_store_refs_with_bindings,
     find_template_refs,
 };
 use svn_parser::Document;
@@ -556,6 +557,23 @@ fn emit_document_with_render_name(
     for name in &reactive_touched_names {
         if !def_assign_names.iter().any(|n| n == name) {
             def_assign_names.push(name.clone());
+        }
+    }
+    // Every top-level `let NAME: Type;` (typed, no initializer) in
+    // the instance script — Svelte-style "declare now, assign in a
+    // handler later" pattern. Upstream svelte-check doesn't fire
+    // TS2454 on these because its TS version / transform sequence
+    // never observes the uninitialised state. Matching that with a
+    // `!` definite-assign assertion is the simplest equivalent.
+    if let Some(instance) = &doc.instance_script {
+        let alloc_ua = Allocator::default();
+        let parsed_ua = parse_script_body(&alloc_ua, instance.content, instance.lang);
+        let mut uninit_lets: Vec<SmolStr> = Vec::new();
+        collect_typed_uninit_lets(&parsed_ua.program, &mut uninit_lets);
+        for name in uninit_lets {
+            if !def_assign_names.iter().any(|n| n == &name) {
+                def_assign_names.push(name);
+            }
         }
     }
     // Widen Svelte-4-style untyped uninitialized exported props to `any`.

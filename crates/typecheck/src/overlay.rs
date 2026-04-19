@@ -194,18 +194,25 @@ pub fn build(
     if !user_includes.is_empty() {
         overlay.insert("include".into(), json!(user_includes));
     }
-    if !kit_overlay_sources.is_empty() {
-        // Exclude the original Kit files from the compile so tsgo
-        // only sees our type-injected overlay (mirrored at the same
-        // path under the cache svelte dir and listed in `files`).
-        // Without this, tsgo's `include` glob catches BOTH copies
-        // and tries to merge their exports — which fails because they
-        // have identical shapes but different injected-type
-        // annotations.
-        let excludes: Vec<String> = kit_overlay_sources
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect();
+    // Exclude list. Two sources that must union:
+    //
+    // 1. The user's own `exclude` from their tsconfig chain — e.g.
+    //    `playwright/fixtures/videos/**/*` for binary-named-`.ts`
+    //    files. tsconfig semantics REPLACE (not merge) exclude when
+    //    the child config declares one, so dropping this would let
+    //    user-excluded content back into the program.
+    // 2. Original Kit-file source paths that have an injected
+    //    overlay at a mirrored cache path. Without this, tsgo
+    //    loads BOTH the untyped original and the typed overlay.
+    //
+    // Only emit the field if at least one source contributed — an
+    // empty `exclude` field in our overlay would clobber the user's
+    // inherited exclude with an empty list.
+    let mut excludes: Vec<String> = collect_user_excludes(user_tsconfig);
+    for p in kit_overlay_sources {
+        excludes.push(p.to_string_lossy().into_owned());
+    }
+    if !excludes.is_empty() {
         overlay.insert("exclude".into(), json!(excludes));
     }
     Value::Object(overlay)
@@ -409,6 +416,27 @@ fn collect_user_root_dirs(tsconfig: &Path) -> Vec<PathBuf> {
 /// "file is not a TS file" errors or get silently ignored depending on
 /// tsgo build; either way they add nothing useful.
 fn collect_user_includes(tsconfig: &Path) -> Vec<String> {
+    collect_user_patterns(tsconfig, "include", true)
+}
+
+/// Walks the extends chain and returns the user's `exclude` patterns
+/// as absolute path globs. Same shape as [`collect_user_includes`] —
+/// returned when we need to carry them forward into our own overlay
+/// `exclude` (e.g. when we also want to exclude Kit-file source
+/// originals). tsconfig `exclude` is REPLACED not merged when a child
+/// defines it, so we must union the user's patterns into ours
+/// explicitly.
+fn collect_user_excludes(tsconfig: &Path) -> Vec<String> {
+    collect_user_patterns(tsconfig, "exclude", false)
+}
+
+/// Shared backbone for `include` / `exclude` resolution. Walks the
+/// extends chain, returns the first config that declares the field.
+/// `drop_svelte_only` filters out patterns that only matched raw
+/// `.svelte` files — valid for `include` where our generated
+/// `.svelte.ts` overlays cover the same surface, harmful for
+/// `exclude` where dropping a pattern opens a hole.
+fn collect_user_patterns(tsconfig: &Path, field: &str, drop_svelte_only: bool) -> Vec<String> {
     let mut queue: std::collections::VecDeque<PathBuf> =
         std::collections::VecDeque::from([tsconfig.to_path_buf()]);
     let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
@@ -428,12 +456,12 @@ fn collect_user_includes(tsconfig: &Path) -> Vec<String> {
             continue;
         };
         let dir = path.parent().unwrap_or(Path::new(""));
-        if let Some(arr) = json.get("include").and_then(|v| v.as_array()) {
-            // First config to declare include wins (TS semantics).
+        if let Some(arr) = json.get(field).and_then(|v| v.as_array()) {
+            // First config to declare the field wins (TS semantics).
             let mut out: Vec<String> = Vec::new();
             for entry in arr {
                 let Some(s) = entry.as_str() else { continue };
-                if is_svelte_only_pattern(s) {
+                if drop_svelte_only && is_svelte_only_pattern(s) {
                     continue;
                 }
                 let resolved = if Path::new(s).is_absolute() {

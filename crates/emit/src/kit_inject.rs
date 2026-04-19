@@ -1,40 +1,43 @@
 //! SvelteKit Kit-file type injection.
 //!
 //! Mirrors a subset of upstream svelte2tsx's `upsertKitFile` behavior:
-//! for a Kit file whose user source omits the handler's parameter type,
-//! splice in an `: import('./$types').Xxx` annotation. The result is
-//! the original source with insertions at specific byte positions —
-//! positions that line up with where the user would have hand-written
-//! the annotation, so diagnostic positions map back cleanly.
+//! for a Kit file whose user source omits a handler's parameter type
+//! or a config variable's annotation, splice in the expected
+//! `: import('./$types').Xxx` / `: boolean | ...` annotation. The
+//! result is the original source with insertions at specific byte
+//! positions — positions that line up with where the user would have
+//! hand-written the annotation, so diagnostic positions map back
+//! cleanly.
 //!
-//! v0.3 scope (MVP):
+//! Shipped branches:
 //!
 //! - `+server.ts` HTTP handlers (`GET` / `POST` / `PUT` / `PATCH` /
 //!   `DELETE` / `OPTIONS` / `HEAD` / `fallback`) — inject
 //!   `: import('./$types').RequestEvent` on the single untyped
 //!   parameter.
+//! - `+page.ts` / `+layout.ts` / `+page.server.ts` /
+//!   `+layout.server.ts`:
+//!     - `load` function's first parameter gets
+//!       `: import('./$types').(Page|Layout)(Server)?LoadEvent` — the
+//!       name matrix matches upstream's naming exactly.
+//!     - SvelteKit page-option exports (`ssr`, `csr`, `prerender`,
+//!       `trailingSlash`) get their fixed value-union types injected
+//!       on the declarator binding.
 //!
 //! Deliberately NOT handled here (yet):
 //!
-//! - `+page.ts` / `+page.server.ts` / `+layout.*` `load` functions —
-//!   the type name depends on Server vs universal vs Layout vs Page
-//!   and has multiple variants we'd need to branch on.
 //! - `actions` const satisfies pattern.
-//! - `prerender` / `ssr` / `csr` / `trailingSlash` variable types.
-//! - `hooks.server.ts` / `hooks.client.ts` handlers.
+//! - `entries` function in `+page.server.ts` / `+server.ts`.
+//! - `hooks.server.ts` / `hooks.client.ts` handler typing.
 //! - `src/params/*.ts` param matchers.
-//! - `.js` route files (needs JSDoc param annotation injection, a
+//! - `.js` route files (needs JSDoc annotation injection, a
 //!   separate code path).
-//!
-//! Those round out the feature set once the MVP is proven. Each
-//! category needs its own branch in `inject` + a hand-written
-//! fixture per architectural rule 8.
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{Declaration, Statement};
+use oxc_ast::ast::{BindingPatternKind, Declaration, Statement};
 use oxc_span::GetSpan;
-use svn_parser::{ScriptLang, parse_script_body};
 use std::path::Path;
+use svn_parser::{ScriptLang, parse_script_body};
 
 /// HTTP method names that `+server.ts` may export as handler functions,
 /// per the SvelteKit runtime. Order matches upstream svelte2tsx's
@@ -42,6 +45,46 @@ use std::path::Path;
 const SERVER_HANDLER_NAMES: &[&str] = &[
     "GET", "PUT", "POST", "PATCH", "DELETE", "OPTIONS", "HEAD", "fallback",
 ];
+
+/// Classification of which SvelteKit Kit-file shape we're processing.
+/// Drives which export names we inject types for and which
+/// `$types`-scope label to splice in.
+enum KitFileKind {
+    /// `+server.ts` — HTTP handlers get `RequestEvent`. No config
+    /// exports (`ssr`/`csr`/etc. are page-only).
+    ServerEndpoint,
+    /// `+page.ts`, `+layout.ts`, `+page.server.ts`, `+layout.server.ts`.
+    /// `load` gets a type-matrix-derived `LoadEvent`; page-option
+    /// consts get their fixed-union types. Sub-classification feeds
+    /// the load-event name computation.
+    Route {
+        is_layout: bool,
+        is_server: bool,
+    },
+}
+
+fn classify_kit_file(basename: &str) -> Option<KitFileKind> {
+    match basename {
+        "+server.ts" => Some(KitFileKind::ServerEndpoint),
+        "+page.ts" => Some(KitFileKind::Route {
+            is_layout: false,
+            is_server: false,
+        }),
+        "+layout.ts" => Some(KitFileKind::Route {
+            is_layout: true,
+            is_server: false,
+        }),
+        "+page.server.ts" => Some(KitFileKind::Route {
+            is_layout: false,
+            is_server: true,
+        }),
+        "+layout.server.ts" => Some(KitFileKind::Route {
+            is_layout: true,
+            is_server: true,
+        }),
+        _ => None,
+    }
+}
 
 /// Returns the modified source with injected type annotations, or
 /// `None` if no injections were needed (no handlers matched OR all
@@ -53,11 +96,7 @@ const SERVER_HANDLER_NAMES: &[&str] = &[
 /// inject still map 1:1 to the source.
 pub fn inject(path: &Path, source: &str) -> Option<String> {
     let basename = path.file_name().and_then(|s| s.to_str())?;
-    // Only `+server.ts` in this MVP. Other Kit files fall back to
-    // passthrough (no injection) until the other branches land.
-    if basename != "+server.ts" {
-        return None;
-    }
+    let kind = classify_kit_file(basename)?;
 
     let alloc = Allocator::default();
     let parsed = parse_script_body(&alloc, source, ScriptLang::Ts);
@@ -67,38 +106,65 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
         let Statement::ExportNamedDeclaration(export) = stmt else {
             continue;
         };
-        let Some(Declaration::FunctionDeclaration(func)) = &export.declaration else {
-            continue;
-        };
-        let Some(name) = func.id.as_ref().map(|id| id.name.as_str()) else {
-            continue;
-        };
-        if !SERVER_HANDLER_NAMES.contains(&name) {
-            continue;
-        }
 
-        // Exactly one parameter, no existing type annotation. The
-        // destructure case (`{ url }`) and identifier case (`event`)
-        // both have `type_annotation: None` when the user leaves it
-        // implicit. Rest params and multi-param signatures are
-        // deliberately skipped — they don't match the RequestEvent
-        // shape upstream injects.
-        if func.params.items.len() != 1 {
-            continue;
+        match &export.declaration {
+            Some(Declaration::FunctionDeclaration(func)) => {
+                let Some(name) = func.id.as_ref().map(|id| id.name.as_str()) else {
+                    continue;
+                };
+                match &kind {
+                    KitFileKind::ServerEndpoint => {
+                        if !SERVER_HANDLER_NAMES.contains(&name) {
+                            continue;
+                        }
+                        collect_handler_insert(
+                            func,
+                            "import('./$types').RequestEvent",
+                            &mut insertions,
+                        );
+                    }
+                    KitFileKind::Route {
+                        is_layout,
+                        is_server,
+                    } => {
+                        if name != "load" {
+                            continue;
+                        }
+                        let event_type = load_event_type(*is_layout, *is_server);
+                        collect_handler_insert(func, &event_type, &mut insertions);
+                    }
+                }
+            }
+            Some(Declaration::VariableDeclaration(var_decl)) => {
+                let KitFileKind::Route { .. } = kind else {
+                    continue;
+                };
+                for declarator in &var_decl.declarations {
+                    // Only annotate simple identifier declarators with
+                    // no existing type. `let { a, b } = …` patterns,
+                    // already-typed declarations, and bindings without
+                    // initializers are left alone.
+                    if declarator.id.type_annotation.is_some() {
+                        continue;
+                    }
+                    if declarator.init.is_none() {
+                        continue;
+                    }
+                    let BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind else {
+                        continue;
+                    };
+                    let Some(annot) = page_option_type(id.name.as_str()) else {
+                        continue;
+                    };
+                    // Insert after the identifier's span. The declarator
+                    // shape is `NAME (= INIT)?` — we splice `: T` between
+                    // NAME and `=`.
+                    let insert_at = id.span.end as usize;
+                    insertions.push((insert_at, format!(": {annot}")));
+                }
+            }
+            _ => {}
         }
-        let param = &func.params.items[0];
-        if param.pattern.type_annotation.is_some() {
-            continue;
-        }
-
-        // Splice point: immediately after the parameter pattern's
-        // closing byte. For `{ url }` that's after `}`; for `event`
-        // that's after `t`. Result: `function GET({ url }: Import<…>.RequestEvent)`.
-        let insert_at = param.pattern.span().end as usize;
-        insertions.push((
-            insert_at,
-            ": import('./$types').RequestEvent".to_string(),
-        ));
     }
 
     if insertions.is_empty() {
@@ -113,6 +179,50 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
     Some(out)
 }
 
+/// Mirrors upstream's load-event naming matrix. Server-side gets
+/// `PageServerLoadEvent` / `LayoutServerLoadEvent`, client-side
+/// `PageLoadEvent` / `LayoutLoadEvent`.
+fn load_event_type(is_layout: bool, is_server: bool) -> String {
+    let page_or_layout = if is_layout { "Layout" } else { "Page" };
+    let server_infix = if is_server { "Server" } else { "" };
+    format!("import('./$types').{page_or_layout}{server_infix}LoadEvent")
+}
+
+/// SvelteKit page-option exports with fixed value-union types. Names
+/// match upstream's `addTypeToVariable` calls verbatim — any name not
+/// in this list is left untouched (could be a user-defined export
+/// that happens to be declared without a type).
+fn page_option_type(name: &str) -> Option<&'static str> {
+    match name {
+        "prerender" => Some("boolean | 'auto'"),
+        "ssr" => Some("boolean"),
+        "csr" => Some("boolean"),
+        "trailingSlash" => Some("'never' | 'always' | 'ignore'"),
+        _ => None,
+    }
+}
+
+/// Shared single-parameter-handler injection. Applies to both
+/// `+server.ts` HTTP handlers and `+page.ts` `load` functions. Skips
+/// multi-param and already-typed signatures (those don't match the
+/// SvelteKit handler shape upstream injects against, so we leave
+/// them alone rather than guess).
+fn collect_handler_insert(
+    func: &oxc_ast::ast::Function<'_>,
+    event_type: &str,
+    insertions: &mut Vec<(usize, String)>,
+) {
+    if func.params.items.len() != 1 {
+        return;
+    }
+    let param = &func.params.items[0];
+    if param.pattern.type_annotation.is_some() {
+        return;
+    }
+    let insert_at = param.pattern.span().end as usize;
+    insertions.push((insert_at, format!(": {event_type}")));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,25 +231,33 @@ mod tests {
     fn server_path() -> PathBuf {
         PathBuf::from("src/routes/+server.ts")
     }
+    fn page_path() -> PathBuf {
+        PathBuf::from("src/routes/+page.ts")
+    }
+    fn layout_path() -> PathBuf {
+        PathBuf::from("src/routes/+layout.ts")
+    }
+    fn page_server_path() -> PathBuf {
+        PathBuf::from("src/routes/+page.server.ts")
+    }
+    fn layout_server_path() -> PathBuf {
+        PathBuf::from("src/routes/+layout.server.ts")
+    }
+
+    // +server.ts handler cases — existing coverage.
 
     #[test]
     fn injects_on_destructured_single_param() {
         let source = "export async function GET({ url }) {\n    return new Response(url.pathname);\n}";
         let got = inject(&server_path(), source).unwrap();
-        assert!(
-            got.contains("({ url }: import('./$types').RequestEvent)"),
-            "expected annotation after destructure; got:\n{got}"
-        );
+        assert!(got.contains("({ url }: import('./$types').RequestEvent)"));
     }
 
     #[test]
     fn injects_on_identifier_param() {
         let source = "export function POST(event) { return new Response(''); }";
         let got = inject(&server_path(), source).unwrap();
-        assert!(
-            got.contains("(event: import('./$types').RequestEvent)"),
-            "expected annotation after identifier; got:\n{got}"
-        );
+        assert!(got.contains("(event: import('./$types').RequestEvent)"));
     }
 
     #[test]
@@ -173,10 +291,10 @@ export async function POST({ request }) { return new Response(''); }
     }
 
     #[test]
-    fn non_server_file_returns_none() {
+    fn non_kit_file_returns_none() {
         let source = "export async function GET({ url }) { return new Response(''); }";
-        let page_path = PathBuf::from("src/routes/+page.ts");
-        assert!(inject(&page_path, source).is_none());
+        let helper_path = PathBuf::from("src/lib/helper.ts");
+        assert!(inject(&helper_path, source).is_none());
     }
 
     #[test]
@@ -185,10 +303,106 @@ export async function POST({ request }) { return new Response(''); }
         let suffix = "\n    return new Response(url.pathname);\n}\n";
         let source = format!("{prefix}{suffix}");
         let got = inject(&server_path(), &source).unwrap();
-        // Prefix + suffix bytes should appear identically; only the
-        // insertion sits between `}` (destructure close) and `)`
-        // (param list close).
         assert!(got.starts_with("// user comment\n"));
         assert!(got.contains("return new Response(url.pathname);"));
+    }
+
+    // +page.ts load function — Page variant (client-side).
+
+    #[test]
+    fn page_load_gets_page_load_event() {
+        let source = "export async function load({ params, fetch }) { return {}; }";
+        let got = inject(&page_path(), source).unwrap();
+        assert!(got.contains(": import('./$types').PageLoadEvent"));
+    }
+
+    #[test]
+    fn layout_load_gets_layout_load_event() {
+        let source = "export async function load({ params }) { return {}; }";
+        let got = inject(&layout_path(), source).unwrap();
+        assert!(got.contains(": import('./$types').LayoutLoadEvent"));
+    }
+
+    #[test]
+    fn page_server_load_gets_page_server_load_event() {
+        let source = "export async function load({ request }) { return {}; }";
+        let got = inject(&page_server_path(), source).unwrap();
+        assert!(got.contains(": import('./$types').PageServerLoadEvent"));
+    }
+
+    #[test]
+    fn layout_server_load_gets_layout_server_load_event() {
+        let source = "export async function load({ request }) { return {}; }";
+        let got = inject(&layout_server_path(), source).unwrap();
+        assert!(got.contains(": import('./$types').LayoutServerLoadEvent"));
+    }
+
+    #[test]
+    fn non_load_function_in_page_is_ignored() {
+        // Random user-defined helper — don't splice.
+        let source = "export function helper({ x }) { return x; }";
+        assert!(inject(&page_path(), source).is_none());
+    }
+
+    // Page-option variable-type injection.
+
+    #[test]
+    fn injects_ssr_boolean() {
+        let source = "export const ssr = 'invalid';";
+        let got = inject(&page_path(), source).unwrap();
+        assert!(
+            got.contains("export const ssr: boolean = 'invalid'"),
+            "got: {got}"
+        );
+    }
+
+    #[test]
+    fn injects_csr_boolean() {
+        let source = "export const csr = false;";
+        let got = inject(&page_path(), source).unwrap();
+        assert!(got.contains("csr: boolean = false"));
+    }
+
+    #[test]
+    fn injects_prerender_union() {
+        let source = "export const prerender = 'auto';";
+        let got = inject(&page_path(), source).unwrap();
+        assert!(got.contains("prerender: boolean | 'auto' = 'auto'"));
+    }
+
+    #[test]
+    fn injects_trailing_slash_union() {
+        let source = "export const trailingSlash = 'always';";
+        let got = inject(&page_path(), source).unwrap();
+        assert!(got.contains("trailingSlash: 'never' | 'always' | 'ignore' = 'always'"));
+    }
+
+    #[test]
+    fn leaves_typed_page_options_alone() {
+        let source = "export const ssr: boolean = true;";
+        assert!(inject(&page_path(), source).is_none());
+    }
+
+    #[test]
+    fn skips_unknown_page_consts() {
+        // User-defined export that happens to be a bare const.
+        let source = "export const myCustomThing = 42;";
+        assert!(inject(&page_path(), source).is_none());
+    }
+
+    #[test]
+    fn layout_also_accepts_page_options() {
+        let source = "export const ssr = true;";
+        let got = inject(&layout_path(), source).unwrap();
+        assert!(got.contains("ssr: boolean = true"));
+    }
+
+    #[test]
+    fn server_endpoint_ignores_page_options() {
+        // +server.ts doesn't support `ssr` etc. — our ServerEndpoint
+        // branch only looks at HTTP handlers, so page-options are
+        // untouched even if the user happens to write one.
+        let source = "export const ssr = true;";
+        assert!(inject(&server_path(), source).is_none());
     }
 }

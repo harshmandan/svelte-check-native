@@ -65,11 +65,34 @@ pub struct ComponentInstantiation {
     pub component_root: SmolStr,
     /// Plain attributes only (no bind/on/use/etc directives, no spread).
     pub props: Vec<PropShape>,
+    /// SVELTE-4-COMPAT: `on:event={handler}` directives on this
+    /// component. Emit binds each via `$inst.$on("event", handler)`
+    /// on the hoisted instance local, mirroring upstream svelte2tsx's
+    /// shape. The props object stays free of `on*` keys so we can
+    /// drop the `on${string}` union from `__SvnPropsPartial` — which
+    /// in turn stops collisions with user props whose names start
+    /// with "on" (`oneTouchReaction`, `onVideoMoments`, etc.).
+    pub on_events: Vec<OnEventDirective>,
     /// Byte offset of the `<Component` token in the source. Emit keys
     /// the prop-check on this to locate the correct enclosing scope
     /// (i.e. inside the right `{#each}` / `{#if}` / `{#snippet}` body)
     /// when re-walking the template fragment.
     pub node_start: u32,
+}
+
+/// One `on:event={handler}` directive on a component instantiation.
+/// Gets emitted as `$inst.$on("event", handler)` after construction.
+#[derive(Debug, Clone)]
+pub struct OnEventDirective {
+    /// The event name without the `on:` prefix (e.g. `click` for
+    /// `on:click`). Modifiers are stripped — runtime behavior, no
+    /// type signature impact.
+    pub event_name: SmolStr,
+    /// Source range of the handler expression. Empty (start == end)
+    /// when the user wrote `on:event` with no `={…}` value — those
+    /// re-dispatch the event to a parent listener at runtime; we
+    /// skip emit for type-check purposes.
+    pub handler_range: Range,
 }
 
 /// One prop on a component instantiation.
@@ -351,6 +374,7 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
         return;
     }
     let mut props: Vec<PropShape> = Vec::with_capacity(c.attributes.len());
+    let mut on_events: Vec<OnEventDirective> = Vec::new();
     for attr in &c.attributes {
         match attr {
             Attribute::Plain(p) => {
@@ -399,42 +423,41 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
             }
             Attribute::Directive(d) => {
                 // SVELTE-4-COMPAT: `on:event={handler}` on a component
-                // is semantically identical to Svelte 5's `onevent={
-                // handler}` at the type level. Rename the directive to
-                // a regular prop so the component's Props (which
-                // declares `oncustom: EventHandler<…>` in Svelte 5
-                // shape) actually type-checks the handler against it.
+                // emits as `$inst.$on("event", handler)` after
+                // construction (mirrors upstream svelte2tsx). The
+                // handler's type gets checked against the component's
+                // declared `Events` type via the `SvelteComponent<P,
+                // E, S>.$on` signature — independent of the props
+                // object literal. That decoupling is what lets us
+                // drop the `on${string}` union from
+                // `__SvnPropsPartial`, which used to collide with
+                // user props starting with "on" (e.g.
+                // `oneTouchReaction` matched template-literal-wise).
                 //
                 // Other directives (`bind:`, `use:`, `class:`, etc.)
                 // remain silently dropped — the `Partial<>` wrap in
                 // emit accepts their absence, and they provide
                 // runtime values we can't model statically.
                 //
-                // Svelte-4 allowed multiple `on:event={…}` listeners
-                // on the same component — all fire. Rewriting each
-                // to a prop-keyed entry in the same object literal
-                // creates duplicate keys and fires TS1117. Drop an
-                // earlier entry with the same name so only the last
-                // survives; the emit still type-checks the handler,
-                // just only against the final listener.
-                if let Some(name) = crate::svelte4::on_directive::prop_name_for(d) {
-                    if let Some(svn_parser::DirectiveValue::Expression {
-                        expression_range, ..
-                    }) = &d.value
-                    {
-                        let target = smol_str::SmolStr::from(name);
-                        props.retain(|p| match p {
-                            PropShape::BoolShorthand { name }
-                            | PropShape::Literal { name, .. }
-                            | PropShape::Expression { name, .. }
-                            | PropShape::Shorthand { name } => name != &target,
-                        });
-                        props.push(PropShape::Expression {
-                            name: target,
-                            expr_range: *expression_range,
-                        });
-                    }
+                // Multiple `on:event={…}` listeners on the same
+                // component all fire at runtime; we emit one `$on`
+                // call per listener, which type-checks each handler
+                // against the event type independently. No dedup
+                // required — `$on` accepts repeated subscriptions.
+                if d.kind != svn_parser::DirectiveKind::On {
+                    continue;
                 }
+                if let Some(svn_parser::DirectiveValue::Expression {
+                    expression_range, ..
+                }) = &d.value
+                {
+                    on_events.push(OnEventDirective {
+                        event_name: d.name.clone(),
+                        handler_range: *expression_range,
+                    });
+                }
+                // `on:event` with no value (bare re-dispatch form) is
+                // a runtime-only behavior — no handler to type-check.
             }
             // Spread — silently dropped. The Partial<> wrap in emit
             // means we don't need to model the props it would
@@ -447,6 +470,7 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
         .push(ComponentInstantiation {
             component_root: c.name.clone(),
             props,
+            on_events,
             node_start: c.range.start,
         });
 }

@@ -347,14 +347,34 @@ declare function __svn_any<T = any>(): T;
  */
 declare function __svn_ensure_component<P extends Record<string, any>>(
     c: import('svelte').Component<P>,
-): new (options: { target?: any; props?: __SvnPropsPartial<P> }) => { $$prop_def: P };
+): new (options: { target?: any; props?: __SvnPropsPartial<P> }) => __SvnInstance<P>;
 declare function __svn_ensure_component<C extends new (...args: any[]) => any>(c: C): C;
 declare function __svn_ensure_component<P>(
     c: (anchor: any, props: P) => any,
-): new (options: { target?: any; props?: __SvnPropsPartial<P> }) => { $$prop_def: P };
+): new (options: { target?: any; props?: __SvnPropsPartial<P> }) => __SvnInstance<P>;
 declare function __svn_ensure_component(
     c: unknown,
-): new (options: { target?: any; props?: any }) => { $$prop_def: any };
+): new (options: { target?: any; props?: any }) => __SvnInstance<any>;
+
+/**
+ * Shape returned by a `new __svn_ensure_component(C)({target, props})`
+ * call. `$$prop_def` is the compile-time-only carrier used elsewhere
+ * in the shim chain; `$on` accepts the SVELTE-4-COMPAT
+ * `$inst.$on("event", handler)` pattern the emit uses for `on:event`
+ * directives on components.
+ *
+ * `handler` is typed as a callable `(...args: any[]) => any` rather
+ * than bare `any` so the arrow function the user passes gets
+ * contextual typing from the callable shape. With bare `any`, the
+ * arrow's `({detail}) => ...` parameter destructure falls back to
+ * TS's fresh inference — no context — and fires TS7031 under
+ * `noImplicitAny`. The callable form pushes `any` into each
+ * positional param, which is what makes the destructure fine.
+ */
+type __SvnInstance<P> = {
+    $$prop_def: P;
+    $on(event: string, handler: (...args: any[]) => any): () => void;
+};
 
 /**
  * Partial<> variant that widens each prop with `| null`. Required
@@ -366,30 +386,7 @@ declare function __svn_ensure_component(
  * Excess-property checks (typo'd prop names) and contextual-typing
  * flow (callback destructures, snippet params) are preserved.
  */
-type __SvnPropsPartial<P> = { [K in keyof P]?: P[K] | null }
-    // SVELTE-4-COMPAT: accept any `on${string}` key not declared by
-    // P. Svelte-4 consumers use `on:event={handler}` directives on
-    // Svelte-5 children that don't declare the matching `on<event>`
-    // prop — our analyze pass rewrites the directive to a prop key,
-    // and without this union Tsgo fires TS2353 and TS7031
-    // (implicit-any on `{detail}` destructure). The handler value
-    // type is a permissive union (callable + primitives) so the
-    // widen's contextual typing works for both declared and ad-hoc
-    // listeners.
-    //
-    // A known-imperfect consequence: a user-declared prop whose
-    // name happens to start with `on` but holds a non-callable
-    // non-primitive value (e.g. `oneTouchReaction: { emojiId: … }`)
-    // fires TS2322 at the call site because TS checks the nested
-    // object against the Record's value union and finds no match.
-    // This pattern is rare enough we accept the false positive; a
-    // stricter fix would require per-component introspection of
-    // which on-prefix keys were REWRITTEN from `on:event`
-    // directives vs declared as plain props.
-    & Partial<Record<
-        `on${string}`,
-        ((...args: any[]) => any) | boolean | null | undefined | string | number
-    >>;
+type __SvnPropsPartial<P> = { [K in keyof P]?: P[K] | null };
 
 /**
  * Assert that a `bind:this` target's declared type accepts the element

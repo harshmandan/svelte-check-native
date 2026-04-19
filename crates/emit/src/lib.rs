@@ -2197,10 +2197,21 @@ fn emit_component_call(
     let indent = "    ".repeat(depth);
     let inner = "    ".repeat(depth + 1);
     let comp = &inst.component_root;
-    // Per-call-site synthesized local. Using the instantiation's byte
+    // Per-call-site synthesized locals. Using the instantiation's byte
     // offset keeps each one unique without threading a counter through
-    // the walker.
+    // the walker. `C_*` holds the ensured-component class; `inst_*` is
+    // the instance returned by `new C_*({...})` — the latter only
+    // emitted when there's at least one `on:event` directive to call
+    // `$on` on, so we don't pay the unused-local tax on the common
+    // case (no events).
     let local = format!("__svn_C_{:x}", inst.node_start);
+    let inst_local = format!("__svn_inst_{:x}", inst.node_start);
+    let hoist_instance = !inst.on_events.is_empty();
+    let ctor_lhs = if hoist_instance {
+        format!("const {inst_local} = ")
+    } else {
+        String::new()
+    };
 
     let _ = writeln!(out, "{indent}{{");
     let _ = writeln!(
@@ -2211,14 +2222,18 @@ fn emit_component_call(
     if snippet_children.is_empty() && inst.props.is_empty() {
         let _ = writeln!(
             out,
-            "{inner}new {local}({{ target: __svn_any(), props: {{}} }});"
+            "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{}} }});"
         );
+        emit_on_event_calls(out, source, inst, &inst_local, &inner);
         let _ = writeln!(out, "{indent}}}");
         return;
     }
 
     if snippet_children.is_empty() {
-        let _ = write!(out, "{inner}new {local}({{ target: __svn_any(), props: {{");
+        let _ = write!(
+            out,
+            "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{"
+        );
         let mut first = true;
         for p in &inst.props {
             if !first {
@@ -2228,12 +2243,13 @@ fn emit_component_call(
             write_prop_shape(out, source, p);
         }
         let _ = writeln!(out, "}} }});");
+        emit_on_event_calls(out, source, inst, &inst_local, &inner);
         let _ = writeln!(out, "{indent}}}");
         return;
     }
 
     // Multi-line form with snippets-as-arrow-props.
-    let _ = writeln!(out, "{inner}new {local}({{");
+    let _ = writeln!(out, "{inner}{ctor_lhs}new {local}({{");
     let opts_inner = "    ".repeat(depth + 2);
     let props_inner = "    ".repeat(depth + 3);
     let _ = writeln!(out, "{opts_inner}target: __svn_any(),");
@@ -2250,7 +2266,32 @@ fn emit_component_call(
     }
     let _ = writeln!(out, "{opts_inner}}},");
     let _ = writeln!(out, "{inner}}});");
+    emit_on_event_calls(out, source, inst, &inst_local, &inner);
     let _ = writeln!(out, "{indent}}}");
+}
+
+/// Emit one `$inst.$on("event", (handler))` line per `on:event`
+/// directive on this component. No-op when `inst.on_events` is empty —
+/// in that case the caller also skips hoisting the instance into a
+/// local, so there's no local to reference.
+///
+/// Mirrors upstream svelte2tsx's shape (`$inst.$on("click", fn)` after
+/// `new $C(...)`). Handler expression type-checks against the
+/// component's declared `Events` record via
+/// `SvelteComponent<Props, Events, Slots>.$on`'s signature — Svelte's
+/// own typing chain, no special-casing needed on our side.
+fn emit_on_event_calls(
+    out: &mut String,
+    source: &str,
+    inst: &svn_analyze::ComponentInstantiation,
+    inst_local: &str,
+    inner: &str,
+) {
+    for ev in &inst.on_events {
+        let expr = &source[ev.handler_range.start as usize..ev.handler_range.end as usize];
+        let name = &ev.event_name;
+        let _ = writeln!(out, "{inner}{inst_local}.$on(\"{name}\", ({expr}));");
+    }
 }
 
 /// Write a single property of a component-prop-check object literal,

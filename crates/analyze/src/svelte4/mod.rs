@@ -13,4 +13,5 @@
 //!
 //! See `design/phase_g/DESIGN.md` for the full plan.
 
-pub mod on_directive;
+// (nothing here yet — the on:-directive helper was inlined into
+// template_walker once we switched to the `$on()` emit shape.)

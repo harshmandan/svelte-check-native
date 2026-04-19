@@ -36,6 +36,7 @@ pub use store::{
 };
 pub use template_refs::find_template_refs;
 pub use template_walker::{
-    BindThisTarget, ComponentInstantiation, PropShape, TemplateSummary, walk_template,
+    BindThisTarget, ComponentInstantiation, OnEventDirective, PropShape, TemplateSummary,
+    walk_template,
 };
 pub use void_refs::VoidRefRegistry;

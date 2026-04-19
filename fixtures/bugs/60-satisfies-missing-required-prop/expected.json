@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Parent.svelte",
+            "line": 10,
+            "column": 0,
+            "code": 2741
+        }
+    ],
+    "_note": "v0.3 Item 2: `satisfies InstanceType<typeof __svn_C_xx>['$$prop_def']` trailer on the component-call props literal makes tsgo catch missing required props. The TokenMapEntry pass in emit_document maps the satisfies span back to the `<Comp` opening tag, so the TS2741 surfaces at the user-visible call site instead of being dropped by the synthesized-region source-map filter."
+}

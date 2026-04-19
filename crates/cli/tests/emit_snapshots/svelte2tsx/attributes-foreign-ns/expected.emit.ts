@@ -5,7 +5,7 @@ async function $$render_6d186ca7() {
         // template type-check body (incremental)
         {
             const __svn_C_42 = __svn_ensure_component(Component);
-            new __svn_C_42({ target: __svn_any(), props: {someAttr: "5", otherAttr: (6)} });
+            new __svn_C_42({ target: __svn_any(), props: {someAttr: "5", otherAttr: (6)} satisfies InstanceType<typeof __svn_C_42>['$$prop_def'] });
         }
     }
     void __svn_tpl_check;

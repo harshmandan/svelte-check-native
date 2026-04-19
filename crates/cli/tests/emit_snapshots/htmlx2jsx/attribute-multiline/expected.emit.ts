@@ -5,11 +5,11 @@ async function $$render_04fb2c94() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(Comp);
-            new __svn_C_0({ target: __svn_any(), props: {multilineattr: "hello\nworld"} });
+            new __svn_C_0({ target: __svn_any(), props: {multilineattr: "hello\nworld"} satisfies InstanceType<typeof __svn_C_0>['$$prop_def'] });
         }
         {
             const __svn_C_25 = __svn_ensure_component(Comp);
-            new __svn_C_25({ target: __svn_any(), props: {multilineattr: "he`llo\nworld"} });
+            new __svn_C_25({ target: __svn_any(), props: {multilineattr: "he`llo\nworld"} satisfies InstanceType<typeof __svn_C_25>['$$prop_def'] });
         }
     }
     void __svn_tpl_check;

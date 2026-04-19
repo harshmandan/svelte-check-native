@@ -577,9 +577,7 @@ fn collect_component_instantiation(
                 // emission; upstream svelte2tsx uses a custom
                 // `__sveltets_2_get_set_binding` helper that we
                 // haven't ported yet.
-                if d.kind == svn_parser::DirectiveKind::Bind
-                    && d.name.as_str() == "this"
-                {
+                if d.kind == svn_parser::DirectiveKind::Bind && d.name.as_str() == "this" {
                     if let Some(svn_parser::DirectiveValue::Expression {
                         expression_range, ..
                     }) = &d.value
@@ -611,6 +609,26 @@ fn collect_component_instantiation(
                         name: target,
                         expr_range: *expression_range,
                     });
+                    continue;
+                }
+                // Bare shorthand `bind:NAME` desugars to
+                // `bind:NAME={NAME}` — emit as a Shorthand prop so
+                // phase 5's satisfies sees the required field
+                // present. Without this branch a
+                // `<CustomFieldModal bind:items />` consumer fails
+                // the satisfies with "Property 'items' missing"
+                // despite the user correctly binding. Mirrors the
+                // explicit-expression arm above.
+                if d.kind == svn_parser::DirectiveKind::Bind && d.value.is_none() {
+                    let target = d.name.clone();
+                    props.retain(|p| match p {
+                        PropShape::BoolShorthand { name }
+                        | PropShape::Literal { name, .. }
+                        | PropShape::Expression { name, .. }
+                        | PropShape::Shorthand { name } => name != &target,
+                        PropShape::Spread { .. } => true,
+                    });
+                    props.push(PropShape::Shorthand { name: target });
                     continue;
                 }
                 // Other directives (`use:`, `class:`, `style:`,

@@ -5,11 +5,11 @@ async function $$render_6ce80dfb() {
         // template type-check body (incremental)
         {
             const __svn_C_49 = __svn_ensure_component(Input);
-            new __svn_C_49({ target: __svn_any(), props: {type: "text"} });
+            new __svn_C_49({ target: __svn_any(), props: {type: "text", value} satisfies InstanceType<typeof __svn_C_49>['$$prop_def'] });
         }
         {
             const __svn_C_6a = __svn_ensure_component(Input);
-            new __svn_C_6a({ target: __svn_any(), props: {type: "checkbox"} });
+            new __svn_C_6a({ target: __svn_any(), props: {type: "checkbox", checked} satisfies InstanceType<typeof __svn_C_6a>['$$prop_def'] });
         }
     }
     void __svn_tpl_check;

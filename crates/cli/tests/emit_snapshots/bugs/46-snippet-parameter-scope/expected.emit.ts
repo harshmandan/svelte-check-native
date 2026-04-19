@@ -51,13 +51,13 @@ async function $$render_7cc45a4f() {
                     children: (isOpen, toggle) => {
                         {
                             const __svn_C_ac = __svn_ensure_component(Inner);
-                            new __svn_C_ac({ target: __svn_any(), props: {open: (isOpen), onToggle: (toggle)} });
+                            new __svn_C_ac({ target: __svn_any(), props: {open: (isOpen), onToggle: (toggle)} satisfies InstanceType<typeof __svn_C_ac>['$$prop_def'] });
                         }
                         void isOpen;
                         void toggle;
                         return __svn_snippet_return();
                     },
-                },
+                } satisfies InstanceType<typeof __svn_C_72>['$$prop_def'],
             });
         }
     }

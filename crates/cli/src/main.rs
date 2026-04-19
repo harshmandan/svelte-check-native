@@ -549,7 +549,9 @@ fn resolve_tsconfig(
             )
         })?
     };
-    Ok(Some(escape_solution_tsconfig(&candidate).unwrap_or(candidate)))
+    Ok(Some(
+        escape_solution_tsconfig(&candidate).unwrap_or(candidate),
+    ))
 }
 
 /// If `candidate` is a solution-style tsconfig, try to redirect to a
@@ -768,6 +770,9 @@ fn run_typecheck(
                 source_path: file.clone(),
                 generated_ts: emitted.typescript,
                 line_map: emitted.line_map,
+                token_map: emitted.token_map,
+                overlay_line_starts: emitted.overlay_line_starts,
+                source_line_starts: emitted.source_line_starts,
                 kind,
             }
         })
@@ -787,6 +792,9 @@ fn run_typecheck(
             source_path: file.clone(),
             generated_ts: generated,
             line_map: Vec::new(),
+            token_map: Vec::new(),
+            overlay_line_starts: Vec::new(),
+            source_line_starts: Vec::new(),
             kind: svn_typecheck::InputKind::KitFile,
         })
     }));

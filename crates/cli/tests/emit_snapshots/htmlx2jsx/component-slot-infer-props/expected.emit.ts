@@ -11,7 +11,7 @@ async function $$render_55fa86f5() {
                 void bar;
                 {
                     const __svn_C_ba = __svn_ensure_component(Component);
-                    new __svn_C_ba({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                    new __svn_C_ba({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_ba>['$$prop_def'] });
                 }
             }
         }

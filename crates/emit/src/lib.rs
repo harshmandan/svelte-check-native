@@ -63,8 +63,7 @@ use oxc_allocator::Allocator;
 use smol_str::SmolStr;
 use svn_analyze::{
     TemplateSummary, collect_top_level_bindings, collect_typed_top_level_lets,
-    collect_typed_uninit_lets, find_props, find_store_refs_with_bindings,
-    find_template_refs,
+    collect_typed_uninit_lets, find_props, find_store_refs_with_bindings, find_template_refs,
 };
 use svn_parser::Document;
 use svn_parser::{EachBlock, Fragment, Node, SnippetBlock, parse_script_body};
@@ -83,6 +82,33 @@ pub struct EmitOutput {
     /// landed in the overlay, an entry mapping the overlay line range
     /// back to the source line range.
     pub line_map: Vec<LineMapEntry>,
+    /// Token map: byte-span entries mapping a specific synthesized span
+    /// in the overlay back to a byte span in the `.svelte` source. Used
+    /// by the diagnostic mapper to surface errors at user positions
+    /// even when the overlay line the error landed on is inside
+    /// synthesized scaffolding (the line is NOT covered by `line_map`).
+    ///
+    /// Entries are pushed by emit at each site that splices user
+    /// source into synthesized scaffolding — template interpolations,
+    /// component-call prop values, `bind:this` assignments, `$on`
+    /// event-name literals. An empty vec is the current default
+    /// (Item 1 plumbing only); emit sites will start pushing in the
+    /// follow-up PRs (Items 2/3/4 of the v0.3 plan).
+    pub token_map: Vec<TokenMapEntry>,
+    /// Byte offsets of the start of each line in `typescript`. Entry N
+    /// holds the byte offset where line N+1 begins (1-based line
+    /// numbering: index 0 is the start of line 1). Appended is a
+    /// sentinel equal to `typescript.len()` so a binary search can
+    /// clamp the final line. Used to convert a tsgo `(line, column)`
+    /// diagnostic position into an overlay byte offset for
+    /// TokenMapEntry lookup.
+    pub overlay_line_starts: Vec<u32>,
+    /// Byte offsets of the start of each line in the `.svelte` source
+    /// this overlay was emitted from. Same shape as
+    /// `overlay_line_starts`. Used by the diagnostic mapper to
+    /// convert a TokenMapEntry's `source_byte` span back into a
+    /// 1-based (line, column) for the user-facing diagnostic.
+    pub source_line_starts: Vec<u32>,
 }
 
 /// Single line mapping from the overlay back to the original `.svelte`
@@ -100,6 +126,31 @@ pub struct LineMapEntry {
     pub overlay_start_line: u32,
     pub overlay_end_line: u32,
     pub source_start_line: u32,
+}
+
+/// Single byte-span mapping from a synthesized region of the overlay
+/// back to a byte range in the `.svelte` source. Both ranges are
+/// half-open `[start, end)` byte offsets.
+///
+/// TokenMapEntry lives alongside [`LineMapEntry`]: line-map covers
+/// verbatim script blocks (where overlay line N trivially maps to
+/// source line source_start + N - overlay_start), token-map covers
+/// synthesized scaffolding where a specific overlay token was
+/// spliced in from a specific source position (template `{expr}`
+/// interpolations, `new __svn_C_N({...})` call sites with user-source
+/// prop values, `bind:this` assignments, `$on` event-name literals).
+///
+/// The diagnostic mapper prefers the tightest-span TokenMapEntry
+/// containing the diagnostic's byte offset; falls back to
+/// LineMapEntry when no token-map match exists; drops the
+/// diagnostic when neither matches (mirrors upstream svelte-check's
+/// source-map-driven filter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenMapEntry {
+    pub overlay_byte_start: u32,
+    pub overlay_byte_end: u32,
+    pub source_byte_start: u32,
+    pub source_byte_end: u32,
 }
 
 /// Emit the TypeScript scaffold for a parsed Svelte document.
@@ -913,11 +964,96 @@ fn emit_document_with_render_name(
     // `./Foo.svelte.svn.ts` would short-circuit the runes-module
     // fallback.
 
+    let overlay_line_starts = compute_line_starts(&out);
+    let source_line_starts = compute_line_starts(doc.source);
+
+    // v0.3 Item 2: post-walk pass that scans the emitted overlay for
+    // each component-call's `satisfies InstanceType<typeof
+    // __svn_C_<hex>>['$$prop_def']` trailer and pushes a token-map
+    // entry covering that span → the `<Comp` opening tag position in
+    // `.svelte` source. Without this, the TS2741 diagnostics the
+    // trailer surfaces would fall in synthesized regions and get
+    // dropped by the diagnostic mapper's source-map filter.
+    //
+    // Scan-post-hoc (rather than threading a `&mut Vec<TokenMapEntry>`
+    // through the whole template walker) is the established
+    // technique in this codebase — the hex suffix is uniquely
+    // derived from `inst.node_start`, so the scan → analyze lookup
+    // is unambiguous.
+    let token_map = collect_satisfies_token_map(&out, &instantiations_by_start);
+
     EmitOutput {
         typescript: out,
         render_name,
         line_map,
+        token_map,
+        overlay_line_starts,
+        source_line_starts,
     }
+}
+
+/// Post-walk scan: find every `satisfies InstanceType<typeof
+/// __svn_C_<hex>>['$$prop_def']` in the emitted overlay and push a
+/// token-map entry so the TS2741 diagnostic (which lands on the
+/// `satisfies` keyword — see `design/item_2_satisfies_fixture` in
+/// NEXT.md) surfaces at the `<Comp` opening tag position in the
+/// `.svelte` source instead of being dropped.
+///
+/// The span covers the whole `satisfies ... ['$$prop_def']`
+/// expression so any future diagnostic landing inside it (end of
+/// `]` + `]` index-access, nested generic, etc.) also remaps.
+/// Tightest-span semantics in the mapper allow future per-prop
+/// splice entries to override this broader span when appropriate.
+fn collect_satisfies_token_map(
+    out: &str,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+) -> Vec<TokenMapEntry> {
+    // Shape: " satisfies InstanceType<typeof __svn_C_<hex>>['$$prop_def']"
+    const PREFIX: &str = "satisfies InstanceType<typeof __svn_C_";
+    const SUFFIX: &str = ">['$$prop_def']";
+    let mut entries: Vec<TokenMapEntry> = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(rel) = out[cursor..].find(PREFIX) {
+        let span_start = cursor + rel;
+        let after_prefix = span_start + PREFIX.len();
+        // Hex node_start follows, terminated by `>`.
+        let Some(gt_rel) = out[after_prefix..].find('>') else {
+            break;
+        };
+        let hex_end = after_prefix + gt_rel;
+        let hex = &out[after_prefix..hex_end];
+        let Ok(node_start) = u32::from_str_radix(hex, 16) else {
+            cursor = hex_end;
+            continue;
+        };
+        // Verify the suffix matches — defends against `__svn_C_<hex>`
+        // identifiers that happen to appear in other positions.
+        if !out[hex_end..].starts_with(SUFFIX) {
+            cursor = hex_end;
+            continue;
+        }
+        let span_end = hex_end + SUFFIX.len();
+        if let Some(inst) = insts.get(&node_start) {
+            // Source byte span: the opening `<` + component name.
+            // Example: for `<Button class="x" />`, covers `<Button`.
+            // Mapping the span here means a TS2741 diagnostic on the
+            // satisfies keyword (where tsgo plants it — verified via
+            // the /tmp/svn-item2-fixture/ hand-written fixture)
+            // surfaces at the user's component tag position.
+            let source_start = inst.node_start;
+            let name_byte_len = inst.component_root.len() as u32;
+            // +1 for the `<` itself.
+            let source_end = source_start.saturating_add(1 + name_byte_len);
+            entries.push(TokenMapEntry {
+                overlay_byte_start: span_start as u32,
+                overlay_byte_end: span_end as u32,
+                source_byte_start: source_start,
+                source_byte_end: source_end,
+            });
+        }
+        cursor = span_end;
+    }
+    entries
 }
 
 /// Byte-scan a script section for `type NAME`, `interface NAME`,
@@ -1018,6 +1154,24 @@ fn root_type_name(ty: &str) -> Option<String> {
 #[inline]
 fn current_line(s: &str) -> u32 {
     1 + s.bytes().filter(|&b| b == b'\n').count() as u32
+}
+
+/// Byte offsets of the start of each line in `s`. Index 0 is the start
+/// of line 1; index N is the start of line N+1 (i.e. the position just
+/// past the Nth `\n`). A final sentinel equal to `s.len()` is appended
+/// so `starts[line_count]` is always valid and equals the end of the
+/// last line's content — lets the consumer clamp a past-EOF (line,
+/// col) to the end of the buffer without bounds-checking.
+pub fn compute_line_starts(s: &str) -> Vec<u32> {
+    let mut starts: Vec<u32> = Vec::with_capacity(s.bytes().filter(|&b| b == b'\n').count() + 2);
+    starts.push(0);
+    for (idx, b) in s.bytes().enumerate() {
+        if b == b'\n' {
+            starts.push((idx + 1) as u32);
+        }
+    }
+    starts.push(s.len() as u32);
+    starts
 }
 
 /// 1-based line number at the given byte offset in `source`.
@@ -1172,17 +1326,21 @@ fn emit_children_with_let_bindings(
 /// patterns (`let:item={{a, b}}`) aren't narrowed — we take the
 /// original directive name as the binding instead, which is a
 /// harmless no-op but avoids parse-ambiguity.
-fn collect_let_directive_names(
-    source: &str,
-    attributes: &[svn_parser::Attribute],
-) -> Vec<SmolStr> {
+fn collect_let_directive_names(source: &str, attributes: &[svn_parser::Attribute]) -> Vec<SmolStr> {
     use svn_parser::{Attribute, Directive, DirectiveKind, DirectiveValue};
     let mut out: Vec<SmolStr> = Vec::new();
     for attr in attributes {
-        if let Attribute::Directive(Directive { kind: DirectiveKind::Let, name, value, .. }) = attr
+        if let Attribute::Directive(Directive {
+            kind: DirectiveKind::Let,
+            name,
+            value,
+            ..
+        }) = attr
         {
             let bound = match value {
-                Some(DirectiveValue::Expression { expression_range, .. }) => {
+                Some(DirectiveValue::Expression {
+                    expression_range, ..
+                }) => {
                     let start = expression_range.start as usize;
                     let end = expression_range.end as usize;
                     let slice = source.get(start..end).unwrap_or("").trim();
@@ -2309,14 +2467,42 @@ fn emit_component_call(
     let user_named_children_snippet = snippet_children
         .iter()
         .any(|s| s.name.as_str() == "children");
-    let emit_implicit_children = inst.has_implicit_children
-        && !user_named_children
-        && !user_named_children_snippet;
+    let emit_implicit_children =
+        inst.has_implicit_children && !user_named_children && !user_named_children_snippet;
+
+    // Phase 5 trailer: `satisfies InstanceType<typeof $$_C>['$$prop_def']`
+    // on the props literal catches missing required props (TS2741).
+    // Requires phases 1-4 (shipped) to have synthesized the
+    // consumer-side surface the strict check needs: spreads, implicit
+    // template children, bind:this assignment, Partial-wrap for
+    // slot-based containers.
+    //
+    // Targets the ensured-component's instance shape rather than
+    // `ComponentProps<typeof Comp>` so the check works uniformly
+    // across callable Svelte-5 components AND third-party Svelte-4
+    // class imports. `__svn_ensure_component` returns a ctor whose
+    // instance has `$$prop_def: P`: for our shim-synthesized wrap
+    // it's the callable's Props; Svelte-4 classes declaring
+    // `$$prop_def` preserve it. Using `ComponentProps<typeof Comp>`
+    // directly regresses because bare `typeof SvelteComponent`-style
+    // ctor types fail svelte's `T extends SvelteComponent |
+    // Component<any, any>` constraint and surface opaque "missing
+    // properties" errors.
+    //
+    // The hex suffix in `__svn_C_{node_start:x}` makes the trailer
+    // unique per instantiation — the post-walk source-map pass
+    // scans for `InstanceType<typeof __svn_C_<hex>>['$$prop_def']`
+    // to find each satisfies span and push a TokenMapEntry mapping
+    // it to the `<Comp` opening tag in .svelte source, so TS2741
+    // surfaces at the user's tag position instead of being dropped
+    // by the synthesized-region filter. See
+    // `push_satisfies_token_map_entries`.
+    let satisfies_trailer = format!(" satisfies InstanceType<typeof {local}>['$$prop_def']");
 
     if snippet_children.is_empty() && inst.props.is_empty() && !emit_implicit_children {
         let _ = writeln!(
             out,
-            "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{}} }});"
+            "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{}}{satisfies_trailer} }});"
         );
         emit_bind_this_assignment(out, inst, &inst_local, &inner);
         emit_on_event_calls(out, source, inst, &inst_local, &inner);
@@ -2343,7 +2529,7 @@ fn emit_component_call(
             }
             let _ = write!(out, "children: () => __svn_snippet_return()");
         }
-        let _ = writeln!(out, "}} }});");
+        let _ = writeln!(out, "}}{satisfies_trailer} }});");
         emit_bind_this_assignment(out, inst, &inst_local, &inner);
         emit_on_event_calls(out, source, inst, &inst_local, &inner);
         let _ = writeln!(out, "{indent}}}");
@@ -2374,7 +2560,7 @@ fn emit_component_call(
         out.push_str(&props_inner);
         let _ = writeln!(out, "children: () => __svn_snippet_return(),");
     }
-    let _ = writeln!(out, "{opts_inner}}},");
+    let _ = writeln!(out, "{opts_inner}}}{satisfies_trailer},");
     let _ = writeln!(out, "{inner}}});");
     emit_bind_this_assignment(out, inst, &inst_local, &inner);
     emit_on_event_calls(out, source, inst, &inst_local, &inner);
@@ -2960,7 +3146,9 @@ fn try_process_let_statement(
         // Only handle the simple-identifier binding shape; `let { a }`
         // and `let [ a ]` destructuring are covered by other passes and
         // aren't target-name candidates here anyway.
-        if p >= bytes.len() || !(bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] == b'$') {
+        if p >= bytes.len()
+            || !(bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] == b'$')
+        {
             return None;
         }
         let name_start = p;
@@ -3121,7 +3309,11 @@ fn is_svelte4_component(
     split: Option<&script_split::SplitScript>,
 ) -> bool {
     // Signal 1: export let
-    let instance_src = doc.instance_script.as_ref().map(|s| s.content).unwrap_or("");
+    let instance_src = doc
+        .instance_script
+        .as_ref()
+        .map(|s| s.content)
+        .unwrap_or("");
     let module_src = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
     if contains_export_let(instance_src) || contains_export_let(module_src) {
         return true;
@@ -3134,7 +3326,8 @@ fn is_svelte4_component(
         return true;
     }
     // Signal 3: createEventDispatcher
-    if instance_src.contains("createEventDispatcher") || module_src.contains("createEventDispatcher")
+    if instance_src.contains("createEventDispatcher")
+        || module_src.contains("createEventDispatcher")
     {
         return true;
     }
@@ -3252,7 +3445,9 @@ fn try_process_let_statement_for_denarrow(
         while p < bytes.len() && is_ascii_ws(bytes[p]) {
             p += 1;
         }
-        if p >= bytes.len() || !(bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] == b'$') {
+        if p >= bytes.len()
+            || !(bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] == b'$')
+        {
             return None;
         }
         let name_start = p;
@@ -3348,8 +3543,17 @@ fn try_process_let_statement_for_denarrow(
                             // type-assertion `as`. All valid line-
                             // continuation starts that ASI won't
                             // insert a break before.
-                            b'?' | b':' | b'.' | b'&' | b'|' | b'+' | b'-'
-                                | b'*' | b'/' | b'%' | b'^' | b'='
+                            b'?' | b':'
+                                | b'.'
+                                | b'&'
+                                | b'|'
+                                | b'+'
+                                | b'-'
+                                | b'*'
+                                | b'/'
+                                | b'%'
+                                | b'^'
+                                | b'='
                         );
                     if !prev_continues && !next_continues {
                         break;
@@ -3362,9 +3566,7 @@ fn try_process_let_statement_for_denarrow(
 
         if has_type_annotation
             && has_initializer
-            && target_names
-                .iter()
-                .any(|t| t.as_bytes() == name_bytes)
+            && target_names.iter().any(|t| t.as_bytes() == name_bytes)
         {
             if let Ok(name_str) = std::str::from_utf8(name_bytes) {
                 matched.push(SmolStr::from(name_str));
@@ -3477,7 +3679,9 @@ fn try_process_let_statement_for_widening(
         while p < bytes.len() && is_ascii_ws(bytes[p]) {
             p += 1;
         }
-        if p >= bytes.len() || !(bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] == b'$') {
+        if p >= bytes.len()
+            || !(bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] == b'$')
+        {
             return None;
         }
         let name_start = p;
@@ -3632,10 +3836,7 @@ mod tests {
     fn widen_multi_declarator_per_decl() {
         // Three declarators, mixed shapes. Only the untyped-uninitialized
         // exported ones get widened.
-        let got = widen(
-            "let a, b: string, c = 0, d;",
-            &["a", "b", "c", "d"],
-        );
+        let got = widen("let a, b: string, c = 0, d;", &["a", "b", "c", "d"]);
         assert_eq!(got, "let a: any, b: string, c = 0, d: any;");
     }
 
@@ -3655,10 +3856,7 @@ mod tests {
         // Regression: naive scanner that hides the `:` annotation behind
         // `!` would re-widen already-typed props. With widen running
         // BEFORE def-assign, the typed declarator is left alone.
-        let got = widen(
-            "let onChange: (value: string) => void;",
-            &["onChange"],
-        );
+        let got = widen("let onChange: (value: string) => void;", &["onChange"]);
         assert_eq!(got, "let onChange: (value: string) => void;");
     }
 
@@ -3706,10 +3904,7 @@ mod tests {
 
     #[test]
     fn def_assign_multi_declarator_only_targets_assert() {
-        let got = def_assign(
-            "let a: string, b: number, c: boolean;",
-            &["a", "c"],
-        );
+        let got = def_assign("let a: string, b: number, c: boolean;", &["a", "c"]);
         assert_eq!(got, "let a!: string, b: number, c!: boolean;");
     }
 
@@ -3743,8 +3938,7 @@ mod tests {
             &["onclick"],
         );
         assert_eq!(
-            got,
-            "let onclick: ((e: MouseEvent) => void) | undefined = undefined;",
+            got, "let onclick: ((e: MouseEvent) => void) | undefined = undefined;",
             "union of function type + initializer → no !",
         );
     }
@@ -3756,8 +3950,7 @@ mod tests {
             &["onclick"],
         );
         assert_eq!(
-            got,
-            "let onclick: (e: MouseEvent, { data }: { data: any }) => any = () => {};",
+            got, "let onclick: (e: MouseEvent, { data }: { data: any }) => any = () => {};",
             "function type with destructure param + arrow-body init → no !",
         );
     }
@@ -3785,10 +3978,7 @@ mod tests {
 
     #[test]
     fn def_assign_preserves_surrounding_content() {
-        let got = def_assign(
-            "before();\nlet name: string;\nafter();\n",
-            &["name"],
-        );
+        let got = def_assign("before();\nlet name: string;\nafter();\n", &["name"]);
         assert_eq!(got, "before();\nlet name!: string;\nafter();\n");
     }
 

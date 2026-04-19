@@ -76,7 +76,21 @@ fn has_real_svelte(workspace: &Path) -> bool {
     false
 }
 
-pub use svn_emit::LineMapEntry;
+pub use svn_emit::{LineMapEntry, TokenMapEntry};
+
+/// Per-file mapping data the diagnostic mapper needs to translate a
+/// tsgo `(line, column)` back to a source `(line, column)`.
+///
+/// Built from each input's [`CheckInput`] fields (line_map + token_map +
+/// overlay_line_starts + source_line_starts) and keyed by the overlay
+/// path so diagnostic lookup is O(1) on path.
+#[derive(Debug, Clone, Default)]
+pub struct MapData {
+    pub line_map: Vec<LineMapEntry>,
+    pub token_map: Vec<TokenMapEntry>,
+    pub overlay_line_starts: Vec<u32>,
+    pub source_line_starts: Vec<u32>,
+}
 
 /// One file to type-check.
 #[derive(Debug, Clone)]
@@ -91,6 +105,21 @@ pub struct CheckInput {
     /// ranges. Empty for non-Svelte inputs (where overlay line == source
     /// line).
     pub line_map: Vec<LineMapEntry>,
+    /// Token-level byte-span mappings from emit — synthesized overlay
+    /// spans back to source byte spans. Takes precedence over
+    /// `line_map` during diagnostic translation. Empty for Kit files
+    /// and currently empty for Svelte files too (v0.3 Item 1 is pure
+    /// plumbing; emit sites start pushing in follow-up PRs).
+    pub token_map: Vec<TokenMapEntry>,
+    /// Byte offsets of each line's start in the generated overlay. Used
+    /// to translate a tsgo `(line, column)` into an overlay byte
+    /// offset for token-map lookup. Empty for Kit files (line-col
+    /// pass-through is correct there).
+    pub overlay_line_starts: Vec<u32>,
+    /// Byte offsets of each line's start in the `.svelte` source. Used
+    /// to translate a matched TokenMapEntry's `source_byte_start`
+    /// back into a source `(line, column)`. Empty for Kit files.
+    pub source_line_starts: Vec<u32>,
     /// What flavor of input this is. Drives the cache-write layout
     /// (`.svelte.svn.ts` overlay + ambient sidecar for Svelte files;
     /// mirror `.ts` in the cache-svelte tree for Kit files) and the
@@ -272,7 +301,7 @@ pub fn check(
     // declaration that the `svelte` package ships.
     let mut generated_paths: Vec<PathBuf> = Vec::with_capacity(inputs.len());
     let mut kit_overlay_sources: Vec<PathBuf> = Vec::new();
-    let mut line_maps: std::collections::HashMap<PathBuf, Vec<LineMapEntry>> =
+    let mut map_data: std::collections::HashMap<PathBuf, MapData> =
         std::collections::HashMap::with_capacity(inputs.len());
     // `inputs` is consumed here — `generated_ts` and `line_map` move out
     // of each `CheckInput` and the string drops at end of iteration.
@@ -339,7 +368,15 @@ pub fn check(
             }
         }
 
-        line_maps.insert(gen_path.clone(), input.line_map);
+        map_data.insert(
+            gen_path.clone(),
+            MapData {
+                line_map: input.line_map,
+                token_map: input.token_map,
+                overlay_line_starts: input.overlay_line_starts,
+                source_line_starts: input.source_line_starts,
+            },
+        );
         // Only in-scope Svelte files + Kit overlays land in the
         // tsconfig's `files` list. SvelteAuxiliary overlays are
         // reachable via import resolution from the listed entries
@@ -381,7 +418,7 @@ pub fn check(
         .diagnostics
         .into_iter()
         .filter(|d| !is_overlay_tsconfig_noise(d, &layout))
-        .filter_map(|d| map_diagnostic(d, &layout, &line_maps))
+        .filter_map(|d| map_diagnostic(d, &layout, &map_data))
         .filter(|d| !is_svelte4_reactive_noop_comma(d))
         .collect();
     Ok(CheckOutput {
@@ -489,7 +526,7 @@ fn is_svelte4_reactive_noop_comma(diag: &CheckDiagnostic) -> bool {
 fn map_diagnostic(
     raw: RawDiagnostic,
     layout: &CacheLayout,
-    line_maps: &std::collections::HashMap<PathBuf, Vec<LineMapEntry>>,
+    map_data: &std::collections::HashMap<PathBuf, MapData>,
 ) -> Option<CheckDiagnostic> {
     // tsgo emits paths relative to the working directory when the input
     // tsconfig path is itself relative (which it usually is). Absolutize
@@ -499,36 +536,37 @@ fn map_diagnostic(
     } else {
         layout.workspace.join(&raw.file)
     };
-    let (source_path, line) = match layout.original_from_generated(&absolute_file) {
+    let (source_path, line, column) = match layout.original_from_generated(&absolute_file) {
         Some(orig) => {
-            // For overlay files, require the line to fall inside a verbatim
-            // user-source range. Diagnostics against synthesized scaffolding
-            // (component ctor calls, default-export type, wrapper, void
-            // blocks) have no user-source origin and get dropped — mirrors
-            // upstream svelte-check's source-map-driven filter. Without
-            // this, bench repos using libraries with complex Prop unions
-            // (bits-ui, shadcn-style) surface dozens of false positives
-            // against synthesized `new $$_C({...})` sites that upstream
-            // silently filters.
-            match line_maps
+            // For overlay files, require the position to resolve to a
+            // verbatim user-source origin OR a token-map entry.
+            // Diagnostics against synthesized scaffolding with no map
+            // entry (component ctor calls, default-export type,
+            // wrapper, void blocks) are dropped — mirrors upstream
+            // svelte-check's source-map-driven filter. Without this,
+            // bench repos using libraries with complex Prop unions
+            // (bits-ui, shadcn-style) surface dozens of false
+            // positives against synthesized `new $$_C({...})` sites
+            // that upstream silently filters.
+            match map_data
                 .get(&absolute_file)
-                .and_then(|map| translate_line(map, raw.line))
+                .and_then(|data| translate_position(data, raw.line, raw.column))
             {
-                Some(mapped) => (orig, mapped),
+                Some((mapped_line, mapped_col)) => (orig, mapped_line, mapped_col),
                 None => return None,
             }
         }
-        None => (absolute_file, raw.line),
+        None => (absolute_file, raw.line, raw.column),
     };
     let span = raw.span_length.unwrap_or(0);
     Some(CheckDiagnostic {
         source_path,
         line,
-        column: raw.column,
+        column,
         // tsgo emits a single-line span_length, no end-line info — so
         // for TS diagnostics we collapse end_line == start_line.
         end_line: line,
-        end_column: raw.column.saturating_add(span),
+        end_column: column.saturating_add(span),
         severity: raw.severity,
         code: DiagnosticCode::Numeric(raw.code),
         message: raw.message,
@@ -573,17 +611,159 @@ fn translate_line(map: &[LineMapEntry], overlay_line: u32) -> Option<u32> {
     None
 }
 
+/// Translate an overlay `(line, column)` into a source `(line, column)`
+/// via [`MapData`]. Both input and output use 1-based line/column.
+///
+/// Prefers a byte-span [`TokenMapEntry`] when one contains the
+/// overlay byte offset corresponding to `(line, column)`. When the
+/// overlay position falls inside multiple entries (nested spans), the
+/// tightest one wins — that's the one most precisely describing where
+/// the user-source content was spliced. Within the matched entry the
+/// column offset is preserved: `source_column = (overlay_byte - span)
+/// + source_byte_start`, converted to `(line, col)` via
+/// `source_line_starts`.
+///
+/// Falls back to [`translate_line`] on the line number alone when no
+/// token-map entry matches; the column is returned unchanged in that
+/// case (the line-map covers verbatim script blocks, where overlay
+/// column == source column because the script content is emitted
+/// verbatim). Returns `None` when neither a token-map nor a line-map
+/// entry covers the position — the diagnostic mapper drops those,
+/// matching upstream svelte-check's source-map-driven filter.
+fn translate_position(data: &MapData, overlay_line: u32, overlay_col: u32) -> Option<(u32, u32)> {
+    // Try the token map first — tightest-span wins. Requires a
+    // line-starts index to resolve (line, col) → byte offset.
+    if !data.token_map.is_empty() && !data.overlay_line_starts.is_empty() {
+        if let Some(byte) = position_to_byte(&data.overlay_line_starts, overlay_line, overlay_col) {
+            if let Some(entry) = find_tightest_token(&data.token_map, byte) {
+                // Preserve the column offset within the span so a
+                // diagnostic pointing at the middle of the spliced
+                // token still lands at the corresponding position in
+                // source. Clamp on overflow — a diagnostic past the
+                // source span's end lands at source_byte_end - 1.
+                let overlay_offset = byte.saturating_sub(entry.overlay_byte_start);
+                let source_byte = entry
+                    .source_byte_start
+                    .saturating_add(overlay_offset)
+                    .min(entry.source_byte_end.saturating_sub(1));
+                let (sl, sc) = byte_to_position(&data.source_line_starts, source_byte);
+                return Some((sl, sc));
+            }
+        }
+    }
+    // Fall back to the line map. Column is returned unchanged because
+    // verbatim script content emits verbatim — overlay column equals
+    // source column within a line-map range.
+    translate_line(&data.line_map, overlay_line).map(|mapped| (mapped, overlay_col))
+}
+
+/// Find the tightest [`TokenMapEntry`] whose overlay byte span
+/// contains `byte`. "Tightest" = smallest `overlay_byte_end -
+/// overlay_byte_start` span; ties broken by last-wins (later entries
+/// reflect deeper nesting when emit pushes parent spans first and
+/// child splices second). Returns `None` when no entry covers the
+/// byte.
+fn find_tightest_token(map: &[TokenMapEntry], byte: u32) -> Option<TokenMapEntry> {
+    let mut best: Option<TokenMapEntry> = None;
+    for entry in map {
+        if byte < entry.overlay_byte_start || byte >= entry.overlay_byte_end {
+            continue;
+        }
+        let width = entry.overlay_byte_end - entry.overlay_byte_start;
+        match best {
+            None => best = Some(*entry),
+            Some(prev) => {
+                let prev_width = prev.overlay_byte_end - prev.overlay_byte_start;
+                if width <= prev_width {
+                    best = Some(*entry);
+                }
+            }
+        }
+    }
+    best
+}
+
+/// Convert a 1-based `(line, col)` into a byte offset via a
+/// `line_starts` index. Returns `None` when the line is past EOF.
+/// Columns past the end of the line clamp to the line's final byte.
+///
+/// tsgo (and upstream svelte-check) emit 1-based columns; the
+/// line-starts index is 0-based array-of-byte-offsets, so
+/// `line_starts[line - 1]` is the byte where line `line` begins.
+fn position_to_byte(line_starts: &[u32], line: u32, col: u32) -> Option<u32> {
+    if line == 0 {
+        return None;
+    }
+    let line_idx = (line - 1) as usize;
+    if line_idx >= line_starts.len().saturating_sub(1) {
+        return None;
+    }
+    let line_start = line_starts[line_idx];
+    // Clamp to next line's start - 1 (i.e. don't step onto the next
+    // line's first byte). The sentinel at the end of line_starts
+    // handles the last-line case uniformly.
+    let next = line_starts[line_idx + 1];
+    let col_zero_based = col.saturating_sub(1);
+    Some(line_start.saturating_add(col_zero_based).min(next))
+}
+
+/// Convert a byte offset to a 1-based `(line, col)` via a
+/// `line_starts` index. Clamps to the last line when `byte` is past
+/// EOF. Used to render a matched TokenMapEntry's source byte back
+/// into a user-facing position.
+fn byte_to_position(line_starts: &[u32], byte: u32) -> (u32, u32) {
+    if line_starts.is_empty() {
+        return (1, 1);
+    }
+    // Binary search for the last entry with line_start <= byte.
+    let idx = match line_starts.binary_search(&byte) {
+        Ok(i) => i,
+        Err(i) => i.saturating_sub(1),
+    };
+    // Final entry is the sentinel (== buffer length). Never treat it
+    // as its own line — clamp to the preceding line.
+    let line_idx = idx.min(line_starts.len().saturating_sub(2));
+    let line = (line_idx + 1) as u32;
+    let col = byte.saturating_sub(line_starts[line_idx]) + 1;
+    (line, col)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    fn line_maps_for(
-        path: &str,
-        entries: Vec<LineMapEntry>,
-    ) -> HashMap<PathBuf, Vec<LineMapEntry>> {
+    fn line_maps_for(path: &str, entries: Vec<LineMapEntry>) -> HashMap<PathBuf, MapData> {
         let mut m = HashMap::new();
-        m.insert(PathBuf::from(path), entries);
+        m.insert(
+            PathBuf::from(path),
+            MapData {
+                line_map: entries,
+                ..Default::default()
+            },
+        );
+        m
+    }
+
+    /// Test helper: build a MapData HashMap with a token map and the
+    /// overlay/source line-starts indices sized to cover the byte
+    /// offsets referenced in the test.
+    fn token_maps_for(
+        path: &str,
+        token_entries: Vec<TokenMapEntry>,
+        overlay_line_starts: Vec<u32>,
+        source_line_starts: Vec<u32>,
+    ) -> HashMap<PathBuf, MapData> {
+        let mut m = HashMap::new();
+        m.insert(
+            PathBuf::from(path),
+            MapData {
+                token_map: token_entries,
+                overlay_line_starts,
+                source_line_starts,
+                ..Default::default()
+            },
+        );
         m
     }
 
@@ -856,5 +1036,239 @@ mod tests {
                 .original_from_generated(Path::new("/elsewhere/X.ts"))
                 .is_none()
         );
+    }
+
+    // --- TokenMapEntry / translate_position coverage ------------------
+    //
+    // Sanity-floor tests for the byte-span machinery introduced in v0.3
+    // Item 1. Verbatim-block LineMapEntry behavior is tested above;
+    // these exercise the new token-map path, the fallback chain
+    // (token miss → line-map → drop), the "tightest wins" rule, and
+    // the helper conversion functions (position_to_byte /
+    // byte_to_position) in isolation.
+
+    #[test]
+    fn position_to_byte_handles_line_and_column_correctly() {
+        // Overlay buffer: "ab\ncd\nef" (lines 1-3). Line starts:
+        //   line 1 @ 0, line 2 @ 3, line 3 @ 6, sentinel @ 8.
+        let starts = svn_emit::compute_line_starts("ab\ncd\nef");
+        assert_eq!(starts, vec![0, 3, 6, 8]);
+        // (1,1) → byte 0 (line 1 col 1 = first char).
+        assert_eq!(position_to_byte(&starts, 1, 1), Some(0));
+        // (2,1) → byte 3 (first char of line 2).
+        assert_eq!(position_to_byte(&starts, 2, 1), Some(3));
+        // (2,2) → byte 4.
+        assert_eq!(position_to_byte(&starts, 2, 2), Some(4));
+        // Column past end of line clamps to next line start - 0
+        // (which IS the \n position for non-final lines, or the
+        // sentinel for the final line). Acceptable either way for a
+        // diagnostic byte lookup — just needs to stay within the
+        // buffer.
+        assert!(position_to_byte(&starts, 2, 99).unwrap() <= 8);
+        // Line past EOF returns None.
+        assert_eq!(position_to_byte(&starts, 99, 1), None);
+        // Line 0 is invalid (we're 1-based).
+        assert_eq!(position_to_byte(&starts, 0, 1), None);
+    }
+
+    #[test]
+    fn byte_to_position_is_inverse_of_position_to_byte_within_lines() {
+        // Round-trip: (line, col) → byte → (line, col). Every position
+        // inside a line must round-trip exactly. Tests the buffer
+        // "abc\ndef\nghi" (3 lines of 3 chars each).
+        let starts = svn_emit::compute_line_starts("abc\ndef\nghi");
+        for line in 1..=3 {
+            for col in 1..=3 {
+                let byte = position_to_byte(&starts, line, col).unwrap();
+                let (l, c) = byte_to_position(&starts, byte);
+                assert_eq!(
+                    (l, c),
+                    (line, col),
+                    "round-trip failed at line {} col {}: byte {} → ({}, {})",
+                    line,
+                    col,
+                    byte,
+                    l,
+                    c
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn find_tightest_token_prefers_smallest_span() {
+        // Three nested spans at the same byte: outer [0, 100), middle
+        // [10, 50), inner [20, 30). Byte 25 is inside all three.
+        // tightest = [20, 30) (width 10).
+        let map = vec![
+            TokenMapEntry {
+                overlay_byte_start: 0,
+                overlay_byte_end: 100,
+                source_byte_start: 0,
+                source_byte_end: 100,
+            },
+            TokenMapEntry {
+                overlay_byte_start: 10,
+                overlay_byte_end: 50,
+                source_byte_start: 200,
+                source_byte_end: 240,
+            },
+            TokenMapEntry {
+                overlay_byte_start: 20,
+                overlay_byte_end: 30,
+                source_byte_start: 500,
+                source_byte_end: 510,
+            },
+        ];
+        let hit = find_tightest_token(&map, 25).expect("hit");
+        assert_eq!(hit.overlay_byte_start, 20);
+        assert_eq!(hit.source_byte_start, 500);
+    }
+
+    #[test]
+    fn find_tightest_token_returns_none_when_no_span_contains() {
+        let map = vec![TokenMapEntry {
+            overlay_byte_start: 10,
+            overlay_byte_end: 20,
+            source_byte_start: 100,
+            source_byte_end: 110,
+        }];
+        assert!(find_tightest_token(&map, 5).is_none());
+        assert!(find_tightest_token(&map, 20).is_none()); // end is exclusive
+        assert!(find_tightest_token(&map, 100).is_none());
+    }
+
+    #[test]
+    fn translate_position_maps_line_and_column_via_token_map() {
+        // Overlay buffer "aa\nBBBBBB\ncc" — line 2 is synthesized
+        // scaffolding splicing in source bytes [42, 48).
+        // Overlay line 2 col 3 = byte 5. That's offset 2 inside the
+        // token span [3, 9), so source byte = 42 + 2 = 44.
+        // Source buffer "LINE1\nLINE2\nLINE3" — byte 44 would land
+        // somewhere mid-line for a larger source; here we use
+        // synthetic line-starts for clarity.
+        let data = MapData {
+            token_map: vec![TokenMapEntry {
+                overlay_byte_start: 3,
+                overlay_byte_end: 9,
+                source_byte_start: 42,
+                source_byte_end: 48,
+            }],
+            // Overlay: "aa\nBBBBBB\ncc" → starts [0, 3, 10, 12].
+            overlay_line_starts: vec![0, 3, 10, 12],
+            // Source: line 5 starts at byte 40. Byte 44 is line 5 col
+            // 5 (0-offset 4 from line start → 1-based col 5).
+            source_line_starts: vec![0, 10, 20, 30, 40, 50, 60],
+            ..Default::default()
+        };
+        // Overlay (line=2, col=3) corresponds to overlay byte 3+2=5.
+        let (line, col) = translate_position(&data, 2, 3).expect("mapped");
+        // Source byte 44 → line 5 (starts at 40), col 5.
+        assert_eq!((line, col), (5, 5));
+    }
+
+    #[test]
+    fn translate_position_falls_back_to_line_map_on_token_miss() {
+        // Token map is empty but line map covers overlay lines 5..15
+        // mapping to source lines 1..11. Column must pass through
+        // unchanged — verbatim script content emits at the same
+        // column in overlay and source.
+        let data = MapData {
+            line_map: vec![LineMapEntry {
+                overlay_start_line: 5,
+                overlay_end_line: 15,
+                source_start_line: 1,
+            }],
+            ..Default::default()
+        };
+        let (line, col) = translate_position(&data, 10, 42).expect("mapped");
+        assert_eq!(line, 6); // 10 - 5 + 1
+        assert_eq!(col, 42); // unchanged
+    }
+
+    #[test]
+    fn translate_position_drops_when_neither_map_covers() {
+        // A diagnostic that doesn't match a token entry and doesn't
+        // fall inside any LineMapEntry range is dropped — matches
+        // upstream svelte-check's source-map-driven filter.
+        let data = MapData {
+            line_map: vec![LineMapEntry {
+                overlay_start_line: 5,
+                overlay_end_line: 15,
+                source_start_line: 1,
+            }],
+            token_map: vec![TokenMapEntry {
+                overlay_byte_start: 0,
+                overlay_byte_end: 10,
+                source_byte_start: 0,
+                source_byte_end: 10,
+            }],
+            overlay_line_starts: vec![0, 20, 40, 60],
+            source_line_starts: vec![0, 20, 40, 60],
+        };
+        // Line 3 (overlay byte ~40) — outside the token span [0, 10)
+        // AND outside the line-map range [5, 15).
+        assert!(translate_position(&data, 3, 1).is_none());
+    }
+
+    #[test]
+    fn map_diagnostic_rewrites_both_line_and_column_via_token_map() {
+        // End-to-end through map_diagnostic: given a token hit, the
+        // returned CheckDiagnostic must have the mapped line AND the
+        // mapped column — not the original tsgo column. Regression
+        // guard for the column rewrite introduced in this item.
+        let gen_path = "/proj/.svelte-check/svelte/src/X.svelte.ts";
+        let layout = CacheLayout::for_workspace("/proj");
+        // Overlay line 2 col 3 = byte 5 (see test above). Token span
+        // maps to source bytes [42, 48), inside source line 5.
+        let mut m = HashMap::new();
+        m.insert(
+            PathBuf::from(gen_path),
+            MapData {
+                token_map: vec![TokenMapEntry {
+                    overlay_byte_start: 3,
+                    overlay_byte_end: 9,
+                    source_byte_start: 42,
+                    source_byte_end: 48,
+                }],
+                overlay_line_starts: vec![0, 3, 10, 12],
+                source_line_starts: vec![0, 10, 20, 30, 40, 50, 60],
+                ..Default::default()
+            },
+        );
+        let raw = RawDiagnostic {
+            file: PathBuf::from(gen_path),
+            line: 2,
+            column: 3,
+            severity: Severity::Error,
+            code: 2345,
+            message: "mismatch".to_string(),
+            span_length: Some(4),
+        };
+        let mapped = map_diagnostic(raw, &layout, &m).expect("mapped");
+        assert_eq!(mapped.line, 5, "line must follow the token span");
+        assert_eq!(mapped.column, 5, "column must follow the token span");
+        assert_eq!(mapped.end_column, 9, "end column = column + span_length");
+    }
+
+    #[test]
+    fn token_maps_for_helper_is_consumed() {
+        // Smoke test for the token_maps_for builder the other token
+        // tests above rely on indirectly; keeps the helper honest.
+        let map = token_maps_for(
+            "/proj/.svelte-check/svelte/src/Y.svelte.ts",
+            vec![TokenMapEntry {
+                overlay_byte_start: 0,
+                overlay_byte_end: 1,
+                source_byte_start: 0,
+                source_byte_end: 1,
+            }],
+            vec![0, 1],
+            vec![0, 1],
+        );
+        assert_eq!(map.len(), 1);
+        let data = map.values().next().unwrap();
+        assert_eq!(data.token_map.len(), 1);
+        assert_eq!(data.overlay_line_starts.len(), 2);
     }
 }

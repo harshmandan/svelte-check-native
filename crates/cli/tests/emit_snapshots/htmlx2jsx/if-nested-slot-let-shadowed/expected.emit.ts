@@ -10,14 +10,14 @@ async function $$render_ddf2ba9e() {
                 void hello;
                 {
                     const __svn_C_1a = __svn_ensure_component(Comp);
-                    new __svn_C_1a({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                    new __svn_C_1a({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_1a>['$$prop_def'] });
                 }
                 {
                     let hello: any;
                     void hello;
                     {
                         const __svn_C_43 = __svn_ensure_component(Comp);
-                        new __svn_C_43({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                        new __svn_C_43({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_43>['$$prop_def'] });
                     }
                     if ((hello)) {
                         void [hello];
@@ -28,7 +28,7 @@ async function $$render_ddf2ba9e() {
                     void hello;
                     {
                         const __svn_C_ae = __svn_ensure_component(Comp);
-                        new __svn_C_ae({ target: __svn_any(), props: {hello, children: () => __svn_snippet_return()} });
+                        new __svn_C_ae({ target: __svn_any(), props: {hello, children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_ae>['$$prop_def'] });
                     }
                     if ((hello)) {
                         void [hello];
@@ -53,7 +53,7 @@ async function $$render_ddf2ba9e() {
                     void hello;
                     {
                         const __svn_C_223 = __svn_ensure_component(Comp);
-                        new __svn_C_223({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                        new __svn_C_223({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_223>['$$prop_def'] });
                     }
                     if ((hello)) {
                         void [hello];
@@ -66,7 +66,7 @@ async function $$render_ddf2ba9e() {
                         void hello;
                         {
                             const __svn_C_2b4 = __svn_ensure_component(Comp);
-                            new __svn_C_2b4({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                            new __svn_C_2b4({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_2b4>['$$prop_def'] });
                         }
                         if ((hello)) {
                             void [hello];
@@ -77,7 +77,7 @@ async function $$render_ddf2ba9e() {
                         void foo;
                         {
                             const __svn_C_333 = __svn_ensure_component(Comp);
-                            new __svn_C_333({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                            new __svn_C_333({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_333>['$$prop_def'] });
                         }
                         const hello = foo;
                         void hello;
@@ -94,14 +94,14 @@ async function $$render_ddf2ba9e() {
                     void bye;
                     {
                         const __svn_C_3ff = __svn_ensure_component(Comp);
-                        new __svn_C_3ff({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                        new __svn_C_3ff({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_3ff>['$$prop_def'] });
                     }
                 }
             } else if ((cool)) {
                 void [cool];
                 {
                     const __svn_C_452 = __svn_ensure_component(Comp);
-                    new __svn_C_452({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                    new __svn_C_452({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_452>['$$prop_def'] });
                 }
                 {
                     let cool: any;
@@ -112,7 +112,7 @@ async function $$render_ddf2ba9e() {
             } else {
                 {
                     const __svn_C_4da = __svn_ensure_component(Comp);
-                    new __svn_C_4da({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                    new __svn_C_4da({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_4da>['$$prop_def'] });
                 }
                 {
                     let hello: any;
@@ -127,7 +127,7 @@ async function $$render_ddf2ba9e() {
             void hello;
             {
                 const __svn_C_56f = __svn_ensure_component(Comp);
-                new __svn_C_56f({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                new __svn_C_56f({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_56f>['$$prop_def'] });
             }
             if ((hello && bye)) {
                 void [hello, bye];

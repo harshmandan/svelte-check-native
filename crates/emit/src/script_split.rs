@@ -420,10 +420,7 @@ pub fn split_imports(
     for info in &export_type_infos {
         if let Some(ty) = &info.type_source {
             for ident in collect_ident_refs(ty) {
-                if pending_type_spans
-                    .iter()
-                    .any(|(_, _, n, _)| n == &ident)
-                {
+                if pending_type_spans.iter().any(|(_, _, n, _)| n == &ident) {
                     props_reachable.insert(ident);
                 }
             }
@@ -439,9 +436,7 @@ pub fn split_imports(
                 for ident in collect_ident_refs(&content[*start..*end]) {
                     // Track any referenced type by name; the hoist
                     // walk below will hoist them.
-                    if pending_type_spans
-                        .iter()
-                        .any(|(_, _, n, _)| n == &ident)
+                    if pending_type_spans.iter().any(|(_, _, n, _)| n == &ident)
                         && !props_reachable.contains(&ident)
                     {
                         props_reachable.insert(ident);
@@ -827,20 +822,17 @@ fn typeof_targets_inner(text: &str, require_keyof: bool) -> Vec<SmolStr> {
         if bytes[start_of_typeof_clause..].starts_with(b"typeof") {
             // `typeof` must not be preceded by an ident char AND must
             // be followed by a non-ident char.
-            let before_ok = start_of_typeof_clause == 0
-                || !is_ident_byte(bytes[start_of_typeof_clause - 1]);
+            let before_ok =
+                start_of_typeof_clause == 0 || !is_ident_byte(bytes[start_of_typeof_clause - 1]);
             let after_typeof = start_of_typeof_clause + b"typeof".len();
-            let after_ok =
-                after_typeof < bytes.len() && !is_ident_byte(bytes[after_typeof]);
+            let after_ok = after_typeof < bytes.len() && !is_ident_byte(bytes[after_typeof]);
             if before_ok && after_ok {
                 let mut k = after_typeof;
                 while k < bytes.len() && bytes[k].is_ascii_whitespace() {
                     k += 1;
                 }
                 if k < bytes.len()
-                    && (bytes[k].is_ascii_alphabetic()
-                        || bytes[k] == b'_'
-                        || bytes[k] == b'$')
+                    && (bytes[k].is_ascii_alphabetic() || bytes[k] == b'_' || bytes[k] == b'$')
                 {
                     let start = k;
                     while k < bytes.len() && is_ident_byte(bytes[k]) {

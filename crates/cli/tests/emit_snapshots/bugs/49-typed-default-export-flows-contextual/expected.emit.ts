@@ -39,7 +39,7 @@ async function $$render_026729db() {
         // template type-check body (incremental)
         {
             const __svn_C_1a4 = __svn_ensure_component(Switch);
-            new __svn_C_1a4({ target: __svn_any(), props: {checked: (isOn), onchange: (({ checked }) => (isOn = checked))} });
+            new __svn_C_1a4({ target: __svn_any(), props: {checked: (isOn), onchange: (({ checked }) => (isOn = checked))} satisfies InstanceType<typeof __svn_C_1a4>['$$prop_def'] });
         }
     }
     void __svn_tpl_check;

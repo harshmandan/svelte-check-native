@@ -178,8 +178,7 @@ fn collect_top_level_var_names(program: &oxc_ast::ast::Program<'_>) -> HashSet<S
             // subsequent `$: X = …` must be treated as re-assignment
             // (drop the label) rather than a fresh declaration.
             Statement::ExportNamedDeclaration(decl) => {
-                if let Some(oxc_ast::ast::Declaration::VariableDeclaration(vd)) =
-                    &decl.declaration
+                if let Some(oxc_ast::ast::Declaration::VariableDeclaration(vd)) = &decl.declaration
                 {
                     for d in &vd.declarations {
                         collect_binding_names(d, &mut out);
@@ -240,8 +239,7 @@ fn classify_and_rewrite(
         };
         if let Expression::AssignmentExpression(assign) = inner_expr {
             if matches!(assign.operator, oxc_ast::ast::AssignmentOperator::Assign) {
-                if let oxc_ast::ast::AssignmentTarget::AssignmentTargetIdentifier(id) =
-                    &assign.left
+                if let oxc_ast::ast::AssignmentTarget::AssignmentTargetIdentifier(id) = &assign.left
                 {
                     let name = id.name.as_str();
                     let rhs_span = assign.right.span();
@@ -303,12 +301,9 @@ fn classify_and_rewrite(
                 // name is already declared elsewhere in the script,
                 // fall through to Case 2 (block wrap) — we can't
                 // safely emit a fresh `let` for already-bound names.
-                let destructure_names =
-                    collect_destructure_names(&assign.left);
+                let destructure_names = collect_destructure_names(&assign.left);
                 if !destructure_names.is_empty()
-                    && destructure_names
-                        .iter()
-                        .all(|n| !declared.contains(n))
+                    && destructure_names.iter().all(|n| !declared.contains(n))
                 {
                     let rhs_span = assign.right.span();
                     let rhs = &content[rhs_span.start as usize..rhs_span.end as usize];
@@ -382,9 +377,7 @@ fn classify_and_rewrite(
 /// Returns the names in declaration order. Used only to decide whether
 /// a `$: ({...} = expr)` reactive statement can be safely rewritten to
 /// a `let {...} = expr;` declaration.
-fn collect_destructure_names(
-    target: &oxc_ast::ast::AssignmentTarget<'_>,
-) -> Vec<SmolStr> {
+fn collect_destructure_names(target: &oxc_ast::ast::AssignmentTarget<'_>) -> Vec<SmolStr> {
     use oxc_ast::ast::{AssignmentTarget, AssignmentTargetProperty};
     let mut out = Vec::new();
     match target {
@@ -596,8 +589,14 @@ mod tests {
     fn multiple_reactive_declarations() {
         let src = "$: a = 1;\n$: b = 2;";
         let got = ts(src);
-        assert!(got.contains("let a = __svn_invalidate(() => (1)); void a;"), "a invalidate: {got:?}");
-        assert!(got.contains("let b = __svn_invalidate(() => (2)); void b;"), "b invalidate: {got:?}");
+        assert!(
+            got.contains("let a = __svn_invalidate(() => (1)); void a;"),
+            "a invalidate: {got:?}"
+        );
+        assert!(
+            got.contains("let b = __svn_invalidate(() => (2)); void b;"),
+            "b invalidate: {got:?}"
+        );
     }
 
     #[test]

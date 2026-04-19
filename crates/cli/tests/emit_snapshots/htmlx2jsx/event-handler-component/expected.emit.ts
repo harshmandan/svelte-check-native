@@ -5,7 +5,7 @@ async function $$render_9fd7d296() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(Component);
-            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {} });
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_0>['$$prop_def'] });
             __svn_inst_0.$on("event", (() => click()));
             __svn_inst_0.$on("UpperCaseEvent", (() => log('hi')));
         }

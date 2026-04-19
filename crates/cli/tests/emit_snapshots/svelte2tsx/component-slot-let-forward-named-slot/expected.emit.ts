@@ -5,7 +5,7 @@ async function $$render_b9dbbb3b() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(Component);
-            new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+            new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_0>['$$prop_def'] });
         }
         {
             let a: any;

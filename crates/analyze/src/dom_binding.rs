@@ -59,9 +59,17 @@ mod tests {
 
     #[test]
     fn media_time_range_family() {
-        assert!(type_for("buffered").unwrap().contains("SvelteMediaTimeRange"));
+        assert!(
+            type_for("buffered")
+                .unwrap()
+                .contains("SvelteMediaTimeRange")
+        );
         assert!(type_for("played").unwrap().contains("SvelteMediaTimeRange"));
-        assert!(type_for("seekable").unwrap().contains("SvelteMediaTimeRange"));
+        assert!(
+            type_for("seekable")
+                .unwrap()
+                .contains("SvelteMediaTimeRange")
+        );
     }
 
     #[test]

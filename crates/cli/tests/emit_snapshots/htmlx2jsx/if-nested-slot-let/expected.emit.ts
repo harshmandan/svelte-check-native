@@ -10,7 +10,7 @@ async function $$render_dc3d7c74() {
                 void foo;
                 {
                     const __svn_C_10 = __svn_ensure_component(Comp);
-                    new __svn_C_10({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                    new __svn_C_10({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_10>['$$prop_def'] });
                 }
             }
             if ((hi && bye)) {
@@ -20,14 +20,14 @@ async function $$render_dc3d7c74() {
                     void bar;
                     {
                         const __svn_C_55 = __svn_ensure_component(Comp);
-                        new __svn_C_55({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                        new __svn_C_55({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_55>['$$prop_def'] });
                     }
                 }
             } else if ((cool)) {
                 void [cool];
                 {
                     const __svn_C_a8 = __svn_ensure_component(Comp);
-                    new __svn_C_a8({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                    new __svn_C_a8({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_a8>['$$prop_def'] });
                 }
                 {
                     let foo: any;
@@ -38,7 +38,7 @@ async function $$render_dc3d7c74() {
             } else {
                 {
                     const __svn_C_12c = __svn_ensure_component(Comp);
-                    new __svn_C_12c({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                    new __svn_C_12c({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_12c>['$$prop_def'] });
                 }
                 {
                     let bar: any;

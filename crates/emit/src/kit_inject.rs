@@ -57,10 +57,7 @@ enum KitFileKind {
     /// `load` gets a type-matrix-derived `LoadEvent`; page-option
     /// consts get their fixed-union types. Sub-classification feeds
     /// the load-event name computation.
-    Route {
-        is_layout: bool,
-        is_server: bool,
-    },
+    Route { is_layout: bool, is_server: bool },
 }
 
 fn classify_kit_file(basename: &str) -> Option<KitFileKind> {
@@ -248,7 +245,8 @@ mod tests {
 
     #[test]
     fn injects_on_destructured_single_param() {
-        let source = "export async function GET({ url }) {\n    return new Response(url.pathname);\n}";
+        let source =
+            "export async function GET({ url }) {\n    return new Response(url.pathname);\n}";
         let got = inject(&server_path(), source).unwrap();
         assert!(got.contains("({ url }: import('./$types').RequestEvent)"));
     }

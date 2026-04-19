@@ -170,10 +170,7 @@ fn collect_typed_lets_impl(
         let Statement::VariableDeclaration(decl) = stmt else {
             continue;
         };
-        if !matches!(
-            decl.kind,
-            oxc_ast::ast::VariableDeclarationKind::Let
-        ) {
+        if !matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Let) {
             continue;
         }
         for declarator in &decl.declarations {
@@ -181,8 +178,7 @@ fn collect_typed_lets_impl(
                 continue;
             }
             // Only top-level simple identifier with a type annotation.
-            let oxc_ast::ast::BindingPatternKind::BindingIdentifier(id) =
-                &declarator.id.kind
+            let oxc_ast::ast::BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind
             else {
                 continue;
             };

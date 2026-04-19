@@ -55,7 +55,7 @@ async function $$render_8568e182() {
                         void columns;
                         return __svn_snippet_return();
                     },
-                },
+                } satisfies InstanceType<typeof __svn_C_f9>['$$prop_def'],
             });
         }
     }

@@ -23,7 +23,7 @@ async function $$render_03b58764() {
                 void othersubthing;
                 {
                     const __svn_C_169 = __svn_ensure_component(Sub);
-                    new __svn_C_169({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} });
+                    new __svn_C_169({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_169>['$$prop_def'] });
                 }
             }
             {
@@ -33,7 +33,7 @@ async function $$render_03b58764() {
                 void othersubthing;
                 {
                     const __svn_C_205 = __svn_ensure_component(Sub);
-                    new __svn_C_205({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} });
+                    new __svn_C_205({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_205>['$$prop_def'] });
                 }
             }
         }

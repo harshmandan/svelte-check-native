@@ -240,7 +240,8 @@ fn matches_upstream_on_canonical_sveltekit_layout() {
     let ours_n = norm(ours);
 
     assert_eq!(
-        upstream_n, ours_n,
+        upstream_n,
+        ours_n,
         "Kit-file enumeration diverged from upstream svelte-check.\n\
          upstream-only: {:?}\n\
          ours-only: {:?}",

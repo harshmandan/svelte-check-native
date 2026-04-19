@@ -9,7 +9,7 @@ let a = 'b';
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(Test);
-            new __svn_C_0({ target: __svn_any(), props: {b: "6"} });
+            new __svn_C_0({ target: __svn_any(), props: {b: "6"} satisfies InstanceType<typeof __svn_C_0>['$$prop_def'] });
         }
     }
     void __svn_tpl_check;

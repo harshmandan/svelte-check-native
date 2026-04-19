@@ -10,14 +10,14 @@ async function $$render_468914b6() {
             void baz;
             {
                 const __svn_C_0 = __svn_ensure_component(Parent);
-                new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_0>['$$prop_def'] });
             }
             {
                 let bla: any;
                 void bla;
                 {
                     const __svn_C_23 = __svn_ensure_component(Component);
-                    new __svn_C_23({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                    new __svn_C_23({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_23>['$$prop_def'] });
                 }
             }
             {
@@ -25,7 +25,7 @@ async function $$render_468914b6() {
                 void blubb;
                 {
                     const __svn_C_73 = __svn_ensure_component(Component);
-                    new __svn_C_73({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                    new __svn_C_73({ target: __svn_any(), props: {children: () => __svn_snippet_return()} satisfies InstanceType<typeof __svn_C_73>['$$prop_def'] });
                 }
             }
         }

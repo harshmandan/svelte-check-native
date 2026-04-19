@@ -186,6 +186,27 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // If `resolve_tsconfig` escaped a project-references solution to a
+    // sub-app's `tsconfig.json`, redirect the workspace to that sub-app
+    // too. Without this, tsgo's cwd stays at the monorepo root and
+    // `node_modules` resolution for app-local packages
+    // (`@org/types`, workspace-scoped deps) fails from the wrong
+    // directory. The overlay cache, kit-file discovery, and diagnostic
+    // path-relativization all follow workspace.
+    let workspace = match tsconfig.as_deref() {
+        Some(tc) => match tc.parent() {
+            Some(dir) if dir != workspace && dir.starts_with(&workspace) => {
+                eprintln!(
+                    "svelte-check-native: redirected workspace to {} (parent of {}) — original looked like a TS project-references solution",
+                    dir.display(),
+                    tc.display(),
+                );
+                dir.to_path_buf()
+            }
+            _ => workspace,
+        },
+        None => workspace,
+    };
 
     if cli.debug_paths {
         return run_debug_paths(&workspace, tsconfig.as_deref());
@@ -477,6 +498,14 @@ fn parse_compiler_warnings(
 /// Resolve the user's tsconfig path. Honors `--tsconfig`, `--no-tsconfig`,
 /// and otherwise walks up from the workspace looking for `tsconfig.json`
 /// then `jsconfig.json`.
+///
+/// When the resolved tsconfig is a TS project-references solution
+/// (`files: []` + no `include` + non-empty `references`), redirect to a
+/// sub-project's tsconfig via [`escape_solution_tsconfig`]. Solution
+/// files coordinate multiple projects but own no source themselves —
+/// our overlay can't inherit useful `paths` / `baseUrl` / resolution
+/// settings from one, so extending it leaves every `$lib/*` import
+/// unresolved. Common root-of-monorepo case in SvelteKit apps.
 fn resolve_tsconfig(
     workspace: &Path,
     explicit: Option<&Path>,
@@ -485,7 +514,7 @@ fn resolve_tsconfig(
     if no_tsconfig {
         return Ok(None);
     }
-    if let Some(p) = explicit {
+    let candidate: PathBuf = if let Some(p) = explicit {
         let resolved = if p.is_absolute() {
             p.to_path_buf()
         } else {
@@ -496,22 +525,79 @@ fn resolve_tsconfig(
         }
         // Canonicalize so the overlay's `extends` path is computable as a
         // proper relative path between two absolute directories.
-        return Ok(Some(resolved.canonicalize().unwrap_or(resolved)));
-    }
-    let mut cur: Option<&Path> = Some(workspace);
-    while let Some(dir) = cur {
-        for name in ["tsconfig.json", "jsconfig.json"] {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return Ok(Some(candidate));
+        resolved.canonicalize().unwrap_or(resolved)
+    } else {
+        let mut found: Option<PathBuf> = None;
+        let mut cur: Option<&Path> = Some(workspace);
+        while let Some(dir) = cur {
+            for name in ["tsconfig.json", "jsconfig.json"] {
+                let c = dir.join(name);
+                if c.is_file() {
+                    found = Some(c);
+                    break;
+                }
             }
+            if found.is_some() {
+                break;
+            }
+            cur = dir.parent();
         }
-        cur = dir.parent();
+        found.ok_or_else(|| {
+            format!(
+                "no tsconfig.json or jsconfig.json found at or above {}",
+                workspace.display()
+            )
+        })?
+    };
+    Ok(Some(escape_solution_tsconfig(&candidate).unwrap_or(candidate)))
+}
+
+/// If `candidate` is a solution-style tsconfig, try to redirect to a
+/// sub-project's tsconfig that carries real `compilerOptions.paths`.
+///
+/// Algorithm:
+///   1. Parse `candidate`. Return `None` if not a solution.
+///   2. Collect directories from `references[]` (each reference points
+///      at either a tsconfig file or a project dir).
+///   3. In each directory, look for `tsconfig.json` (the base one, not
+///      `.build` / `.test` / `.playwright` variants) that has non-empty
+///      `compilerOptions.paths`. Return the first match.
+///
+/// Returns `None` when the tsconfig isn't a solution, no reference
+/// directory has a paths-carrying `tsconfig.json`, or any parse fails
+/// — keeps the caller's original in those cases.
+fn escape_solution_tsconfig(candidate: &Path) -> Option<PathBuf> {
+    let parsed = svn_core::tsconfig::parse_file(candidate).ok()?;
+    if !parsed.is_solution_style() {
+        return None;
     }
-    Err(format!(
-        "no tsconfig.json or jsconfig.json found at or above {}",
-        workspace.display()
-    ))
+    let parent = candidate.parent()?;
+    for reference in &parsed.references {
+        let ref_path = parent.join(&reference.path);
+        let ref_dir = if ref_path.is_dir() {
+            ref_path.clone()
+        } else if ref_path.is_file() {
+            match ref_path.parent() {
+                Some(p) => p.to_path_buf(),
+                None => continue,
+            }
+        } else {
+            continue;
+        };
+        let base = ref_dir.join("tsconfig.json");
+        if !base.is_file() {
+            continue;
+        }
+        let sub = match svn_core::tsconfig::parse_file(&base) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        if sub.compiler_options.paths.is_empty() {
+            continue;
+        }
+        return Some(base.canonicalize().unwrap_or(base));
+    }
+    None
 }
 
 /// Default flow: parse + emit each .svelte file, hand the lot to tsgo,

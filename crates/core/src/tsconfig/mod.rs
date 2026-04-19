@@ -60,6 +60,24 @@ impl TsConfigFile {
     pub fn config_dir(&self) -> &Path {
         self.path.parent().unwrap_or(Path::new(""))
     }
+
+    /// Does this tsconfig match the TS "project-references solution"
+    /// shape? A solution file coordinates multiple projects but owns no
+    /// source itself — distinguished by `files: []` (explicit empty),
+    /// no `include`, and a non-empty `references` array. Common at the
+    /// root of SvelteKit monorepos where the root tsconfig coordinates
+    /// sub-app / functions / packages / etc.
+    ///
+    /// The overlay emitter can't `extends` a solution usefully — it
+    /// has no `compilerOptions.paths` / `baseUrl` / real
+    /// module-resolution settings. The CLI detects this shape at
+    /// resolve time and redirects to a sub-project's tsconfig.
+    pub fn is_solution_style(&self) -> bool {
+        let files_empty = self.files.as_ref().is_some_and(|f| f.is_empty());
+        let no_include = self.include.is_none();
+        let has_refs = !self.references.is_empty();
+        files_empty && no_include && has_refs
+    }
 }
 
 /// `compilerOptions` — fields we parse explicitly. Everything we don't know

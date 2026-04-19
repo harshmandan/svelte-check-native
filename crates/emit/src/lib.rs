@@ -693,7 +693,15 @@ fn emit_document_with_render_name(
     // now (correctly) "name not found" errors.
     emit_action_attrs_declarations(&mut out, summary);
     emit_bind_pair_declarations(&mut out, summary);
-    emit_dom_binding_checks(&mut out, doc.source, summary);
+    // v0.3 Item 6: DOM-binding checks (`__svn_any_as<TYPE>(expr);`)
+    // are emitted INLINE at each element's position during the
+    // template walk — see `emit_dom_binding_checks_inline` in
+    // `emit_template_node`'s Node::Element arm. Top-of-tpl_check
+    // batching had the same scope gap that was fixed for
+    // component-prop checks above: an expression referencing a
+    // block-scoped name (`bind:clientWidth={items[i].width}`
+    // inside `{#each as _, i}`) resolved against the top-level
+    // scope and fired `Cannot find name 'i'` noise.
     // Index component instantiations by source byte offset so the
     // template walker can emit each prop-check inline at the component
     // node's position — i.e. inside the enclosing `{#each}` / `{#if}` /
@@ -1131,50 +1139,63 @@ fn collect_dom_binding_token_map(
     source: &str,
     summary: &TemplateSummary,
 ) -> Vec<TokenMapEntry> {
-    const PREFIX: &str = "__svn_any_as<";
+    // v0.3 Item 6: the emit shape is
+    //   `void ((): void => { EXPR = null as any as TYPE; });`
+    // The user expression EXPR is the LHS of the assignment after
+    // `{ ` and before ` = null as any as`. Scan for that anchor
+    // sequence and compute the EXPR span from it.
+    const LEAD: &str = "void ((): void => { ";
+    const MID: &str = " = null as any as ";
     let mut entries: Vec<TokenMapEntry> = Vec::new();
     let mut cursor = 0usize;
     let mut binding_idx = 0usize;
-    while let Some(rel) = out[cursor..].find(PREFIX) {
-        let prefix_start = cursor + rel;
-        // Advance past `__svn_any_as<`, then find the matching `>(`.
-        let after_prefix = prefix_start + PREFIX.len();
-        let Some(close_rel) = out[after_prefix..].find(">(") else {
+    while let Some(rel) = out[cursor..].find(LEAD) {
+        let lead_start = cursor + rel;
+        let expr_overlay_start = lead_start + LEAD.len();
+        // Find the ` = null as any as ` separator that terminates EXPR.
+        let Some(mid_rel) = out[expr_overlay_start..].find(MID) else {
             break;
         };
-        let paren_open = after_prefix + close_rel + 2; // past `>(`
+        let expr_overlay_end = expr_overlay_start + mid_rel;
         let Some(binding) = summary.dom_bindings.get(binding_idx) else {
             break;
         };
         binding_idx += 1;
+        // Advance cursor past the whole emit statement in all cases;
+        // the closing `});` terminates it.
+        let advance_to = match out[expr_overlay_end..].find(");") {
+            Some(off) => expr_overlay_end + off + 2,
+            None => expr_overlay_end,
+        };
         let svn_analyze::DomBindingExpression::Range(expr_range) = &binding.expression else {
-            // Bare-shorthand identifier form has no source range;
-            // skip the entry but advance past this call site.
-            let Some(semi_rel) = out[paren_open..].find(");") else {
-                break;
-            };
-            cursor = paren_open + semi_rel + 2;
+            // Bare-shorthand form has no source range; skip.
+            cursor = advance_to;
             continue;
         };
-        // Emit copies `.trim()`-ed source (see emit_dom_binding_checks);
-        // recompute the trimmed source range so overlay/source widths
-        // match and the byte-offset arithmetic lines up.
+        // Trimmed-source arithmetic: emit writes `expr.trim()`, so the
+        // overlay EXPR text length equals the trimmed source range
+        // length. Recompute the trimmed source span.
         let Some(slice) = source.get(expr_range.start as usize..expr_range.end as usize) else {
-            cursor = paren_open;
+            cursor = advance_to;
             continue;
         };
         let leading_ws = slice.len() - slice.trim_start().len();
         let trimmed_len = slice.trim().len();
-        let overlay_end = paren_open + trimmed_len;
+        // Sanity: overlay span length should equal trimmed_len.
+        // Skip on mismatch (belt-and-suspenders — emit guarantees this).
+        if expr_overlay_end - expr_overlay_start != trimmed_len {
+            cursor = advance_to;
+            continue;
+        }
         let source_start = expr_range.start + leading_ws as u32;
         let source_end = source_start + trimmed_len as u32;
         entries.push(TokenMapEntry {
-            overlay_byte_start: paren_open as u32,
-            overlay_byte_end: overlay_end as u32,
+            overlay_byte_start: expr_overlay_start as u32,
+            overlay_byte_end: expr_overlay_end as u32,
             source_byte_start: source_start,
             source_byte_end: source_end,
         });
-        cursor = overlay_end;
+        cursor = advance_to;
     }
     entries
 }
@@ -1648,10 +1669,12 @@ fn emit_template_node(
         Node::KeyBlock(b) => emit_template_body(out, source, &b.body, depth, insts),
         Node::SnippetBlock(b) => emit_snippet_block(out, source, b, depth, insts),
         Node::Element(e) => {
+            emit_dom_binding_checks_inline(out, source, &e.attributes, depth);
             emit_children_with_let_bindings(out, source, &e.attributes, &e.children, depth, insts);
         }
         Node::Component(c) => emit_component_node(out, source, c, depth, insts),
         Node::SvelteElement(s) => {
+            emit_dom_binding_checks_inline(out, source, &s.attributes, depth);
             emit_children_with_let_bindings(out, source, &s.attributes, &s.children, depth, insts);
         }
         Node::Interpolation(i) => emit_at_const_if_any(out, source, i, depth),
@@ -2455,26 +2478,63 @@ fn emit_action_attrs_declarations(out: &mut String, summary: &TemplateSummary) {
 /// desugars to `bind:NAME={NAME}` at runtime, so the user's `NAME`
 /// local still has the bind-assigned type (checked by the
 /// corresponding `BindThisTarget`'s `!` rewrite).
-fn emit_dom_binding_checks(out: &mut String, source: &str, summary: &TemplateSummary) {
-    for binding in &summary.dom_bindings {
-        let expr: std::borrow::Cow<'_, str> = match &binding.expression {
-            svn_analyze::DomBindingExpression::Range(r) => {
-                let Some(s) = source.get(r.start as usize..r.end as usize) else {
+/// v0.3 Item 6: emit `__svn_any_as<TYPE>(expr);` contract checks for
+/// every `bind:NAME={expr}` attribute whose NAME is in
+/// `dom_binding::type_for`'s table, directly at the current
+/// template-walk position. Inline emission places each check inside
+/// the walker's enclosing `{#each}` / `{#if}` / `{#snippet}` scope,
+/// so a binding expression referencing a block-scoped iterator
+/// (`bind:clientWidth={items[i].width}`) resolves against the `i`
+/// introduced by that block rather than the top-of-tpl_check scope.
+///
+/// Bare-shorthand `bind:NAME` is NOT emitted here — its source-range
+/// value-text is the whole directive (including the `bind:` prefix),
+/// not valid TS as a call argument. The shorthand's declaration-site
+/// `!` rewrite covers the definite-assign half of the type-check
+/// flow.
+fn emit_dom_binding_checks_inline(
+    out: &mut String,
+    source: &str,
+    attributes: &[svn_parser::Attribute],
+    depth: usize,
+) {
+    let indent = "    ".repeat(depth);
+    for attr in attributes {
+        let svn_parser::Attribute::Directive(directive) = attr else {
+            continue;
+        };
+        if directive.kind != svn_parser::DirectiveKind::Bind {
+            continue;
+        }
+        let Some(ty) = svn_analyze::dom_binding::type_for(directive.name.as_str()) else {
+            continue;
+        };
+        // Resolve the assignment target:
+        //   `bind:NAME={expr}` → EXPR text
+        //   `bind:NAME`         → NAME (Svelte shorthand — desugars to
+        //                         `bind:NAME={NAME}`)
+        let expr: std::borrow::Cow<'_, str> = match &directive.value {
+            Some(svn_parser::DirectiveValue::Expression {
+                expression_range, ..
+            }) => {
+                let Some(slice) =
+                    source.get(expression_range.start as usize..expression_range.end as usize)
+                else {
                     continue;
                 };
-                std::borrow::Cow::Borrowed(s.trim())
+                std::borrow::Cow::Borrowed(slice.trim())
             }
-            svn_analyze::DomBindingExpression::Identifier(id) => {
-                std::borrow::Cow::Borrowed(id.as_str())
-            }
+            None => std::borrow::Cow::Borrowed(directive.name.as_str()),
+            // BindPair / Quoted don't make sense for these one-way
+            // bindings; skip.
+            _ => continue,
         };
         if expr.is_empty() {
             continue;
         }
         let _ = writeln!(
             out,
-            "        __svn_any_as<{ty}>({expr});",
-            ty = binding.type_annotation,
+            "{indent}void ((): void => {{ {expr} = null as any as {ty}; }});"
         );
     }
 }

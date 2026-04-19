@@ -83,6 +83,7 @@ async function $$render_43de206c() {
                 const __svn_C_392 = __svn_ensure_component(Component);
                 new __svn_C_392({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_392>['$$prop_def'] });
             }
+            void ((): void => { x as any = null as any as HTMLElement['clientWidth']; });
         }
     }
     void __svn_tpl_check;

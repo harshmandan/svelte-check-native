@@ -7,7 +7,6 @@ async function $$render_edb4eb12<T>() {
   let rect;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        __svn_any_as<DOMRectReadOnly>(rect);
         {
             const foo: any = undefined;
             void foo;
@@ -16,6 +15,7 @@ async function $$render_edb4eb12<T>() {
                     void bar;
                 });
             }
+            void ((): void => { rect = null as any as DOMRectReadOnly; });
         }
     }
     void __svn_tpl_check;

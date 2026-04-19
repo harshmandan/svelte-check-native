@@ -49,7 +49,7 @@ pub fn type_for(binding_name: &str) -> Option<&'static str> {
         "played" => Some("import('svelte/elements').SvelteMediaTimeRange[]"),
         "seekable" => Some("import('svelte/elements').SvelteMediaTimeRange[]"),
 
-        // --- Element-native one-way family (v0.3 Item 4) ------------
+        // --- Element-native one-way family (v0.3 Item 4 + 6) --------
         //
         // Image dimensions — HTMLImageElement-specific.
         "naturalWidth" => Some("HTMLImageElement['naturalWidth']"),
@@ -59,22 +59,20 @@ pub fn type_for(binding_name: &str) -> Option<&'static str> {
         "seeking" => Some("HTMLMediaElement['seeking']"),
         "ended" => Some("HTMLMediaElement['ended']"),
         "readyState" => Some("HTMLMediaElement['readyState']"),
-        //
-        // Layout-measurement bindings (clientWidth, clientHeight,
-        // offsetWidth, offsetHeight) are deferred. Those are
-        // commonly used inside `{#each}` blocks (`bind:clientWidth={
-        // items[i].width}`), and `emit_dom_binding_checks` writes
-        // `__svn_any_as<...>(EXPR);` at the top of
-        // `__svn_tpl_check` — OUTSIDE the walker's per-block
-        // scope. The result: TS2304 "Cannot find name 'i'" on
-        // expressions that reference block-scoped iterator names.
-        // Surfacing as misleading noise across real-world benches.
-        //
-        // Fix (future work): move DOM-binding checks into the
-        // walker's scope at the bind-site so block-scoped names are
-        // visible. Until then, stick to the HTMLMediaElement /
-        // HTMLImageElement subset — those bindings are tag-specific
-        // and rarely used inside loops.
+        // Layout measurements — on every HTMLElement. v0.3 Item 6
+        // re-added these after moving the `__svn_any_as<...>(EXPR);`
+        // emit INLINE at the bind-site inside the template walker
+        // (see `emit_dom_binding_checks_inline` in
+        // `emit_template_node`'s Node::Element arm). The top-of-
+        // tpl_check batch placement surfaced `Cannot find name 'i'`
+        // TS2304 noise whenever the expression referenced a
+        // block-scoped iterator (`bind:clientWidth={items[i].width}`
+        // inside `{#each as item, i}`); inline emit resolves those
+        // bindings against the enclosing block's scope.
+        "clientWidth" => Some("HTMLElement['clientWidth']"),
+        "clientHeight" => Some("HTMLElement['clientHeight']"),
+        "offsetWidth" => Some("HTMLElement['offsetWidth']"),
+        "offsetHeight" => Some("HTMLElement['offsetHeight']"),
         _ => None,
     }
 }
@@ -110,13 +108,20 @@ mod tests {
     }
 
     #[test]
-    fn layout_measurements_are_deferred() {
-        // clientWidth/Height, offsetWidth/Height return None in v0.3
-        // — see the table comment for the `{#each}`-scope reason.
-        assert_eq!(type_for("clientWidth"), None);
-        assert_eq!(type_for("clientHeight"), None);
-        assert_eq!(type_for("offsetWidth"), None);
-        assert_eq!(type_for("offsetHeight"), None);
+    fn layout_measurements_use_html_element() {
+        // v0.3 Item 6: re-added after moving the emit of the
+        // `__svn_any_as<...>(EXPR);` contract call inline at the
+        // bind-site, so block-scoped iterator names resolve.
+        assert_eq!(type_for("clientWidth"), Some("HTMLElement['clientWidth']"));
+        assert_eq!(
+            type_for("clientHeight"),
+            Some("HTMLElement['clientHeight']")
+        );
+        assert_eq!(type_for("offsetWidth"), Some("HTMLElement['offsetWidth']"));
+        assert_eq!(
+            type_for("offsetHeight"),
+            Some("HTMLElement['offsetHeight']")
+        );
     }
 
     #[test]

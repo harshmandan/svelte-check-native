@@ -4,14 +4,14 @@
             "file": "Mismatch.svelte",
             "line": 7,
             "column": 39,
-            "code": 2345
+            "code": 2322
         },
         {
             "file": "Mismatch.svelte",
             "line": 8,
             "column": 22,
-            "code": 2345
+            "code": 2322
         }
     ],
-    "_note": "v0.3 Item 4: dom_binding::type_for now covers HTMLImageElement (`naturalWidth`, `naturalHeight`) and HTMLMediaElement (`duration`, `seeking`, `ended`, `readyState`) one-way bindings — a 6-name subset of upstream's `oneWayBindingAttributes` table. Each emits `__svn_any_as<Element['prop']>(expr);` in the template-check body. `collect_dom_binding_token_map` post-scan pushes a TokenMapEntry per Range-form binding mapping the overlay expr span to the user's `bind:NAME={expr}` source range, so TS2345 surfaces at the user-visible bind-value position. The HTMLElement layout family (clientWidth/Height, offsetWidth/Height) is deferred — those are commonly used inside {#each} blocks, and the check-emit's top-of-tpl_check position loses block-scope iterator names. Row/column are 0-based."
+    "_note": "v0.3 Item 4 + Item 6: dom_binding::type_for covers HTMLImageElement (`naturalWidth`, `naturalHeight`), HTMLMediaElement (`duration`, `seeking`, `ended`, `readyState`), and HTMLElement layout (`clientWidth/Height`, `offsetWidth/Height`). Each emits `void ((): void => { EXPR = null as any as TYPE; });` at the bind-site inside the walker's scope — never-called lambda form matches upstream's assignment-direction check (LHS accepts RHS) so `bind:clientWidth={arr[i].optionalWidth}` doesn't fire a spurious `undefined not assignable` FP. Wrong-typed bindings fire TS2322 at the EXPR position via the collect_dom_binding_token_map source-map. Row/column are 0-based."
 }

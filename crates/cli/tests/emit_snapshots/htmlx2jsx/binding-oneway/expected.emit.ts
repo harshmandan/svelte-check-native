@@ -3,12 +3,16 @@
 async function $$render_6cdf582f() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        __svn_any_as<HTMLMediaElement['duration']>(duration);
-        __svn_any_as<import('svelte/elements').SvelteMediaTimeRange[]>(buffered);
-        __svn_any_as<import('svelte/elements').SvelteMediaTimeRange[]>(seekable);
-        __svn_any_as<HTMLMediaElement['seeking']>(seeking);
-        __svn_any_as<import('svelte/elements').SvelteMediaTimeRange[]>(played);
-        __svn_any_as<HTMLMediaElement['ended']>(ended);
+        void ((): void => { width = null as any as HTMLElement['clientWidth']; });
+        void ((): void => { height = null as any as HTMLElement['clientHeight']; });
+        void ((): void => { offsetWidth = null as any as HTMLElement['offsetWidth']; });
+        void ((): void => { offsetHeight = null as any as HTMLElement['offsetHeight']; });
+        void ((): void => { duration = null as any as HTMLMediaElement['duration']; });
+        void ((): void => { buffered = null as any as import('svelte/elements').SvelteMediaTimeRange[]; });
+        void ((): void => { seekable = null as any as import('svelte/elements').SvelteMediaTimeRange[]; });
+        void ((): void => { seeking = null as any as HTMLMediaElement['seeking']; });
+        void ((): void => { played = null as any as import('svelte/elements').SvelteMediaTimeRange[]; });
+        void ((): void => { ended = null as any as HTMLMediaElement['ended']; });
     }
     void __svn_tpl_check;
 }

@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "v0.3 Item 6 motivating case: `bind:clientWidth={items[i].width}` inside `{#each as _item, i}`. Before Item 6, `emit_dom_binding_checks` wrote the contract at the top of `__svn_tpl_check` (outside the each-block's scope) and fired TS2304 `Cannot find name 'i'`. Item 6 emits inline at the bind-site so `i` resolves. Item 6 also switched from function-call (`__svn_any_as<T>(expr)`) to assignment direction (`void ((): void => { expr = null as any as T; })`) so an optional field `width?: number` doesn't fire a spurious `number | undefined not assignable to number` FP."
+}

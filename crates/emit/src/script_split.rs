@@ -557,7 +557,7 @@ pub fn split_imports(
             // `Snippet<[{ fn: typeof fn }]>`). A plain `any` would
             // widen `keyof typeof X` to `string | number | symbol`
             // and trip TS1023 on user `X[stringKey]` subscripts.
-            hoisted.push_str(": { [key: string]: any } & ((...args: any[]) => any);\n");
+            hoisted.push_str(": any;\n");
         }
     }
 

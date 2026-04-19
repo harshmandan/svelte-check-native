@@ -2250,13 +2250,13 @@ fn emit_component_call(
     // Per-call-site synthesized locals. Using the instantiation's byte
     // offset keeps each one unique without threading a counter through
     // the walker. `C_*` holds the ensured-component class; `inst_*` is
-    // the instance returned by `new C_*({...})` — the latter only
-    // emitted when there's at least one `on:event` directive to call
-    // `$on` on, so we don't pay the unused-local tax on the common
-    // case (no events).
+    // the instance returned by `new C_*({...})`. Hoisted into a named
+    // local when one of the post-construction emits needs it:
+    //   - `$inst.$on("evt", h)` per `on:event` directive
+    //   - `x = $inst;` for `bind:this={x}` on the component
     let local = format!("__svn_C_{:x}", inst.node_start);
     let inst_local = format!("__svn_inst_{:x}", inst.node_start);
-    let hoist_instance = !inst.on_events.is_empty();
+    let hoist_instance = !inst.on_events.is_empty() || inst.bind_this_target.is_some();
     let ctor_lhs = if hoist_instance {
         format!("const {inst_local} = ")
     } else {
@@ -2297,6 +2297,7 @@ fn emit_component_call(
             out,
             "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{}} }});"
         );
+        emit_bind_this_assignment(out, inst, &inst_local, &inner);
         emit_on_event_calls(out, source, inst, &inst_local, &inner);
         let _ = writeln!(out, "{indent}}}");
         return;
@@ -2322,6 +2323,7 @@ fn emit_component_call(
             let _ = write!(out, "children: () => __svn_snippet_return()");
         }
         let _ = writeln!(out, "}} }});");
+        emit_bind_this_assignment(out, inst, &inst_local, &inner);
         emit_on_event_calls(out, source, inst, &inst_local, &inner);
         let _ = writeln!(out, "{indent}}}");
         return;
@@ -2353,6 +2355,7 @@ fn emit_component_call(
     }
     let _ = writeln!(out, "{opts_inner}}},");
     let _ = writeln!(out, "{inner}}});");
+    emit_bind_this_assignment(out, inst, &inst_local, &inner);
     emit_on_event_calls(out, source, inst, &inst_local, &inner);
     let _ = writeln!(out, "{indent}}}");
 }
@@ -2392,6 +2395,26 @@ fn emit_on_event_calls(
         let expr = &source[ev.handler_range.start as usize..ev.handler_range.end as usize];
         let name = &ev.event_name;
         let _ = writeln!(out, "{inner}{inst_local}.$on(\"{name}\", ({expr}));");
+    }
+}
+
+/// Emit a `target = $inst;` assignment for `bind:this={target}` on a
+/// component — the JS-scope part of the binding. Combined with the
+/// definite-assign rewrite on the user's `let target` declaration,
+/// this gives tsgo enough signal to type-check the binding without
+/// tripping TS2741 / unused-local warnings.
+///
+/// No-op when the instantiation has no `bind:this` — the caller also
+/// skips hoisting the instance into a local in that case, so there's
+/// nothing to assign.
+fn emit_bind_this_assignment(
+    out: &mut String,
+    inst: &svn_analyze::ComponentInstantiation,
+    inst_local: &str,
+    inner: &str,
+) {
+    if let Some(target) = &inst.bind_this_target {
+        let _ = writeln!(out, "{inner}{target} = {inst_local};");
     }
 }
 

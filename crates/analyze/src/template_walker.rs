@@ -92,6 +92,13 @@ pub struct ComponentInstantiation {
     /// path. Pure whitespace (indentation / newlines between open
     /// and close) also doesn't count.
     pub has_implicit_children: bool,
+    /// Identifier name from `<Comp bind:this={x}>` when `x` is a
+    /// simple identifier. Emit writes `x = $$_inst;` after
+    /// construction to type-check `x`'s declared type against the
+    /// component instance. Member-expression forms (`bind:this={refs.x}`)
+    /// stay `None` for now — upstream handles those with a
+    /// `(setter)(instance)` shape we haven't ported.
+    pub bind_this_target: Option<SmolStr>,
     /// SVELTE-4-COMPAT: `on:event={handler}` directives on this
     /// component. Emit binds each via `$inst.$on("event", handler)`
     /// on the hoisted instance local, mirroring upstream svelte2tsx's
@@ -276,7 +283,7 @@ fn walk_node(
         }
         Node::Component(c) => {
             walk_attributes(&c.attributes, summary, counters, ctx);
-            collect_component_instantiation(c, summary);
+            collect_component_instantiation(c, ctx.source, summary);
             walk_fragment(&c.children, summary, counters, ctx);
         }
         Node::SvelteElement(s) => {
@@ -458,12 +465,17 @@ fn is_ident_continue(c: char) -> bool {
 /// isn't representable as a single TS expression without re-emitting
 /// the template's interpolation pipeline; the whole instantiation is
 /// skipped so the satisfies object stays correct on the rest.
-fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut TemplateSummary) {
+fn collect_component_instantiation(
+    c: &svn_parser::Component,
+    source: &str,
+    summary: &mut TemplateSummary,
+) {
     if c.name.contains('.') {
         return;
     }
     let mut props: Vec<PropShape> = Vec::with_capacity(c.attributes.len());
     let mut on_events: Vec<OnEventDirective> = Vec::new();
+    let mut bind_this_target: Option<SmolStr> = None;
     // Detect "implicit children": any non-snippet, non-whitespace
     // child node between the open/close tags. Pure `{#snippet}`
     // children hoist as explicit props (different code path); pure
@@ -546,10 +558,17 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
                 // mismatches (`<Child bind:value={x: string}>` when
                 // `value` is declared `number` fires TS2322).
                 //
-                // `bind:this` is routed through a separate per-file
-                // mechanism (`BindThisTarget` + definite-assign `!`
-                // rewrite on the bound variable's original let), so
-                // it stays out of the props object literal.
+                // `bind:this={x}` records the identifier so emit can
+                // assign the component instance to it — `x =
+                // $$_inst;` — after construction. TS checks `x`'s
+                // declared type accepts the instance; mismatches
+                // fire TS2322 ("Type 'MyComp' is not assignable to
+                // type 'OtherComp'"). The existing definite-assign
+                // `!` rewrite still fires via `walk_attributes`
+                // (that runs first, on every attribute of every
+                // node); this captures the instance variable name
+                // in addition so the component-local emit can
+                // reference it.
                 //
                 // `bind:GETSET={getter, setter}` (Svelte 5's
                 // two-function bind form) is unmodeled here — the
@@ -559,7 +578,18 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
                 // `__sveltets_2_get_set_binding` helper that we
                 // haven't ported yet.
                 if d.kind == svn_parser::DirectiveKind::Bind
-                    && d.name.as_str() != "this"
+                    && d.name.as_str() == "this"
+                {
+                    if let Some(svn_parser::DirectiveValue::Expression {
+                        expression_range, ..
+                    }) = &d.value
+                        && let Some(id) = simple_identifier_in(source, *expression_range)
+                    {
+                        bind_this_target = Some(id);
+                    }
+                    continue;
+                }
+                if d.kind == svn_parser::DirectiveKind::Bind
                     && let Some(svn_parser::DirectiveValue::Expression {
                         expression_range, ..
                     }) = &d.value
@@ -613,6 +643,7 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
             props,
             has_implicit_children,
             on_events,
+            bind_this_target,
             node_start: c.range.start,
         });
 }

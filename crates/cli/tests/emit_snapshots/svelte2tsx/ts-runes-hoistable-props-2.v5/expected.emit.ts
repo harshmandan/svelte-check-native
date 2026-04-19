@@ -4,7 +4,7 @@
     let value = 1;
 declare const a: { [key: string]: any } & ((...args: any[]) => any);
 declare const b: { [key: string]: any } & ((...args: any[]) => any);
-interface Dependency {
+    interface Dependency {
         a: number;
         b: typeof value;
     }

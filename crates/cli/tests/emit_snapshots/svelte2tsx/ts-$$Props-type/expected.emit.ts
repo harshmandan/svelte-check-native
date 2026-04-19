@@ -4,7 +4,7 @@ declare const exported1: { [key: string]: any } & ((...args: any[]) => any);
 declare const exported2: { [key: string]: any } & ((...args: any[]) => any);
 declare const name1: { [key: string]: any } & ((...args: any[]) => any);
 declare const name2: { [key: string]: any } & ((...args: any[]) => any);
-interface $$Props {
+    interface $$Props {
         exported1: string;
         exported2?: string;
         name1?: string;

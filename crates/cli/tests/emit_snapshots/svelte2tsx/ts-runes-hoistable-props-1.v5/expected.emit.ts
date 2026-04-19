@@ -4,13 +4,13 @@
     let value = 1;
 declare const a: { [key: string]: any } & ((...args: any[]) => any);
 declare const b: { [key: string]: any } & ((...args: any[]) => any);
-type NoComma = true
-type Dependency = {
+    type NoComma = true
+    type Dependency = {
         a: number;
         b: typeof value;
         c: NoComma
     }
-interface Props<T> {
+    interface Props<T> {
         a: Dependency;
         b: T;
     }

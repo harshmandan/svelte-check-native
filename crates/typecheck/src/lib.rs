@@ -90,6 +90,12 @@ pub struct MapData {
     pub token_map: Vec<TokenMapEntry>,
     pub overlay_line_starts: Vec<u32>,
     pub source_line_starts: Vec<u32>,
+    /// When true, overlay positions that don't match any `token_map` /
+    /// `line_map` entry pass through unchanged (identity map) instead
+    /// of being dropped. Set for kit-file inputs where the overlay is
+    /// the original source plus sparse `: T` insertions that never add
+    /// lines — diagnostics against unmodified regions line up 1:1.
+    pub identity_map: bool,
 }
 
 /// One file to type-check.
@@ -375,6 +381,7 @@ pub fn check(
                 token_map: input.token_map,
                 overlay_line_starts: input.overlay_line_starts,
                 source_line_starts: input.source_line_starts,
+                identity_map: matches!(input.kind, InputKind::KitFile),
             },
         );
         // Only in-scope Svelte files + Kit overlays land in the
@@ -654,7 +661,19 @@ fn translate_position(data: &MapData, overlay_line: u32, overlay_col: u32) -> Op
     // Fall back to the line map. Column is returned unchanged because
     // verbatim script content emits verbatim — overlay column equals
     // source column within a line-map range.
-    translate_line(&data.line_map, overlay_line).map(|mapped| (mapped, overlay_col))
+    if let Some(mapped) = translate_line(&data.line_map, overlay_line) {
+        return Some((mapped, overlay_col));
+    }
+    // Identity-map kit files: `kit_inject` splices `: T` annotations on
+    // existing lines — overlay never adds lines. Diagnostics against
+    // unmodified regions (the common case) line up 1:1 on both axes;
+    // on-insertion-line columns may drift but tsgo's diagnostics
+    // against kit files are rare and the approximation is better than
+    // dropping them entirely.
+    if data.identity_map {
+        return Some((overlay_line, overlay_col));
+    }
+    None
 }
 
 /// Find the tightest [`TokenMapEntry`] whose overlay byte span
@@ -770,7 +789,7 @@ mod tests {
     #[test]
     fn maps_generated_file_back_to_source_via_line_map() {
         let layout = CacheLayout::for_workspace("/proj");
-        let gen_path = "/proj/.svelte-check/svelte/src/++Foo.svelte.ts";
+        let gen_path = "/proj/.svelte-check/svelte/src/Foo.svelte.svn.ts";
         // overlay lines 5..15 map to source lines 1..11.
         let map = line_maps_for(
             gen_path,
@@ -1205,6 +1224,7 @@ mod tests {
             }],
             overlay_line_starts: vec![0, 20, 40, 60],
             source_line_starts: vec![0, 20, 40, 60],
+            identity_map: false,
         };
         // Line 3 (overlay byte ~40) — outside the token span [0, 10)
         // AND outside the line-map range [5, 15).

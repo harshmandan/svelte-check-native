@@ -620,9 +620,26 @@ pub fn split_imports(
     }
 
     for &(start, end) in &hoist_spans {
-        hoisted_byte_offsets.push(start as u32);
-        hoisted.push_str(&content[start..end]);
-        if !content[start..end].ends_with('\n') {
+        // Back up through same-line leading whitespace so the hoisted
+        // statement keeps the source indentation. Column positions
+        // then line up 1:1 between overlay and source, which matters
+        // for diagnostics on hoisted `import` / `export … from`
+        // statements (TS2307 module-resolution errors in particular
+        // point at the specifier, and upstream svelte-check's
+        // positions include the leading indent).
+        let bytes = content.as_bytes();
+        let mut effective_start = start;
+        while effective_start > 0 {
+            let b = bytes[effective_start - 1];
+            if b == b' ' || b == b'\t' {
+                effective_start -= 1;
+            } else {
+                break;
+            }
+        }
+        hoisted_byte_offsets.push(effective_start as u32);
+        hoisted.push_str(&content[effective_start..end]);
+        if !content[effective_start..end].ends_with('\n') {
             hoisted.push('\n');
         }
     }

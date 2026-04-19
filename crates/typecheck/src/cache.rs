@@ -174,10 +174,12 @@ impl CacheLayout {
             format!("{stem}.svelte")
         } else if let Some(stem) = file.strip_suffix(".d.svelte.ts") {
             format!("{stem}.svelte")
-        } else if let Some(stripped) = file.strip_prefix("++") {
-            stripped.strip_suffix(".ts").unwrap_or(stripped).to_string()
         } else {
-            file.strip_suffix(".ts")?.to_string()
+            // Kit mirror files (`+page.ts`, `hooks.server.ts`,
+            // `src/params/foo.ts`) live at the same basename in cache
+            // as in source — see `kit_overlay_path`. The inverse is
+            // identity: no extension rewrite.
+            file.to_string()
         };
         Some(self.workspace.join(parent).join(original_name))
     }
@@ -289,6 +291,22 @@ mod tests {
         let dts = Path::new("/p/.svelte-check/svelte/src/Foo.d.svelte.ts");
         let back = layout.original_from_generated(dts).unwrap();
         assert_eq!(back, Path::new("/p/src/Foo.svelte"));
+    }
+
+    #[test]
+    fn original_from_generated_inverts_kit_overlay_path() {
+        let layout = CacheLayout::for_workspace("/p");
+        let kit = Path::new("/p/.svelte-check/svelte/src/routes/+page.ts");
+        let back = layout.original_from_generated(kit).unwrap();
+        assert_eq!(back, Path::new("/p/src/routes/+page.ts"));
+    }
+
+    #[test]
+    fn original_from_generated_preserves_kit_hooks_extension() {
+        let layout = CacheLayout::for_workspace("/p");
+        let kit = Path::new("/p/.svelte-check/svelte/src/hooks.server.ts");
+        let back = layout.original_from_generated(kit).unwrap();
+        assert_eq!(back, Path::new("/p/src/hooks.server.ts"));
     }
 
     #[test]

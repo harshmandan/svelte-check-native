@@ -3,8 +3,8 @@
 
     import X from './X';
 declare const foo: { [key: string]: any } & ((...args: any[]) => any);
-import { readable } from 'svelte/store';
-interface Props {
+    import { readable } from 'svelte/store';
+    interface Props {
         foo?: string;
     }
 async function $$render_b09ebc4f() {

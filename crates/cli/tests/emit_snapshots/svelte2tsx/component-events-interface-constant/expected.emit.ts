@@ -3,7 +3,7 @@
 declare const A: { [key: string]: any } & ((...args: any[]) => any);
 declare const B: { [key: string]: any } & ((...args: any[]) => any);
 declare const C: { [key: string]: any } & ((...args: any[]) => any);
-interface $$Events {
+    interface $$Events {
         /**
          * Some doc
          */

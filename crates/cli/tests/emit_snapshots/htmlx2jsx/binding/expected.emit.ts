@@ -5,7 +5,7 @@ async function $$render_d9f25341() {
         // template type-check body (incremental)
         {
             const __svn_C_7a = __svn_ensure_component(Input);
-            new __svn_C_7a({ target: __svn_any(), props: {type: "text"} });
+            new __svn_C_7a({ target: __svn_any(), props: {type: "text", value: (test)} });
         }
         {
             const __svn_C_a1 = __svn_ensure_component(Input);
@@ -17,7 +17,7 @@ async function $$render_d9f25341() {
         }
         {
             const __svn_C_f3 = __svn_ensure_component(Input);
-            new __svn_C_f3({ target: __svn_any(), props: {type: "text"} });
+            new __svn_C_f3({ target: __svn_any(), props: {type: "text", value: (test)} });
         }
     }
     void __svn_tpl_check;

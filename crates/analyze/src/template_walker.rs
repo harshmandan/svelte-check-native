@@ -422,42 +422,71 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
                 });
             }
             Attribute::Directive(d) => {
-                // SVELTE-4-COMPAT: `on:event={handler}` on a component
-                // emits as `$inst.$on("event", handler)` after
-                // construction (mirrors upstream svelte2tsx). The
-                // handler's type gets checked against the component's
-                // declared `Events` type via the `SvelteComponent<P,
-                // E, S>.$on` signature — independent of the props
-                // object literal. That decoupling is what lets us
-                // drop the `on${string}` union from
-                // `__SvnPropsPartial`, which used to collide with
-                // user props starting with "on" (e.g.
-                // `oneTouchReaction` matched template-literal-wise).
-                //
-                // Other directives (`bind:`, `use:`, `class:`, etc.)
-                // remain silently dropped — the `Partial<>` wrap in
-                // emit accepts their absence, and they provide
-                // runtime values we can't model statically.
-                //
-                // Multiple `on:event={…}` listeners on the same
-                // component all fire at runtime; we emit one `$on`
-                // call per listener, which type-checks each handler
-                // against the event type independently. No dedup
-                // required — `$on` accepts repeated subscriptions.
-                if d.kind != svn_parser::DirectiveKind::On {
+                // `on:event={handler}` on a component emits as
+                // `$inst.$on("event", handler)` after construction
+                // (mirrors upstream svelte2tsx). Handler's type
+                // flows through `SvelteComponent<P, E, S>.$on`
+                // against the declared Events type.
+                if d.kind == svn_parser::DirectiveKind::On {
+                    if let Some(svn_parser::DirectiveValue::Expression {
+                        expression_range, ..
+                    }) = &d.value
+                    {
+                        on_events.push(OnEventDirective {
+                            event_name: d.name.clone(),
+                            handler_range: *expression_range,
+                        });
+                    }
+                    // `on:event` with no value is a bare re-dispatch
+                    // — runtime-only, no handler to type-check.
                     continue;
                 }
-                if let Some(svn_parser::DirectiveValue::Expression {
-                    expression_range, ..
-                }) = &d.value
+                // `bind:NAME={x}` on a component (other than
+                // `bind:this`) is type-equivalent to passing `x` as
+                // the `NAME` prop. Emit as a regular expression prop
+                // so the child's `Props.NAME` declared type catches
+                // mismatches (`<Child bind:value={x: string}>` when
+                // `value` is declared `number` fires TS2322).
+                //
+                // `bind:this` is routed through a separate per-file
+                // mechanism (`BindThisTarget` + definite-assign `!`
+                // rewrite on the bound variable's original let), so
+                // it stays out of the props object literal.
+                //
+                // `bind:GETSET={getter, setter}` (Svelte 5's
+                // two-function bind form) is unmodeled here — the
+                // expression is a SequenceExpression, not a
+                // plain identifier. Fall through with no prop
+                // emission; upstream svelte2tsx uses a custom
+                // `__sveltets_2_get_set_binding` helper that we
+                // haven't ported yet.
+                if d.kind == svn_parser::DirectiveKind::Bind
+                    && d.name.as_str() != "this"
+                    && let Some(svn_parser::DirectiveValue::Expression {
+                        expression_range, ..
+                    }) = &d.value
                 {
-                    on_events.push(OnEventDirective {
-                        event_name: d.name.clone(),
-                        handler_range: *expression_range,
+                    let target = d.name.clone();
+                    // Dedup: if the user already wrote the same name
+                    // as a plain attribute (`<Child value={x}
+                    // bind:value={x} />` — redundant but seen), drop
+                    // the prior entry so the bind: expression is the
+                    // final authority.
+                    props.retain(|p| match p {
+                        PropShape::BoolShorthand { name }
+                        | PropShape::Literal { name, .. }
+                        | PropShape::Expression { name, .. }
+                        | PropShape::Shorthand { name } => name != &target,
                     });
+                    props.push(PropShape::Expression {
+                        name: target,
+                        expr_range: *expression_range,
+                    });
+                    continue;
                 }
-                // `on:event` with no value (bare re-dispatch form) is
-                // a runtime-only behavior — no handler to type-check.
+                // Other directives (`use:`, `class:`, `style:`,
+                // transitions, animations) are runtime behaviors
+                // with no type-level surface on components. Drop.
             }
             // Spread — silently dropped. The Partial<> wrap in emit
             // means we don't need to model the props it would

@@ -345,6 +345,30 @@ declare function __svn_any<T = any>(): T;
  * names still fire TS2353) and contextual-typing flow (callback
  * destructures, snippet params).
  */
+// SVELTE-4-COMPAT — v0.3 Item 3: typed-events overload.
+//
+// When a child component declares `interface $$Events { ... }` (or
+// `type $$Events = ...`), the child's emit intersects its default
+// export with `& { readonly __svn_events: $$Events }`. That property
+// presence is what this overload keys on: it matches ONLY typed
+// children, binds E out of `__svn_events`, and returns an
+// `__SvnInstanceTyped<P, E>` whose `$on<K extends keyof E>` narrows
+// handler signatures per declared event.
+//
+// Untyped children (no `$$Events` declaration — the common case
+// including all Svelte-5 runes-mode children) fall through to the
+// lax overload below and get `__SvnInstance<P>` whose `$on(event:
+// string, handler: (...args: any[]) => any)` contextually types
+// destructures like `({detail}) => …` to `any` — critical to avoid
+// TS7031 at workspace scale (the regression that sunk the reverted
+// conditional-dispatch attempt in v0.2.5).
+//
+// Overload order MATTERS: typed must come first so it's preferred
+// when the intersection is present. Validated end-to-end via
+// /tmp/svn-item3-fixture/real_component.ts.
+declare function __svn_ensure_component<P extends Record<string, any>, E>(
+    c: import('svelte').Component<P> & { readonly __svn_events: E },
+): new (options: { target?: any; props?: __SvnPropsPartial<P> }) => __SvnInstanceTyped<P, E>;
 declare function __svn_ensure_component<P extends Record<string, any>>(
     c: import('svelte').Component<P>,
 ): new (options: { target?: any; props?: __SvnPropsPartial<P> }) => __SvnInstance<P>;
@@ -374,6 +398,37 @@ declare function __svn_ensure_component(
 type __SvnInstance<P> = {
     $$prop_def: P;
     $on(event: string, handler: (...args: any[]) => any): () => void;
+};
+
+/**
+ * SVELTE-4-COMPAT — v0.3 Item 3. Typed-events counterpart to
+ * `__SvnInstance<P>`. `$on` dispatches against the declared events
+ * map `E`: the event name must be `keyof E`, and the handler sees a
+ * `CustomEvent<E[K]>` with the declared payload — so `e.detail`
+ * narrows to the right shape in the handler body.
+ *
+ * Selected by the typed overload of `__svn_ensure_component` when
+ * the child component's default export carries
+ * `{ readonly __svn_events: E }` (emit intersects this in when a
+ * `$$Events` interface/type is declared in the child). For children
+ * without that marker, `__SvnInstance<P>` is selected instead and
+ * `$on` stays lax.
+ *
+ * Mirrors upstream svelte2tsx's `hasStrictEvents`-branching shape
+ * (see `_events(strictEvents, renderStr)` in
+ * `language-tools/packages/svelte2tsx/src/svelte2tsx/addComponentExport.ts`).
+ * Upstream's non-strict branch INTERSECTS Events with `{[evt:
+ * string]: CustomEvent<any>}`; ours does the same implicitly by
+ * selecting the lax `__SvnInstance<P>` at the overload level
+ * instead of typing it up through an intersection. Equivalent
+ * observed semantics, simpler shim.
+ */
+type __SvnInstanceTyped<P, E> = {
+    $$prop_def: P;
+    $on<K extends keyof E>(
+        event: K,
+        handler: (e: CustomEvent<E[K]>) => any,
+    ): () => void;
 };
 
 /**

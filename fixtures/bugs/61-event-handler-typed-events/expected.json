@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "ParentMismatch.svelte",
+            "line": 11,
+            "column": 19,
+            "code": 2345
+        }
+    ],
+    "_note": "v0.3 Item 3: child declares `interface $$Events { myevent: {id: number} }` → emit intersects the default export with `& { readonly __svn_events: $$Events }`. Consumer's `__svn_ensure_component` overload-resolves to `__SvnInstanceTyped<P, E>`, whose `$on<K extends keyof E>(event: K, handler: (e: CustomEvent<E[K]>) => any)` narrows the handler signature. A wrong-payload handler fires TS2345, and the TokenMapEntry for $on handler-argument spans surfaces the diagnostic at the user's `on:myevent={wrongHandler}` directive (column 19 = position of `wrongHandler` in `<Child on:myevent={wrongHandler} />`)."
+}

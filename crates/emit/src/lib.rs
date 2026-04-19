@@ -863,6 +863,17 @@ fn emit_document_with_render_name(
     // those consumer-side writes valid without opening the door on
     // Svelte-5 codebases (where widening would mask real typos).
     let svelte4_style = is_svelte4_component(doc, split.as_ref());
+    // v0.3 Item 3: when the child declares `$$Events`, carry it as
+    // `& { readonly __svn_events: $$Events }` on the default export.
+    // Consumer-side `__svn_ensure_component` has a typed overload
+    // that matches this marker and returns `__SvnInstanceTyped<P, E>`
+    // — handlers then narrow `e.detail` against the declared payload.
+    // Lax-shim fallback stays in place for all other children.
+    let typed_events_intersection = if has_strict_events(doc) {
+        " & { readonly __svn_events: $$Events }"
+    } else {
+        ""
+    };
     // Widen strings emit as ` & __SvnSvelte4PropsWiden<P>` where P is
     // the base Props type so the shim can omit already-declared on*
     // keys from the widening (otherwise typed callbacks intersect with
@@ -891,6 +902,15 @@ fn emit_document_with_render_name(
             inner
         }
     };
+    // v0.3 Item 3: intersection is only applied to `Component<P>`-shaped
+    // default exports (arms 2 and 4 below) — those pass through
+    // `__svn_ensure_component`'s Component<P> overload where the typed
+    // overload is declared. Callable-generic arms (1 and 3) go through
+    // the plain-callable overload in the shim, which has no typed
+    // variant. In practice this is a non-issue: generic Svelte-4
+    // components with `$$Events` are exceedingly rare, and the <script
+    // generics> syntax is Svelte-5 runes only while `$$Events` is
+    // Svelte-4 only — the overlap set is effectively empty.
     match (&prop_type_source, &generics) {
         (Some(ty), Some(g)) if ty_safe_in_generic_scope => {
             let widen = widen_for(ty);
@@ -910,7 +930,7 @@ fn emit_document_with_render_name(
             let props = wrap_props(format!("{ty}{widen}"));
             let _ = writeln!(
                 out,
-                "declare const __svn_component_default: import('svelte').Component<{props}{component_exports_arg}>;"
+                "declare const __svn_component_default: import('svelte').Component<{props}{component_exports_arg}>{typed_events_intersection};"
             );
             let _ = writeln!(
                 out,
@@ -941,7 +961,7 @@ fn emit_document_with_render_name(
             let props = wrap_props(format!("Record<string, any>{widen}"));
             let _ = writeln!(
                 out,
-                "declare const __svn_component_default: import('svelte').Component<{props}{component_exports_arg}>;"
+                "declare const __svn_component_default: import('svelte').Component<{props}{component_exports_arg}>{typed_events_intersection};"
             );
             let _ = writeln!(
                 out,
@@ -980,7 +1000,8 @@ fn emit_document_with_render_name(
     // technique in this codebase — the hex suffix is uniquely
     // derived from `inst.node_start`, so the scan → analyze lookup
     // is unambiguous.
-    let token_map = collect_satisfies_token_map(&out, &instantiations_by_start);
+    let mut token_map = collect_satisfies_token_map(&out, &instantiations_by_start);
+    token_map.extend(collect_on_event_token_map(&out, &instantiations_by_start));
 
     EmitOutput {
         typescript: out,
@@ -991,6 +1012,103 @@ fn emit_document_with_render_name(
         source_line_starts,
     }
 }
+
+/// Post-walk scan: find every `__svn_inst_<hex>.$on("<name>",
+/// (<handler>))` in the emitted overlay and push a token-map entry
+/// covering the handler expression span → the handler's source byte
+/// range (from `inst.on_events[N].handler_range`).
+///
+/// Unlocks v0.3 Item 3 end-to-end: when the child declares a typed
+/// `$$Events`, the overload-selected `__SvnInstanceTyped<P, E>`'s
+/// `$on<K extends keyof E>` fires TS2345 on a wrong-payload handler.
+/// That diagnostic lands at the first char of the handler expression
+/// in the overlay (tsgo's argument-position reporting — verified via
+/// `/tmp/svn-item3-fixture/typed_mismatch.ts`). This entry maps it
+/// back to the user's `on:event={h}` directive position so it
+/// surfaces at the user-visible site.
+///
+/// Relies on the per-inst ordering invariant: `emit_on_event_calls`
+/// iterates `inst.on_events` in order; the Nth `$on(...)` call in
+/// the overlay for a given inst's hex corresponds to
+/// `inst.on_events[N]`. A per-inst cursor tracks N.
+fn collect_on_event_token_map(
+    out: &str,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+) -> Vec<TokenMapEntry> {
+    const PREFIX: &str = "__svn_inst_";
+    let mut entries: Vec<TokenMapEntry> = Vec::new();
+    let mut inst_cursor: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    let mut cursor = 0usize;
+    while let Some(rel) = out[cursor..].find(PREFIX) {
+        let prefix_start = cursor + rel;
+        let after_prefix = prefix_start + PREFIX.len();
+        // Read hex suffix.
+        let hex_len = out[after_prefix..]
+            .bytes()
+            .take_while(|b| b.is_ascii_hexdigit())
+            .count();
+        let hex_end = after_prefix + hex_len;
+        if hex_len == 0 {
+            cursor = hex_end;
+            continue;
+        }
+        let hex = &out[after_prefix..hex_end];
+        let Ok(node_start) = u32::from_str_radix(hex, 16) else {
+            cursor = hex_end;
+            continue;
+        };
+        // The only occurrence shape that carries a handler expression
+        // is `.$on("<name>", (<expr>))`. Skip other `__svn_inst_<hex>`
+        // sites (the hoist declaration `const __svn_inst_<hex> = ...`
+        // and the bind:this assignment `target = __svn_inst_<hex>;`).
+        if !out[hex_end..].starts_with(".$on(\"") {
+            cursor = hex_end;
+            continue;
+        }
+        let Some(inst) = insts.get(&node_start) else {
+            cursor = hex_end;
+            continue;
+        };
+        // Resolve N for this inst, bump cursor.
+        let idx = *inst_cursor.entry(node_start).or_insert(0);
+        inst_cursor.insert(node_start, idx + 1);
+        let Some(ev) = inst.on_events.get(idx) else {
+            cursor = hex_end;
+            continue;
+        };
+        // Emit shape: `.$on("<name>", (<expr>));`
+        //              ^ hex_end         ^ handler_overlay_start
+        // After `.$on("`, find the closing `"` to skip the name, then
+        // consume `, (` to land on the handler expression's first
+        // byte. Handler length in the overlay == length in source
+        // (emit spliced it verbatim).
+        let name_start = hex_end + PREFIX_ON_PREFIX_LEN;
+        let Some(quote_rel) = out[name_start..].find('"') else {
+            cursor = hex_end;
+            continue;
+        };
+        let comma_paren_start = name_start + quote_rel;
+        if !out[comma_paren_start..].starts_with("\", (") {
+            cursor = hex_end;
+            continue;
+        }
+        let handler_overlay_start = comma_paren_start + 4; // past `", (`
+        let handler_byte_len = ev.handler_range.end.saturating_sub(ev.handler_range.start);
+        let handler_overlay_end = handler_overlay_start + handler_byte_len as usize;
+        entries.push(TokenMapEntry {
+            overlay_byte_start: handler_overlay_start as u32,
+            overlay_byte_end: handler_overlay_end as u32,
+            source_byte_start: ev.handler_range.start,
+            source_byte_end: ev.handler_range.end,
+        });
+        cursor = handler_overlay_end;
+    }
+    entries
+}
+
+/// Byte length of `.$on("` — the prefix we skip past to land on the
+/// event-name string inside the call.
+const PREFIX_ON_PREFIX_LEN: usize = 6;
 
 /// Post-walk scan: find every `satisfies InstanceType<typeof
 /// __svn_C_<hex>>['$$prop_def']` in the emitted overlay and push a
@@ -3377,6 +3495,31 @@ fn has_double_dollar_interface(src: &str) -> bool {
     src.contains("interface $$Props")
         || src.contains("interface $$Events")
         || src.contains("interface $$Slots")
+}
+
+/// SVELTE-4-COMPAT — v0.3 Item 3. Detect whether the component has a
+/// `$$Events` interface or type declaration in its instance or module
+/// script. When true, the default-export declaration intersects with
+/// `& { readonly __svn_events: $$Events }` so consumers resolve to
+/// `__svn_ensure_component`'s typed overload and get narrowed
+/// `$on("evt", handler)` signatures.
+///
+/// `createEventDispatcher<T>()` generic extraction is NOT covered
+/// here — that's the Svelte-5-style typed dispatcher pattern, gated
+/// on AST walking rather than substring detection. Deferred per
+/// NEXT.md's follow-up work; a child using typed dispatcher without
+/// `$$Events` still routes through the lax overload, matching the
+/// v0.2.5 behavior.
+fn has_strict_events(doc: &svn_parser::Document<'_>) -> bool {
+    let instance_src = doc
+        .instance_script
+        .as_ref()
+        .map(|s| s.content)
+        .unwrap_or("");
+    let module_src = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
+    let has_interface =
+        |src: &str| src.contains("interface $$Events") || src.contains("type $$Events ");
+    has_interface(instance_src) || has_interface(module_src)
 }
 
 /// SVELTE-4-COMPAT: de-narrow a typed-with-initializer exported

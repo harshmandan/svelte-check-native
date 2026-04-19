@@ -24,7 +24,7 @@ async function $$render_7d31ee4a() {
     void __svn_tpl_check;
 }
 $$render_7d31ee4a;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Record<string, any>> & { readonly __svn_events: $$Events };
 declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
 export default __svn_component_default;
 

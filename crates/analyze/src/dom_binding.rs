@@ -173,16 +173,20 @@ mod tests {
     }
 
     #[test]
-    fn bidirectional_bindings_return_none() {
-        // bind:value, bind:checked, bind:group, bind:files — deferred
-        // to a follow-up PR. They need read + write flow, not just the
-        // one-way `__svn_any_as<TYPE>(expr)` contract call.
+    fn bidirectional_bindings_partial_coverage() {
+        // v0.3 Item 8 (narrow): bind:checked and bind:files have
+        // fixed HTMLInputElement types, so they ARE in the table now.
+        assert_eq!(type_for("checked"), Some("HTMLInputElement['checked']"));
+        assert_eq!(type_for("files"), Some("HTMLInputElement['files']"));
+        // bind:value is context-aware (tag + `type` attribute); the
+        // static `type_for` table returns None. Dispatch happens via
+        // `template_walker::resolve_bind_value_type(tag, attrs)`.
         assert_eq!(type_for("value"), None);
-        assert_eq!(type_for("checked"), None);
+        // bind:group is intentionally skipped — upstream widens to any
+        // (`__sveltets_2_any(null)`); we mirror by staying silent.
         assert_eq!(type_for("group"), None);
-        assert_eq!(type_for("files"), None);
         // `bind:this` is handled via a different path entirely
-        // (`bind_this_target` + `__svn_bind_this_check`).
+        // (`collect_bind_this_checks` + inline emit at Item 7).
         assert_eq!(type_for("this"), None);
     }
 

@@ -3,6 +3,7 @@
 async function $$render_6ce80dfb() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        void ((): void => { value = null as any as string; });
         void ((): void => { checked = null as any as HTMLInputElement['checked']; });
         {
             const __svn_C_49 = __svn_ensure_component(Input);

@@ -1,0 +1,23 @@
+{
+    "errors": [
+        {
+            "file": "Mismatch.svelte",
+            "line": 17,
+            "column": 33,
+            "code": 2322
+        },
+        {
+            "file": "Mismatch.svelte",
+            "line": 18,
+            "column": 31,
+            "code": 2322
+        },
+        {
+            "file": "Mismatch.svelte",
+            "line": 19,
+            "column": 22,
+            "code": 2322
+        }
+    ],
+    "_note": "v0.3 Item 8 extended: bind:value dispatches the target type from (tag, literal type attribute). <input type='number'> → number; <input type='range'> → number; <input> / <input type='text'> / <textarea> → string. Simple-identifier targets (`let x: T = ...`) skip the check — the definite-assign rewrite widens their flow type to any. Member expressions (`state.x`) survive since they skip the rewrite."
+}

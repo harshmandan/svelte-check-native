@@ -1731,16 +1731,17 @@ fn emit_template_node(
         Node::KeyBlock(b) => emit_template_body(out, source, &b.body, depth, insts),
         Node::SnippetBlock(b) => emit_snippet_block(out, source, b, depth, insts),
         Node::Element(e) => {
-            emit_dom_binding_checks_inline(out, source, &e.attributes, depth);
+            emit_dom_binding_checks_inline(out, source, e.name.as_str(), &e.attributes, depth);
             emit_bind_this_element_check_inline(out, source, e.name.as_str(), &e.attributes, depth);
             emit_children_with_let_bindings(out, source, &e.attributes, &e.children, depth, insts);
         }
         Node::Component(c) => emit_component_node(out, source, c, depth, insts),
         Node::SvelteElement(s) => {
-            emit_dom_binding_checks_inline(out, source, &s.attributes, depth);
             // `<svelte:element this={tagExpr}>` is dynamic — fall back
-            // to `HTMLElement` since we don't know the concrete tag
-            // at type-check time.
+            // to `HTMLElement` for bind:this and skip bind:value
+            // dispatch (empty tag_name → resolve_bind_value_type
+            // returns None).
+            emit_dom_binding_checks_inline(out, source, "", &s.attributes, depth);
             emit_bind_this_element_check_inline(out, source, "", &s.attributes, depth);
             emit_children_with_let_bindings(out, source, &s.attributes, &s.children, depth, insts);
         }
@@ -2562,10 +2563,17 @@ fn emit_action_attrs_declarations(out: &mut String, summary: &TemplateSummary) {
 fn emit_dom_binding_checks_inline(
     out: &mut String,
     source: &str,
+    tag_name: &str,
     attributes: &[svn_parser::Attribute],
     depth: usize,
 ) {
     let indent = "    ".repeat(depth);
+    // v0.3 Item 8 extended: bind:value's target type depends on the
+    // element tag + literal `type="..."` sibling attribute. Resolve
+    // once per element (not per-attribute) since all bind:value
+    // directives on the same element dispatch to the same target
+    // type.
+    let bind_value_type = svn_analyze::resolve_bind_value_type(tag_name, attributes);
     for attr in attributes {
         let svn_parser::Attribute::Directive(directive) = attr else {
             continue;
@@ -2573,8 +2581,15 @@ fn emit_dom_binding_checks_inline(
         if directive.kind != svn_parser::DirectiveKind::Bind {
             continue;
         }
-        let Some(ty) = svn_analyze::dom_binding::type_for(directive.name.as_str()) else {
-            continue;
+        let name = directive.name.as_str();
+        let ty = if name == "value" {
+            let Some(ty) = bind_value_type else { continue };
+            ty
+        } else {
+            let Some(ty) = svn_analyze::dom_binding::type_for(name) else {
+                continue;
+            };
+            ty
         };
         // Resolve the assignment target:
         //   `bind:NAME={expr}` → EXPR text

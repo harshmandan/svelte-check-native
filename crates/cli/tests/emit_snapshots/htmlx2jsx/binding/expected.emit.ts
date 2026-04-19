@@ -5,19 +5,19 @@ async function $$render_d9f25341() {
         // template type-check body (incremental)
         {
             const __svn_C_7a = __svn_ensure_component(Input);
-            new __svn_C_7a({ target: __svn_any(), props: {type: "text", value: (test)} satisfies InstanceType<typeof __svn_C_7a>['$$prop_def'] });
+            new __svn_C_7a({ target: __svn_any(), props: {type: "text", value: (test)} });
         }
         {
             const __svn_C_a1 = __svn_ensure_component(Input);
-            new __svn_C_a1({ target: __svn_any(), props: {type: "text"} satisfies InstanceType<typeof __svn_C_a1>['$$prop_def'] });
+            new __svn_C_a1({ target: __svn_any(), props: {type: "text"} });
         }
         {
             const __svn_C_ca = __svn_ensure_component(Input);
-            new __svn_C_ca({ target: __svn_any(), props: {type: "text"} satisfies InstanceType<typeof __svn_C_ca>['$$prop_def'] });
+            new __svn_C_ca({ target: __svn_any(), props: {type: "text"} });
         }
         {
             const __svn_C_f3 = __svn_ensure_component(Input);
-            new __svn_C_f3({ target: __svn_any(), props: {type: "text", value: (test)} satisfies InstanceType<typeof __svn_C_f3>['$$prop_def'] });
+            new __svn_C_f3({ target: __svn_any(), props: {type: "text", value: (test)} });
         }
     }
     void __svn_tpl_check;

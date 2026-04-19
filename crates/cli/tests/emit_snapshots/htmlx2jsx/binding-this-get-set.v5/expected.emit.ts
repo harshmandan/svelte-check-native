@@ -13,11 +13,11 @@ async function $$render_c159a31e() {
         void __svn_bind_pair_3;
         {
             const __svn_C_54 = __svn_ensure_component(Input);
-            new __svn_C_54({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_54>['$$prop_def'] });
+            new __svn_C_54({ target: __svn_any(), props: {} });
         }
         {
             const __svn_C_7a = __svn_ensure_component(Input);
-            new __svn_C_7a({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_7a>['$$prop_def'] });
+            new __svn_C_7a({ target: __svn_any(), props: {} });
         }
     }
     void __svn_tpl_check;

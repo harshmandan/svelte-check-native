@@ -33,7 +33,7 @@ async function $$render_200dbc4a<T>() {
             }
             {
                 const __svn_C_1f6 = __svn_ensure_component(Component);
-                new __svn_C_1f6({ target: __svn_any(), props: {prop: (await promise)} satisfies InstanceType<typeof __svn_C_1f6>['$$prop_def'] });
+                new __svn_C_1f6({ target: __svn_any(), props: {prop: (await promise)} });
             }
             if ((true)) {
                 const x = await promise;

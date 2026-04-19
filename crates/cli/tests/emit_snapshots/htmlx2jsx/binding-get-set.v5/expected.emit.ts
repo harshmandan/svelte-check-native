@@ -17,11 +17,11 @@ async function $$render_9eb76bb9() {
         void __svn_bind_pair_5;
         {
             const __svn_C_9f = __svn_ensure_component(Input);
-            new __svn_C_9f({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_9f>['$$prop_def'] });
+            new __svn_C_9f({ target: __svn_any(), props: {} });
         }
         {
             const __svn_C_bf = __svn_ensure_component(Input);
-            new __svn_C_bf({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_bf>['$$prop_def'] });
+            new __svn_C_bf({ target: __svn_any(), props: {} });
         }
     }
     void __svn_tpl_check;

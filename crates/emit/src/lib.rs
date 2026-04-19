@@ -2313,28 +2313,10 @@ fn emit_component_call(
         && !user_named_children
         && !user_named_children_snippet;
 
-    // Phase 5 trailer: `satisfies InstanceType<typeof $$_C>['$$prop_def']`
-    // on the props literal catches missing required props (TS2741).
-    // Requires phases 1-4 to have shipped first — otherwise legitimate
-    // slot/children/spread/bind:this consumers regress en masse.
-    //
-    // Targets the ensured-component's instance shape rather than
-    // `ComponentProps<typeof Comp>` so the check works uniformly across
-    // callable Svelte-5 components AND third-party Svelte-4 class
-    // imports. `__svn_ensure_component` returns a ctor whose instance
-    // has `$$prop_def: P`: for our shim-synthesized wrap it's the
-    // callable's Props; for Svelte-4 classes that already declare
-    // `$$prop_def` the pass-through overload preserves it. Using
-    // `ComponentProps<typeof Comp>` directly regresses here because
-    // bare `typeof SvelteComponent`-style constructor types fail
-    // svelte's `T extends SvelteComponent | Component<any, any>`
-    // constraint and surface opaque "missing properties" errors.
-    let satisfies_trailer = format!(" satisfies InstanceType<typeof {local}>['$$prop_def']");
-
     if snippet_children.is_empty() && inst.props.is_empty() && !emit_implicit_children {
         let _ = writeln!(
             out,
-            "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{}}{satisfies_trailer} }});"
+            "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{}} }});"
         );
         emit_bind_this_assignment(out, inst, &inst_local, &inner);
         emit_on_event_calls(out, source, inst, &inst_local, &inner);
@@ -2361,7 +2343,7 @@ fn emit_component_call(
             }
             let _ = write!(out, "children: () => __svn_snippet_return()");
         }
-        let _ = writeln!(out, "}}{satisfies_trailer} }});");
+        let _ = writeln!(out, "}} }});");
         emit_bind_this_assignment(out, inst, &inst_local, &inner);
         emit_on_event_calls(out, source, inst, &inst_local, &inner);
         let _ = writeln!(out, "{indent}}}");
@@ -2392,7 +2374,7 @@ fn emit_component_call(
         out.push_str(&props_inner);
         let _ = writeln!(out, "children: () => __svn_snippet_return(),");
     }
-    let _ = writeln!(out, "{opts_inner}}}{satisfies_trailer},");
+    let _ = writeln!(out, "{opts_inner}}},");
     let _ = writeln!(out, "{inner}}});");
     emit_bind_this_assignment(out, inst, &inst_local, &inner);
     emit_on_event_calls(out, source, inst, &inst_local, &inner);

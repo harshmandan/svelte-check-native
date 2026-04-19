@@ -77,11 +77,11 @@ async function $$render_43de206c() {
             }
             {
                 const __svn_C_354 = __svn_ensure_component(Component);
-                new __svn_C_354({ target: __svn_any(), props: {attr: (attr as boolean)} satisfies InstanceType<typeof __svn_C_354>['$$prop_def'] });
+                new __svn_C_354({ target: __svn_any(), props: {attr: (attr as boolean)} });
             }
             {
                 const __svn_C_392 = __svn_ensure_component(Component);
-                new __svn_C_392({ target: __svn_any(), props: {} satisfies InstanceType<typeof __svn_C_392>['$$prop_def'] });
+                new __svn_C_392({ target: __svn_any(), props: {} });
             }
         }
     }

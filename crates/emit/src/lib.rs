@@ -1011,6 +1011,7 @@ fn emit_document_with_render_name(
     let mut token_map = collect_satisfies_token_map(&out, &instantiations_by_start);
     token_map.extend(collect_on_event_token_map(&out, &instantiations_by_start));
     token_map.extend(collect_dom_binding_token_map(&out, doc.source, summary));
+    token_map.extend(collect_bind_this_check_token_map(&out, doc.source, summary));
 
     EmitOutput {
         typescript: out,
@@ -1118,6 +1119,67 @@ fn collect_on_event_token_map(
 /// Byte length of `.$on("` — the prefix we skip past to land on the
 /// event-name string inside the call.
 const PREFIX_ON_PREFIX_LEN: usize = 6;
+
+/// v0.3 Item 7: post-walk scan pairing each `__svn_bind_this_check<
+/// TAG>(EXPR);` overlay occurrence with `summary.bind_this_checks`
+/// in walk order, pushing a TokenMapEntry that maps EXPR's overlay
+/// span → the user's `bind:this={EXPR}` source range. Without this
+/// entry, a TS2345 on a wrong-typed bind:this target fires inside
+/// synthesized scope and gets dropped by the diagnostic filter.
+fn collect_bind_this_check_token_map(
+    out: &str,
+    source: &str,
+    summary: &TemplateSummary,
+) -> Vec<TokenMapEntry> {
+    // Emit shape:
+    //     `void /* bind:this */ ((): void => { EXPR = null as any as TYPE; });`
+    // LEAD anchors the `bind:this` marker; the EXPR starts after the
+    // `{ ` that follows `((): void => `. MID terminates EXPR.
+    const LEAD: &str = "void /* bind:this */ ((): void => { ";
+    const MID: &str = " = null as any as ";
+    let mut entries: Vec<TokenMapEntry> = Vec::new();
+    let mut cursor = 0usize;
+    let mut check_idx = 0usize;
+    while let Some(rel) = out[cursor..].find(LEAD) {
+        let lead_start = cursor + rel;
+        let expr_overlay_start = lead_start + LEAD.len();
+        let Some(mid_rel) = out[expr_overlay_start..].find(MID) else {
+            break;
+        };
+        let expr_overlay_end = expr_overlay_start + mid_rel;
+        let Some(binding) = summary.bind_this_checks.get(check_idx) else {
+            break;
+        };
+        check_idx += 1;
+        // Advance past the whole statement for every iteration.
+        let advance_to = match out[expr_overlay_end..].find(");") {
+            Some(off) => expr_overlay_end + off + 2,
+            None => expr_overlay_end,
+        };
+        let Some(slice) = source
+            .get(binding.expression_range.start as usize..binding.expression_range.end as usize)
+        else {
+            cursor = advance_to;
+            continue;
+        };
+        let leading_ws = slice.len() - slice.trim_start().len();
+        let trimmed_len = slice.trim().len();
+        if expr_overlay_end - expr_overlay_start != trimmed_len {
+            cursor = advance_to;
+            continue;
+        }
+        let source_start = binding.expression_range.start + leading_ws as u32;
+        let source_end = source_start + trimmed_len as u32;
+        entries.push(TokenMapEntry {
+            overlay_byte_start: expr_overlay_start as u32,
+            overlay_byte_end: expr_overlay_end as u32,
+            source_byte_start: source_start,
+            source_byte_end: source_end,
+        });
+        cursor = advance_to;
+    }
+    entries
+}
 
 /// Post-walk scan: find every `__svn_any_as<TYPE>(expr);` line emitted
 /// by `emit_dom_binding_checks` and push a token-map entry covering
@@ -1670,11 +1732,16 @@ fn emit_template_node(
         Node::SnippetBlock(b) => emit_snippet_block(out, source, b, depth, insts),
         Node::Element(e) => {
             emit_dom_binding_checks_inline(out, source, &e.attributes, depth);
+            emit_bind_this_element_check_inline(out, source, e.name.as_str(), &e.attributes, depth);
             emit_children_with_let_bindings(out, source, &e.attributes, &e.children, depth, insts);
         }
         Node::Component(c) => emit_component_node(out, source, c, depth, insts),
         Node::SvelteElement(s) => {
             emit_dom_binding_checks_inline(out, source, &s.attributes, depth);
+            // `<svelte:element this={tagExpr}>` is dynamic — fall back
+            // to `HTMLElement` since we don't know the concrete tag
+            // at type-check time.
+            emit_bind_this_element_check_inline(out, source, "", &s.attributes, depth);
             emit_children_with_let_bindings(out, source, &s.attributes, &s.children, depth, insts);
         }
         Node::Interpolation(i) => emit_at_const_if_any(out, source, i, depth),
@@ -2537,6 +2604,88 @@ fn emit_dom_binding_checks_inline(
             "{indent}void ((): void => {{ {expr} = null as any as {ty}; }});"
         );
     }
+}
+
+/// v0.3 Item 7: emit a never-called lambda `void (() => { EXPR = null
+/// as any as HTMLElementTagNameMap['tag']; });` for each
+/// `bind:this={EXPR}` directive on a DOM element. Inline at the
+/// walker's current depth so block-scoped iterators in EXPR resolve.
+///
+/// **Assignment direction matches upstream.** Upstream svelte2tsx's
+/// `Binding.ts:86-93` emits `EXPR = ${element.name}` — an assignment
+/// whose LHS (user's target) must accept the concrete element type
+/// as RHS. So `bind:this={widgetEl}` with `widgetEl: HTMLElement |
+/// null` on a `<div>` passes (HTMLElement is a supertype of
+/// HTMLDivElement); same binding with `widgetEl: HTMLSpanElement`
+/// fails. Matches the lax behavior common to idiomatic Svelte code
+/// (broad HTMLElement | null declarations).
+///
+/// Covers BOTH simple-identifier and member-expression forms. Simple
+/// identifiers keep their v0.2-shipped `!` definite-assign rewrite
+/// (separate code path, unchanged by this emit). Member expressions
+/// (`bind:this={refs.input}`) previously had NO type check at all.
+///
+/// `tag_name == ""` is the svelte:element dynamic-tag escape hatch:
+/// falls back to `HTMLElement`.
+fn emit_bind_this_element_check_inline(
+    out: &mut String,
+    source: &str,
+    tag_name: &str,
+    attributes: &[svn_parser::Attribute],
+    depth: usize,
+) {
+    let indent = "    ".repeat(depth);
+    for attr in attributes {
+        let svn_parser::Attribute::Directive(directive) = attr else {
+            continue;
+        };
+        if directive.kind != svn_parser::DirectiveKind::Bind {
+            continue;
+        }
+        if directive.name.as_str() != "this" {
+            continue;
+        }
+        let Some(svn_parser::DirectiveValue::Expression {
+            expression_range, ..
+        }) = &directive.value
+        else {
+            continue;
+        };
+        let Some(expr) = source.get(expression_range.start as usize..expression_range.end as usize)
+        else {
+            continue;
+        };
+        let expr = expr.trim();
+        if expr.is_empty() {
+            continue;
+        }
+        let el_type = element_type_annotation(tag_name);
+        // Using `/* bind:this */` as a distinguishing marker vs Item
+        // 6's DOM-binding lambda emit (which uses the plain
+        // `void ((): void => { ... });` shape). The marker lets
+        // `collect_bind_this_check_token_map` scan uniquely for
+        // these without colliding with Item 6's scan pattern.
+        let _ = writeln!(
+            out,
+            "{indent}void /* bind:this */ ((): void => {{ {expr} = null as any as {el_type}; }});"
+        );
+    }
+}
+
+/// Map a static HTML/SVG tag name to a `HTMLElementTagNameMap['tag']`
+/// / `SVGElementTagNameMap['tag']` indexed-access type. Dynamic
+/// tags (empty string) fall back to `HTMLElement`. Unknown tag
+/// names that aren't in either map would resolve through these
+/// indexed accesses to `any` — acceptable, just means the check
+/// stays lax for custom elements.
+fn element_type_annotation(tag_name: &str) -> String {
+    if tag_name.is_empty() {
+        return "HTMLElement".to_string();
+    }
+    // `HTMLElementTagNameMap` covers all standard HTML tags including
+    // deprecated ones. TS's DOM lib dispatches at the type level; we
+    // just pass the tag as a string-literal key.
+    format!("HTMLElementTagNameMap['{tag_name}']")
 }
 
 /// Emit a `<Component ...>` node as a call to the component's typed

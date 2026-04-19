@@ -45,6 +45,13 @@ pub struct TemplateSummary {
     /// type (TS2322 fires on `let rect: string; bind:contentRect={rect}`
     /// because DOMRectReadOnly isn't assignable to string).
     pub dom_bindings: Vec<DomBinding>,
+    /// `bind:this={EXPR}` sites on DOM elements — collected in
+    /// source/walk order for v0.3 Item 7's source-map post-scan to
+    /// pair 1:1 with `__svn_bind_this_check<TAG>(EXPR);` overlay
+    /// occurrences. Covers both simple-identifier and member-
+    /// expression forms. Component `bind:this` stays on
+    /// `ComponentInstantiation.bind_this_target` (different emit path).
+    pub bind_this_checks: Vec<BindThisCheck>,
     /// Number of `{#each}` blocks encountered. Emit uses this to allocate
     /// unique iteration helpers.
     pub each_block_count: usize,
@@ -161,13 +168,28 @@ pub enum PropShape {
     GetSetBinding { name: SmolStr, getter_range: Range },
 }
 
-/// One `bind:this={x}` site.
+/// One `bind:this={x}` site where `x` is a simple identifier. Used
+/// for the definite-assignment rewrite on the declaration.
 #[derive(Debug, Clone)]
 pub struct BindThisTarget {
     /// The identifier name `x`.
     pub name: SmolStr,
     /// Source range of the bind expression (the `x` part).
     pub range: Range,
+}
+
+/// One `bind:this={EXPR}` site on a DOM element — recorded in walk
+/// order for v0.3 Item 7's post-scan source-map pass. EXPR can be
+/// a simple identifier (`myDivRef`), a member expression
+/// (`refs.input`), or any other lvalue expression. The emit pairs
+/// each entry with a `__svn_bind_this_check<TAG>(EXPR);` occurrence
+/// in the overlay.
+#[derive(Debug, Clone)]
+pub struct BindThisCheck {
+    /// Source range of the `={EXPR}` value — emit writes this
+    /// verbatim into the check call. TokenMapEntry maps the
+    /// overlay-side EXPR span back to this.
+    pub expression_range: Range,
 }
 
 /// One `bind:NAME={x}` site on a DOM element where NAME is in
@@ -291,6 +313,7 @@ fn walk_node(
     match node {
         Node::Element(e) => {
             walk_attributes(&e.attributes, summary, counters, ctx);
+            collect_bind_this_checks(&e.attributes, summary);
             walk_fragment(&e.children, summary, counters, ctx);
         }
         Node::Component(c) => {
@@ -300,6 +323,7 @@ fn walk_node(
         }
         Node::SvelteElement(s) => {
             walk_attributes(&s.attributes, summary, counters, ctx);
+            collect_bind_this_checks(&s.attributes, summary);
             walk_fragment(&s.children, summary, counters, ctx);
         }
         Node::IfBlock(b) => {
@@ -346,6 +370,31 @@ fn walk_attributes(
         if let Attribute::Directive(d) = attr {
             walk_directive(d, summary, counters, ctx);
         }
+    }
+}
+
+/// v0.3 Item 7: record `bind:this={EXPR}` sites on DOM elements and
+/// `<svelte:element>` for emit's source-map post-scan. Emit pairs
+/// each entry with a `__svn_bind_this_check<TAG>(EXPR);` overlay
+/// occurrence and pushes a TokenMapEntry. Walk order matches emit
+/// order; pairing is N-th to N-th.
+fn collect_bind_this_checks(attrs: &[Attribute], summary: &mut TemplateSummary) {
+    for attr in attrs {
+        let Attribute::Directive(d) = attr else {
+            continue;
+        };
+        if d.kind != svn_parser::DirectiveKind::Bind || d.name.as_str() != "this" {
+            continue;
+        }
+        let Some(svn_parser::DirectiveValue::Expression {
+            expression_range, ..
+        }) = &d.value
+        else {
+            continue;
+        };
+        summary.bind_this_checks.push(BindThisCheck {
+            expression_range: *expression_range,
+        });
     }
 }
 

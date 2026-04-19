@@ -3,6 +3,7 @@
 async function $$render_3cecb40c() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        void /* bind:this */ ((): void => { element = null as any as HTMLElement; });
     }
     void __svn_tpl_check;
 }

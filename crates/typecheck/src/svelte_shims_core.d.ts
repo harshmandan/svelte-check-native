@@ -443,25 +443,18 @@ type __SvnInstanceTyped<P, E> = {
  */
 type __SvnPropsPartial<P> = { [K in keyof P]?: P[K] | null };
 
-/**
- * Assert that a `bind:this` target's declared type accepts the element
- * shape produced at the bind site. Called as:
- *
- *     __svn_bind_this_check<HTMLInputElement>(inputEl);
- *
- * `target: El | null | undefined` requires `inputEl`'s declared type to
- * be a subtype of `El | null | undefined`, matching the runtime
- * contract: Svelte assigns either the element or nothing. Accepts
- * `HTMLInputElement`, `HTMLInputElement | null`, `HTMLInputElement |
- * undefined`, and the full triplet; rejects a wrong element type
- * (`HTMLDivElement` vs `HTMLInputElement`).
- *
- * Replaces the pre-refactor habit of emitting
- * `inputEl = null as any as HTMLElement | null`, which forced `null`
- * onto the user's variable type and mis-fired on `HTMLElement |
- * undefined`-typed targets.
- */
-declare function __svn_bind_this_check<El>(target: El | null | undefined): void;
+// v0.3 Item 7: the `__svn_bind_this_check<El>(target)` shim that
+// previously lived here was removed. Its `target: El | null |
+// undefined` signature rejected legitimate broader-type declarations
+// (`let el: HTMLElement | null` on a `<div>`) because `HTMLElement`
+// is a SUPERTYPE of `HTMLDivElement`. Current Item 7 emit uses the
+// assignment-direction shape (matches upstream's Binding.ts:85-93):
+//     void /* bind:this */ ((): void => {
+//         EXPR = null as any as HTMLElementTagNameMap['tag'];
+//     });
+// where the LHS-accepts-RHS check correctly admits broader
+// declared types while still flagging truly-wrong element types
+// (e.g. `HTMLSpanElement` declared, bound on `<input>`).
 
 /**
  * Phantom type-compatibility check for one-way-not-on-element DOM

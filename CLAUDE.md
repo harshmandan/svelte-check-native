@@ -251,6 +251,76 @@ so the scenario is reproducible against any workspace.
 - **`cargo test` is the scoreboard.** `emit_snapshots` count and
   `bug_fixtures` count both show in `README.md`.
 
+## Diagnostic method — "diff the real upstream artifact"
+
+When a diagnostic fires on our binary that upstream doesn't (or vice
+versa), the debugging path that SHORT-CIRCUITS hours of speculation:
+
+1. **Anchor on a real failing file.** Pick the exact `.svelte` file
+   from a bench or submodule test fixture where the diagnostics
+   diverge. Don't build a synthetic reduction first — the real file
+   captures all the context that matters (`$state()` uninit patterns,
+   `bind:` combinations, destructured `$props()`, slot shapes, etc.).
+
+2. **Read upstream's actual overlay for that file.** Install
+   `svelte2tsx` from any bench's `node_modules` (different versions
+   exist across benches — any recent one is fine) and run it directly:
+
+   ```sh
+   node -e "
+     import('<bench>/node_modules/.../svelte2tsx/index.mjs').then(m => {
+       const src = require('fs').readFileSync('/path/to/File.svelte', 'utf8');
+       console.log(m.svelte2tsx(src, { filename: 'File.svelte', isTsFile: true }).code);
+     });
+   "
+   ```
+
+3. **Read our overlay for the same file.** Run our binary with
+   `--emit-ts` on the same directory:
+
+   ```sh
+   target/debug/svelte-check-native --workspace <dir> --tsconfig <cfg> --emit-ts
+   ```
+
+4. **Side-by-side diff at the diagnostic site.** Focus on the
+   specific LINES tsgo flags (grep the overlay for the relevant
+   variable names, not whole-file diffs). The structural delta is
+   usually a wrapper / lambda / parenthesization / extra intersection
+   — not a primitive type difference.
+
+5. **Lock upstream's shape as a tsgo fixture first** (Rule #8 of
+   "Architecture rules"). Minimal `.ts` files under `design/<topic>/`
+   that produce exactly the expected diagnostics from tsgo. Commit
+   before any Rust change. If the fixture doesn't reproduce the
+   desired behavior, the theory is wrong and coding won't fix it.
+
+6. **Only then port the shape into our emit.**
+
+### When to deploy it
+
+- Any time `cargo test --test upstream_sanity` or a bench's error
+  count diverges from `svelte-check --tsgo` on the same workspace.
+- Any time a theory about "why TS should fire here" conflicts with
+  what `svelte-check --tsgo` actually reports.
+- Any time you catch yourself writing "TS should do X here" — the
+  real artifact is the ground truth; reading it is almost always
+  faster than reasoning about it.
+
+### Case study (2026-04-20)
+
+`control-svelte-4` FigmaPopup FP: we had a theory that
+`$state<T>()` → child expecting `T` should fire TS2322, and ran a
+synthetic repro that confirmed. But upstream `svelte-check --tsgo`
+didn't fire on the same file. Reading the real svelte2tsx output
+showed `bind:clientWidth={mainWidth}` emits as a plain
+`mainWidth = $$_div2.clientWidth;` statement — the assignment
+narrows `mainWidth` via TS flow analysis. Our emit wrapped the
+equivalent assignment in a never-called lambda (`void (() => { ... })`),
+deliberately isolating it from narrowing. One-line unwrap, 1-FP
+eliminated, bench went 1 → 0 errors. Full trace in
+`crates/emit/src/lib.rs::emit_dom_binding_checks_inline` + commit
+`61fb2f5`.
+
 ## When in doubt
 
 - Read `README.md` for the public-facing overview.

@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "Mismatch.svelte",
+            "line": 6,
+            "column": 37,
+            "code": 2322
+        },
+        {
+            "file": "Mismatch.svelte",
+            "line": 7,
+            "column": 31,
+            "code": 2322
+        }
+    ],
+    "_note": "v0.3 Item 8 (narrow): dom_binding::type_for now covers bind:checked (HTMLInputElement['checked']) and bind:files (HTMLInputElement['files']) — the two bidirectional bindings whose target type is independent of the input's `type` attribute. bind:value and bind:group are deferred: their type varies with `type='number'` / `type='file'` / etc., needing attribute-aware element-type dispatch. Row/column are 0-based."
+}

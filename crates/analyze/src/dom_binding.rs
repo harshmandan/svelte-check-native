@@ -73,6 +73,29 @@ pub fn type_for(binding_name: &str) -> Option<&'static str> {
         "clientHeight" => Some("HTMLElement['clientHeight']"),
         "offsetWidth" => Some("HTMLElement['offsetWidth']"),
         "offsetHeight" => Some("HTMLElement['offsetHeight']"),
+
+        // --- Bidirectional bindings (v0.3 Item 8 — narrow subset) ---
+        //
+        // `bind:checked` / `bind:files` on `<input>` have a FIXED
+        // target type independent of the input's `type` attribute:
+        //
+        //   - `bind:checked` → boolean (for checkbox/radio; invalid
+        //     on other input types, but svelte accepts at runtime)
+        //   - `bind:files`   → FileList | null (only meaningful on
+        //     type="file" but type's value is a runtime concern)
+        //
+        // `bind:value` and `bind:group` are deferred: their type
+        // depends on the input's `type` attribute value
+        // (`type="number"` → number, default → string, etc.), which
+        // requires attribute-aware element-type dispatch. Tracked in
+        // NEXT.md as remaining Item 8 scope.
+        //
+        // Emit direction is assignment (same lambda shape as Item 6):
+        // the user's declared target type must accept the element
+        // property's type. Wrong-typed targets fire TS2322.
+        "checked" => Some("HTMLInputElement['checked']"),
+        "files" => Some("HTMLInputElement['files']"),
+
         _ => None,
     }
 }

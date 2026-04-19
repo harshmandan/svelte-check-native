@@ -2372,6 +2372,12 @@ fn write_prop_shape(out: &mut String, source: &str, p: &svn_analyze::PropShape) 
             write_object_key(out, name);
             out.push_str(": true");
         }
+        svn_analyze::PropShape::Spread { expr_range } => {
+            let expr = &source[expr_range.start as usize..expr_range.end as usize];
+            // Wrap the expression in parens so things like ternaries
+            // or `a, b` sequences stay a single operand of `...`.
+            let _ = write!(out, "...({expr})");
+        }
     }
 }
 

@@ -116,6 +116,13 @@ pub enum PropShape {
     Shorthand { name: SmolStr },
     /// `name` (no `=`) — boolean shorthand.
     BoolShorthand { name: SmolStr },
+    /// `{...expr}` spread — emit as `...(expr)` in the props literal.
+    /// TS type-checks the spread's inferred shape against the
+    /// destination type; mismatched spreads fire the usual structural
+    /// mismatch errors. Unlike named props, spreads can contribute
+    /// any subset of the declared Props AND extra keys in a single
+    /// expression.
+    Spread { expr_range: Range },
 }
 
 /// One `bind:this={x}` site.
@@ -542,6 +549,7 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
                         | PropShape::Literal { name, .. }
                         | PropShape::Expression { name, .. }
                         | PropShape::Shorthand { name } => name != &target,
+                        PropShape::Spread { .. } => true, // spreads pass through
                     });
                     props.push(PropShape::Expression {
                         name: target,
@@ -556,7 +564,20 @@ fn collect_component_instantiation(c: &svn_parser::Component, summary: &mut Temp
             // Spread — silently dropped. The Partial<> wrap in emit
             // means we don't need to model the props it would
             // contribute; we only check what the user wrote explicitly.
-            Attribute::Spread(_) => {}
+            Attribute::Spread(s) => {
+                // `<Comp {...rest}>` contributes whatever `rest` holds
+                // at runtime. Emit as a spread in the props literal so
+                // TS structurally type-checks `rest`'s inferred shape
+                // against the declared Props — missing-required-prop
+                // errors surface on the spread expression itself
+                // (useful user-facing signal). A spread CAN fill
+                // required-but-not-named-elsewhere props, which is
+                // also why phase 5's `satisfies` trailer is
+                // tolerant-by-spread without false-positive.
+                props.push(PropShape::Spread {
+                    expr_range: s.expression_range,
+                });
+            }
         }
     }
     summary

@@ -147,6 +147,18 @@ pub enum PropShape {
     /// any subset of the declared Props AND extra keys in a single
     /// expression.
     Spread { expr_range: Range },
+    /// Svelte 5 `bind:NAME={getter, setter}` get/set form. Emit
+    /// `name: (getter)()` — calling the getter to obtain the bound
+    /// value, whose type is what the target Props declaration
+    /// checks against. Setter is intentionally dropped; its role
+    /// is runtime plumbing (writing back to the source) with no
+    /// type-level surface at the consumer's call site.
+    ///
+    /// Without this variant, the reverted pre-v0.3 behavior would
+    /// drop the binding entirely, which v0.3's `satisfies` trailer
+    /// surfaces as a spurious "missing required prop" on every
+    /// Svelte 5 get/set bind consumer.
+    GetSetBinding { name: SmolStr, getter_range: Range },
 }
 
 /// One `bind:this={x}` site.
@@ -602,7 +614,8 @@ fn collect_component_instantiation(
                         PropShape::BoolShorthand { name }
                         | PropShape::Literal { name, .. }
                         | PropShape::Expression { name, .. }
-                        | PropShape::Shorthand { name } => name != &target,
+                        | PropShape::Shorthand { name }
+                        | PropShape::GetSetBinding { name, .. } => name != &target,
                         PropShape::Spread { .. } => true, // spreads pass through
                     });
                     props.push(PropShape::Expression {
@@ -625,10 +638,46 @@ fn collect_component_instantiation(
                         PropShape::BoolShorthand { name }
                         | PropShape::Literal { name, .. }
                         | PropShape::Expression { name, .. }
-                        | PropShape::Shorthand { name } => name != &target,
+                        | PropShape::Shorthand { name }
+                        | PropShape::GetSetBinding { name, .. } => name != &target,
                         PropShape::Spread { .. } => true,
                     });
                     props.push(PropShape::Shorthand { name: target });
+                    continue;
+                }
+                // Svelte 5 `bind:NAME={getter, setter}` get/set form
+                // (DirectiveValue::BindPair). Upstream svelte2tsx uses
+                // a `__sveltets_2_get_set_binding` helper to model
+                // it; we don't yet. Without this branch v0.3's
+                // satisfies trailer catches `name` / `definition`
+                // etc. as "missing required props" on consumers that
+                // correctly use the get/set form — false positives
+                // on Svelte 5 bind: idiom.
+                //
+                // Interim: push the name as Shorthand so satisfies
+                // sees the key present. Loses the read+write type
+                // flow that upstream's helper provides, but prevents
+                // the FP. Real fix: emit
+                // `__svn_get_set_binding(getter, setter)` call that
+                // TS can resolve to the getter's return type —
+                // tracked as deferred in NEXT.md.
+                if d.kind == svn_parser::DirectiveKind::Bind
+                    && let Some(svn_parser::DirectiveValue::BindPair { getter_range, .. }) =
+                        &d.value
+                {
+                    let target = d.name.clone();
+                    props.retain(|p| match p {
+                        PropShape::BoolShorthand { name }
+                        | PropShape::Literal { name, .. }
+                        | PropShape::Expression { name, .. }
+                        | PropShape::Shorthand { name }
+                        | PropShape::GetSetBinding { name, .. } => name != &target,
+                        PropShape::Spread { .. } => true,
+                    });
+                    props.push(PropShape::GetSetBinding {
+                        name: target,
+                        getter_range: *getter_range,
+                    });
                     continue;
                 }
                 // Other directives (`use:`, `class:`, `style:`,

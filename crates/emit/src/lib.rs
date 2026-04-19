@@ -2763,7 +2763,8 @@ fn prop_shape_name(p: &svn_analyze::PropShape) -> Option<&str> {
         svn_analyze::PropShape::Literal { name, .. }
         | svn_analyze::PropShape::Expression { name, .. }
         | svn_analyze::PropShape::Shorthand { name }
-        | svn_analyze::PropShape::BoolShorthand { name } => Some(name),
+        | svn_analyze::PropShape::BoolShorthand { name }
+        | svn_analyze::PropShape::GetSetBinding { name, .. } => Some(name),
         svn_analyze::PropShape::Spread { .. } => None,
     }
 }
@@ -2845,6 +2846,15 @@ fn write_prop_shape(out: &mut String, source: &str, p: &svn_analyze::PropShape) 
             // Wrap the expression in parens so things like ternaries
             // or `a, b` sequences stay a single operand of `...`.
             let _ = write!(out, "...({expr})");
+        }
+        svn_analyze::PropShape::GetSetBinding { name, getter_range } => {
+            let getter = &source[getter_range.start as usize..getter_range.end as usize];
+            write_object_key(out, name);
+            // `name: (getter)()` — invoke the getter so TS resolves
+            // the value to the getter's return type, which is what
+            // the target Props declaration wants to check against.
+            // Svelte 5 get/set bind form; setter dropped (runtime-only).
+            let _ = write!(out, ": ({getter})()");
         }
     }
 }

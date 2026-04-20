@@ -51,6 +51,4 @@ Thumbs.db
 bench/
 
 # Private working notes
-ROADMAP.md
-NEXT.md
-DEFERRED.md
+notes/

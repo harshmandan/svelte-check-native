@@ -207,6 +207,31 @@ fn emit_document_with_render_name(
     // lifted to module scope).
     let generics = extract_generics_attr(doc);
 
+    // Parse the instance script exactly once up front. Every analyze
+    // pass that needs the oxc AST of the ORIGINAL script (Props type
+    // source, declared props, top-level bindings, typed uninitialized
+    // lets, typed top-level lets) derives its facts from this single
+    // parse — each was its own reparse + allocator before, which
+    // added up to 4-5 repeats of the same work on the hot path. The
+    // `rewritten_content` reparse at bindings-collection time is
+    // separate (different source string) and only fires when the
+    // Svelte-4 reactive rewrite actually touched the script.
+    let alloc_instance = Allocator::default();
+    let parsed_instance = doc
+        .instance_script
+        .as_ref()
+        .map(|s| parse_script_body(&alloc_instance, s.content, s.lang));
+
+    // Cache the raw Props type source too — both `script_split`
+    // (which only needs its root name) and the props-type-annotation
+    // pass (which wants the full generic-form string) consume it.
+    let prop_type_source_cached: Option<String> =
+        if let (Some(s), Some(parsed)) = (doc.instance_script.as_ref(), parsed_instance.as_ref()) {
+            svn_analyze::find_props_type_source(&parsed.program, s.content)
+        } else {
+            None
+        };
+
     // Extract the Props type's root name (if any) up front so
     // script_split can decide whether a given `type`/`interface`
     // declaration IS the Props annotation — Props always hoists, even
@@ -215,13 +240,9 @@ fn emit_document_with_render_name(
     // contextual flow. Non-Props types that reference body-locals via
     // `typeof` stay body-scoped so `keyof typeof X` resolves against
     // the real declaration rather than the lossy declare-const stub.
-    let prop_type_root_for_split: Option<String> = doc.instance_script.as_ref().and_then(|s| {
-        let alloc = Allocator::default();
-        let parsed = parse_script_body(&alloc, s.content, s.lang);
-        svn_analyze::find_props_type_source(&parsed.program, s.content)
-            .as_deref()
-            .and_then(|t| root_type_name(t.trim()))
-    });
+    let prop_type_root_for_split: Option<String> = prop_type_source_cached
+        .as_deref()
+        .and_then(|t| root_type_name(t.trim()));
 
     // SVELTE-4-COMPAT: rewrite `$: ...` reactive statements before
     // the Svelte-5-shaped passes run, so downstream code sees the
@@ -375,14 +396,14 @@ fn emit_document_with_render_name(
     }
 
     let (prop_names, prop_type_source): (Vec<SmolStr>, Option<String>) =
-        if let (Some(_s), Some(instance)) = (&split, &doc.instance_script) {
+        if let (Some(_s), Some(instance), Some(parsed_orig)) =
+            (&split, &doc.instance_script, parsed_instance.as_ref())
+        {
             // Scan bindings + props against the *original* script content
             // (imports included). Using the imports-blanked body would
             // miss store names imported from external modules (e.g.
             // SvelteKit's `import { page } from '$app/stores'` plus
             // template uses of `$page.data.foo`).
-            let alloc_orig = Allocator::default();
-            let parsed_orig = parse_script_body(&alloc_orig, instance.content, instance.lang);
             let props: Vec<SmolStr> = find_props(&parsed_orig.program)
                 .into_iter()
                 .map(|p| p.local_name)
@@ -394,8 +415,7 @@ fn emit_document_with_render_name(
             // overlay default resolves to the weak declared type and
             // every `<X cb={(arg) => ...}>` destructure binding reads
             // as implicit-any via `ComponentProps<any> = any`.
-            let mut ty =
-                svn_analyze::find_props_type_source(&parsed_orig.program, instance.content);
+            let mut ty = prop_type_source_cached.clone();
 
             // SvelteKit auto-typing: when the file is a route component
             // (`+page.svelte`, `+layout.svelte`, …) and the user wrote
@@ -617,11 +637,9 @@ fn emit_document_with_render_name(
     // TS2454 on these because its TS version / transform sequence
     // never observes the uninitialised state. Matching that with a
     // `!` definite-assign assertion is the simplest equivalent.
-    if let Some(instance) = &doc.instance_script {
-        let alloc_ua = Allocator::default();
-        let parsed_ua = parse_script_body(&alloc_ua, instance.content, instance.lang);
+    if let Some(parsed_orig) = parsed_instance.as_ref() {
         let mut uninit_lets: Vec<SmolStr> = Vec::new();
-        collect_typed_uninit_lets(&parsed_ua.program, &mut uninit_lets);
+        collect_typed_uninit_lets(&parsed_orig.program, &mut uninit_lets);
         for name in uninit_lets {
             if !def_assign_names.iter().any(|n| n == &name) {
                 def_assign_names.push(name);
@@ -664,11 +682,9 @@ fn emit_document_with_render_name(
         // subsequent `if (X) X.foo` fires TS2339 on `never`. Reuse the
         // same insertion.
         let mut denarrow_targets: Vec<SmolStr> = s.exported_locals.clone();
-        if let Some(instance) = &doc.instance_script {
-            let alloc_dn = Allocator::default();
-            let parsed_dn = parse_script_body(&alloc_dn, instance.content, instance.lang);
+        if let Some(parsed_orig) = parsed_instance.as_ref() {
             let mut typed_lets: Vec<SmolStr> = Vec::new();
-            collect_typed_top_level_lets(&parsed_dn.program, &mut typed_lets);
+            collect_typed_top_level_lets(&parsed_orig.program, &mut typed_lets);
             for name in typed_lets {
                 if !denarrow_targets.iter().any(|n| n == &name) {
                     denarrow_targets.push(name);

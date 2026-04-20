@@ -133,13 +133,19 @@ fn parse_underline(line: &str) -> Option<u32> {
 
 /// Strip ANSI escape sequences (ESC [ ... letter). Conservative: handles
 /// CSI sequences which is what tsc/tsgo use for color.
+///
+/// Byte-indexing is safe: ESC (0x1b), `[` (0x5b), and CSI terminators
+/// (0x40..=0x7e) are all ASCII, and in valid UTF-8 an ASCII byte can
+/// only appear at a char boundary. Non-ESC runs are copied as string
+/// slices so multibyte chars in filenames/messages survive intact.
 fn strip_ansi(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut i = 0;
+    let mut run_start = 0;
     while i < bytes.len() {
         if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'[') {
-            // Skip until a letter terminator (0x40..=0x7e).
+            out.push_str(&input[run_start..i]);
             i += 2;
             while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
                 i += 1;
@@ -147,11 +153,12 @@ fn strip_ansi(input: &str) -> String {
             if i < bytes.len() {
                 i += 1; // skip terminator
             }
+            run_start = i;
         } else {
-            out.push(bytes[i] as char);
             i += 1;
         }
     }
+    out.push_str(&input[run_start..]);
     out
 }
 
@@ -245,5 +252,21 @@ also ignored
         let diags = parse(stdout);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].file, PathBuf::from("src/x.ts"));
+    }
+
+    #[test]
+    fn strip_ansi_preserves_multibyte_chars() {
+        // Unicode in both the ANSI-wrapped and plain regions.
+        let stripped = strip_ansi("\x1b[31mτ\x1b[0m — naïve résumé 日本語");
+        assert_eq!(stripped, "τ — naïve résumé 日本語");
+    }
+
+    #[test]
+    fn parses_diagnostic_with_unicode_path_and_message() {
+        let stdout = "src/日本語/Café.ts:1:1 - error TS1: naïve résumé τ";
+        let diags = parse(stdout);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].file, PathBuf::from("src/日本語/Café.ts"));
+        assert_eq!(diags[0].message, "naïve résumé τ");
     }
 }

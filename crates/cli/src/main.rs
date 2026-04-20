@@ -193,7 +193,7 @@ fn main() -> ExitCode {
     // (`@org/types`, workspace-scoped deps) fails from the wrong
     // directory. The overlay cache, kit-file discovery, and diagnostic
     // path-relativization all follow workspace.
-    let workspace = match tsconfig.as_deref() {
+    let (workspace, solution_root_tsconfig) = match tsconfig.as_deref() {
         Some(tc) => match tc.parent() {
             Some(dir) if dir != workspace && dir.starts_with(&workspace) => {
                 eprintln!(
@@ -201,11 +201,22 @@ fn main() -> ExitCode {
                     dir.display(),
                     tc.display(),
                 );
-                dir.to_path_buf()
+                // Record the ORIGINAL solution root's tsconfig. Overlay
+                // builder consults it to flatten sibling-project
+                // references into the overlay's include/exclude/paths,
+                // so transitive imports across projects remain visible
+                // to tsgo (see svn_core::tsconfig::flatten_references).
+                let solution_root = workspace.join("tsconfig.json");
+                let solution = if solution_root.is_file() {
+                    Some(solution_root)
+                } else {
+                    None
+                };
+                (dir.to_path_buf(), solution)
             }
-            _ => workspace,
+            _ => (workspace, None),
         },
-        None => workspace,
+        None => (workspace, None),
     };
 
     if cli.debug_paths {
@@ -232,6 +243,7 @@ fn main() -> ExitCode {
 
     run_typecheck(
         &workspace,
+        solution_root_tsconfig.as_deref(),
         &tsconfig,
         &output,
         &cli.threshold,
@@ -617,6 +629,7 @@ fn escape_solution_tsconfig(candidate: &Path) -> Option<PathBuf> {
 #[allow(clippy::too_many_arguments)]
 fn run_typecheck(
     workspace: &Path,
+    solution_root_tsconfig: Option<&Path>,
     tsconfig: &Path,
     output_format: &str,
     threshold: &str,
@@ -806,7 +819,13 @@ fn run_typecheck(
     // written to the cache — see svn_typecheck::check docs.
     let mark = std::time::Instant::now();
     let (mut diagnostics, tsgo_diag_block) = if sources.js {
-        match svn_typecheck::check(workspace, tsconfig, inputs, tsgo_diagnostics) {
+        match svn_typecheck::check(
+            workspace,
+            solution_root_tsconfig,
+            tsconfig,
+            inputs,
+            tsgo_diagnostics,
+        ) {
             Ok(out) => (out.diagnostics, out.extended_diagnostics),
             Err(err) => {
                 eprintln!("svelte-check-native: type-check failed: {err}");

@@ -30,7 +30,9 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use svn_core::tsconfig::{TsConfigFile, load_chain};
+use svn_core::tsconfig::{
+    FlattenedReference, TsConfigFile, flatten_references_from_chain, load_chain,
+};
 
 use crate::cache::CacheLayout;
 
@@ -66,6 +68,31 @@ pub fn build(
     // `${configDir}` substitution, `.json` inference, and
     // `node_modules/@tsconfig/...` walk-up for us.
     let chain: Vec<TsConfigFile> = load_chain(user_tsconfig).unwrap_or_default();
+
+    // When the CLI redirected from a solution-style root, pull sibling
+    // projects REFERENCED BY THE REDIRECT TARGET into the overlay so
+    // transitive imports across projects reach tsgo as part of the
+    // same program. Flattening the solution root's full references[]
+    // would over-include — for a app-style repo where
+    // `tsconfig.json` coordinates console + functions + packages,
+    // type-checking console doesn't require functions code, yet
+    // including functions' tsconfig pulls its strict-mode errors
+    // into our output.
+    //
+    // The narrower rule: only follow `references[]` declared BY the
+    // redirect target (or its extends chain). That matches the
+    // user's own tsconfig's declaration of "these are the projects
+    // whose types I need." Skip a reference pointing at the current
+    // workspace — its own tsconfig chain already covers it via
+    // `chain`. Empty vec for flat-project runs.
+    let sibling_refs: Vec<FlattenedReference> = flatten_references_from_chain(user_tsconfig)
+        .into_iter()
+        .filter(|r| r.project_dir != layout.workspace)
+        .collect();
+    // Acknowledge but don't consume the solution root — the CLI
+    // still passes it down for future expansion (e.g.
+    // paths-level aliases from the solution root).
+    let _ = layout.solution_root_tsconfig.as_deref();
 
     let mut root_dirs: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -136,6 +163,26 @@ pub fn build(
                 };
                 resolved.push(normalize(&abs).to_string_lossy().into_owned());
             }
+            if !resolved.is_empty() {
+                paths_keys_order.push(pattern.clone());
+                paths_accumulated.insert(pattern.clone(), resolved);
+            }
+        }
+    }
+    // Sibling-project paths: only fill in patterns NOT already
+    // declared by the redirect target's chain. Inner-wins policy
+    // preserves user intent when the redirect target has its own
+    // alias for the same pattern; sibling projects only contribute
+    // aliases that the redirect target hasn't claimed.
+    for sibling in &sibling_refs {
+        for (pattern, values) in &sibling.paths {
+            if paths_accumulated.contains_key(pattern) {
+                continue;
+            }
+            let resolved: Vec<String> = values
+                .iter()
+                .map(|v| v.to_string_lossy().into_owned())
+                .collect();
             if !resolved.is_empty() {
                 paths_keys_order.push(pattern.clone());
                 paths_accumulated.insert(pattern.clone(), resolved);
@@ -255,7 +302,41 @@ pub fn build(
     // patterns since our generated overlays in `files` already cover
     // them; `exclude` keeps everything (dropping a pattern opens a
     // hole).
-    let user_includes = first_non_empty_patterns(&chain, |f| f.include.as_deref(), true);
+    let mut user_includes = first_non_empty_patterns(&chain, |f| f.include.as_deref(), true);
+    // Sibling-project includes: add each reference's own include
+    // patterns, anchored at the reference's project_dir. Fall back to
+    // `**/*.ts` + `**/*.d.ts` for references that don't declare their
+    // own include (tsc's default when `include` is absent and `files`
+    // is absent). `.svelte` patterns are dropped per the same rule as
+    // the user's own includes. This is the sibling-visibility fix:
+    // without it, a transitive import from the redirect target into a
+    // sibling project fires tsgo's "File not listed within project".
+    for sibling in &sibling_refs {
+        let project_dir = sibling.project_dir.as_path();
+        if sibling.include.is_empty() {
+            for ext in ["ts", "d.ts"] {
+                let glob = format!("{}/**/*.{}", project_dir.to_string_lossy(), ext);
+                if !user_includes.contains(&glob) {
+                    user_includes.push(glob);
+                }
+            }
+        } else {
+            for pat in &sibling.include {
+                if is_svelte_only_pattern(pat) {
+                    continue;
+                }
+                let resolved = if Path::new(pat).is_absolute() {
+                    PathBuf::from(pat)
+                } else {
+                    project_dir.join(pat)
+                };
+                let glob = normalize(&resolved).to_string_lossy().into_owned();
+                if !user_includes.contains(&glob) {
+                    user_includes.push(glob);
+                }
+            }
+        }
+    }
 
     let mut overlay = serde_json::Map::new();
     overlay.insert("extends".into(), Value::String(extends_rel));
@@ -280,6 +361,26 @@ pub fn build(
     // inherited exclude with an empty list.
     let mut excludes: Vec<String> =
         first_non_empty_patterns(&chain, |f| f.exclude.as_deref(), false);
+    // Each sibling reference's own `exclude` patterns, anchored at
+    // that reference's project_dir. Critical for preserving user
+    // intent — sub-app's tsconfig.playwright.json excludes binary
+    // `.ts` files under `./playwright/fixtures/videos/**/*`; without
+    // propagating that, our widened include would pull them in and
+    // fire tsgo "file appears to be binary" errors.
+    for sibling in &sibling_refs {
+        let project_dir = sibling.project_dir.as_path();
+        for pat in &sibling.exclude {
+            let resolved = if Path::new(pat).is_absolute() {
+                PathBuf::from(pat)
+            } else {
+                project_dir.join(pat)
+            };
+            let glob = normalize(&resolved).to_string_lossy().into_owned();
+            if !excludes.contains(&glob) {
+                excludes.push(glob);
+            }
+        }
+    }
     for p in kit_overlay_sources {
         excludes.push(p.to_string_lossy().into_owned());
     }
@@ -801,6 +902,161 @@ mod tests {
             paths.contains_key("from-b"),
             "from-b missing from paths; got {:?}",
             paths.keys().collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn build_overlay_flattens_sibling_refs_on_solution_redirect() {
+        // Solution root at /root with references to src/console (the
+        // redirect target) and src/services (a sibling). Services has
+        // its own include/exclude/paths. Overlay built around console
+        // should carry the services' include/exclude/paths so
+        // transitive imports into services don't fire tsgo's "File
+        // not listed within project".
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+
+        // The redirect target. Declares `../services` in its OWN
+        // references[] — that's how the overlay discovers which
+        // siblings to flatten. Solution root coordinates via its
+        // own references[] (for `tsc -b` ordering) but the overlay
+        // follows the sub-project's declared dependencies, not the
+        // solution root's (pulling every solution-root sibling
+        // would over-include; see overlay.rs comment).
+        write_file(
+            &root.join("src/console/tsconfig.json"),
+            r#"{
+                "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": { "@": ["./src"] }
+                },
+                "include": ["**/*.ts"],
+                "references": [{ "path": "../services" }]
+            }"#,
+        );
+
+        // The sibling project — referenced from the console config.
+        write_file(
+            &root.join("src/services/tsconfig.json"),
+            r#"{
+                "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": { "~/*": ["./*"] }
+                },
+                "include": ["**/*.ts"],
+                "exclude": ["fixtures/**/*"]
+            }"#,
+        );
+
+        // Solution root — coordinates via references (mirrors a real
+        // monorepo's `tsc -b` wiring).
+        write_file(
+            &root.join("tsconfig.json"),
+            r#"{
+                "files": [],
+                "references": [
+                    { "path": "./src/console" },
+                    { "path": "./src/services" }
+                ]
+            }"#,
+        );
+
+        let console_dir = root.join("src/console");
+        let console_ts = console_dir.join("tsconfig.json");
+        let layout = CacheLayout::for_workspace_with_solution_root(
+            &console_dir,
+            Some(root.join("tsconfig.json")),
+        );
+        let overlay = build(&layout, &console_ts, &[], &[]);
+
+        // `include`: the services' `**/*.ts`, anchored at services'
+        // project_dir.
+        let includes: Vec<&str> = overlay["include"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let services_dir = root.join("src/services");
+        let expected_services_include = services_dir.join("**/*.ts").to_string_lossy().into_owned();
+        assert!(
+            includes.iter().any(|v| *v == expected_services_include),
+            "expected sibling-services include {expected_services_include:?}, got {includes:?}",
+        );
+
+        // `exclude`: the services' `fixtures/**/*` resolved absolute.
+        let excludes: Vec<&str> = overlay["exclude"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let expected_services_exclude = services_dir
+            .join("fixtures/**/*")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            excludes.iter().any(|v| *v == expected_services_exclude),
+            "expected sibling-services exclude {expected_services_exclude:?}, got {excludes:?}",
+        );
+
+        // `paths`: console's `@` survives + services' `~/*` was
+        // merged in (inner-wins per pattern — both declare disjoint
+        // keys, both should appear).
+        let paths = overlay["compilerOptions"]["paths"].as_object().unwrap();
+        assert!(
+            paths.contains_key("@"),
+            "console's @ missing: {:?}",
+            paths.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            paths.contains_key("~/*"),
+            "services' ~/* missing: {:?}",
+            paths.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn build_overlay_skips_self_reference_in_sibling_flatten() {
+        // The solution root references the redirect target itself.
+        // That reference should be skipped when flattening siblings —
+        // the target's own chain already covers it; re-adding via
+        // flatten would duplicate includes.
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+
+        write_file(
+            &root.join("app/tsconfig.json"),
+            r#"{ "include": ["src/**/*.ts"] }"#,
+        );
+        write_file(
+            &root.join("tsconfig.json"),
+            r#"{
+                "files": [],
+                "references": [{ "path": "./app" }]
+            }"#,
+        );
+
+        let app_dir = root.join("app");
+        let layout = CacheLayout::for_workspace_with_solution_root(
+            &app_dir,
+            Some(root.join("tsconfig.json")),
+        );
+        let overlay = build(&layout, &app_dir.join("tsconfig.json"), &[], &[]);
+
+        // `include` should contain the app's own pattern EXACTLY
+        // once (anchored at app_dir via the chain walk).
+        let includes: Vec<&str> = overlay["include"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let own_include = app_dir.join("src/**/*.ts").to_string_lossy().into_owned();
+        let matches = includes.iter().filter(|v| **v == own_include).count();
+        assert_eq!(
+            matches, 1,
+            "self-reference should not duplicate the include; got {includes:?}",
         );
     }
 }

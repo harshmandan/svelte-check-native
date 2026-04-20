@@ -269,11 +269,15 @@ pub enum CheckError {
 /// count). On success with no problems the diagnostics vec is empty.
 pub fn check(
     workspace: &Path,
+    solution_root_tsconfig: Option<&Path>,
     user_tsconfig: &Path,
     inputs: Vec<CheckInput>,
     extended_diagnostics: bool,
 ) -> Result<CheckOutput, CheckError> {
-    let layout = CacheLayout::for_workspace(workspace);
+    let layout = CacheLayout::for_workspace_with_solution_root(
+        workspace,
+        solution_root_tsconfig.map(|p| p.to_path_buf()),
+    );
     std::fs::create_dir_all(&layout.svelte_dir)?;
 
     // Ship the svelte type shims into the cache. Core (runes + helper

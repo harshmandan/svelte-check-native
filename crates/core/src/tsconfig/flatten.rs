@@ -78,48 +78,110 @@ pub fn flatten_references(solution_root: &Path) -> Result<Vec<FlattenedReference
     if !solution.is_solution_style() {
         return Ok(Vec::new());
     }
-    let solution_dir = solution.config_dir();
-
+    let solution_dir = solution.config_dir().to_path_buf();
     let mut out: Vec<FlattenedReference> = Vec::new();
     for reference in &solution.references {
-        let ref_path = if Path::new(&reference.path).is_absolute() {
-            PathBuf::from(&reference.path)
-        } else {
-            solution_dir.join(&reference.path)
-        };
-        let (config_path, project_dir) = if ref_path.is_dir() {
-            (ref_path.join("tsconfig.json"), ref_path.clone())
-        } else if ref_path.is_file() {
-            let parent = match ref_path.parent() {
-                Some(p) => p.to_path_buf(),
-                None => continue,
-            };
-            (ref_path.clone(), parent)
-        } else {
-            continue;
-        };
-        if !config_path.is_file() {
-            continue;
+        if let Some(r) = resolve_reference(&reference.path, &solution_dir) {
+            out.push(r);
         }
-
-        let chain = match load_chain(&config_path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        let include = first_non_empty(&chain, |f| f.include.as_deref()).unwrap_or_default();
-        let exclude = first_non_empty(&chain, |f| f.exclude.as_deref()).unwrap_or_default();
-        let paths = resolve_paths_bfs(&chain);
-
-        out.push(FlattenedReference {
-            config_path,
-            project_dir,
-            include,
-            exclude,
-            paths,
-        });
     }
     Ok(out)
+}
+
+/// Flatten every reference in `config`'s own chain, TRANSITIVELY —
+/// each referenced project's own `references[]` is walked too.
+///
+/// Used by the overlay when the CLI has redirected into a
+/// sub-project. The sub-project's tsconfig declares direct refs; each
+/// of those may itself reference further siblings. Without the
+/// transitive walk, overlay include coverage misses files that
+/// a direct ref imports from an indirect ref (common in monorepos
+/// where `packages/types` references `packages/db`, and the
+/// sub-project imports from types).
+///
+/// Cycles short-circuit via a visited-set keyed on canonical config
+/// path. Returns an empty vec when nothing in the chain declared
+/// references or when the entry config fails to load.
+pub fn flatten_references_from_chain(entry: &Path) -> Vec<FlattenedReference> {
+    let chain = match load_chain(entry) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let mut out: Vec<FlattenedReference> = Vec::new();
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut queue: std::collections::VecDeque<(String, PathBuf)> =
+        std::collections::VecDeque::new();
+    // Seed with direct refs from every config in the entry's chain.
+    for file in &chain {
+        let dir = file.config_dir().to_path_buf();
+        for reference in &file.references {
+            queue.push_back((reference.path.clone(), dir.clone()));
+        }
+    }
+    // Cap depth to keep pathological ref loops from running away.
+    // Real monorepos rarely exceed 3-4 levels of transitive ref depth.
+    let mut hops = 0usize;
+    while let Some((ref_path, declaring_dir)) = queue.pop_front() {
+        hops += 1;
+        if hops > 256 {
+            break;
+        }
+        let Some(r) = resolve_reference(&ref_path, &declaring_dir) else {
+            continue;
+        };
+        if !seen.insert(r.config_path.clone()) {
+            continue;
+        }
+        // Enqueue the flattened ref's OWN transitive references.
+        // Re-loading the chain here is cheap — parse_file is fast
+        // and we want the full extends chain's references[] mixed in
+        // (a ref's tsconfig may extend a base that declares more
+        // references).
+        if let Ok(ref_chain) = load_chain(&r.config_path) {
+            for rf in &ref_chain {
+                let dir = rf.config_dir().to_path_buf();
+                for reference in &rf.references {
+                    queue.push_back((reference.path.clone(), dir.clone()));
+                }
+            }
+        }
+        out.push(r);
+    }
+    out
+}
+
+/// Shared resolution: take a reference's raw `path` string and the
+/// declaring config's directory; produce a [`FlattenedReference`]
+/// for it, or `None` on any error (missing file, malformed config,
+/// etc.).
+fn resolve_reference(raw_path: &str, declaring_dir: &Path) -> Option<FlattenedReference> {
+    let ref_path = if Path::new(raw_path).is_absolute() {
+        PathBuf::from(raw_path)
+    } else {
+        declaring_dir.join(raw_path)
+    };
+    let (config_path, project_dir) = if ref_path.is_dir() {
+        (ref_path.join("tsconfig.json"), ref_path.clone())
+    } else if ref_path.is_file() {
+        let parent = ref_path.parent()?.to_path_buf();
+        (ref_path.clone(), parent)
+    } else {
+        return None;
+    };
+    if !config_path.is_file() {
+        return None;
+    }
+    let chain = load_chain(&config_path).ok()?;
+    let include = first_non_empty(&chain, |f| f.include.as_deref()).unwrap_or_default();
+    let exclude = first_non_empty(&chain, |f| f.exclude.as_deref()).unwrap_or_default();
+    let paths = resolve_paths_bfs(&chain);
+    Some(FlattenedReference {
+        config_path,
+        project_dir,
+        include,
+        exclude,
+        paths,
+    })
 }
 
 /// Return the first-declaring config's values for a multi-string

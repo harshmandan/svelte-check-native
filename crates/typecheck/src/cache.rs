@@ -34,6 +34,13 @@ use std::path::{Path, PathBuf};
 pub struct CacheLayout {
     /// Workspace root the cache belongs to.
     pub workspace: PathBuf,
+    /// When the CLI escaped a solution-style root tsconfig to a
+    /// sub-project, this holds the path to the solution root's
+    /// `tsconfig.json`. `None` for the common flat-project case.
+    /// Consumed by the overlay builder to flatten sibling-project
+    /// references into the overlay's include/exclude/paths (see
+    /// `svn_core::tsconfig::flatten_references`).
+    pub solution_root_tsconfig: Option<PathBuf>,
     /// Cache root: usually `<workspace>/node_modules/.cache/svelte-check-native/`
     /// (gitignored by convention), with `<workspace>/.svelte-check/` as a
     /// fallback when there is no `node_modules`. See [`Self::for_workspace`].
@@ -60,6 +67,19 @@ impl CacheLayout {
     /// Svelte project), and falls back to `<workspace>/.svelte-check/`
     /// otherwise — see the module docs for why.
     pub fn for_workspace(workspace: impl Into<PathBuf>) -> Self {
+        Self::for_workspace_with_solution_root(workspace, None)
+    }
+
+    /// Like [`Self::for_workspace`] but records the solution-style
+    /// root tsconfig path when the CLI's `escape_solution_tsconfig`
+    /// step redirected to a sub-project. The overlay builder reads
+    /// it to merge sibling-project `include`/`exclude`/`paths` into
+    /// the overlay so transitive imports into referenced projects
+    /// don't fire "File not listed within project".
+    pub fn for_workspace_with_solution_root(
+        workspace: impl Into<PathBuf>,
+        solution_root_tsconfig: Option<PathBuf>,
+    ) -> Self {
         let workspace = workspace.into();
         let node_modules = workspace.join("node_modules");
         let root = if node_modules.is_dir() {
@@ -73,6 +93,7 @@ impl CacheLayout {
         let svelte_shims = root.join("svelte-shims.d.ts");
         Self {
             workspace,
+            solution_root_tsconfig,
             root,
             svelte_dir,
             overlay_tsconfig,

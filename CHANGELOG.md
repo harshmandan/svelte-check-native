@@ -4,6 +4,78 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5]
+
+Patch release: two user-reported bugfixes + four code-review follow-ups.
+Scoreboard unchanged from 0.3.0 (4/6 benches at exact `--tsgo` parity).
+
+### Fixed — two user-reported bugs on real SvelteKit projects
+
+- **Line numbers for diagnostics on hoisted imports were off by the
+  count of synthetic `declare const` stubs.** When the emit crate
+  prepends body-local stubs (`declare const <name>: ...;`) to the
+  hoisted prelude, those lines have no entry in
+  `hoisted_byte_offsets` — but the line-map walker was pairing each
+  newline in `s.hoisted` with the next source offset anyway, shifting
+  every real hoist's mapping N-stubs too far. Result: a TS6133 on a
+  `type AppVideo` import pointed at the `}` of `interface Props` five
+  lines below. Script-split now exposes `stub_prefix_len`; emit skips
+  past the stubs before aligning with the first real offset. Root
+  cause fix, no snapshot changes.
+- **Type-only imports consumed only in template casts (`{fn(x as
+  AppVideo)}`) fired false-positive TS6133.** `AppVideo` is
+  type-only, so `collect_top_level_bindings` correctly skipped it
+  (voiding a type name fires TS2693), which meant template-ref
+  intersection never matched it, which meant the void-refs block
+  never referenced it — tsgo then flagged the import as unused. Fix:
+  emit now intersects `find_template_refs` output with a new
+  `collect_type_only_import_bindings` set and synthesizes
+  `type __svn_tpl_type_refs = [AppVideo, …];` at module scope.
+  Locked with bug fixture
+  `60-type-only-import-used-in-template-cast`.
+
+### Changed — code-review follow-ups
+
+- **UTF-8-safe ANSI stripping in the tsgo output parser.** The
+  byte-by-byte cast to `char` turned UTF-8 continuation bytes into
+  U+0080–U+00FF individually, corrupting any Unicode filename or
+  diagnostic message before the line-map and path-reverse stages
+  saw them. Non-ESC runs are now copied as string slices; CSI
+  introducer bytes and terminators are all ASCII so byte-indexed
+  lookaheads still land on char boundaries.
+- **Overlay builder now walks the canonical tsconfig loader.** The
+  overlay had its own extends walker with a local `resolve_extends`
+  that only did `dir.join(reference)` — missing package extends
+  (`@tsconfig/svelte`), `.json` inference, node_modules walk-up,
+  and implicit `${configDir}` substitution. Each of the five
+  derived fields (`paths`, `rootDirs`, `include`, `exclude`,
+  `types`) also re-read every tsconfig in the chain. A new
+  `svn-core::tsconfig::load_chain` helper returns every visited,
+  substituted config in BFS order; the overlay walks it once and
+  aggregates per-field. Reinstates CLAUDE.md's "no parallel
+  JSON-reading shortcuts" rule. Drops `json5` from `svn-typecheck`.
+- **Instance script parsed once per document in the emit hot
+  path.** `emit_document` was calling `parse_script_body` on the
+  same `instance.content` in four separate places with four
+  separate allocators. Consolidated to one top-of-function parse;
+  every downstream analyze call reads from the single
+  `&parsed.program`. Props-type annotation also cached once. Pure
+  perf win — no semantic change, all snapshots unchanged.
+- **Store auto-subscribe scanner skips strings, comments, and
+  template-literal static segments.** Previously a `"$store"`
+  inside a string literal was accepted as a potential store ref
+  (documented limitation in a test). Mini lexer now skips
+  `// line`, `/* block */`, `"…"`, `'…'`, and the static parts of
+  template literals. `${…}` interpolations are re-scanned as code
+  so a `$store` inside an interpolation still gets picked up. Brace
+  counting per-level handles nested object literals and nested
+  templates. Escape-aware.
+
+### Scoreboard
+
+Unchanged from 0.3.0. Warmed bench on cnblocks: 832/8/127/51,
+matching pre-session.
+
 ## [0.3.0]
 
 ### Parity milestone

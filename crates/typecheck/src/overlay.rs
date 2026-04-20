@@ -589,4 +589,218 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert!(files[0].as_str().unwrap().ends_with("svelte-shims.d.ts"));
     }
+
+    // ===== Canonical-loader-driven overlay behaviors ====================
+    //
+    // These write real tsconfigs into a tempdir and run `build()` end-to-
+    // end through `load_chain`. Guards against regressions in the three
+    // places the overlay's loader integration matters most:
+    //
+    //   * package `extends` via `node_modules/<pkg>/…`
+    //   * `${configDir}` substitution per-declaring-file
+    //   * array-form `extends` (TS 5.0+) merge order
+    //
+    // Each test sets up the minimal on-disk shape and asserts on the
+    // overlay JSON that `build()` returns.
+
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn write_file(path: &Path, contents: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn build_overlay_inherits_paths_and_rootdirs_from_package_extends() {
+        // Workspace tsconfig extends `@tsconfig/svelte` from a local
+        // node_modules. The overlay builder should walk the package-
+        // extends target, inherit its `paths` + `rootDirs`, and
+        // project them into the overlay with absolute-path values.
+        let tmp = tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+
+        let pkg_ts = ws.join("node_modules/@tsconfig/svelte/tsconfig.json");
+        write_file(
+            &pkg_ts,
+            r#"{
+                "compilerOptions": {
+                    "baseUrl": ".",
+                    "paths": {
+                        "$lib": ["./src/lib"],
+                        "$lib/*": ["./src/lib/*"]
+                    },
+                    "rootDirs": ["./extra-types"]
+                }
+            }"#,
+        );
+
+        let user_ts = ws.join("tsconfig.json");
+        write_file(
+            &user_ts,
+            r#"{ "extends": "@tsconfig/svelte/tsconfig.json" }"#,
+        );
+
+        let layout = CacheLayout::for_workspace(&ws);
+        let overlay = build(&layout, &user_ts, &[], &[]);
+
+        let opts = &overlay["compilerOptions"];
+        // rootDirs union includes svelte cache, workspace, AND the
+        // inherited rootDirs entry, resolved against the package
+        // tsconfig's dir (not the user's).
+        let root_dirs: Vec<&str> = opts["rootDirs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let expected_extra = ws
+            .join("node_modules/@tsconfig/svelte/extra-types")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            root_dirs.iter().any(|r| *r == expected_extra),
+            "expected {expected_extra:?} in rootDirs, got {root_dirs:?}",
+        );
+
+        // paths inherit from the package extends and get projected with
+        // a cache-mirror candidate prepended for each value.
+        let paths = opts["paths"].as_object().unwrap();
+        assert!(
+            paths.contains_key("$lib"),
+            "paths keys: {:?}",
+            paths.keys().collect::<Vec<_>>()
+        );
+        assert!(paths.contains_key("$lib/*"));
+        let lib_values: Vec<&str> = paths["$lib"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let expected_original = ws
+            .join("node_modules/@tsconfig/svelte/src/lib")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            lib_values.iter().any(|v| *v == expected_original),
+            "original paths-target not present: {lib_values:?}",
+        );
+    }
+
+    #[test]
+    fn build_overlay_substitutes_configdir_to_declaring_files_dir() {
+        // Base config uses `${configDir}` for both baseUrl and rootDirs;
+        // the user extends it from a DIFFERENT directory. Overlay must
+        // resolve the placeholder against the BASE's dir, not the user's.
+        let tmp = tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let base_dir = ws.join("configs");
+        let project_dir = ws.join("project");
+
+        let base_ts = base_dir.join("base.json");
+        write_file(
+            &base_ts,
+            r#"{
+                "compilerOptions": {
+                    "baseUrl": "${configDir}/src",
+                    "rootDirs": ["${configDir}/types"],
+                    "paths": {
+                        "$lib": ["./local/lib"],
+                        "$abs": ["${configDir}/abs-target"]
+                    }
+                }
+            }"#,
+        );
+
+        let user_ts = project_dir.join("tsconfig.json");
+        write_file(&user_ts, r#"{ "extends": "../configs/base.json" }"#);
+
+        let layout = CacheLayout::for_workspace(&project_dir);
+        let overlay = build(&layout, &user_ts, &[], &[]);
+
+        let opts = &overlay["compilerOptions"];
+
+        // ${configDir} in rootDirs resolves to the base's dir.
+        let root_dirs: Vec<&str> = opts["rootDirs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let expected_types = base_dir.join("types").to_string_lossy().into_owned();
+        assert!(
+            root_dirs.iter().any(|r| *r == expected_types),
+            "expected ${{configDir}}-resolved rootDirs entry {expected_types:?}, got {root_dirs:?}",
+        );
+        // Must NOT resolve against the user's dir.
+        let wrong_types = project_dir.join("types").to_string_lossy().into_owned();
+        assert!(
+            !root_dirs.iter().any(|r| *r == wrong_types),
+            "${{configDir}} wrongly resolved to user's dir: {wrong_types:?}",
+        );
+
+        // Paths: relative `./local/lib` resolves against base's baseUrl
+        // (which itself is ${configDir}/src → base_dir/src). Absolute
+        // `${configDir}/abs-target` resolves to base_dir/abs-target.
+        let paths = opts["paths"].as_object().unwrap();
+        let abs_values: Vec<&str> = paths["$abs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let expected_abs = base_dir.join("abs-target").to_string_lossy().into_owned();
+        assert!(
+            abs_values.iter().any(|v| *v == expected_abs),
+            "${{configDir}}-in-paths not resolved correctly: {abs_values:?}",
+        );
+    }
+
+    #[test]
+    fn build_overlay_preserves_array_extends_merge_order() {
+        // `extends: ["./a.json", "./b.json"]` — TS 5.0+ semantics walk
+        // left-to-right; the entry itself wins over array members, and
+        // later array entries override earlier ones. The overlay's
+        // `paths` first-wins should reflect BFS order: entry > b > a.
+        let tmp = tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+
+        write_file(
+            &ws.join("a.json"),
+            r#"{
+                "compilerOptions": {
+                    "paths": { "from-a": ["./a-target"] }
+                }
+            }"#,
+        );
+        write_file(
+            &ws.join("b.json"),
+            r#"{
+                "compilerOptions": {
+                    "paths": { "from-b": ["./b-target"] }
+                }
+            }"#,
+        );
+
+        let user_ts = ws.join("tsconfig.json");
+        write_file(&user_ts, r#"{ "extends": ["./a.json", "./b.json"] }"#);
+
+        let layout = CacheLayout::for_workspace(&ws);
+        let overlay = build(&layout, &user_ts, &[], &[]);
+
+        let paths = overlay["compilerOptions"]["paths"].as_object().unwrap();
+        // Both entries flow through to the overlay — BFS per-pattern
+        // first-wins means patterns declared in either base survive.
+        assert!(
+            paths.contains_key("from-a"),
+            "from-a missing from paths; got {:?}",
+            paths.keys().collect::<Vec<_>>(),
+        );
+        assert!(
+            paths.contains_key("from-b"),
+            "from-b missing from paths; got {:?}",
+            paths.keys().collect::<Vec<_>>(),
+        );
+    }
 }

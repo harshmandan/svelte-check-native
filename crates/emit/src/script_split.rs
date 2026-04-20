@@ -41,6 +41,12 @@ pub struct SplitScript {
     pub body: String,
     pub exported_locals: Vec<SmolStr>,
     pub hoisted_byte_offsets: Vec<u32>,
+    /// Byte offset inside `hoisted` where the real hoisted statements
+    /// start. Lines before this are synthetic `declare const ...` stubs
+    /// with no source-line mapping — emit's line-map builder must skip
+    /// past them so each `hoisted_byte_offsets` entry lines up with the
+    /// right slice of `hoisted`.
+    pub stub_prefix_len: usize,
     /// Per-export type info for assembling the component's Exports
     /// intersection on the default-export type alias. `type_source` is
     /// `None` when the user didn't annotate the declaration (or when
@@ -109,6 +115,7 @@ pub fn split_imports(
             body: content.to_string(),
             exported_locals: Vec::new(),
             hoisted_byte_offsets: Vec::new(),
+            stub_prefix_len: 0,
             export_type_infos: Vec::new(),
             hoisted_type_names: HashSet::new(),
         };
@@ -128,6 +135,7 @@ pub fn split_imports(
             body: content.to_string(),
             exported_locals: Vec::new(),
             hoisted_byte_offsets: Vec::new(),
+            stub_prefix_len: 0,
             export_type_infos: Vec::new(),
             hoisted_type_names: HashSet::new(),
         };
@@ -540,6 +548,7 @@ pub fn split_imports(
             body: content.to_string(),
             exported_locals,
             hoisted_byte_offsets: Vec::new(),
+            stub_prefix_len: 0,
             export_type_infos,
             hoisted_type_names: HashSet::new(),
         };
@@ -619,6 +628,12 @@ pub fn split_imports(
         }
     }
 
+    // Everything above this point is synthetic stub prelude. From here
+    // on, each hoisted statement corresponds 1:1 with an entry in
+    // `hoisted_byte_offsets`. Emit's line-map builder uses this to skip
+    // past the stubs before pairing overlay lines with source offsets.
+    let stub_prefix_len = hoisted.len();
+
     for &(start, end) in &hoist_spans {
         // Back up through same-line leading whitespace so the hoisted
         // statement keeps the source indentation. Column positions
@@ -680,6 +695,7 @@ pub fn split_imports(
         body,
         exported_locals,
         hoisted_byte_offsets,
+        stub_prefix_len,
         export_type_infos,
         hoisted_type_names,
     }

@@ -292,10 +292,20 @@ fn emit_document_with_render_name(
             // verbatim into `s.hoisted` — line counts inside each
             // statement match the source 1:1, so we emit one entry per
             // statement.
+            //
+            // `s.hoisted` starts with synthetic `declare const <name>:
+            // ...;` stubs for body-referenced names — those have NO
+            // entry in `hoisted_byte_offsets`, so we skip past them
+            // before aligning the walk cursor with the first real
+            // offset. Without this skip, every overlay line in the
+            // hoist region gets mapped to the wrong source line (every
+            // entry's source_offset is applied N-stubs too early).
             if let Some(instance) = &doc.instance_script {
-                let mut overlay_cursor = current_line(&out);
+                let stub_line_count =
+                    count_lines(&s.hoisted[..s.stub_prefix_len.min(s.hoisted.len())]);
+                let mut overlay_cursor = current_line(&out) + stub_line_count;
                 let bytes = s.hoisted.as_bytes();
-                let mut byte = 0usize;
+                let mut byte = s.stub_prefix_len.min(bytes.len());
                 for &source_offset in &s.hoisted_byte_offsets {
                     // Each hoisted statement runs until either the next
                     // `\n` followed by a non-blank line, or the next

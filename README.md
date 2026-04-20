@@ -22,19 +22,18 @@ Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-ch
 
 ## Speed
 
-Measured on a big SvelteKit + TypeScript project
-with 1206 `.svelte` files, M1 Pro 8C, median of 3 runs each:
+Measured on a SvelteKit + TypeScript monorepo with
+1359 `.svelte` files (Svelte 5 runes), M1 Pro 8C, mean of 2 runs each:
 
-`svelte-check-native --tsconfig tsconfig.json --diagnostic-sources 'ts,svelte'`
+`svelte-check-native --tsconfig tsconfig.json --diagnostic-sources 'js,svelte'`
 
 | Tool                    |      Cold |      Warm |     Dirty |   Speedup | Errors | Warnings | Files w/ issues |
 | :---------------------- | --------: | --------: | --------: | --------: | -----: | -------: | --------------: |
-| `svelte-check-native`   | **8.1 s** | **2.9 s** | **3.0 s** | **13.2×** |  **0** |       44 |              15 |
-| `svelte-check` 4.4.6    |    39.4 s |    38.2 s |    38.0 s |      1.0× |      0 |       44 |              15 |
+| `svelte-check-native`   | **6.0 s** | **2.6 s** | **2.6 s** | **15.8×** |      1 |       44 |              16 |
+| `svelte-check` 4.4.6    |    39.9 s |    41.0 s |    41.0 s |      1.0× |      1 |       44 |              16 |
 | `svelte-check-rs` 0.9.7 |    15.0 s |     5.5 s |     4.4 s |      6.9× |    732 |       44 |             261 |
 
-Diagnostic output is byte-equivalent to upstream `svelte-check` with
-the same flags.
+Diagnostic counts match `svelte-check` with same flags.
 
 ## Install
 

@@ -32,8 +32,8 @@ pub mod void_refs;
 pub use props::{PropInfo, find_props, find_props_type_source};
 pub use rune::{RuneCall, RuneKind, find_runes};
 pub use store::{
-    collect_top_level_bindings, collect_typed_top_level_lets, collect_typed_uninit_lets,
-    find_store_refs, find_store_refs_with_bindings,
+    collect_top_level_bindings, collect_type_only_import_bindings, collect_typed_top_level_lets,
+    collect_typed_uninit_lets, find_store_refs, find_store_refs_with_bindings,
 };
 pub use template_refs::find_template_refs;
 pub use template_walker::{

@@ -493,6 +493,30 @@ fn emit_document_with_render_name(
         accumulated
     };
 
+    // Type-only imports (`import type { X }` / `import { type X }`):
+    // collect_top_level_bindings deliberately excludes these (voiding a
+    // type name fires TS2693), so they never enter script_bindings. But
+    // a type-only import can still be "used" purely inside a template
+    // expression — the most common case is a type-cast in an attribute
+    // expression: `{foo(item as AppVideo)}`. Without a type-position
+    // reference in the overlay, tsgo fires TS6133 on the import.
+    //
+    // Collect them separately and intersect with template refs below so
+    // we can emit a `type __svn_tpl_type_refs = [A, B]` alias that
+    // keeps TS from flagging the import as unused.
+    let mut type_only_imports: HashSet<String> = HashSet::new();
+    if let Some(parsed) = parsed_instance.as_ref() {
+        svn_analyze::collect_type_only_import_bindings(&parsed.program, &mut type_only_imports);
+    }
+    if let Some(module_script) = &doc.module_script {
+        let alloc_mod2 = Allocator::default();
+        let parsed_mod2 = parse_script_body(&alloc_mod2, module_script.content, module_script.lang);
+        svn_analyze::collect_type_only_import_bindings(
+            &parsed_mod2.program,
+            &mut type_only_imports,
+        );
+    }
+
     // Walk template expressions for identifier references. A single walk
     // produces both:
     //   - `template_void_refs`: refs that match a script binding —
@@ -502,32 +526,42 @@ fn emit_document_with_render_name(
     //     declarations: a store imported in the script but only
     //     auto-subscribed in the template (`{$page.data.x}`) needs the
     //     same `let $page: any;` declaration as a script-side use.
-    let (template_void_refs, template_store_refs) = if script_bindings.is_empty() {
-        (Vec::new(), Vec::new())
-    } else {
-        let already: HashSet<&str> = store_refs
-            .iter()
-            .chain(prop_names.iter())
-            .map(|s| s.as_str())
-            .collect();
-        let mut tpl_voids = Vec::new();
-        let mut tpl_stores = Vec::new();
-        let mut store_seen: HashSet<String> = store_refs.iter().map(|s| s.to_string()).collect();
-        for name in find_template_refs(fragment, doc.source) {
-            // `$foo` where `foo` is a script binding (and not already a
-            // declared store) — synthesize the auto-subscribe alias.
-            if let Some(base) = name.as_str().strip_prefix('$') {
-                if script_bindings.contains(base) && store_seen.insert(name.to_string()) {
-                    tpl_stores.push(name.clone());
-                    continue;
+    //   - type-only import names referenced in template expressions —
+    //     kept alive via a module-scope type alias below.
+    let (template_void_refs, template_store_refs, template_type_refs) =
+        if script_bindings.is_empty() && type_only_imports.is_empty() {
+            (Vec::new(), Vec::new(), Vec::new())
+        } else {
+            let already: HashSet<&str> = store_refs
+                .iter()
+                .chain(prop_names.iter())
+                .map(|s| s.as_str())
+                .collect();
+            let mut tpl_voids = Vec::new();
+            let mut tpl_stores = Vec::new();
+            let mut tpl_types: Vec<SmolStr> = Vec::new();
+            let mut type_seen: HashSet<String> = HashSet::new();
+            let mut store_seen: HashSet<String> =
+                store_refs.iter().map(|s| s.to_string()).collect();
+            for name in find_template_refs(fragment, doc.source) {
+                // `$foo` where `foo` is a script binding (and not already a
+                // declared store) — synthesize the auto-subscribe alias.
+                if let Some(base) = name.as_str().strip_prefix('$') {
+                    if script_bindings.contains(base) && store_seen.insert(name.to_string()) {
+                        tpl_stores.push(name.clone());
+                        continue;
+                    }
+                }
+                if script_bindings.contains(name.as_str()) && !already.contains(name.as_str()) {
+                    tpl_voids.push(name);
+                } else if type_only_imports.contains(name.as_str())
+                    && type_seen.insert(name.to_string())
+                {
+                    tpl_types.push(name);
                 }
             }
-            if script_bindings.contains(name.as_str()) && !already.contains(name.as_str()) {
-                tpl_voids.push(name);
-            }
-        }
-        (tpl_voids, tpl_stores)
-    };
+            (tpl_voids, tpl_stores, tpl_types)
+        };
     store_refs.extend(template_store_refs);
 
     // Store auto-subscribe aliases: declare a typed `let $store!:
@@ -1035,6 +1069,23 @@ fn emit_document_with_render_name(
                 "declare type __svn_component_default = import('svelte').SvelteComponent<{props}>{exports_clause};"
             );
         }
+    }
+    // Type-position reference for every type-only import that was
+    // consumed only in a template expression (e.g. as cast target).
+    // TS considers the type used, so the import isn't flagged TS6133.
+    // Module-scope type alias works even though declared after the
+    // render function; type-level resolution doesn't depend on source
+    // order.
+    if !template_type_refs.is_empty() {
+        out.push_str("type __svn_tpl_type_refs = [");
+        for (i, name) in template_type_refs.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(name.as_str());
+        }
+        out.push_str("];\n");
+        out.push_str("void (0 as any as __svn_tpl_type_refs);\n");
     }
     out.push_str("export default __svn_component_default;\n");
 

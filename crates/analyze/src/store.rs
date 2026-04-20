@@ -255,6 +255,45 @@ pub fn collect_top_level_bindings(program: &oxc_ast::ast::Program<'_>, out: &mut
     }
 }
 
+/// Collect the set of type-only import specifier names. Parallel to
+/// [`collect_top_level_bindings`] but only returns names that were
+/// imported strictly as types (`import type { X }` / `import { type X }`).
+/// These have no runtime value — downstream emit must reference them in
+/// TYPE position (`type _ = [X, Y]`) to keep TS from firing TS6133 when
+/// they're only consumed inside template expressions (e.g. as cast
+/// targets: `{foo(item as AppVideo)}`).
+pub fn collect_type_only_import_bindings(
+    program: &oxc_ast::ast::Program<'_>,
+    out: &mut HashSet<String>,
+) {
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(decl) = stmt else {
+            continue;
+        };
+        // `import type { X, Y } from '...'` — every specifier is type-only.
+        if matches!(decl.import_kind, ImportOrExportKind::Type) {
+            if let Some(specifiers) = &decl.specifiers {
+                for spec in specifiers {
+                    if let ImportDeclarationSpecifier::ImportSpecifier(s) = spec {
+                        out.insert(s.local.name.to_string());
+                    }
+                }
+            }
+            continue;
+        }
+        // Mixed import with per-specifier `type` prefix.
+        if let Some(specifiers) = &decl.specifiers {
+            for spec in specifiers {
+                if let ImportDeclarationSpecifier::ImportSpecifier(s) = spec {
+                    if matches!(s.import_kind, ImportOrExportKind::Type) {
+                        out.insert(s.local.name.to_string());
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Collect every top-level `let NAME: Type;` (typed, no initializer)
 /// binding name. Used to seed the definite-assign rewriter for
 /// Svelte-style "declare now, assign in a handler later" patterns —

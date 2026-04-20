@@ -607,9 +607,14 @@ fn is_ident_continue(c: char) -> bool {
 /// generate a satisfies-check for, push a `ComponentInstantiation` to
 /// the summary.
 ///
-/// Only emits when the component name is a simple identifier (no
-/// dotted forms like `<ui.MyButton />` — `typeof ui.MyButton` would
-/// require careful expression emission which v0.1 punts on).
+/// Handles both simple component names (`<MyButton />`) and dotted
+/// forms (`<ui.MyButton />`, `<UI.TextInput>`). The dotted form is
+/// passed verbatim through to the emit's `__svn_ensure_component(...)`
+/// call — `UI.TextInput` evaluates to the member-referenced component
+/// value, which the ensure_component overloads resolve the same way
+/// as a simple-identifier reference. Emit also voids the root
+/// identifier via template_refs, so the barrel import isn't flagged
+/// unused.
 ///
 /// Each plain attribute (including boolean shorthand and `{shorthand}`)
 /// contributes a `PropShape` to the literal. Directive attributes
@@ -630,9 +635,6 @@ fn collect_component_instantiation(
     _source: &str,
     summary: &mut TemplateSummary,
 ) {
-    if c.name.contains('.') {
-        return;
-    }
     let mut props: Vec<PropShape> = Vec::with_capacity(c.attributes.len());
     let mut on_events: Vec<OnEventDirective> = Vec::new();
     let mut bind_this_target: Option<Range> = None;

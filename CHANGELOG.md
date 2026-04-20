@@ -4,6 +4,102 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7]
+
+Patch release: two correctness fixes that close ~30% of the palacms
+parity gap with upstream `svelte-check` (default mode). No emit-
+shape surprises; no regression on any other bench.
+
+### Fixed — component-instantiation scaffolding for dotted tag names
+
+`<UI.TextInput>`, `<ui.MyButton>`, `<Foo.Bar>` and similar member-
+expression component invocations were silently disqualified in the
+analyze phase — the template-check body emitted nothing for them.
+Consequence: any type mismatch on props or bindings at those sites
+passed silently.
+
+The disqualifier was a one-line early return (`if c.name.contains('.')
+return`) carried over from a v0.1 scope cut. The emit path already
+handled dotted names correctly: `__svn_ensure_component(UI.TextInput)`
+is a valid TypeScript member-expression value, and the root
+identifier (`UI`) is voided via the existing template-refs pass so
+the barrel import doesn't trip TS6133.
+
+Dropping the return unlocks the full component-check emission for
+member-expression components. palacms (which leans heavily on this
+pattern in its `UI` barrel) picked up 20 real user-code bugs that
+were previously invisible.
+
+Snapshot `htmlx2jsx/component-name-dot` updated to the new emit
+shape; upstream svelte2tsx's reference output for the same input
+produces the equivalent construct call.
+
+Commit `a654def`.
+
+### Fixed — TS5097 parity on user-authored `.ts`-extension imports
+
+The overlay builder had `allowImportingTsExtensions: true` hardcoded
+on every run — carried from an earlier architecture where we briefly
+rewrote `.svelte` imports to `.svelte.ts`. That rewrite was removed
+long ago; the flag stayed. Side effect: when users wrote
+`import { x } from './helper.ts'` in their own Svelte source
+(explicit `.ts` extension), our overlay silenced the TS5097 upstream
+fires by default.
+
+Upstream's own overlay doesn't set the flag. Their overlay inherits
+whatever the user's tsconfig declares. If the user opts into
+`allowImportingTsExtensions` in their tsconfig, `.ts`-extension
+imports are fine; otherwise TS5097 fires.
+
+This release matches upstream's behavior exactly. The flag is now
+inherited, not forced. Users who want `.ts`-extension imports set
+it in their own tsconfig and our overlay picks it up through the
+extends chain.
+
+The flag was NOT load-bearing on our `.svelte` overlay resolution:
+
+- `allowArbitraryExtensions: true` handles `.svelte` imports via
+  the `.d.svelte.ts` ambient sidecar.
+- The sidecar's `.ts` re-export is legal under declaration-file
+  rules regardless of `allowImportingTsExtensions`.
+
+Both of those still work after the change.
+
+Fixture `43-user-include-patterns` updated: the test's deliberate
+`import from './helper.ts'` line now expects TS5097 (matching
+upstream behavior for a user whose tsconfig doesn't opt in). The
+fixture's note explains the parity rule.
+
+Commit `b912b77`.
+
+### Scoreboard delta on bench/palacms
+
+| metric | pre-release | post-`a654def` | post-`b912b77` |
+|---|---:|---:|---:|
+| ours errors | 321 | 340 | **384** |
+| overlap with upstream | 156 | 159 | **219** |
+| upstream-only (our misses) | 176 | 173 | **113** |
+| files_with_problems | 64 | 73 | **115** (upstream: 116) |
+
+Net: **63 upstream catches newly matched this release** (from 176
+misses down to 113, or +60 on the overlap axis). No regressions on
+the other four benches (control-svelte-4 1124/0/2/2,
+control-svelte-5 1/1/0/1, local-music-pwa 88/0/0/0, cnblocks
+832/8/127/51 all unchanged).
+
+### Not in this release (documented for context)
+
+- **Template-attribute-expression preservation for DOM elements.**
+  Investigated as a candidate for closing the remaining 113 palacms
+  misses. Source-location classification showed the reachable yield
+  was only ~20-35 catches (18-30%), not the ~80 originally estimated:
+  ~55 of the 113 misses are in component-callback contexts we
+  ALREADY emit, where the blocker is tsgo's current limitations on
+  JSDoc typedef inference and discriminated-union narrowing — not
+  anything we can fix in emission. Deferred until tsgo matures or a
+  clearer ROI appears. See `notes/NEXT.md` session notes for the
+  full classification.
+
 ## [0.3.6]
 
 Patch release: sibling-visibility fix for solution-style monorepos

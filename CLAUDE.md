@@ -501,3 +501,91 @@ Grep `^.* COMPLETED ` for the summary line, or pipe
 
 The compiler-warning bridge silently no-ops if `bun`/`node` isn't on
 `PATH`. Force it OFF explicitly with `--diagnostic-sources js`.
+
+### Release workflow
+
+v0.3.0 process, documented for the next bump.
+
+**Six packages ship together:**
+- `svelte-check-native` — the meta/wrapper npm package users install.
+- `svelte-check-native-darwin-arm64` — M-series Mac native binary.
+- `svelte-check-native-darwin-x64` — Intel Mac native binary.
+- `svelte-check-native-linux-arm64` — ARM Linux native binary.
+- `svelte-check-native-linux-x64` — x86_64 Linux native binary.
+- `svelte-check-native-win32-x64` — Windows native binary.
+
+The meta package `optionalDependencies` pins each platform package
+at the exact same version so `npm install svelte-check-native` gives
+each user their correct binary. `scripts/prepare-release.mjs` is the
+single source of truth that keeps the six `package.json` versions +
+`optionalDependencies` pins in lockstep — always re-run it after any
+version bump.
+
+**Prerequisites (check once per workstation):**
+
+```sh
+rustup target list --installed | grep -E "apple|linux|windows"
+# expect: aarch64-apple-darwin, x86_64-apple-darwin,
+#         aarch64-unknown-linux-gnu, x86_64-unknown-linux-gnu,
+#         x86_64-pc-windows-gnu
+# add missing with: rustup target add <triple>
+
+zig version && cargo zigbuild --version
+# install with: brew install zig && cargo install cargo-zigbuild
+
+npm whoami
+# must return a user with publish rights to @harshmandan/*
+```
+
+**Bump + tag:**
+
+1. Update `Cargo.toml` `[workspace.package].version` + root `package.json` `version` (both must match exactly).
+2. Update `CHANGELOG.md` — add a new `## [X.Y.Z]` section at the top with what shipped.
+3. Commit: `git commit -am "release: vX.Y.Z"`.
+4. Tag: `git tag vX.Y.Z`.
+
+**Publish:**
+
+```sh
+# Dry run — builds all platform binaries, regenerates dist-packs/,
+# packs + validates without writing to the registry. Use this FIRST.
+npm run publish:dry
+
+# If dry-run is clean, publish for real. Order is enforced by
+# scripts/publish-all.mjs: 5 platform packages first, then the
+# meta wrapper last so optionalDependencies are resolvable when
+# the wrapper hits the registry.
+npm run publish:all
+```
+
+`publish:all` chains `build:all` → `prepare-release` → `publish-all.mjs`.
+It does NOT push to git — push `main` + the new tag separately:
+
+```sh
+git push origin main
+git push origin vX.Y.Z
+```
+
+**Post-release verification:**
+
+```sh
+npm view svelte-check-native version
+# expect: X.Y.Z
+
+# Fresh-install smoke test
+cd /tmp && rm -rf sc-smoke && mkdir sc-smoke && cd sc-smoke
+npm init -y
+npm i -D svelte-check-native @typescript/native-preview
+npx svelte-check-native --version
+# expect: svelte-check-native X.Y.Z
+```
+
+**Don't:**
+- Don't run `npm publish` manually in individual package dirs — ordering
+  must be enforced (platforms first, wrapper last) or installs break.
+- Don't bump version without re-running `prepare-release.mjs` — the six
+  package.json versions will drift out of sync and the wrapper's
+  `optionalDependencies` will point at nonexistent platform versions.
+- Don't push a git tag before the corresponding npm publish completes —
+  users grabbing tarballs by tag will see a version that isn't yet
+  installable.

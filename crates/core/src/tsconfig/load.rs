@@ -71,6 +71,64 @@ pub fn load(entry: impl AsRef<Path>) -> Result<TsConfigFile, LoadError> {
     load_recursive(entry.as_ref(), &mut seen)
 }
 
+/// Walk the extends chain and return every parsed + `${configDir}`-
+/// substituted [`TsConfigFile`] visited, BFS order starting at the
+/// entry file. Extends references are resolved with the same rules as
+/// [`load`] — relative paths with `.json` inference, package extends via
+/// `node_modules` walk-up, array-extends left-to-right.
+///
+/// Unlike [`load`], this returns each file unmerged. Callers that need
+/// custom aggregation across the chain (e.g. the overlay builder, which
+/// wants a UNION of `rootDirs` from every config rather than TS's
+/// replace-on-child semantics) can iterate the list directly.
+///
+/// Cycles and unreadable files are skipped silently — the function is
+/// best-effort, matching what the overlay builder's hand-rolled walk
+/// used to do. Hard errors (missing entry file, malformed entry) still
+/// surface via [`LoadError`].
+pub fn load_chain(entry: impl AsRef<Path>) -> Result<Vec<TsConfigFile>, LoadError> {
+    use std::collections::VecDeque;
+
+    let entry_canon = entry
+        .as_ref()
+        .canonicalize()
+        .map_err(|source| LoadError::Io {
+            path: entry.as_ref().to_path_buf(),
+            source,
+        })?;
+
+    let mut out: Vec<TsConfigFile> = Vec::new();
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    let mut queue: VecDeque<PathBuf> = VecDeque::from([entry_canon]);
+
+    while let Some(path) = queue.pop_front() {
+        if !visited.insert(path.clone()) {
+            continue;
+        }
+        let mut file = match parse_file(&path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        file.path = path.clone();
+        substitute_config_dir(&mut file);
+
+        let parent_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        for ext_ref in &file.extends {
+            match resolve_extends(ext_ref, &parent_dir) {
+                Ok(resolved) => {
+                    let canon = resolved.canonicalize().unwrap_or(resolved);
+                    if !visited.contains(&canon) {
+                        queue.push_back(canon);
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        out.push(file);
+    }
+    Ok(out)
+}
+
 fn load_recursive(path: &Path, seen: &mut HashSet<PathBuf>) -> Result<TsConfigFile, LoadError> {
     let canonical = path.canonicalize().map_err(|source| LoadError::Io {
         path: path.to_path_buf(),
@@ -683,6 +741,89 @@ mod tests {
 
         let cfg = load(&ts).unwrap();
         assert_eq!(cfg.path, ts.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn load_chain_returns_every_visited_file_bfs() {
+        let tmp = tempdir().unwrap();
+        let gp = tmp.path().join("grandparent.json");
+        let p = tmp.path().join("parent.json");
+        let c = tmp.path().join("tsconfig.json");
+        write(&gp, r#"{ "compilerOptions": { "strict": true } }"#);
+        write(
+            &p,
+            r#"{ "extends": "./grandparent.json", "compilerOptions": { "target": "ES2020" } }"#,
+        );
+        write(
+            &c,
+            r#"{ "extends": "./parent.json", "compilerOptions": { "target": "ES2022" } }"#,
+        );
+
+        let chain = load_chain(&c).unwrap();
+        // BFS from entry: child, parent, grandparent.
+        assert_eq!(chain.len(), 3);
+        assert!(chain[0].path.ends_with("tsconfig.json"));
+        assert!(chain[1].path.ends_with("parent.json"));
+        assert!(chain[2].path.ends_with("grandparent.json"));
+    }
+
+    #[test]
+    fn load_chain_follows_array_extends_in_order() {
+        let tmp = tempdir().unwrap();
+        let a = tmp.path().join("a.json");
+        let b = tmp.path().join("b.json");
+        let ts = tmp.path().join("tsconfig.json");
+        write(&a, r#"{ "compilerOptions": { "strict": true } }"#);
+        write(&b, r#"{ "compilerOptions": { "target": "ES2022" } }"#);
+        write(&ts, r#"{ "extends": ["./a.json", "./b.json"] }"#);
+
+        let chain = load_chain(&ts).unwrap();
+        assert_eq!(chain.len(), 3);
+        assert!(chain[0].path.ends_with("tsconfig.json"));
+        assert!(chain[1].path.ends_with("a.json"));
+        assert!(chain[2].path.ends_with("b.json"));
+    }
+
+    #[test]
+    fn load_chain_substitutes_config_dir_per_file() {
+        let tmp = tempdir().unwrap();
+        let base_dir = tmp.path().join("configs");
+        let child_dir = tmp.path().join("project");
+        fs::create_dir_all(&base_dir).unwrap();
+        fs::create_dir_all(&child_dir).unwrap();
+        let base = base_dir.join("base.json");
+        let ts = child_dir.join("tsconfig.json");
+        write(
+            &base,
+            r#"{ "compilerOptions": { "rootDirs": ["${configDir}/src"] } }"#,
+        );
+        write(&ts, r#"{ "extends": "../configs/base.json" }"#);
+
+        let chain = load_chain(&ts).unwrap();
+        // Parent's rootDirs should have ${configDir} resolved against
+        // base's dir, not child's.
+        let expected = base_dir.canonicalize().unwrap().join("src");
+        let base_entry = chain
+            .iter()
+            .find(|f| f.path.ends_with("base.json"))
+            .unwrap();
+        assert_eq!(
+            base_entry.compiler_options.root_dirs,
+            vec![expected.to_str().unwrap()]
+        );
+    }
+
+    #[test]
+    fn load_chain_skips_unreadable_extends_without_failing() {
+        let tmp = tempdir().unwrap();
+        let ts = tmp.path().join("tsconfig.json");
+        // Extends a file that doesn't exist. load() errors; load_chain
+        // is best-effort and returns just the entry.
+        write(&ts, r#"{ "extends": "./missing.json" }"#);
+
+        let chain = load_chain(&ts).unwrap();
+        assert_eq!(chain.len(), 1);
+        assert!(chain[0].path.ends_with("tsconfig.json"));
     }
 
     #[test]

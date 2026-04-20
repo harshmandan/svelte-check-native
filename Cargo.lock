@@ -1189,7 +1189,6 @@ dependencies = [
  "anyhow",
  "blake3",
  "camino",
- "json5",
  "serde",
  "serde_json",
  "svn-core",

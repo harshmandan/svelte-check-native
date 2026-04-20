@@ -30,6 +30,7 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
+use svn_core::tsconfig::{TsConfigFile, load_chain};
 
 use crate::cache::CacheLayout;
 
@@ -58,6 +59,14 @@ pub fn build(
         .collect();
     files.push(layout.svelte_shims.to_string_lossy().into_owned());
 
+    // Walk the user's extends chain once via the canonical loader.
+    // Every derived field the overlay needs (paths, rootDirs, include,
+    // exclude, types) is computed by iterating this single Vec — no
+    // parallel JSON reads, no local extends resolver. The loader does
+    // `${configDir}` substitution, `.json` inference, and
+    // `node_modules/@tsconfig/...` walk-up for us.
+    let chain: Vec<TsConfigFile> = load_chain(user_tsconfig).unwrap_or_default();
+
     let mut root_dirs: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let push_root =
@@ -76,26 +85,68 @@ pub fn build(
     // cache root's parent is no longer the workspace ever since we
     // moved the cache under node_modules/.cache/.
     push_root(layout.workspace.as_path(), &mut root_dirs, &mut seen);
-    // Whatever the user's extends chain declared.
-    for entry in collect_user_root_dirs(user_tsconfig) {
-        push_root(entry.as_path(), &mut root_dirs, &mut seen);
+    // UNION `rootDirs` across the whole extends chain. TS semantics
+    // REPLACE the field when a child declares it, but we need the
+    // widest possible virtual-merge in the overlay so every relative
+    // import the user could have written still resolves back to the
+    // real source tree.
+    for file in &chain {
+        let dir = file.config_dir();
+        for rd in &file.compiler_options.root_dirs {
+            let resolved = if Path::new(rd).is_absolute() {
+                PathBuf::from(rd)
+            } else {
+                dir.join(rd)
+            };
+            push_root(normalize(&resolved).as_path(), &mut root_dirs, &mut seen);
+        }
     }
 
-    // Path aliases: collect every entry the user defined in their
-    // extends chain and prepend a cache-mirror candidate. TS resolves
-    // each pattern's value-list in order, so a path-mapped import like
-    // `$lib/foo/Bar.svelte.ts` first tries our generated overlay file
-    // and falls back to the source location if not found. Without this,
-    // path-mapped Svelte imports skip rootDirs entirely and never reach
-    // our overlay (rootDirs only kicks in for raw relative paths).
+    // Path aliases: walk the chain and apply per-pattern first-wins
+    // (inner config beats outer for the same key — the walker is BFS
+    // from the entry, so chain[0] is the innermost). Prepend a
+    // cache-mirror candidate to each value-list so a path-mapped import
+    // like `$lib/foo/Bar.svelte.ts` first tries our generated overlay
+    // file and falls back to the source location if not found.
+    // Without this, path-mapped Svelte imports skip rootDirs entirely
+    // and never reach our overlay (rootDirs only kicks in for raw
+    // relative paths).
     let mut paths_map: serde_json::Map<String, Value> = serde_json::Map::new();
-    for (pattern, values) in collect_user_paths(user_tsconfig) {
+    let mut paths_keys_order: Vec<String> = Vec::new();
+    let mut paths_accumulated: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for file in &chain {
+        let dir = file.config_dir();
+        // baseUrl (if set) resolves relative `paths` values.
+        let base_url = match file.compiler_options.base_url.as_deref() {
+            Some(b) if Path::new(b).is_absolute() => PathBuf::from(b),
+            Some(b) => dir.join(b),
+            None => dir.to_path_buf(),
+        };
+        for (pattern, values) in &file.compiler_options.paths {
+            if paths_accumulated.contains_key(pattern) {
+                continue; // inner wins per pattern
+            }
+            let mut resolved: Vec<String> = Vec::new();
+            for v in values {
+                let abs = if Path::new(v).is_absolute() {
+                    PathBuf::from(v)
+                } else {
+                    base_url.join(v)
+                };
+                resolved.push(normalize(&abs).to_string_lossy().into_owned());
+            }
+            if !resolved.is_empty() {
+                paths_keys_order.push(pattern.clone());
+                paths_accumulated.insert(pattern.clone(), resolved);
+            }
+        }
+    }
+    for pattern in paths_keys_order {
+        let values = paths_accumulated.remove(&pattern).unwrap_or_default();
         let mut merged: Vec<String> = Vec::new();
         for v in &values {
-            // The cache mirror sits at <overlay>/svelte/<same-relative-segment>.
-            // The tail after the workspace root in `v` is what we mirror.
-            let mirrored = mirror_into_overlay(layout, v);
-            if let Some(m) = mirrored {
+            if let Some(m) = mirror_into_overlay(layout, v) {
                 if !merged.iter().any(|x| x == &m) {
                     merged.push(m);
                 }
@@ -155,7 +206,22 @@ pub fn build(
     // regenerated yet, a typo, etc.) silently zeros our error count.
     // We override the inherited `types` with the surviving entries so
     // the user's intent is preserved without the fatal-abort.
-    if let Some(types) = collect_user_types(user_tsconfig) {
+    // `types`: inner wins (first config in the BFS chain that declares
+    // the field). Filter against tsgo's resolution rules so a stale
+    // entry can't fatally TS2688 and zero out our error count.
+    if let Some(types) = chain
+        .iter()
+        .find(|f| f.compiler_options.types.is_some())
+        .and_then(|f| {
+            f.compiler_options.types.as_ref().map(|list| {
+                let dir = f.config_dir();
+                list.iter()
+                    .filter(|t| is_resolvable_types_entry(t, dir))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+        })
+    {
         compiler_options.insert("types".into(), json!(types));
     }
     if !paths_map.is_empty() {
@@ -185,7 +251,11 @@ pub fn build(
     // generated overlays we list in `files`. Patterns are emitted as
     // absolute path globs so the tsconfig works regardless of the
     // overlay's location relative to the workspace.
-    let user_includes = collect_user_includes(user_tsconfig);
+    // Inner wins for include/exclude. `include` drops `.svelte`-only
+    // patterns since our generated overlays in `files` already cover
+    // them; `exclude` keeps everything (dropping a pattern opens a
+    // hole).
+    let user_includes = first_non_empty_patterns(&chain, |f| f.include.as_deref(), true);
 
     let mut overlay = serde_json::Map::new();
     overlay.insert("extends".into(), Value::String(extends_rel));
@@ -208,7 +278,8 @@ pub fn build(
     // Only emit the field if at least one source contributed — an
     // empty `exclude` field in our overlay would clobber the user's
     // inherited exclude with an empty list.
-    let mut excludes: Vec<String> = collect_user_excludes(user_tsconfig);
+    let mut excludes: Vec<String> =
+        first_non_empty_patterns(&chain, |f| f.exclude.as_deref(), false);
     for p in kit_overlay_sources {
         excludes.push(p.to_string_lossy().into_owned());
     }
@@ -241,242 +312,43 @@ fn mirror_into_overlay(layout: &CacheLayout, path_str: &str) -> Option<String> {
     Some(mirrored.to_string_lossy().into_owned())
 }
 
-/// Walk the user tsconfig's `extends` chain and collect every `paths`
-/// entry, resolving relative paths-target values against the declaring
-/// tsconfig's directory (or its `baseUrl` when set). Inner configs
-/// override outer (as TS does).
+/// First tsconfig in the BFS chain that declares `include` / `exclude`
+/// wins — match TS's replace-on-child semantics. Each pattern is
+/// resolved against the declaring config's dir so the overlay's
+/// absolute-path globs work regardless of where the overlay tsconfig
+/// itself lives.
 ///
-/// `extends` may be a single string OR an array of strings (TS 5.0+).
-/// Arrays are walked left-to-right; later entries override earlier
-/// ones for conflicting keys, matching TS semantics. Combined with
-/// "inner wins over outer," the precedence is: the first config to
-/// declare a key in a depth-first inner-first walk wins.
-fn collect_user_paths(tsconfig: &Path) -> Vec<(String, Vec<String>)> {
-    use std::collections::HashMap;
-    let mut accumulated: HashMap<String, Vec<String>> = HashMap::new();
-    let mut order: Vec<String> = Vec::new();
-
-    // FIFO queue rather than single-pointer so array-extends work.
-    // Cap iterations to keep pathological cycles from looping.
-    let mut queue: std::collections::VecDeque<PathBuf> =
-        std::collections::VecDeque::from([tsconfig.to_path_buf()]);
-    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    let mut hops = 0usize;
-    while let Some(path) = queue.pop_front() {
-        hops += 1;
-        if hops > 32 {
-            break;
-        }
-        if !visited.insert(path.clone()) {
-            continue;
-        }
-        let Ok(content) = std::fs::read_to_string(&path) else {
+/// `drop_svelte_only` filters patterns that only match raw `.svelte`
+/// files — valid for `include` (our generated `.svelte.ts` overlays in
+/// `files` already cover that surface) but NOT for `exclude`, where
+/// dropping a pattern would open a hole.
+fn first_non_empty_patterns<F>(
+    chain: &[TsConfigFile],
+    get: F,
+    drop_svelte_only: bool,
+) -> Vec<String>
+where
+    F: Fn(&TsConfigFile) -> Option<&[String]>,
+{
+    for file in chain {
+        let Some(patterns) = get(file) else {
             continue;
         };
-        let Ok(json) = json5::from_str::<Value>(&content) else {
-            continue;
-        };
-        let dir = path.parent().unwrap_or(Path::new(""));
-        let opts = json.get("compilerOptions");
-        // baseUrl resolves relative paths inside `paths` values.
-        let base_url = opts
-            .and_then(|c| c.get("baseUrl"))
-            .and_then(Value::as_str)
-            .map(|b| {
-                if Path::new(b).is_absolute() {
-                    PathBuf::from(b)
-                } else {
-                    dir.join(b)
-                }
-            })
-            .unwrap_or_else(|| dir.to_path_buf());
-        if let Some(p) = opts.and_then(|c| c.get("paths")).and_then(Value::as_object) {
-            for (pattern, values) in p {
-                if accumulated.contains_key(pattern) {
-                    // Inner (closer-to-root) wins. Skip outer entries.
-                    continue;
-                }
-                let arr = match values.as_array() {
-                    Some(a) => a,
-                    None => continue,
-                };
-                let mut resolved: Vec<String> = Vec::new();
-                for v in arr {
-                    let Some(s) = v.as_str() else { continue };
-                    let abs = if Path::new(s).is_absolute() {
-                        PathBuf::from(s)
-                    } else {
-                        base_url.join(s)
-                    };
-                    resolved.push(normalize(&abs).to_string_lossy().into_owned());
-                }
-                if !resolved.is_empty() {
-                    order.push(pattern.clone());
-                    accumulated.insert(pattern.clone(), resolved);
-                }
+        let dir = file.config_dir();
+        let mut out: Vec<String> = Vec::new();
+        for s in patterns {
+            if drop_svelte_only && is_svelte_only_pattern(s) {
+                continue;
             }
+            let resolved = if Path::new(s).is_absolute() {
+                PathBuf::from(s)
+            } else {
+                dir.join(s)
+            };
+            out.push(normalize(&resolved).to_string_lossy().into_owned());
         }
-        for ext in resolve_extends(&json, dir) {
-            queue.push_back(ext);
-        }
-    }
-    order
-        .into_iter()
-        .filter_map(|k| accumulated.remove(&k).map(|v| (k, v)))
-        .collect()
-}
-
-/// Read an `extends` field that may be a single string or an array of
-/// strings, returning the resolved absolute path(s) in declaration
-/// order. Returns empty if `extends` is absent or malformed.
-fn resolve_extends(json: &Value, dir: &Path) -> Vec<PathBuf> {
-    let Some(extends) = json.get("extends") else {
-        return Vec::new();
-    };
-    let resolve_one = |s: &str| -> PathBuf {
-        if Path::new(s).is_absolute() {
-            PathBuf::from(s)
-        } else {
-            dir.join(s)
-        }
-    };
-    if let Some(s) = extends.as_str() {
-        return vec![resolve_one(s)];
-    }
-    if let Some(arr) = extends.as_array() {
-        return arr
-            .iter()
-            .filter_map(|v| v.as_str().map(resolve_one))
-            .collect();
-    }
-    Vec::new()
-}
-
-/// Walk the user tsconfig's `extends` chain (depth-limited; tsconfig
-/// chains shouldn't realistically exceed a handful of links) and return
-/// every `rootDirs` entry resolved to an absolute path.
-///
-/// Unreadable, malformed, or missing files cause the walk to stop — we
-/// don't care about producing perfect output, only about preserving as
-/// much of the user's intent as we can. The overlay still works (just
-/// with fewer virtual roots merged) when this returns empty.
-fn collect_user_root_dirs(tsconfig: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut queue: std::collections::VecDeque<PathBuf> =
-        std::collections::VecDeque::from([tsconfig.to_path_buf()]);
-    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    let mut hops = 0usize;
-    while let Some(path) = queue.pop_front() {
-        hops += 1;
-        if hops > 32 {
-            break;
-        }
-        if !visited.insert(path.clone()) {
-            continue;
-        }
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(json) = json5::from_str::<Value>(&content) else {
-            continue;
-        };
-        let dir = path.parent().unwrap_or(Path::new(""));
-        if let Some(rd) = json
-            .get("compilerOptions")
-            .and_then(|c| c.get("rootDirs"))
-            .and_then(|v| v.as_array())
-        {
-            for entry in rd {
-                if let Some(s) = entry.as_str() {
-                    let resolved = if Path::new(s).is_absolute() {
-                        PathBuf::from(s)
-                    } else {
-                        dir.join(s)
-                    };
-                    out.push(normalize(&resolved));
-                }
-            }
-        }
-        for ext in resolve_extends(&json, dir) {
-            queue.push_back(ext);
-        }
-    }
-    out
-}
-
-/// Walk the user tsconfig's `extends` chain and collect every `include`
-/// pattern, resolved to an absolute path-glob. Only the FIRST tsconfig
-/// in the chain that declares `include` wins, matching TS behavior:
-/// `include` in an inner config overrides any inherited from `extends`.
-///
-/// Patterns matching `**/*.svelte` (or anything that ends in
-/// `.svelte`) are dropped — tsgo can't parse raw .svelte and the
-/// .svelte content is already covered by our generated overlay files
-/// in the `files` array. Keeping `.svelte` patterns would either fire
-/// "file is not a TS file" errors or get silently ignored depending on
-/// tsgo build; either way they add nothing useful.
-fn collect_user_includes(tsconfig: &Path) -> Vec<String> {
-    collect_user_patterns(tsconfig, "include", true)
-}
-
-/// Walks the extends chain and returns the user's `exclude` patterns
-/// as absolute path globs. Same shape as [`collect_user_includes`] —
-/// returned when we need to carry them forward into our own overlay
-/// `exclude` (e.g. when we also want to exclude Kit-file source
-/// originals). tsconfig `exclude` is REPLACED not merged when a child
-/// defines it, so we must union the user's patterns into ours
-/// explicitly.
-fn collect_user_excludes(tsconfig: &Path) -> Vec<String> {
-    collect_user_patterns(tsconfig, "exclude", false)
-}
-
-/// Shared backbone for `include` / `exclude` resolution. Walks the
-/// extends chain, returns the first config that declares the field.
-/// `drop_svelte_only` filters out patterns that only matched raw
-/// `.svelte` files — valid for `include` where our generated
-/// `.svelte.ts` overlays cover the same surface, harmful for
-/// `exclude` where dropping a pattern opens a hole.
-fn collect_user_patterns(tsconfig: &Path, field: &str, drop_svelte_only: bool) -> Vec<String> {
-    let mut queue: std::collections::VecDeque<PathBuf> =
-        std::collections::VecDeque::from([tsconfig.to_path_buf()]);
-    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    let mut hops = 0usize;
-    while let Some(path) = queue.pop_front() {
-        hops += 1;
-        if hops > 32 {
-            break;
-        }
-        if !visited.insert(path.clone()) {
-            continue;
-        }
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(json) = json5::from_str::<Value>(&content) else {
-            continue;
-        };
-        let dir = path.parent().unwrap_or(Path::new(""));
-        if let Some(arr) = json.get(field).and_then(|v| v.as_array()) {
-            // First config to declare the field wins (TS semantics).
-            let mut out: Vec<String> = Vec::new();
-            for entry in arr {
-                let Some(s) = entry.as_str() else { continue };
-                if drop_svelte_only && is_svelte_only_pattern(s) {
-                    continue;
-                }
-                let resolved = if Path::new(s).is_absolute() {
-                    PathBuf::from(s)
-                } else {
-                    dir.join(s)
-                };
-                out.push(normalize(&resolved).to_string_lossy().into_owned());
-            }
-            if !out.is_empty() {
-                return out;
-            }
-        }
-        for ext in resolve_extends(&json, dir) {
-            queue.push_back(ext);
+        if !out.is_empty() {
+            return out;
         }
     }
     Vec::new()
@@ -489,59 +361,6 @@ fn collect_user_patterns(tsconfig: &Path, field: &str, drop_svelte_only: bool) -
 fn is_svelte_only_pattern(pattern: &str) -> bool {
     let trimmed = pattern.trim_end_matches('/');
     trimmed.ends_with(".svelte")
-}
-
-/// Walk the user tsconfig's `extends` chain to find the first `types`
-/// entry, then filter it: package-name entries pass through, relative
-/// path entries are kept only if they actually exist on disk. Returns
-/// `Some(filtered_list)` when the chain declared `types`, `None`
-/// otherwise (so we don't override an unset value).
-///
-/// Filtering matters because tsgo treats a non-resolvable `types`
-/// entry as a fatal TS2688 — once that fires, downstream files in the
-/// program go un-diagnosed. Projects that auto-generate a .d.ts (e.g.
-/// unplugin-auto-import → `.generated/types/auto-imports.d.ts`) hit
-/// this pattern any time the user has a fresh clone or a stale build.
-fn collect_user_types(tsconfig: &Path) -> Option<Vec<String>> {
-    let mut queue: std::collections::VecDeque<PathBuf> =
-        std::collections::VecDeque::from([tsconfig.to_path_buf()]);
-    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    let mut hops = 0usize;
-    while let Some(path) = queue.pop_front() {
-        hops += 1;
-        if hops > 32 {
-            break;
-        }
-        if !visited.insert(path.clone()) {
-            continue;
-        }
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(json) = json5::from_str::<Value>(&content) else {
-            continue;
-        };
-        let dir = path.parent().unwrap_or(Path::new(""));
-        if let Some(arr) = json
-            .get("compilerOptions")
-            .and_then(|c| c.get("types"))
-            .and_then(|v| v.as_array())
-        {
-            // Inner config wins (TS semantics).
-            let mut out: Vec<String> = Vec::new();
-            for entry in arr {
-                let Some(s) = entry.as_str() else { continue };
-                if is_resolvable_types_entry(s, dir) {
-                    out.push(s.to_string());
-                }
-            }
-            return Some(out);
-        }
-        for ext in resolve_extends(&json, dir) {
-            queue.push_back(ext);
-        }
-    }
-    None
 }
 
 /// True when a `types` entry will resolve under tsgo's lookup rules.

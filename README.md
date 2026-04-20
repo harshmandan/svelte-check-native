@@ -10,7 +10,11 @@
 </div>
 
 Blazing fast CLI type-checker for **Svelte** projects.
-Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check) — same flags, same output formats, same exit codes. Powered by Rust + [tsgo](https://github.com/microsoft/typescript-go). Made for all your ai agents and fast CI/CD pipelines.
+Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check) — same flags, same output formats, same exit codes. Powered by Rust + [tsgo](https://github.com/microsoft/typescript-go). Made for:
+
+- AI agents that need tight feedback loops
+- Fast CI/CD pipelines
+- Git pre-commit hooks that actually stay enabled
 
 | What it is                                  | What it isn't               |
 | ------------------------------------------- | --------------------------- |

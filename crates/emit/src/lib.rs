@@ -907,8 +907,7 @@ fn emit_document_with_render_name(
     // Substring check over `doc.source` is accurate because the `$$`
     // prefix is Svelte-reserved — no valid user identifier starts with
     // `$$`.
-    let uses_any_props =
-        doc.source.contains("$$props") || doc.source.contains("$$restProps");
+    let uses_any_props = doc.source.contains("$$props") || doc.source.contains("$$restProps");
     let has_slots = svelte4_style && doc.source.contains("<slot");
     // Match upstream's factory-pattern: intersections ONLY when the
     // component shape actually needs them. ANY non-empty intersection
@@ -2666,10 +2665,7 @@ fn emit_dom_binding_checks_inline(
         // assignment from narrowing, which produced spurious
         // "possibly undefined" errors on consumer prop-passing sites
         // against upstream's behavior (bench: FigmaPopup mainWidth).
-        let _ = writeln!(
-            out,
-            "{indent}{expr} = null as any as {ty};"
-        );
+        let _ = writeln!(out, "{indent}{expr} = null as any as {ty};");
     }
 }
 

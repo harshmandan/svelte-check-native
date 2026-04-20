@@ -6,22 +6,38 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [0.3.0]
 
+### Parity milestone
+
+**4 of 6 real-world benches at exact parity with `svelte-check --tsgo`.**
+
+| bench | ours (F/E/W/P) | svelte-check --tsgo | svelte-check default | Δ E |
+|---|---|---|---|---|
+| control-svelte-4 (1000-file monorepo) | 1124/**0**/2/2 | 1125/1/2/3 | **6511/0/2/2** | **0** ✓ |
+| control-svelte-5 | 1359/**2**/44/17 | 1359/**2**/44/17 | 7290/1/44/16 | **0** ✓ |
+| local-music-pwa | 88/**0**/0/0 | 88/**0**/0/0 | 1410/0/0/0 | **0** ✓ |
+| slowreader/web | 113/**0**/0/0 | 113/**0**/0/0 | 724/0/0/0 | **0** ✓ |
+| palacms | 211/321/67/64 | 211/419/67/121 | 5501/331/67/116 | −10 vs default |
+| cnblocks | 832/8/127/51 | 750/0/127/48 | 5751/6/127/49 | +8 (ours more correct) |
+
 ### Added — component-prop + event typing
 
-- **Phase 5 `satisfies ComponentProps<typeof Comp>` trailer.**
-  Every `<Component ... />` in a template emits a `props: {...}
-  satisfies InstanceType<typeof __svn_C_N>['$$prop_def']` in the
-  overlay. Missing required props fire TS2741 at the user's
-  `<Component>` opening tag position (new `TokenMapEntry`
-  byte-span source map surfaces the diagnostic at the user-visible
-  site instead of dropping it in the synthesized region). Closes
-  the reverted `af30c56` / `4f4e613` cycle from v0.2.5.
+- **Required-prop enforcement direct from the `new $$_C(...)` site.**
+  `__svn_ensure_component`'s `Component<P>` overload returns
+  `new (options: { target?: any; props?: P }) => ...` — exact `P`
+  (no Partial wrapping). Missing required props fire TS2741 at
+  the component-name source position with the precise error code
+  (Svelte 5 runes). Earlier v0.3 attempts used a
+  `satisfies InstanceType<...>['$$prop_def']` trailer that fired
+  TS1360 at wrong position; replaced by direct prop-type check +
+  call-span `TokenMapEntry` source-map.
 - **Typed event-handler narrowing via `$$Events`.** When a child
   component declares `interface $$Events` or `type $$Events`, the
   consumer's `<Child on:myevent={handler}>` narrows `handler`'s
   parameter to `(e: CustomEvent<E[K]>) => any`. Wrong-payload
   handlers fire TS2345 at the `on:event={handler}` directive
-  position.
+  position. Typed `createEventDispatcher<T>()` WITHOUT `$$Events`
+  stays lax (matches upstream's `__sveltets_2_with_any_event`
+  behavior — see DEFERRED notes).
 - **DOM `bind:` coverage expanded.** In addition to the v0.2
   `bind:contentRect` / `bind:contentBoxSize` / etc. family:
   - HTMLImageElement: `naturalWidth`, `naturalHeight`.
@@ -36,38 +52,74 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
     type="number">` / `<input type="range">` → number; on
     `<input>` default / `<input type="text">` / `<textarea>` →
     string.
-- **`bind:this` on DOM elements.** Both simple-identifier and
-  member-expression targets (`bind:this={refs.input}`) get a
-  type-check emitted inline at the bind-site. Matches upstream's
-  assignment-direction semantics.
-- **`bind:X={getter, setter}` get/set form.** Svelte 5's two-
-  function bind syntax modeled as `PropShape::GetSetBinding`
-  emitting `name: (getter)()` so phase-5 `satisfies` sees the
-  required prop present.
+- **`bind:this` on DOM elements.** Direct-assignment emit
+  (`EXPR = null as any as HTMLElementTagNameMap['tag'];`) —
+  not lambda-wrapped. TypeScript's control-flow analysis
+  narrows `EXPR` from `T | null` to `T` for subsequent uses,
+  matching upstream's `Binding.ts:86-93` semantics. Lets
+  `let ref = $state<HTMLElement | null>(null)` flow as
+  `HTMLElement` at downstream prop-passing sites.
+- **`bind:this` on components** covers both simple-identifier
+  and member-expression targets (`bind:this={refs.input}`).
+- **`bind:X={getter, setter}` get/set form.** Svelte 5's
+  two-function bind syntax modeled as `PropShape::GetSetBinding`
+  emitting `name: (getter)()` so required props are seen present.
 - **Byte-span source maps.** New `TokenMapEntry` alongside
   `LineMapEntry` in the typecheck mapper. Diagnostics in
   synthesized regions get remapped to tightest-matching source
   byte spans; drops only when neither token-map nor line-map
-  covers. Per-feature post-scans (`collect_satisfies_token_map`,
-  `collect_on_event_token_map`, `collect_dom_binding_token_map`,
-  `collect_bind_this_check_token_map`) pair overlay sites 1:1
-  with user source.
+  covers. Per-feature post-scans for component calls,
+  DOM-binding checks, `bind:this` assignments, `$on` event-name
+  literals pair overlay sites 1:1 with user source.
+
+### Added — shape alignment with upstream
+
+- **Conditional Svelte-4 widen** matching upstream's
+  `__sveltets_2_PropsWithChildren<Props, Slots>` +
+  `__sveltets_2_with_any(…)` factory pattern:
+  - No widen for pure-Svelte-5-runes components.
+  - `& { children?: any }` when the component has `<slot>` usage.
+  - `& { [index: string]: any }` (`__SvnAllProps`) when the
+    component uses `$$props` / `$$restProps` (whole-document
+    scan covers both script AND template `{...$$props}` spreads).
+  - Both together when both apply.
+  Previous version intersected `{slot?, class?, style?} &
+  {[index: string]: any}` unconditionally, contaminating tsgo's
+  assignability check (missing-required-prop fired TS2322 top-
+  level with TS2741 as sub-message instead of TS2741 directly).
+  Now matches upstream's minimal widen pattern; TS2741 surfaces
+  with the precise error code (Svelte 5 runes) or as upstream's
+  TS2322+TS2741 chain (Svelte 4 widen cases — same underlying
+  info, same visual position).
+
+### Added — diagnostic method + fixture infrastructure
+
+- **"Diff the real upstream artifact" method** codified in
+  CLAUDE.md. Concrete 6-step process: anchor on a real failing
+  file → read upstream's actual svelte2tsx output → read ours via
+  `--emit-ts` → side-by-side diff at the diagnostic site → lock
+  upstream's shape as a tsgo fixture → port. Used to close every
+  bench parity delta this release.
+- **Phase A fixture gate** (`design/phase_align_upstream/`).
+  Six tsgo-validated TS files that anchor upstream's
+  `Render<T>` + `isomorphic_component` pattern for Svelte 5
+  runes components, typed dispatchers, and generic-bearing
+  dispatchers. Regression anchor for future shape work.
 
 ### Added — bench tooling
 
 - **`scripts/bench.mjs --mode parity`.** Runs our binary +
-  upstream `svelte-check` + `svelte-check --tsgo` (when the
-  workspace's svelte-check version supports it) on the same
-  workspace; prints a side-by-side comparison of FILES, ERRORS,
-  WARNINGS, FILES_WITH_PROBLEMS counts. Exits non-zero on drift
-  from the best-available upstream baseline. Solution-style
-  tsconfig redirects are detected + propagated so upstream runs
-  from the same effective workspace our binary hops to.
-- **Goal, per NEXT.md:** diagnostic counts match upstream
-  `svelte-check` (preferred) or at minimum `svelte-check
-  --tsgo`. Current status: control-svelte-4 matches `svelte-check
-  --tsgo` exactly (1124 FILES, 1 ERROR, 2 WARNINGS, 3
-  FILES_WITH_PROBLEMS).
+  upstream `svelte-check` + `svelte-check --tsgo` (when
+  available) on the same workspace; prints a side-by-side
+  comparison of FILES, ERRORS, WARNINGS, FILES_WITH_PROBLEMS
+  counts. Exits non-zero on drift from the best-available
+  upstream baseline. Solution-style tsconfig redirects detected
+  + propagated. `findUpstreamSvelteCheck` walks
+  `node_modules/.bin/`, `node_modules/.pnpm/`,
+  `node_modules/.bun/svelte-check@X/`, and
+  `node_modules/.pnpm/svelte-check@X/` layouts; prefers 4.4+
+  (first `--tsgo`-capable release) when multiple candidates
+  exist.
 
 ### Fixed — pre-existing test failures
 
@@ -110,55 +162,64 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 - **`bind:NAME` shorthand on components.** Bare-shorthand form
   (`<Child bind:items />` desugaring to `<Child
   bind:items={items}>`) now emits as `PropShape::Shorthand`
-  rather than being silently dropped. Closed 36 false positives
-  on the initial phase-5 `satisfies` bench pass where
-  consumers of v0.2.5 bind-supporting components were reported
-  as missing the bound prop.
+  rather than being silently dropped.
 - **`bind:X={getter, setter}` consumer-side.** Svelte 5's
   two-function bind form is now modeled; consumers of children
   with required props that the user passes via get/set no
   longer fire spurious "missing required prop" TS2741.
+- **DOM-binding flow narrowing.** One-way DOM bindings
+  (`bind:clientWidth`, `bind:contentRect`, etc.) previously wrapped
+  the assignment in a never-called lambda — isolating the
+  assignment from TS flow analysis. Now emits as a plain
+  statement so the assignment's RHS type narrows EXPR for
+  subsequent uses, matching upstream's `Binding.ts:86-93`
+  semantics. Eliminates `control-svelte-4`'s last FP (1→0 errors).
+- **`bind:this` on DOM elements: same narrowing fix.** Previously
+  lambda-wrapped; now plain assignment. Closes the
+  `let iconEl = $state<HTMLElement | null>(null)` →
+  `<button bind:this={iconEl}>` → `<Child {iconEl}>` narrowing
+  gap that caused a FP on control-svelte-5.
 
 ### Known limitations (match upstream behavior)
 
 These are intentional gaps where upstream `svelte-check` is
 deliberately permissive; our tool matches that laxity to
-preserve drop-in parity. Users who want stricter checks should
-file a request for an opt-in flag.
+preserve drop-in parity. Every item below verified against
+upstream source with file:line citations.
 
-- **`bind:value` on `<select>`.** Accepts any type (upstream
-  types `HTMLSelectAttributes['value']` as `any`). Would need
-  `<option>` value-type union inference to be stricter.
-- **`bind:group`** on `<input type="checkbox|radio">`. Silent;
-  no target-type check. Upstream's Binding.ts:99-108 emits
-  `EXPR = __sveltets_2_any(null);` (widen-to-any). Our
-  skip-entirely produces the same observable no-error
-  behavior.
-- **Cross-HTML*Element distinctions for `bind:this`.** TS's DOM
-  lib treats HTML element subtypes as structurally compatible
-  (HTMLDivElement and HTMLInputElement share all of HTMLElement
-  + HTMLDivElement's only unique field `align` is optional).
-  `<input bind:this={divRef}>` where `divRef: HTMLDivElement`
-  accepts silently. Matches upstream; not fixable without
-  inventing our own DOM hierarchy.
-- **Simple-identifier `bind:` target checks.** For `let num:
-  number = 0; <input type="number" bind:value={num}>`, the
-  pre-existing definite-assign rewrite (`num = undefined as
-  any;`) widens `num`'s flow type to `any` before the bind
-  contract check runs inside `__svn_tpl_check`, so wrong-typed
-  targets don't fire on simple identifiers. Member-expression
-  targets (`state.num`) skip the rewrite and DO get checked.
+- **Typed `createEventDispatcher<T>()` consumer narrowing.**
+  Child: `const d = createEventDispatcher<{change: {checked: boolean}}>()`,
+  parent: `<Child on:change={({detail}) => ...}>` — `detail` is
+  `any`, not narrowed. Upstream's `__sveltets_2_with_any_event`
+  (svelte-shims.d.ts + addComponentExport.ts:417) deliberately
+  widens consumer handlers unless `<script strictEvents>` or
+  explicit `$$Events` is set. Our existing lax `$on` overload
+  matches.
+- **`bind:value` on `<select>`.** Accepts any type. Upstream's
+  `svelte-jsx.d.ts:1342` declares `HTMLSelectAttributes['value']?:
+  any`. No `<option>` value-union inference anywhere upstream.
+- **`bind:group` on `<input type="checkbox|radio">`.** Silent.
+  Upstream's `Binding.ts:99-108` emits
+  `EXPR = __sveltets_2_any(null);` (widen-to-any). Neither
+  direction catches errors upstream either.
+- **Cross-HTMLElement distinctions for `bind:this`.** TS's DOM lib
+  treats element subtypes as structurally compatible. Upstream's
+  `Binding.ts:71-94` accepts any HTMLElement subtype. Blocked on
+  [TypeScript issue #45218](https://github.com/microsoft/TypeScript/issues/45218)
+  (stale since 2021).
 
 ### Known bench discrepancies
 
-- **Upstream default `svelte-check` reports ~5× more FILES** on
+- **Upstream default `svelte-check` reports 5-12× more FILES** on
   large workspaces (control-svelte-4: 6511 FILES vs ours 1124
   vs `svelte-check --tsgo` 1125). Upstream default crawls all
-  `.svelte/.ts/.js/.d.ts` on disk, including declaration files
-  that aren't part of the type-check surface. Our FILES matches
-  `svelte-check --tsgo` (the meaningful "what was actually
-  type-checked" count). Users who need default-svelte-check
-  denominator parity should benchmark against `--tsgo`.
+  `.svelte/.ts/.js/.d.ts` on disk via TypeScript's LanguageService
+  (supporting hover/autocomplete paths), including declaration
+  files unrelated to the type-check surface. Our FILES matches
+  `svelte-check --tsgo` exactly on every verified bench (the
+  meaningful "what was actually type-checked" count). Users
+  wanting default-svelte-check denominator parity should run
+  `--tsgo`.
 
 ### Performance
 

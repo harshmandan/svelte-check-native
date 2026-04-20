@@ -452,6 +452,38 @@ enum CompilerWarningOverride {
 /// Apply a per-code override to a single compiler-warning severity.
 /// Returns `None` if the override is `Ignore` (caller should drop the
 /// diagnostic).
+/// Build the `codeDescription.href` URL for a Svelte-compiler
+/// diagnostic. Mirrors upstream svelte-check's `getCodeDescription`
+/// (`svelte-check/dist/src/index.js:112550`):
+///
+/// - Warnings route to `compiler-warnings#<code>`.
+/// - Errors route to `compiler-errors#<code>`.
+/// - Code must start with a lowercase ASCII letter AND contain `_` or
+///   `-`. Filters out numeric TS codes and opaque `unknown` slugs
+///   that don't correspond to documented anchors.
+/// - Hyphens in the code are normalized to underscores before
+///   joining with the URL (matches the svelte.dev doc-anchor naming
+///   convention).
+///
+/// Returns `None` when the code doesn't match upstream's filter —
+/// emitting a URL for an undocumented code would send users to a
+/// 404 anchor, worse than no link.
+fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Option<String> {
+    let mut chars = code.chars();
+    let first = chars.next()?;
+    if !first.is_ascii_lowercase() {
+        return None;
+    }
+    if !code.contains('_') && !code.contains('-') {
+        return None;
+    }
+    let base = match severity {
+        svn_typecheck::Severity::Error => "https://svelte.dev/docs/svelte/compiler-errors#",
+        svn_typecheck::Severity::Warning => "https://svelte.dev/docs/svelte/compiler-warnings#",
+    };
+    Some(format!("{base}{}", code.replace('-', "_")))
+}
+
 fn apply_compiler_override(
     code: &str,
     base: svn_svelte_compiler::Severity,
@@ -863,14 +895,20 @@ fn run_typecheck(
                         let severity =
                             apply_compiler_override(&w.code, w.severity, compiler_overrides);
                         let Some(severity) = severity else { continue };
-                        // Documented compiler-warning codes link to the
-                        // svelte.dev compiler-warnings reference page
-                        // via their slug. Mirrors what upstream svelte-
-                        // check emits in `codeDescription.href`.
-                        let href = format!(
-                            "https://svelte.dev/docs/svelte/compiler-warnings#{}",
-                            w.code,
-                        );
+                        // Mirrors upstream svelte-check's
+                        // `getCodeDescription(code, url)`
+                        // (svelte-check/dist/src/index.js @ 112550):
+                        //   - url differs by severity: warnings link
+                        //     to `compiler-warnings#`, errors to
+                        //     `compiler-errors#`.
+                        //   - code must begin with a lowercase letter
+                        //     AND contain `-` or `_`. Filters out
+                        //     numeric/opaque codes that wouldn't anchor
+                        //     to any docs page.
+                        //   - hyphens in the code are normalized to
+                        //     underscores before joining with the URL
+                        //     (upstream uses `.replace(/-/g, '_')`).
+                        let href = compiler_code_docs_url(&w.code, severity);
                         // svelte/compiler emits 1-based line numbers
                         // but 0-based column offsets. CheckDiagnostic
                         // is documented as 1-based across the board
@@ -890,7 +928,7 @@ fn run_typecheck(
                             // surfaces via `code` separately.
                             message: w.message,
                             source: svn_typecheck::DiagnosticSource::Svelte,
-                            code_description_url: Some(href),
+                            code_description_url: href,
                         });
                     }
                 }
@@ -1453,4 +1491,77 @@ fn build_ignore_set(spec: Option<&str>) -> Option<globset::GlobSet> {
         return None;
     }
     builder.build().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use svn_typecheck::Severity;
+
+    #[test]
+    fn compiler_docs_url_routes_warning_to_compiler_warnings_anchor() {
+        assert_eq!(
+            compiler_code_docs_url("state_referenced_locally", Severity::Warning),
+            Some(
+                "https://svelte.dev/docs/svelte/compiler-warnings#state_referenced_locally"
+                    .to_string()
+            ),
+        );
+    }
+
+    #[test]
+    fn compiler_docs_url_routes_error_to_compiler_errors_anchor() {
+        // Bridge-emitted compile-error codes (parse errors, etc.)
+        // go to the compiler-errors page, not warnings.
+        assert_eq!(
+            compiler_code_docs_url("compile_error", Severity::Error),
+            Some("https://svelte.dev/docs/svelte/compiler-errors#compile_error".to_string()),
+        );
+    }
+
+    #[test]
+    fn compiler_docs_url_normalizes_hyphens_to_underscores() {
+        // svelte.dev's anchor slugs use underscores; upstream
+        // svelte-check normalizes hyphenated codes before joining.
+        assert_eq!(
+            compiler_code_docs_url("element-invalid-self-closing-tag", Severity::Warning),
+            Some(
+                "https://svelte.dev/docs/svelte/compiler-warnings#element_invalid_self_closing_tag"
+                    .to_string()
+            ),
+        );
+    }
+
+    #[test]
+    fn compiler_docs_url_skips_codes_without_separator() {
+        // Single-word codes like "unknown" aren't documented
+        // anchors; upstream's filter requires at least one `_` or `-`.
+        assert_eq!(compiler_code_docs_url("unknown", Severity::Warning), None);
+    }
+
+    #[test]
+    fn compiler_docs_url_skips_uppercase_first_char() {
+        // Upstream filters out codes whose first char isn't a lower
+        // ASCII letter (rules out TS numeric codes, PascalCase, etc.).
+        assert_eq!(compiler_code_docs_url("TS2322", Severity::Warning), None);
+        assert_eq!(
+            compiler_code_docs_url("PascalCase_code", Severity::Warning),
+            None,
+        );
+    }
+
+    #[test]
+    fn compiler_docs_url_skips_empty_code() {
+        assert_eq!(compiler_code_docs_url("", Severity::Warning), None);
+    }
+
+    #[test]
+    fn compiler_docs_url_accepts_hyphen_only_code() {
+        // Codes with `-` but no `_` still pass the filter; normalize
+        // to underscore in the URL.
+        assert_eq!(
+            compiler_code_docs_url("a11y-autofocus", Severity::Warning),
+            Some("https://svelte.dev/docs/svelte/compiler-warnings#a11y_autofocus".to_string()),
+        );
+    }
 }

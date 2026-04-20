@@ -18,6 +18,14 @@
 //! The emit crate generates `let $<name>: any;` declarations from the
 //! returned list.
 //!
+//! The scanner skips `// line` and `/* block */` comments, single-
+//! and double-quoted strings, and the static segments of template
+//! literals. Interpolations (`${…}`) are re-scanned as normal code,
+//! so a `$store` inside a `${…}` IS picked up. Regex literals are
+//! not specially handled — in practice a regex containing a pattern
+//! that happens to match a bound script name is rare, and the
+//! intersection-with-bindings filter keeps the scanner conservative.
+//!
 //! Limitations:
 //! - Doesn't yet scan template interpolations (template-only store
 //!   references are missed).
@@ -67,9 +75,128 @@ pub fn find_store_refs_with_bindings(source: &str, bound: &HashSet<String>) -> V
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     let bytes = source.as_bytes();
+    // Template-literal depth stack: each entry is the brace-nesting
+    // count at which we re-enter template-quoted mode when the brace
+    // count drops back to 0. Non-empty when inside `${…}` of a
+    // template literal. Lets nested templates work correctly.
+    let mut template_stack: Vec<u32> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] != b'$' {
+        let b = bytes[i];
+
+        // Line comment.
+        if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // Block comment.
+        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+            continue;
+        }
+        // Single- or double-quoted string. `$ident` inside is a
+        // literal substring, not a store reference — skip the whole
+        // thing.
+        if b == b'"' || b == b'\'' {
+            let quote = b;
+            i += 1;
+            while i < bytes.len() && bytes[i] != quote {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                } else if bytes[i] == b'\n' {
+                    // Unterminated; bail conservatively to avoid a
+                    // runaway skip if the user's code is mid-edit.
+                    break;
+                } else {
+                    i += 1;
+                }
+            }
+            if i < bytes.len() {
+                i += 1; // closing quote
+            }
+            continue;
+        }
+        // Template literal open. Skip the static prefix; `${…}`
+        // interpolations push a stack entry so the inner expression
+        // goes through normal scanning (a `$store` inside `${…}`
+        // IS a real store ref) and we return to template-quoted
+        // mode when the matching `}` is seen.
+        if b == b'`' {
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'`' {
+                    i += 1;
+                    break;
+                }
+                if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'{') {
+                    template_stack.push(0);
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        // Brace accounting while we're in the expression part of a
+        // template literal.
+        if !template_stack.is_empty() {
+            if b == b'{' {
+                if let Some(depth) = template_stack.last_mut() {
+                    *depth += 1;
+                }
+                i += 1;
+                continue;
+            }
+            if b == b'}' {
+                if let Some(depth) = template_stack.last_mut() {
+                    if *depth == 0 {
+                        // End of `${…}` — resume template-quoted mode
+                        // for the current level.
+                        template_stack.pop();
+                        i += 1;
+                        // Re-use the template-literal skip above by
+                        // pretending we just hit a backtick boundary:
+                        // fall through so the next iteration sees
+                        // whatever character follows. But the rest of
+                        // the template string still needs skipping,
+                        // so walk until ` or another ${.
+                        while i < bytes.len() {
+                            if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                                i += 2;
+                                continue;
+                            }
+                            if bytes[i] == b'`' {
+                                i += 1;
+                                break;
+                            }
+                            if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'{') {
+                                template_stack.push(0);
+                                i += 2;
+                                break;
+                            }
+                            i += 1;
+                        }
+                        continue;
+                    }
+                    *depth -= 1;
+                }
+                i += 1;
+                continue;
+            }
+        }
+
+        if b != b'$' {
             i += 1;
             continue;
         }
@@ -412,17 +539,61 @@ mod tests {
     }
 
     #[test]
-    fn inside_string_not_a_ref() {
-        // A `$store` inside a string literal would still be a token by
-        // our simple byte scanner. This test documents the limitation —
-        // we'd need a full lexer to filter it out. For now we accept the
-        // false positive (cost: one extra `let $store: any;` declaration
-        // for stores that don't actually need one — harmless).
-        let src = r#"let store = null;\nconst msg = "hello $store";"#;
+    fn inside_double_quoted_string_not_a_ref() {
+        let src = "let store = null;\nconst msg = \"hello $store\";";
         let r = refs(src);
-        // Either passes or finds the false positive — we don't assert
-        // either way; this is informational.
-        let _ = r;
+        assert!(!r.iter().any(|s| s == "$store"));
+    }
+
+    #[test]
+    fn inside_single_quoted_string_not_a_ref() {
+        let src = "let store = null;\nconst msg = 'hello $store';";
+        let r = refs(src);
+        assert!(!r.iter().any(|s| s == "$store"));
+    }
+
+    #[test]
+    fn inside_line_comment_not_a_ref() {
+        let src = "let store = null;\n// see $store for details\nconst x = 1;";
+        let r = refs(src);
+        assert!(!r.iter().any(|s| s == "$store"));
+    }
+
+    #[test]
+    fn inside_block_comment_not_a_ref() {
+        let src = "let store = null;\n/* uses $store here */\nconst x = 1;";
+        let r = refs(src);
+        assert!(!r.iter().any(|s| s == "$store"));
+    }
+
+    #[test]
+    fn inside_template_literal_static_part_not_a_ref() {
+        let src = "let store = null;\nconst msg = `hello $store world`;";
+        let r = refs(src);
+        assert!(!r.iter().any(|s| s == "$store"));
+    }
+
+    #[test]
+    fn inside_template_interpolation_is_a_ref() {
+        let src = "let store = null;\nconst msg = `x ${$store} y`;";
+        let r = refs(src);
+        assert!(r.iter().any(|s| s == "$store"));
+    }
+
+    #[test]
+    fn template_with_nested_object_expression_handles_braces() {
+        // Braces in an interpolation must not prematurely close the
+        // template-interpolation state.
+        let src = "let store = null;\nconst msg = `v ${ { a: $store } } w`;";
+        let r = refs(src);
+        assert!(r.iter().any(|s| s == "$store"));
+    }
+
+    #[test]
+    fn escaped_quote_does_not_end_string_early() {
+        let src = "let store = null;\nconst msg = \"a \\\" $store \\\" b\";";
+        let r = refs(src);
+        assert!(!r.iter().any(|s| s == "$store"));
     }
 
     #[test]

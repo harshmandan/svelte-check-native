@@ -19,9 +19,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+mod flatten;
 mod load;
 mod parse;
 
+pub use flatten::{FlattenedReference, flatten_references};
 pub use load::{LoadError, load, load_chain};
 pub use parse::{ParseError, parse_file, parse_str};
 

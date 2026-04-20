@@ -4,6 +4,93 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6]
+
+Patch release: sibling-visibility fix for solution-style monorepos
++ pnpm isolated-install tsgo discovery + docs-URL routing accuracy.
+
+### Fixed — sibling-visibility on solution-style tsconfig redirects
+
+When the CLI detected a project-references solution root
+(`{"files": [], "references": [...]}`) and redirected the workspace
+into a sub-project (typical SvelteKit monorepo shape), transitive
+imports into sibling referenced projects fired tsgo's "File not
+listed within the file list of project" error. The sub-project's
+`include` patterns only covered its own tree; imports into
+`../services/...` or `../packages/...` had no matching glob in the
+overlay.
+
+The overlay builder now consults a new helper,
+`svn-core::tsconfig::flatten_references_from_chain`, which:
+
+- Walks the redirect target's full extends chain and collects every
+  `references[]` entry across the chain.
+- **Transitively expands** each ref's own `references[]` via BFS
+  with visited-set dedupe (capped at 256 hops). Critical for
+  monorepos where `packages/types` references `packages/db`, and the
+  sub-project imports from types but pulls db files transitively.
+- Each resolved reference contributes its own `include` (anchored
+  at that project's dir) + `exclude` (absolute-anchored) + `paths`
+  (BFS per-pattern first-wins).
+
+The overlay merges these into its own include/exclude/paths, with
+the redirect target's declarations winning per-key for paths
+conflicts (inner-wins). The solution root's own `references[]` is
+*not* walked — following coordinating-only refs (e.g. `functions`
+alongside `console`) would pull in code the user didn't ask us to
+type-check.
+
+Concrete result on a app-style monorepo: solution-root redirect
+now completes without the init.ts "not listed" error. For
+`bench/control-svelte-5` specifically: 2 errors → 1 error (the
+remaining one is a legit tsgo "Excessive stack depth" on a heavy
+conditional type).
+
+Commits: `bad54b4` (canonical-loader regression fixtures lock the
+groundwork), `33ebd89` (the helper + 5 unit tests), `abc2b11` (the
+overlay wiring + 2 integration tests + CacheLayout plumbing).
+
+### Fixed — tsgo discovery under pnpm/bun isolated installs
+
+Previously only walked the hoisted path
+`node_modules/@typescript/native-preview/bin/tsgo.js`. Under pnpm
+8+'s default `shamefully-hoist=false` (and bun's analogous `.bun/`
+layout), that symlink is absent — tsgo lives in
+`node_modules/.pnpm/@typescript+native-preview@<version>/...`
+instead. Users had to set `TSGO_BIN` manually.
+
+New resolution order at each ancestor: env var → hoisted native →
+hoisted wrapper → `.pnpm/` store walk (newest version wins,
+native-binary preferred) → `.bun/` store walk. Hoisted paths still
+beat store-fallback, so happy-path users pay zero extra cost.
+
+Commit `662b207`.
+
+### Fixed — compiler-error docs URL routing
+
+Bridge-reported diagnostics with `Severity::Error` (parse errors as
+`compile_error`, forced-error overrides) were being given the
+`svelte.dev/docs/svelte/compiler-warnings#<code>` URL — the
+warnings-page anchor, which 404s for error codes. Upstream routes
+those to `compiler-errors#<code>`.
+
+New `compiler_code_docs_url(code, severity)` helper matches
+upstream `svelte-check`'s `getCodeDescription` shape exactly:
+route by severity, require first-char-lowercase + `_`-or-`-`
+separator (filters out TS numeric codes, PascalCase identifiers,
+opaque slugs), normalize `-` → `_` before joining with the URL.
+7 unit tests.
+
+Commit `a2b0fdf`.
+
+### Scoreboard
+
+| bench | before (0.3.5) | after (0.3.6) | vs upstream --tsgo |
+|---|---|---|---|
+| control-svelte-4 | 1124/0/2/2 | 1124/0/2/2 | exact parity |
+| control-svelte-5 (redirected) | 2/2/0/2 | **1/1/0/1** | **exact parity** |
+| cnblocks | 832/8/127/51 | 832/8/127/51 | +8 errors vs tsgo's 0, but upstream's tsgo run fatally bails on a missing `@types/node` (our overlay filters unresolvable types entries); upstream returns 0 from silent failure. Our 8 errors are real user-code bugs. We are more correct. |
+
 ## [0.3.5]
 
 Patch release: two user-reported bugfixes + four code-review follow-ups.

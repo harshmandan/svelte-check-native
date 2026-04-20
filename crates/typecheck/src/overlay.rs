@@ -228,11 +228,15 @@ pub fn build(
     // running tsc directly on their source; this only affects the
     // overlay pass.
     compiler_options.insert("forceConsistentCasingInFileNames".into(), json!(false));
-    // `allowImportingTsExtensions` lets emit rewrite
-    // `import './X.svelte'` → `import './X.svelte.ts'` so the import
-    // lands on our generated overlay file rather than resolving to the
-    // `*.svelte` ambient declaration shipped with the `svelte` package.
-    compiler_options.insert("allowImportingTsExtensions".into(), json!(true));
+    // `allowImportingTsExtensions` is INHERITED, not forced. Whatever
+    // the user sets in their tsconfig carries through. Setting it to
+    // `true` unconditionally here silently widened user-authored
+    // `.ts`-extension imports that upstream svelte-check flags via
+    // TS5097 — 44 such errors on bench/palacms alone. Upstream's own
+    // overlay doesn't set the flag either; our `.svelte` overlay
+    // resolution doesn't need it (handled by `allowArbitraryExtensions`
+    // + the `.d.svelte.ts` ambient sidecars whose `.ts` re-exports are
+    // legal under declaration-file rules regardless of the flag).
     compiler_options.insert("incremental".into(), json!(true));
     compiler_options.insert(
         "tsBuildInfoFile".into(),

@@ -1,4 +1,6 @@
 {
-    "clean": true,
-    "_note": "User declares `include: [\"src/**/*.ts\", \"src/**/*.svelte\"]`. Our overlay must mirror those include patterns so user TS modules (route loaders, hooks, $lib helpers, .svelte.ts rune helpers, etc.) are part of the type-check program — not just the .svelte sources transitively imported from there. Without this, an entire class of user .ts files goes silently unchecked."
+    "errors": [
+        { "file": "src/Foo.svelte", "line": 1, "column": 29, "code": 5097 }
+    ],
+    "_note": "User declares `include: [\"src/**/*.ts\", \"src/**/*.svelte\"]` — our overlay mirrors those so user TS modules (route loaders, hooks, $lib helpers, .svelte.ts rune helpers, etc.) stay in the type-check program, not just .svelte sources transitively imported from there. Fires the TS5097 upstream fires: `import ... from './helper.ts'` with a literal `.ts` extension, and the user tsconfig doesn't enable `allowImportingTsExtensions`. Matches upstream's default-strictness. If the user wants to opt into `.ts`-ext imports, they set the flag in their own tsconfig and the overlay inherits it."
 }

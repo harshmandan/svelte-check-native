@@ -8,6 +8,12 @@
 //! 3. The JavaScript wrapper at
 //!    `node_modules/@typescript/native-preview/bin/tsgo.js` invoked via
 //!    `node`.
+//! 4. pnpm / bun per-package-store fallbacks:
+//!    `node_modules/.pnpm/@typescript+native-preview@*/node_modules/...`
+//!    and `node_modules/.bun/@typescript+native-preview@*/node_modules/...`.
+//!    Needed when `shamefully-hoist=false` (default in pnpm 8+) or
+//!    `symlink=false` prevents the hoisted paths above from existing.
+//!    When multiple versions are installed, the highest semver wins.
 //!
 //! `@typescript/native-preview` ships the JS wrapper and installs a
 //! platform-specific package (e.g. `native-preview-darwin-arm64`) as an
@@ -84,12 +90,88 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
                 needs_node: true,
             });
         }
+        // pnpm / bun per-package store. Only reached when the
+        // canonical hoisted paths above are absent (pnpm
+        // `shamefully-hoist=false`, isolated installs, etc.).
+        if let Some(found) = find_in_package_store(dir, native_relative.as_deref()) {
+            return Ok(found);
+        }
         current = dir.parent();
     }
 
     Err(DiscoveryError::NotFound {
         searched_from: workspace.to_path_buf(),
     })
+}
+
+/// Look for `@typescript+native-preview@<version>` directories under
+/// `<dir>/node_modules/.pnpm` and `<dir>/node_modules/.bun`. Returns
+/// the highest-version match's native binary (preferred) or JS wrapper
+/// (fallback). Returns `None` when no package-store entries exist.
+///
+/// pnpm store layout (shamefully-hoist=false or symlink=false):
+///
+/// ```text
+/// node_modules/.pnpm/
+///   @typescript+native-preview@7.0.0-dev.20260101.1/
+///     node_modules/@typescript/
+///       native-preview/bin/tsgo.js
+///       native-preview-darwin-arm64/lib/tsgo
+/// ```
+///
+/// bun uses the same layout under `.bun/`.
+fn find_in_package_store(dir: &Path, native_relative: Option<&Path>) -> Option<TsgoBinary> {
+    for manager_root in [
+        dir.join("node_modules").join(".pnpm"),
+        dir.join("node_modules").join(".bun"),
+    ] {
+        let Ok(entries) = std::fs::read_dir(&manager_root) else {
+            continue;
+        };
+        // Collect every `@typescript+native-preview@<version>` entry
+        // and sort newest-first (simple string-order is fine — the
+        // version prefix sorts correctly for dev-release suffixes
+        // and semver alike at this use-site).
+        let mut candidates: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|name| name.starts_with("@typescript+native-preview@"))
+            })
+            .collect();
+        candidates.sort();
+        candidates.reverse();
+
+        for pkg_root in candidates {
+            let inner = pkg_root.join("node_modules/@typescript");
+            // Native binary under the sibling platform package inside
+            // the same store entry — prefer this form when present.
+            if let Some(rel) = native_relative {
+                // native_relative is rooted at `node_modules/...`; we
+                // need the tail after `node_modules/` to attach under
+                // the store's own `node_modules/`.
+                if let Ok(tail) = rel.strip_prefix("node_modules/") {
+                    let native_candidate = pkg_root.join("node_modules").join(tail);
+                    if native_candidate.is_file() {
+                        return Some(TsgoBinary {
+                            path: native_candidate,
+                            needs_node: false,
+                        });
+                    }
+                }
+            }
+            let wrapper_candidate = inner.join("native-preview/bin/tsgo.js");
+            if wrapper_candidate.is_file() {
+                return Some(TsgoBinary {
+                    path: wrapper_candidate,
+                    needs_node: true,
+                });
+            }
+        }
+    }
+    None
 }
 
 /// Return the relative path to the platform-native tsgo binary, or `None`
@@ -219,4 +301,115 @@ mod tests {
     // mutating process-global env vars is unsound (Rust 2024 marks
     // std::env::set_var unsafe for that reason). The env-var path is
     // covered by integration tests that spawn fresh subprocesses.
+
+    #[test]
+    fn discovers_tsgo_in_pnpm_package_store_wrapper() {
+        // pnpm with shamefully-hoist=false: the hoisted
+        // `node_modules/@typescript/native-preview/` symlink is
+        // absent; tsgo lives under `.pnpm/@typescript+native-preview@X/`.
+        let tmp = tempdir().unwrap();
+        let pkg_root = tmp
+            .path()
+            .join("node_modules/.pnpm/@typescript+native-preview@7.0.0-dev.20260101.1");
+        let wrapper = pkg_root.join("node_modules/@typescript/native-preview/bin/tsgo.js");
+        fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+        fs::write(&wrapper, b"// stub").unwrap();
+
+        let found = discover(tmp.path()).unwrap();
+        assert_eq!(found.path, wrapper);
+        assert!(found.needs_node);
+    }
+
+    #[test]
+    fn pnpm_store_picks_highest_version() {
+        // Multiple versions in the same store; highest string-order
+        // wins (matches newest dev-release).
+        let tmp = tempdir().unwrap();
+        for version in ["7.0.0-dev.20260101.1", "7.0.0-dev.20260201.1"] {
+            let pkg_root = tmp.path().join(format!(
+                "node_modules/.pnpm/@typescript+native-preview@{version}"
+            ));
+            let wrapper = pkg_root.join("node_modules/@typescript/native-preview/bin/tsgo.js");
+            fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+            fs::write(&wrapper, b"// stub").unwrap();
+        }
+        let found = discover(tmp.path()).unwrap();
+        assert!(
+            found
+                .path
+                .to_string_lossy()
+                .contains("@typescript+native-preview@7.0.0-dev.20260201.1"),
+            "expected newest version, got {:?}",
+            found.path,
+        );
+    }
+
+    #[test]
+    fn pnpm_store_prefers_native_binary_when_present() {
+        // Store entry has BOTH the JS wrapper and a platform-native
+        // binary. Native wins.
+        let Some(rel) = current_platform_native_path() else {
+            return;
+        };
+        let tmp = tempdir().unwrap();
+        let pkg_root = tmp
+            .path()
+            .join("node_modules/.pnpm/@typescript+native-preview@7.0.0-dev.20260101.1");
+        // native_relative is rooted at `node_modules/...` — strip
+        // the prefix and attach under the store entry's own
+        // `node_modules/`.
+        let tail = rel.strip_prefix("node_modules/").unwrap();
+        let native = pkg_root.join("node_modules").join(tail);
+        fs::create_dir_all(native.parent().unwrap()).unwrap();
+        fs::write(&native, b"\x7fELF stub").unwrap();
+
+        let wrapper = pkg_root.join("node_modules/@typescript/native-preview/bin/tsgo.js");
+        fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+        fs::write(&wrapper, b"// stub").unwrap();
+
+        let found = discover(tmp.path()).unwrap();
+        assert_eq!(found.path, native);
+        assert!(!found.needs_node);
+    }
+
+    #[test]
+    fn discovers_tsgo_in_bun_package_store() {
+        // bun's layout mirrors pnpm's under `.bun/` instead of
+        // `.pnpm/`.
+        let tmp = tempdir().unwrap();
+        let pkg_root = tmp
+            .path()
+            .join("node_modules/.bun/@typescript+native-preview@7.0.0-dev.20260101.1");
+        let wrapper = pkg_root.join("node_modules/@typescript/native-preview/bin/tsgo.js");
+        fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+        fs::write(&wrapper, b"// stub").unwrap();
+
+        let found = discover(tmp.path()).unwrap();
+        assert_eq!(found.path, wrapper);
+        assert!(found.needs_node);
+    }
+
+    #[test]
+    fn hoisted_layout_beats_package_store() {
+        // Both hoisted and store paths exist (common in
+        // `shamefully-hoist=true`). The hoisted layout wins so we
+        // don't pay an extra readdir per ancestor when the user's
+        // config doesn't need the fallback.
+        let tmp = tempdir().unwrap();
+        let hoisted = tmp
+            .path()
+            .join("node_modules/@typescript/native-preview/bin/tsgo.js");
+        fs::create_dir_all(hoisted.parent().unwrap()).unwrap();
+        fs::write(&hoisted, b"// stub").unwrap();
+
+        let store_wrapper = tmp
+            .path()
+            .join("node_modules/.pnpm/@typescript+native-preview@7.0.0-dev.20260101.1")
+            .join("node_modules/@typescript/native-preview/bin/tsgo.js");
+        fs::create_dir_all(store_wrapper.parent().unwrap()).unwrap();
+        fs::write(&store_wrapper, b"// stub").unwrap();
+
+        let found = discover(tmp.path()).unwrap();
+        assert_eq!(found.path, hoisted);
+    }
 }

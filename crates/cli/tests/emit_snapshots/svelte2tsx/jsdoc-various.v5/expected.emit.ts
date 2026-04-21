@@ -12,6 +12,7 @@ async function $$render_edb4eb12<T>() {
             void foo;
             {
                 void ((bar: any) => {
+                    /*svn_I*/(bar);
                     void bar;
                 });
             }

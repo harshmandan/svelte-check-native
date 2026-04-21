@@ -1125,6 +1125,7 @@ fn emit_document_with_render_name(
     token_map.extend(collect_action_directive_token_map(
         &out, doc.source, summary,
     ));
+    token_map.extend(collect_interpolation_token_map(&out, doc.source, fragment));
 
     EmitOutput {
         typescript: out,
@@ -1292,6 +1293,151 @@ fn collect_bind_this_check_token_map(
         cursor = advance_to;
     }
     entries
+}
+
+/// Post-walk scan: for each plain `{EXPR}` interpolation emitted
+/// under the `/*svn_I*/(EXPR);` sentinel shape, push a token-map entry
+/// covering EXPR's overlay byte span → the source byte range the
+/// expression came from.
+///
+/// tsgo reports diagnostics at the overlay byte offset of the
+/// offending identifier inside the expression (e.g. `form.error`'s
+/// `error` property position under a narrowing `{#if form?.success}`).
+/// The token-map entry tells `map_diagnostic` that overlay-inside-the-
+/// slice corresponds 1:1 with source-inside-the-template-expression,
+/// so the diagnostic surfaces at the user's original `{form.error}`
+/// site instead of being dropped as synthesized scaffolding.
+///
+/// Pairing is by walk-order: fragment-walk order matches emit-walk
+/// order (`emit_template_body` → `emit_template_node` →
+/// `emit_interpolation`) so the Nth sentinel in the overlay
+/// corresponds to the Nth plain interpolation in a depth-first
+/// fragment walk. `{@*}` tags are filtered out on both sides — they
+/// have their own emit shape and don't carry the sentinel.
+fn collect_interpolation_token_map(
+    out: &str,
+    source: &str,
+    fragment: &svn_parser::Fragment,
+) -> Vec<TokenMapEntry> {
+    let mut ranges: Vec<svn_core::Range> = Vec::new();
+    collect_plain_interpolation_ranges(fragment, source, &mut ranges);
+    let marker = "/*svn_I*/(";
+    let bytes = out.as_bytes();
+    let mut entries: Vec<TokenMapEntry> = Vec::new();
+    let mut cursor = 0usize;
+    let mut range_idx = 0usize;
+    while let Some(rel) = out[cursor..].find(marker) {
+        let expr_overlay_start = cursor + rel + marker.len();
+        // Paren-balance to find the matching `)` that closes the
+        // wrapping paren. Tolerates nested calls, arrow-body parens,
+        // object/array literals (brace-neutral at paren level).
+        let mut depth = 1usize;
+        let mut i = expr_overlay_start;
+        while i < bytes.len() && depth > 0 {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 {
+                break;
+            }
+            i += 1;
+        }
+        if depth != 0 {
+            break;
+        }
+        let expr_overlay_end = i;
+        let Some(range) = ranges.get(range_idx) else {
+            break;
+        };
+        range_idx += 1;
+        // The emit trims the source slice before writing; compare
+        // trimmed-for-trimmed so an entry is only pushed when the two
+        // halves truly correspond. Leading/trailing whitespace in the
+        // original expression_range shifts both ends accordingly.
+        let overlay_slice = &out[expr_overlay_start..expr_overlay_end];
+        let source_slice_full = match source.get(range.start as usize..range.end as usize) {
+            Some(s) => s,
+            None => {
+                cursor = expr_overlay_end + 1;
+                continue;
+            }
+        };
+        let leading_ws = source_slice_full.len() - source_slice_full.trim_start().len();
+        let trimmed = source_slice_full.trim();
+        if overlay_slice != trimmed {
+            cursor = expr_overlay_end + 1;
+            continue;
+        }
+        let source_start = range.start + leading_ws as u32;
+        let source_end = source_start + trimmed.len() as u32;
+        entries.push(TokenMapEntry {
+            overlay_byte_start: expr_overlay_start as u32,
+            overlay_byte_end: expr_overlay_end as u32,
+            source_byte_start: source_start,
+            source_byte_end: source_end,
+        });
+        cursor = expr_overlay_end + 1;
+    }
+    entries
+}
+
+/// Collect every plain `{EXPR}` interpolation's `expression_range` in
+/// depth-first fragment order — matching the order `emit_template_node`
+/// walks during emit. `{@*}` directive tags are skipped (different
+/// emit shape; no sentinel).
+fn collect_plain_interpolation_ranges(
+    fragment: &svn_parser::Fragment,
+    source: &str,
+    out: &mut Vec<svn_core::Range>,
+) {
+    use svn_parser::Node;
+    for node in &fragment.nodes {
+        match node {
+            Node::Interpolation(i) => {
+                let tag_start = i.range.start as usize;
+                let tag_end = i.range.end as usize;
+                if let Some(full) = source.get(tag_start..tag_end) {
+                    if !full.starts_with("{@") {
+                        out.push(i.expression_range);
+                    }
+                }
+            }
+            Node::IfBlock(b) => {
+                collect_plain_interpolation_ranges(&b.consequent, source, out);
+                for arm in &b.elseif_arms {
+                    collect_plain_interpolation_ranges(&arm.body, source, out);
+                }
+                if let Some(alt) = &b.alternate {
+                    collect_plain_interpolation_ranges(alt, source, out);
+                }
+            }
+            Node::EachBlock(b) => {
+                collect_plain_interpolation_ranges(&b.body, source, out);
+                if let Some(alt) = &b.alternate {
+                    collect_plain_interpolation_ranges(alt, source, out);
+                }
+            }
+            Node::AwaitBlock(b) => {
+                if let Some(p) = &b.pending {
+                    collect_plain_interpolation_ranges(p, source, out);
+                }
+                if let Some(t) = &b.then_branch {
+                    collect_plain_interpolation_ranges(&t.body, source, out);
+                }
+                if let Some(c) = &b.catch_branch {
+                    collect_plain_interpolation_ranges(&c.body, source, out);
+                }
+            }
+            Node::KeyBlock(b) => collect_plain_interpolation_ranges(&b.body, source, out),
+            Node::SnippetBlock(b) => collect_plain_interpolation_ranges(&b.body, source, out),
+            Node::Element(e) => collect_plain_interpolation_ranges(&e.children, source, out),
+            Node::SvelteElement(s) => collect_plain_interpolation_ranges(&s.children, source, out),
+            Node::Component(c) => collect_plain_interpolation_ranges(&c.children, source, out),
+            Node::Text(_) | Node::Comment(_) => {}
+        }
+    }
 }
 
 /// Post-walk scan: for each `ActionDirective`, locate the corresponding
@@ -1976,9 +2122,67 @@ fn emit_template_node(
             emit_bind_this_element_check_inline(out, source, "", &s.attributes, depth);
             emit_children_with_let_bindings(out, source, &s.attributes, &s.children, depth, insts);
         }
-        Node::Interpolation(i) => emit_at_const_if_any(out, source, i, depth),
+        Node::Interpolation(i) => emit_interpolation(out, source, i, depth),
         Node::Text(_) | Node::Comment(_) => {}
     }
+}
+
+/// Emit a template `{EXPR}` interpolation as a bare expression
+/// statement in the current scope so tsgo type-checks EXPR against
+/// any enclosing control-flow narrowing (`{#if}` / `{:else if}` /
+/// `{#each …}`) and against the script-declared types of referenced
+/// identifiers.
+///
+/// Without emitting the expression here, a pattern like
+///     `{#if form?.success}{form.error}{/if}`
+/// has no `form.error` reference inside the `if`-body in the overlay,
+/// so the TS2339 diagnostic upstream fires on accessing `.error` in
+/// the truthy-narrowed branch never materializes. `find_template_refs`
+/// voids the ROOT identifier (`form`) elsewhere, which kept TS6133
+/// happy but forfeited type-checking of the FULL expression — the
+/// whole point of type-checking the template.
+///
+/// `{@const NAME = EXPR}` still routes through `emit_at_const_if_any`
+/// — that has to emit a `const` declaration at the block scope, not a
+/// bare expression. Other `{@tag}` forms (`@html`, `@debug`, `@render`)
+/// also need their own shapes; the generic `(EXPR);` here handles the
+/// plain `{EXPR}` case and falls through for anything that looks like
+/// a `{@` directive.
+fn emit_interpolation(
+    out: &mut String,
+    source: &str,
+    interp: &svn_parser::Interpolation,
+    depth: usize,
+) {
+    let tag_start = interp.range.start as usize;
+    let Some(full) = source.get(tag_start..interp.range.end as usize) else {
+        return;
+    };
+    // `{@*}` tags need structured emit — delegate.
+    if full.starts_with("{@") {
+        emit_at_const_if_any(out, source, interp, depth);
+        return;
+    }
+    let expr_start = interp.expression_range.start as usize;
+    let expr_end = interp.expression_range.end as usize;
+    let Some(expr) = source.get(expr_start..expr_end) else {
+        return;
+    };
+    let expr = expr.trim();
+    if expr.is_empty() {
+        return;
+    }
+    let indent = "    ".repeat(depth);
+    // The `/*svn_I*/` prefix is a sentinel the post-walk scanner hooks
+    // to produce a TokenMapEntry covering EXPR's overlay byte span →
+    // its source range. Without the token-map entry, diagnostics
+    // against the expression (TS2339 on a wrong-branch property
+    // access under narrowing, etc.) get dropped by `map_diagnostic`'s
+    // "synthesized scaffolding with no source anchor" filter.
+    //
+    // Paren-wrap protects against multi-clause / assignment-looking
+    // expressions parsing as statement heads.
+    let _ = writeln!(out, "{indent}/*svn_I*/({expr});");
 }
 
 /// If `interp` is an `{@const <pattern> = <expr>}` tag, emit it inline

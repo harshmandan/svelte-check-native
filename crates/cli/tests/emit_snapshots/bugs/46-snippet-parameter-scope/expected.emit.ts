@@ -23,6 +23,7 @@ async function $$render_ea3119be() {
     let { open, onToggle }: { open: boolean; onToggle: () => void } = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        /*svn_I*/(open ? 'close' : 'open');
     }
     void __svn_tpl_check;
     void open;

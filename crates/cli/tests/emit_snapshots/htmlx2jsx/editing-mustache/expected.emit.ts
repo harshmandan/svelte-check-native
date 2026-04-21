@@ -3,6 +3,10 @@
 async function $$render_672f27a9() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        /*svn_I*/(abc.);
+        /*svn_I*/(abc?.);
+        /*svn_I*/(abc ?);
+        /*svn_I*/(a+);
         {
             const __svn_C_20 = __svn_ensure_component(Component);
             new __svn_C_20({ target: __svn_any(), props: {regex: (/.*/)} });

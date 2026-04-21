@@ -12,6 +12,7 @@ async function $$render_e5ad478b() {
             }
             {
                 void ((e: any) => {
+                    /*svn_I*/(e);
                     void e;
                 });
             }

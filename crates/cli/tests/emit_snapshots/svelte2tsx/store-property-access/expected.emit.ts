@@ -15,6 +15,15 @@ async function $$render_a20fee98() {
     $store?.prop?.anotherProp;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        /*svn_I*/($store);
+        /*svn_I*/($store.prop);
+        /*svn_I*/($store['prop']);
+        /*svn_I*/($store.prop.anotherProp);
+        /*svn_I*/($store['prop'].anotherProp);
+        /*svn_I*/($store.prop['anotherProp']);
+        /*svn_I*/($store['prop']['anotherProp']);
+        /*svn_I*/($store?.prop.anotherProp);
+        /*svn_I*/($store?.prop?.anotherProp);
     }
     void __svn_tpl_check;
     void $store;

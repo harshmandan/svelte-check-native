@@ -7,27 +7,33 @@ async function $$render_b67cf125() {
             void [hello];
             {
                 const y: any = undefined;
+                /*svn_I*/(y);
                 void y;
             }
             {
                 const y: any = undefined;
+                /*svn_I*/(y);
                 void y;
             }
+            /*svn_I*/(hello);
             if ((hi && bye)) {
                 void [hi, bye];
                 {
                     const y: any = undefined;
+                    /*svn_I*/(y);
                     void y;
                 }
             } else if ((cool)) {
                 void [cool];
                 {
                     const y: any = undefined;
+                    /*svn_I*/(y);
                     void y;
                 }
             } else {
                 {
                     const y: any = undefined;
+                    /*svn_I*/(y);
                     void y;
                 }
             }

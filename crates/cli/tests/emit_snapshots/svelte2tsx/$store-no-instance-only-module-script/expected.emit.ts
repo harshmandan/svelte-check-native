@@ -8,6 +8,8 @@ async function $$render_386ab038() {
     let $store2!: __SvnStoreValue<typeof store2>;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        /*svn_I*/($store1);
+        /*svn_I*/($store2);
     }
     void __svn_tpl_check;
     void $store1;

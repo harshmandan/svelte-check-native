@@ -5,10 +5,12 @@ async function $$render_88f50e2b() {
         // template type-check body (incremental)
         {
             const value: any = undefined;
+            /*svn_I*/(value);
             void value;
         }
         {
             const error: any = undefined;
+            /*svn_I*/(error);
             void error;
         }
     }

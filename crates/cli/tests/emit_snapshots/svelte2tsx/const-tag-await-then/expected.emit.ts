@@ -22,6 +22,12 @@ async function $$render_e1dcebf1() {
             void width;
             void height;
             void sum;
+            /*svn_I*/(area);
+            /*svn_I*/(volume);
+            /*svn_I*/(perimeter);
+            /*svn_I*/(width);
+            /*svn_I*/(height);
+            /*svn_I*/(sum);
             void box;
         }
         {
@@ -35,6 +41,12 @@ async function $$render_e1dcebf1() {
             void width;
             void height;
             void sum;
+            /*svn_I*/(area);
+            /*svn_I*/(volume);
+            /*svn_I*/(perimeter);
+            /*svn_I*/(width);
+            /*svn_I*/(height);
+            /*svn_I*/(sum);
             void box;
         }
     }

@@ -12,6 +12,11 @@ async function $$render_19e9402e() {
     const [ store3, store4, noStore ] = fromSomewhere();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        /*svn_I*/($store);
+        /*svn_I*/($store1);
+        /*svn_I*/($store2);
+        /*svn_I*/($store3);
+        /*svn_I*/($store4);
     }
     void __svn_tpl_check;
     void $store;

@@ -7,34 +7,45 @@ async function $$render_bdea4648() {
             void [hello];
             {
                 const hello: any = undefined;
+                /*svn_I*/(hello);
                 void hello;
             }
+            /*svn_I*/(hello);
             {
                 const foo: any = undefined;
                 const hello = foo;
                 void hello;
+                /*svn_I*/(hello);
                 void foo;
             }
+            /*svn_I*/(hello);
             {
                 const hi: any = undefined;
+                /*svn_I*/(hello);
                 void hi;
             }
             {
                 const hello: any = undefined;
+                /*svn_I*/(hello);
                 void hello;
             }
             {
                 const hello: any = undefined;
+                /*svn_I*/(hello);
                 if ((hello)) {
                     void [hello];
+                    /*svn_I*/(hello);
+                    /*svn_I*/(hello);
                     {
                         const hello: any = undefined;
+                        /*svn_I*/(hello);
                         void hello;
                     }
                     {
                         const hello: any = undefined;
                         if ((hello)) {
                             void [hello];
+                            /*svn_I*/(hello);
                         }
                         void hello;
                     }
@@ -44,6 +55,7 @@ async function $$render_bdea4648() {
                         void hello;
                         if ((hello)) {
                             void [hello];
+                            /*svn_I*/(hello);
                         }
                         void foo;
                     }
@@ -54,12 +66,14 @@ async function $$render_bdea4648() {
                 void [hi, bye];
                 {
                     const bye: any = undefined;
+                    /*svn_I*/(bye);
                     void bye;
                 }
                 {
                     const hello: any = undefined;
                     if ((hello)) {
                         void [hello];
+                        /*svn_I*/(hello);
                     }
                     void hello;
                 }
@@ -69,6 +83,7 @@ async function $$render_bdea4648() {
                     const cool: any = undefined;
                     if ((cool)) {
                         void [cool];
+                        /*svn_I*/(cool);
                     }
                     void cool;
                 }
@@ -78,6 +93,7 @@ async function $$render_bdea4648() {
                 }
                 {
                     const cool: any = undefined;
+                    /*svn_I*/(cool);
                     void cool;
                 }
             } else {
@@ -85,6 +101,7 @@ async function $$render_bdea4648() {
                     const hello: any = undefined;
                     if ((hello)) {
                         void [hello];
+                        /*svn_I*/(hello);
                     }
                     void hello;
                 }
@@ -92,15 +109,19 @@ async function $$render_bdea4648() {
         }
         if ((cool)) {
             void [cool];
+            /*svn_I*/(cool);
         } else if ((hello)) {
             void [hello];
+            /*svn_I*/(hello);
         }
         {
             const cool: any = undefined;
             if ((cool)) {
                 void [cool];
+                /*svn_I*/(cool);
             } else if ((hello)) {
                 void [hello];
+                /*svn_I*/(hello);
             }
             void cool;
         }
@@ -108,8 +129,10 @@ async function $$render_bdea4648() {
             const cool: any = undefined;
             if ((cool)) {
                 void [cool];
+                /*svn_I*/(cool);
             } else if ((hello)) {
                 void [hello];
+                /*svn_I*/(hello);
             }
             void cool;
         }

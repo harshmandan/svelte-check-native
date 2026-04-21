@@ -16,12 +16,16 @@ async function $$render_2403d132() {
             void foo;
             let baz: any;
             void baz;
+            /*svn_I*/(foo);
+            /*svn_I*/(baz);
         }
         {
             let foo: any;
             void foo;
             let baz: any;
             void baz;
+            /*svn_I*/(foo);
+            /*svn_I*/(baz);
         }
     }
     void __svn_tpl_check;

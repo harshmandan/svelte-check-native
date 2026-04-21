@@ -5,6 +5,8 @@ async function $$render_d0e284e2() {
         // template type-check body (incremental)
         for (const item of __svn_each_items(items)) {
             const i: number = 0;
+            /*svn_I*/(item);
+            /*svn_I*/(i);
             void item;
             void i;
         }

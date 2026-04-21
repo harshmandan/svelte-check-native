@@ -4,6 +4,7 @@ async function $$render_34fb20f4() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         for (const item of __svn_each_items(someObject?.items)) {
+            /*svn_I*/(item);
             void item;
         }
     }

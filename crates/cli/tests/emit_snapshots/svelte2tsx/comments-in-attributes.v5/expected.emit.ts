@@ -5,6 +5,13 @@ async function $$render_29958c69() {
     let x = $state();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        /*svn_I*/(handler);
+        /*svn_I*/(params);
+        /*svn_I*/(element);
+        /*svn_I*/(...spread_props);
+        /*svn_I*/(handler);
+        /*svn_I*/(bound_prop);
+        /*svn_I*/(...spread_props);
     }
     void __svn_tpl_check;
 }

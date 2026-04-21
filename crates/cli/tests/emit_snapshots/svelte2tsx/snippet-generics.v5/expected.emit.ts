@@ -8,10 +8,12 @@ async function $$render_ba1a20ec() {
             const __svn_C_2f = __svn_ensure_component(T);
             new __svn_C_2f({ target: __svn_any(), props: {extends: true, string: true, children: () => __svn_snippet_return()} });
         }
+        /*svn_I*/(val);
         {
             const __svn_C_77 = __svn_ensure_component(T);
             new __svn_C_77({ target: __svn_any(), props: {extends: true, "|": true, "|": true, Set: true, children: () => __svn_snippet_return()} });
         }
+        /*svn_I*/(val);
     }
     void __svn_tpl_check;
 }

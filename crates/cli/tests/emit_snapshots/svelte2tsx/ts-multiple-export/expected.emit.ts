@@ -6,6 +6,9 @@ async function $$render_bbc70e42() {
            let number2!: number
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        /*svn_I*/(number1);
+        /*svn_I*/(number2);
+        /*svn_I*/(number1 + number2);
     }
     void __svn_tpl_check;
     void number1;

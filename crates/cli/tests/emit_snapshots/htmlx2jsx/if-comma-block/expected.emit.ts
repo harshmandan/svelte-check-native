@@ -4,6 +4,7 @@ async function $$render_5c4830b9() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         if (((true, false))) {
+            /*svn_I*/(name);
         }
     }
     void __svn_tpl_check;

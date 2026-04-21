@@ -12,6 +12,7 @@ async function $$render_ddf2ba9e() {
                     const __svn_C_1a = __svn_ensure_component(Comp);
                     new __svn_C_1a({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                 }
+                /*svn_I*/(hello);
                 {
                     let hello: any;
                     void hello;
@@ -21,6 +22,7 @@ async function $$render_ddf2ba9e() {
                     }
                     if ((hello)) {
                         void [hello];
+                        /*svn_I*/(hello);
                     }
                 }
                 {
@@ -32,6 +34,7 @@ async function $$render_ddf2ba9e() {
                     }
                     if ((hello)) {
                         void [hello];
+                        /*svn_I*/(hello);
                     }
                 }
                 {
@@ -39,6 +42,7 @@ async function $$render_ddf2ba9e() {
                     void hello;
                     if ((hello)) {
                         void [hello];
+                        /*svn_I*/(hello);
                     }
                 }
                 {
@@ -46,6 +50,7 @@ async function $$render_ddf2ba9e() {
                     void hello;
                     if ((hello)) {
                         void [hello];
+                        /*svn_I*/(hello);
                     }
                 }
                 {
@@ -57,6 +62,7 @@ async function $$render_ddf2ba9e() {
                     }
                     if ((hello)) {
                         void [hello];
+                        /*svn_I*/(hello);
                     }
                 }
                 if ((hello)) {
@@ -70,6 +76,7 @@ async function $$render_ddf2ba9e() {
                         }
                         if ((hello)) {
                             void [hello];
+                            /*svn_I*/(hello);
                         }
                     }
                     {
@@ -83,6 +90,7 @@ async function $$render_ddf2ba9e() {
                         void hello;
                         if ((hello)) {
                             void [hello];
+                            /*svn_I*/(hello);
                         }
                     }
                 }
@@ -96,6 +104,7 @@ async function $$render_ddf2ba9e() {
                         const __svn_C_3ff = __svn_ensure_component(Comp);
                         new __svn_C_3ff({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                     }
+                    /*svn_I*/(bye);
                 }
             } else if ((cool)) {
                 void [cool];
@@ -108,6 +117,7 @@ async function $$render_ddf2ba9e() {
                     void cool;
                     let hello: any;
                     void hello;
+                    /*svn_I*/(hello);
                 }
             } else {
                 {
@@ -119,6 +129,7 @@ async function $$render_ddf2ba9e() {
                     void hello;
                     let other: any;
                     void other;
+                    /*svn_I*/(hello);
                 }
             }
         }
@@ -131,18 +142,30 @@ async function $$render_ddf2ba9e() {
             }
             if ((hello && bye)) {
                 void [hello, bye];
+                /*svn_I*/(hello);
+                /*svn_I*/(bye);
             } else if ((hello && bye)) {
                 void [hello, bye];
+                /*svn_I*/(hello);
+                /*svn_I*/(bye);
             } else {
+                /*svn_I*/(hello);
+                /*svn_I*/(bye);
             }
             {
                 let hello: any;
                 void hello;
                 if ((hello && bye)) {
                     void [hello, bye];
+                    /*svn_I*/(hello);
+                    /*svn_I*/(bye);
                 } else if ((hello && bye)) {
                     void [hello, bye];
+                    /*svn_I*/(hello);
+                    /*svn_I*/(bye);
                 } else {
+                    /*svn_I*/(hello);
+                    /*svn_I*/(bye);
                 }
             }
             {
@@ -150,9 +173,15 @@ async function $$render_ddf2ba9e() {
                 void hello;
                 if ((hello && bye)) {
                     void [hello, bye];
+                    /*svn_I*/(hello);
+                    /*svn_I*/(bye);
                 } else if ((hello && bye)) {
                     void [hello, bye];
+                    /*svn_I*/(hello);
+                    /*svn_I*/(bye);
                 } else {
+                    /*svn_I*/(hello);
+                    /*svn_I*/(bye);
                 }
             }
             {
@@ -162,9 +191,15 @@ async function $$render_ddf2ba9e() {
                 void hello;
                 if ((hello && bye)) {
                     void [hello, bye];
+                    /*svn_I*/(hello);
+                    /*svn_I*/(bye);
                 } else if ((hello && bye)) {
                     void [hello, bye];
+                    /*svn_I*/(hello);
+                    /*svn_I*/(bye);
                 } else {
+                    /*svn_I*/(hello);
+                    /*svn_I*/(bye);
                 }
             }
         }

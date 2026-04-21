@@ -6,6 +6,8 @@ async function $$render_ec5d75ac() {
 	let id = $props.id();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        /*svn_I*/(id);
+        /*svn_I*/(props);
     }
     void __svn_tpl_check;
     void props;

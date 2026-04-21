@@ -4,8 +4,10 @@ async function $$render_27b7be6d() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         if (((name1 ?? "bla") == "world")) {
+            /*svn_I*/(name2);
         } else if ((name3 ?? "blubb")) {
             void [name3];
+            /*svn_I*/(name4);
         }
     }
     void __svn_tpl_check;

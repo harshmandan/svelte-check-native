@@ -5,6 +5,7 @@ async function $$render_a41317e5() {
         // template type-check body (incremental)
         {
             const error: any = undefined;
+            /*svn_I*/(error);
             void error;
         }
     }

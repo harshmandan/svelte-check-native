@@ -7,23 +7,29 @@ async function $$render_481b7e3c() {
             void [hello];
             for (const item of __svn_each_items(items)) {
                 const i: number = 0;
+                /*svn_I*/(item);
+                /*svn_I*/(i);
                 void item;
                 void i;
             }
             if ((hi && bye)) {
                 void [hi, bye];
                 for (const item of __svn_each_items(items)) {
+                    /*svn_I*/(item);
                     void item;
                 }
             } else if ((cool)) {
                 void [cool];
                 for (const item of __svn_each_items(items)) {
                     const i: number = 0;
+                    /*svn_I*/(item);
+                    /*svn_I*/(i);
                     void item;
                     void i;
                 }
             } else {
                 for (const item of __svn_each_items(items)) {
+                    /*svn_I*/(item);
                     void item;
                 }
             }

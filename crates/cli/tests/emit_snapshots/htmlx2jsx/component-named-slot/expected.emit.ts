@@ -19,6 +19,9 @@ async function $$render_468914b6() {
                     const __svn_C_23 = __svn_ensure_component(Component);
                     new __svn_C_23({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                 }
+                /*svn_I*/(foo);
+                /*svn_I*/(baz);
+                /*svn_I*/(bla);
             }
             {
                 let blubb: any;
@@ -27,6 +30,7 @@ async function $$render_468914b6() {
                     const __svn_C_73 = __svn_ensure_component(Component);
                     new __svn_C_73({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                 }
+                /*svn_I*/(blubb);
             }
         }
     }

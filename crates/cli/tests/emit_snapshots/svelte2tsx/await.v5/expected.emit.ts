@@ -10,16 +10,23 @@ async function $$render_de15df1d() {
         {
             const x: any = undefined;
             void x;
+            /*svn_I*/(foo);
+            /*svn_I*/(await promise);
             for (const item of __svn_each_items(await promise)) {
+                /*svn_I*/(item);
                 void item;
             }
             for (const item of __svn_each_items(await promise)) {
                 const i: number = 0;
+                /*svn_I*/(item);
+                /*svn_I*/(i);
                 void item;
                 void i;
             }
             for (const item of __svn_each_items(await promise)) {
                 const i: number = 0;
+                /*svn_I*/(item);
+                /*svn_I*/(i);
                 void item;
                 void i;
             }
@@ -31,6 +38,7 @@ async function $$render_de15df1d() {
             } else if ((await promise)) {
                 void [promise];
             }
+            /*svn_I*/(await promise);
             {
                 const __svn_C_1d8 = __svn_ensure_component(Component);
                 new __svn_C_1d8({ target: __svn_any(), props: {prop: (await promise)} });
@@ -38,6 +46,7 @@ async function $$render_de15df1d() {
             if ((true)) {
                 const x = await promise;
                 void x;
+                /*svn_I*/(x);
             }
         }
     }

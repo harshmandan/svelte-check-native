@@ -5,6 +5,7 @@ async function $$render_4160f2ef() {
   let tag = 'div';
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        /*svn_I*/(tag);
     }
     void __svn_tpl_check;
     void tag;

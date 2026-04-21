@@ -10,6 +10,7 @@ async function $$render_53b84942() {
         // template type-check body (incremental)
         {
             const data: any = undefined;
+            /*svn_I*/(data);
             void data;
         }
     }

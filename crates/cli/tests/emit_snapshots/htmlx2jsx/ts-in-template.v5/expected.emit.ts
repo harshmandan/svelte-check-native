@@ -26,6 +26,7 @@ async function $$render_43de206c() {
             }
             for (const [''] as item: string of __svn_each_items(items)) {
                 const i: number = 0;
+                /*svn_I*/(item as string);
                 void as;
                 void item;
                 void i;

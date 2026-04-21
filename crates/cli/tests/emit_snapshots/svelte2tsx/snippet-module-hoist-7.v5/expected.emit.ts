@@ -15,6 +15,8 @@ async function $$render_6c5b63d4() {
             void _foo;
             const _foo2: any = undefined;
             void _foo2;
+            /*svn_I*/($store);
+            /*svn_I*/($store2);
         }
     }
     void __svn_tpl_check;

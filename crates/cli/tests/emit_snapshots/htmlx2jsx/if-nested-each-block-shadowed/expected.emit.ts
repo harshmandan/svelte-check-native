@@ -7,11 +7,14 @@ async function $$render_64a5d390() {
             void [hello];
             for (const hello of __svn_each_items(items)) {
                 const i: number = 0;
+                /*svn_I*/(hello);
+                /*svn_I*/(i);
                 if ((hello)) {
                     void [hello];
                     for (const hello of __svn_each_items(items)) {
                         if ((hello)) {
                             void [hello];
+                            /*svn_I*/(hello);
                         }
                         void hello;
                     }
@@ -20,6 +23,7 @@ async function $$render_64a5d390() {
                         void hello;
                         if ((hello)) {
                             void [hello];
+                            /*svn_I*/(hello);
                         }
                         void foo;
                     }
@@ -29,24 +33,30 @@ async function $$render_64a5d390() {
             }
             if ((hello)) {
                 void [hello];
+                /*svn_I*/(hello);
             }
             if ((hi && bye)) {
                 void [hi, bye];
                 for (const bye of __svn_each_items(items)) {
+                    /*svn_I*/(bye);
                     void bye;
                 }
                 if ((bye)) {
                     void [bye];
+                    /*svn_I*/(bye);
                 }
             } else if ((cool)) {
                 void [cool];
                 for (const item of __svn_each_items(items)) {
                     const cool: number = 0;
+                    /*svn_I*/(item);
+                    /*svn_I*/(cool);
                     void item;
                     void cool;
                 }
             } else {
                 for (const hello of __svn_each_items(items)) {
+                    /*svn_I*/(hello);
                     void hello;
                 }
             }
@@ -55,18 +65,36 @@ async function $$render_64a5d390() {
             const i: number = 0;
             if ((hello && i && bye)) {
                 void [hello, i, bye];
+                /*svn_I*/(hello);
+                /*svn_I*/(i);
+                /*svn_I*/(bye);
             } else if ((hello && i && bye)) {
                 void [hello, i, bye];
+                /*svn_I*/(hello);
+                /*svn_I*/(i);
+                /*svn_I*/(bye);
             } else {
+                /*svn_I*/(hello);
+                /*svn_I*/(i);
+                /*svn_I*/(bye);
             }
             void hello;
             void i;
         }
         if ((hello && i && bye)) {
             void [hello, i, bye];
+            /*svn_I*/(hello);
+            /*svn_I*/(i);
+            /*svn_I*/(bye);
         } else if ((hello && i && bye)) {
             void [hello, i, bye];
+            /*svn_I*/(hello);
+            /*svn_I*/(i);
+            /*svn_I*/(bye);
         } else {
+            /*svn_I*/(hello);
+            /*svn_I*/(i);
+            /*svn_I*/(bye);
         }
     }
     void __svn_tpl_check;

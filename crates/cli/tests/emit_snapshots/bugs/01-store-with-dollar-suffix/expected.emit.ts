@@ -8,6 +8,7 @@ async function $$render_ec2f74ae() {
     const parent$ = writable(0);
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        /*svn_I*/($parent$);
     }
     void __svn_tpl_check;
     void $parent$;

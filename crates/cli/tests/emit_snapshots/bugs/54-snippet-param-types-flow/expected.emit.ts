@@ -47,11 +47,14 @@ async function $$render_8568e182() {
                 target: __svn_any(),
                 props: {
                     row: ({ id, label }) => {
+                        /*svn_I*/(formatId(id));
+                        /*svn_I*/(label.toUpperCase());
                         void id;
                         void label;
                         return __svn_snippet_return();
                     },
                     header: (columns) => {
+                        /*svn_I*/(joinLabels(columns));
                         void columns;
                         return __svn_snippet_return();
                     },

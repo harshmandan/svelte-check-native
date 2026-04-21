@@ -5,6 +5,7 @@ async function $$render_ef3a7832() {
     let count = 0;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        /*svn_I*/(count);
     }
     void __svn_tpl_check;
     void count;

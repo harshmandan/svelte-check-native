@@ -5,6 +5,7 @@ async function $$render_a8746c92() {
     void $$restProps;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        /*svn_I*/($$restProps['name']);
     }
     void __svn_tpl_check;
 }

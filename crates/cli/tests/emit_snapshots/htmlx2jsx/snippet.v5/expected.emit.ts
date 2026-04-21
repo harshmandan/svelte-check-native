@@ -16,15 +16,18 @@ async function $$render_0bc1cb85() {
             void jsDoc;
             {
                 void ((x: any) => {
+                    /*svn_I*/(x);
                     void x;
                 });
             }
             {
                 const bar: any = undefined;
+                /*svn_I*/(bar);
                 void bar;
             }
             {
                 void ((x: any = '') => {
+                    /*svn_I*/(x);
                     void x;
                 });
             }
@@ -34,6 +37,7 @@ async function $$render_0bc1cb85() {
                     target: __svn_any(),
                     props: {
                         bar: (x) => {
+                            /*svn_I*/(x);
                             void x;
                             return __svn_snippet_return();
                         },
@@ -41,6 +45,7 @@ async function $$render_0bc1cb85() {
                     },
                 });
             }
+            /*svn_I*/(asd);
             {
                 const __svn_C_181 = __svn_ensure_component(List);
                 new __svn_C_181({
@@ -48,12 +53,14 @@ async function $$render_0bc1cb85() {
                     props: {
                         data: ([1, 2, 3]),
                         row: (item) => {
+                            /*svn_I*/(item);
                             void item;
                             return __svn_snippet_return();
                         },
                         await_inside: () => {
                             {
                                 const bar: any = undefined;
+                                /*svn_I*/(bar);
                                 void bar;
                             }
                             return __svn_snippet_return();
@@ -72,10 +79,12 @@ async function $$render_0bc1cb85() {
                     props: {
                         data: ([1, 2, 3]),
                         row1: (item) => {
+                            /*svn_I*/(item);
                             void item;
                             return __svn_snippet_return();
                         },
                         row2: (item) => {
+                            /*svn_I*/(item);
                             void item;
                             return __svn_snippet_return();
                         },
@@ -85,6 +94,7 @@ async function $$render_0bc1cb85() {
             }
             {
                 void ((/**@type {number}*/a: any) => {
+                    /*svn_I*/(a);
                     void type;
                     void number;
                     void a;

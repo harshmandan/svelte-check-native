@@ -3,6 +3,7 @@
 async function $$render_557cd70e() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        /*svn_I*/(item);
     }
     void __svn_tpl_check;
 }

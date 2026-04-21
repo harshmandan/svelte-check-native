@@ -10,6 +10,7 @@ async function $$render_9abb519b() {
             void hoistable1;
             const hoistable2: any = undefined;
             void hoistable2;
+            /*svn_I*/(foo);
         }
     }
     void __svn_tpl_check;

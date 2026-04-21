@@ -4,6 +4,120 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8]
+
+Patch release: Windows fixes plus two correctness bugs that affected
+real-world monorepo and SvelteKit-Vite setups.
+
+### Fixed — Windows workspace paths produced "0 errors in 0 files"
+
+`std::fs::canonicalize` on Windows always returns the verbatim/UNC
+form `\\?\D:\…`, even for plain drive paths. tsgo silently rejects a
+workspace root passed in that form (it doesn't treat `\\?\D:\app` as
+equivalent to `D:\app`), and our lexical glob matching — TS `include`
+patterns use forward slashes — doesn't survive the prefix either.
+
+Symptom seen in a user report: upstream `svelte-check` found 19
+errors in 6 files on a SvelteKit project under `D:\…`; our tool
+reported `0 errors and 0 warnings in 0 files` with no indication of
+what went wrong. Banner gave it away — we printed
+`\\?\D:\GitHub\…`, upstream printed `d:\GitHub\…`.
+
+Swapped every runtime `canonicalize` call (9 sites across cli, core,
+typecheck) for `dunce::canonicalize`, which returns the plain
+`D:\…` form whenever it's representable. Test code unchanged.
+
+Commit `7ce4d8e`.
+
+### Fixed — JS runtime discovery ignored PATHEXT on Windows
+
+The compiler-warning bridge's `which_in_path` did `dir.join(name)`
+with bare `"node"` / `"bun"` and tested `.is_file()`. On Windows the
+real filename is `node.exe` — a bare-name lookup never hits. The
+bridge silently no-op'd on every Windows install even when
+Node/Bun was on PATH, and users lost the `svelte/compiler`
+diagnostic stream (`state_referenced_locally`,
+`element_invalid_self_closing_tag`, accessibility warnings, and the
+other dozens of compiler warnings).
+
+Extended discovery to iterate PATHEXT suffixes after the bare-name
+attempt. Refactored into a pure `which_in(path_var, pathext, name)`
+helper so tests exercise the PATHEXT logic without mutating process
+env. Bare-name lookup still wins on Unix and also when callers pass
+`node.exe` directly.
+
+Commit `f11711e`.
+
+### Fixed — `vite/client` / `vitest/globals` silently dropped from overlay
+
+`is_resolvable_types_entry` classified any unscoped `foo/bar` entry
+as a relative filesystem path, tried to locate it on disk, failed,
+and silently dropped the entry before tsgo saw it. Real-world
+victims: `vite/client`, `vitest/globals`, `astro/client`,
+`@sveltejs/kit/types`. Dropping them erased the ambient types those
+packages provide (`import.meta.env`, CSS module side-effect imports,
+Vitest globals) and produced spurious TS2304/TS2307 cascades against
+user code that type-checks cleanly upstream.
+
+Replaced the relative-path heuristic with a narrower test (entry
+starts with `.` or `/`) plus a `split_package_entry` helper that
+separates the package root from the subpath. Package-subpath entries
+are kept when `node_modules/<pkg>/package.json` exists; tsgo's own
+module resolver handles the subpath via the package's exports map /
+typesVersions / bundled `.d.ts` — trying to second-guess which file
+it resolves to is what got us dropping valid entries in the first
+place.
+
+Commit `f563021`.
+
+### Fixed — solution-style tsconfig redirect missed real monorepo layouts
+
+`escape_solution_tsconfig` is the hatch that redirects from a
+solution-style root tsconfig (pure references, no `include`) to a
+sub-project tsconfig that actually declares path aliases, so `$lib`
+and friends resolve. Two holes in the classifier:
+
+  1. References pointing at a variant filename like
+     `tsconfig.app.json` were resolved to the directory and then
+     rejoined with `tsconfig.json` — discarding the explicit filename
+     the user wrote. Depending on the layout, the redirect either
+     landed on a different file or bailed out entirely.
+
+  2. The `paths`-presence check parsed the leaf config alone and
+     missed the common monorepo pattern where `paths` is declared
+     once in a shared `tsconfig.base.json` and inherited via
+     `extends`. We'd see an empty `paths` on the leaf, skip the
+     redirect, and leave the user stuck on the solution root.
+
+Honor the reference's filename when it names a file. Walk the full
+extends chain via `load_chain` for the paths-presence check. Both
+regressions are locked by dedicated unit tests.
+
+Commit `a7d6adb`.
+
+### Fixed — pnpm/bun tsgo discovery sorted versions lexicographically
+
+`find_in_package_store` picked the "newest" `@typescript+native-preview@<version>`
+directory by string order and took the last. String compare
+mis-orders every multi-digit boundary: `...9` beats `...10`, `9.0.0`
+beats `10.0.0`, `1.9.0` beats `1.10.0`.
+
+Current tsgo naming `7.0.0-dev.YYYYMMDD.N` is fine today because `N`
+stays single-digit and the date is fixed-width, but each axis is one
+cycle from silently downgrading users. Replaced with proper semver
+compare via the `semver` crate.
+
+Commit `507a08f`.
+
+### Cleanup — removed dead `svn-lint` crate
+
+`crates/lint` was five lines of module docs with zero code. The CLI
+listed it in its dependencies, pulling it through the workspace
+build for nothing. Deleted. We'll re-add when there's an actual
+rule to ship.
+
+Commit `28ba5fd`.
+
 ## [0.3.7]
 
 Patch release: two correctness fixes that close ~30% of the palacms

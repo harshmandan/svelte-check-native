@@ -4,6 +4,136 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9]
+
+Patch release: three parity fixes driven by a real-world user
+report on a SvelteKit sub-app monorepo. Closes the
+`use:enhance={({form,data,submit}) => …}` callback-typing miss
+(TS2339 ×3 per site upstream, silent on ours), the
+`{#if form?.success}{form.error}` narrowing miss, and — same
+root cause — the paraglide `m['login.pin']` literal-key miss.
+Parity on `control-svelte-5/sub-app` goes from 2 errors to 8,
+matching upstream `svelte-check --tsgo` exactly.
+
+Full investigation trail in [`docs/parity-findings-2026-04-21.md`](https://github.com/harshmandan/svelte-check-native/blob/main/docs/parity-findings-2026-04-21.md).
+
+### Fixed — `use:ACTION={PARAMS}` callback parameters no longer lose contextual typing
+
+`use:enhance={({formData}) => …}` and every other user-defined
+action directive emitted as a dead `let __svn_action_attrs_N: any =
+{}` placeholder. The `PARAMS` expression was discarded, so
+TypeScript never saw the callback and its parameter destructure was
+never checked. Users writing `use:enhance={({form,data,submit}) => …}`
+(confusing the action's `SubmitFunction` param shape with the
+`$props()` destructure names) got zero diagnostics — upstream fires
+3 TS2339 per site.
+
+Emit now mirrors upstream svelte2tsx's `__sveltets_2_ensureAction`
+shape with our `__svn_` namespace:
+
+```ts
+const __svn_action_0 = __svn_ensure_action(
+    enhance(__svn_map_element_tag('form'), (callback))
+);
+```
+
+The inner `enhance(...)` is a real call, so TypeScript contextually
+types the callback against `SubmitFunction`'s declared input shape
+and fires TS2339 on every wrong destructure name. New shim helpers
+`__svn_ensure_action` + `__svn_map_element_tag` in
+`svelte_shims_core.d.ts`. Design fixture at
+`design/action_directive/` (per CLAUDE.md rule #8) proves the shape
+before Rust touched — Clean case 0 errors, Wrong case exactly 3
+TS2339 at expected positions.
+
+Commit `f91fa70`.
+
+### Fixed — template `{EXPR}` interpolations now participate in type-checking
+
+Plain `{EXPR}` interpolations were emitted as nothing. Our template
+walker voided ROOT identifiers via `find_template_refs` to keep
+TS6133 off our back, but the full expression never landed in the
+overlay — TypeScript had no opportunity to check it against
+enclosing control-flow narrowing, scope bindings, or literal-key
+types.
+
+Visible consequences users reported:
+
+- `{#if form?.success}{form.error}{/if}` on a hand-typed
+  discriminated union — upstream fires TS2339 on the wrong-branch
+  `.error` access; we fired nothing.
+- `{m['login.pin']()}` where `m` is paraglide's generated messages
+  object — upstream fires TS7053 on the missing literal key; we
+  fired nothing.
+
+Emit each plain interpolation as an expression statement inside its
+enclosing scope, prefixed with a sentinel comment the post-walk
+scanner uses as a token-map anchor:
+
+```ts
+if ((form?.success)) {
+    void [form?.success];
+    /*svn_I*/(form.error);
+}
+```
+
+`collect_interpolation_token_map` zips `/*svn_I*/` sentinels with
+fragment-walk-order expression ranges and pushes a TokenMapEntry
+per site so diagnostics surface at the user's `{EXPR}` position.
+Paren-wrap protects against multi-clause expressions parsing as
+statement heads. 110 existing emit-snapshot fixtures picked up
+additive lines.
+
+Note: SvelteKit's `ActionData` type (from generated `$types`) uses
+`OptionalUnion<U>` which synthesizes `?: never` for every other
+branch's keys — reading `form.error` under `{#if form?.success}`
+returns `undefined` rather than firing TS2339. Upstream behaves
+the same. Our fix correctly catches hand-typed discriminated
+unions; Kit-standard `ActionData` reads as designed.
+
+Commit `ae15e45`.
+
+### Fixed — code-frame caret aligns under tab-indented source
+
+Windows-reported cosmetic bug: tab-indented file fired
+`bind:value={addAssemblyPrice}` TS2322 but the `^^^` caret rendered
+several visual columns LEFT of the actual error (under
+`type="number"` on the line above). Root cause was the caret line
+being padded with literal spaces while the source line rendered
+tabs verbatim — terminal expansion made the source wider than the
+padding counted for.
+
+Fix mirrors each whitespace character from the source line into
+the caret prefix (tab→tab, anything else→space). Terminal applies
+the same expansion to both lines so the caret lands under the
+error regardless of the configured tab width. Extracted
+`render_code_frame` as a pure helper with 4 regression tests.
+
+Purely cosmetic — no change to diagnostic content, line:col
+numbers, or machine/machine-verbose outputs (those don't render a
+code frame).
+
+Commit `fe12814`.
+
+### Workflow — GitHub releases instead of manual tagging
+
+`gh release create vX.Y.Z --latest=true` now owns tag creation —
+no more separate `git tag` + `git push origin vX.Y.Z` steps.
+Collapses to one command, keeps tag and release in sync by
+construction (v0.3.8 drifted between them for a session until
+force-reconciled). CLAUDE.md updated.
+
+Commit `91f59d4`.
+
+### Docs — parity-findings write-up
+
+New `docs/` tree with an investigation log covering the three
+fixes above, the explicit non-findings (ActionData OptionalUnion,
+duplicate `</form>`), a SvelteKit typed-callback audit, and
+parity numbers before/after.
+
+Commit `ae7d365`.
+
 ## [0.3.8]
 
 Patch release: Windows fixes plus two correctness bugs that affected

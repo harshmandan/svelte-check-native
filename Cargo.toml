@@ -17,7 +17,7 @@ rust-version = "1.85"
 license = "MIT"
 repository = "https://github.com/harshmandan/svelte-check-native"
 authors = ["Harsh Mandan <harshsinghmandan@gmail.com>"]
-version = "0.3.8"
+version = "0.3.9"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

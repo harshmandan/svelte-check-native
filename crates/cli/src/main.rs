@@ -609,15 +609,24 @@ fn resolve_tsconfig(
 ///
 /// Algorithm:
 ///   1. Parse `candidate`. Return `None` if not a solution.
-///   2. Collect directories from `references[]` (each reference points
-///      at either a tsconfig file or a project dir).
-///   3. In each directory, look for `tsconfig.json` (the base one, not
-///      `.build` / `.test` / `.playwright` variants) that has non-empty
-///      `compilerOptions.paths`. Return the first match.
+///   2. For each entry in `references[]`: if the reference points at a
+///      file, that IS the sub-project's config (TS references may name
+///      any file, not just `tsconfig.json`); if it points at a
+///      directory, fall back to the conventional `tsconfig.json` under
+///      it.
+///   3. Load the referenced config's full extends chain via
+///      [`load_chain`]. If any file in the chain declares non-empty
+///      `compilerOptions.paths`, return the leaf as the redirect
+///      target.
 ///
-/// Returns `None` when the tsconfig isn't a solution, no reference
-/// directory has a paths-carrying `tsconfig.json`, or any parse fails
-/// — keeps the caller's original in those cases.
+/// The extends walk matters in monorepos that declare `paths` once in a
+/// shared `tsconfig.base.json` and inherit it into each app; a single
+/// `parse_file` of the leaf misses those and leaves us stuck on the
+/// solution root with unresolvable `$lib`-style aliases.
+///
+/// Returns `None` when the tsconfig isn't a solution, no reference's
+/// chain declares paths, or any parse fails — keeps the caller's
+/// original in those cases.
 fn escape_solution_tsconfig(candidate: &Path) -> Option<PathBuf> {
     let parsed = svn_core::tsconfig::parse_file(candidate).ok()?;
     if !parsed.is_solution_style() {
@@ -626,28 +635,34 @@ fn escape_solution_tsconfig(candidate: &Path) -> Option<PathBuf> {
     let parent = candidate.parent()?;
     for reference in &parsed.references {
         let ref_path = parent.join(&reference.path);
-        let ref_dir = if ref_path.is_dir() {
-            ref_path.clone()
-        } else if ref_path.is_file() {
-            match ref_path.parent() {
-                Some(p) => p.to_path_buf(),
-                None => continue,
+        let config_path = if ref_path.is_file() {
+            // References may name the config file directly (e.g.
+            // `./apps/foo/tsconfig.app.json`). The reference's
+            // filename is the user's explicit "this is the project
+            // config" and we must honor it — a monorepo that picks
+            // variant names like `tsconfig.app.json` for runtime code
+            // and `tsconfig.node.json` for build-time code would
+            // silently redirect to the wrong file (or no file at all)
+            // if we hardcoded `tsconfig.json`.
+            ref_path
+        } else if ref_path.is_dir() {
+            let default = ref_path.join("tsconfig.json");
+            if !default.is_file() {
+                continue;
             }
+            default
         } else {
             continue;
         };
-        let base = ref_dir.join("tsconfig.json");
-        if !base.is_file() {
-            continue;
-        }
-        let sub = match svn_core::tsconfig::parse_file(&base) {
-            Ok(s) => s,
+        let chain = match svn_core::tsconfig::load_chain(&config_path) {
+            Ok(c) => c,
             Err(_) => continue,
         };
-        if sub.compiler_options.paths.is_empty() {
+        let has_paths = chain.iter().any(|f| !f.compiler_options.paths.is_empty());
+        if !has_paths {
             continue;
         }
-        return Some(dunce::canonicalize(&base).unwrap_or(base));
+        return Some(dunce::canonicalize(&config_path).unwrap_or(config_path));
     }
     None
 }
@@ -1568,5 +1583,103 @@ mod tests {
             compiler_code_docs_url("a11y-autofocus", Severity::Warning),
             Some("https://svelte.dev/docs/svelte/compiler-warnings#a11y_autofocus".to_string()),
         );
+    }
+
+    /// Write a tsconfig with the given JSON body and return its path.
+    fn write_tsconfig(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn escape_solution_keeps_referenced_file_name_not_just_dir() {
+        // Reference points at a variant filename like tsconfig.app.json.
+        // Pre-fix we'd drop the filename and try <dir>/tsconfig.json,
+        // miss it, and never redirect — leaving the user stuck on the
+        // solution root with unresolvable paths.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let app_dir = root.join("apps/foo");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        write_tsconfig(
+            root,
+            "tsconfig.json",
+            r#"{ "files": [], "references": [{ "path": "./apps/foo/tsconfig.app.json" }] }"#,
+        );
+        let app_ts = write_tsconfig(
+            &app_dir,
+            "tsconfig.app.json",
+            r#"{ "compilerOptions": { "paths": { "$lib/*": ["./src/lib/*"] } } }"#,
+        );
+        let redirected = escape_solution_tsconfig(&root.join("tsconfig.json")).unwrap();
+        assert_eq!(
+            dunce::canonicalize(&redirected).unwrap(),
+            dunce::canonicalize(&app_ts).unwrap(),
+        );
+    }
+
+    #[test]
+    fn escape_solution_follows_extends_for_paths_discovery() {
+        // Leaf `tsconfig.json` declares no paths of its own but inherits
+        // them from a shared `tsconfig.base.json` via `extends`. Pre-fix
+        // we only looked at the leaf and missed the redirect entirely.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_tsconfig(
+            root,
+            "tsconfig.base.json",
+            r#"{ "compilerOptions": { "paths": { "$app/*": ["./src/app/*"] } } }"#,
+        );
+        let app_dir = root.join("apps/foo");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        write_tsconfig(
+            root,
+            "tsconfig.json",
+            r#"{ "files": [], "references": [{ "path": "./apps/foo" }] }"#,
+        );
+        let leaf = write_tsconfig(
+            &app_dir,
+            "tsconfig.json",
+            r#"{ "extends": "../../tsconfig.base.json", "compilerOptions": { "strict": true } }"#,
+        );
+        let redirected = escape_solution_tsconfig(&root.join("tsconfig.json")).unwrap();
+        assert_eq!(
+            dunce::canonicalize(&redirected).unwrap(),
+            dunce::canonicalize(&leaf).unwrap(),
+        );
+    }
+
+    #[test]
+    fn escape_solution_skips_reference_whose_chain_has_no_paths() {
+        // References that inherit nothing path-related stay on the
+        // solution root. The escape only exists to rescue paths
+        // resolution; skipping leaves other flows untouched.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let app_dir = root.join("apps/foo");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        write_tsconfig(
+            root,
+            "tsconfig.json",
+            r#"{ "files": [], "references": [{ "path": "./apps/foo" }] }"#,
+        );
+        write_tsconfig(
+            &app_dir,
+            "tsconfig.json",
+            r#"{ "compilerOptions": { "strict": true } }"#,
+        );
+        assert!(escape_solution_tsconfig(&root.join("tsconfig.json")).is_none());
+    }
+
+    #[test]
+    fn escape_solution_returns_none_for_non_solution_tsconfig() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ts = write_tsconfig(
+            tmp.path(),
+            "tsconfig.json",
+            r#"{ "compilerOptions": { "strict": true }, "include": ["src/**/*"] }"#,
+        );
+        assert!(escape_solution_tsconfig(&ts).is_none());
     }
 }

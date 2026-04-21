@@ -470,54 +470,104 @@ fn is_svelte_only_pattern(pattern: &str) -> bool {
 
 /// True when a `types` entry will resolve under tsgo's lookup rules.
 ///
-/// **Package-name entries** (e.g. `"node"`, `"@types/foo"`, `"foo"`)
-/// are resolved through the workspace's `node_modules` chain. We walk
-/// up from the declaring tsconfig's directory looking for either
-/// `node_modules/@types/<name>/package.json` (the conventional types
-/// package layout) or `node_modules/<name>/package.json` (a runtime
-/// package that ships its own .d.ts files). Either match means tsgo
-/// will find it; otherwise we drop the entry. This matters because
-/// SvelteKit's auto-generated `.svelte-kit/tsconfig.json` declares
-/// `types: ["node"]` even when the host project doesn't actually
-/// depend on `@types/node` — without filtering, tsgo treats the
-/// missing entry as fatal TS2688 and stops emitting diagnostics for
-/// the entire program.
+/// Entries fall into two buckets:
 ///
-/// **Relative path entries** (start with `.` or `/`, or contain a
-/// path separator and aren't scoped) must point at an existing file.
-/// tsgo's `types` lookup for relative entries does NOT add `.d.ts`
-/// automatically when the path already includes an extension, so we
-/// test the literal path first and `<path>.d.ts` as a fallback.
+/// **Filesystem paths** — start with `.`, `..`, or `/`. Must point at an
+/// existing file. tsgo's `types` lookup for relative entries does NOT
+/// add `.d.ts` automatically when the path already includes an
+/// extension, so we test the literal path first and `<path>.d.ts` as a
+/// fallback. This is the narrow case where `types: ["./foo"]` is a
+/// literal file reference.
+///
+/// **Package entries** — everything else. Includes:
+///   - Bare names: `"node"`, `"svelte"`.
+///   - Scoped names: `"@types/foo"`, `"@sveltejs/kit"`.
+///   - Package-subpath entries: `"vite/client"`, `"vitest/globals"`,
+///     `"@sveltejs/kit/types"`. The subpath component is resolved
+///     internally by the package (via its `exports` map,
+///     `typesVersions`, or bundled .d.ts layout) — we don't try to
+///     second-guess which file it lands on. Checking that the package
+///     itself is installed in the workspace's `node_modules` chain is
+///     sufficient; tsgo does the rest.
+///
+/// This filtering exists because SvelteKit's auto-generated
+/// `.svelte-kit/tsconfig.json` declares `types: ["node"]` even when the
+/// host project doesn't actually depend on `@types/node` — without it,
+/// tsgo treats the missing entry as fatal TS2688 and stops emitting
+/// diagnostics for the entire program. The classifier has to keep
+/// genuinely-installed entries (including subpaths like `vite/client`)
+/// or user code loses its ambient types.
 fn is_resolvable_types_entry(entry: &str, declaring_dir: &Path) -> bool {
-    let looks_relative = entry.starts_with('.')
-        || entry.starts_with('/')
-        || (entry.contains('/') && !entry.starts_with('@'));
-    if !looks_relative {
-        return package_types_entry_resolves(entry, declaring_dir);
+    if is_filesystem_types_entry(entry) {
+        let candidate = if Path::new(entry).is_absolute() {
+            PathBuf::from(entry)
+        } else {
+            declaring_dir.join(entry)
+        };
+        if candidate.is_file() {
+            return true;
+        }
+        let with_dts = candidate.with_extension(format!(
+            "{}.d.ts",
+            candidate.extension().and_then(|e| e.to_str()).unwrap_or(""),
+        ));
+        if with_dts.is_file() {
+            return true;
+        }
+        let mut as_dts = candidate.clone();
+        as_dts.as_mut_os_string().push(".d.ts");
+        return as_dts.is_file();
     }
-    let candidate = if Path::new(entry).is_absolute() {
-        PathBuf::from(entry)
-    } else {
-        declaring_dir.join(entry)
-    };
-    if candidate.is_file() {
-        return true;
-    }
-    // `types: ["./foo"]` may resolve as `foo.d.ts`.
-    let with_dts = candidate.with_extension(format!(
-        "{}.d.ts",
-        candidate.extension().and_then(|e| e.to_str()).unwrap_or(""),
-    ));
-    if with_dts.is_file() {
-        return true;
-    }
-    // Plain extensionless input: try `<entry>.d.ts`.
-    let mut as_dts = candidate.clone();
-    as_dts.as_mut_os_string().push(".d.ts");
-    as_dts.is_file()
+    let (pkg, _subpath) = split_package_entry(entry);
+    package_types_entry_resolves(pkg, declaring_dir)
 }
 
-/// True when a bare-name `types` entry resolves to either an `@types`
+/// True when the entry should be treated as a filesystem path rather
+/// than a package spec. Filesystem paths begin with `./`, `../`, or `/`
+/// (POSIX-style absolute). Everything else — bare names, scoped names,
+/// package subpaths — resolves through `node_modules`.
+fn is_filesystem_types_entry(entry: &str) -> bool {
+    entry.starts_with('.') || entry.starts_with('/')
+}
+
+/// Split a package-style `types` entry into its package root and the
+/// (possibly empty) subpath.
+///
+/// Examples:
+///   - `"node"` → `("node", "")`
+///   - `"vite/client"` → `("vite", "client")`
+///   - `"vitest/globals"` → `("vitest", "globals")`
+///   - `"@sveltejs/kit"` → `("@sveltejs/kit", "")`
+///   - `"@sveltejs/kit/types"` → `("@sveltejs/kit", "types")`
+///
+/// The package root is always the portion that lives directly under
+/// `node_modules/`: for unscoped packages it's everything before the
+/// first `/`, for scoped packages it's the first two segments.
+fn split_package_entry(entry: &str) -> (&str, &str) {
+    if let Some(rest) = entry.strip_prefix('@') {
+        // Scoped package: @<scope>/<name>[/<subpath>]. Find the second
+        // slash — that marks the boundary between package and subpath.
+        let scope_end = match rest.find('/') {
+            Some(idx) => idx,
+            None => return (entry, ""),
+        };
+        let after_scope = &rest[scope_end + 1..];
+        match after_scope.find('/') {
+            Some(idx) => {
+                let pkg_end = 1 + scope_end + 1 + idx;
+                (&entry[..pkg_end], &entry[pkg_end + 1..])
+            }
+            None => (entry, ""),
+        }
+    } else {
+        match entry.split_once('/') {
+            Some((pkg, sub)) => (pkg, sub),
+            None => (entry, ""),
+        }
+    }
+}
+
+/// True when a package-name `types` entry resolves to either an `@types`
 /// package or a runtime package shipping its own .d.ts files in the
 /// workspace's `node_modules` chain. Walks up from the declaring
 /// tsconfig's directory; first match wins.
@@ -1062,5 +1112,110 @@ mod tests {
             matches, 1,
             "self-reference should not duplicate the include; got {includes:?}",
         );
+    }
+
+    #[test]
+    fn split_package_entry_unscoped_bare_name() {
+        assert_eq!(split_package_entry("node"), ("node", ""));
+    }
+
+    #[test]
+    fn split_package_entry_unscoped_subpath() {
+        assert_eq!(split_package_entry("vite/client"), ("vite", "client"));
+        assert_eq!(split_package_entry("vitest/globals"), ("vitest", "globals"),);
+        assert_eq!(
+            split_package_entry("swiper/css/navigation"),
+            ("swiper", "css/navigation"),
+        );
+    }
+
+    #[test]
+    fn split_package_entry_scoped_bare_name() {
+        assert_eq!(split_package_entry("@sveltejs/kit"), ("@sveltejs/kit", ""),);
+    }
+
+    #[test]
+    fn split_package_entry_scoped_subpath() {
+        assert_eq!(
+            split_package_entry("@sveltejs/kit/types"),
+            ("@sveltejs/kit", "types"),
+        );
+        assert_eq!(
+            split_package_entry("@types/node/fs/promises"),
+            ("@types/node", "fs/promises"),
+        );
+    }
+
+    #[test]
+    fn split_package_entry_malformed_scoped_stays_whole() {
+        // A bare `@scope` with no slash has no package root to split from.
+        // Return it unchanged rather than crash.
+        assert_eq!(split_package_entry("@scope"), ("@scope", ""));
+    }
+
+    #[test]
+    fn is_filesystem_types_entry_picks_relative_and_absolute() {
+        assert!(is_filesystem_types_entry("./foo"));
+        assert!(is_filesystem_types_entry("../foo/bar.d.ts"));
+        assert!(is_filesystem_types_entry("/abs/path/foo.d.ts"));
+        assert!(!is_filesystem_types_entry("foo"));
+        assert!(!is_filesystem_types_entry("vite/client"));
+        assert!(!is_filesystem_types_entry("@scope/pkg/sub"));
+    }
+
+    #[test]
+    fn is_resolvable_types_entry_keeps_installed_package_subpath() {
+        // Repro of the real bug: a tsconfig declares `types: ["vite/client"]`
+        // and `node_modules/vite/package.json` exists. Pre-fix the entry
+        // was classified as a relative filesystem path, not found on
+        // disk, and silently dropped — which erased the ambient types
+        // user code depends on (`import.meta.env`, CSS module imports).
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("node_modules").join("vite");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("package.json"), "{}").unwrap();
+        assert!(is_resolvable_types_entry("vite/client", tmp.path()));
+        assert!(is_resolvable_types_entry("vite", tmp.path()));
+    }
+
+    #[test]
+    fn is_resolvable_types_entry_keeps_installed_scoped_subpath() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp
+            .path()
+            .join("node_modules")
+            .join("@sveltejs")
+            .join("kit");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("package.json"), "{}").unwrap();
+        assert!(is_resolvable_types_entry("@sveltejs/kit/types", tmp.path(),));
+    }
+
+    #[test]
+    fn is_resolvable_types_entry_drops_uninstalled_package() {
+        // The filtering's whole point: SvelteKit writes `types: ["node"]`
+        // into `.svelte-kit/tsconfig.json` even when @types/node isn't
+        // installed; if we kept it tsgo would fire fatal TS2688 and zero
+        // our error count. Same applies to uninstalled subpaths.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("node_modules")).unwrap();
+        assert!(!is_resolvable_types_entry("node", tmp.path()));
+        assert!(!is_resolvable_types_entry("vite/client", tmp.path()));
+    }
+
+    #[test]
+    fn is_resolvable_types_entry_keeps_relative_dts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dts = tmp.path().join("types.d.ts");
+        std::fs::write(&dts, "").unwrap();
+        assert!(is_resolvable_types_entry("./types.d.ts", tmp.path()));
+        // Extensionless form also accepted (tsgo appends .d.ts).
+        assert!(is_resolvable_types_entry("./types", tmp.path()));
+    }
+
+    #[test]
+    fn is_resolvable_types_entry_drops_missing_relative_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!is_resolvable_types_entry("./does-not-exist", tmp.path()));
     }
 }

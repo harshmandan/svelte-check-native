@@ -51,10 +51,20 @@ time, never imported at runtime.
 ## Use
 
 ```sh
-svelte-check-native --workspace .
+npx svelte-check-native --workspace .
 ```
 
-Same flags as `svelte-check`. See `svelte-check-native --help`.
+Or add it to `package.json`:
+
+```json
+{
+  "scripts": {
+    "check": "svelte-check-native --workspace ."
+  }
+}
+```
+
+Same flags as `svelte-check`. See `npx svelte-check-native --help`.
 
 ## How it works
 

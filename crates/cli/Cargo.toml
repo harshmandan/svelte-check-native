@@ -17,7 +17,6 @@ svn-core = { path = "../core" }
 svn-parser = { path = "../parser" }
 svn-analyze = { path = "../analyze" }
 svn-emit = { path = "../emit" }
-svn-lint = { path = "../lint" }
 svn-svelte-compiler = { path = "../svelte-compiler" }
 svn-typecheck = { path = "../typecheck" }
 clap.workspace = true

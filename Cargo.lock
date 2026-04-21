@@ -1104,7 +1104,6 @@ dependencies = [
  "svn-analyze",
  "svn-core",
  "svn-emit",
- "svn-lint",
  "svn-parser",
  "svn-svelte-compiler",
  "svn-typecheck",
@@ -1149,15 +1148,6 @@ dependencies = [
  "oxc_ast",
  "oxc_span",
  "smol_str",
- "svn-analyze",
- "svn-core",
- "svn-parser",
-]
-
-[[package]]
-name = "svn-lint"
-version = "0.3.7"
-dependencies = [
  "svn-analyze",
  "svn-core",
  "svn-parser",

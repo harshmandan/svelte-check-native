@@ -5,7 +5,6 @@ members = [
     "crates/parser",
     "crates/analyze",
     "crates/emit",
-    "crates/lint",
     "crates/svelte-compiler",
     "crates/typecheck",
     "crates/cli",

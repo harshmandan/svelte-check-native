@@ -151,7 +151,13 @@ fn main() -> ExitCode {
     // search) traverses real filesystem ancestors. Without this, a relative
     // workspace like `./test-success` walks `.parent()` → `./` → `""` →
     // None and never reaches actual node_modules locations.
-    let workspace = match workspace_arg.canonicalize() {
+    //
+    // Uses `dunce::canonicalize` so on Windows drive paths come back as
+    // `D:\…` rather than the verbatim `\\?\D:\…` form. tsgo silently skips
+    // a workspace root passed in verbatim form and our lexical include-
+    // glob matching (forward slashes in user patterns) doesn't survive
+    // the prefix either — "0 files, 0 errors" on Windows traces back here.
+    let workspace = match dunce::canonicalize(&workspace_arg) {
         Ok(p) => p,
         Err(err) => {
             eprintln!(
@@ -569,7 +575,7 @@ fn resolve_tsconfig(
         }
         // Canonicalize so the overlay's `extends` path is computable as a
         // proper relative path between two absolute directories.
-        resolved.canonicalize().unwrap_or(resolved)
+        dunce::canonicalize(&resolved).unwrap_or(resolved)
     } else {
         let mut found: Option<PathBuf> = None;
         let mut cur: Option<&Path> = Some(workspace);
@@ -641,7 +647,7 @@ fn escape_solution_tsconfig(candidate: &Path) -> Option<PathBuf> {
         if sub.compiler_options.paths.is_empty() {
             continue;
         }
-        return Some(base.canonicalize().unwrap_or(base));
+        return Some(dunce::canonicalize(&base).unwrap_or(base));
     }
     None
 }
@@ -702,7 +708,7 @@ fn run_typecheck(
             .iter()
             .flatten()
             .map(|p| tsconfig_dir.join(p))
-            .filter_map(|p| p.canonicalize().ok().or(Some(p)))
+            .filter_map(|p| dunce::canonicalize(&p).ok().or(Some(p)))
             .collect();
         (
             build_glob_set(workspace, tc.include.as_deref()),
@@ -718,8 +724,7 @@ fn run_typecheck(
         // walker path and its canonical form (the explicit list was
         // canonicalized where possible above).
         if files.contains(path)
-            || path
-                .canonicalize()
+            || dunce::canonicalize(path)
                 .ok()
                 .is_some_and(|abs| files.contains(&abs))
         {

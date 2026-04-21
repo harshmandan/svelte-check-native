@@ -468,7 +468,10 @@ fn is_overlay_tsconfig_noise(raw: &RawDiagnostic, layout: &CacheLayout) -> bool 
     if abs == layout.overlay_tsconfig {
         return true;
     }
-    if let (Ok(a), Ok(b)) = (abs.canonicalize(), layout.overlay_tsconfig.canonicalize()) {
+    if let (Ok(a), Ok(b)) = (
+        dunce::canonicalize(&abs),
+        dunce::canonicalize(&layout.overlay_tsconfig),
+    ) {
         if a == b {
             return true;
         }

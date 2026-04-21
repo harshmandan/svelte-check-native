@@ -58,6 +58,12 @@ blake3 = "1"
 # Filesystem walking
 walkdir = "2"
 globset = "0.4"
+# Canonicalize replacement that avoids Windows verbatim/UNC (`\\?\`) prefixes
+# whenever a plain path is representable. std::fs::canonicalize on Windows
+# always returns the verbatim form, which upstream svelte-check/tsgo don't
+# accept and which breaks lexical glob matching against user `include`
+# patterns written with forward slashes.
+dunce = "1"
 
 # JS/TS parser. Architecture rule: embedded JS/TS is parsed once into
 # a real AST and walked structurally — never scanned character-by-

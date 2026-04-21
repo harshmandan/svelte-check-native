@@ -89,13 +89,10 @@ pub fn load(entry: impl AsRef<Path>) -> Result<TsConfigFile, LoadError> {
 pub fn load_chain(entry: impl AsRef<Path>) -> Result<Vec<TsConfigFile>, LoadError> {
     use std::collections::VecDeque;
 
-    let entry_canon = entry
-        .as_ref()
-        .canonicalize()
-        .map_err(|source| LoadError::Io {
-            path: entry.as_ref().to_path_buf(),
-            source,
-        })?;
+    let entry_canon = dunce::canonicalize(entry.as_ref()).map_err(|source| LoadError::Io {
+        path: entry.as_ref().to_path_buf(),
+        source,
+    })?;
 
     let mut out: Vec<TsConfigFile> = Vec::new();
     let mut visited: HashSet<PathBuf> = HashSet::new();
@@ -116,7 +113,7 @@ pub fn load_chain(entry: impl AsRef<Path>) -> Result<Vec<TsConfigFile>, LoadErro
         for ext_ref in &file.extends {
             match resolve_extends(ext_ref, &parent_dir) {
                 Ok(resolved) => {
-                    let canon = resolved.canonicalize().unwrap_or(resolved);
+                    let canon = dunce::canonicalize(&resolved).unwrap_or(resolved);
                     if !visited.contains(&canon) {
                         queue.push_back(canon);
                     }
@@ -130,7 +127,7 @@ pub fn load_chain(entry: impl AsRef<Path>) -> Result<Vec<TsConfigFile>, LoadErro
 }
 
 fn load_recursive(path: &Path, seen: &mut HashSet<PathBuf>) -> Result<TsConfigFile, LoadError> {
-    let canonical = path.canonicalize().map_err(|source| LoadError::Io {
+    let canonical = dunce::canonicalize(path).map_err(|source| LoadError::Io {
         path: path.to_path_buf(),
         source,
     })?;

@@ -16,6 +16,7 @@ json5.workspace = true
 camino.workspace = true
 thiserror.workspace = true
 memchr.workspace = true
+dunce.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

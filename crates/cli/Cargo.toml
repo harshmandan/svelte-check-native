@@ -29,6 +29,7 @@ serde_json.workspace = true
 camino.workspace = true
 walkdir.workspace = true
 globset.workspace = true
+dunce.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

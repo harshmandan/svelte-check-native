@@ -19,6 +19,7 @@ serde_json.workspace = true
 walkdir.workspace = true
 camino.workspace = true
 thiserror.workspace = true
+dunce.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

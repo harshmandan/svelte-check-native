@@ -1275,6 +1275,23 @@ fn format_code_frame(path: &Path, line: u32, column: u32, span_length: Option<u3
     let Ok(source) = std::fs::read_to_string(path) else {
         return String::new();
     };
+    render_code_frame(&source, line, column, span_length)
+}
+
+/// Pure code-frame renderer — split out for testability. Takes the whole
+/// file's text plus a 1-based (line, column) and produces a 3-line frame
+/// with the target line highlighted by a `^^^` caret underneath.
+///
+/// Tab handling: the source line is printed verbatim (tabs preserved),
+/// and the caret line mirrors the source's whitespace through column-1
+/// — writing a tab where the source had a tab, space elsewhere. The
+/// terminal's own tab expansion then aligns both lines to the same
+/// visual column regardless of the configured tab width. Without this,
+/// tab-indented files render with the caret several visual columns
+/// left of the actual error site (filed by a user with a Svelte project
+/// whose indent was tabs: `bind:value={addAssemblyPrice}` fired TS2322
+/// but the caret appeared under `type="number"` on the line above).
+fn render_code_frame(source: &str, line: u32, column: u32, span_length: Option<u32>) -> String {
     let lines: Vec<&str> = source.lines().collect();
     let target_idx = match (line as usize).checked_sub(1) {
         Some(i) if i < lines.len() => i,
@@ -1288,11 +1305,21 @@ fn format_code_frame(path: &Path, line: u32, column: u32, span_length: Option<u3
         let ln = start + i + 1;
         let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{ln:>width$} | {content}\n"));
         if ln == line as usize {
-            let pad = width + 3 + column.saturating_sub(1) as usize;
-            let underline = "^".repeat(span_length.unwrap_or(1).max(1) as usize);
-            for _ in 0..pad {
+            // Gutter: "<ln> | " — `width` digits + space + pipe + space.
+            for _ in 0..(width + 3) {
                 out.push(' ');
             }
+            // Preserve each whitespace kind from the source line up to
+            // the error column so terminal tab-expansion aligns caret
+            // and source identically. Non-whitespace chars before the
+            // column (rare for error sites but possible for multi-byte
+            // identifiers etc.) still get a single space — sufficient
+            // for caret counting since `column` is 1-based char index.
+            let column_idx = column.saturating_sub(1) as usize;
+            for ch in content.chars().take(column_idx) {
+                out.push(if ch == '\t' { '\t' } else { ' ' });
+            }
+            let underline = "^".repeat(span_length.unwrap_or(1).max(1) as usize);
             out.push_str(&underline);
             out.push('\n');
         }
@@ -1681,5 +1708,87 @@ mod tests {
             r#"{ "compilerOptions": { "strict": true }, "include": ["src/**/*"] }"#,
         );
         assert!(escape_solution_tsconfig(&ts).is_none());
+    }
+
+    /// Return the caret line from a rendered code frame — the line that
+    /// starts at the gutter padding and contains the `^` underline.
+    fn extract_caret_line(frame: &str) -> &str {
+        frame
+            .lines()
+            .find(|l| l.trim_start().starts_with('^'))
+            .unwrap_or("")
+    }
+
+    /// Return the target source line from a rendered frame — the one with
+    /// gutter `N | ` matching the requested line number.
+    fn extract_source_line(frame: &str, line: u32) -> &str {
+        let prefix = format!("{line} | ");
+        // Also tolerate right-aligned gutters (`"  3 | "`): strip leading
+        // spaces before comparing.
+        frame
+            .lines()
+            .find(|l| l.trim_start().starts_with(&prefix))
+            .unwrap_or("")
+    }
+
+    #[test]
+    fn code_frame_caret_aligns_with_error_on_tab_indented_source() {
+        // Regression: a user reported that on Windows, a tab-indented
+        // file showed the `^^^` caret several visual columns left of
+        // the actual error site. Root cause was spaces-only caret
+        // padding while the source line rendered its tabs verbatim —
+        // terminal tab-expansion made the source wider than the caret
+        // counted for. Fix is to mirror the source's whitespace kind.
+        let src = "line one\n\t\t\tbind:value={x}\nline three\n";
+        // `bind:value={x}` starts at char column 4 (3 tabs + 1-based).
+        let frame = render_code_frame(src, 2, 4, Some(14));
+        let src_line = extract_source_line(&frame, 2);
+        let caret_line = extract_caret_line(&frame);
+
+        // After the gutter, the caret prefix must contain exactly the
+        // same TABS as the source line before the error column.
+        let src_prefix_tabs = src_line.chars().filter(|&c| c == '\t').count();
+        let caret_prefix_tabs = caret_line.chars().filter(|&c| c == '\t').count();
+        assert_eq!(
+            src_prefix_tabs, caret_prefix_tabs,
+            "caret line must mirror source tabs so terminal expansion aligns them\n\
+             frame:\n{frame}",
+        );
+        assert!(
+            caret_line.contains("^^^^^^^^^^^^^^"),
+            "14-char underline missing; frame:\n{frame}",
+        );
+    }
+
+    #[test]
+    fn code_frame_caret_uses_spaces_on_space_indented_source() {
+        // Sanity: space-indented source must still produce a
+        // space-only caret prefix (no tabs sneaking in).
+        let src = "line one\n    bind:value={x}\nline three\n";
+        let frame = render_code_frame(src, 2, 5, Some(14));
+        let caret_line = extract_caret_line(&frame);
+        assert!(
+            !caret_line.contains('\t'),
+            "caret line must not contain tabs when source is space-indented\nframe:\n{frame}",
+        );
+        assert!(caret_line.contains("^^^^^^^^^^^^^^"), "frame:\n{frame}");
+    }
+
+    #[test]
+    fn code_frame_returns_empty_for_line_out_of_range() {
+        let src = "only one line\n";
+        assert_eq!(render_code_frame(src, 5, 1, Some(1)), "");
+    }
+
+    #[test]
+    fn code_frame_handles_first_line_with_no_preceding_line() {
+        // No `line - 1` context available; we still emit the target
+        // line + any trailing context.
+        let src = "first line\nsecond line\n";
+        let frame = render_code_frame(src, 1, 1, Some(5));
+        assert!(
+            frame.contains("first line"),
+            "target line missing from frame:\n{frame}",
+        );
     }
 }

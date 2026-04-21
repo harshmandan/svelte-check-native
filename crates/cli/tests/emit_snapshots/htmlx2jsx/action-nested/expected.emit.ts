@@ -3,6 +3,16 @@
 async function $$render_a3a3d9ca() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        const __svn_action_0 = __svn_ensure_action(svgAction(__svn_map_element_tag('svg')));
+        void __svn_action_0;
+        const __svn_action_1 = __svn_ensure_action(divAction(__svn_map_element_tag('div')));
+        void __svn_action_1;
+        const __svn_action_2 = __svn_ensure_action(action(__svn_map_element_tag('input')));
+        void __svn_action_2;
+        const __svn_action_3 = __svn_ensure_action(pAction(__svn_map_element_tag('p')));
+        void __svn_action_3;
+        const __svn_action_4 = __svn_ensure_action(unknownAction(__svn_map_element_tag('unknownTag')));
+        void __svn_action_4;
         let __svn_action_attrs_0: any = {};
         void __svn_action_attrs_0;
         let __svn_action_attrs_1: any = {};

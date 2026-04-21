@@ -72,6 +72,43 @@ pub struct TemplateSummary {
     /// would itself cause false positives. Component-prop checking for
     /// those shapes is a future expansion.
     pub component_instantiations: Vec<ComponentInstantiation>,
+    /// One entry per `use:ACTION={PARAMS}` directive encountered. Emit
+    /// uses this to generate `__svn_ensure_action(ACTION(__svn_map_element_tag('TAG'), (PARAMS)))`
+    /// — a real call that forces TypeScript to contextually type the
+    /// PARAMS expression against `ACTION`'s declared second parameter.
+    /// Without this, the params expression (often a callback whose
+    /// destructure we want type-checked, e.g. `use:enhance={({formData}) => …}`)
+    /// emits unanchored and every destructure silently passes as
+    /// implicit `any`.
+    pub action_directives: Vec<ActionDirective>,
+}
+
+/// One `use:NAME={PARAMS}` directive site. Populated by the template
+/// walker; consumed by emit to produce the upstream-shaped call:
+///
+/// ```ts
+/// const __svn_action_<index> = __svn_ensure_action(
+///     <action_name>(__svn_map_element_tag('<tag_name>'), (<params_range>))
+/// );
+/// ```
+#[derive(Debug, Clone)]
+pub struct ActionDirective {
+    /// The N in `__svn_action_<N>` — shared counter with the
+    /// `__svn_action_attrs_<N>` void-ref registration so the two
+    /// synthesized names stay aligned per directive.
+    pub index: usize,
+    /// The action's identifier (e.g. `enhance`). Actions in Svelte
+    /// must be simple local identifiers — no dotted / computed forms
+    /// at the directive site.
+    pub action_name: SmolStr,
+    /// Parent element's tag (e.g. `form`, `div`). `None` for
+    /// `<svelte:element>` where the tag is runtime-dynamic — emit
+    /// falls back to the generic `HTMLElement` overload.
+    pub tag_name: Option<SmolStr>,
+    /// Range of the expression in `use:NAME={EXPR}`. `None` for the
+    /// bare `use:NAME` form (no `={…}` value); emit just calls the
+    /// action with the element and no params.
+    pub params_range: Option<Range>,
 }
 
 /// One `<Component ...>` site eligible for excess-property checking.
@@ -320,18 +357,30 @@ fn walk_node(
 ) {
     match node {
         Node::Element(e) => {
-            walk_attributes(&e.attributes, summary, counters, ctx);
+            walk_attributes(&e.attributes, summary, counters, ctx, Some(e.name.as_str()));
             collect_bind_this_checks(&e.attributes, summary);
             collect_bind_value_bindings(&e.attributes, e.name.as_str(), summary);
             walk_fragment(&e.children, summary, counters, ctx);
         }
         Node::Component(c) => {
-            walk_attributes(&c.attributes, summary, counters, ctx);
+            // `use:` on a component is nonsensical at the Svelte level
+            // (actions attach to DOM elements, not to component
+            // instances), but we pass the component name along anyway —
+            // emit's shim-side `__svn_map_element_tag(tag: string)`
+            // overload resolves unknown tags to `HTMLElement` so the
+            // pattern doesn't break the program.
+            walk_attributes(&c.attributes, summary, counters, ctx, None);
             collect_component_instantiation(c, ctx.source, summary);
             walk_fragment(&c.children, summary, counters, ctx);
         }
         Node::SvelteElement(s) => {
-            walk_attributes(&s.attributes, summary, counters, ctx);
+            // `<svelte:element this={dynamic}>` — tag is only known at
+            // runtime. Pass None so emit picks the generic HTMLElement
+            // overload of __svn_map_element_tag; actions that declare a
+            // specific element type will TS2345 against HTMLElement if
+            // they require a narrower base, which matches user intent
+            // (action narrowness flags dynamic-tag misuse).
+            walk_attributes(&s.attributes, summary, counters, ctx, None);
             collect_bind_this_checks(&s.attributes, summary);
             walk_fragment(&s.children, summary, counters, ctx);
         }
@@ -374,10 +423,11 @@ fn walk_attributes(
     summary: &mut TemplateSummary,
     counters: &mut Counters,
     ctx: &WalkCtx<'_>,
+    parent_tag: Option<&str>,
 ) {
     for attr in attrs {
         if let Attribute::Directive(d) = attr {
-            walk_directive(d, summary, counters, ctx);
+            walk_directive(d, summary, counters, ctx, parent_tag);
         }
     }
 }
@@ -502,12 +552,30 @@ fn walk_directive(
     summary: &mut TemplateSummary,
     counters: &mut Counters,
     ctx: &WalkCtx<'_>,
+    parent_tag: Option<&str>,
 ) {
     match d.kind {
         DirectiveKind::Use => {
-            let name = format!("__svn_action_attrs_{}", counters.action_attrs);
+            let index = counters.action_attrs;
+            let name = format!("__svn_action_attrs_{index}");
             summary.void_refs.register(name);
             counters.action_attrs += 1;
+            // Capture the full action-directive shape so emit can build
+            // the real call — `action(element, params)` — rather than
+            // the pre-v0.3.9 placeholder that dropped both sides and
+            // lost contextual typing on the params expression.
+            let params_range = match &d.value {
+                Some(DirectiveValue::Expression {
+                    expression_range, ..
+                }) => Some(*expression_range),
+                _ => None,
+            };
+            summary.action_directives.push(ActionDirective {
+                index,
+                action_name: d.name.clone(),
+                tag_name: parent_tag.map(SmolStr::new),
+                params_range,
+            });
         }
         DirectiveKind::Bind => match &d.value {
             Some(DirectiveValue::BindPair { .. }) => {

@@ -517,6 +517,56 @@ declare function __svn_any_as<T>(value: T): void;
 declare function __svn_snippet_return(): any;
 
 /**
+ * Action-directive return shape — matches Svelte's `ActionReturn` plus
+ * the `$$_attributes` hook svelte2tsx uses to forward action-declared
+ * attributes back onto the element.
+ */
+type __SvnActionReturnType =
+    | {
+          update?: (args: any) => void;
+          destroy?: () => void;
+          $$_attributes?: Record<string, any>;
+      }
+    | void;
+
+/**
+ * Wraps an action invocation — `action(element, params)` — so its
+ * return value type-checks against `ActionReturn` and any
+ * `$$_attributes` the action advertises can be picked up by the
+ * enclosing element's attribute pass.
+ *
+ * The important half for us is the ARGUMENT side: `action(element,
+ * params)` is a real function call, so TypeScript contextually types
+ * `params` against the action's declared second parameter. For
+ * `use:enhance={({formData}) => ...}` that flows `SubmitFunction`'s
+ * parameter shape into the arrow's destructure — and fires TS2339 on
+ * any property name that isn't on that shape (the user-reported
+ * `{form, data, submit}` miss).
+ */
+declare function __svn_ensure_action<T extends __SvnActionReturnType>(
+    actionCall: T,
+): T extends { $$_attributes?: any } ? T['$$_attributes'] : {};
+
+/**
+ * Map an HTML/SVG tag name back to the real element type so action
+ * directives emit `action(__svn_map_element_tag('form'), params)` with
+ * a proper `HTMLFormElement` in the first slot rather than `unknown`
+ * or `any`. Actions that declare a specific element type (e.g.
+ * `Action<HTMLFormElement, P>`) will TS2345 against the concrete type
+ * if the tag doesn't match.
+ *
+ * Unknown tags fall through to `HTMLElement` — matching upstream
+ * svelte2tsx's `svelteHTML.mapElementTag` behavior.
+ */
+declare function __svn_map_element_tag<K extends keyof HTMLElementTagNameMap>(
+    tag: K,
+): HTMLElementTagNameMap[K];
+declare function __svn_map_element_tag<K extends keyof SVGElementTagNameMap>(
+    tag: K,
+): SVGElementTagNameMap[K];
+declare function __svn_map_element_tag(tag: string): HTMLElement;
+
+/**
  * Extract the NON-optional Props type from any supported component
  * shape (class or callable). Declared for future bind:prop pair
  * emission — the helper recovers the raw Props type so a

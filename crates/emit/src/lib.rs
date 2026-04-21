@@ -751,7 +751,7 @@ fn emit_document_with_render_name(
     // block-scope `const` re-use would fire TS6133 on the unused
     // outer `let`. References out of the declaring block's scope are
     // now (correctly) "name not found" errors.
-    emit_action_attrs_declarations(&mut out, summary);
+    emit_action_directives(&mut out, doc, summary);
     emit_bind_pair_declarations(&mut out, summary);
     // v0.3 Item 6: DOM-binding checks (`__svn_any_as<TYPE>(expr);`)
     // are emitted INLINE at each element's position during the
@@ -1122,6 +1122,9 @@ fn emit_document_with_render_name(
     token_map.extend(collect_on_event_token_map(&out, &instantiations_by_start));
     token_map.extend(collect_dom_binding_token_map(&out, doc.source, summary));
     token_map.extend(collect_bind_this_check_token_map(&out, doc.source, summary));
+    token_map.extend(collect_action_directive_token_map(
+        &out, doc.source, summary,
+    ));
 
     EmitOutput {
         typescript: out,
@@ -1287,6 +1290,117 @@ fn collect_bind_this_check_token_map(
             source_byte_end: source_end,
         });
         cursor = advance_to;
+    }
+    entries
+}
+
+/// Post-walk scan: for each `ActionDirective`, locate the corresponding
+/// `const __svn_action_<N> = ...` line in the emitted overlay and push
+/// a token-map entry covering the PARAMS slice.
+///
+/// tsgo reports diagnostics at the overlay byte offset of the offending
+/// identifier (e.g. a wrong name in `({form,data,submit}) => ...`). The
+/// params slice is copied verbatim from user source — the token-map
+/// entry tells the diagnostic mapper that an overlay position INSIDE
+/// the slice corresponds to the same relative position INSIDE the
+/// user's `use:ACTION={...}` value expression in their `.svelte` file.
+/// Without this mapping, `map_diagnostic` drops every diagnostic that
+/// fires inside the emitted action call, and upstream-caught errors
+/// (e.g. the user-reported `use:enhance={({form,data,submit}) => …}`
+/// pattern firing TS2339 ×3) stay invisible to our CLI.
+///
+/// Relies on: each `ActionDirective.index` maps 1:1 with a unique
+/// `__svn_action_<N>` occurrence in the overlay. The scan is linear —
+/// one pass through the output matching the index sequence — and the
+/// PARAMS span is located via simple paren-balance scanning between
+/// `__svn_map_element_tag(...)` and the directive's terminating `;`.
+fn collect_action_directive_token_map(
+    out: &str,
+    source: &str,
+    summary: &TemplateSummary,
+) -> Vec<TokenMapEntry> {
+    let mut entries: Vec<TokenMapEntry> = Vec::new();
+    let bytes = out.as_bytes();
+    for ad in &summary.action_directives {
+        let Some(range) = ad.params_range else {
+            continue;
+        };
+        // Anchor: `const __svn_action_<N> =`. Unique per directive, so
+        // a whole-overlay `find` is unambiguous and O(1)-ish per
+        // directive.
+        let anchor = format!("const __svn_action_{} = ", ad.index);
+        let Some(anchor_pos) = out.find(&anchor) else {
+            continue;
+        };
+        // Inside the statement, the params slice lives between the
+        // LAST `, (` (the closing of `__svn_map_element_tag(...)` and
+        // the open of the params wrapper) and the MATCHING `)` that
+        // closes the wrapper. Paren-balance the scan to tolerate
+        // arrow functions whose bodies contain `{...}` (paren-neutral)
+        // and nested calls.
+        let stmt_start = anchor_pos;
+        let after_anchor = stmt_start + anchor.len();
+        // Find `__svn_map_element_tag(` and its matching `)`.
+        let tag_marker = "__svn_map_element_tag(";
+        let Some(tag_rel) = out[after_anchor..].find(tag_marker) else {
+            continue;
+        };
+        let tag_arg_start = after_anchor + tag_rel + tag_marker.len();
+        let mut depth = 1usize;
+        let mut i = tag_arg_start;
+        while i < bytes.len() && depth > 0 {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 {
+                break;
+            }
+            i += 1;
+        }
+        if depth != 0 {
+            continue;
+        }
+        // `i` now points at the `)` closing `__svn_map_element_tag(...)`.
+        // Next tokens are `, (` introducing the params wrapper.
+        let after_tag_close = i + 1;
+        let Some(paren_rel) = out[after_tag_close..].find(", (") else {
+            continue;
+        };
+        let params_overlay_start = (after_tag_close + paren_rel + ", (".len()) as u32;
+        // Balance-match the wrapper paren to locate the params end.
+        let mut depth = 1usize;
+        let mut j = params_overlay_start as usize;
+        while j < bytes.len() && depth > 0 {
+            match bytes[j] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 {
+                break;
+            }
+            j += 1;
+        }
+        if depth != 0 {
+            continue;
+        }
+        let params_overlay_end = j as u32;
+        // Sanity: the overlay slice should equal the source slice.
+        // If they diverge (e.g. emit mutation we didn't account for),
+        // skip the token-map entry rather than push a wrong one.
+        let overlay_slice = &out[params_overlay_start as usize..params_overlay_end as usize];
+        let source_slice = &source[range.start as usize..range.end as usize];
+        if overlay_slice != source_slice {
+            continue;
+        }
+        entries.push(TokenMapEntry {
+            overlay_byte_start: params_overlay_start,
+            overlay_byte_end: params_overlay_end,
+            source_byte_start: range.start,
+            source_byte_end: range.end,
+        });
     }
     entries
 }
@@ -2622,15 +2736,78 @@ fn emit_snippet_block(
     let _ = writeln!(out, "{indent}}}");
 }
 
-/// Emit `let __svn_action_attrs_N: any = {};` declarations inside
-/// `__svn_tpl_check` — one per `use:` directive — and immediately void
-/// each one so TypeScript's `noUnusedLocals` doesn't flag them.
+/// Emit a typed call per `use:ACTION={PARAMS}` directive so the PARAMS
+/// expression gets contextually-typed against ACTION's declared second
+/// parameter.
 ///
-/// The void in the *outer* function (in `emit_void_block`) brings the
-/// names into scope for whoever might reference them externally; the void
-/// here suppresses TS6133 inside `__svn_tpl_check` itself, where the
-/// declaration lives.
-fn emit_action_attrs_declarations(out: &mut String, summary: &TemplateSummary) {
+/// Shape (mirrors upstream svelte2tsx's `__sveltets_2_ensureAction(…)`
+/// with our `__svn_` namespace):
+///
+/// ```ts
+///     const __svn_action_0 = __svn_ensure_action(
+///         enhance(__svn_map_element_tag('form'), (({formData}) => {…}))
+///     );
+///     void __svn_action_0;
+/// ```
+///
+/// The inner `enhance(…)` is a real function call — TS checks that the
+/// PARAMS match ACTION's declared parameter shape. For `use:enhance=
+/// {({form,data,submit}) => …}` that fires TS2339 on each wrong name
+/// because the real `SubmitFunction` parameter type doesn't have them.
+///
+/// Pre-v0.3.9 we emitted `let __svn_action_attrs_N: any = {};` — a dead
+/// placeholder that discarded the PARAMS expression entirely. Every
+/// destructure inside a `use:` callback silently passed regardless of
+/// correctness, and the user-reported `use:enhance={({form,data,submit})
+/// => …}` bug was invisible to our tool while upstream fired 3 TS2339s.
+///
+/// The legacy `__svn_action_attrs_N` void-ref registration stays for
+/// anyone who referenced the name externally (e.g. template spreads);
+/// we emit it alongside the new call so no registered name disappears.
+fn emit_action_directives(out: &mut String, doc: &Document<'_>, summary: &TemplateSummary) {
+    for ad in &summary.action_directives {
+        // Tag → either the element-tag literal for the typed overload,
+        // or fall through to the string overload for unknown/dynamic
+        // tags (components, <svelte:element>).
+        let tag_arg = match ad.tag_name.as_deref() {
+            Some(tag) => format!("'{tag}'"),
+            None => "'' as string".to_string(),
+        };
+        let action = ad.action_name.as_str();
+        let index = ad.index;
+        match ad.params_range {
+            Some(range) => {
+                let params = &doc.source[range.start as usize..range.end as usize];
+                // The `__svn_action_{index}` identifier is unique per
+                // directive — a post-emit scan uses it as the anchor
+                // to locate the params slice's overlay byte offset
+                // and push a matching TokenMapEntry. Without the
+                // token map, tsgo diagnostics against identifiers
+                // inside the params expression (e.g. `form` in the
+                // wrong-destructure `({form,data,submit})`) fall in
+                // synthesized scaffolding with no source anchor and
+                // get dropped by `map_diagnostic`.
+                let _ = writeln!(
+                    out,
+                    "        const __svn_action_{index} = __svn_ensure_action({action}(__svn_map_element_tag({tag_arg}), ({params})));"
+                );
+            }
+            None => {
+                // Bare `use:NAME` — no params expression. Call the
+                // action with just the element.
+                let _ = writeln!(
+                    out,
+                    "        const __svn_action_{index} = __svn_ensure_action({action}(__svn_map_element_tag({tag_arg})));"
+                );
+            }
+        }
+        let _ = writeln!(out, "        void __svn_action_{index};");
+    }
+    // Keep the old `__svn_action_attrs_N` void registration alive so
+    // external references (e.g. template spreads that consumed the
+    // action's declared `$$_attributes`) still resolve. The outer
+    // void_block emits `void __svn_action_attrs_N;` unconditionally;
+    // declaring the binding here avoids TS2304 at that reference site.
     for name in summary.void_refs.names() {
         if name.starts_with("__svn_action_attrs_") {
             let _ = writeln!(out, "        let {name}: any = {{}};");

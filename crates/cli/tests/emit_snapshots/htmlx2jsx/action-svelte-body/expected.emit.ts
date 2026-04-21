@@ -3,6 +3,8 @@
 async function $$render_5529c5a7() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        const __svn_action_0 = __svn_ensure_action(blink(__svn_map_element_tag('' as string)));
+        void __svn_action_0;
         let __svn_action_attrs_0: any = {};
         void __svn_action_attrs_0;
     }

@@ -1189,6 +1189,7 @@ dependencies = [
  "blake3",
  "camino",
  "dunce",
+ "semver",
  "serde",
  "serde_json",
  "svn-core",

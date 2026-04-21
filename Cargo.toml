@@ -63,6 +63,10 @@ globset = "0.4"
 # accept and which breaks lexical glob matching against user `include`
 # patterns written with forward slashes.
 dunce = "1"
+# Semver-aware comparison for picking the newest tsgo in a pnpm/bun
+# package store. Lexicographic string-sort mis-orders 9 vs 10 anywhere
+# in a version segment.
+semver = "1"
 
 # JS/TS parser. Architecture rule: embedded JS/TS is parsed once into
 # a real AST and walked structurally — never scanned character-by-

@@ -20,6 +20,7 @@ walkdir.workspace = true
 camino.workspace = true
 thiserror.workspace = true
 dunce.workspace = true
+semver.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

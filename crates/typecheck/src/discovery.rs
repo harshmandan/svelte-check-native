@@ -129,9 +129,13 @@ fn find_in_package_store(dir: &Path, native_relative: Option<&Path>) -> Option<T
             continue;
         };
         // Collect every `@typescript+native-preview@<version>` entry
-        // and sort newest-first (simple string-order is fine — the
-        // version prefix sorts correctly for dev-release suffixes
-        // and semver alike at this use-site).
+        // and sort newest-first by parsed semver. Lexicographic sort
+        // mis-orders any segment that crosses a multi-digit boundary
+        // (`...9` beats `...10`, `9.0.0` beats `10.0.0`) — tsgo's
+        // dev-release suffix `7.0.0-dev.YYYYMMDD.N` is fine today
+        // because `N` is single-digit and the date is fixed-width, but
+        // either axis can cross 9→10 in the future and silently
+        // downgrade users to an older tsgo.
         let mut candidates: Vec<PathBuf> = entries
             .filter_map(|e| e.ok())
             .map(|e| e.path())
@@ -141,8 +145,18 @@ fn find_in_package_store(dir: &Path, native_relative: Option<&Path>) -> Option<T
                     .is_some_and(|name| name.starts_with("@typescript+native-preview@"))
             })
             .collect();
-        candidates.sort();
-        candidates.reverse();
+        candidates.sort_by(|a, b| {
+            let va = version_from_store_entry(a);
+            let vb = version_from_store_entry(b);
+            // Newest first. Unparseable entries sort last so a weird
+            // store subdir never shadows a real version.
+            match (va, vb) {
+                (Some(va), Some(vb)) => vb.cmp(&va),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => b.cmp(a),
+            }
+        });
 
         for pkg_root in candidates {
             let inner = pkg_root.join("node_modules/@typescript");
@@ -172,6 +186,20 @@ fn find_in_package_store(dir: &Path, native_relative: Option<&Path>) -> Option<T
         }
     }
     None
+}
+
+/// Extract and parse the version from a pnpm/bun store directory name.
+///
+/// Store entries are named `@typescript+native-preview@<version>`. When the
+/// version is valid semver (tsgo's own `7.0.0-dev.YYYYMMDD.N` form is), the
+/// parsed [`Version`](semver::Version) sorts correctly by semver rules —
+/// `1.0.0-dev.10` > `1.0.0-dev.9` (numeric identifier compare) and
+/// `10.0.0` > `9.0.0`. Returns `None` for entries that don't match the
+/// expected name or whose version doesn't parse.
+fn version_from_store_entry(path: &Path) -> Option<semver::Version> {
+    let name = path.file_name().and_then(|s| s.to_str())?;
+    let ver = name.strip_prefix("@typescript+native-preview@")?;
+    semver::Version::parse(ver).ok()
 }
 
 /// Return the relative path to the platform-native tsgo binary, or `None`
@@ -322,8 +350,8 @@ mod tests {
 
     #[test]
     fn pnpm_store_picks_highest_version() {
-        // Multiple versions in the same store; highest string-order
-        // wins (matches newest dev-release).
+        // Multiple versions in the same store; newest by semver wins
+        // (matches newest dev-release).
         let tmp = tempdir().unwrap();
         for version in ["7.0.0-dev.20260101.1", "7.0.0-dev.20260201.1"] {
             let pkg_root = tmp.path().join(format!(
@@ -340,6 +368,72 @@ mod tests {
                 .to_string_lossy()
                 .contains("@typescript+native-preview@7.0.0-dev.20260201.1"),
             "expected newest version, got {:?}",
+            found.path,
+        );
+    }
+
+    #[test]
+    fn pnpm_store_picks_dev_suffix_10_over_9() {
+        // Regression for the lexicographic-sort bug: under string
+        // compare, `...9` beat `...10` because '9' > '1' byte-wise,
+        // silently downgrading users to an older tsgo. Semver-aware
+        // compare treats dev-release trailing identifiers as numeric.
+        let tmp = tempdir().unwrap();
+        for version in ["7.0.0-dev.20260101.9", "7.0.0-dev.20260101.10"] {
+            let pkg_root = tmp.path().join(format!(
+                "node_modules/.pnpm/@typescript+native-preview@{version}"
+            ));
+            let wrapper = pkg_root.join("node_modules/@typescript/native-preview/bin/tsgo.js");
+            fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+            fs::write(&wrapper, b"// stub").unwrap();
+        }
+        let found = discover(tmp.path()).unwrap();
+        assert!(
+            found.path.to_string_lossy().contains("20260101.10"),
+            "expected .10 (newer) to win over .9, got {:?}",
+            found.path,
+        );
+    }
+
+    #[test]
+    fn pnpm_store_picks_major_10_over_major_9() {
+        // Same class of bug on the major-version axis. If tsgo ever
+        // ships 10.x alongside 9.x, string compare picks 9.x (because
+        // '9' > '1' byte-wise). Semver compares numerically.
+        let tmp = tempdir().unwrap();
+        for version in ["9.0.0", "10.0.0"] {
+            let pkg_root = tmp.path().join(format!(
+                "node_modules/.pnpm/@typescript+native-preview@{version}"
+            ));
+            let wrapper = pkg_root.join("node_modules/@typescript/native-preview/bin/tsgo.js");
+            fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+            fs::write(&wrapper, b"// stub").unwrap();
+        }
+        let found = discover(tmp.path()).unwrap();
+        assert!(
+            found.path.to_string_lossy().contains("@10.0.0"),
+            "expected 10.0.0 to win over 9.0.0, got {:?}",
+            found.path,
+        );
+    }
+
+    #[test]
+    fn pnpm_store_ignores_unparseable_entry_and_picks_real_version() {
+        // A malformed or future-format store entry shouldn't shadow a
+        // real one. Unparseable entries sort last.
+        let tmp = tempdir().unwrap();
+        for suffix in ["not-a-version", "7.0.0-dev.20260101.1"] {
+            let pkg_root = tmp.path().join(format!(
+                "node_modules/.pnpm/@typescript+native-preview@{suffix}"
+            ));
+            let wrapper = pkg_root.join("node_modules/@typescript/native-preview/bin/tsgo.js");
+            fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+            fs::write(&wrapper, b"// stub").unwrap();
+        }
+        let found = discover(tmp.path()).unwrap();
+        assert!(
+            found.path.to_string_lossy().contains("7.0.0-dev"),
+            "expected the parseable version to win, got {:?}",
             found.path,
         );
     }

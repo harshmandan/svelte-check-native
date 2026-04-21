@@ -566,6 +566,91 @@ git push origin main
 git push origin vX.Y.Z
 ```
 
+**Cut a GitHub release** (NOT just a tag — automated dep-update bots
+like Renovate and Dependabot surface release notes to downstream users
+when evaluating upgrades; a bare tag shows up as an empty changelog).
+
+Body layout is **2-3 line human-readable summary on top, blank line,
+then a hand-curated, grouped list — max 10 entries.** The summary is
+what Renovate/Dependabot quote into PR descriptions and what someone
+clicking through a tag skims first; the entries are the proof it
+stands on.
+
+Each entry in the list is one of:
+  - A single commit: `- <short-sha> <description>`
+  - A contiguous or thematic range: `- <oldest-sha>..<newest-sha> <description>`
+
+Group related commits into logical buckets (Windows fixes, emit
+refactors, docs, etc.) so the list stays scannable. Do NOT just dump
+`git log --pretty=...` — a 40-commit release rendered as 40 bullets
+is noise. Readers evaluating an upgrade want "what thematically
+changed," not "every micro-commit that happened."
+
+Rules:
+  - **Summary first, 2-3 lines, prose.** Name the release character
+    (patch / minor / "correctness fixes" / "Windows fixes" / etc.),
+    the 1-2 headline changes, and any user-visible impact. Drop-in
+    example below.
+  - **Hard cap at 10 entries** in the list. More than that means the
+    groups are too fine-grained.
+  - **Range notation (`a..b`) when useful**, even if the range isn't
+    strictly contiguous in `git log` order — readers care about which
+    theme the commits belong to, not git topology. Pick the oldest
+    and newest SHA from the group as bookends.
+  - **Subject must describe the change, not repeat the prefix.** Drop
+    conventional-commit prefixes (`fix(windows):`) when they don't
+    add signal in prose form. Write "Windows fixes: UNC paths, PATHEXT
+    discovery" not "fix(windows): apply PATHEXT when discovering the
+    JS runtime."
+  - **Filter the `release: vX.Y.Z` commit** — it's the tag's own
+    bump, no content.
+
+Workflow:
+
+```sh
+# 1. Pull the raw commits for the range and skim them.
+PREV=<previous-tag>     # e.g. v0.3.7 when cutting v0.3.8
+VER=X.Y.Z
+git log --pretty=format:"%h %s" "$PREV..v$VER" | grep -v "release: v"
+
+# 2. Hand-write the body: summary paragraph first, blank line, then
+#    the grouped list. Sample v0.3.8:
+cat > /tmp/release-notes.md <<'BODY'
+Patch release: Windows fixes plus correctness bugs in monorepo and
+SvelteKit-Vite setups. Reported by a user on `D:\…` whose
+`svelte-check-native` went from "0 errors in 0 files" to matching
+upstream `svelte-check --tsgo` byte-for-byte after the UNC-path fix.
+
+- 7ce4d8e..f11711e Windows fixes: dunce::canonicalize for UNC workspace paths, PATHEXT discovery for node/bun
+- a7d6adb CLI: redirect solution tsconfig honors reference filename + extends chain
+- f563021 Overlay: keep package-subpath types entries like vite/client
+- 507a08f Discovery: semver-aware version compare in pnpm/bun package store
+- 28ba5fd Chore: remove dead svn-lint crate
+- 72af3e6..a8d23c2 Docs: README + usage instructions
+BODY
+
+# 3. Create the release. --latest=true moves GitHub's "Latest release"
+#    pointer to this version. Title matches the tag for a clean list.
+gh release create "v$VER" --title "v$VER" --notes-file /tmp/release-notes.md --latest=true
+```
+
+Why summary + grouped list (not raw commit dump, not prose-only):
+CHANGELOG gets the long "what + why + how" narrative for humans
+doing a deep read. The release body is what appears inline in
+Renovate/Dependabot PR descriptions and in GitHub's "click a tag to
+see what changed" flow — readers there want a quick read on the
+character of the release backed by a commit trail they can click
+through if curious.
+
+Do this AFTER `npm publish:all` completes — same reasoning as the tag-
+push ordering above: the release page surfaces install instructions
+and users clicking through expect the version to be installable.
+
+**Do NOT** mark stable releases as `--prerelease`; we don't use that
+channel. Pre-1.0 versions are regular releases, not pre-releases — the
+published npm package has been on `latest` since v0.1.0, so the GitHub
+surface should match.
+
 **Post-release verification:**
 
 ```sh
@@ -589,3 +674,8 @@ npx svelte-check-native --version
 - Don't push a git tag before the corresponding npm publish completes —
   users grabbing tarballs by tag will see a version that isn't yet
   installable.
+- Don't stop at the pushed tag — always follow up with `gh release
+  create` so Renovate/Dependabot and end users clicking through the
+  tag in their PR diff see the actual release notes instead of an
+  empty page. We backfilled the whole pre-0.3.8 tag history once (see
+  issue #2); don't let it drift again.

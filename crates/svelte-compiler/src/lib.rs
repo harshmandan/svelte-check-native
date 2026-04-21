@@ -343,16 +343,46 @@ fn pick_runtime() -> Result<PathBuf, BridgeError> {
 fn which_in_path(name: &str) -> std::io::Result<PathBuf> {
     let path_var = std::env::var_os("PATH")
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no PATH"))?;
-    for dir in std::env::split_paths(&path_var) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
+    let pathext = std::env::var_os("PATHEXT").unwrap_or_else(|| {
+        // Windows guarantees PATHEXT is set, but a weird launch environment
+        // might strip it — default to the shell's built-in list so we don't
+        // silently regress to bare-name lookup.
+        if cfg!(windows) {
+            std::ffi::OsString::from(".COM;.EXE;.BAT;.CMD")
+        } else {
+            std::ffi::OsString::new()
+        }
+    });
+    which_in(&path_var, &pathext, name)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, name.to_string()))
+}
+
+/// Pure implementation of the PATH walk. Separated from [`which_in_path`]
+/// so tests can exercise the PATHEXT logic without mutating process env.
+///
+/// For each directory in `path_var`, try `<name>` as-is first (so callers
+/// that already passed `node.exe` don't double-append), then try
+/// `<name><suffix>` for every non-empty suffix in `pathext`. First hit
+/// wins. Empty/unset `pathext` degenerates to bare-name only — the Unix
+/// default and a safe no-op on platforms without executable extensions.
+fn which_in(path_var: &std::ffi::OsStr, pathext: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
+    let pathext_str = pathext.to_string_lossy();
+    let suffixes: Vec<&str> = std::iter::once("")
+        .chain(pathext_str.split(';').filter(|e| !e.is_empty()))
+        .collect();
+    for dir in std::env::split_paths(path_var) {
+        for suffix in &suffixes {
+            let candidate = if suffix.is_empty() {
+                dir.join(name)
+            } else {
+                dir.join(format!("{name}{suffix}"))
+            };
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::NotFound,
-        name.to_string(),
-    ))
+    None
 }
 
 /// Walk up from `start` looking for `node_modules/svelte/compiler/index.js`
@@ -570,5 +600,56 @@ mod tests {
         let tmp = std::env::temp_dir().join("svn-locate-svelte-test");
         std::fs::create_dir_all(&tmp).unwrap();
         assert!(locate_svelte(&tmp).is_none());
+    }
+
+    #[test]
+    fn which_in_finds_bare_name_without_pathext() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("svn_dummy");
+        std::fs::write(&file, b"").unwrap();
+        let path_var = tmp.path().as_os_str().to_owned();
+        let pathext = std::ffi::OsString::new();
+        assert_eq!(which_in(&path_var, &pathext, "svn_dummy"), Some(file),);
+    }
+
+    #[test]
+    fn which_in_applies_pathext_suffix_when_bare_name_missing() {
+        // Simulates Windows: only `node.exe` exists, user asks for `node`.
+        // Without PATHEXT handling this returned None and the bridge
+        // silently no-oped on every Windows install.
+        let tmp = tempfile::tempdir().unwrap();
+        // Use lowercase `.exe` for the on-disk file and a matching suffix
+        // in PATHEXT. Case doesn't matter at lookup time on Windows
+        // (case-insensitive filesystem) but the returned PathBuf echoes
+        // the PATHEXT case verbatim, and APFS on macOS is also
+        // case-insensitive — keep both sides aligned so the assertion
+        // works cross-platform in CI.
+        let file = tmp.path().join("svn_dummy.exe");
+        std::fs::write(&file, b"").unwrap();
+        let path_var = tmp.path().as_os_str().to_owned();
+        let pathext = std::ffi::OsString::from(".cmd;.exe;.bat");
+        assert_eq!(which_in(&path_var, &pathext, "svn_dummy"), Some(file),);
+    }
+
+    #[test]
+    fn which_in_returns_none_when_nothing_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path_var = tmp.path().as_os_str().to_owned();
+        let pathext = std::ffi::OsString::from(".EXE");
+        assert_eq!(which_in(&path_var, &pathext, "nonexistent"), None);
+    }
+
+    #[test]
+    fn which_in_prefers_bare_name_over_suffixed_match() {
+        // If both `foo` and `foo.exe` exist, the bare form wins — matches
+        // Rust's `which` crate and the Windows shell's resolution order.
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = tmp.path().join("svn_dummy");
+        let exe = tmp.path().join("svn_dummy.exe");
+        std::fs::write(&bare, b"").unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        let path_var = tmp.path().as_os_str().to_owned();
+        let pathext = std::ffi::OsString::from(".EXE");
+        assert_eq!(which_in(&path_var, &pathext, "svn_dummy"), Some(bare),);
     }
 }

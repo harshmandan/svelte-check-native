@@ -537,12 +537,20 @@ npm whoami
 # must return a user with publish rights to @harshmandan/*
 ```
 
-**Bump + tag:**
+**Bump:**
 
 1. Update `Cargo.toml` `[workspace.package].version` + root `package.json` `version` (both must match exactly).
 2. Update `CHANGELOG.md` — add a new `## [X.Y.Z]` section at the top with what shipped.
 3. Commit: `git commit -am "release: vX.Y.Z"`.
-4. Tag: `git tag vX.Y.Z`.
+
+**No manual `git tag`.** `gh release create` in the final step creates
+the tag on the remote pointing at main's HEAD. One artifact (the
+release), one command, no chance of the tag and release drifting out
+of sync the way they did on v0.3.8 (amended the release commit,
+forgot to move the tag, tag pointed at an orphaned commit on the
+remote while the release pointed at the amended one). Local tags
+don't exist after release unless you `git fetch --tags` explicitly;
+that's fine — they were never load-bearing.
 
 **Publish:**
 
@@ -559,16 +567,16 @@ npm run publish:all
 ```
 
 `publish:all` chains `build:all` → `prepare-release` → `publish-all.mjs`.
-It does NOT push to git — push `main` + the new tag separately:
+It does NOT push to git — push `main` separately:
 
 ```sh
 git push origin main
-git push origin vX.Y.Z
 ```
 
-**Cut a GitHub release** (NOT just a tag — automated dep-update bots
-like Renovate and Dependabot surface release notes to downstream users
-when evaluating upgrades; a bare tag shows up as an empty changelog).
+**Cut a GitHub release** (this is both "tag the commit" AND "publish
+release notes" in one step — automated dep-update bots like Renovate
+and Dependabot surface release notes to downstream users when
+evaluating upgrades).
 
 Body layout is **2-3 line human-readable summary on top, blank line,
 then a hand-curated, grouped list — max 10 entries.** The summary is
@@ -608,10 +616,10 @@ Rules:
 Workflow:
 
 ```sh
-# 1. Pull the raw commits for the range and skim them.
-PREV=<previous-tag>     # e.g. v0.3.7 when cutting v0.3.8
+# 1. Pull the raw commits since the previous release's tag and skim them.
+PREV=<previous-release-tag>   # e.g. v0.3.8 when cutting v0.3.9
 VER=X.Y.Z
-git log --pretty=format:"%h %s" "$PREV..v$VER" | grep -v "release: v"
+git log --pretty=format:"%h %s" "$PREV..HEAD" | grep -v "release: v"
 
 # 2. Hand-write the body: summary paragraph first, blank line, then
 #    the grouped list. Sample v0.3.8:
@@ -629,10 +637,17 @@ upstream `svelte-check --tsgo` byte-for-byte after the UNC-path fix.
 - 72af3e6..a8d23c2 Docs: README + usage instructions
 BODY
 
-# 3. Create the release. --latest=true moves GitHub's "Latest release"
-#    pointer to this version. Title matches the tag for a clean list.
+# 3. Create the release. Creates the tag on the remote pointing at
+#    main's current HEAD and publishes the release notes in one shot.
+#    --latest=true moves GitHub's "Latest release" pointer to this
+#    version. Title matches the tag for a clean releases list.
 gh release create "v$VER" --title "v$VER" --notes-file /tmp/release-notes.md --latest=true
 ```
+
+(The `$PREV..HEAD` range works pre-tag because `HEAD` is the release
+commit you just pushed; after `gh release create` runs, the new tag
+will also resolve to this same commit, so the range is stable
+whether you rerun it before or after release creation.)
 
 Why summary + grouped list (not raw commit dump, not prose-only):
 CHANGELOG gets the long "what + why + how" narrative for humans
@@ -642,9 +657,12 @@ see what changed" flow — readers there want a quick read on the
 character of the release backed by a commit trail they can click
 through if curious.
 
-Do this AFTER `npm publish:all` completes — same reasoning as the tag-
-push ordering above: the release page surfaces install instructions
-and users clicking through expect the version to be installable.
+Do this AFTER `npm publish:all` + `git push origin main` complete —
+the release page surfaces install instructions and a "Browse files"
+link that resolves through the tag; users clicking through expect
+both to work. A release cut before `npm publish` or before `git push`
+shows a version that isn't yet installable or a tag pointing at a
+commit the remote doesn't know about.
 
 **Do NOT** mark stable releases as `--prerelease`; we don't use that
 channel. Pre-1.0 versions are regular releases, not pre-releases — the
@@ -671,11 +689,18 @@ npx svelte-check-native --version
 - Don't bump version without re-running `prepare-release.mjs` — the six
   package.json versions will drift out of sync and the wrapper's
   `optionalDependencies` will point at nonexistent platform versions.
-- Don't push a git tag before the corresponding npm publish completes —
-  users grabbing tarballs by tag will see a version that isn't yet
-  installable.
-- Don't stop at the pushed tag — always follow up with `gh release
-  create` so Renovate/Dependabot and end users clicking through the
-  tag in their PR diff see the actual release notes instead of an
-  empty page. We backfilled the whole pre-0.3.8 tag history once (see
-  issue #2); don't let it drift again.
+- Don't `git tag` manually. `gh release create` creates the tag for
+  you pointing at main's HEAD; that keeps tag and release in sync by
+  construction. We burned a session on v0.3.8 where the manual tag
+  landed at the pre-amendment release commit while the release was
+  moved to the amended one — the tag then had to be force-pushed to
+  align.
+- Don't create a release before `npm publish:all` completes — users
+  clicking install instructions on the release page will see a
+  version that isn't on the registry yet.
+- Don't skip `gh release create` after pushing a release commit. A
+  bare tag (which is what you'd have if you tagged manually and
+  stopped) shows up as an empty changelog in Renovate/Dependabot PR
+  descriptions; end users evaluating the upgrade have zero context.
+  We backfilled the whole pre-0.3.8 tag history once (see issue #2);
+  don't let it drift again.

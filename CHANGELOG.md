@@ -4,6 +4,59 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1]
+
+Patch release: error-side parity improvements targeting TS-emit-shape
+gaps that `svelte-check --tsgo` handled and we didn't. No breaking
+changes.
+
+### Emit (Svelte 4 callable shape)
+
+- **Contextual typing restored on callback-shaped prop values.**
+  When a Svelte-4 `interface $$Props { foo?: typeof foo; … }`
+  referenced body-local `typeof` targets, the callable-form
+  default export collapsed its props slot to
+  `Partial<Record<string, any> & …>`. Consumer sites like
+  `<Foo labels={{ format: (value) => … }}/>` then lost
+  contextual typing on the arrow parameter and fired TS7006
+  implicit-any at every such destructure. The sanitized exports
+  record now backs the props slot when the component uses
+  `export let` (Svelte-4 `export let foo` is both a prop and an
+  exported member — one record describes both). Runes components
+  with `export function` methods keep the permissive fallback
+  since their exports are methods, not props.
+
+- **Arrow-signature synthesis for untyped function-valued
+  `export let`.** `export let fn = (a: number) => …` now
+  synthesizes `fn?: (a: number) => any` in the Props type
+  instead of collapsing to `fn?: any`. Consumers passing arrow
+  callbacks to these props keep their parameter typings.
+
+- **ASI scan accepts multi-line type annotations.** Multi-line
+  union annotations on `export let` were tripping
+  `rewrite_definite_assignment_in_place`'s ASI scan — it broke
+  at the first depth-0 newline inside the type and missed the
+  trailing `= undefined` initializer, producing a `!` on a
+  declarator that already had an initializer and firing TS1264.
+  Scan now allows a depth-0 newline when the next non-whitespace
+  is a union / intersection continuation.
+
+### Overlay (project references)
+
+- **Sibling projects' `compilerOptions.types` now flows through
+  the overlay.** In workspaces that pull files from a referenced
+  project via the sibling-include union, ambient-type entries
+  declared only on the referenced project's tsconfig (e.g.
+  `@types/chrome` on an extension sub-package) weren't reaching
+  tsgo when those files were type-checked — producing TS2304
+  "Cannot find namespace" and implicit-any on declarations
+  written against the missing ambient. `FlattenedReference` now
+  carries each reference's `types` + `lib` from its own extends
+  chain; the overlay unions sibling `types` into the user
+  workspace's entries when the user explicitly set theirs,
+  filtered against `is_resolvable_types_entry` per sibling's
+  project dir so unresolvable entries can't fatally TS2688.
+
 ## [0.4.0]
 
 Minor release built on two themes: a native Rust compile-warning

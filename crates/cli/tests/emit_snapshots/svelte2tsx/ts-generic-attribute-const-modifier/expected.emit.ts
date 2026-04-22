@@ -8,9 +8,11 @@ async function $$render_063ede7a<const T extends readonly string[]>() {
     }
     void __svn_tpl_check;
     void items;
+    return { props: undefined as any as ({ items: T; }) };
 }
 $$render_063ede7a;
-declare const __svn_component_default: <const T extends readonly string[]>(__anchor: any, props: Partial<{ items: T; }>) => { items: T; };
-declare type __svn_component_default<const T extends readonly string[]> = import('svelte').SvelteComponent<{ items: T; }> & { items: T; };
+declare class __svn_Render_063ede7a<const T extends readonly string[]> { props(): Awaited<ReturnType<typeof $$render_063ede7a<const T>>>['props']; }
+declare const __svn_component_default: <const T extends readonly string[]>(__anchor: any, props: Partial<ReturnType<__svn_Render_063ede7a<const T>['props']>>) => { items: T; };
+declare type __svn_component_default<const T extends readonly string[]> = import('svelte').SvelteComponent<ReturnType<__svn_Render_063ede7a<const T>['props']>> & { items: T; };
 export default __svn_component_default;
 

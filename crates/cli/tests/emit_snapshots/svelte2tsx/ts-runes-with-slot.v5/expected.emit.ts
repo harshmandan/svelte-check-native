@@ -14,9 +14,11 @@ async function $$render_17f189ba<T>() {
     void b;
     void x;
     void y;
+    return { props: undefined as any as (Props) };
 }
 $$render_17f189ba;
-declare const __svn_component_default: <T>(__anchor: any, props: Partial<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>) => any;
-declare type __svn_component_default<T> = import('svelte').SvelteComponent<Partial<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>>;
+declare class __svn_Render_17f189ba<T> { props(): Awaited<ReturnType<typeof $$render_17f189ba<T>>>['props']; }
+declare const __svn_component_default: <T>(__anchor: any, props: Partial<ReturnType<__svn_Render_17f189ba<T>['props']> & __SvnSvelte4PropsWiden<ReturnType<__svn_Render_17f189ba<T>['props']>>>) => any;
+declare type __svn_component_default<T> = import('svelte').SvelteComponent<Partial<ReturnType<__svn_Render_17f189ba<T>['props']> & __SvnSvelte4PropsWiden<ReturnType<__svn_Render_17f189ba<T>['props']>>>>;
 export default __svn_component_default;
 

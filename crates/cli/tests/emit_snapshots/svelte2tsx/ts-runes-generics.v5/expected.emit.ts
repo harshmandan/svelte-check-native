@@ -11,9 +11,11 @@ async function $$render_6b1a6441<T>() {
     void __svn_tpl_check;
     void a;
     void b;
+    return { props: undefined as any as ({ a: T, b: string }) };
 }
 $$render_6b1a6441;
-declare const __svn_component_default: <T>(__anchor: any, props: Partial<{ a: T, b: string }>) => any;
-declare type __svn_component_default<T> = import('svelte').SvelteComponent<{ a: T, b: string }>;
+declare class __svn_Render_6b1a6441<T> { props(): Awaited<ReturnType<typeof $$render_6b1a6441<T>>>['props']; }
+declare const __svn_component_default: <T>(__anchor: any, props: Partial<ReturnType<__svn_Render_6b1a6441<T>['props']>>) => any;
+declare type __svn_component_default<T> = import('svelte').SvelteComponent<ReturnType<__svn_Render_6b1a6441<T>['props']>>;
 export default __svn_component_default;
 

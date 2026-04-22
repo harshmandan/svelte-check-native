@@ -11,9 +11,11 @@ async function $$render_cbdc5f31<T extends boolean>() {
     }
     void __svn_tpl_check;
     void someProp;
+    return { props: undefined as any as ({ someProp: SomeType<T>; }) };
 }
 $$render_cbdc5f31;
-declare const __svn_component_default: <T extends boolean>(__anchor: any, props: Partial<{ someProp: SomeType<T>; }>) => any;
-declare type __svn_component_default<T extends boolean> = import('svelte').SvelteComponent<{ someProp: SomeType<T>; }>;
+declare class __svn_Render_cbdc5f31<T extends boolean> { props(): Awaited<ReturnType<typeof $$render_cbdc5f31<T>>>['props']; }
+declare const __svn_component_default: <T extends boolean>(__anchor: any, props: Partial<ReturnType<__svn_Render_cbdc5f31<T>['props']>>) => any;
+declare type __svn_component_default<T extends boolean> = import('svelte').SvelteComponent<ReturnType<__svn_Render_cbdc5f31<T>['props']>>;
 export default __svn_component_default;
 

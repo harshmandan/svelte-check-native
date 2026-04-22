@@ -855,8 +855,48 @@ fn emit_document_with_render_name(
         &exported_locals,
     );
 
+    // Class-wrapper pattern (Phase 2 / R1 of notes/PLAN.md, upstream
+    // svelte2tsx's approach): when the component has both a Props
+    // type source and a generics list, return a typed sentinel so a
+    // sibling `declare class` can extract the Props type at module
+    // scope via `ReturnType<Render<T>['props']>`. This lets body-
+    // local `typeof X` refs in the Props type (`interface $$Props {
+    // labels?: typeof labels }`) resolve through the render
+    // function's scope — fixing the TS2304/TS7006 cluster on
+    // generic Svelte-4 components (e.g. layerchart/BarChart).
+    //
+    // Fixtures: design/class_wrapper/{current,fixed,broken}/.
+    let use_class_wrapper = generics.is_some() && prop_type_source.is_some();
+    if use_class_wrapper
+        && let Some(ty) = prop_type_source.as_deref()
+    {
+        // Inject just before the closing brace of $$render so the
+        // return statement is the last thing in the function body.
+        // Using `undefined as any as <ty>` (not `null as <ty>`) so
+        // `<ty>` can be a non-nullable type like `{ foo: string }`
+        // without firing TS2352.
+        let _ = writeln!(out, "    return {{ props: undefined as any as ({ty}) }};");
+    }
+
     out.push_str("}\n");
     let _ = writeln!(out, "{render_name};");
+
+    // Emit the class-wrapper declaration at module scope. Its
+    // `props()` method's return type is resolved THROUGH the render
+    // function, which is where body-local `typeof X` refs are in
+    // scope. `Awaited<…>` handles the `async` wrapper on $$render —
+    // the render body is wrapped in an async function so top-level
+    // `await` in user code compiles.
+    if use_class_wrapper
+        && let Some(g) = generics.as_deref()
+    {
+        let class_name = render_class_name(&render_name);
+        let g_args = generic_arg_names(g);
+        let _ = writeln!(
+            out,
+            "declare class {class_name}<{g}> {{ props(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['props']; }}"
+        );
+    }
 
     // Default export so `import Foo from './Foo.svelte'` resolves to
     // a valid module member. Emits as a `declare function`: the props
@@ -1053,13 +1093,30 @@ fn emit_document_with_render_name(
     // components with `$$Events` are exceedingly rare, and the <script
     // generics> syntax is Svelte-5 runes only while `$$Events` is
     // Svelte-4 only — the overlap set is effectively empty.
+    // When class-wrapper is active (use_class_wrapper), the Props
+    // type reaches module scope via
+    // `ReturnType<__svn_Render_<hash><g_args>['props']>`. That
+    // resolves through the render function's scope — where
+    // body-local `typeof X` refs are in scope — so body-scoped type
+    // references in `$$Props` no longer need to be sanitised to
+    // `any` at module scope.
+    let render_class_name_for_props = if use_class_wrapper {
+        generics.as_deref().map(|g| {
+            let class_name = render_class_name(&render_name);
+            let g_args = generic_arg_names(g);
+            format!("ReturnType<{class_name}<{g_args}>['props']>")
+        })
+    } else {
+        None
+    };
     match (&prop_type_source, &generics) {
         (Some(ty), Some(g)) if ty_safe_in_generic_scope => {
             let widen = widen_for(ty);
-            let props = wrap_props(format!("{ty}{widen}"));
+            let props_base = render_class_name_for_props.as_deref().unwrap_or(ty);
+            let props = wrap_props(format!("{props_base}{widen}"));
             let _ = writeln!(
                 out,
-                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{ty}{widen}>) => {};",
+                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{props_base}{widen}>) => {};",
                 exports_object.as_deref().unwrap_or("any"),
             );
             let _ = writeln!(
@@ -1109,8 +1166,18 @@ fn emit_document_with_render_name(
             // Sanitizer above already replaced body-scoped refs in
             // exports_object with `any`, so using it as the props base
             // won't leak TS2304 at module scope.
+            // Priority of props_base:
+            //   1. `ReturnType<Render<g_args>['props']>` when the
+            //      class-wrapper is active (user has both a Props
+            //      type source and generics).
+            //   2. (sanitized) `exports_object` when Svelte-4
+            //      `export let` is the Props shape (pre-class-wrapper
+            //      fallback from commit f45dbdd).
+            //   3. `Record<string, any>` as a final lax fallback.
             let use_exports_as_props = has_export_let && exports_object.is_some();
-            let props_base: &str = if use_exports_as_props {
+            let props_base: &str = if let Some(cw) = render_class_name_for_props.as_deref() {
+                cw
+            } else if use_exports_as_props {
                 exports_object.as_deref().unwrap_or("Record<string, any>")
             } else {
                 "Record<string, any>"
@@ -1904,6 +1971,114 @@ fn render_function_name(source_path: &Path) -> SmolStr {
     let hex = hash.to_hex();
     let short = &hex.as_str()[..8];
     SmolStr::from(format!("$$render_{short}"))
+}
+
+/// Companion-class name for [`render_function_name`]. Used by the
+/// class-wrapper emit path (Phase 2 / R1 of `notes/PLAN.md`) to
+/// extract body-scoped Props types at module scope via
+/// `ReturnType<__svn_Render_<hash><T>['props']>`.
+///
+/// Matches upstream svelte2tsx's `class __sveltets_Render<T>` shape
+/// but with our per-file hash prefix — same reason as `$$render_<hash>`:
+/// two components in the same overlay project would collide on a bare
+/// `class __svn_Render { … }`.
+fn render_class_name(render_fn_name: &str) -> SmolStr {
+    // `render_fn_name` is `$$render_<hash>`. Transform to
+    // `__svn_Render_<hash>`.
+    let short = render_fn_name
+        .strip_prefix("$$render_")
+        .unwrap_or(render_fn_name);
+    SmolStr::from(format!("__svn_Render_{short}"))
+}
+
+/// Extract just the type-parameter NAMES from a Svelte-5 generics
+/// attribute value.
+///
+/// Input is what the user wrote in `<script lang="ts" generics="…">`.
+/// We splice that string verbatim into the declaration site of
+/// `async function $$render_<hash><…>()` and any class-wrapper
+/// declaration — both expect the full parameter syntax (with `extends`
+/// constraints and `= default` defaults).
+///
+/// At instantiation sites we need just the names: `typeof foo<T, U>`
+/// not `typeof foo<T extends X, U = Y>`. This helper strips
+/// constraints and defaults, preserving comma-separated order.
+///
+/// Handles:
+/// - `T` → `T`
+/// - `T extends Item` → `T`
+/// - `T extends Item, U` → `T, U`
+/// - `T extends Array<U>, U` → `T, U` (bracket depth tracked so the
+///   inner `U` doesn't get counted as a separator)
+/// - `T = string` → `T`
+fn generic_arg_names(generics: &str) -> String {
+    let mut out = String::new();
+    let mut depth_angle: i32 = 0;
+    let mut depth_paren: i32 = 0;
+    let mut depth_bracket: i32 = 0;
+    let mut current_name = String::new();
+    let mut in_name = true;
+    let bytes = generics.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match b {
+            b'<' => depth_angle += 1,
+            b'>' => depth_angle -= 1,
+            b'(' => depth_paren += 1,
+            b')' => depth_paren -= 1,
+            b'[' => depth_bracket += 1,
+            b']' => depth_bracket -= 1,
+            _ => {}
+        }
+        let at_depth_zero = depth_angle == 0 && depth_paren == 0 && depth_bracket == 0;
+        if at_depth_zero && b == b',' {
+            let trimmed = current_name.trim();
+            if !trimmed.is_empty() {
+                if !out.is_empty() {
+                    out.push_str(", ");
+                }
+                out.push_str(trimmed);
+            }
+            current_name.clear();
+            in_name = true;
+            i += 1;
+            continue;
+        }
+        // At depth zero, `extends` / `=` terminate the param name.
+        if in_name && at_depth_zero {
+            if b.is_ascii_whitespace() {
+                if !current_name.is_empty() {
+                    // Check if the next non-whitespace token is `extends`.
+                    let mut j = i;
+                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    if generics[j..].starts_with("extends") {
+                        in_name = false;
+                    }
+                }
+                current_name.push(b as char);
+                i += 1;
+                continue;
+            }
+            if b == b'=' {
+                in_name = false;
+                i += 1;
+                continue;
+            }
+            current_name.push(b as char);
+        }
+        i += 1;
+    }
+    let trimmed = current_name.trim();
+    if !trimmed.is_empty() {
+        if !out.is_empty() {
+            out.push_str(", ");
+        }
+        out.push_str(trimmed);
+    }
+    out
 }
 
 /// Extract the `generics=` attribute value from the instance `<script>`

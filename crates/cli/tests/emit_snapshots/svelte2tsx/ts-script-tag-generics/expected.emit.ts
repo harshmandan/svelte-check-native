@@ -8,9 +8,11 @@ async function $$render_389427c4<T extends Record<string, any>>() {
     }
     void __svn_tpl_check;
     void init;
+    return { props: undefined as any as ({ init: T; }) };
 }
 $$render_389427c4;
-declare const __svn_component_default: <T extends Record<string, any>>(__anchor: any, props: Partial<{ init: T; }>) => { init: T; };
-declare type __svn_component_default<T extends Record<string, any>> = import('svelte').SvelteComponent<{ init: T; }> & { init: T; };
+declare class __svn_Render_389427c4<T extends Record<string, any>> { props(): Awaited<ReturnType<typeof $$render_389427c4<T>>>['props']; }
+declare const __svn_component_default: <T extends Record<string, any>>(__anchor: any, props: Partial<ReturnType<__svn_Render_389427c4<T>['props']>>) => { init: T; };
+declare type __svn_component_default<T extends Record<string, any>> = import('svelte').SvelteComponent<ReturnType<__svn_Render_389427c4<T>['props']>> & { init: T; };
 export default __svn_component_default;
 

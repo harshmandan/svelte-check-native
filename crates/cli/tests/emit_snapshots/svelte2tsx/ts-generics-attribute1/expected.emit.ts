@@ -22,9 +22,11 @@ async function $$render_94f45523<A, B extends keyof A, C extends boolean>() {
     void a;
     void b;
     void getA;
+    return { props: undefined as any as ({ a: A; b: B; c: C; }) };
 }
 $$render_94f45523;
-declare const __svn_component_default: <A, B extends keyof A, C extends boolean>(__anchor: any, props: Partial<{ a: A; b: B; c: C; } & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>) => { a: A; b: B; c: C; getA: () => void; };
-declare type __svn_component_default<A, B extends keyof A, C extends boolean> = import('svelte').SvelteComponent<Partial<{ a: A; b: B; c: C; } & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>> & { a: A; b: B; c: C; getA: () => void; };
+declare class __svn_Render_94f45523<A, B extends keyof A, C extends boolean> { props(): Awaited<ReturnType<typeof $$render_94f45523<A, B, C>>>['props']; }
+declare const __svn_component_default: <A, B extends keyof A, C extends boolean>(__anchor: any, props: Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>) => { a: A; b: B; c: C; getA: () => void; };
+declare type __svn_component_default<A, B extends keyof A, C extends boolean> = import('svelte').SvelteComponent<Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>> & { a: A; b: B; c: C; getA: () => void; };
 export default __svn_component_default;
 

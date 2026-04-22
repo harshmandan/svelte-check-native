@@ -997,7 +997,13 @@ fn emit_document_with_render_name(
     // an `on${string}` index signature + an optional `slot` key keeps
     // those consumer-side writes valid without opening the door on
     // Svelte-5 codebases (where widening would mask real typos).
-    let svelte4_style = is_svelte4_component(doc, split.as_ref());
+    // `has_slot`: does the template contain a `<slot>` element? Derived
+    // from the parsed Fragment (not a `source.contains("<slot")` byte
+    // check, which would false-positive on comments or substrings).
+    // Used by `is_svelte4_component` as Signal 2, plus by the widen-
+    // intersection decision a few lines below.
+    let has_slot = fragment_contains_slot(fragment);
+    let svelte4_style = is_svelte4_component(doc, split.as_ref(), has_slot);
     // Narrower gate than `svelte4_style`: only true when the component
     // uses `export let` (Svelte 4's prop-declaration form). `svelte4_style`
     // also catches `export function` / `export const` which are method
@@ -1049,7 +1055,7 @@ fn emit_document_with_render_name(
     // prefix is Svelte-reserved — no valid user identifier starts with
     // `$$`.
     let uses_any_props = doc.source.contains("$$props") || doc.source.contains("$$restProps");
-    let has_slots = svelte4_style && doc.source.contains("<slot");
+    let has_slots = svelte4_style && has_slot;
     // Match upstream's factory-pattern: intersections ONLY when the
     // component shape actually needs them. ANY non-empty intersection
     // (even a benign `{children?: any}`) contaminates tsgo's
@@ -1076,7 +1082,7 @@ fn emit_document_with_render_name(
     // phase-5 `satisfies ComponentProps<typeof Foo>` trailer from
     // firing TS2741 on legitimate slot-only consumer sites while
     // still catching missing required props on Svelte-5 components.
-    let svelte4_with_slot = svelte4_style && doc.source.contains("<slot");
+    let svelte4_with_slot = svelte4_style && has_slot;
     let wrap_props = |inner: String| -> String {
         if svelte4_with_slot {
             format!("Partial<{inner}>")
@@ -4576,6 +4582,7 @@ fn try_process_let_statement(
 fn is_svelte4_component(
     doc: &svn_parser::Document<'_>,
     split: Option<&script_split::SplitScript>,
+    has_slot: bool,
 ) -> bool {
     // Signal 1: export let
     let instance_src = doc
@@ -4587,11 +4594,11 @@ fn is_svelte4_component(
     if contains_export_let(instance_src) || contains_export_let(module_src) {
         return true;
     }
-    // Signal 2: <slot> element — substring check on the whole source
-    // (the template doesn't live in a separate string, but the source
-    // as a whole is fine; `<slot` will only appear in template or a
-    // comment).
-    if doc.source.contains("<slot") {
+    // Signal 2: `<slot>` element in the template. Precomputed from the
+    // parsed Fragment (see `fragment_contains_slot`); replaces an
+    // earlier `doc.source.contains("<slot")` byte scan that false-
+    // positived on comments / string content.
+    if has_slot {
         return true;
     }
     // Signal 3: createEventDispatcher
@@ -4661,6 +4668,104 @@ fn has_double_dollar_interface(src: &str) -> bool {
 /// NEXT.md's follow-up work; a child using typed dispatcher without
 /// `$$Events` still routes through the lax overload, matching the
 /// v0.2.5 behavior.
+/// Does the parsed template fragment contain a `<slot>` element?
+///
+/// Replaces an earlier `doc.source.contains("<slot")` substring check.
+/// The AST walk is strictly more accurate:
+/// - Correctly matches only `<slot>` / `<slot name="x">` (tag name is
+///   exactly `slot`), not `<slotfoo>` or `<Slot>`.
+/// - Skips comments and string content — those produce Text / Comment
+///   nodes, not Element nodes.
+/// - Recurses into all block children (if/each/await/key/snippet)
+///   and nested elements so a `<slot>` inside a branch of an
+///   `{#if}` is detected.
+///
+/// Used by:
+/// - `is_svelte4_component` — Signal 2 of the Svelte-4-detection
+///   heuristic: rendering a `<slot>` is a strong Svelte-4 signal
+///   (Svelte-5 uses `{@render children()}` instead).
+/// - `widen_for` / `svelte4_with_slot` — the `__SvnSvelte4PropsWiden`
+///   intersection for consumer-side `<Foo slot="x">` compatibility.
+fn fragment_contains_slot(fragment: &svn_parser::Fragment) -> bool {
+    use svn_parser::Node;
+    for node in &fragment.nodes {
+        match node {
+            Node::Element(e) => {
+                if e.name.as_str() == "slot" {
+                    return true;
+                }
+                if fragment_contains_slot(&e.children) {
+                    return true;
+                }
+            }
+            Node::Component(c) => {
+                if fragment_contains_slot(&c.children) {
+                    return true;
+                }
+            }
+            Node::SvelteElement(e) => {
+                if fragment_contains_slot(&e.children) {
+                    return true;
+                }
+            }
+            Node::IfBlock(b) => {
+                if fragment_contains_slot(&b.consequent) {
+                    return true;
+                }
+                for arm in &b.elseif_arms {
+                    if fragment_contains_slot(&arm.body) {
+                        return true;
+                    }
+                }
+                if let Some(alt) = &b.alternate
+                    && fragment_contains_slot(alt)
+                {
+                    return true;
+                }
+            }
+            Node::EachBlock(b) => {
+                if fragment_contains_slot(&b.body) {
+                    return true;
+                }
+                if let Some(alt) = &b.alternate
+                    && fragment_contains_slot(alt)
+                {
+                    return true;
+                }
+            }
+            Node::AwaitBlock(b) => {
+                if let Some(p) = &b.pending
+                    && fragment_contains_slot(p)
+                {
+                    return true;
+                }
+                if let Some(t) = &b.then_branch
+                    && fragment_contains_slot(&t.body)
+                {
+                    return true;
+                }
+                if let Some(c) = &b.catch_branch
+                    && fragment_contains_slot(&c.body)
+                {
+                    return true;
+                }
+            }
+            Node::KeyBlock(b) => {
+                if fragment_contains_slot(&b.body) {
+                    return true;
+                }
+            }
+            Node::SnippetBlock(b) => {
+                if fragment_contains_slot(&b.body) {
+                    return true;
+                }
+            }
+            Node::Text(_) | Node::Comment(_) | Node::Interpolation(_) => {}
+        }
+    }
+    false
+}
+
 fn has_strict_events(doc: &svn_parser::Document<'_>) -> bool {
     let instance_src = doc
         .instance_script

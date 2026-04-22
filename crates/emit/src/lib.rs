@@ -62,8 +62,8 @@ use std::collections::HashSet;
 use oxc_allocator::Allocator;
 use smol_str::SmolStr;
 use svn_analyze::{
-    TemplateSummary, collect_top_level_bindings, collect_typed_top_level_lets,
-    collect_typed_uninit_lets, find_props, find_store_refs_with_bindings, find_template_refs,
+    PropsInfo, TemplateSummary, collect_top_level_bindings, collect_typed_top_level_lets,
+    collect_typed_uninit_lets, find_store_refs_with_bindings, find_template_refs,
 };
 use svn_parser::Document;
 use svn_parser::{EachBlock, Fragment, Node, SnippetBlock, parse_script_body};
@@ -222,27 +222,25 @@ fn emit_document_with_render_name(
         .as_ref()
         .map(|s| parse_script_body(&alloc_instance, s.content, s.lang));
 
-    // Cache the raw Props type source too — both `script_split`
-    // (which only needs its root name) and the props-type-annotation
-    // pass (which wants the full generic-form string) consume it.
-    let prop_type_source_cached: Option<String> =
+    // Single analyze-time resolution of every Props decision emit
+    // makes downstream — type text, type root name, destructure
+    // locals, and which of the four priority branches produced the
+    // result. See PropsInfo in svn-analyze.
+    //
+    // script_split consumes `type_root_name` to decide whether a
+    // given `type`/`interface` declaration IS the Props annotation.
+    // Props always hoists, even when its body references locals via
+    // `typeof`, because consumers need the Props type visible at
+    // module scope to get typed contextual flow. Non-Props types
+    // that reference body-locals via `typeof` stay body-scoped so
+    // `keyof typeof X` resolves against the real declaration rather
+    // than the lossy declare-const stub.
+    let props_info: PropsInfo =
         if let (Some(s), Some(parsed)) = (doc.instance_script.as_ref(), parsed_instance.as_ref()) {
-            svn_analyze::find_props_type_source(&parsed.program, s.content)
+            PropsInfo::build(&parsed.program, s.content)
         } else {
-            None
+            PropsInfo::default()
         };
-
-    // Extract the Props type's root name (if any) up front so
-    // script_split can decide whether a given `type`/`interface`
-    // declaration IS the Props annotation — Props always hoists, even
-    // when its body references locals via `typeof`, because consumers
-    // need the Props type visible at module scope to get typed
-    // contextual flow. Non-Props types that reference body-locals via
-    // `typeof` stay body-scoped so `keyof typeof X` resolves against
-    // the real declaration rather than the lossy declare-const stub.
-    let prop_type_root_for_split: Option<String> = prop_type_source_cached
-        .as_deref()
-        .and_then(|t| root_type_name(t.trim()));
 
     // SVELTE-4-COMPAT: rewrite `$: ...` reactive statements before
     // the Svelte-5-shaped passes run, so downstream code sees the
@@ -280,7 +278,7 @@ fn emit_document_with_render_name(
             content,
             s.lang,
             generics.is_some(),
-            prop_type_root_for_split.as_deref(),
+            props_info.type_root_name.as_deref(),
         )
     });
 
@@ -414,35 +412,34 @@ fn emit_document_with_render_name(
             // miss store names imported from external modules (e.g.
             // SvelteKit's `import { page } from '$app/stores'` plus
             // template uses of `$page.data.foo`).
-            let props: Vec<SmolStr> = find_props(&parsed_orig.program)
-                .into_iter()
-                .map(|p| p.local_name)
+            let props: Vec<SmolStr> = props_info
+                .destructures
+                .iter()
+                .map(|p| p.local_name.clone())
                 .collect();
 
-            // Capture the `$props()` type annotation (if any) so the
-            // default export below can be typed as
-            // `Component<PropType>`. Without this, `typeof X` for our
-            // overlay default resolves to the weak declared type and
-            // every `<X cb={(arg) => ...}>` destructure binding reads
-            // as implicit-any via `ComponentProps<any> = any`.
-            let mut ty = prop_type_source_cached.clone();
-
-            // SvelteKit auto-typing: when the file is a route component
-            // (`+page.svelte`, `+layout.svelte`, …) and the user wrote
-            // an untyped `$props()` destructure, synthesize a Props
-            // shape from the known kit-auto-typed prop names so `data`
-            // gets `PageData` / `LayoutData`, `form` gets `ActionData`,
-            // etc. Users writing `let { data } = $props()` expect this
-            // without writing the annotation themselves — upstream
-            // svelte2tsx injects the same shape. No-op when the user
-            // already wrote their own `$props()` annotation or when the
-            // file is non-route.
-            if ty.is_none() {
-                if let Some(kind) = sveltekit::route_kind(source_path) {
+            // Props type text for the default-export annotation
+            // (`Component<PropType>`). Without this, `typeof X` for
+            // our overlay default resolves to the weak declared type
+            // and every `<X cb={(arg) => ...}>` destructure binding
+            // reads as implicit-any via `ComponentProps<any> = any`.
+            //
+            // SvelteKit auto-typing: when the file is a route
+            // component (`+page.svelte`, `+layout.svelte`, …) and the
+            // user wrote an untyped `$props()` destructure, synthesize
+            // a Props shape from the known kit-auto-typed prop names
+            // so `data` gets `PageData` / `LayoutData`, `form` gets
+            // `ActionData`, etc. Users writing `let { data } =
+            // $props()` expect this without writing the annotation
+            // themselves — upstream svelte2tsx injects the same shape.
+            // Only fires when PropsInfo reports no user-provided
+            // source; a user annotation (any branch) wins.
+            let ty = props_info.type_text.clone().or_else(|| {
+                sveltekit::route_kind(source_path).and_then(|kind| {
                     let names_borrow: Vec<&str> = props.iter().map(|s| s.as_str()).collect();
-                    ty = sveltekit::synthesize_route_props_type(kind, &names_borrow);
-                }
-            }
+                    sveltekit::synthesize_route_props_type(kind, &names_borrow)
+                })
+            });
 
             collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
             // Also collect bindings from the rewritten content —
@@ -902,7 +899,7 @@ fn emit_document_with_render_name(
         .is_some_and(|t| t.trim().starts_with('{'));
     let prop_ty_root_name = prop_type_source
         .as_deref()
-        .and_then(|t| root_type_name(t.trim()));
+        .and_then(svn_analyze::root_type_name_of);
     // Consider a named Props type module-scope-visible if either (a)
     // script_split hoisted it out of the instance script, or (b) it's
     // declared in the `<script module>` section (which emits verbatim
@@ -1844,30 +1841,6 @@ fn imports_name(hoisted: &str, name: &str) -> bool {
         }
     }
     false
-}
-
-/// Extract the leading identifier of a TypeScript type source, if the
-/// source starts with a reference to a named type (e.g. `Props`,
-/// `Props<T>`, `ChannelMessageProps`). Returns `None` for literal
-/// shapes (`{ ... }`), tuple/array (`[...]`), and other non-reference
-/// starts. Used by emit to decide whether a named-type Props can be
-/// safely mentioned at module scope.
-fn root_type_name(ty: &str) -> Option<String> {
-    let bytes = ty.as_bytes();
-    if bytes.is_empty() {
-        return None;
-    }
-    let first = bytes[0];
-    if !(first.is_ascii_alphabetic() || first == b'_' || first == b'$') {
-        return None;
-    }
-    let mut end = 0usize;
-    while end < bytes.len()
-        && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_' || bytes[end] == b'$')
-    {
-        end += 1;
-    }
-    Some(ty[..end].to_string())
 }
 
 /// 1-based line number of the next character that would be appended to `s`.

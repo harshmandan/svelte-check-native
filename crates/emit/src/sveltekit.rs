@@ -118,8 +118,9 @@ pub fn kit_prop_decl(name: &str, kind: RouteKind) -> Option<String> {
 /// `<name>?: any;` so the synthesized shape stays a superset of what
 /// the user wrote; marking them optional avoids TS2741 errors at the
 /// component-instantiation sites where the user's template doesn't
-/// pass them. Matches the convention `find_props_type_source` uses for
-/// untyped `export let foo = default` declarations.
+/// pass them. Matches the convention `PropsInfo::build` uses for
+/// untyped `export let foo = default` declarations (see
+/// `svn_analyze::props`).
 ///
 /// For `+layout.svelte`, `children` is added implicitly even when the
 /// user doesn't destructure it (upstream does this too). Layouts

@@ -232,19 +232,6 @@ pub fn root_type_name_of(ty: &str) -> Option<SmolStr> {
     Some(SmolStr::from(&ty[..end]))
 }
 
-/// Find the *type source text* for the component's Props bag.
-///
-/// Thin wrapper over [`PropsInfo::build`]. Exists for callers that
-/// only need the type text and not the full [`PropsInfo`] result.
-/// New callers should prefer `PropsInfo::build(...)` — it's the
-/// single-pass analyze entry point.
-///
-/// Priority order, returned shapes, and fallback semantics are
-/// documented on [`PropsInfo`].
-pub fn find_props_type_source(program: &oxc_ast::ast::Program<'_>, source: &str) -> Option<String> {
-    PropsInfo::build(program, source).type_text
-}
-
 /// Build an inline object type literal from top-level `export let` /
 /// `export const` declarations in an instance script. Returns `None`
 /// when there are no such declarations.
@@ -464,23 +451,6 @@ fn arrow_signature_from_init(init: &Expression<'_>, source: &str) -> Option<Stri
     Some(format!("({}) => {}", parts.join(", "), ret))
 }
 
-/// Find every `let { ... } = $props()` destructuring in `program` and
-/// return the local names introduced. Order is source order.
-///
-/// Thin wrapper over [`PropsInfo::build`] — the equivalent of
-/// `PropsInfo::build(program, source).destructures`. Exists for
-/// callers that don't need the full [`PropsInfo`] result; new callers
-/// should prefer `PropsInfo::build(...)` so they get the type text
-/// for free.
-///
-/// The no-source-needed signature is kept so existing test helpers
-/// that only have a program (not its source) keep working; an empty
-/// string is passed as `source` because `destructures` doesn't touch
-/// it.
-pub fn find_props(program: &oxc_ast::ast::Program<'_>) -> Vec<PropInfo> {
-    PropsInfo::build(program, "").destructures
-}
-
 /// Does this expression look like a call to the `$props` rune?
 ///
 /// Matches `$props()`, `$props<Type>()`, `$props<{...}>()`. Doesn't match
@@ -558,7 +528,8 @@ mod tests {
     fn props(src: &str) -> Vec<String> {
         let alloc = Allocator::default();
         let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
-        find_props(&parsed.program)
+        PropsInfo::build(&parsed.program, src)
+            .destructures
             .into_iter()
             .map(|p| p.local_name.to_string())
             .collect()
@@ -616,9 +587,10 @@ mod tests {
 
     #[test]
     fn rest_is_flagged_on_info() {
+        let src = "let { a, ...rest } = $props();";
         let alloc = Allocator::default();
-        let parsed = parse_script_body(&alloc, "let { a, ...rest } = $props();", ScriptLang::Ts);
-        let info = find_props(&parsed.program);
+        let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
+        let info = PropsInfo::build(&parsed.program, src).destructures;
         assert_eq!(info.len(), 2);
         assert!(!info[0].is_rest);
         assert!(info[1].is_rest);
@@ -684,7 +656,7 @@ mod tests {
         let src = "let { foo } = $props();";
         let alloc = Allocator::default();
         let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
-        let info = find_props(&parsed.program);
+        let info = PropsInfo::build(&parsed.program, src).destructures;
         assert_eq!(info.len(), 1);
         assert_eq!(info[0].range.slice(src), "foo");
     }
@@ -692,7 +664,7 @@ mod tests {
     fn props_type(src: &str) -> Option<String> {
         let alloc = Allocator::default();
         let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
-        find_props_type_source(&parsed.program, src)
+        PropsInfo::build(&parsed.program, src).type_text
     }
 
     #[test]

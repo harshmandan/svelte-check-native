@@ -108,12 +108,14 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     timings: bool,
 
-    /// How to source compile warnings. `bridge` (default) keeps the
-    /// legacy Node-subprocess path. `native` runs our Rust lint pass
-    /// and drops the bridge — faster but only covers ported warning
-    /// codes today. `both` runs both and dedups, useful for parity
-    /// testing during the port.
-    #[arg(long = "svelte-warnings", default_value = "bridge")]
+    /// How to source compile warnings. `native` (default) runs our
+    /// in-process Rust lint pass — no subprocess, full parity with
+    /// svelte/compiler on every ported warning code. `bridge` falls
+    /// back to spawning bun/node workers that import the user's
+    /// `svelte/compiler` directly; slower, but useful if a
+    /// just-released compiler emits a code we haven't ported yet.
+    /// `both` runs both and dedups, for parity testing.
+    #[arg(long = "svelte-warnings", default_value = "native")]
     svelte_warnings: String,
 
     /// Print resolved paths (workspace, tsconfig, tsgo, JS runtime,
@@ -320,10 +322,11 @@ fn main() -> ExitCode {
 /// dispatch inside `run_typecheck`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SvelteWarningsMode {
-    /// Legacy default: use the multi-worker Node bridge.
+    /// Fallback: spawn the multi-worker Node bridge against the
+    /// user's `svelte/compiler`. Useful when a just-released
+    /// compiler emits a code we haven't ported yet.
     Bridge,
-    /// Run the native Rust lint pass; skip the bridge. Only ported
-    /// warning codes fire.
+    /// Default: run the native Rust lint pass in-process.
     Native,
     /// Run both and dedup by (code, start, end). Useful for parity
     /// testing during the port.

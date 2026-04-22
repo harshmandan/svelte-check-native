@@ -44,18 +44,49 @@ pub use discovery::{DiscoveryError, TsgoBinary, discover};
 pub use output::{RawDiagnostic, Severity, parse as parse_output};
 pub use runner::{RunError, run as run_tsgo};
 
-/// Always-on shim: Svelte 5 rune ambients ($state, $derived, $effect,
-/// etc.) plus the helper types emit references (`__SvnStoreValue`,
-/// `__svn_type_ref`). Written into the cache on every check.
-const SVELTE_SHIMS_CORE: &str = include_str!("svelte_shims_core.d.ts");
+/// Svelte type shims — single source of truth for everything we ship
+/// into the cache. Structure:
+///
+/// - Always-shipped core: rune ambients (`$state`, `$derived`, …),
+///   emit helper types (`__SvnStoreValue`, `__svn_type_ref`), the
+///   `svelteHTML` / `svelte-jsx` intersection shapes, asset-module
+///   ambients (`*.svg` / `*.css` / …).
+/// - `@@FALLBACK_BEGIN@@` … `@@FALLBACK_END@@` block: stand-in
+///   `declare module 'svelte/*'` declarations for environments
+///   without a real `svelte` install. Stripped before writing to the
+///   cache when a real `svelte` IS reachable — otherwise the fallback
+///   would shadow the richer real types (`HTMLAnchorAttributes` from
+///   `svelte/elements` etc.) and fire false-positive TS2305 errors.
+const SVELTE_SHIMS: &str = include_str!("svelte_shims_core.d.ts");
 
-/// Fallback `declare module 'svelte/*'` blocks for environments where
-/// the user has no real `svelte` package installed (e.g. the upstream
-/// fixture corpus). Written into the cache ONLY when no real svelte is
-/// reachable from the workspace's node_modules chain — when one IS
-/// installed, these declarations would shadow the richer real types
-/// (see `svelte_shims_fallback.d.ts` header for details).
-const SVELTE_SHIMS_FALLBACK: &str = include_str!("svelte_shims_fallback.d.ts");
+const FALLBACK_BEGIN: &str = "// @@FALLBACK_BEGIN@@";
+const FALLBACK_END: &str = "// @@FALLBACK_END@@";
+
+/// Return the shim text with the fallback `declare module 'svelte/*'`
+/// block stripped when `keep_fallback` is false. Line count is
+/// preserved — the stripped range is replaced with blank lines so
+/// diagnostic positions in the shim stay stable across the two modes.
+fn resolve_shim_text(keep_fallback: bool) -> String {
+    if keep_fallback {
+        return SVELTE_SHIMS.to_string();
+    }
+    let Some(begin) = SVELTE_SHIMS.find(FALLBACK_BEGIN) else {
+        return SVELTE_SHIMS.to_string();
+    };
+    let Some(end_offset) = SVELTE_SHIMS[begin..].find(FALLBACK_END) else {
+        return SVELTE_SHIMS.to_string();
+    };
+    let end = begin + end_offset + FALLBACK_END.len();
+    let stripped = &SVELTE_SHIMS[begin..end];
+    let mut out = String::with_capacity(SVELTE_SHIMS.len());
+    out.push_str(&SVELTE_SHIMS[..begin]);
+    // Preserve line count so diagnostic positions stay stable.
+    for _ in 0..stripped.bytes().filter(|&b| b == b'\n').count() {
+        out.push('\n');
+    }
+    out.push_str(&SVELTE_SHIMS[end..]);
+    out
+}
 
 /// Walk up from `workspace` looking for `node_modules/svelte/package.json`.
 /// Returns `true` iff the user has the real `svelte` package installed
@@ -281,22 +312,14 @@ pub fn check(
     std::fs::create_dir_all(&layout.svelte_dir)?;
 
     // Ship the svelte type shims into the cache. Core (runes + helper
-    // types) is always written. The `declare module 'svelte/*'`
-    // fallback is only written when no real svelte is reachable —
-    // otherwise its minimal declarations would shadow the richer real
-    // types (e.g. svelte/elements re-exports HTMLAnchorAttributes,
-    // HTMLInputAttributes, ClassValue from clsx, etc., none of which
-    // our shim enumerates).
-    let shim_text = if has_real_svelte(workspace) {
-        SVELTE_SHIMS_CORE.to_string()
-    } else {
-        let mut combined =
-            String::with_capacity(SVELTE_SHIMS_CORE.len() + SVELTE_SHIMS_FALLBACK.len() + 1);
-        combined.push_str(SVELTE_SHIMS_CORE);
-        combined.push('\n');
-        combined.push_str(SVELTE_SHIMS_FALLBACK);
-        combined
-    };
+    // types + shim-wide ambients) is always written. The fallback
+    // `declare module 'svelte/*'` block — marked in-source with
+    // @@FALLBACK_BEGIN@@ / @@FALLBACK_END@@ — is stripped when a real
+    // svelte install is reachable; otherwise its minimal declarations
+    // would shadow the richer real types (e.g. svelte/elements
+    // re-exports HTMLAnchorAttributes, HTMLInputAttributes, ClassValue
+    // from clsx, etc., none of which the fallback enumerates).
+    let shim_text = resolve_shim_text(/* keep_fallback */ !has_real_svelte(workspace));
     write_if_changed(&layout.svelte_shims, &shim_text)?;
 
     // Step 1: write generated TS for each input. Skip identical writes.
@@ -758,6 +781,31 @@ fn byte_to_position(line_starts: &[u32], byte: u32) -> (u32, u32) {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn shim_keeps_fallback_when_asked() {
+        let full = resolve_shim_text(true);
+        assert!(full.contains(FALLBACK_BEGIN));
+        assert!(full.contains(FALLBACK_END));
+        assert!(full.contains("declare module 'svelte'"));
+        assert!(full.contains("declare module 'svelte/elements'"));
+        // Core runes must remain.
+        assert!(full.contains("$state"));
+    }
+
+    #[test]
+    fn shim_strips_fallback_when_real_svelte_present() {
+        let stripped = resolve_shim_text(false);
+        assert!(!stripped.contains("declare module 'svelte'"));
+        assert!(!stripped.contains("declare module 'svelte/elements'"));
+        // Core runes still present.
+        assert!(stripped.contains("$state"));
+        // Line count preserved so diagnostic positions in the shim
+        // stay stable across the two modes.
+        let full_lines = resolve_shim_text(true).lines().count();
+        let stripped_lines = stripped.lines().count();
+        assert_eq!(full_lines, stripped_lines);
+    }
 
     fn line_maps_for(path: &str, entries: Vec<LineMapEntry>) -> HashMap<PathBuf, MapData> {
         let mut m = HashMap::new();

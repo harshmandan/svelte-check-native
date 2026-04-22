@@ -1098,12 +1098,17 @@ dependencies = [
  "clap",
  "dunce",
  "globset",
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_parser",
+ "oxc_span",
  "rayon",
  "serde",
  "serde_json",
  "svn-analyze",
  "svn-core",
  "svn-emit",
+ "svn-lint",
  "svn-parser",
  "svn-svelte-compiler",
  "svn-typecheck",
@@ -1149,6 +1154,23 @@ dependencies = [
  "oxc_span",
  "smol_str",
  "svn-analyze",
+ "svn-core",
+ "svn-parser",
+]
+
+[[package]]
+name = "svn-lint"
+version = "0.3.9"
+dependencies = [
+ "memchr",
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_parser",
+ "oxc_span",
+ "rayon",
+ "serde",
+ "serde_json",
+ "smol_str",
  "svn-core",
  "svn-parser",
 ]

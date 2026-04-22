@@ -18,6 +18,7 @@ svn-parser = { path = "../parser" }
 svn-analyze = { path = "../analyze" }
 svn-emit = { path = "../emit" }
 svn-svelte-compiler = { path = "../svelte-compiler" }
+svn-lint = { path = "../svn-lint" }
 svn-typecheck = { path = "../typecheck" }
 clap.workspace = true
 anyhow.workspace = true
@@ -29,6 +30,10 @@ camino.workspace = true
 walkdir.workspace = true
 globset.workspace = true
 dunce.workspace = true
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_parser.workspace = true
+oxc_span.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

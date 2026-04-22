@@ -9,3 +9,19 @@
 [language-tools]
 sha = "5be821d5a5a92b614ec1dbd06f34ac19c6a9fe8f"
 note = "svelte-check@4.4.6"
+
+[svelte-compiler]
+# The Svelte compiler repo tracked locally under
+# .svelte-upstream/svelte (blobless clone). Consumed at `cargo test
+# -p svn-lint --test upstream_validator` time against its
+# `packages/svelte/tests/validator/samples/` corpus. Also the source
+# of truth for `cargo run -p xtask --bin regen-lint-catalog` which
+# regenerates `crates/svn-lint/src/codes.rs` + `messages.rs` from
+# `packages/svelte/messages/compile-warnings/*.md`.
+#
+# /update-lint diffs origin/main against this pin. Bump only after a
+# manual review confirms: (1) no new warning codes dropped on the
+# floor, (2) message-text changes regenerated, (3) upstream-fixture
+# tier-A gate still green.
+sha = "8e7319063aa609cca2cbf8cdf1958e5392dd2fa0"
+note = "svelte@5.55.4 + post-5.55.4 main"

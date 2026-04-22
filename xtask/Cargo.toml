@@ -15,3 +15,7 @@ anyhow.workspace = true
 [[bin]]
 name = "scoreboard"
 path = "src/bin/scoreboard.rs"
+
+[[bin]]
+name = "regen-lint-catalog"
+path = "src/bin/regen_lint_catalog.rs"

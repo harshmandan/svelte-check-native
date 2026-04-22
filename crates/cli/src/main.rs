@@ -11,6 +11,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod kit_files;
+mod svelte_config;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -66,6 +67,16 @@ struct Cli {
     #[arg(long = "compiler-warnings")]
     compiler_warnings: Option<String>,
 
+    /// Drop every Svelte compiler warning whose source path contains
+    /// a `node_modules/` segment. Mirrors the common upstream pattern
+    /// `compilerOptions.warningFilter: (w) => !w.filename?.includes('node_modules')`.
+    /// Our default workspace scan already skips `node_modules/`
+    /// directories; this flag is belt-and-suspenders for cases where
+    /// symlinks (e.g. pnpm workspaces) put node_modules files in
+    /// scope anyway.
+    #[arg(long = "ignore-node-modules-warnings", default_value_t = false)]
+    ignore_node_modules_warnings: bool,
+
     /// Comma-separated globs to ignore. Only valid with `--no-tsconfig`.
     #[arg(long)]
     ignore: Option<String>,
@@ -96,6 +107,14 @@ struct Cli {
     /// tsgo, compiler bridge) at the end of the run.
     #[arg(long, default_value_t = false)]
     timings: bool,
+
+    /// How to source compile warnings. `bridge` (default) keeps the
+    /// legacy Node-subprocess path. `native` runs our Rust lint pass
+    /// and drops the bridge — faster but only covers ported warning
+    /// codes today. `both` runs both and dedups, useful for parity
+    /// testing during the port.
+    #[arg(long = "svelte-warnings", default_value = "bridge")]
+    svelte_warnings: String,
 
     /// Print resolved paths (workspace, tsconfig, tsgo, JS runtime,
     /// svelte/compiler) and exit. Useful for diagnosing "which tsgo
@@ -247,6 +266,37 @@ fn main() -> ExitCode {
     let ignore_set = build_ignore_set(cli.ignore.as_deref());
     let color = resolve_color_mode(cli.color, cli.no_color);
 
+    // Tier 2: static analysis of svelte.config.js `warningFilter`.
+    // When found and parseable, its rules augment --compiler-warnings
+    // at the filter stage. Unrecognised callbacks → stderr note so
+    // users know to supplement with --compiler-warnings.
+    let warning_filter_plan = match svelte_config::find_svelte_config(&workspace) {
+        Some(cfg) => {
+            let plan = svelte_config::analyse_config(&cfg);
+            if plan.partial {
+                eprintln!(
+                    "svelte-check-native: partial `warningFilter` in {} — one or more branches couldn't be translated. Unrecognised: `{}`. Add `--compiler-warnings code:ignore,…` to cover the rest.",
+                    cfg.display(),
+                    plan.unrecognised_excerpt.as_deref().unwrap_or("?")
+                );
+            }
+            plan
+        }
+        None => svelte_config::WarningFilterPlan::default(),
+    };
+
+    let svelte_warnings_mode = match cli.svelte_warnings.as_str() {
+        "bridge" => SvelteWarningsMode::Bridge,
+        "native" => SvelteWarningsMode::Native,
+        "both" => SvelteWarningsMode::Both,
+        other => {
+            eprintln!(
+                "svelte-check-native: unknown --svelte-warnings value `{other}` (expected bridge/native/both)"
+            );
+            return ExitCode::from(2);
+        }
+    };
+
     run_typecheck(
         &workspace,
         solution_root_tsconfig.as_deref(),
@@ -260,7 +310,24 @@ fn main() -> ExitCode {
         color,
         cli.timings,
         cli.tsgo_diagnostics,
+        svelte_warnings_mode,
+        cli.ignore_node_modules_warnings,
+        &warning_filter_plan,
     )
+}
+
+/// How to source compile warnings. Drives the bridge-vs-native
+/// dispatch inside `run_typecheck`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SvelteWarningsMode {
+    /// Legacy default: use the multi-worker Node bridge.
+    Bridge,
+    /// Run the native Rust lint pass; skip the bridge. Only ported
+    /// warning codes fire.
+    Native,
+    /// Run both and dedup by (code, start, end). Useful for parity
+    /// testing during the port.
+    Both,
 }
 
 /// Tri-state color mode resolved from `--color` / `--no-color` / isatty.
@@ -490,6 +557,52 @@ fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Opti
     Some(format!("{base}{}", code.replace('-', "_")))
 }
 
+/// Run the native Rust compile-warning pass on every in-scope
+/// Svelte source and push the result into `diagnostics`. Dedups by
+/// `(code, path, start-line, start-col)` so calling this alongside
+/// the bridge in `both` mode doesn't double-report.
+fn emit_native_svelte_warnings(
+    svelte_sources: &[(PathBuf, String)],
+    compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
+    diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
+    seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
+) {
+    let per_file = svn_lint::lint_batch(svelte_sources.iter().cloned());
+
+    for (path, warnings) in per_file {
+        for w in warnings {
+            let code = w.code.as_str().to_string();
+            // Apply user `--compiler-warnings` reclassification.
+            // Default severity from our lint pass is Warning.
+            let severity = apply_compiler_override(
+                &code,
+                svn_svelte_compiler::Severity::Warning,
+                compiler_overrides,
+            );
+            let Some(severity) = severity else { continue };
+            let key = (code.clone(), path.clone(), w.start_line, w.start_column);
+            if !seen.insert(key) {
+                continue;
+            }
+            let href = compiler_code_docs_url(&code, severity);
+            diagnostics.push(svn_typecheck::CheckDiagnostic {
+                source_path: path.clone(),
+                line: w.start_line,
+                // LintContext::emit stored 0-based column; CLI adds 1
+                // at the source-of-truth boundary (same as bridge).
+                column: w.start_column.saturating_add(1),
+                end_line: w.end_line,
+                end_column: w.end_column.saturating_add(1),
+                severity,
+                code: svn_typecheck::DiagnosticCode::Slug(code),
+                message: w.message,
+                source: svn_typecheck::DiagnosticSource::Svelte,
+                code_description_url: href,
+            });
+        }
+    }
+}
+
 fn apply_compiler_override(
     code: &str,
     base: svn_svelte_compiler::Severity,
@@ -509,6 +622,15 @@ fn apply_compiler_override(
                 svn_svelte_compiler::Severity::Warning => svn_typecheck::Severity::Warning,
             })
         })
+}
+
+/// Does `path` contain a `node_modules` segment? Uses path components
+/// (not string-contains) so a directory named `my_node_modules_dir`
+/// doesn't trip the check.
+fn path_is_under_node_modules(path: &Path) -> bool {
+    path.components().any(|c| {
+        matches!(c, std::path::Component::Normal(name) if name == "node_modules")
+    })
 }
 
 fn parse_compiler_warnings(
@@ -693,6 +815,9 @@ fn run_typecheck(
     color: ColorMode,
     timings: bool,
     tsgo_diagnostics: bool,
+    svelte_warnings_mode: SvelteWarningsMode,
+    ignore_node_modules_warnings: bool,
+    warning_filter_plan: &svelte_config::WarningFilterPlan,
 ) -> ExitCode {
     let phase_start = std::time::Instant::now();
 
@@ -901,60 +1026,73 @@ fn run_typecheck(
     // win.
     let mark = std::time::Instant::now();
     if sources.svelte {
-        // Move svelte_sources into the bridge — we don't need it after
-        // this point and the bridge takes the PathBufs by value to avoid
-        // re-cloning them inside the result vec. Truncate to the
-        // in-scope prefix so auxiliary (out-of-scope) files don't run
-        // through the compiler-warning bridge — their diagnostics would
-        // be user-unactionable noise against files the user excluded.
         svelte_sources.truncate(svelte_sources_in_scope_end);
-        match svn_svelte_compiler::compile_batch(workspace, std::mem::take(&mut svelte_sources)) {
-            Ok(per_file) => {
-                for (path, warnings) in per_file {
-                    for w in warnings {
-                        let severity =
-                            apply_compiler_override(&w.code, w.severity, compiler_overrides);
-                        let Some(severity) = severity else { continue };
-                        // Mirrors upstream svelte-check's
-                        // `getCodeDescription(code, url)`
-                        // (svelte-check/dist/src/index.js @ 112550):
-                        //   - url differs by severity: warnings link
-                        //     to `compiler-warnings#`, errors to
-                        //     `compiler-errors#`.
-                        //   - code must begin with a lowercase letter
-                        //     AND contain `-` or `_`. Filters out
-                        //     numeric/opaque codes that wouldn't anchor
-                        //     to any docs page.
-                        //   - hyphens in the code are normalized to
-                        //     underscores before joining with the URL
-                        //     (upstream uses `.replace(/-/g, '_')`).
-                        let href = compiler_code_docs_url(&w.code, severity);
-                        // svelte/compiler emits 1-based line numbers
-                        // but 0-based column offsets. CheckDiagnostic
-                        // is documented as 1-based across the board
-                        // (and the formatter subtracts 1 to convert
-                        // back to 0-based LSP-style on the way out),
-                        // so add 1 to columns at the source-of-truth
-                        // boundary.
-                        diagnostics.push(svn_typecheck::CheckDiagnostic {
-                            source_path: path.clone(),
-                            line: w.start.line,
-                            column: w.start.column.saturating_add(1),
-                            end_line: w.end.line,
-                            end_column: w.end.column.saturating_add(1),
-                            severity,
-                            code: svn_typecheck::DiagnosticCode::Slug(w.code.clone()),
-                            // Raw message — no slug pollution. The slug
-                            // surfaces via `code` separately.
-                            message: w.message,
-                            source: svn_typecheck::DiagnosticSource::Svelte,
-                            code_description_url: href,
-                        });
+
+        // Track which (code, path, offset) tuples we've already
+        // pushed so `--svelte-warnings=both` can dedup bridge/native
+        // overlap without double-counting.
+        let mut seen: std::collections::HashSet<(String, PathBuf, u32, u32)> =
+            std::collections::HashSet::new();
+
+        // Run native first when requested.
+        let run_native = matches!(
+            svelte_warnings_mode,
+            SvelteWarningsMode::Native | SvelteWarningsMode::Both
+        );
+        if run_native {
+            emit_native_svelte_warnings(
+                &svelte_sources,
+                compiler_overrides,
+                &mut diagnostics,
+                &mut seen,
+            );
+        }
+
+        // Run bridge when requested. Native path moves svelte_sources
+        // only at the end, because both paths need it.
+        let run_bridge = matches!(
+            svelte_warnings_mode,
+            SvelteWarningsMode::Bridge | SvelteWarningsMode::Both
+        );
+        if run_bridge {
+            match svn_svelte_compiler::compile_batch(workspace, std::mem::take(&mut svelte_sources))
+            {
+                Ok(per_file) => {
+                    for (path, warnings) in per_file {
+                        for w in warnings {
+                            let severity =
+                                apply_compiler_override(&w.code, w.severity, compiler_overrides);
+                            let Some(severity) = severity else { continue };
+                            let href = compiler_code_docs_url(&w.code, severity);
+                            let key = (w.code.clone(), path.clone(), w.start.line, w.start.column);
+                            if !seen.insert(key) {
+                                continue;
+                            }
+                            // svelte/compiler emits 1-based line numbers
+                            // but 0-based column offsets. CheckDiagnostic
+                            // is documented as 1-based across the board
+                            // (and the formatter subtracts 1 to convert
+                            // back to 0-based LSP-style on the way out),
+                            // so add 1 to columns at the source-of-truth
+                            // boundary.
+                            diagnostics.push(svn_typecheck::CheckDiagnostic {
+                                source_path: path.clone(),
+                                line: w.start.line,
+                                column: w.start.column.saturating_add(1),
+                                end_line: w.end.line,
+                                end_column: w.end.column.saturating_add(1),
+                                severity,
+                                code: svn_typecheck::DiagnosticCode::Slug(w.code.clone()),
+                                message: w.message,
+                                source: svn_typecheck::DiagnosticSource::Svelte,
+                                code_description_url: href,
+                            });
+                        }
                     }
                 }
-            }
-            Err(_) => {
-                // Bridge unavailable — proceed with TS diagnostics only.
+                Err(_) => {
+                    // Bridge unavailable — proceed with TS diagnostics only.
+                }
             }
         }
     }
@@ -965,6 +1103,36 @@ fn run_typecheck(
     // the flag's effect on `css` is purely opt-out semantics; opting in
     // is a no-op until we have something to emit.
     let _ = sources.css;
+
+    // `--ignore-node-modules-warnings`: drop every Svelte-source
+    // warning whose path contains a `node_modules/` component.
+    // Mirrors upstream's common `warningFilter: (w) => !w.filename?.
+    // includes('node_modules')` pattern (19/100 sampled real-world
+    // uses — see notes/lint-progress.md Tier-1 section). Only
+    // affects Svelte diagnostics; TS/JS diagnostics fall through
+    // because tsgo's `include`/`exclude` already own that boundary.
+    if ignore_node_modules_warnings {
+        diagnostics.retain(|d| {
+            !matches!(d.source, svn_typecheck::DiagnosticSource::Svelte)
+                || !path_is_under_node_modules(&d.source_path)
+        });
+    }
+
+    // Tier 2: apply any drop rules we statically translated from the
+    // user's `svelte.config.js` `warningFilter`. Applies only to the
+    // Svelte diagnostic source — TS/JS diagnostics are tsgo's domain.
+    if !warning_filter_plan.rules.is_empty() || warning_filter_plan.constant.is_some() {
+        diagnostics.retain(|d| {
+            if !matches!(d.source, svn_typecheck::DiagnosticSource::Svelte) {
+                return true;
+            }
+            let code = match &d.code {
+                svn_typecheck::DiagnosticCode::Slug(s) => s.as_str(),
+                svn_typecheck::DiagnosticCode::Numeric(_) => "",
+            };
+            !warning_filter_plan.should_drop(code, Some(&d.source_path))
+        });
+    }
 
     // `--threshold error` drops warnings entirely (mirrors upstream).
     if threshold == "error" {
@@ -1790,5 +1958,21 @@ mod tests {
             frame.contains("first line"),
             "target line missing from frame:\n{frame}",
         );
+    }
+
+    #[test]
+    fn node_modules_filter_matches_component_not_substring() {
+        assert!(path_is_under_node_modules(Path::new(
+            "/app/node_modules/pkg/Foo.svelte"
+        )));
+        assert!(path_is_under_node_modules(Path::new(
+            "/app/packages/foo/node_modules/pkg/Foo.svelte"
+        )));
+        assert!(!path_is_under_node_modules(Path::new(
+            "/app/src/my_node_modules_dir/Foo.svelte"
+        )));
+        assert!(!path_is_under_node_modules(Path::new(
+            "/app/src/routes/+page.svelte"
+        )));
     }
 }

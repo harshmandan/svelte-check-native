@@ -52,3 +52,4 @@ bench/
 
 # Private working notes
 notes/
+.svelte-upstream/

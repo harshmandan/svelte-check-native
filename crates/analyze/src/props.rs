@@ -276,9 +276,71 @@ fn append_props_from_var_decl(
         // the default kicks in). No initializer + no type → required
         // `any`. No initializer + type → required of that type.
         let optional_marker = if has_init { "?" } else { "" };
-        let ty_src = ty_text.unwrap_or("any");
+        // Inference fallback when there's no explicit annotation.
+        // For `export let fn = (x: T, y: U) => …` we synthesize the
+        // arrow's parameter signature — this is what lets a consumer
+        // passing `<Comp fn={cond ? (x, y) => … : alt} />` contextually
+        // type its arrow's params against the component prop. Without
+        // the signature, the prop collapses to `any` and every
+        // consumer's callback param fires TS7006 implicit-any.
+        let arrow_sig = if ty_text.is_none() {
+            declarator
+                .init
+                .as_ref()
+                .and_then(|init| arrow_signature_from_init(init, source))
+        } else {
+            None
+        };
+        let ty_src = ty_text
+            .map(ToOwned::to_owned)
+            .or(arrow_sig)
+            .unwrap_or_else(|| "any".to_string());
         out.push(format!("{name}{optional_marker}: {ty_src};"));
     }
+}
+
+/// For `init` = an arrow function, synthesize a function-type
+/// annotation from its parameter signatures. Return type defaults
+/// to `any` — we don't try to infer it without running TS. Returns
+/// `None` if the init isn't an arrow, or any param uses a pattern
+/// we don't emit (destructure, rest) — better to fall back to `any`
+/// than emit an incomplete signature that tsgo rejects.
+fn arrow_signature_from_init<'s>(
+    init: &Expression<'_>,
+    source: &'s str,
+) -> Option<String> {
+    let Expression::ArrowFunctionExpression(arrow) = init else {
+        return None;
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for param in &arrow.params.items {
+        let BindingPatternKind::BindingIdentifier(id) = &param.pattern.kind else {
+            // Destructure / rest / assignment patterns — give up and
+            // let the caller fall back to `any`. Writing these as
+            // prop-type-position types needs the full TS
+            // destructure-type machinery we don't reproduce.
+            return None;
+        };
+        let name = id.name.as_str();
+        let ty = param
+            .pattern
+            .type_annotation
+            .as_ref()
+            .map(|ty| ty.type_annotation.span())
+            .and_then(|span| source.get(span.start as usize..span.end as usize))
+            .unwrap_or("any");
+        parts.push(format!("{name}: {ty}"));
+    }
+    // Return type — honor an explicit annotation, otherwise `any`.
+    // We don't run an inference pass; `any` is strictly looser than
+    // the real return, which is safe for prop-sig contextual typing.
+    let ret = arrow
+        .return_type
+        .as_ref()
+        .map(|r| r.type_annotation.span())
+        .and_then(|span| source.get(span.start as usize..span.end as usize))
+        .unwrap_or("any");
+    Some(format!("({}) => {}", parts.join(", "), ret))
 }
 
 /// Find every `let { ... } = $props()` destructuring in `program` and

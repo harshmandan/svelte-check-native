@@ -3,14 +3,14 @@
 async function $$render_a390b0ad() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        const __svn_action_0 = __svn_ensure_action(action(__svn_map_element_tag('img')));
-        void __svn_action_0;
         let __svn_action_attrs_0: any = {};
         void __svn_action_attrs_0;
         {
             const __svn_C_36 = __svn_ensure_component(Component);
             new __svn_C_36({ target: __svn_any(), props: {} });
         }
+        const __svn_action_0 = __svn_ensure_action(action(__svn_map_element_tag('img')));
+        void __svn_action_0;
     }
     void __svn_tpl_check;
 }

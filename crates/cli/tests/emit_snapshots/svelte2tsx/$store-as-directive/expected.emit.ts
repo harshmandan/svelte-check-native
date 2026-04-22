@@ -14,10 +14,10 @@ async function $$render_b5ddc729() {
 	const actionStore = null;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        const __svn_action_0 = __svn_ensure_action($actionStore(__svn_map_element_tag('div')));
-        void __svn_action_0;
         let __svn_action_attrs_0: any = {};
         void __svn_action_attrs_0;
+        const __svn_action_0 = __svn_ensure_action($actionStore(__svn_map_element_tag('div')));
+        void __svn_action_0;
     }
     void __svn_tpl_check;
     void $transitionStore;

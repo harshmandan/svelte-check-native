@@ -751,7 +751,7 @@ fn emit_document_with_render_name(
     // block-scope `const` re-use would fire TS6133 on the unused
     // outer `let`. References out of the declaring block's scope are
     // now (correctly) "name not found" errors.
-    emit_action_directives(&mut out, doc, summary);
+    emit_legacy_action_attrs(&mut out, summary);
     emit_bind_pair_declarations(&mut out, summary);
     // v0.3 Item 6: DOM-binding checks (`__svn_any_as<TYPE>(expr);`)
     // are emitted INLINE at each element's position during the
@@ -778,7 +778,15 @@ fn emit_document_with_render_name(
         .iter()
         .map(|i| (i.node_start, i))
         .collect();
-    emit_template_body(&mut out, doc.source, fragment, 2, &instantiations_by_start);
+    let mut action_counter: usize = 0;
+    emit_template_body(
+        &mut out,
+        doc.source,
+        fragment,
+        2,
+        &instantiations_by_start,
+        &mut action_counter,
+    );
     out.push_str("    }\n");
 
     let exported_locals: Vec<SmolStr> = split
@@ -1894,6 +1902,7 @@ fn emit_template_body(
     fragment: &Fragment,
     depth: usize,
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
 ) {
     // Hoist `{#snippet name(...)}` names declared at this fragment so
     // sibling component-prop checks (`<X slot={name}>`) resolve them.
@@ -1912,7 +1921,7 @@ fn emit_template_body(
         .collect();
     if snippets.is_empty() {
         for node in &fragment.nodes {
-            emit_template_node(out, source, node, depth, insts);
+            emit_template_node(out, source, node, depth, insts, action_counter);
         }
         return;
     }
@@ -1924,7 +1933,7 @@ fn emit_template_body(
         let _ = writeln!(out, "{inner}void {};", s.name);
     }
     for node in &fragment.nodes {
-        emit_template_node(out, source, node, depth + 1, insts);
+        emit_template_node(out, source, node, depth + 1, insts, action_counter);
     }
     let _ = writeln!(out, "{indent}}}");
 }
@@ -1948,10 +1957,11 @@ fn emit_children_with_let_bindings(
     children: &Fragment,
     depth: usize,
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
 ) {
     let let_names = collect_let_directive_names(source, attributes);
     if let_names.is_empty() {
-        emit_template_body(out, source, children, depth, insts);
+        emit_template_body(out, source, children, depth, insts, action_counter);
         return;
     }
     let indent = "    ".repeat(depth);
@@ -1962,7 +1972,7 @@ fn emit_children_with_let_bindings(
         let _ = writeln!(out, "{inner}void {name};");
     }
     for node in &children.nodes {
-        emit_template_node(out, source, node, depth + 1, insts);
+        emit_template_node(out, source, node, depth + 1, insts, action_counter);
     }
     let _ = writeln!(out, "{indent}}}");
 }
@@ -2023,9 +2033,10 @@ fn emit_template_node(
     node: &Node,
     depth: usize,
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
 ) {
     match node {
-        Node::EachBlock(b) => emit_each_block(out, source, b, depth, insts),
+        Node::EachBlock(b) => emit_each_block(out, source, b, depth, insts, action_counter),
         Node::IfBlock(b) => {
             // Emit as a real `if/else if/else` chain so TS's control-flow
             // analysis narrows union / nullable / type-guard references
@@ -2057,7 +2068,7 @@ fn emit_template_node(
                 .trim();
             let _ = writeln!(out, "{indent}if (({main_cond})) {{");
             emit_condition_ref_marker(out, source, b.condition_range, depth + 1);
-            emit_template_body(out, source, &b.consequent, depth + 1, insts);
+            emit_template_body(out, source, &b.consequent, depth + 1, insts, action_counter);
             for arm in &b.elseif_arms {
                 let arm_cond = source
                     .get(arm.condition_range.start as usize..arm.condition_range.end as usize)
@@ -2065,17 +2076,17 @@ fn emit_template_node(
                     .trim();
                 let _ = writeln!(out, "{indent}}} else if (({arm_cond})) {{");
                 emit_condition_ref_marker(out, source, arm.condition_range, depth + 1);
-                emit_template_body(out, source, &arm.body, depth + 1, insts);
+                emit_template_body(out, source, &arm.body, depth + 1, insts, action_counter);
             }
             if let Some(alt) = &b.alternate {
                 let _ = writeln!(out, "{indent}}} else {{");
-                emit_template_body(out, source, alt, depth + 1, insts);
+                emit_template_body(out, source, alt, depth + 1, insts, action_counter);
             }
             let _ = writeln!(out, "{indent}}}");
         }
         Node::AwaitBlock(b) => {
             if let Some(p) = &b.pending {
-                emit_template_body(out, source, p, depth, insts);
+                emit_template_body(out, source, p, depth, insts, action_counter);
             }
             if let Some(t) = &b.then_branch {
                 // `{:then v}` binds `v` to the resolved value for the
@@ -2092,6 +2103,7 @@ fn emit_template_node(
                     &t.body,
                     depth,
                     insts,
+                    action_counter,
                 );
             }
             if let Some(c) = &b.catch_branch {
@@ -2102,17 +2114,34 @@ fn emit_template_node(
                     &c.body,
                     depth,
                     insts,
+                    action_counter,
                 );
             }
         }
-        Node::KeyBlock(b) => emit_template_body(out, source, &b.body, depth, insts),
-        Node::SnippetBlock(b) => emit_snippet_block(out, source, b, depth, insts),
+        Node::KeyBlock(b) => emit_template_body(out, source, &b.body, depth, insts, action_counter),
+        Node::SnippetBlock(b) => emit_snippet_block(out, source, b, depth, insts, action_counter),
         Node::Element(e) => {
             emit_dom_binding_checks_inline(out, source, e.name.as_str(), &e.attributes, depth);
             emit_bind_this_element_check_inline(out, source, e.name.as_str(), &e.attributes, depth);
-            emit_children_with_let_bindings(out, source, &e.attributes, &e.children, depth, insts);
+            emit_use_directives_inline(
+                out,
+                source,
+                e.name.as_str(),
+                &e.attributes,
+                depth,
+                action_counter,
+            );
+            emit_children_with_let_bindings(
+                out,
+                source,
+                &e.attributes,
+                &e.children,
+                depth,
+                insts,
+                action_counter,
+            );
         }
-        Node::Component(c) => emit_component_node(out, source, c, depth, insts),
+        Node::Component(c) => emit_component_node(out, source, c, depth, insts, action_counter),
         Node::SvelteElement(s) => {
             // `<svelte:element this={tagExpr}>` is dynamic — fall back
             // to `HTMLElement` for bind:this and skip bind:value
@@ -2120,7 +2149,16 @@ fn emit_template_node(
             // returns None).
             emit_dom_binding_checks_inline(out, source, "", &s.attributes, depth);
             emit_bind_this_element_check_inline(out, source, "", &s.attributes, depth);
-            emit_children_with_let_bindings(out, source, &s.attributes, &s.children, depth, insts);
+            emit_use_directives_inline(out, source, "", &s.attributes, depth, action_counter);
+            emit_children_with_let_bindings(
+                out,
+                source,
+                &s.attributes,
+                &s.children,
+                depth,
+                insts,
+                action_counter,
+            );
         }
         Node::Interpolation(i) => emit_interpolation(out, source, i, depth),
         Node::Text(_) | Node::Comment(_) => {}
@@ -2777,6 +2815,7 @@ fn emit_each_block(
     b: &EachBlock,
     depth: usize,
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
 ) {
     let indent = "    ".repeat(depth);
     let expr_text = source
@@ -2808,7 +2847,7 @@ fn emit_each_block(
     if let Some(ix) = index_binding {
         let _ = writeln!(out, "{indent}    const {ix}: number = 0;");
     }
-    emit_template_body(out, source, &b.body, depth + 1, insts);
+    emit_template_body(out, source, &b.body, depth + 1, insts, action_counter);
     // Void every identifier that the binding pattern destructures, not
     // just the first. `[id, label]` and `[id, { label }]` both bind two
     // names and TS6133 fires on each unused one.
@@ -2821,7 +2860,7 @@ fn emit_each_block(
     let _ = writeln!(out, "{indent}}}");
 
     if let Some(alt) = &b.alternate {
-        emit_template_body(out, source, alt, depth, insts);
+        emit_template_body(out, source, alt, depth, insts, action_counter);
     }
 }
 
@@ -2841,9 +2880,10 @@ fn emit_branch_with_binding(
     body: &Fragment,
     depth: usize,
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
 ) {
     let Some(range) = context_range else {
-        emit_template_body(out, source, body, depth, insts);
+        emit_template_body(out, source, body, depth, insts, action_counter);
         return;
     };
     let binding_text = source
@@ -2851,7 +2891,7 @@ fn emit_branch_with_binding(
         .unwrap_or("")
         .trim();
     if binding_text.is_empty() {
-        emit_template_body(out, source, body, depth, insts);
+        emit_template_body(out, source, body, depth, insts, action_counter);
         return;
     }
     let idents = all_identifiers(binding_text);
@@ -2860,7 +2900,7 @@ fn emit_branch_with_binding(
     for ident in &idents {
         let _ = writeln!(out, "{indent}    const {ident}: any = undefined;");
     }
-    emit_template_body(out, source, body, depth + 1, insts);
+    emit_template_body(out, source, body, depth + 1, insts, action_counter);
     for ident in &idents {
         let _ = writeln!(out, "{indent}    void {ident};");
     }
@@ -2888,6 +2928,7 @@ fn emit_snippet_block(
     b: &SnippetBlock,
     depth: usize,
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
 ) {
     let indent = "    ".repeat(depth);
     let params_text = source
@@ -2899,7 +2940,7 @@ fn emit_snippet_block(
     // returns an empty vec (it falls back to `__svn_each_unused`),
     // so we intercept the empty-params case before calling it.
     if params_text.is_empty() {
-        emit_template_body(out, source, &b.body, depth, insts);
+        emit_template_body(out, source, &b.body, depth, insts, action_counter);
         return;
     }
     // Open a fresh block, then reference the ORIGINAL params text
@@ -2932,7 +2973,7 @@ fn emit_snippet_block(
     // and optional-after-required orderings remain legal.
     let _ = writeln!(out, "{indent}{{");
     let _ = writeln!(out, "{indent}    void (({annotated}) => {{");
-    emit_template_body(out, source, &b.body, depth + 2, insts);
+    emit_template_body(out, source, &b.body, depth + 2, insts, action_counter);
     for ident in &idents {
         let _ = writeln!(out, "{indent}        void {ident};");
     }
@@ -2968,45 +3009,15 @@ fn emit_snippet_block(
 /// The legacy `__svn_action_attrs_N` void-ref registration stays for
 /// anyone who referenced the name externally (e.g. template spreads);
 /// we emit it alongside the new call so no registered name disappears.
-fn emit_action_directives(out: &mut String, doc: &Document<'_>, summary: &TemplateSummary) {
-    for ad in &summary.action_directives {
-        // Tag → either the element-tag literal for the typed overload,
-        // or fall through to the string overload for unknown/dynamic
-        // tags (components, <svelte:element>).
-        let tag_arg = match ad.tag_name.as_deref() {
-            Some(tag) => format!("'{tag}'"),
-            None => "'' as string".to_string(),
-        };
-        let action = ad.action_name.as_str();
-        let index = ad.index;
-        match ad.params_range {
-            Some(range) => {
-                let params = &doc.source[range.start as usize..range.end as usize];
-                // The `__svn_action_{index}` identifier is unique per
-                // directive — a post-emit scan uses it as the anchor
-                // to locate the params slice's overlay byte offset
-                // and push a matching TokenMapEntry. Without the
-                // token map, tsgo diagnostics against identifiers
-                // inside the params expression (e.g. `form` in the
-                // wrong-destructure `({form,data,submit})`) fall in
-                // synthesized scaffolding with no source anchor and
-                // get dropped by `map_diagnostic`.
-                let _ = writeln!(
-                    out,
-                    "        const __svn_action_{index} = __svn_ensure_action({action}(__svn_map_element_tag({tag_arg}), ({params})));"
-                );
-            }
-            None => {
-                // Bare `use:NAME` — no params expression. Call the
-                // action with just the element.
-                let _ = writeln!(
-                    out,
-                    "        const __svn_action_{index} = __svn_ensure_action({action}(__svn_map_element_tag({tag_arg})));"
-                );
-            }
-        }
-        let _ = writeln!(out, "        void __svn_action_{index};");
-    }
+/// Register the legacy `let __svn_action_attrs_N: any = {};` compat
+/// shims at the top of `__svn_tpl_check`. These are registered names
+/// consumed by downstream void-ref emission. The actual `use:` action
+/// calls that type-check params against action signatures are emitted
+/// inline per-element by [`emit_use_directives_inline`] — so scope-
+/// bound identifiers referenced inside the params expression
+/// (`{#each items as item, i}`'s `i`, `{@const}` declarations, snippet
+/// parameters) stay visible in the emitted TS.
+fn emit_legacy_action_attrs(out: &mut String, summary: &TemplateSummary) {
     // Keep the old `__svn_action_attrs_N` void registration alive so
     // external references (e.g. template spreads that consumed the
     // action's declared `$$_attributes`) still resolve. The outer
@@ -3058,6 +3069,82 @@ fn emit_action_directives(out: &mut String, doc: &Document<'_>, summary: &Templa
 /// not valid TS as a call argument. The shorthand's declaration-site
 /// `!` rewrite covers the definite-assign half of the type-check
 /// flow.
+/// Emit the typed `use:ACTION={PARAMS}` call inline at the parent
+/// element's depth during the template walk. Shape matches
+/// [`emit_legacy_action_attrs`]'s prior top-of-tpl_check form:
+///
+/// ```ts
+/// const __svn_action_0 = __svn_ensure_action(
+///     enhance(__svn_map_element_tag('form'), (({formData}) => {…}))
+/// );
+/// void __svn_action_0;
+/// ```
+///
+/// Index comes from `action_counter` — walker walks the template in
+/// the same depth-first order as emit, so the Nth use-directive
+/// emit encounters matches the Nth `ActionDirective` the walker
+/// pushed onto `summary.action_directives`. The `__svn_action_<N>`
+/// anchor is required for the post-emit token-map scan
+/// (`collect_action_params_token_map`) to pin diagnostics back to
+/// the user's PARAMS source range.
+///
+/// Being inline at element depth puts the call INSIDE any enclosing
+/// `{#each} as item, index` / `{@const X = …}` / `{#snippet}` scope,
+/// so identifiers defined there resolve correctly when referenced
+/// from the callback bodies inside PARAMS. Pre-fix we hoisted all
+/// action calls to the top of `__svn_tpl_check`, which left
+/// `{#each items as _, i}<div use:a={{on:()=>i}}>` reading `i` as
+/// "Cannot find name" (bench: cnblocks validated this pattern;
+/// control-svelte-4/5 had 6 such fires on real user code).
+fn emit_use_directives_inline(
+    out: &mut String,
+    source: &str,
+    tag_name: &str,
+    attributes: &[svn_parser::Attribute],
+    depth: usize,
+    action_counter: &mut usize,
+) {
+    let indent = "    ".repeat(depth);
+    let tag_arg = if tag_name.is_empty() {
+        "'' as string".to_string()
+    } else {
+        format!("'{tag_name}'")
+    };
+    for attr in attributes {
+        let svn_parser::Attribute::Directive(d) = attr else {
+            continue;
+        };
+        if d.kind != svn_parser::DirectiveKind::Use {
+            continue;
+        }
+        let index = *action_counter;
+        *action_counter += 1;
+        let action = d.name.as_str();
+        match &d.value {
+            Some(svn_parser::DirectiveValue::Expression {
+                expression_range, ..
+            }) => {
+                let Some(params) = source
+                    .get(expression_range.start as usize..expression_range.end as usize)
+                else {
+                    continue;
+                };
+                let _ = writeln!(
+                    out,
+                    "{indent}const __svn_action_{index} = __svn_ensure_action({action}(__svn_map_element_tag({tag_arg}), ({params})));"
+                );
+            }
+            _ => {
+                let _ = writeln!(
+                    out,
+                    "{indent}const __svn_action_{index} = __svn_ensure_action({action}(__svn_map_element_tag({tag_arg})));"
+                );
+            }
+        }
+        let _ = writeln!(out, "{indent}void __svn_action_{index};");
+    }
+}
+
 fn emit_dom_binding_checks_inline(
     out: &mut String,
     source: &str,
@@ -3264,6 +3351,7 @@ fn emit_component_node(
     c: &svn_parser::Component,
     depth: usize,
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
 ) {
     let snippet_children: Vec<&SnippetBlock> = c
         .children
@@ -3300,13 +3388,21 @@ fn emit_component_node(
     // multi-part interpolated attribute values) fall back to a plain
     // template-body walk so snippet hoists still emit there.
     if let Some(inst) = inst {
-        emit_component_call(out, source, inst, inner_depth, &snippet_children, insts);
+        emit_component_call(
+            out,
+            source,
+            inst,
+            inner_depth,
+            &snippet_children,
+            insts,
+            action_counter,
+        );
     }
 
     if inst.is_none() || snippet_children.is_empty() {
         // Walk children at the same let-binding scope depth.
         for node in &c.children.nodes {
-            emit_template_node(out, source, node, inner_depth, insts);
+            emit_template_node(out, source, node, inner_depth, insts, action_counter);
         }
         if !let_names.is_empty() {
             let _ = writeln!(out, "{indent}}}");
@@ -3318,7 +3414,7 @@ fn emit_component_node(
         if matches!(node, Node::SnippetBlock(_)) {
             continue;
         }
-        emit_template_node(out, source, node, inner_depth, insts);
+        emit_template_node(out, source, node, inner_depth, insts, action_counter);
     }
     if !let_names.is_empty() {
         let _ = writeln!(out, "{indent}}}");
@@ -3352,6 +3448,7 @@ fn emit_component_call(
     depth: usize,
     snippet_children: &[&SnippetBlock],
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
 ) {
     let indent = "    ".repeat(depth);
     let inner = "    ".repeat(depth + 1);
@@ -3467,7 +3564,7 @@ fn emit_component_call(
     }
     for s in snippet_children {
         out.push_str(&props_inner);
-        write_snippet_arrow_prop(out, source, s, depth + 3, insts);
+        write_snippet_arrow_prop(out, source, s, depth + 3, insts, action_counter);
         let _ = writeln!(out, ",");
     }
     // Implicit children and explicit snippet children are mutually
@@ -3735,6 +3832,7 @@ fn write_snippet_arrow_prop(
     s: &SnippetBlock,
     depth: usize,
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
 ) {
     let indent = "    ".repeat(depth);
     let body_indent = "    ".repeat(depth + 1);
@@ -3745,13 +3843,13 @@ fn write_snippet_arrow_prop(
     write_object_key(out, &s.name);
     if params_text.is_empty() {
         let _ = writeln!(out, ": () => {{");
-        emit_template_body(out, source, &s.body, depth + 1, insts);
+        emit_template_body(out, source, &s.body, depth + 1, insts, action_counter);
         let _ = writeln!(out, "{body_indent}return __svn_snippet_return();");
         let _ = write!(out, "{indent}}}");
         return;
     }
     let _ = writeln!(out, ": ({params_text}) => {{");
-    emit_template_body(out, source, &s.body, depth + 1, insts);
+    emit_template_body(out, source, &s.body, depth + 1, insts, action_counter);
     for ident in all_identifiers(params_text) {
         let _ = writeln!(out, "{body_indent}void {ident};");
     }

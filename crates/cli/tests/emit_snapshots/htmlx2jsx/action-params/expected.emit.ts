@@ -3,18 +3,18 @@
 async function $$render_c31127f3() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        const __svn_action_0 = __svn_ensure_action(blink(__svn_map_element_tag('h1'), (500,2)));
-        void __svn_action_0;
-        const __svn_action_1 = __svn_ensure_action(blink(__svn_map_element_tag('h1')));
-        void __svn_action_1;
-        const __svn_action_2 = __svn_ensure_action(blink(__svn_map_element_tag('h1')));
-        void __svn_action_2;
         let __svn_action_attrs_0: any = {};
         void __svn_action_attrs_0;
         let __svn_action_attrs_1: any = {};
         void __svn_action_attrs_1;
         let __svn_action_attrs_2: any = {};
         void __svn_action_attrs_2;
+        const __svn_action_0 = __svn_ensure_action(blink(__svn_map_element_tag('h1'), (500,2)));
+        void __svn_action_0;
+        const __svn_action_1 = __svn_ensure_action(blink(__svn_map_element_tag('h1')));
+        void __svn_action_1;
+        const __svn_action_2 = __svn_ensure_action(blink(__svn_map_element_tag('h1')));
+        void __svn_action_2;
     }
     void __svn_tpl_check;
 }

@@ -1263,27 +1263,14 @@ fn emit_document_with_render_name(
     // `./Foo.svelte.svn.ts` would short-circuit the runes-module
     // fallback.
 
-    let (out, line_map, mut token_map) = buf.finish();
+    let (out, line_map, token_map) = buf.finish();
     let overlay_line_starts = compute_line_starts(&out);
     let source_line_starts = compute_line_starts(doc.source);
 
-    // v0.3 Item 2: post-walk pass that scans the emitted overlay for
-    // each component-call's `satisfies InstanceType<typeof
-    // __svn_C_<hex>>['$$prop_def']` trailer and pushes a token-map
-    // entry covering that span → the `<Comp` opening tag position in
-    // `.svelte` source. Without this, the TS2741 diagnostics the
-    // trailer surfaces would fall in synthesized regions and get
-    // dropped by the diagnostic mapper's source-map filter.
-    //
-    // Scan-post-hoc (rather than threading a `&mut Vec<TokenMapEntry>`
-    // through the whole template walker) is the established
-    // technique in this codebase — the hex suffix is uniquely
-    // derived from `inst.node_start`, so the scan → analyze lookup
-    // is unambiguous.
-    token_map.extend(collect_satisfies_token_map(&out, &instantiations_by_start));
-    // Action-directive and interpolation token-map entries are now
-    // pushed inline at the splice site by `emit_use_directives_inline`
-    // and `emit_interpolation` via `EmitBuffer::append_with_source`.
+    // All TokenMapEntries are now pushed inline during emit via
+    // `EmitBuffer::append_with_source` (user-authored expression
+    // splices) and `EmitBuffer::push_token_map` (synthesized-scaffolding
+    // spans like component calls). No post-walk scanners remain.
 
     EmitOutput {
         typescript: out,
@@ -1293,78 +1280,6 @@ fn emit_document_with_render_name(
         overlay_line_starts,
         source_line_starts,
     }
-}
-
-/// Post-walk scan: find every `new __svn_C_<hex>(...)` call in the
-/// emitted overlay and push a token-map entry covering the entire
-/// call span, mapping back to the component-name start byte in the
-/// `.svelte` source. TS2741 "missing required prop" fires on the
-/// `props: {...}` literal inside the call; without this mapping, the
-/// diagnostic lives in a synthesized region and gets dropped by the
-/// source-map filter.
-///
-/// Source span is `[node_start+1, node_start+2)` — 1-byte span on
-/// the component name's first character. `translate_position`'s
-/// `.min(source_end - 1)` clamp pins any overlay-byte inside the
-/// call to this one source position, which is col 1 (0-based) of
-/// `<Comp />` — matching upstream's TS2741 position.
-///
-/// Replaces the prior `satisfies InstanceType<…>['$$prop_def']`
-/// scanner. That trailer existed to restore required-prop tracking
-/// that `__SvnPropsPartial<P>` erased. Now the shim's exact `P` at
-/// the constructor's `props?` slot fires TS2741 directly, and this
-/// call-span mapping gives the correct source position with the
-/// correct error code.
-fn collect_satisfies_token_map(
-    out: &str,
-    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
-) -> Vec<TokenMapEntry> {
-    const PREFIX: &str = "new __svn_C_";
-    let mut entries: Vec<TokenMapEntry> = Vec::new();
-    let mut cursor = 0usize;
-    let bytes = out.as_bytes();
-    while let Some(rel) = out[cursor..].find(PREFIX) {
-        let span_start = cursor + rel;
-        let after_prefix = span_start + PREFIX.len();
-        let Some(paren_rel) = out[after_prefix..].find('(') else {
-            break;
-        };
-        let paren_open = after_prefix + paren_rel;
-        let hex = &out[after_prefix..paren_open];
-        let Ok(node_start) = u32::from_str_radix(hex, 16) else {
-            cursor = paren_open;
-            continue;
-        };
-        // Match paren/brace/bracket depth to find the closing `)`.
-        let mut depth: i32 = 1;
-        let mut i = paren_open + 1;
-        while i < bytes.len() && depth > 0 {
-            match bytes[i] {
-                b'(' | b'{' | b'[' => depth += 1,
-                b')' | b'}' | b']' => depth -= 1,
-                _ => {}
-            }
-            i += 1;
-        }
-        let span_end = i;
-        if let Some(inst) = insts.get(&node_start) {
-            // Point-map to the component name's first character
-            // (`C` of `<Comp />`, 0-based col 1). The 1-byte source
-            // span collapses all diagnostics inside the synthesized
-            // call to this one position via translate_position's
-            // end-clamp, matching upstream's TS2741 col-1 target.
-            let source_start = inst.node_start.saturating_add(1);
-            let source_end = source_start.saturating_add(1);
-            entries.push(TokenMapEntry {
-                overlay_byte_start: span_start as u32,
-                overlay_byte_end: span_end as u32,
-                source_byte_start: source_start,
-                source_byte_end: source_end,
-            });
-        }
-        cursor = span_end;
-    }
-    entries
 }
 
 /// Byte-scan a script section for `type NAME`, `interface NAME`,
@@ -3293,10 +3208,14 @@ fn emit_component_call(
     // name start) matching upstream's expected position.
 
     if snippet_children.is_empty() && inst.props.is_empty() && !emit_implicit_children {
-        let _ = writeln!(
+        let _ = write!(buf, "{inner}{ctor_lhs}");
+        let call_start = buf.len() as u32;
+        let _ = write!(
             buf,
-            "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{}} }});"
+            "new {local}({{ target: __svn_any(), props: {{}} }})"
         );
+        push_component_call_token_map(buf, call_start, inst.node_start);
+        buf.push_str(";\n");
         emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
         emit_on_event_calls(buf, source, inst, &inst_local, &inner);
         let _ = writeln!(buf, "{indent}}}");
@@ -3304,10 +3223,9 @@ fn emit_component_call(
     }
 
     if snippet_children.is_empty() {
-        let _ = write!(
-            buf,
-            "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{"
-        );
+        let _ = write!(buf, "{inner}{ctor_lhs}");
+        let call_start = buf.len() as u32;
+        let _ = write!(buf, "new {local}({{ target: __svn_any(), props: {{");
         let mut first = true;
         for p in &inst.props {
             if !first {
@@ -3322,7 +3240,9 @@ fn emit_component_call(
             }
             let _ = write!(buf, "children: () => __svn_snippet_return()");
         }
-        let _ = writeln!(buf, "}} }});");
+        let _ = write!(buf, "}} }})");
+        push_component_call_token_map(buf, call_start, inst.node_start);
+        buf.push_str(";\n");
         emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
         emit_on_event_calls(buf, source, inst, &inst_local, &inner);
         let _ = writeln!(buf, "{indent}}}");
@@ -3330,7 +3250,9 @@ fn emit_component_call(
     }
 
     // Multi-line form with snippets-as-arrow-props.
-    let _ = writeln!(buf, "{inner}{ctor_lhs}new {local}({{");
+    let _ = write!(buf, "{inner}{ctor_lhs}");
+    let call_start = buf.len() as u32;
+    let _ = writeln!(buf, "new {local}({{");
     let opts_inner = "    ".repeat(depth + 2);
     let props_inner = "    ".repeat(depth + 3);
     let _ = writeln!(buf, "{opts_inner}target: __svn_any(),");
@@ -3354,10 +3276,30 @@ fn emit_component_call(
         let _ = writeln!(buf, "children: () => __svn_snippet_return(),");
     }
     let _ = writeln!(buf, "{opts_inner}}},");
-    let _ = writeln!(buf, "{inner}}});");
+    let _ = write!(buf, "{inner}}})");
+    push_component_call_token_map(buf, call_start, inst.node_start);
+    buf.push_str(";\n");
     emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
     emit_on_event_calls(buf, source, inst, &inst_local, &inner);
     let _ = writeln!(buf, "{indent}}}");
+}
+
+/// Push a TokenMapEntry for a `new __svn_C_<hex>(...)` component call.
+/// Source range is the 1-byte span at `node_start+1` — the first char
+/// of the component name after `<`. `translate_position`'s end-clamp
+/// collapses any overlay byte inside the call to this single position,
+/// which is the column upstream TS reports TS2741 at. Replaces the
+/// former post-walk `collect_satisfies_token_map` scanner.
+fn push_component_call_token_map(buf: &mut EmitBuffer, call_start: u32, node_start: u32) {
+    let call_end = buf.len() as u32;
+    let source_start = node_start.saturating_add(1);
+    let source_end = source_start.saturating_add(1);
+    buf.push_token_map(TokenMapEntry {
+        overlay_byte_start: call_start,
+        overlay_byte_end: call_end,
+        source_byte_start: source_start,
+        source_byte_end: source_end,
+    });
 }
 
 /// Extract the NAME from a `PropShape`, if it has one (spreads

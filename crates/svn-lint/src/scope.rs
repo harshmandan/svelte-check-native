@@ -458,6 +458,51 @@ fn idents_in_pattern(pat: &BindingPattern<'_>) -> Vec<String> {
     out
 }
 
+/// Scan backward from `script_start` through whitespace-only runs
+/// of template text looking for one or more consecutive
+/// `<!-- svelte-ignore CODE, CODE, … -->` comments, and return the
+/// flattened list of codes. Mirrors upstream's treatment of
+/// comment-siblings immediately preceding a node in the root
+/// fragment — the codes silence fires inside the following node
+/// (which for us is the instance `<script>`).
+fn collect_preceding_template_ignores(source: &str, script_start: u32) -> Vec<SmolStr> {
+    let bytes = source.as_bytes();
+    let mut end = script_start as usize;
+    let mut codes: Vec<SmolStr> = Vec::new();
+    loop {
+        // Skip whitespace backward.
+        while end > 0 && matches!(bytes[end - 1], b' ' | b'\t' | b'\n' | b'\r') {
+            end -= 1;
+        }
+        // Must see `-->` now.
+        if end < 3 || &bytes[end - 3..end] != b"-->" {
+            break;
+        }
+        // Find matching `<!--` (search backward).
+        let Some(open) = source[..end - 3].rfind("<!--") else {
+            break;
+        };
+        let body = &source[open + 4..end - 3];
+        let trimmed = body.trim_start();
+        let Some(rest) = trimmed.strip_prefix("svelte-ignore") else {
+            break;
+        };
+        let rest = match rest.chars().next() {
+            Some(ch) if ch.is_whitespace() => &rest[ch.len_utf8()..],
+            _ => break,
+        };
+        // Parse codes in runes-mode lenient (same path script
+        // leading-comments use). Prepend so the scan order mirrors
+        // source order.
+        let comment_codes = crate::ignore::parse_ignore_codes_public(rest, true);
+        let mut merged = comment_codes;
+        merged.extend(codes);
+        codes = merged;
+        end = open;
+    }
+    codes
+}
+
 /// Like [`build`], but also walks the template fragment — capturing
 /// references in attribute expressions / interpolations / directive
 /// values and the implicit reassignments from `bind:*` directives.
@@ -480,7 +525,17 @@ pub fn build_with_template(
 
     let instance_root = tree_builder.new_scope(Some(module_root));
     if let Some(script) = &doc.instance_script {
-        tree_builder.build_script_as_instance(script, instance_root);
+        // A `<!-- svelte-ignore CODE -->` comment placed in the
+        // template immediately before `<script>` applies its codes
+        // to the whole instance-script body. Upstream wires this up
+        // naturally because the script is an AST sibling inside the
+        // root Fragment; our sections parser extracts it separately,
+        // so we have to bridge the ignore forward explicitly.
+        let leading = collect_preceding_template_ignores(
+            doc.source,
+            script.open_tag_range.start,
+        );
+        tree_builder.build_script_as_instance(script, instance_root, &leading);
     }
 
     if let Some(frag) = fragment {
@@ -1403,15 +1458,20 @@ impl TreeBuilder {
     }
 
     fn build_script(&mut self, script: &ScriptSection<'_>, root_scope: ScopeId) {
-        self.build_script_inner(script, root_scope, false);
+        self.build_script_inner(script, root_scope, false, &[]);
     }
 
     /// Instance-script variant — marks the walker so `$:` labels at
     /// the program top level flip `in_reactive_statement` on descent.
     /// Upstream guards the `reactive_declaration_module_script_dependency`
     /// check behind `ast_type === 'instance'`, so we gate the same way.
-    fn build_script_as_instance(&mut self, script: &ScriptSection<'_>, root_scope: ScopeId) {
-        self.build_script_inner(script, root_scope, true);
+    fn build_script_as_instance(
+        &mut self,
+        script: &ScriptSection<'_>,
+        root_scope: ScopeId,
+        leading_ignores: &[SmolStr],
+    ) {
+        self.build_script_inner(script, root_scope, true, leading_ignores);
     }
 
     fn build_script_inner(
@@ -1419,6 +1479,7 @@ impl TreeBuilder {
         script: &ScriptSection<'_>,
         root_scope: ScopeId,
         is_instance: bool,
+        leading_ignores: &[SmolStr],
     ) {
         let alloc = oxc_allocator::Allocator::default();
         let parsed = parse_script_body(&alloc, script.content, script.lang);
@@ -1471,8 +1532,16 @@ impl TreeBuilder {
             script_content: script.content,
             ignore_frames: Vec::new(),
         };
+        // Push the template-comment ignores so they apply to every
+        // reference recorded during this script walk.
+        if !leading_ignores.is_empty() {
+            walker.ignore_frames.push(leading_ignores.to_vec());
+        }
         for stmt in &parsed.program.body {
             walker.visit_stmt(stmt);
+        }
+        if !leading_ignores.is_empty() {
+            walker.ignore_frames.pop();
         }
         // oxc types borrow from `alloc`; keep it alive until the walk
         // finishes. Nothing we stash below borrows from it.

@@ -310,6 +310,102 @@ fn state_referenced_locally_5_51_2_fires_on_rest_prop_read() {
 // runes-mode inference: call-shape required
 // ----------------------------------------------------------------
 
+// ----------------------------------------------------------------
+// Template <!-- svelte-ignore --> → instance script bridge
+// ----------------------------------------------------------------
+
+/// `<!-- svelte-ignore CODE -->` placed between the module and
+/// instance scripts applies its codes to the whole instance script
+/// body. Upstream wires this up because the script is an AST
+/// sibling inside the root Fragment; our sections parser extracts
+/// it separately, so the ignore has to be bridged explicitly.
+#[test]
+fn template_comment_before_script_suppresses_script_ignores() {
+    let src = "\
+<script module>
+  const base = 1
+</script>
+
+<!-- svelte-ignore state_referenced_locally -->
+<script lang=\"ts\">
+  let { foo } = $props()
+  const x = foo
+  void x
+</script>
+";
+    let warnings = svn_lint::lint_file(src, Path::new("t.svelte"), None, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"state_referenced_locally"),
+        "template svelte-ignore before <script> must suppress the script's fires, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Multiple consecutive `<!-- svelte-ignore A --><!-- svelte-ignore B -->`
+/// comments stack — both codes suppressed in the script.
+#[test]
+fn multiple_template_comments_before_script_all_apply() {
+    let src = "\
+<!-- svelte-ignore state_referenced_locally -->
+<!-- svelte-ignore non_reactive_update -->
+<script lang=\"ts\">
+  let { foo } = $props()
+  const x = foo
+  void x
+</script>
+";
+    let warnings = svn_lint::lint_file(src, Path::new("t.svelte"), None, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"state_referenced_locally"),
+        "stacked ignores must both apply, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A comma-separated list inside a single comment must also work.
+#[test]
+fn comma_list_in_template_comment_applies_to_script() {
+    let src = "\
+<!-- svelte-ignore state_referenced_locally, non_reactive_update -->
+<script lang=\"ts\">
+  let { foo } = $props()
+  const x = foo
+  void x
+</script>
+";
+    let warnings = svn_lint::lint_file(src, Path::new("t.svelte"), None, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"state_referenced_locally"),
+        "comma-list ignore must apply, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A comment separated from the script by non-whitespace template
+/// content does NOT apply to the script.
+#[test]
+fn template_comment_separated_from_script_does_not_leak_in() {
+    let src = "\
+<!-- svelte-ignore state_referenced_locally -->
+<p>some real content</p>
+<script lang=\"ts\">
+  let { foo } = $props()
+  const x = foo
+  void x
+</script>
+";
+    let warnings = svn_lint::lint_file(src, Path::new("t.svelte"), None, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"state_referenced_locally"),
+        "comment separated by a <p> must not bridge to the script, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+// ----------------------------------------------------------------
+// Runes-mode inference
+// ----------------------------------------------------------------
+
 /// A bare substring like `$$props` (Svelte-4 ambient store) that
 /// happens to contain `$props` must not flip runes-mode inference.
 /// Previously `source.contains("$props")` matched inside `$$props`,

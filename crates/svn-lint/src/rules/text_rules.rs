@@ -30,13 +30,12 @@ pub fn visit_text(t: &Text, ctx: &mut LintContext<'_>) {
             // Expand to contiguous run.
             let run_start = i;
             let mut run_end = i + c.len_utf8();
-            while let Some(&(_j, nc)) = chars.peek() {
-                if is_bidi_control(nc) {
-                    let (_, consumed) = chars.next().expect("peek said some");
-                    run_end = _j + consumed.len_utf8();
-                } else {
+            while let Some(&(j, nc)) = chars.peek() {
+                if !is_bidi_control(nc) {
                     break;
                 }
+                chars.next();
+                run_end = j + nc.len_utf8();
             }
             let abs_start = (start_byte + run_start) as u32;
             let abs_end = (start_byte + run_end) as u32;

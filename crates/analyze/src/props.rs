@@ -305,10 +305,7 @@ fn append_props_from_var_decl(
 /// `None` if the init isn't an arrow, or any param uses a pattern
 /// we don't emit (destructure, rest) — better to fall back to `any`
 /// than emit an incomplete signature that tsgo rejects.
-fn arrow_signature_from_init<'s>(
-    init: &Expression<'_>,
-    source: &'s str,
-) -> Option<String> {
+fn arrow_signature_from_init(init: &Expression<'_>, source: &str) -> Option<String> {
     let Expression::ArrowFunctionExpression(arrow) = init else {
         return None;
     };

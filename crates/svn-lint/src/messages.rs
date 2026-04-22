@@ -2,7 +2,12 @@
 //
 // Source: .svelte-upstream/svelte/packages/svelte/messages/compile-warnings/*.md
 
-#![allow(non_snake_case, dead_code, clippy::too_many_arguments)]
+#![allow(
+    non_snake_case,
+    dead_code,
+    clippy::too_many_arguments,
+    clippy::useless_format
+)]
 
 //! Message-text builders for each warning code.
 

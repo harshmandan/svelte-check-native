@@ -220,7 +220,9 @@ fn render_messages(catalog: &BTreeMap<String, Warning>) -> String {
     out.push_str(
         "// Source: .svelte-upstream/svelte/packages/svelte/messages/compile-warnings/*.md\n\n",
     );
-    out.push_str("#![allow(non_snake_case, dead_code, clippy::too_many_arguments)]\n\n");
+    out.push_str(
+        "#![allow(non_snake_case, dead_code, clippy::too_many_arguments, clippy::useless_format)]\n\n",
+    );
     out.push_str("//! Message-text builders for each warning code.\n\n");
 
     for (code, warn) in catalog {

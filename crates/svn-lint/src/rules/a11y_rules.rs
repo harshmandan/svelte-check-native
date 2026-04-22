@@ -19,8 +19,8 @@ use svn_parser::ast::{
 };
 
 use crate::a11y_constants::{
-    A11Y_DISTRACTING_ELEMENTS, A11Y_RECOMMENDED_INTERACTIVE_HANDLERS,
-    A11Y_REQUIRED_CONTENT, ABSTRACT_ROLES, ADDRESS_TYPE_TOKENS, ARIA_ATTRIBUTES, ARIA_ROLES,
+    A11Y_DISTRACTING_ELEMENTS, A11Y_RECOMMENDED_INTERACTIVE_HANDLERS, A11Y_REQUIRED_CONTENT,
+    ABSTRACT_ROLES, ADDRESS_TYPE_TOKENS, ARIA_ATTRIBUTES, ARIA_ROLES,
     AUTOFILL_CONTACT_FIELD_NAME_TOKENS, AUTOFILL_FIELD_NAME_TOKENS, AriaType, COMBOBOX_IF_LIST,
     CONTACT_TYPE_TOKENS, INTERACTIVE_ROLES, INVISIBLE_ELEMENTS, NON_INTERACTIVE_ROLES,
     PRESENTATION_ROLES, a11y_implicit_semantics, a11y_nested_implicit_semantics,
@@ -36,11 +36,7 @@ use crate::context::LintContext;
 use crate::messages;
 
 /// Entry for a `<RegularElement>`.
-pub fn visit_regular(
-    el: &Element,
-    ctx: &mut LintContext<'_>,
-    ancestors: &[String],
-) {
+pub fn visit_regular(el: &Element, ctx: &mut LintContext<'_>, ancestors: &[String]) {
     check_element(
         el.name.as_str(),
         &el.attributes,
@@ -196,7 +192,8 @@ fn check_element(
     // Skips when aria-hidden="true" or inert; upstream additionally
     // allows `<button>` when content contains `<selectedcontent>`
     // inside a select or a popover.
-    if !is_dynamic && (name == "button" || (name == "a" && attribute_map.contains_key("href")))
+    if !is_dynamic
+        && (name == "button" || (name == "a" && attribute_map.contains_key("href")))
         && !has_spread
     {
         let is_labelled = has_labelling_attr(&attribute_map);
@@ -302,11 +299,7 @@ fn check_element(
             && !is_interactive_element_minimal(name, &attribute_map)
         {
             let msg = messages::a11y_aria_activedescendant_has_tabindex();
-            ctx.emit(
-                Code::a11y_aria_activedescendant_has_tabindex,
-                msg,
-                p.range,
-            );
+            ctx.emit(Code::a11y_aria_activedescendant_has_tabindex, msg, p.range);
         }
 
         // aria-*: unknown-aria-attribute + invisible-element +
@@ -349,15 +342,11 @@ fn check_element(
                             continue;
                         }
                         if ABSTRACT_ROLES.contains(&role_word) {
-                            let msg =
-                                messages::a11y_no_abstract_role(role_word);
+                            let msg = messages::a11y_no_abstract_role(role_word);
                             ctx.emit(Code::a11y_no_abstract_role, msg, p.range);
                         } else if !ARIA_ROLES.contains(&role_word) {
-                            let suggestion =
-                                fuzzy_match(role_word, ARIA_ROLES);
-                            let msg = messages::a11y_unknown_role(
-                                role_word, suggestion,
-                            );
+                            let suggestion = fuzzy_match(role_word, ARIA_ROLES);
+                            let msg = messages::a11y_unknown_role(role_word, suggestion);
                             ctx.emit(Code::a11y_unknown_role, msg, p.range);
                         } else {
                             // a11y_role_has_required_aria_props: all
@@ -369,40 +358,26 @@ fn check_element(
                             let get_attr = |attr_name: &str| -> AttrState<'_> {
                                 match attribute_map.get(attr_name) {
                                     None => AttrState::Absent,
-                                    Some(Attribute::Plain(p)) => {
-                                        match get_static_text_value(p) {
-                                            Some(s) => AttrState::Literal(s),
-                                            None => AttrState::Dynamic,
-                                        }
-                                    }
+                                    Some(Attribute::Plain(p)) => match get_static_text_value(p) {
+                                        Some(s) => AttrState::Literal(s),
+                                        None => AttrState::Dynamic,
+                                    },
                                     Some(_) => AttrState::Dynamic,
                                 }
                             };
                             if !is_dynamic
                                 && !has_spread
                                 && !is_semantic_role_element(role_word, name, get_attr)
+                                && let Some((_, required)) = role_props(role_word)
+                                && !required.is_empty()
+                                && required.iter().any(|r| !attribute_map.contains_key(*r))
                             {
-                                if let Some((_, required)) = role_props(role_word)
-                                    && !required.is_empty()
-                                    && required
-                                        .iter()
-                                        .any(|r| !attribute_map.contains_key(*r))
-                                {
-                                    let quoted: Vec<String> = required
-                                        .iter()
-                                        .map(|r| format!("\"{r}\""))
-                                        .collect();
-                                    let list = join_sequence_borrowed_and(&quoted);
-                                    let msg =
-                                        messages::a11y_role_has_required_aria_props(
-                                            role_word, &list,
-                                        );
-                                    ctx.emit(
-                                        Code::a11y_role_has_required_aria_props,
-                                        msg,
-                                        p.range,
-                                    );
-                                }
+                                let quoted: Vec<String> =
+                                    required.iter().map(|r| format!("\"{r}\"")).collect();
+                                let list = join_sequence_borrowed_and(&quoted);
+                                let msg =
+                                    messages::a11y_role_has_required_aria_props(role_word, &list);
+                                ctx.emit(Code::a11y_role_has_required_aria_props, msg, p.range);
                             }
                             // a11y_interactive_supports_focus: element is
                             // static AND role is interactive AND not
@@ -415,9 +390,12 @@ fn check_element(
                                 && !has_disabled_attr(&attribute_map)
                                 && !is_hidden_from_screen_reader(name, &attribute_map)
                                 && !attribute_map.contains_key("tabindex")
-                                && handlers
-                                    .iter()
-                                    .any(|h| crate::a11y_constants::is_interactive_handler(h.as_str(), ctx.compat))
+                                && handlers.iter().any(|h| {
+                                    crate::a11y_constants::is_interactive_handler(
+                                        h.as_str(),
+                                        ctx.compat,
+                                    )
+                                })
                             {
                                 let msg = messages::a11y_interactive_supports_focus(role_word);
                                 ctx.emit(Code::a11y_interactive_supports_focus, msg, range);
@@ -443,10 +421,7 @@ fn check_element(
                             // a11y_no_noninteractive_element_to_interactive_role:
                             // element is non-interactive, role is
                             // interactive, not in carve-out table.
-                            if !has_spread
-                                && is_non_interactive
-                                && is_interactive_role(role_word)
-                            {
+                            if !has_spread && is_non_interactive && is_interactive_role(role_word) {
                                 let is_exception =
                                     a11y_non_interactive_element_to_interactive_role_exceptions(
                                         name,
@@ -464,28 +439,24 @@ fn check_element(
                                     );
                                 }
                             }
-                            let matches_implicit = Some(role_word)
-                                == a11y_implicit_semantics(name);
+                            let matches_implicit = Some(role_word) == a11y_implicit_semantics(name);
                             let exempt_implicit = matches_implicit
                                 && (matches!(name, "ul" | "ol" | "li" | "menu")
                                     || (name == "a" && !attribute_map.contains_key("href")));
                             if matches_implicit && !exempt_implicit {
-                                let msg =
-                                    messages::a11y_no_redundant_roles(role_word);
+                                let msg = messages::a11y_no_redundant_roles(role_word);
                                 ctx.emit(Code::a11y_no_redundant_roles, msg, p.range);
                             }
                             // Upstream also checks nested_implicit
                             // semantics (header/footer → banner/
                             // contentinfo) when the element ISN'T
                             // nested in a <section> / <article>.
-                            let matches_nested = Some(role_word)
-                                == a11y_nested_implicit_semantics(name);
-                            let in_section_or_article = ancestors
-                                .iter()
-                                .any(|a| a == "section" || a == "article");
+                            let matches_nested =
+                                Some(role_word) == a11y_nested_implicit_semantics(name);
+                            let in_section_or_article =
+                                ancestors.iter().any(|a| a == "section" || a == "article");
                             if matches_nested && !in_section_or_article {
-                                let msg =
-                                    messages::a11y_no_redundant_roles(role_word);
+                                let msg = messages::a11y_no_redundant_roles(role_word);
                                 ctx.emit(Code::a11y_no_redundant_roles, msg, p.range);
                             }
                         }
@@ -538,11 +509,7 @@ fn check_element(
                     };
                     if !is_interactive && !has_interactive_role && nonneg_tabindex {
                         let msg = messages::a11y_no_noninteractive_tabindex();
-                        ctx.emit(
-                            Code::a11y_no_noninteractive_tabindex,
-                            msg,
-                            range,
-                        );
+                        ctx.emit(Code::a11y_no_noninteractive_tabindex, msg, range);
                     }
                 }
             }
@@ -554,7 +521,8 @@ fn check_element(
     // attribute that the element's resolved role doesn't support,
     // fire at the attribute. Implicit role fires the _implicit
     // variant with the element name appended to the message.
-    if !is_dynamic && !has_spread
+    if !is_dynamic
+        && !has_spread
         && let Some(role_val) = resolved_role
         && role_props(role_val).is_some()
     {
@@ -571,9 +539,7 @@ fn check_element(
             }
             if !role_supports_prop(role_val, &lower) {
                 let msg = if is_implicit_role {
-                    messages::a11y_role_supports_aria_props_implicit(
-                        &lower, role_val, name,
-                    )
+                    messages::a11y_role_supports_aria_props_implicit(&lower, role_val, name)
                 } else {
                     messages::a11y_role_supports_aria_props(&lower, role_val)
                 };
@@ -596,18 +562,21 @@ fn check_element(
         && !resolved_role.is_some_and(is_presentation_role)
     {
         let has_contenteditable = attribute_map.contains_key("contenteditable");
-        let role_is_non_interactive = role_static_value
-            .is_some_and(is_non_interactive_role);
+        let role_is_non_interactive = role_static_value.is_some_and(is_non_interactive_role);
         let fire = !has_contenteditable
             && ((!is_interactive && role_is_non_interactive)
                 || (is_non_interactive && role_attr.is_none()));
         if fire {
-            let has_recommended = handlers.iter().any(|h| {
-                A11Y_RECOMMENDED_INTERACTIVE_HANDLERS.contains(&h.as_str())
-            });
+            let has_recommended = handlers
+                .iter()
+                .any(|h| A11Y_RECOMMENDED_INTERACTIVE_HANDLERS.contains(&h.as_str()));
             if has_recommended {
                 let msg = messages::a11y_no_noninteractive_element_interactions(name);
-                ctx.emit(Code::a11y_no_noninteractive_element_interactions, msg, range);
+                ctx.emit(
+                    Code::a11y_no_noninteractive_element_interactions,
+                    msg,
+                    range,
+                );
             }
         }
     }
@@ -683,15 +652,11 @@ fn check_element(
     // a11y_mouse_events_have_key_events: mouseover w/o focus,
     // mouseout w/o blur.
     if !is_dynamic && !has_spread {
-        if handlers.iter().any(|h| h == "mouseover")
-            && !handlers.iter().any(|h| h == "focus")
-        {
+        if handlers.iter().any(|h| h == "mouseover") && !handlers.iter().any(|h| h == "focus") {
             let msg = messages::a11y_mouse_events_have_key_events("mouseover", "focus");
             ctx.emit(Code::a11y_mouse_events_have_key_events, msg, range);
         }
-        if handlers.iter().any(|h| h == "mouseout")
-            && !handlers.iter().any(|h| h == "blur")
-        {
+        if handlers.iter().any(|h| h == "mouseout") && !handlers.iter().any(|h| h == "blur") {
             let msg = messages::a11y_mouse_events_have_key_events("mouseout", "blur");
             ctx.emit(Code::a11y_mouse_events_have_key_events, msg, range);
         }
@@ -714,27 +679,19 @@ fn check_element(
                         && let Some(val) = get_static_text_value(p)
                         && (val.is_empty() || val == "#" || regex_js_prefix(val))
                     {
-                        let msg =
-                            messages::a11y_invalid_attribute(val, p.name.as_str());
+                        let msg = messages::a11y_invalid_attribute(val, p.name.as_str());
                         ctx.emit(Code::a11y_invalid_attribute, msg, p.range);
                     }
                 } else {
                     let id_truthy = static_nonempty(&attribute_map, "id");
                     let name_truthy = static_nonempty(&attribute_map, "name");
-                    let aria_disabled = attribute_map
-                        .get("aria-disabled")
-                        .and_then(|a| match a {
-                            Attribute::Plain(p) => get_static_text_value(p),
-                            _ => None,
-                        })
-                        == Some("true");
+                    let aria_disabled = attribute_map.get("aria-disabled").and_then(|a| match a {
+                        Attribute::Plain(p) => get_static_text_value(p),
+                        _ => None,
+                    }) == Some("true");
                     if !id_truthy && !name_truthy && !aria_disabled {
                         let seq = join_sequence(&["href"]);
-                        let msg = messages::a11y_missing_attribute(
-                            "a",
-                            article_for("href"),
-                            &seq,
-                        );
+                        let msg = messages::a11y_missing_attribute("a", article_for("href"), &seq);
                         ctx.emit(Code::a11y_missing_attribute, msg, range);
                     }
                 }
@@ -751,10 +708,8 @@ fn check_element(
                 // `a11y_autocomplete_valid` / the role-based rules
                 // elsewhere.
                 if is_image {
-                    let required: &[&str] =
-                        &["alt", "aria-label", "aria-labelledby"];
-                    let has_any =
-                        required.iter().any(|w| attribute_map.contains_key(*w));
+                    let required: &[&str] = &["alt", "aria-label", "aria-labelledby"];
+                    let has_any = required.iter().any(|w| attribute_map.contains_key(*w));
                     if !has_any {
                         let first = required.first().copied().unwrap_or("");
                         let seq = join_sequence(required);
@@ -786,10 +741,7 @@ fn check_element(
                             AutocompleteValue::Dynamic => "",
                         };
                         let display_type = type_value.unwrap_or("...");
-                        let msg = messages::a11y_autocomplete_valid(
-                            display_value,
-                            display_type,
-                        );
+                        let msg = messages::a11y_autocomplete_valid(display_value, display_type);
                         ctx.emit(Code::a11y_autocomplete_valid, msg, p.range);
                     }
                 }
@@ -802,11 +754,7 @@ fn check_element(
                     if !has_any {
                         let first = required.first().copied().unwrap_or("");
                         let seq = join_sequence(required);
-                        let msg = messages::a11y_missing_attribute(
-                            name,
-                            article_for(first),
-                            &seq,
-                        );
+                        let msg = messages::a11y_missing_attribute(name, article_for(first), &seq);
                         ctx.emit(Code::a11y_missing_attribute, msg, range);
                     }
                 }
@@ -823,14 +771,7 @@ fn article_for(first: &str) -> &'static str {
         return "an";
     }
     match first.as_bytes().first() {
-        Some(c)
-            if matches!(
-                c.to_ascii_lowercase(),
-                b'a' | b'e' | b'i' | b'o' | b'u'
-            ) =>
-        {
-            "an"
-        }
+        Some(c) if matches!(c.to_ascii_lowercase(), b'a' | b'e' | b'i' | b'o' | b'u') => "an",
         _ => "a",
     }
 }
@@ -872,9 +813,7 @@ fn classify_autocomplete_value<'a>(p: &'a svn_parser::ast::PlainAttr) -> Autocom
         None => AutocompleteValue::Bare,
         Some(v) if v.parts.is_empty() && v.quoted => AutocompleteValue::Literal(""),
         Some(v) if v.parts.len() == 1 => match &v.parts[0] {
-            AttrValuePart::Text { content, .. } => {
-                AutocompleteValue::Literal(content.as_str())
-            }
+            AttrValuePart::Text { content, .. } => AutocompleteValue::Literal(content.as_str()),
             AttrValuePart::Expression { .. } => AutocompleteValue::Dynamic,
         },
         _ => AutocompleteValue::Dynamic,
@@ -905,10 +844,7 @@ fn is_valid_autocomplete(value: AutocompleteValue<'_>) -> bool {
     }
     let lower = raw.trim().to_ascii_lowercase();
     let mut tokens: Vec<&str> = lower.split_ascii_whitespace().collect();
-    if tokens
-        .first()
-        .is_some_and(|t| t.starts_with("section-"))
-    {
+    if tokens.first().is_some_and(|t| t.starts_with("section-")) {
         tokens.remove(0);
     }
     if tokens
@@ -953,10 +889,7 @@ enum Interactivity {
 
 /// Classify an element using the ARIA role schemas, matching
 /// upstream `element_interactivity`.
-fn element_interactivity(
-    name: &str,
-    attrs: &HashMap<String, &Attribute>,
-) -> Interactivity {
+fn element_interactivity(name: &str, attrs: &HashMap<String, &Attribute>) -> Interactivity {
     let get_attr = |attr_name: &str| -> AttrState<'_> {
         match attrs.get(attr_name) {
             None => AttrState::Absent,
@@ -982,14 +915,12 @@ fn element_interactivity(
 /// Upstream `get_implicit_role`. For `<input>` / `<menuitem>` the
 /// role depends on the `type` attribute; for everything else we
 /// defer to [`a11y_implicit_semantics`].
-fn get_implicit_role(
-    name: &str,
-    attrs: &HashMap<String, &Attribute>,
-) -> Option<&'static str> {
+fn get_implicit_role(name: &str, attrs: &HashMap<String, &Attribute>) -> Option<&'static str> {
     if name == "menuitem" {
         return attrs.get("type").and_then(|a| match a {
-            Attribute::Plain(p) => get_static_text_value(p)
-                .and_then(menuitem_type_to_implicit_role),
+            Attribute::Plain(p) => {
+                get_static_text_value(p).and_then(menuitem_type_to_implicit_role)
+            }
             _ => None,
         });
     }
@@ -1037,7 +968,7 @@ fn is_hidden_from_screen_reader(name: &str, attrs: &HashMap<String, &Attribute>)
     match attrs.get("aria-hidden") {
         None => false,
         Some(Attribute::Plain(p)) => match get_static_text_value(p) {
-            None => true,       // bare `<div aria-hidden>` → hidden
+            None => true, // bare `<div aria-hidden>` → hidden
             Some("true") => true,
             _ => false,
         },
@@ -1049,16 +980,14 @@ fn is_hidden_from_screen_reader(name: &str, attrs: &HashMap<String, &Attribute>)
 /// Covers the subset relied on by
 /// `a11y_aria_activedescendant_has_tabindex` and a handful of other
 /// rules pending the full ARIA role table port (Phase E.3).
-fn is_interactive_element_minimal(
-    name: &str,
-    attrs: &HashMap<String, &Attribute>,
-) -> bool {
+fn is_interactive_element_minimal(name: &str, attrs: &HashMap<String, &Attribute>) -> bool {
     match name {
         "a" => attrs.contains_key("href") || attrs.contains_key("xlink:href"),
         "audio" | "video" => attrs.contains_key("controls"),
-        "button" | "details" | "embed" | "iframe" | "img" | "input" | "keygen"
-        | "label" | "menu" | "menuitem" | "option" | "select" | "summary"
-        | "textarea" | "tr" | "dialog" => true,
+        "button" | "details" | "embed" | "iframe" | "img" | "input" | "keygen" | "label"
+        | "menu" | "menuitem" | "option" | "select" | "summary" | "textarea" | "tr" | "dialog" => {
+            true
+        }
         _ => false,
     }
 }
@@ -1075,17 +1004,12 @@ fn regex_js_prefix(s: &str) -> bool {
         i += 1;
     }
     let rest = &s[i..];
-    rest.len() >= 11
-        && rest[..11].eq_ignore_ascii_case("javascript:")
+    rest.len() >= 11 && rest[..11].eq_ignore_ascii_case("javascript:")
 }
 
-fn static_nonempty(
-    attrs: &HashMap<String, &Attribute>,
-    key: &str,
-) -> bool {
+fn static_nonempty(attrs: &HashMap<String, &Attribute>, key: &str) -> bool {
     attrs.get(key).is_some_and(|a| match a {
-        Attribute::Plain(p) => get_static_text_value(p)
-            .is_some_and(|s| !s.is_empty()),
+        Attribute::Plain(p) => get_static_text_value(p).is_some_and(|s| !s.is_empty()),
         _ => false,
     })
 }
@@ -1103,8 +1027,7 @@ fn contains_redundant_img_word(text: &str) -> bool {
         while i + wb.len() <= bytes.len() {
             if &bytes[i..i + wb.len()] == wb {
                 let before_ok = i == 0 || !is_word_byte(bytes[i - 1]);
-                let after_ok =
-                    i + wb.len() == bytes.len() || !is_word_byte(bytes[i + wb.len()]);
+                let after_ok = i + wb.len() == bytes.len() || !is_word_byte(bytes[i + wb.len()]);
                 if before_ok && after_ok {
                     return true;
                 }
@@ -1154,9 +1077,7 @@ fn has_text_content(frag: &Fragment) -> bool {
                 if has_attribute_named(&el.attributes, "popover") {
                     continue;
                 }
-                if el.name.as_str() == "img"
-                    && has_attribute_named(&el.attributes, "alt")
-                {
+                if el.name.as_str() == "img" && has_attribute_named(&el.attributes, "alt") {
                     return true;
                 }
                 if el.name.as_str() == "selectedcontent" {
@@ -1329,7 +1250,10 @@ fn validate_aria_value(
             // true — we replicate by parsing as f64, then checking it's finite
             // and equal to its floor/ceil.
             let ok = !val.is_empty()
-                && val.parse::<f64>().ok().is_some_and(|f| f.is_finite() && f.fract() == 0.0);
+                && val
+                    .parse::<f64>()
+                    .ok()
+                    .is_some_and(|f| f.is_finite() && f.fract() == 0.0);
             if !ok {
                 let msg = messages::a11y_incorrect_aria_attribute_type_integer(name);
                 ctx.emit(
@@ -1371,11 +1295,7 @@ fn validate_aria_value(
             if !def.values.contains(&lower.as_str()) {
                 let list = quote_list(def.values);
                 let msg = messages::a11y_incorrect_aria_attribute_type_token(name, &list);
-                ctx.emit(
-                    Code::a11y_incorrect_aria_attribute_type_token,
-                    msg,
-                    p.range,
-                );
+                ctx.emit(Code::a11y_incorrect_aria_attribute_type_token, msg, p.range);
             }
         }
         AriaType::TokenList => {
@@ -1388,7 +1308,11 @@ fn validate_aria_value(
                 .split(|c: char| c.is_whitespace())
                 .find(|s| !s.is_empty())
                 .is_none();
-            if empty_after_split || !all_ok || lower.split_whitespace().count() == 0 || has_trailing_ws_only_tok(&lower, def.values) {
+            if empty_after_split
+                || !all_ok
+                || lower.split_whitespace().count() == 0
+                || has_trailing_ws_only_tok(&lower, def.values)
+            {
                 let list = quote_list(def.values);
                 let msg = messages::a11y_incorrect_aria_attribute_type_tokenlist(name, &list);
                 ctx.emit(
@@ -1463,12 +1387,10 @@ fn has_disabled_attr(attrs: &HashMap<String, &Attribute>) -> bool {
     if attrs.contains_key("disabled") {
         return true;
     }
-    attrs
-        .get("aria-disabled")
-        .is_some_and(|a| match a {
-            Attribute::Plain(p) => get_static_text_value(p) == Some("true"),
-            _ => false,
-        })
+    attrs.get("aria-disabled").is_some_and(|a| match a {
+        Attribute::Plain(p) => get_static_text_value(p) == Some("true"),
+        _ => false,
+    })
 }
 
 fn fuzzy_match<'a>(name: &str, candidates: &[&'a str]) -> Option<&'a str> {
@@ -1509,7 +1431,11 @@ fn levenshtein_distance(a: &str, b: &str) -> usize {
     for i in 1..=a_chars.len() {
         curr_row[0] = i;
         for j in 1..=b_chars.len() {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
             curr_row[j] = (prev_row[j] + 1)
                 .min(curr_row[j - 1] + 1)
                 .min(prev_row[j - 1] + cost);

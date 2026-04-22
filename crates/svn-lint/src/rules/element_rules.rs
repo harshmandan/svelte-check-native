@@ -43,12 +43,14 @@ pub fn visit(
             ctx.emit(Code::node_invalid_placement_ssr, full, el.range);
             parent_check_fired = true;
         }
-        if ancestors.len() > 1 {
+        if ancestors.len() > 1
+            && let Some(parent_el) = ancestors.last()
+        {
             // Walk from innermost outer ancestor to outermost,
             // extending the list each step. Fire on first match.
             let mut list: Vec<&str> = Vec::new();
             // Start with parent (upstream ancestors[0]).
-            list.push(ancestors.last().unwrap().as_str());
+            list.push(parent_el.as_str());
             for outer in ancestors.iter().rev().skip(1) {
                 list.push(outer.as_str());
                 if parent_check_fired {
@@ -82,9 +84,7 @@ pub fn visit(
         && let Some(bid) = tree.resolve_from_template(el.name.as_str())
     {
         let b = tree.binding(bid);
-        if b.declaration_kind == crate::scope::DeclarationKind::Import
-            && b.references.is_empty()
-        {
+        if b.declaration_kind == crate::scope::DeclarationKind::Import && b.references.is_empty() {
             let msg = messages::component_name_lowercase(el.name.as_str());
             ctx.emit(Code::component_name_lowercase, msg, el.range);
         }
@@ -178,8 +178,10 @@ impl AttrParent {
 pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, parent: AttrParent) {
     let parent_is_quotable = parent.is_quotable();
     let fires_event_directive = parent.fires_event_directive_deprecated();
-    let parent_is_regular_or_svelte =
-        matches!(parent, AttrParent::RegularElement { .. } | AttrParent::SvelteElement);
+    let parent_is_regular_or_svelte = matches!(
+        parent,
+        AttrParent::RegularElement { .. } | AttrParent::SvelteElement
+    );
     match attr {
         Attribute::Plain(p) => {
             let name = p.name.as_str();
@@ -269,9 +271,7 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
             {
                 let expr_src = ctx
                     .source
-                    .get(
-                        e.expression_range.start as usize..e.expression_range.end as usize,
-                    )
+                    .get(e.expression_range.start as usize..e.expression_range.end as usize)
                     .map(str::trim);
                 if expr_src == Some(name) && !tree.is_declared_anywhere(name) {
                     let msg = messages::attribute_global_event_reference(name);

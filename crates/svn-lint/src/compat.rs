@@ -41,12 +41,16 @@ impl SvelteVersion {
     /// when any segment isn't a plain integer.
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim().trim_start_matches('v');
-        let core = s.split(|c| c == '-' || c == '+').next().unwrap_or(s);
+        let core = s.split(['-', '+']).next().unwrap_or(s);
         let mut parts = core.split('.');
         let major = parts.next()?.parse().ok()?;
         let minor = parts.next()?.parse().ok()?;
         let patch = parts.next()?.parse().ok()?;
-        Some(Self { major, minor, patch })
+        Some(Self {
+            major,
+            minor,
+            patch,
+        })
     }
 }
 
@@ -117,7 +121,11 @@ mod tests {
 
     #[test]
     fn at_least_respects_semver_precedence() {
-        let v = SvelteVersion { major: 5, minor: 48, patch: 3 };
+        let v = SvelteVersion {
+            major: 5,
+            minor: 48,
+            patch: 3,
+        };
         assert!(v.at_least(5, 48, 3));
         assert!(!v.at_least(5, 48, 4));
         assert!(v.at_least(5, 48, 2));
@@ -128,7 +136,9 @@ mod tests {
     fn bench_snapshot_thresholds() {
         // bench/cryptgeon pins svelte 5.20.5 — pre-props ruleset.
         let c = CompatFeatures::from_version(Some(SvelteVersion {
-            major: 5, minor: 20, patch: 5,
+            major: 5,
+            minor: 20,
+            patch: 5,
         }));
         assert!(!c.a11y_pointer_touch_handlers);
         assert!(!c.state_locally_fires_on_props);
@@ -137,7 +147,9 @@ mod tests {
         // bench/control-svelte-4 pins svelte 5.48.2 — post-props,
         // pre-pointer-touch, pre-rest-prop.
         let c = CompatFeatures::from_version(Some(SvelteVersion {
-            major: 5, minor: 48, patch: 2,
+            major: 5,
+            minor: 48,
+            patch: 2,
         }));
         assert!(!c.a11y_pointer_touch_handlers);
         assert!(c.state_locally_fires_on_props);
@@ -145,7 +157,9 @@ mod tests {
 
         // bench/control-svelte-5 pins svelte 5.55.4 — modern ruleset.
         let c = CompatFeatures::from_version(Some(SvelteVersion {
-            major: 5, minor: 55, patch: 4,
+            major: 5,
+            minor: 55,
+            patch: 4,
         }));
         assert!(c.a11y_pointer_touch_handlers);
         assert!(c.state_locally_fires_on_props);
@@ -153,7 +167,9 @@ mod tests {
 
         // Right at the threshold for props in state-locally.
         let c = CompatFeatures::from_version(Some(SvelteVersion {
-            major: 5, minor: 45, patch: 3,
+            major: 5,
+            minor: 45,
+            patch: 3,
         }));
         assert!(c.state_locally_fires_on_props);
         assert!(!c.a11y_pointer_touch_handlers);
@@ -161,7 +177,9 @@ mod tests {
 
         // Right at the threshold for pointer/touch.
         let c = CompatFeatures::from_version(Some(SvelteVersion {
-            major: 5, minor: 48, patch: 3,
+            major: 5,
+            minor: 48,
+            patch: 3,
         }));
         assert!(c.a11y_pointer_touch_handlers);
         assert!(c.state_locally_fires_on_props);
@@ -169,7 +187,9 @@ mod tests {
 
         // Right at the threshold for rest_prop.
         let c = CompatFeatures::from_version(Some(SvelteVersion {
-            major: 5, minor: 51, patch: 2,
+            major: 5,
+            minor: 51,
+            patch: 2,
         }));
         assert!(c.a11y_pointer_touch_handlers);
         assert!(c.state_locally_fires_on_props);

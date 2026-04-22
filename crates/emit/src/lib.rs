@@ -46,6 +46,7 @@
 
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
+mod emit_buffer;
 pub mod kit_inject;
 mod script_split;
 mod state_nullish_rewrite;

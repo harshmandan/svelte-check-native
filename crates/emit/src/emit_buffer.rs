@@ -48,6 +48,8 @@
 
 #![allow(dead_code)]
 
+use std::fmt;
+
 use svn_core::Range;
 
 use crate::{LineMapEntry, TokenMapEntry};
@@ -104,6 +106,13 @@ impl EmitBuffer {
     pub fn append_synthetic(&mut self, text: &str) {
         self.out.push_str(text);
         self.overlay_line += count_newlines(text);
+    }
+
+    /// Alias for [`append_synthetic`] matching the `String::push_str`
+    /// signature. Offered so call sites doing bulk `out.push_str(...)`
+    /// can migrate to `buf.push_str(...)` with zero shape change.
+    pub fn push_str(&mut self, text: &str) {
+        self.append_synthetic(text);
     }
 
     /// Append text verbatim from `source[source_range]`, recording
@@ -201,6 +210,19 @@ impl EmitBuffer {
     /// Consume the buffer and return its parts.
     pub fn finish(self) -> (String, Vec<LineMapEntry>, Vec<TokenMapEntry>) {
         (self.out, self.line_map, self.token_map)
+    }
+}
+
+/// `fmt::Write` routes through `append_synthetic` so the overlay-line
+/// counter stays in sync when call sites use `write!(buf, ...)` /
+/// `writeln!(buf, ...)` macros. Formatted fragments are treated as
+/// synthesized content with no source anchor — use
+/// [`EmitBuffer::append_with_source`] when a fragment needs a
+/// TokenMapEntry.
+impl fmt::Write for EmitBuffer {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.append_synthetic(s);
+        Ok(())
     }
 }
 
@@ -327,6 +349,28 @@ mod tests {
         buf.raw_string_mut().push_str("two\nthree\n");
         buf.resync_current_line();
         assert_eq!(buf.current_line(), 4);
+    }
+
+    #[test]
+    fn push_str_alias_routes_through_append_synthetic() {
+        let mut buf = EmitBuffer::with_capacity(16);
+        buf.push_str("alpha\nbeta\n");
+        assert_eq!(buf.current_line(), 3);
+        assert_eq!(buf.as_str(), "alpha\nbeta\n");
+    }
+
+    #[test]
+    fn fmt_write_advances_line_counter() {
+        use std::fmt::Write as _;
+        let mut buf = EmitBuffer::with_capacity(32);
+        write!(buf, "const x = {};", 42).unwrap();
+        writeln!(buf).unwrap();
+        writeln!(buf, "const y = {};", 7).unwrap();
+        assert_eq!(buf.as_str(), "const x = 42;\nconst y = 7;\n");
+        assert_eq!(buf.current_line(), 3);
+        let (_, lm, tm) = buf.finish();
+        assert!(lm.is_empty());
+        assert!(tm.is_empty());
     }
 
     #[test]

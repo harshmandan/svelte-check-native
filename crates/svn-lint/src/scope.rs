@@ -105,7 +105,9 @@ pub enum InitialKind {
     /// `should_proxy`-analog: `true` iff the expression is a Literal,
     /// TemplateLiteral, ArrowFunctionExpression, FunctionExpression,
     /// UnaryExpression, BinaryExpression, or `undefined`.
-    Expression { primitive: bool },
+    Expression {
+        primitive: bool,
+    },
     /// `$state(x)` / `$state.raw(x)` / `$derived(x)` / `$props()` /
     /// `$bindable(x)` — rune call. `primitive_arg` is set for `$state`
     /// only (upstream's discriminator).
@@ -412,8 +414,7 @@ fn promote_non_runes_exports(tree: &mut ScopeTree, doc: &Document<'_>) {
                     if let Some(alias) = exported
                         && alias != local
                     {
-                        tree.bindings[bid.0 as usize].prop_alias =
-                            Some(SmolStr::from(alias));
+                        tree.bindings[bid.0 as usize].prop_alias = Some(SmolStr::from(alias));
                     }
                 }
             }
@@ -531,10 +532,7 @@ pub fn build_with_template(
         // naturally because the script is an AST sibling inside the
         // root Fragment; our sections parser extracts it separately,
         // so we have to bridge the ignore forward explicitly.
-        let leading = collect_preceding_template_ignores(
-            doc.source,
-            script.open_tag_range.start,
-        );
+        let leading = collect_preceding_template_ignores(doc.source, script.open_tag_range.start);
         tree_builder.build_script_as_instance(script, instance_root, &leading);
     }
 
@@ -758,11 +756,11 @@ impl TreeBuilder {
                             } else {
                                 BindingKind::Static
                             };
-                            let name =
-                                ctx.source
-                                    .get(index.start as usize..index.end as usize)
-                                    .unwrap_or("")
-                                    .trim();
+                            let name = ctx
+                                .source
+                                .get(index.start as usize..index.end as usize)
+                                .unwrap_or("")
+                                .trim();
                             if !name.is_empty() {
                                 self.declare(
                                     child_scope,
@@ -872,9 +870,9 @@ impl TreeBuilder {
         }
         // Split attrs into let:directives (scoped to children) vs
         // everything else (scoped to current scope).
-        let has_let = attrs.iter().any(|a| {
-            matches!(a, Attribute::Directive(d) if d.kind == DirectiveKind::Let)
-        });
+        let has_let = attrs
+            .iter()
+            .any(|a| matches!(a, Attribute::Directive(d) if d.kind == DirectiveKind::Let));
         for attr in attrs {
             if matches!(attr, Attribute::Directive(d) if d.kind == DirectiveKind::Let) {
                 continue;
@@ -954,17 +952,16 @@ impl TreeBuilder {
             .collect()
     }
 
-    fn walk_template_attr(
-        &mut self,
-        attr: &svn_parser::ast::Attribute,
-        ctx: &mut TemplateCtx<'_>,
-    ) {
+    fn walk_template_attr(&mut self, attr: &svn_parser::ast::Attribute, ctx: &mut TemplateCtx<'_>) {
         use svn_parser::ast::{AttrValuePart, Attribute, DirectiveKind};
         match attr {
             Attribute::Plain(p) => {
                 if let Some(v) = &p.value {
                     for part in &v.parts {
-                        if let AttrValuePart::Expression { expression_range, .. } = part {
+                        if let AttrValuePart::Expression {
+                            expression_range, ..
+                        } = part
+                        {
                             self.walk_expr_range(*expression_range, ctx, RefFlags::default());
                         }
                     }
@@ -975,12 +972,7 @@ impl TreeBuilder {
             }
             Attribute::Shorthand(s) => {
                 // `{name}` — single identifier ref at template root.
-                self.record_template_ref(
-                    s.name.as_str(),
-                    s.range,
-                    ctx,
-                    RefFlags::default(),
-                );
+                self.record_template_ref(s.name.as_str(), s.range, ctx, RefFlags::default());
             }
             Attribute::Spread(s) => {
                 self.walk_expr_range(s.expression_range, ctx, RefFlags::default());
@@ -1004,17 +996,11 @@ impl TreeBuilder {
                         | DirectiveKind::Out
                         | DirectiveKind::Animate
                 ) {
-                    self.record_template_ref(
-                        d.name.as_str(),
-                        d.range,
-                        ctx,
-                        RefFlags::default(),
-                    );
+                    self.record_template_ref(d.name.as_str(), d.range, ctx, RefFlags::default());
                 }
                 match &d.value {
                     Some(svn_parser::ast::DirectiveValue::Expression {
-                        expression_range,
-                        ..
+                        expression_range, ..
                     }) => {
                         self.walk_expr_range(*expression_range, ctx, flags);
                         if d.kind == DirectiveKind::Bind {
@@ -1031,7 +1017,10 @@ impl TreeBuilder {
                     }
                     Some(svn_parser::ast::DirectiveValue::Quoted(v)) => {
                         for part in &v.parts {
-                            if let AttrValuePart::Expression { expression_range, .. } = part {
+                            if let AttrValuePart::Expression {
+                                expression_range, ..
+                            } = part
+                            {
                                 self.walk_expr_range(*expression_range, ctx, flags);
                             }
                         }
@@ -1042,12 +1031,7 @@ impl TreeBuilder {
                                 // `bind:foo` shorthand — implicit
                                 // `{foo}` identifier reference +
                                 // reassignment.
-                                self.record_template_ref(
-                                    d.name.as_str(),
-                                    d.range,
-                                    ctx,
-                                    flags,
-                                );
+                                self.record_template_ref(d.name.as_str(), d.range, ctx, flags);
                                 self.pending_updates.push(PendingUpdate {
                                     scope: ctx.scope,
                                     name: SmolStr::from(d.name.as_str()),
@@ -1063,12 +1047,7 @@ impl TreeBuilder {
                             // via class/style directives look unused
                             // to `export_let_unused`.
                             DirectiveKind::Class | DirectiveKind::Style => {
-                                self.record_template_ref(
-                                    d.name.as_str(),
-                                    d.range,
-                                    ctx,
-                                    flags,
-                                );
+                                self.record_template_ref(d.name.as_str(), d.range, ctx, flags);
                             }
                             _ => {}
                         }
@@ -1098,13 +1077,7 @@ impl TreeBuilder {
             // template scope, without feeding them through
             // visit_assignment.
             self.declare_each_pattern(
-                &d.id,
-                ctx.scope,
-                ctx.scope,
-                offset,
-                false,
-                ctx.source,
-                ctx.lang,
+                &d.id, ctx.scope, ctx.scope, offset, false, ctx.source, ctx.lang,
             );
             // Re-tag those bindings as Template (declare_each_pattern
             // uses `BindingKind::Each` internally).
@@ -1131,16 +1104,8 @@ impl TreeBuilder {
         drop(alloc);
     }
 
-    fn walk_expr_range(
-        &mut self,
-        range: Range,
-        ctx: &mut TemplateCtx<'_>,
-        flags: RefFlags,
-    ) {
-        let Some(slice) = ctx
-            .source
-            .get(range.start as usize..range.end as usize)
-        else {
+    fn walk_expr_range(&mut self, range: Range, ctx: &mut TemplateCtx<'_>, flags: RefFlags) {
+        let Some(slice) = ctx.source.get(range.start as usize..range.end as usize) else {
             return;
         };
         // Template expression slices that start with `{` are object
@@ -1155,9 +1120,7 @@ impl TreeBuilder {
         let leading = slice
             .bytes()
             .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'));
-        let needs_wrap = leading
-            .and_then(|i| slice.as_bytes().get(i).copied())
-            == Some(b'{');
+        let needs_wrap = leading.and_then(|i| slice.as_bytes().get(i).copied()) == Some(b'{');
         let wrapped: String;
         let (effective_slice, base_adjust): (&str, u32) = if needs_wrap && range.start > 0 {
             wrapped = format!("({slice})");
@@ -1196,7 +1159,13 @@ impl TreeBuilder {
         // Apply template flags to refs produced during that walk.
         // PendingRef doesn't yet carry template flags; set them on
         // the refs produced in this slice via a post-pass.
-        apply_template_flags_since(&mut self.pending_refs, range, flags, true, ctx.in_control_flow);
+        apply_template_flags_since(
+            &mut self.pending_refs,
+            range,
+            flags,
+            true,
+            ctx.in_control_flow,
+        );
         drop(parsed);
         drop(alloc);
     }
@@ -1260,8 +1229,7 @@ impl TreeBuilder {
         source: &str,
         lang: svn_parser::document::ScriptLang,
     ) {
-        let Some(slice) = source.get(range.start as usize..range.end as usize)
-        else {
+        let Some(slice) = source.get(range.start as usize..range.end as usize) else {
             return;
         };
         // Wrap the pattern so oxc can parse it as a destructuring
@@ -1278,15 +1246,7 @@ impl TreeBuilder {
             // `wrapped` (prefix "let " = 4 bytes). Translate back to
             // the original source.
             let offset: i32 = range.start as i32 - 4;
-            self.declare_each_pattern(
-                &d.id,
-                each_scope,
-                parent_scope,
-                offset,
-                false,
-                source,
-                lang,
-            );
+            self.declare_each_pattern(&d.id, each_scope, parent_scope, offset, false, source, lang);
         }
         drop(parsed);
         drop(alloc);
@@ -1400,10 +1360,7 @@ impl TreeBuilder {
     /// the backing binding's `has_bind_reference` flag, for
     /// `bind_invalid_each_rest`.
     fn register_bind_update(&mut self, range: Range, ctx: &mut TemplateCtx<'_>) {
-        let Some(raw) = ctx
-            .source
-            .get(range.start as usize..range.end as usize)
-        else {
+        let Some(raw) = ctx.source.get(range.start as usize..range.end as usize) else {
             return;
         };
         let slice = raw.trim();
@@ -1569,21 +1526,19 @@ impl TreeBuilder {
                 if declared_at.start == r.range.start && declared_at.end == r.range.end {
                     continue;
                 }
-                self.bindings[bid.0 as usize]
-                    .references
-                    .push(Reference {
-                        range: r.range,
-                        parent_kind: r.parent_kind,
-                        function_depth_at_use: r.function_depth_at_use,
-                        nested_in_state_call: r.nested_in_state_call,
-                        in_template: r.in_template,
-                        in_control_flow: r.in_control_flow,
-                        is_bind_this: r.is_bind_this,
-                        in_function_closure: r.in_function_closure,
-                        parent_is_call: r.parent_is_call,
-                        in_reactive_statement: r.in_reactive_statement,
-                        ignored: r.ignored.clone(),
-                    });
+                self.bindings[bid.0 as usize].references.push(Reference {
+                    range: r.range,
+                    parent_kind: r.parent_kind,
+                    function_depth_at_use: r.function_depth_at_use,
+                    nested_in_state_call: r.nested_in_state_call,
+                    in_template: r.in_template,
+                    in_control_flow: r.in_control_flow,
+                    is_bind_this: r.is_bind_this,
+                    in_function_closure: r.in_function_closure,
+                    parent_is_call: r.parent_is_call,
+                    in_reactive_statement: r.in_reactive_statement,
+                    ignored: r.ignored.clone(),
+                });
             } else {
                 unresolved.push(UnresolvedRef {
                     name: r.name,
@@ -1661,9 +1616,7 @@ fn synthesize_store_subs(
         //   carve-out (which preserves e.g. `const foo = $props(); $foo()`
         //   as a conflict).
         if let Some(bid) = backing {
-            if let InitialKind::RuneCall { rune, .. } =
-                tree.bindings[bid.0 as usize].initial
-            {
+            if let InitialKind::RuneCall { rune, .. } = tree.bindings[bid.0 as usize].initial {
                 let props_exception = store_name != "props" && rune == RuneCall::Props;
                 if !props_exception {
                     continue;
@@ -1706,8 +1659,7 @@ fn synthesize_store_subs(
         }
     }
     // Drop the refs we moved. Walk in reverse to keep indices stable.
-    let mut all_moved: Vec<usize> =
-        buckets.values().flat_map(|v| v.iter().copied()).collect();
+    let mut all_moved: Vec<usize> = buckets.values().flat_map(|v| v.iter().copied()).collect();
     all_moved.sort_unstable();
     for i in all_moved.into_iter().rev() {
         unresolved.swap_remove(i);
@@ -1873,10 +1825,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     fn cur_scope(&self) -> ScopeId {
         // Invariant: scope_stack is seeded with `root_scope` in
         // `build_script` and every push is paired with a pop.
-        self.scope_stack
-            .last()
-            .copied()
-            .unwrap_or(ScopeId(0))
+        self.scope_stack.last().copied().unwrap_or(ScopeId(0))
     }
 
     fn abs(&self, start: u32, end: u32) -> Range {
@@ -1933,7 +1882,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     /// Push them as a new ignore frame. Returns `true` if a frame
     /// was pushed so the caller pops on exit.
     fn push_leading_ignores(&mut self, stmt_start: Option<u32>) -> bool {
-        let Some(start) = stmt_start else { return false };
+        let Some(start) = stmt_start else {
+            return false;
+        };
         let start = start as usize;
         let bytes = self.script_content.as_bytes();
         let mut codes: Vec<SmolStr> = Vec::new();
@@ -2191,9 +2142,8 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // `reactive_declaration_module_script_dependency` we need to
         // know the reference sits inside a `$:` block at the top
         // level of the instance script.
-        let is_top_level_reactive = lbl.label.name == "$"
-            && self.is_instance
-            && self.function_depth == self.program_depth;
+        let is_top_level_reactive =
+            lbl.label.name == "$" && self.is_instance && self.function_depth == self.program_depth;
         if is_top_level_reactive {
             let prev = std::mem::replace(&mut self.in_reactive_statement, true);
             self.visit_stmt(&lbl.body);
@@ -2331,8 +2281,8 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // destructure, the rest element becomes RestProp, and
         // `$bindable(default)` fallbacks flip to BindableProp.
         let is_props = matches!(rune, Some(RuneCall::Props));
-        let is_props_identifier = is_props
-            && matches!(&d.id.kind, BindingPatternKind::BindingIdentifier(_));
+        let is_props_identifier =
+            is_props && matches!(&d.id.kind, BindingPatternKind::BindingIdentifier(_));
 
         // custom_element_props_identifier candidate. Upstream
         // `VariableDeclarator.js:72-83` fires on Identifier form
@@ -2346,10 +2296,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 BindingPatternKind::BindingIdentifier(id) => {
                     Some(self.abs(id.span.start, id.span.end))
                 }
-                BindingPatternKind::ObjectPattern(op) => op
-                    .rest
-                    .as_ref()
-                    .map(|r| self.abs(r.span.start, r.span.end)),
+                BindingPatternKind::ObjectPattern(op) => {
+                    op.rest.as_ref().map(|r| self.abs(r.span.start, r.span.end))
+                }
                 _ => None,
             };
             if let Some(r) = warn_range {
@@ -2469,13 +2418,14 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 } else {
                     // Unwrap an AssignmentPattern to see if there's a
                     // default expression.
-                    let default = if let BindingPatternKind::AssignmentPattern(ap) = &prop.value.kind {
-                        InitialKind::Expression {
-                            primitive: is_primitive_expr(&ap.right),
-                        }
-                    } else {
-                        InitialKind::None
-                    };
+                    let default =
+                        if let BindingPatternKind::AssignmentPattern(ap) = &prop.value.kind {
+                            InitialKind::Expression {
+                                primitive: is_primitive_expr(&ap.right),
+                            }
+                        } else {
+                            InitialKind::None
+                        };
                     (BindingKind::Prop, default)
                 }
             } else {
@@ -2484,7 +2434,11 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             self.declare_pattern_with(&prop.value, decl_kind, child_kind, &child_initial, is_props);
         }
         if let Some(rest) = &op.rest {
-            let child_kind = if is_props { BindingKind::RestProp } else { kind };
+            let child_kind = if is_props {
+                BindingKind::RestProp
+            } else {
+                kind
+            };
             // Upstream `VariableDeclarator.js` only walks the
             // ObjectPattern's `properties` list for the $props-rewire
             // step — rest-element bindings keep the `.initial` that
@@ -2515,7 +2469,13 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     }
 
     fn declare_pattern(&mut self, pat: &BindingPattern<'_>, decl_kind: DeclarationKind) {
-        self.declare_pattern_with(pat, decl_kind, BindingKind::Normal, &InitialKind::None, false);
+        self.declare_pattern_with(
+            pat,
+            decl_kind,
+            BindingKind::Normal,
+            &InitialKind::None,
+            false,
+        );
     }
 
     /// Walk the default-value expressions in an `AssignmentPattern`
@@ -2998,7 +2958,6 @@ fn apply_template_flags_since(
     }
 }
 
-
 /// For a `$state`/`$state.raw` call init, return whether the first
 /// argument is a primitive-like (matching upstream's `should_proxy`
 /// analog). `true` if no argument.
@@ -3095,9 +3054,7 @@ fn base_identifier<'a>(e: &'a Expression<'_>) -> Option<(&'a str, u32, u32)> {
     }
 }
 
-fn expression_from_for_init<'a>(
-    e: &'a ForStatementInit<'_>,
-) -> Option<&'a Expression<'a>> {
+fn expression_from_for_init<'a>(e: &'a ForStatementInit<'_>) -> Option<&'a Expression<'a>> {
     e.as_expression()
 }
 
@@ -3107,8 +3064,6 @@ fn expression_from_default<'a>(
     e.as_expression()
 }
 
-fn expression_from_property_key<'a>(
-    k: &'a PropertyKey<'_>,
-) -> Option<&'a Expression<'a>> {
+fn expression_from_property_key<'a>(k: &'a PropertyKey<'_>) -> Option<&'a Expression<'a>> {
     k.as_expression()
 }

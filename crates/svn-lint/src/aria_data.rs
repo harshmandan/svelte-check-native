@@ -129,7 +129,11 @@ pub const ROLE_PROPS: &[(&str, u64, &[&str])] = &[
     ("checkbox", 0x1e217dfdc62u64, &["aria-checked"]),
     ("code", 0x14217595c22u64, &[]),
     ("columnheader", 0x5de217ffdf22u64, &[]),
-    ("combobox", 0x1e217ffdc27u64, &["aria-controls", "aria-expanded"]),
+    (
+        "combobox",
+        0x1e217ffdc27u64,
+        &["aria-controls", "aria-expanded"],
+    ),
     ("complementary", 0x14217595c22u64, &[]),
     ("contentinfo", 0x14217595c22u64, &[]),
     ("definition", 0x14217595c22u64, &[]),
@@ -220,7 +224,11 @@ pub const ROLE_PROPS: &[(&str, u64, &[&str])] = &[
     ("row", 0x354a1f5ddd23u64, &[]),
     ("rowgroup", 0x14217595c22u64, &[]),
     ("rowheader", 0x5de217ffdf22u64, &[]),
-    ("scrollbar", 0x781431759dc22u64, &["aria-controls", "aria-valuenow"]),
+    (
+        "scrollbar",
+        0x781431759dc22u64,
+        &["aria-controls", "aria-valuenow"],
+    ),
     ("search", 0x14217595c22u64, &[]),
     ("searchbox", 0x1e657fbdc27u64, &[]),
     ("separator", 0x781431759dc22u64, &[]),
@@ -249,55 +257,196 @@ pub const ROLE_PROPS: &[(&str, u64, &[&str])] = &[
 pub const INTERACTIVE_ELEMENT_SCHEMAS: &[Schema] = &[
     // role-interactive (derived from aria-query's elementRoles →
     // widget/window superClass)
-    Schema { name: "input", attrs: &[("type", Some("button"))] },
-    Schema { name: "input", attrs: &[("type", Some("image"))] },
-    Schema { name: "input", attrs: &[("type", Some("reset"))] },
-    Schema { name: "input", attrs: &[("type", Some("submit"))] },
-    Schema { name: "button", attrs: &[] },
-    Schema { name: "td", attrs: &[] },
-    Schema { name: "input", attrs: &[("type", Some("checkbox"))] },
-    Schema { name: "th", attrs: &[] },
-    Schema { name: "th", attrs: &[("scope", Some("col"))] },
-    Schema { name: "th", attrs: &[("scope", Some("colgroup"))] },
-    Schema { name: "input", attrs: &[("list", None), ("type", Some("email"))] },
-    Schema { name: "input", attrs: &[("list", None), ("type", Some("search"))] },
-    Schema { name: "input", attrs: &[("list", None), ("type", Some("tel"))] },
-    Schema { name: "input", attrs: &[("list", None), ("type", Some("text"))] },
-    Schema { name: "input", attrs: &[("list", None), ("type", Some("url"))] },
-    Schema { name: "select", attrs: &[] },
-    Schema { name: "dialog", attrs: &[] },
-    Schema { name: "td", attrs: &[] },
-    Schema { name: "a", attrs: &[("href", None)] },
-    Schema { name: "area", attrs: &[("href", None)] },
-    Schema { name: "select", attrs: &[("size", None)] },
-    Schema { name: "select", attrs: &[("multiple", None)] },
-    Schema { name: "datalist", attrs: &[] },
-    Schema { name: "option", attrs: &[] },
-    Schema { name: "input", attrs: &[("type", Some("radio"))] },
-    Schema { name: "tr", attrs: &[] },
-    Schema { name: "th", attrs: &[("scope", Some("row"))] },
-    Schema { name: "th", attrs: &[("scope", Some("rowgroup"))] },
-    Schema { name: "input", attrs: &[("type", Some("search"))] },
-    Schema { name: "input", attrs: &[("type", Some("range"))] },
-    Schema { name: "input", attrs: &[("type", Some("number"))] },
-    Schema { name: "input", attrs: &[] },
-    Schema { name: "input", attrs: &[("type", Some("email"))] },
-    Schema { name: "input", attrs: &[("type", Some("tel"))] },
-    Schema { name: "input", attrs: &[("type", Some("text"))] },
-    Schema { name: "input", attrs: &[("type", Some("url"))] },
-    Schema { name: "textarea", attrs: &[] },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("button"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("image"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("reset"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("submit"))],
+    },
+    Schema {
+        name: "button",
+        attrs: &[],
+    },
+    Schema {
+        name: "td",
+        attrs: &[],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("checkbox"))],
+    },
+    Schema {
+        name: "th",
+        attrs: &[],
+    },
+    Schema {
+        name: "th",
+        attrs: &[("scope", Some("col"))],
+    },
+    Schema {
+        name: "th",
+        attrs: &[("scope", Some("colgroup"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("list", None), ("type", Some("email"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("list", None), ("type", Some("search"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("list", None), ("type", Some("tel"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("list", None), ("type", Some("text"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("list", None), ("type", Some("url"))],
+    },
+    Schema {
+        name: "select",
+        attrs: &[],
+    },
+    Schema {
+        name: "dialog",
+        attrs: &[],
+    },
+    Schema {
+        name: "td",
+        attrs: &[],
+    },
+    Schema {
+        name: "a",
+        attrs: &[("href", None)],
+    },
+    Schema {
+        name: "area",
+        attrs: &[("href", None)],
+    },
+    Schema {
+        name: "select",
+        attrs: &[("size", None)],
+    },
+    Schema {
+        name: "select",
+        attrs: &[("multiple", None)],
+    },
+    Schema {
+        name: "datalist",
+        attrs: &[],
+    },
+    Schema {
+        name: "option",
+        attrs: &[],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("radio"))],
+    },
+    Schema {
+        name: "tr",
+        attrs: &[],
+    },
+    Schema {
+        name: "th",
+        attrs: &[("scope", Some("row"))],
+    },
+    Schema {
+        name: "th",
+        attrs: &[("scope", Some("rowgroup"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("search"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("range"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("number"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("email"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("tel"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("text"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("url"))],
+    },
+    Schema {
+        name: "textarea",
+        attrs: &[],
+    },
     // ax-interactive (axobject-query elementAXObjects → widget
     // AXObject type) — additional members not covered above.
-    Schema { name: "audio", attrs: &[] },
-    Schema { name: "canvas", attrs: &[] },
-    Schema { name: "input", attrs: &[("type", Some("color"))] },
-    Schema { name: "input", attrs: &[("type", Some("date"))] },
-    Schema { name: "input", attrs: &[("type", Some("datetime"))] },
-    Schema { name: "summary", attrs: &[] },
-    Schema { name: "embed", attrs: &[] },
-    Schema { name: "input", attrs: &[("type", Some("time"))] },
-    Schema { name: "menuitem", attrs: &[] },
-    Schema { name: "video", attrs: &[] },
+    Schema {
+        name: "audio",
+        attrs: &[],
+    },
+    Schema {
+        name: "canvas",
+        attrs: &[],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("color"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("date"))],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("datetime"))],
+    },
+    Schema {
+        name: "summary",
+        attrs: &[],
+    },
+    Schema {
+        name: "embed",
+        attrs: &[],
+    },
+    Schema {
+        name: "input",
+        attrs: &[("type", Some("time"))],
+    },
+    Schema {
+        name: "menuitem",
+        attrs: &[],
+    },
+    Schema {
+        name: "video",
+        attrs: &[],
+    },
 ];
 
 /// (schema, roles) pairs from `axobject-query`'s `elementAXObjects`
@@ -307,45 +456,279 @@ pub const INTERACTIVE_ELEMENT_SCHEMAS: &[Schema] = &[
 /// already provides the `switch` role and hence `aria-checked` isn't
 /// actually missing).
 pub const ELEMENT_AX_ROLES: &[(Schema, &[&str])] = &[
-    (Schema { name: "article", attrs: &[] }, &["article"]),
-    (Schema { name: "button", attrs: &[] }, &["button"]),
-    (Schema { name: "td", attrs: &[] }, &["cell", "gridcell"]),
-    (Schema { name: "input", attrs: &[("type", Some("checkbox"))] }, &["checkbox", "switch"]),
-    (Schema { name: "th", attrs: &[] }, &["columnheader"]),
-    (Schema { name: "select", attrs: &[] }, &["combobox", "listbox"]),
-    (Schema { name: "dialog", attrs: &[] }, &["dialog"]),
-    (Schema { name: "dir", attrs: &[] }, &["directory"]),
-    (Schema { name: "figure", attrs: &[] }, &["figure"]),
-    (Schema { name: "form", attrs: &[] }, &["form"]),
-    (Schema { name: "h1", attrs: &[] }, &["heading"]),
-    (Schema { name: "h2", attrs: &[] }, &["heading"]),
-    (Schema { name: "h3", attrs: &[] }, &["heading"]),
-    (Schema { name: "h4", attrs: &[] }, &["heading"]),
-    (Schema { name: "h5", attrs: &[] }, &["heading"]),
-    (Schema { name: "h6", attrs: &[] }, &["heading"]),
-    (Schema { name: "img", attrs: &[] }, &["img"]),
-    (Schema { name: "input", attrs: &[] }, &["textbox"]),
-    (Schema { name: "a", attrs: &[("href", None)] }, &["link"]),
-    (Schema { name: "option", attrs: &[] }, &["option"]),
-    (Schema { name: "datalist", attrs: &[] }, &["listbox"]),
-    (Schema { name: "li", attrs: &[] }, &["listitem"]),
-    (Schema { name: "ul", attrs: &[] }, &["list"]),
-    (Schema { name: "ol", attrs: &[] }, &["list"]),
-    (Schema { name: "main", attrs: &[] }, &["main"]),
-    (Schema { name: "marquee", attrs: &[] }, &["marquee"]),
-    (Schema { name: "menuitem", attrs: &[] }, &["menuitem"]),
-    (Schema { name: "menu", attrs: &[] }, &["menu"]),
-    (Schema { name: "nav", attrs: &[] }, &["navigation"]),
-    (Schema { name: "progress", attrs: &[] }, &["progressbar"]),
-    (Schema { name: "input", attrs: &[("type", Some("radio"))] }, &["radio"]),
-    (Schema { name: "th", attrs: &[("scope", Some("row"))] }, &["rowheader"]),
-    (Schema { name: "tr", attrs: &[] }, &["row"]),
-    (Schema { name: "input", attrs: &[("type", Some("search"))] }, &["searchbox"]),
-    (Schema { name: "input", attrs: &[("type", Some("range"))] }, &["slider"]),
-    (Schema { name: "input", attrs: &[("type", Some("number"))] }, &["spinbutton"]),
-    (Schema { name: "table", attrs: &[] }, &["table"]),
-    (Schema { name: "textarea", attrs: &[] }, &["textbox"]),
-    (Schema { name: "input", attrs: &[("type", Some("text"))] }, &["textbox"]),
+    (
+        Schema {
+            name: "article",
+            attrs: &[],
+        },
+        &["article"],
+    ),
+    (
+        Schema {
+            name: "button",
+            attrs: &[],
+        },
+        &["button"],
+    ),
+    (
+        Schema {
+            name: "td",
+            attrs: &[],
+        },
+        &["cell", "gridcell"],
+    ),
+    (
+        Schema {
+            name: "input",
+            attrs: &[("type", Some("checkbox"))],
+        },
+        &["checkbox", "switch"],
+    ),
+    (
+        Schema {
+            name: "th",
+            attrs: &[],
+        },
+        &["columnheader"],
+    ),
+    (
+        Schema {
+            name: "select",
+            attrs: &[],
+        },
+        &["combobox", "listbox"],
+    ),
+    (
+        Schema {
+            name: "dialog",
+            attrs: &[],
+        },
+        &["dialog"],
+    ),
+    (
+        Schema {
+            name: "dir",
+            attrs: &[],
+        },
+        &["directory"],
+    ),
+    (
+        Schema {
+            name: "figure",
+            attrs: &[],
+        },
+        &["figure"],
+    ),
+    (
+        Schema {
+            name: "form",
+            attrs: &[],
+        },
+        &["form"],
+    ),
+    (
+        Schema {
+            name: "h1",
+            attrs: &[],
+        },
+        &["heading"],
+    ),
+    (
+        Schema {
+            name: "h2",
+            attrs: &[],
+        },
+        &["heading"],
+    ),
+    (
+        Schema {
+            name: "h3",
+            attrs: &[],
+        },
+        &["heading"],
+    ),
+    (
+        Schema {
+            name: "h4",
+            attrs: &[],
+        },
+        &["heading"],
+    ),
+    (
+        Schema {
+            name: "h5",
+            attrs: &[],
+        },
+        &["heading"],
+    ),
+    (
+        Schema {
+            name: "h6",
+            attrs: &[],
+        },
+        &["heading"],
+    ),
+    (
+        Schema {
+            name: "img",
+            attrs: &[],
+        },
+        &["img"],
+    ),
+    (
+        Schema {
+            name: "input",
+            attrs: &[],
+        },
+        &["textbox"],
+    ),
+    (
+        Schema {
+            name: "a",
+            attrs: &[("href", None)],
+        },
+        &["link"],
+    ),
+    (
+        Schema {
+            name: "option",
+            attrs: &[],
+        },
+        &["option"],
+    ),
+    (
+        Schema {
+            name: "datalist",
+            attrs: &[],
+        },
+        &["listbox"],
+    ),
+    (
+        Schema {
+            name: "li",
+            attrs: &[],
+        },
+        &["listitem"],
+    ),
+    (
+        Schema {
+            name: "ul",
+            attrs: &[],
+        },
+        &["list"],
+    ),
+    (
+        Schema {
+            name: "ol",
+            attrs: &[],
+        },
+        &["list"],
+    ),
+    (
+        Schema {
+            name: "main",
+            attrs: &[],
+        },
+        &["main"],
+    ),
+    (
+        Schema {
+            name: "marquee",
+            attrs: &[],
+        },
+        &["marquee"],
+    ),
+    (
+        Schema {
+            name: "menuitem",
+            attrs: &[],
+        },
+        &["menuitem"],
+    ),
+    (
+        Schema {
+            name: "menu",
+            attrs: &[],
+        },
+        &["menu"],
+    ),
+    (
+        Schema {
+            name: "nav",
+            attrs: &[],
+        },
+        &["navigation"],
+    ),
+    (
+        Schema {
+            name: "progress",
+            attrs: &[],
+        },
+        &["progressbar"],
+    ),
+    (
+        Schema {
+            name: "input",
+            attrs: &[("type", Some("radio"))],
+        },
+        &["radio"],
+    ),
+    (
+        Schema {
+            name: "th",
+            attrs: &[("scope", Some("row"))],
+        },
+        &["rowheader"],
+    ),
+    (
+        Schema {
+            name: "tr",
+            attrs: &[],
+        },
+        &["row"],
+    ),
+    (
+        Schema {
+            name: "input",
+            attrs: &[("type", Some("search"))],
+        },
+        &["searchbox"],
+    ),
+    (
+        Schema {
+            name: "input",
+            attrs: &[("type", Some("range"))],
+        },
+        &["slider"],
+    ),
+    (
+        Schema {
+            name: "input",
+            attrs: &[("type", Some("number"))],
+        },
+        &["spinbutton"],
+    ),
+    (
+        Schema {
+            name: "table",
+            attrs: &[],
+        },
+        &["table"],
+    ),
+    (
+        Schema {
+            name: "textarea",
+            attrs: &[],
+        },
+        &["textbox"],
+    ),
+    (
+        Schema {
+            name: "input",
+            attrs: &[("type", Some("text"))],
+        },
+        &["textbox"],
+    ),
 ];
 
 /// Does the native element schema expose `role` as one of its AX
@@ -366,74 +749,281 @@ pub fn is_semantic_role_element<'a>(
 }
 
 pub const NON_INTERACTIVE_ELEMENT_SCHEMAS: &[Schema] = &[
-    Schema { name: "article", attrs: &[] },
-    Schema { name: "header", attrs: &[] },
-    Schema { name: "blockquote", attrs: &[] },
-    Schema { name: "caption", attrs: &[] },
-    Schema { name: "code", attrs: &[] },
-    Schema { name: "aside", attrs: &[] },
-    Schema { name: "aside", attrs: &[("aria-label", None)] },
-    Schema { name: "aside", attrs: &[("aria-labelledby", None)] },
-    Schema { name: "footer", attrs: &[] },
-    Schema { name: "dd", attrs: &[] },
-    Schema { name: "del", attrs: &[] },
-    Schema { name: "html", attrs: &[] },
-    Schema { name: "em", attrs: &[] },
-    Schema { name: "figure", attrs: &[] },
-    Schema { name: "form", attrs: &[("aria-label", None)] },
-    Schema { name: "form", attrs: &[("aria-labelledby", None)] },
-    Schema { name: "form", attrs: &[("name", None)] },
-    Schema { name: "details", attrs: &[] },
-    Schema { name: "fieldset", attrs: &[] },
-    Schema { name: "optgroup", attrs: &[] },
-    Schema { name: "address", attrs: &[] },
-    Schema { name: "h1", attrs: &[] },
-    Schema { name: "h2", attrs: &[] },
-    Schema { name: "h3", attrs: &[] },
-    Schema { name: "h4", attrs: &[] },
-    Schema { name: "h5", attrs: &[] },
-    Schema { name: "h6", attrs: &[] },
-    Schema { name: "img", attrs: &[("alt", None)] },
-    Schema { name: "img", attrs: &[] },
-    Schema { name: "ins", attrs: &[] },
-    Schema { name: "menu", attrs: &[] },
-    Schema { name: "ol", attrs: &[] },
-    Schema { name: "ul", attrs: &[] },
-    Schema { name: "li", attrs: &[] },
-    Schema { name: "main", attrs: &[] },
-    Schema { name: "mark", attrs: &[] },
-    Schema { name: "math", attrs: &[] },
-    Schema { name: "meter", attrs: &[] },
-    Schema { name: "nav", attrs: &[] },
-    Schema { name: "p", attrs: &[] },
-    Schema { name: "img", attrs: &[("alt", Some(""))] },
-    Schema { name: "progress", attrs: &[] },
-    Schema { name: "section", attrs: &[("aria-label", None)] },
-    Schema { name: "section", attrs: &[("aria-labelledby", None)] },
-    Schema { name: "tbody", attrs: &[] },
-    Schema { name: "tfoot", attrs: &[] },
-    Schema { name: "thead", attrs: &[] },
-    Schema { name: "hr", attrs: &[] },
-    Schema { name: "output", attrs: &[] },
-    Schema { name: "strong", attrs: &[] },
-    Schema { name: "sub", attrs: &[] },
-    Schema { name: "sup", attrs: &[] },
-    Schema { name: "table", attrs: &[] },
-    Schema { name: "dfn", attrs: &[] },
-    Schema { name: "dt", attrs: &[] },
-    Schema { name: "time", attrs: &[] },
+    Schema {
+        name: "article",
+        attrs: &[],
+    },
+    Schema {
+        name: "header",
+        attrs: &[],
+    },
+    Schema {
+        name: "blockquote",
+        attrs: &[],
+    },
+    Schema {
+        name: "caption",
+        attrs: &[],
+    },
+    Schema {
+        name: "code",
+        attrs: &[],
+    },
+    Schema {
+        name: "aside",
+        attrs: &[],
+    },
+    Schema {
+        name: "aside",
+        attrs: &[("aria-label", None)],
+    },
+    Schema {
+        name: "aside",
+        attrs: &[("aria-labelledby", None)],
+    },
+    Schema {
+        name: "footer",
+        attrs: &[],
+    },
+    Schema {
+        name: "dd",
+        attrs: &[],
+    },
+    Schema {
+        name: "del",
+        attrs: &[],
+    },
+    Schema {
+        name: "html",
+        attrs: &[],
+    },
+    Schema {
+        name: "em",
+        attrs: &[],
+    },
+    Schema {
+        name: "figure",
+        attrs: &[],
+    },
+    Schema {
+        name: "form",
+        attrs: &[("aria-label", None)],
+    },
+    Schema {
+        name: "form",
+        attrs: &[("aria-labelledby", None)],
+    },
+    Schema {
+        name: "form",
+        attrs: &[("name", None)],
+    },
+    Schema {
+        name: "details",
+        attrs: &[],
+    },
+    Schema {
+        name: "fieldset",
+        attrs: &[],
+    },
+    Schema {
+        name: "optgroup",
+        attrs: &[],
+    },
+    Schema {
+        name: "address",
+        attrs: &[],
+    },
+    Schema {
+        name: "h1",
+        attrs: &[],
+    },
+    Schema {
+        name: "h2",
+        attrs: &[],
+    },
+    Schema {
+        name: "h3",
+        attrs: &[],
+    },
+    Schema {
+        name: "h4",
+        attrs: &[],
+    },
+    Schema {
+        name: "h5",
+        attrs: &[],
+    },
+    Schema {
+        name: "h6",
+        attrs: &[],
+    },
+    Schema {
+        name: "img",
+        attrs: &[("alt", None)],
+    },
+    Schema {
+        name: "img",
+        attrs: &[],
+    },
+    Schema {
+        name: "ins",
+        attrs: &[],
+    },
+    Schema {
+        name: "menu",
+        attrs: &[],
+    },
+    Schema {
+        name: "ol",
+        attrs: &[],
+    },
+    Schema {
+        name: "ul",
+        attrs: &[],
+    },
+    Schema {
+        name: "li",
+        attrs: &[],
+    },
+    Schema {
+        name: "main",
+        attrs: &[],
+    },
+    Schema {
+        name: "mark",
+        attrs: &[],
+    },
+    Schema {
+        name: "math",
+        attrs: &[],
+    },
+    Schema {
+        name: "meter",
+        attrs: &[],
+    },
+    Schema {
+        name: "nav",
+        attrs: &[],
+    },
+    Schema {
+        name: "p",
+        attrs: &[],
+    },
+    Schema {
+        name: "img",
+        attrs: &[("alt", Some(""))],
+    },
+    Schema {
+        name: "progress",
+        attrs: &[],
+    },
+    Schema {
+        name: "section",
+        attrs: &[("aria-label", None)],
+    },
+    Schema {
+        name: "section",
+        attrs: &[("aria-labelledby", None)],
+    },
+    Schema {
+        name: "tbody",
+        attrs: &[],
+    },
+    Schema {
+        name: "tfoot",
+        attrs: &[],
+    },
+    Schema {
+        name: "thead",
+        attrs: &[],
+    },
+    Schema {
+        name: "hr",
+        attrs: &[],
+    },
+    Schema {
+        name: "output",
+        attrs: &[],
+    },
+    Schema {
+        name: "strong",
+        attrs: &[],
+    },
+    Schema {
+        name: "sub",
+        attrs: &[],
+    },
+    Schema {
+        name: "sup",
+        attrs: &[],
+    },
+    Schema {
+        name: "table",
+        attrs: &[],
+    },
+    Schema {
+        name: "dfn",
+        attrs: &[],
+    },
+    Schema {
+        name: "dt",
+        attrs: &[],
+    },
+    Schema {
+        name: "time",
+        attrs: &[],
+    },
     // ax-non-interactive additions.
-    Schema { name: "abbr", attrs: &[] },
-    Schema { name: "dl", attrs: &[] },
-    Schema { name: "dir", attrs: &[] },
-    Schema { name: "figcaption", attrs: &[] },
-    Schema { name: "form", attrs: &[] },
-    Schema { name: "img", attrs: &[("usemap", None)] },
-    Schema { name: "label", attrs: &[] },
-    Schema { name: "legend", attrs: &[] },
-    Schema { name: "br", attrs: &[] },
-    Schema { name: "marquee", attrs: &[] },
-    Schema { name: "pre", attrs: &[] },
-    Schema { name: "tr", attrs: &[] },
-    Schema { name: "ruby", attrs: &[] },
+    Schema {
+        name: "abbr",
+        attrs: &[],
+    },
+    Schema {
+        name: "dl",
+        attrs: &[],
+    },
+    Schema {
+        name: "dir",
+        attrs: &[],
+    },
+    Schema {
+        name: "figcaption",
+        attrs: &[],
+    },
+    Schema {
+        name: "form",
+        attrs: &[],
+    },
+    Schema {
+        name: "img",
+        attrs: &[("usemap", None)],
+    },
+    Schema {
+        name: "label",
+        attrs: &[],
+    },
+    Schema {
+        name: "legend",
+        attrs: &[],
+    },
+    Schema {
+        name: "br",
+        attrs: &[],
+    },
+    Schema {
+        name: "marquee",
+        attrs: &[],
+    },
+    Schema {
+        name: "pre",
+        attrs: &[],
+    },
+    Schema {
+        name: "tr",
+        attrs: &[],
+    },
+    Schema {
+        name: "ruby",
+        attrs: &[],
+    },
 ];

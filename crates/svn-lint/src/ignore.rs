@@ -130,17 +130,14 @@ fn parse_ignore_codes_emit(
             let tok_source = &segment[leading_ws..];
             let token_len: usize = tok_source
                 .chars()
-                .take_while(|c| {
-                    c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '$'
-                })
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '$')
                 .map(|c| c.len_utf8())
                 .sum();
             if token_len == 0 {
                 continue;
             }
             let code = &tok_source[..token_len];
-            let token_abs_start =
-                rest_base_offset + (seg_start as u32) + (leading_ws as u32);
+            let token_abs_start = rest_base_offset + (seg_start as u32) + (leading_ws as u32);
             let token_abs_end = token_abs_start + token_len as u32;
             if is_known_code(code) {
                 out.push(SmolStr::new(code));

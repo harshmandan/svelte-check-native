@@ -11,7 +11,12 @@
 use std::path::Path;
 
 fn lint(source: &str) -> Vec<svn_lint::Warning> {
-    svn_lint::lint_file(source, Path::new("t.svelte"), Some(true), svn_lint::CompatFeatures::MODERN)
+    svn_lint::lint_file(
+        source,
+        Path::new("t.svelte"),
+        Some(true),
+        svn_lint::CompatFeatures::MODERN,
+    )
 }
 
 fn state_locally(source: &str) -> Vec<(u32, u32)> {
@@ -54,7 +59,11 @@ fn prop_read_inside_else_body_fires() {
 </script>
 ";
     let got = state_locally(src);
-    assert_eq!(got.len(), 2, "expected two warnings (if-cond + else-body), got {got:?}");
+    assert_eq!(
+        got.len(),
+        2,
+        "expected two warnings (if-cond + else-body), got {got:?}"
+    );
 }
 
 #[test]
@@ -68,7 +77,11 @@ fn prop_read_inside_plain_block_fires() {
 </script>
 ";
     let got = state_locally(src);
-    assert_eq!(got.len(), 1, "expected one warning (plain block body), got {got:?}");
+    assert_eq!(
+        got.len(),
+        1,
+        "expected one warning (plain block body), got {got:?}"
+    );
 }
 
 #[test]
@@ -84,5 +97,8 @@ fn prop_read_inside_function_does_not_fire() {
 </script>
 ";
     let got = state_locally(src);
-    assert!(got.is_empty(), "expected no warnings inside function body, got {got:?}");
+    assert!(
+        got.is_empty(),
+        "expected no warnings inside function body, got {got:?}"
+    );
 }

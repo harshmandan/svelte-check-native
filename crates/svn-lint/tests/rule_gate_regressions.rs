@@ -228,7 +228,9 @@ fn state_referenced_locally_pre_5_45_3_does_not_fire_on_prop() {
 </script>
 ";
     let compat = CompatFeatures::from_version(Some(SvelteVersion {
-        major: 5, minor: 45, patch: 2,
+        major: 5,
+        minor: 45,
+        patch: 2,
     }));
     let warnings = lint(src, compat);
     assert!(
@@ -249,7 +251,9 @@ fn state_referenced_locally_5_45_3_fires_on_prop() {
 </script>
 ";
     let compat = CompatFeatures::from_version(Some(SvelteVersion {
-        major: 5, minor: 45, patch: 3,
+        major: 5,
+        minor: 45,
+        patch: 3,
     }));
     let warnings = lint(src, compat);
     assert!(codes(&warnings).contains(&"state_referenced_locally"));
@@ -270,7 +274,9 @@ fn state_referenced_locally_pre_5_51_2_does_not_fire_on_rest_prop() {
 </script>
 ";
     let compat = CompatFeatures::from_version(Some(SvelteVersion {
-        major: 5, minor: 51, patch: 1,
+        major: 5,
+        minor: 51,
+        patch: 1,
     }));
     let warnings = lint(src, compat);
     assert_eq!(
@@ -296,7 +302,9 @@ fn state_referenced_locally_5_51_2_fires_on_rest_prop_read() {
 </script>
 ";
     let compat = CompatFeatures::from_version(Some(SvelteVersion {
-        major: 5, minor: 51, patch: 2,
+        major: 5,
+        minor: 51,
+        patch: 2,
     }));
     let warnings = lint(src, compat);
     assert!(

@@ -59,7 +59,9 @@ pub fn infer_runes_mode(source: &str, path: &Path) -> bool {
             let mut after = pos + mbytes.len();
             while bytes.get(after) == Some(&b'.') {
                 after += 1;
-                while after < bytes.len() && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_') {
+                while after < bytes.len()
+                    && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_')
+                {
                     after += 1;
                 }
             }
@@ -163,7 +165,10 @@ pub fn walk(source: &str, ctx: &mut LintContext<'_>) {
 /// name) and whether the literal object has a `props` key, when the
 /// value is an ObjectExpression. String / boolean values have no
 /// props option.
-fn find_custom_element_option(fragment: &Fragment, source: &str) -> Option<(svn_core::Range, bool)> {
+fn find_custom_element_option(
+    fragment: &Fragment,
+    source: &str,
+) -> Option<(svn_core::Range, bool)> {
     for node in &fragment.nodes {
         if let Node::SvelteElement(se) = node
             && se.kind == SvelteElementKind::Options

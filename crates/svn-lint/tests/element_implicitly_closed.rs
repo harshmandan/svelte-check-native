@@ -27,7 +27,12 @@
 use std::path::Path;
 
 fn lint(source: &str) -> Vec<svn_lint::Warning> {
-    svn_lint::lint_file(source, Path::new("t.svelte"), Some(true), svn_lint::CompatFeatures::MODERN)
+    svn_lint::lint_file(
+        source,
+        Path::new("t.svelte"),
+        Some(true),
+        svn_lint::CompatFeatures::MODERN,
+    )
 }
 
 fn implicit_close_warnings(source: &str) -> Vec<&'static str> {

@@ -133,8 +133,14 @@ pub const A11Y_INTERACTIVE_HANDLERS: &[&str] = &[
 /// Subset of `A11Y_INTERACTIVE_HANDLERS` that trigger
 /// `a11y_recommended_interactive_handlers` (used inside
 /// `a11y_click_events_have_key_events` / friends).
-pub const A11Y_RECOMMENDED_INTERACTIVE_HANDLERS: &[&str] =
-    &["click", "mousedown", "mouseup", "keypress", "keydown", "keyup"];
+pub const A11Y_RECOMMENDED_INTERACTIVE_HANDLERS: &[&str] = &[
+    "click",
+    "mousedown",
+    "mouseup",
+    "keypress",
+    "keydown",
+    "keyup",
+];
 
 /// Is `handler` considered interactive under the active compat
 /// profile? Gates the pointer/touch subset behind
@@ -238,7 +244,13 @@ pub fn a11y_non_interactive_element_to_interactive_role_exceptions(
 ) -> Option<&'static [&'static str]> {
     Some(match name {
         "ul" | "ol" | "menu" => &[
-            "listbox", "menu", "menubar", "radiogroup", "tablist", "tree", "treegrid",
+            "listbox",
+            "menu",
+            "menubar",
+            "radiogroup",
+            "tablist",
+            "tree",
+            "treegrid",
         ],
         "li" => &["menuitem", "option", "row", "tab", "treeitem"],
         "table" => &["grid"],
@@ -621,55 +633,361 @@ pub const NON_INTERACTIVE_ROLES: &[&str] = &[
 pub const PRESENTATION_ROLES: &[&str] = &["presentation", "none"];
 
 pub static ARIA_PROPS: &[(&str, &AriaPropDef)] = &[
-    ("aria-activedescendant", &AriaPropDef { ty: AriaType::Id, values: NONE }),
-    ("aria-atomic", &AriaPropDef { ty: AriaType::Boolean, values: NONE }),
-    ("aria-autocomplete", &AriaPropDef { ty: AriaType::Token, values: &["inline", "list", "both", "none"] }),
-    ("aria-braillelabel", &AriaPropDef { ty: AriaType::String, values: NONE }),
-    ("aria-brailleroledescription", &AriaPropDef { ty: AriaType::String, values: NONE }),
-    ("aria-busy", &AriaPropDef { ty: AriaType::Boolean, values: NONE }),
-    ("aria-checked", &AriaPropDef { ty: AriaType::Tristate, values: NONE }),
-    ("aria-colcount", &AriaPropDef { ty: AriaType::Integer, values: NONE }),
-    ("aria-colindex", &AriaPropDef { ty: AriaType::Integer, values: NONE }),
-    ("aria-colspan", &AriaPropDef { ty: AriaType::Integer, values: NONE }),
-    ("aria-controls", &AriaPropDef { ty: AriaType::IdList, values: NONE }),
-    ("aria-current", &AriaPropDef { ty: AriaType::Token, values: &["page", "step", "location", "date", "time", "true", "false"] }),
-    ("aria-describedby", &AriaPropDef { ty: AriaType::IdList, values: NONE }),
-    ("aria-description", &AriaPropDef { ty: AriaType::String, values: NONE }),
-    ("aria-details", &AriaPropDef { ty: AriaType::Id, values: NONE }),
-    ("aria-disabled", &AriaPropDef { ty: AriaType::Boolean, values: NONE }),
-    ("aria-dropeffect", &AriaPropDef { ty: AriaType::TokenList, values: &["copy", "execute", "link", "move", "none", "popup"] }),
-    ("aria-errormessage", &AriaPropDef { ty: AriaType::Id, values: NONE }),
-    ("aria-expanded", &AriaPropDef { ty: AriaType::BooleanUndefined, values: NONE }),
-    ("aria-flowto", &AriaPropDef { ty: AriaType::IdList, values: NONE }),
-    ("aria-grabbed", &AriaPropDef { ty: AriaType::BooleanUndefined, values: NONE }),
-    ("aria-haspopup", &AriaPropDef { ty: AriaType::Token, values: &["false", "true", "menu", "listbox", "tree", "grid", "dialog"] }),
-    ("aria-hidden", &AriaPropDef { ty: AriaType::BooleanUndefined, values: NONE }),
-    ("aria-invalid", &AriaPropDef { ty: AriaType::Token, values: &["grammar", "false", "spelling", "true"] }),
-    ("aria-keyshortcuts", &AriaPropDef { ty: AriaType::String, values: NONE }),
-    ("aria-label", &AriaPropDef { ty: AriaType::String, values: NONE }),
-    ("aria-labelledby", &AriaPropDef { ty: AriaType::IdList, values: NONE }),
-    ("aria-level", &AriaPropDef { ty: AriaType::Integer, values: NONE }),
-    ("aria-live", &AriaPropDef { ty: AriaType::Token, values: &["assertive", "off", "polite"] }),
-    ("aria-modal", &AriaPropDef { ty: AriaType::Boolean, values: NONE }),
-    ("aria-multiline", &AriaPropDef { ty: AriaType::Boolean, values: NONE }),
-    ("aria-multiselectable", &AriaPropDef { ty: AriaType::Boolean, values: NONE }),
-    ("aria-orientation", &AriaPropDef { ty: AriaType::Token, values: &["vertical", "undefined", "horizontal"] }),
-    ("aria-owns", &AriaPropDef { ty: AriaType::IdList, values: NONE }),
-    ("aria-placeholder", &AriaPropDef { ty: AriaType::String, values: NONE }),
-    ("aria-posinset", &AriaPropDef { ty: AriaType::Integer, values: NONE }),
-    ("aria-pressed", &AriaPropDef { ty: AriaType::Tristate, values: NONE }),
-    ("aria-readonly", &AriaPropDef { ty: AriaType::Boolean, values: NONE }),
-    ("aria-relevant", &AriaPropDef { ty: AriaType::TokenList, values: &["additions", "all", "removals", "text"] }),
-    ("aria-required", &AriaPropDef { ty: AriaType::Boolean, values: NONE }),
-    ("aria-roledescription", &AriaPropDef { ty: AriaType::String, values: NONE }),
-    ("aria-rowcount", &AriaPropDef { ty: AriaType::Integer, values: NONE }),
-    ("aria-rowindex", &AriaPropDef { ty: AriaType::Integer, values: NONE }),
-    ("aria-rowspan", &AriaPropDef { ty: AriaType::Integer, values: NONE }),
-    ("aria-selected", &AriaPropDef { ty: AriaType::BooleanUndefined, values: NONE }),
-    ("aria-setsize", &AriaPropDef { ty: AriaType::Integer, values: NONE }),
-    ("aria-sort", &AriaPropDef { ty: AriaType::Token, values: &["ascending", "descending", "none", "other"] }),
-    ("aria-valuemax", &AriaPropDef { ty: AriaType::Number, values: NONE }),
-    ("aria-valuemin", &AriaPropDef { ty: AriaType::Number, values: NONE }),
-    ("aria-valuenow", &AriaPropDef { ty: AriaType::Number, values: NONE }),
-    ("aria-valuetext", &AriaPropDef { ty: AriaType::String, values: NONE }),
+    (
+        "aria-activedescendant",
+        &AriaPropDef {
+            ty: AriaType::Id,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-atomic",
+        &AriaPropDef {
+            ty: AriaType::Boolean,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-autocomplete",
+        &AriaPropDef {
+            ty: AriaType::Token,
+            values: &["inline", "list", "both", "none"],
+        },
+    ),
+    (
+        "aria-braillelabel",
+        &AriaPropDef {
+            ty: AriaType::String,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-brailleroledescription",
+        &AriaPropDef {
+            ty: AriaType::String,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-busy",
+        &AriaPropDef {
+            ty: AriaType::Boolean,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-checked",
+        &AriaPropDef {
+            ty: AriaType::Tristate,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-colcount",
+        &AriaPropDef {
+            ty: AriaType::Integer,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-colindex",
+        &AriaPropDef {
+            ty: AriaType::Integer,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-colspan",
+        &AriaPropDef {
+            ty: AriaType::Integer,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-controls",
+        &AriaPropDef {
+            ty: AriaType::IdList,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-current",
+        &AriaPropDef {
+            ty: AriaType::Token,
+            values: &["page", "step", "location", "date", "time", "true", "false"],
+        },
+    ),
+    (
+        "aria-describedby",
+        &AriaPropDef {
+            ty: AriaType::IdList,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-description",
+        &AriaPropDef {
+            ty: AriaType::String,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-details",
+        &AriaPropDef {
+            ty: AriaType::Id,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-disabled",
+        &AriaPropDef {
+            ty: AriaType::Boolean,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-dropeffect",
+        &AriaPropDef {
+            ty: AriaType::TokenList,
+            values: &["copy", "execute", "link", "move", "none", "popup"],
+        },
+    ),
+    (
+        "aria-errormessage",
+        &AriaPropDef {
+            ty: AriaType::Id,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-expanded",
+        &AriaPropDef {
+            ty: AriaType::BooleanUndefined,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-flowto",
+        &AriaPropDef {
+            ty: AriaType::IdList,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-grabbed",
+        &AriaPropDef {
+            ty: AriaType::BooleanUndefined,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-haspopup",
+        &AriaPropDef {
+            ty: AriaType::Token,
+            values: &["false", "true", "menu", "listbox", "tree", "grid", "dialog"],
+        },
+    ),
+    (
+        "aria-hidden",
+        &AriaPropDef {
+            ty: AriaType::BooleanUndefined,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-invalid",
+        &AriaPropDef {
+            ty: AriaType::Token,
+            values: &["grammar", "false", "spelling", "true"],
+        },
+    ),
+    (
+        "aria-keyshortcuts",
+        &AriaPropDef {
+            ty: AriaType::String,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-label",
+        &AriaPropDef {
+            ty: AriaType::String,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-labelledby",
+        &AriaPropDef {
+            ty: AriaType::IdList,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-level",
+        &AriaPropDef {
+            ty: AriaType::Integer,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-live",
+        &AriaPropDef {
+            ty: AriaType::Token,
+            values: &["assertive", "off", "polite"],
+        },
+    ),
+    (
+        "aria-modal",
+        &AriaPropDef {
+            ty: AriaType::Boolean,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-multiline",
+        &AriaPropDef {
+            ty: AriaType::Boolean,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-multiselectable",
+        &AriaPropDef {
+            ty: AriaType::Boolean,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-orientation",
+        &AriaPropDef {
+            ty: AriaType::Token,
+            values: &["vertical", "undefined", "horizontal"],
+        },
+    ),
+    (
+        "aria-owns",
+        &AriaPropDef {
+            ty: AriaType::IdList,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-placeholder",
+        &AriaPropDef {
+            ty: AriaType::String,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-posinset",
+        &AriaPropDef {
+            ty: AriaType::Integer,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-pressed",
+        &AriaPropDef {
+            ty: AriaType::Tristate,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-readonly",
+        &AriaPropDef {
+            ty: AriaType::Boolean,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-relevant",
+        &AriaPropDef {
+            ty: AriaType::TokenList,
+            values: &["additions", "all", "removals", "text"],
+        },
+    ),
+    (
+        "aria-required",
+        &AriaPropDef {
+            ty: AriaType::Boolean,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-roledescription",
+        &AriaPropDef {
+            ty: AriaType::String,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-rowcount",
+        &AriaPropDef {
+            ty: AriaType::Integer,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-rowindex",
+        &AriaPropDef {
+            ty: AriaType::Integer,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-rowspan",
+        &AriaPropDef {
+            ty: AriaType::Integer,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-selected",
+        &AriaPropDef {
+            ty: AriaType::BooleanUndefined,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-setsize",
+        &AriaPropDef {
+            ty: AriaType::Integer,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-sort",
+        &AriaPropDef {
+            ty: AriaType::Token,
+            values: &["ascending", "descending", "none", "other"],
+        },
+    ),
+    (
+        "aria-valuemax",
+        &AriaPropDef {
+            ty: AriaType::Number,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-valuemin",
+        &AriaPropDef {
+            ty: AriaType::Number,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-valuenow",
+        &AriaPropDef {
+            ty: AriaType::Number,
+            values: NONE,
+        },
+    ),
+    (
+        "aria-valuetext",
+        &AriaPropDef {
+            ty: AriaType::String,
+            values: NONE,
+        },
+    ),
 ];

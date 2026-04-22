@@ -256,11 +256,8 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
                 if has_bidi_char(&lit.value) {
                     let range = self.abs_range(lit.span.start, lit.span.end);
                     let msg = messages::bidirectional_control_characters();
-                    self.ctx.emit(
-                        Code::bidirectional_control_characters,
-                        msg,
-                        range,
-                    );
+                    self.ctx
+                        .emit(Code::bidirectional_control_characters, msg, range);
                 }
             }
             Expression::TemplateLiteral(tl) => {
@@ -269,11 +266,8 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
                         if has_bidi_char(cooked) {
                             let range = self.abs_range(q.span.start, q.span.end);
                             let msg = messages::bidirectional_control_characters();
-                            self.ctx.emit(
-                                Code::bidirectional_control_characters,
-                                msg,
-                                range,
-                            );
+                            self.ctx
+                                .emit(Code::bidirectional_control_characters, msg, range);
                         }
                     }
                 }

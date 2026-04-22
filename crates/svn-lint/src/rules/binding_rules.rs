@@ -9,7 +9,7 @@
 use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
-use crate::scope::{BindingKind, InitialKind, Reference, RefParentKind, ScopeTree, is_rune_name};
+use crate::scope::{BindingKind, InitialKind, RefParentKind, Reference, ScopeTree, is_rune_name};
 
 /// Does `ref.ignored`'s snapshot include the rule's code? Port of
 /// upstream's `ignore_map.get(node)?.some(codes => codes.has(code))`.
@@ -135,9 +135,7 @@ fn state_referenced_locally(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
             BindingKind::RestProp => {
                 ctx.compat.state_locally_fires_on_props && ctx.compat.state_locally_rest_prop
             }
-            BindingKind::State => {
-                binding.reassigned || primitive_initial(&binding.initial)
-            }
+            BindingKind::State => binding.reassigned || primitive_initial(&binding.initial),
             _ => false,
         };
         if !reactive_kind {
@@ -159,7 +157,11 @@ fn state_referenced_locally(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
             if ref_ignores(r, Code::state_referenced_locally) {
                 continue;
             }
-            let type_var = if r.nested_in_state_call { "derived" } else { "closure" };
+            let type_var = if r.nested_in_state_call {
+                "derived"
+            } else {
+                "closure"
+            };
             let msg = messages::state_referenced_locally(binding.name.as_str(), type_var);
             ctx.emit(Code::state_referenced_locally, msg, r.range);
         }
@@ -344,5 +346,11 @@ fn bind_invalid_each_rest(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
 /// friends. For non-rune inits we return `false` (the check only
 /// applies in the `State` kind branch upstream).
 fn primitive_initial(init: &InitialKind) -> bool {
-    matches!(init, InitialKind::RuneCall { primitive_arg: true, .. })
+    matches!(
+        init,
+        InitialKind::RuneCall {
+            primitive_arg: true,
+            ..
+        }
+    )
 }

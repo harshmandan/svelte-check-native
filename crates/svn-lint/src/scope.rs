@@ -25,7 +25,7 @@
 
 use oxc_ast::ast::{
     ArrayPattern, AssignmentExpression, AssignmentTarget, BindingPattern, BindingPatternKind,
-    CallExpression, Class, ClassBody, ClassElement, Expression, ForStatementInit,
+    CallExpression, ChainElement, Class, ClassBody, ClassElement, Expression, ForStatementInit,
     IdentifierReference, LabeledStatement, ObjectExpression, ObjectPattern, ObjectPropertyKind,
     PropertyKey, SimpleAssignmentTarget, Statement, UpdateExpression, VariableDeclaration,
     VariableDeclarator,
@@ -2427,6 +2427,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             Expression::TSNonNullExpression(t) => self.visit_expr(&t.expression),
             Expression::TSTypeAssertion(t) => self.visit_expr(&t.expression),
             Expression::TSInstantiationExpression(t) => self.visit_expr(&t.expression),
+            Expression::ChainExpression(ch) => self.visit_chain_element(&ch.expression),
             _ => {}
         }
     }
@@ -2439,6 +2440,19 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 self.visit_expr(&m.expression);
             }
             Expression::PrivateFieldExpression(m) => self.visit_expr(&m.object),
+            _ => {}
+        }
+    }
+
+    fn visit_chain_element(&mut self, el: &ChainElement<'_>) {
+        match el {
+            ChainElement::CallExpression(c) => self.visit_call(c),
+            ChainElement::StaticMemberExpression(m) => self.visit_expr(&m.object),
+            ChainElement::ComputedMemberExpression(m) => {
+                self.visit_expr(&m.object);
+                self.visit_expr(&m.expression);
+            }
+            ChainElement::PrivateFieldExpression(m) => self.visit_expr(&m.object),
             _ => {}
         }
     }
@@ -2477,10 +2491,22 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         }
         for a in &c.arguments {
             if let Some(e) = a.as_expression() {
+                // Honour `// svelte-ignore CODE` comments that precede
+                // this argument — upstream attaches leading comments
+                // per-node, so a runed-rune call with the ignore
+                // between `(` and the expression silences a rule for
+                // references nested inside. Statement-level capture
+                // (which `visit_stmt` does) isn't enough here because
+                // the comment lives *inside* the surrounding
+                // declaration statement, not before it.
+                let pushed = self.push_leading_ignores(Some(e.span().start));
                 if push_state {
                     self.visit_arg_inside_state_call(e);
                 } else {
                     self.visit_expr(e);
+                }
+                if pushed {
+                    self.ignore_frames.pop();
                 }
             }
         }

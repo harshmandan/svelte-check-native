@@ -106,9 +106,7 @@ pub fn scan(source: &str, ctx: &mut LintContext<'_>) {
             // svelte:* tags aren't RegularElements in upstream's
             // model; they participate in their own layering. For the
             // auto-close table, only real HTML tag names matter.
-            let is_regular = !name.starts_with("svelte:")
-                && !name.contains('-')
-                && is_lowercase_start(&name);
+            let is_regular = is_regular_name(&name);
             let tag_name = name.clone();
 
             if is_regular {
@@ -345,6 +343,12 @@ fn is_tag_name_cont(b: u8) -> bool {
 fn is_lowercase_start(name: &str) -> bool {
     name.chars().next().is_some_and(|c| c.is_ascii_lowercase())
 }
+fn is_regular_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with("svelte:")
+        && !name.contains('-')
+        && is_lowercase_start(name)
+}
 
 /// Scan from the position right after the tag name to the `>` that
 /// ends the opening tag. Returns `(end_of_open_tag, self_closing)`.
@@ -438,7 +442,33 @@ fn handle_open(
 /// non-matching regular element fires the warning keyed on
 /// `</NAME>`, until we find the matching element (or hit a Block
 /// boundary / empty stack).
+///
+/// Guards — both are necessary to avoid the FP class we saw on
+///
+///   1. NAME must be a regular element name. A Component / custom
+///      element / `svelte:*` close is tracked by upstream's own
+///      parse-stack; we don't model those frames, so if we treat
+///      `</Foo>` as if it were a regular close we walk up and fire
+///      on innocent regular ancestors that are actually closed
+///      correctly further along.
+///   2. There must be a matching regular open within the current
+///      block frame. Without a match the close is invalid and
+///      upstream fires `element_invalid_closing_tag` (an error —
+///      out of scope for this warning). Firing
+///      `element_implicitly_closed` on ancestors in that case is
+///      a false positive for the same reason as (1).
 fn handle_close(stack: &mut Vec<Frame>, name: &str, _close_end: u32, ctx: &mut LintContext<'_>) {
+    if !is_regular_name(name) {
+        return;
+    }
+    let has_match = stack
+        .iter()
+        .rev()
+        .take_while(|f| !matches!(f, Frame::Block))
+        .any(|f| matches!(f, Frame::Open(parent) if parent.name.as_str() == name));
+    if !has_match {
+        return;
+    }
     while let Some(frame) = stack.pop() {
         match frame {
             Frame::Block => {

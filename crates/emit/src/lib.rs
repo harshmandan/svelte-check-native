@@ -856,14 +856,6 @@ fn emit_document_with_render_name(
         buf.push('}');
         Some(buf)
     });
-    let exports_clause = exports_object
-        .as_deref()
-        .map(|e| format!(" & {e}"))
-        .unwrap_or_default();
-    let component_exports_arg = exports_object
-        .as_deref()
-        .map(|e| format!(", {e}"))
-        .unwrap_or_default();
     emit_void_block(
         buf.raw_string_mut(),
         summary,
@@ -899,356 +891,17 @@ fn emit_document_with_render_name(
     buf.push_str("}\n");
     let _ = writeln!(buf, "{render_name};");
 
-    // Emit the class-wrapper declaration at module scope. Its
-    // `props()` method's return type is resolved THROUGH the render
-    // function, which is where body-local `typeof X` refs are in
-    // scope. `Awaited<…>` handles the `async` wrapper on $$render —
-    // the render body is wrapped in an async function so top-level
-    // `await` in user code compiles.
-    if use_class_wrapper
-        && let Some(g) = generics.as_deref()
-    {
-        let class_name = render_class_name(&render_name);
-        let g_args = generic_arg_names(g);
-        let _ = writeln!(
-            buf,
-            "declare class {class_name}<{g}> {{ props(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['props']; }}"
-        );
-    }
-
-    // Default export so `import Foo from './Foo.svelte'` resolves to
-    // a valid module member. Emits as a `declare function`: the props
-    // parameter of the call signature is what carries the Props type
-    // into consumers. A consumer's `<Foo prop={...}>` template becomes
-    // `Foo(__svn_any(), {prop: ...})`, and TS contextually types the
-    // prop object from the function's second parameter — which is the
-    // only shape that makes callback-prop destructures
-    // (`onclick={({x}) => ...}`) and snippet children contextually
-    // pick up their parameter types.
-    //
-    // Three cases:
-    //   1. Typed Props + generics: emit
-    //        declare function __svn_component_default<T>(__anchor, props: Props): any
-    //      where Props may reference T. The generic's scope is the
-    //      function signature, so T resolves module-scope.
-    //   2. Typed Props only: same shape without the generic list.
-    //   3. Untyped (no $props() annotation): emit the permissive
-    //        declare function __svn_component_default(__anchor, props: any): any
-    //      — consumers can pass any shape. Preserves the pre-refactor
-    //      "silently accept" behaviour for Svelte-4-style or
-    //      <script>-less components.
-    //
-    // A same-named type alias is also emitted so user code that uses
-    // the default import as a type (`let x: Foo`, `$state<Foo>(...)`)
-    // doesn't fire TS2749. The alias resolves to a structurally
-    // matching function-type.
-    // Three cases: typed+generic, typed non-generic, untyped.
-    //
-    // The Props source has to be "safe" to reference at module scope:
-    // either a literal shape (`{ item: T }`) or a named type whose
-    // declaration was hoisted by script_split. Bare named types that
-    // stay body-scoped (either because they reference the script's
-    // generic without re-binding it, or because they reference a
-    // body-level const via `typeof`) can't be named from the
-    // default-export declaration — emit falls back to `any` for
-    // those.
-    let prop_ty_is_literal = prop_type_source
-        .as_deref()
-        .is_some_and(|t| t.trim().starts_with('{'));
-    let prop_ty_root_name = prop_type_source
-        .as_deref()
-        .and_then(svn_analyze::root_type_name_of);
-    // Consider a named Props type module-scope-visible if either (a)
-    // script_split hoisted it out of the instance script, or (b) it's
-    // declared in the `<script module>` section (which emits verbatim
-    // at module scope), or (c) it's imported as a type at the module
-    // top level. The last case is the common
-    // `import type { FooProps } from './types'` pattern.
-    let module_script_text = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
-    let prop_ty_module_visible = prop_ty_root_name.as_deref().is_some_and(|n| {
-        split
-            .as_ref()
-            .is_some_and(|s| s.hoisted_type_names.contains(n))
-            || module_script_declares_type(module_script_text, n)
-            || split.as_ref().is_some_and(|s| imports_name(&s.hoisted, n))
-    });
-    let ty_safe_in_generic_scope = prop_ty_is_literal || prop_ty_module_visible;
-    let ty_safe_in_module_scope = prop_ty_is_literal || prop_ty_module_visible;
-    // Default export typed as Svelte 5's `Component<Props>` (function
-    // form). This shape is chosen to satisfy the constraint on
-    // svelte's built-in `ComponentProps<T>` helper — which accepts
-    // `T extends Component<any, any, string> | SvelteComponent<...>`
-    // — so user code that writes `ComponentProps<typeof Foo>`
-    // resolves Props correctly. A class-based default with narrower
-    // Props fails `SvelteComponent<any>`'s invariant-in-Props
-    // constraint; the function form sidesteps that entirely.
-    //
-    // Consumer-side emission wraps the value through
-    // `__svn_ensure_component`, which synthesizes a construct
-    // signature for callable components and passes class components
-    // through unchanged:
-    //
-    //     { const $$_C0 = __svn_ensure_component(Comp);
-    //       new $$_C0({ target: __svn_any(), props: { ... } }); }
-    //
-    // The wrapper's intermediate local is what makes generic
-    // components' `<T>` resolve at the `new` site (TS binds generics
-    // against the concrete prop values there, not at the
-    // `__svn_ensure_component` call). Validated end-to-end in
-    // design/phase_a/ — including classes imported from third-party
-    // libraries (lucide-svelte, phosphor-svelte, bits-ui).
-    // A same-named type alias is emitted alongside the value so user
-    // code that uses the default import as a type
-    // (`let ref: MyComp`, `$state<MyComp>(...)`, `(el as MyComp)`)
-    // resolves without firing TS2749 "refers to a value, but is
-    // being used as a type here". The alias resolves to the
-    // InstanceType of the Component's construct wrapper — roughly
-    // `{ $on?, $set? } & Exports` for real-svelte `Component<Props>`
-    // — which is what upstream's svelte2tsx surfaces under the same
-    // name. Consumer code that writes `let x: MyComp` picks up the
-    // instance shape, same as before the callable-shape refactor.
-    // SVELTE-4-COMPAT: detect whether this file uses Svelte-4
-    // conventions. Consumers of such files pass `on:event` directives
-    // (rewritten to `on<event>` prop keys by us) and `<Foo slot="x">`
-    // slot-name attrs, neither of which are declared in the component's
-    // actual Props type. Widening this component's exported Props with
-    // an `on${string}` index signature + an optional `slot` key keeps
-    // those consumer-side writes valid without opening the door on
-    // Svelte-5 codebases (where widening would mask real typos).
-    // `has_slot`: does the template contain a `<slot>` element? Derived
-    // from the parsed Fragment (not a `source.contains("<slot")` byte
-    // check, which would false-positive on comments or substrings).
-    // Used by `is_svelte4_component` as Signal 2, plus by the widen-
-    // intersection decision a few lines below.
-    let has_slot = fragment_contains_slot(fragment);
-    let svelte4_style = is_svelte4_component(doc, split.as_ref(), has_slot);
-    // Narrower gate than `svelte4_style`: only true when the component
-    // uses `export let` (Svelte 4's prop-declaration form). `svelte4_style`
-    // also catches `export function` / `export const` which are method
-    // exports on runes components — those don't describe Props, so
-    // gating arm 3's props-base swap on `svelte4_style` would break
-    // runes fixtures (e.g. svelte2tsx/generics-attribute.v5).
-    let has_export_let = doc
-        .instance_script
-        .as_ref()
-        .is_some_and(|s| contains_export_let(s.content))
-        || doc
-            .module_script
-            .as_ref()
-            .is_some_and(|s| contains_export_let(s.content));
-    // v0.3 Item 3: when the child declares `$$Events`, carry it as
-    // `& { readonly __svn_events: $$Events }` on the default export.
-    // Consumer-side `__svn_ensure_component` has a typed overload
-    // that matches this marker and returns `__SvnInstanceTyped<P, E>`
-    // — handlers then narrow `e.detail` against the declared payload.
-    // Lax-shim fallback stays in place for all other children.
-    let typed_events_intersection = if has_strict_events(doc) {
-        " & { readonly __svn_events: $$Events }"
-    } else {
-        ""
-    };
-    // Widen strings emit as ` & __SvnSvelte4PropsWiden<P>` where P is
-    // the base Props type so the shim can omit already-declared on*
-    // keys from the widening (otherwise typed callbacks intersect with
-    // the widen's lax signature and collapse to never).
-    //
-    // Conditional index-signature widen: mirror upstream's
-    // `__sveltets_2_with_any(…)` factory (svelte-shims-v4.d.ts:89)
-    // which adds `SvelteAllProps = {[index: string]: any}` ONLY when
-    // the child component uses `$$props` / `$$restProps`. Components
-    // that don't reference those keep strict Props — matching
-    // upstream's TS2353 on undeclared attrs. Detection mirrors
-    // upstream's `uses$$props` flag: check if the instance or module
-    // script references `$$props` or `$$restProps` as identifiers
-    // (substring check is accurate here because these aren't valid
-    // user-chosen names — the `$$` prefix is Svelte-reserved).
-    // Scan the WHOLE document source, not just script blocks: a
-    // Svelte 4 component can spread `{...$$props}` / `{...$$restProps}`
-    // in the TEMPLATE (`bench/control-svelte-4/.../MenuItem.svelte` is
-    // the canonical example — scripts define typed props, template
-    // spreads `{...$$props}` onto the root element so arbitrary extra
-    // attrs pass through at runtime). Upstream's `uses$$props`
-    // detection runs over the whole parsed tree, not just scripts.
-    // Substring check over `doc.source` is accurate because the `$$`
-    // prefix is Svelte-reserved — no valid user identifier starts with
-    // `$$`.
-    let uses_any_props = doc.source.contains("$$props") || doc.source.contains("$$restProps");
-    let has_slots = svelte4_style && has_slot;
-    // Match upstream's factory-pattern: intersections ONLY when the
-    // component shape actually needs them. ANY non-empty intersection
-    // (even a benign `{children?: any}`) contaminates tsgo's
-    // assignability check — missing-required-prop fires TS2322 top-
-    // level with TS2741 as sub-message, instead of TS2741 directly.
-    // Confirmed via `/tmp/repro-diag` hand-tests.
-    let widen_for = |base: &str| -> String {
-        if !svelte4_style {
-            return String::new();
-        }
-        match (has_slots, uses_any_props) {
-            (false, false) => String::new(),
-            (true, false) => format!(" & __SvnSvelte4PropsWiden<{base}>"),
-            (false, true) => " & __SvnAllProps".to_string(),
-            (true, true) => format!(" & __SvnSvelte4PropsWiden<{base}> & __SvnAllProps"),
-        }
-    };
-    // SVELTE-4-COMPAT: Svelte-4 components that render a `<slot>` are
-    // content-containers — consumers typically write `<Foo>body</Foo>`
-    // and omit prop values entirely. Mirrors upstream's
-    // `__sveltets_2_isomorphic_component_slots` (Partial<P>) vs the
-    // plain `__sveltets_2_isomorphic_component` (P) split. Wrapping
-    // ComponentProps's source in `Partial<>` here is what keeps the
-    // phase-5 `satisfies ComponentProps<typeof Foo>` trailer from
-    // firing TS2741 on legitimate slot-only consumer sites while
-    // still catching missing required props on Svelte-5 components.
-    let svelte4_with_slot = svelte4_style && has_slot;
-    let wrap_props = |inner: String| -> String {
-        if svelte4_with_slot {
-            format!("Partial<{inner}>")
-        } else {
-            inner
-        }
-    };
-    // v0.3 Item 3: intersection is only applied to `Component<P>`-shaped
-    // default exports (arms 2 and 4 below) — those pass through
-    // `__svn_ensure_component`'s Component<P> overload where the typed
-    // overload is declared. Callable-generic arms (1 and 3) go through
-    // the plain-callable overload in the shim, which has no typed
-    // variant. In practice this is a non-issue: generic Svelte-4
-    // components with `$$Events` are exceedingly rare, and the <script
-    // generics> syntax is Svelte-5 runes only while `$$Events` is
-    // Svelte-4 only — the overlap set is effectively empty.
-    // When class-wrapper is active (use_class_wrapper), the Props
-    // type reaches module scope via
-    // `ReturnType<__svn_Render_<hash><g_args>['props']>`. That
-    // resolves through the render function's scope — where
-    // body-local `typeof X` refs are in scope — so body-scoped type
-    // references in `$$Props` no longer need to be sanitised to
-    // `any` at module scope.
-    let render_class_name_for_props = if use_class_wrapper {
-        generics.as_deref().map(|g| {
-            let class_name = render_class_name(&render_name);
-            let g_args = generic_arg_names(g);
-            format!("ReturnType<{class_name}<{g_args}>['props']>")
-        })
-    } else {
-        None
-    };
-    match (&prop_type_source, &generics) {
-        (Some(ty), Some(g)) if ty_safe_in_generic_scope => {
-            let widen = widen_for(ty);
-            let props_base = render_class_name_for_props.as_deref().unwrap_or(ty);
-            let props = wrap_props(format!("{props_base}{widen}"));
-            let _ = writeln!(
-                buf,
-                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{props_base}{widen}>) => {};",
-                exports_object.as_deref().unwrap_or("any"),
-            );
-            let _ = writeln!(
-                buf,
-                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<{props}>{exports_clause};"
-            );
-        }
-        (Some(ty), None) if ty_safe_in_module_scope => {
-            let widen = widen_for(ty);
-            let props = wrap_props(format!("{ty}{widen}"));
-            let _ = writeln!(
-                buf,
-                "declare const __svn_component_default: import('svelte').Component<{props}{component_exports_arg}>{typed_events_intersection};"
-            );
-            let _ = writeln!(
-                buf,
-                "declare type __svn_component_default = import('svelte').SvelteComponent<{props}>{exports_clause};"
-            );
-        }
-        (_, Some(g)) => {
-            // Props type isn't safe at module scope (or not present), but
-            // the component declares generics. The exports_object still
-            // references the generics verbatim — so `{ data: TData[] }`
-            // would float `TData` unresolved at module scope if we took
-            // the plain fallback. Wrap the whole declaration in the
-            // generic scope so the references bind.
-            //
-            // SVELTE-4 only: use the (sanitized) exports_object as the
-            // props base rather than `Record<string, any>`. In Svelte 4
-            // `export let foo` is both a PROP and an exported member
-            // (bind:-accessible), so exports_object doubles as the
-            // Props type. Typing the props slot this way restores
-            // contextual-type flow — consumer sites like
-            // `<BarChart labels={{ format: (value) => … }}/>` see
-            // `value` contextually typed. Plain `Record<string, any>`
-            // flattens every prop slot to `any` and fires TS7006 under
-            // strict (layerchart's primary FP cluster).
-            //
-            // Svelte 5 runes keep the plain-record fallback: exports
-            // there are method-style (`export function getA()`) and
-            // don't describe the Props shape — props come from a
-            // `$props()` destructure that we've already considered
-            // unsafe-at-module-scope above. Using exports_object would
-            // reject legitimate consumer-side props as excess
-            // properties.
-            //
-            // Sanitizer above already replaced body-scoped refs in
-            // exports_object with `any`, so using it as the props base
-            // won't leak TS2304 at module scope.
-            // Priority of props_base:
-            //   1. `ReturnType<Render<g_args>['props']>` when the
-            //      class-wrapper is active (user has both a Props
-            //      type source and generics).
-            //   2. (sanitized) `exports_object` when Svelte-4
-            //      `export let` is the Props shape (pre-class-wrapper
-            //      fallback from commit f45dbdd).
-            //   3. `Record<string, any>` as a final lax fallback.
-            let use_exports_as_props = has_export_let && exports_object.is_some();
-            let props_base: &str = if let Some(cw) = render_class_name_for_props.as_deref() {
-                cw
-            } else if use_exports_as_props {
-                exports_object.as_deref().unwrap_or("Record<string, any>")
-            } else {
-                "Record<string, any>"
-            };
-            let widen = widen_for(props_base);
-            let props = wrap_props(format!("{props_base}{widen}"));
-            let _ = writeln!(
-                buf,
-                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{props_base}{widen}>) => {};",
-                exports_object.as_deref().unwrap_or("any"),
-            );
-            let _ = writeln!(
-                buf,
-                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<{props}>{exports_clause};"
-            );
-        }
-        _ => {
-            let widen = widen_for("Record<string, any>");
-            let props = wrap_props(format!("Record<string, any>{widen}"));
-            let _ = writeln!(
-                buf,
-                "declare const __svn_component_default: import('svelte').Component<{props}{component_exports_arg}>{typed_events_intersection};"
-            );
-            let _ = writeln!(
-                buf,
-                "declare type __svn_component_default = import('svelte').SvelteComponent<{props}>{exports_clause};"
-            );
-        }
-    }
-    // Type-position reference for every type-only import that was
-    // consumed only in a template expression (e.g. as cast target).
-    // TS considers the type used, so the import isn't flagged TS6133.
-    // Module-scope type alias works even though declared after the
-    // render function; type-level resolution doesn't depend on source
-    // order.
-    if !template_type_refs.is_empty() {
-        buf.push_str("type __svn_tpl_type_refs = [");
-        for (i, name) in template_type_refs.iter().enumerate() {
-            if i > 0 {
-                buf.push_str(", ");
-            }
-            buf.push_str(name.as_str());
-        }
-        buf.push_str("];\n");
-        buf.push_str("void (0 as any as __svn_tpl_type_refs);\n");
-    }
-    buf.push_str("export default __svn_component_default;\n");
+    emit_default_export_declarations(
+        &mut buf,
+        doc,
+        fragment,
+        split.as_ref(),
+        &render_name,
+        generics.as_deref(),
+        prop_type_source.as_deref(),
+        exports_object.as_deref(),
+        &template_type_refs,
+    );
 
     // `.svelte` import specifiers are left unchanged. TS resolves
     // them via `allowArbitraryExtensions` + the ambient
@@ -1280,6 +933,269 @@ fn emit_document_with_render_name(
         overlay_line_starts,
         source_line_starts,
     }
+}
+
+/// Emit the `declare class {class_name}<…>`, the 4-arm
+/// `declare const __svn_component_default: …` / `declare type
+/// __svn_component_default = …` pair, the `type __svn_tpl_type_refs
+/// = [...]` alias (when any template-used type imports exist), and
+/// the final `export default __svn_component_default;`.
+///
+/// The arm dispatch is on `(prop_type_source, generics)` × whether
+/// the Props source is safe to reference at module scope (either a
+/// literal `{ … }` shape, a script-hoisted named type, a type
+/// declared in `<script module>`, or a type-imported name).
+///
+/// Each arm produces two declarations (value + type alias) with the
+/// same `__svn_component_default` identifier; users writing `typeof
+/// Foo` land on the value and `let x: Foo` lands on the alias.
+///
+/// Class-wrapper: when Props + generics are both present, a
+/// `declare class __svn_Render_<hash><T> { props(): Awaited<…>; }`
+/// is emitted first. The 4-arm then substitutes `props_base` with
+/// `ReturnType<__svn_Render_<hash><T>['props']>` so body-local
+/// `typeof X` references in `interface $$Props { … }` resolve
+/// through the render function's scope instead of module scope. See
+/// `notes/PLAN.md` Phase 2 for the full rationale.
+#[allow(clippy::too_many_arguments)]
+fn emit_default_export_declarations(
+    buf: &mut EmitBuffer,
+    doc: &Document<'_>,
+    fragment: &Fragment,
+    split: Option<&script_split::SplitScript>,
+    render_name: &SmolStr,
+    generics: Option<&str>,
+    prop_type_source: Option<&str>,
+    exports_object: Option<&str>,
+    template_type_refs: &[SmolStr],
+) {
+    let use_class_wrapper = generics.is_some() && prop_type_source.is_some();
+    let exports_clause = exports_object
+        .map(|e| format!(" & {e}"))
+        .unwrap_or_default();
+    let component_exports_arg = exports_object
+        .map(|e| format!(", {e}"))
+        .unwrap_or_default();
+
+    // Class-wrapper declaration at module scope. Its `props()` method's
+    // return type is resolved THROUGH the render function, which is
+    // where body-local `typeof X` refs are in scope. `Awaited<…>`
+    // handles the `async` wrapper on $$render — the body is wrapped in
+    // an async function so top-level `await` in user code compiles.
+    if use_class_wrapper
+        && let Some(g) = generics
+    {
+        let class_name = render_class_name(render_name);
+        let g_args = generic_arg_names(g);
+        let _ = writeln!(
+            buf,
+            "declare class {class_name}<{g}> {{ props(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['props']; }}"
+        );
+    }
+
+    // The Props source has to be "safe" to reference at module scope:
+    // either a literal shape (`{ item: T }`) or a named type whose
+    // declaration was hoisted by script_split. Bare named types that
+    // stay body-scoped (either because they reference the script's
+    // generic without re-binding it, or because they reference a
+    // body-level const via `typeof`) can't be named from the
+    // default-export declaration — emit falls back to `any` for those.
+    let prop_ty_is_literal = prop_type_source.is_some_and(|t| t.trim().starts_with('{'));
+    let prop_ty_root_name = prop_type_source.and_then(svn_analyze::root_type_name_of);
+    // Consider a named Props type module-scope-visible if either (a)
+    // script_split hoisted it out of the instance script, (b) it's
+    // declared in the `<script module>` section, or (c) it's imported
+    // as a type at the module top level (`import type { FooProps }
+    // from './types'`).
+    let module_script_text = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
+    let prop_ty_module_visible = prop_ty_root_name.as_deref().is_some_and(|n| {
+        split.is_some_and(|s| s.hoisted_type_names.contains(n))
+            || module_script_declares_type(module_script_text, n)
+            || split.is_some_and(|s| imports_name(&s.hoisted, n))
+    });
+    let ty_safe_in_generic_scope = prop_ty_is_literal || prop_ty_module_visible;
+    let ty_safe_in_module_scope = prop_ty_is_literal || prop_ty_module_visible;
+
+    // SVELTE-4-COMPAT detection. Consumers of Svelte-4 components pass
+    // `on:event` directives (rewritten to `on<event>` prop keys by us)
+    // and `<Foo slot="x">` slot-name attrs, neither of which are
+    // declared in the actual Props type. Widening with an
+    // `on${string}` index signature + optional `slot` key keeps those
+    // consumer writes valid without opening the door on Svelte-5
+    // codebases where widening would mask real typos.
+    let has_slot = fragment_contains_slot(fragment);
+    let svelte4_style = is_svelte4_component(doc, split, has_slot);
+    // Narrower gate than `svelte4_style`: only true when the component
+    // uses `export let` (Svelte 4's prop-declaration form).
+    // `svelte4_style` also catches `export function` / `export const`
+    // which are method exports on runes components — those don't
+    // describe Props, so gating arm 3's props-base swap on
+    // `svelte4_style` would break runes fixtures.
+    let has_export_let = doc
+        .instance_script
+        .as_ref()
+        .is_some_and(|s| contains_export_let(s.content))
+        || doc
+            .module_script
+            .as_ref()
+            .is_some_and(|s| contains_export_let(s.content));
+    // v0.3 Item 3: when the child declares `$$Events`, carry it as
+    // `& { readonly __svn_events: $$Events }` on the default export.
+    // Consumer-side `__svn_ensure_component` has a typed overload
+    // matching this marker and returning `__SvnInstanceTyped<P, E>` —
+    // handlers then narrow `e.detail` against the declared payload.
+    let typed_events_intersection = if has_strict_events(doc) {
+        " & { readonly __svn_events: $$Events }"
+    } else {
+        ""
+    };
+    // Conditional index-signature widen mirrors upstream's
+    // `__sveltets_2_with_any(…)` factory: adds `SvelteAllProps =
+    // {[index: string]: any}` ONLY when the child component uses
+    // `$$props` / `$$restProps`. Scan the WHOLE document source — a
+    // Svelte 4 component can spread `{...$$props}` in the TEMPLATE
+    // (scripts define typed props, template spreads arbitrary extras).
+    // Substring check over `doc.source` is accurate because the `$$`
+    // prefix is Svelte-reserved.
+    let uses_any_props = doc.source.contains("$$props") || doc.source.contains("$$restProps");
+    let has_slots = svelte4_style && has_slot;
+    // Match upstream's factory-pattern: intersections ONLY when the
+    // component shape actually needs them. ANY non-empty intersection
+    // (even a benign `{children?: any}`) contaminates tsgo's
+    // assignability check — missing-required-prop fires TS2322
+    // top-level with TS2741 as sub-message, instead of TS2741 directly.
+    let widen_for = |base: &str| -> String {
+        if !svelte4_style {
+            return String::new();
+        }
+        match (has_slots, uses_any_props) {
+            (false, false) => String::new(),
+            (true, false) => format!(" & __SvnSvelte4PropsWiden<{base}>"),
+            (false, true) => " & __SvnAllProps".to_string(),
+            (true, true) => format!(" & __SvnSvelte4PropsWiden<{base}> & __SvnAllProps"),
+        }
+    };
+    // SVELTE-4-COMPAT: Svelte-4 components that render a `<slot>` are
+    // content-containers — consumers typically write `<Foo>body</Foo>`
+    // and omit prop values entirely. Mirrors upstream's
+    // `__sveltets_2_isomorphic_component_slots` (Partial<P>) vs the
+    // plain `__sveltets_2_isomorphic_component` (P) split.
+    let svelte4_with_slot = svelte4_style && has_slot;
+    let wrap_props = |inner: String| -> String {
+        if svelte4_with_slot {
+            format!("Partial<{inner}>")
+        } else {
+            inner
+        }
+    };
+    // When class-wrapper is active, the Props type reaches module
+    // scope via `ReturnType<__svn_Render_<hash><g_args>['props']>` —
+    // body-scoped type refs in `$$Props` resolve through the render
+    // function's scope without module-scope sanitisation.
+    let render_class_name_for_props = if use_class_wrapper {
+        generics.map(|g| {
+            let class_name = render_class_name(render_name);
+            let g_args = generic_arg_names(g);
+            format!("ReturnType<{class_name}<{g_args}>['props']>")
+        })
+    } else {
+        None
+    };
+    match (prop_type_source, generics) {
+        (Some(ty), Some(g)) if ty_safe_in_generic_scope => {
+            let widen = widen_for(ty);
+            let props_base = render_class_name_for_props.as_deref().unwrap_or(ty);
+            let props = wrap_props(format!("{props_base}{widen}"));
+            let _ = writeln!(
+                buf,
+                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{props_base}{widen}>) => {};",
+                exports_object.unwrap_or("any"),
+            );
+            let _ = writeln!(
+                buf,
+                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<{props}>{exports_clause};"
+            );
+        }
+        (Some(ty), None) if ty_safe_in_module_scope => {
+            let widen = widen_for(ty);
+            let props = wrap_props(format!("{ty}{widen}"));
+            let _ = writeln!(
+                buf,
+                "declare const __svn_component_default: import('svelte').Component<{props}{component_exports_arg}>{typed_events_intersection};"
+            );
+            let _ = writeln!(
+                buf,
+                "declare type __svn_component_default = import('svelte').SvelteComponent<{props}>{exports_clause};"
+            );
+        }
+        (_, Some(g)) => {
+            // Props type isn't safe at module scope (or not present),
+            // but the component declares generics. The exports_object
+            // still references generics verbatim, so wrap the whole
+            // declaration in the generic scope so those bind.
+            //
+            // SVELTE-4 only: use the (sanitized) exports_object as the
+            // props base rather than `Record<string, any>`. In Svelte 4
+            // `export let foo` is both a PROP and an exported member
+            // (bind:-accessible), so exports_object doubles as the
+            // Props type. Typing the props slot this way restores
+            // contextual-type flow. Svelte 5 runes keep the plain-
+            // record fallback: exports there are method-style and
+            // don't describe the Props shape. Priority:
+            //   1. `ReturnType<Render<g_args>['props']>` when class-
+            //      wrapper is active.
+            //   2. (sanitized) `exports_object` when Svelte-4
+            //      `export let` is the Props shape.
+            //   3. `Record<string, any>` as a final lax fallback.
+            let use_exports_as_props = has_export_let && exports_object.is_some();
+            let props_base: &str = if let Some(cw) = render_class_name_for_props.as_deref() {
+                cw
+            } else if use_exports_as_props {
+                exports_object.unwrap_or("Record<string, any>")
+            } else {
+                "Record<string, any>"
+            };
+            let widen = widen_for(props_base);
+            let props = wrap_props(format!("{props_base}{widen}"));
+            let _ = writeln!(
+                buf,
+                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{props_base}{widen}>) => {};",
+                exports_object.unwrap_or("any"),
+            );
+            let _ = writeln!(
+                buf,
+                "declare type __svn_component_default<{g}> = import('svelte').SvelteComponent<{props}>{exports_clause};"
+            );
+        }
+        _ => {
+            let widen = widen_for("Record<string, any>");
+            let props = wrap_props(format!("Record<string, any>{widen}"));
+            let _ = writeln!(
+                buf,
+                "declare const __svn_component_default: import('svelte').Component<{props}{component_exports_arg}>{typed_events_intersection};"
+            );
+            let _ = writeln!(
+                buf,
+                "declare type __svn_component_default = import('svelte').SvelteComponent<{props}>{exports_clause};"
+            );
+        }
+    }
+
+    // Type-position reference for every type-only import that was
+    // consumed only in a template expression (e.g. as cast target).
+    // TS considers the type used, so the import isn't flagged TS6133.
+    if !template_type_refs.is_empty() {
+        buf.push_str("type __svn_tpl_type_refs = [");
+        for (i, name) in template_type_refs.iter().enumerate() {
+            if i > 0 {
+                buf.push_str(", ");
+            }
+            buf.push_str(name.as_str());
+        }
+        buf.push_str("];\n");
+        buf.push_str("void (0 as any as __svn_tpl_type_refs);\n");
+    }
+    buf.push_str("export default __svn_component_default;\n");
 }
 
 /// Byte-scan a script section for `type NAME`, `interface NAME`,

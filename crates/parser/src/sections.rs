@@ -193,9 +193,7 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
             let pos = scanner.pos() as usize;
             let next = bytes.get(pos + 1).copied();
             if next == Some(b'/') {
-                if tag_depth > 0 {
-                    tag_depth -= 1;
-                }
+                tag_depth = tag_depth.saturating_sub(1);
                 let mut i = pos + 2;
                 while i < bytes.len() && bytes[i] != b'>' {
                     i += 1;
@@ -650,7 +648,7 @@ fn scan_past_mustache(bytes: &[u8], from: u32) -> u32 {
 /// values.
 fn scan_past_open_tag(bytes: &[u8], from: usize) -> (usize, bool) {
     let mut i = from + 1;
-    let mut self_closing = false;
+    let self_closing = false;
     while i < bytes.len() {
         match bytes[i] {
             b'"' | b'\'' => {
@@ -668,7 +666,6 @@ fn scan_past_open_tag(bytes: &[u8], from: usize) -> (usize, bool) {
                 i = scan_past_mustache(bytes, i as u32) as usize;
             }
             b'/' if bytes.get(i + 1) == Some(&b'>') => {
-                self_closing = true;
                 return (i + 2, true);
             }
             b'>' => return (i + 1, self_closing),

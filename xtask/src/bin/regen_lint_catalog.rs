@@ -53,8 +53,6 @@ fn env_workspace_root() -> Result<PathBuf> {
 /// One warning entry.
 #[derive(Debug)]
 struct Warning {
-    /// The bare code — e.g. `a11y_unknown_role`.
-    code: String,
     /// Message templates — one per blockquote row. In presence-of-overload
     /// order, earliest first. Each is the raw text with `%name%` placeholders.
     templates: Vec<String>,
@@ -139,7 +137,7 @@ fn parse_md_file(raw: &str, out: &mut BTreeMap<String, Warning>) -> Result<()> {
             if templates.is_empty() {
                 anyhow::bail!("warning `{}` has no message template", code);
             }
-            out.insert(code.clone(), Warning { code, templates });
+            out.insert(code, Warning { templates });
         } else {
             i += 1;
         }
@@ -450,11 +448,12 @@ fn rust_format_template(template: &str) -> String {
                 _ => out.push(b as char),
             }
             i += 1;
-        } else {
+        } else if let Some(ch) = template[i..].chars().next() {
             // Copy the full multi-byte scalar at `i..i+len`.
-            let ch = template[i..].chars().next().expect("non-empty suffix");
             out.push(ch);
             i += ch.len_utf8();
+        } else {
+            break;
         }
     }
     out

@@ -3,10 +3,10 @@
 async function $$render_214f3ab7() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/({ 
+        ({ 
     toString() { return "Hello World" } 
 });
-        /*svn_I*/({ a: '' }['a']);
+        ({ a: '' }['a']);
     }
     void __svn_tpl_check;
 }

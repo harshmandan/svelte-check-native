@@ -5,8 +5,8 @@ async function $$render_ebd292b2() {
         // template type-check body (incremental)
         for (const item of __svn_each_items(items)) {
             const i: number = 0;
-            /*svn_I*/(item);
-            /*svn_I*/(i);
+            (item);
+            (i);
             void item;
             void i;
         }

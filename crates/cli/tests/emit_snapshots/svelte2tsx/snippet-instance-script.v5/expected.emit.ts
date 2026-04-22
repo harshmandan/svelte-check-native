@@ -9,7 +9,7 @@ async function $$render_253c43cc() {
         {
             const bar: any = undefined;
             void bar;
-            /*svn_I*/(foo);
+            (foo);
         }
     }
     void __svn_tpl_check;

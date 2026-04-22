@@ -10,8 +10,8 @@ async function $$render_f1e333d8() {
     $derived;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/(state);
-        /*svn_I*/(derived);
+        (state);
+        (derived);
     }
     void __svn_tpl_check;
     void state;

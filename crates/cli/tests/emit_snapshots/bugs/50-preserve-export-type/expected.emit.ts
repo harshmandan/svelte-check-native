@@ -55,8 +55,8 @@ async function $$render_6e910aea() {
     } = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/(config.section);
-        /*svn_I*/(config.count);
+        (config.section);
+        (config.count);
     }
     void __svn_tpl_check;
     void config;

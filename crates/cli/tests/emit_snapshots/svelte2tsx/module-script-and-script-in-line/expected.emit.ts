@@ -5,7 +5,7 @@ async function $$render_409449b8() {
        let world = "name"
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/(world);
+        (world);
     }
     void __svn_tpl_check;
     void world;

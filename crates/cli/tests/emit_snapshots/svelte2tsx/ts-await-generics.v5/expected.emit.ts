@@ -10,23 +10,23 @@ async function $$render_200dbc4a<T>() {
         {
             const x: any = undefined;
             void x;
-            /*svn_I*/(foo);
-            /*svn_I*/(await promise);
+            (foo);
+            (await promise);
             for (const item of __svn_each_items(await promise)) {
-                /*svn_I*/(item);
+                (item);
                 void item;
             }
             for (const item of __svn_each_items(await promise)) {
                 const i: number = 0;
-                /*svn_I*/(item);
-                /*svn_I*/(i);
+                (item);
+                (i);
                 void item;
                 void i;
             }
             for (const item of __svn_each_items(await promise)) {
                 const i: number = 0;
-                /*svn_I*/(item);
-                /*svn_I*/(i);
+                (item);
+                (i);
                 void item;
                 void i;
             }
@@ -38,7 +38,7 @@ async function $$render_200dbc4a<T>() {
             } else if ((await promise)) {
                 void [promise];
             }
-            /*svn_I*/(await promise);
+            (await promise);
             {
                 const __svn_C_1f6 = __svn_ensure_component(Component);
                 new __svn_C_1f6({ target: __svn_any(), props: {prop: (await promise)} });
@@ -46,7 +46,7 @@ async function $$render_200dbc4a<T>() {
             if ((true)) {
                 const x = await promise;
                 void x;
-                /*svn_I*/(x);
+                (x);
             }
         }
     }

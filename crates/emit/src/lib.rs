@@ -787,8 +787,15 @@ fn emit_document_with_render_name(
         .map(|i| (i.node_start, i))
         .collect();
     let mut action_counter: usize = 0;
+    // Resync before the template walk — emit_legacy_action_attrs /
+    // emit_bind_pair_declarations above wrote via raw_string_mut and
+    // left overlay_line stale. Every append_with_source inside the
+    // walk (interpolation splice sites) reads current byte position
+    // from the buffer, which is always accurate, but the counter
+    // needs to be fresh for any LineMapEntry the walk might push.
+    buf.resync_current_line();
     emit_template_body(
-        buf.raw_string_mut(),
+        &mut buf,
         doc.source,
         fragment,
         2,
@@ -1280,7 +1287,8 @@ fn emit_document_with_render_name(
     token_map.extend(collect_action_directive_token_map(
         &out, doc.source, summary,
     ));
-    token_map.extend(collect_interpolation_token_map(&out, doc.source, fragment));
+    // Interpolation token-map entries are now pushed inline at the
+    // splice site by `emit_interpolation` via `EmitBuffer::append_with_source`.
 
     EmitOutput {
         typescript: out,
@@ -1448,149 +1456,6 @@ fn collect_bind_this_check_token_map(
         cursor = advance_to;
     }
     entries
-}
-
-/// Post-walk scan: for each plain `{EXPR}` interpolation emitted
-/// under the `/*svn_I*/(EXPR);` sentinel shape, push a token-map entry
-/// covering EXPR's overlay byte span → the source byte range the
-/// expression came from.
-///
-/// tsgo reports diagnostics at the overlay byte offset of the
-/// offending identifier inside the expression (e.g. `form.error`'s
-/// `error` property position under a narrowing `{#if form?.success}`).
-/// The token-map entry tells `map_diagnostic` that overlay-inside-the-
-/// slice corresponds 1:1 with source-inside-the-template-expression,
-/// so the diagnostic surfaces at the user's original `{form.error}`
-/// site instead of being dropped as synthesized scaffolding.
-///
-/// Pairing is by walk-order: fragment-walk order matches emit-walk
-/// order (`emit_template_body` → `emit_template_node` →
-/// `emit_interpolation`) so the Nth sentinel in the overlay
-/// corresponds to the Nth plain interpolation in a depth-first
-/// fragment walk. `{@*}` tags are filtered out on both sides — they
-/// have their own emit shape and don't carry the sentinel.
-fn collect_interpolation_token_map(
-    out: &str,
-    source: &str,
-    fragment: &svn_parser::Fragment,
-) -> Vec<TokenMapEntry> {
-    let mut ranges: Vec<svn_core::Range> = Vec::new();
-    collect_plain_interpolation_ranges(fragment, &mut ranges);
-    let marker = "/*svn_I*/(";
-    let bytes = out.as_bytes();
-    let mut entries: Vec<TokenMapEntry> = Vec::new();
-    let mut cursor = 0usize;
-    let mut range_idx = 0usize;
-    while let Some(rel) = out[cursor..].find(marker) {
-        let expr_overlay_start = cursor + rel + marker.len();
-        // Paren-balance to find the matching `)` that closes the
-        // wrapping paren. Tolerates nested calls, arrow-body parens,
-        // object/array literals (brace-neutral at paren level).
-        let mut depth = 1usize;
-        let mut i = expr_overlay_start;
-        while i < bytes.len() && depth > 0 {
-            match bytes[i] {
-                b'(' => depth += 1,
-                b')' => depth -= 1,
-                _ => {}
-            }
-            if depth == 0 {
-                break;
-            }
-            i += 1;
-        }
-        if depth != 0 {
-            break;
-        }
-        let expr_overlay_end = i;
-        let Some(range) = ranges.get(range_idx) else {
-            break;
-        };
-        range_idx += 1;
-        // The emit trims the source slice before writing; compare
-        // trimmed-for-trimmed so an entry is only pushed when the two
-        // halves truly correspond. Leading/trailing whitespace in the
-        // original expression_range shifts both ends accordingly.
-        let overlay_slice = &out[expr_overlay_start..expr_overlay_end];
-        let source_slice_full = match source.get(range.start as usize..range.end as usize) {
-            Some(s) => s,
-            None => {
-                cursor = expr_overlay_end + 1;
-                continue;
-            }
-        };
-        let leading_ws = source_slice_full.len() - source_slice_full.trim_start().len();
-        let trimmed = source_slice_full.trim();
-        if overlay_slice != trimmed {
-            cursor = expr_overlay_end + 1;
-            continue;
-        }
-        let source_start = range.start + leading_ws as u32;
-        let source_end = source_start + trimmed.len() as u32;
-        entries.push(TokenMapEntry {
-            overlay_byte_start: expr_overlay_start as u32,
-            overlay_byte_end: expr_overlay_end as u32,
-            source_byte_start: source_start,
-            source_byte_end: source_end,
-        });
-        cursor = expr_overlay_end + 1;
-    }
-    entries
-}
-
-/// Collect every plain `{EXPR}` interpolation's `expression_range` in
-/// depth-first fragment order — matching the order `emit_template_node`
-/// walks during emit. `{@*}` directive tags are skipped (different
-/// emit shape; no sentinel).
-fn collect_plain_interpolation_ranges(
-    fragment: &svn_parser::Fragment,
-    out: &mut Vec<svn_core::Range>,
-) {
-    use svn_parser::Node;
-    for node in &fragment.nodes {
-        match node {
-            Node::Interpolation(i) => {
-                // Plain `{EXPR}` only; `{@const}` / `{@html}` / etc.
-                // produce structured emit elsewhere (see
-                // emit_at_const_if_any) and don't want a sentinel.
-                if i.kind == svn_parser::InterpolationKind::Expression {
-                    out.push(i.expression_range);
-                }
-            }
-            Node::IfBlock(b) => {
-                collect_plain_interpolation_ranges(&b.consequent, out);
-                for arm in &b.elseif_arms {
-                    collect_plain_interpolation_ranges(&arm.body, out);
-                }
-                if let Some(alt) = &b.alternate {
-                    collect_plain_interpolation_ranges(alt, out);
-                }
-            }
-            Node::EachBlock(b) => {
-                collect_plain_interpolation_ranges(&b.body, out);
-                if let Some(alt) = &b.alternate {
-                    collect_plain_interpolation_ranges(alt, out);
-                }
-            }
-            Node::AwaitBlock(b) => {
-                if let Some(p) = &b.pending {
-                    collect_plain_interpolation_ranges(p, out);
-                }
-                if let Some(t) = &b.then_branch {
-                    collect_plain_interpolation_ranges(&t.body, out);
-                }
-                if let Some(c) = &b.catch_branch {
-                    collect_plain_interpolation_ranges(&c.body, out);
-                }
-            }
-            Node::KeyBlock(b) => collect_plain_interpolation_ranges(&b.body, out),
-            Node::SnippetBlock(b) => collect_plain_interpolation_ranges(&b.body, out),
-            Node::Element(e) => collect_plain_interpolation_ranges(&e.children, out),
-            Node::SvelteElement(s) => collect_plain_interpolation_ranges(&s.children, out),
-            Node::Component(c) => collect_plain_interpolation_ranges(&c.children, out),
-            Node::Text(_) | Node::Comment(_) => {}
-        }
-    }
 }
 
 /// Post-walk scan: for each `ActionDirective`, locate the corresponding
@@ -2126,7 +1991,7 @@ fn extract_generics_attr(doc: &Document<'_>) -> Option<SmolStr> {
 /// checks are emitted inline at each `<Component>` position so they
 /// sit inside the correct enclosing block scope.
 fn emit_template_body(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     fragment: &Fragment,
     depth: usize,
@@ -2150,21 +2015,21 @@ fn emit_template_body(
         .collect();
     if snippets.is_empty() {
         for node in &fragment.nodes {
-            emit_template_node(out, source, node, depth, insts, action_counter);
+            emit_template_node(buf, source, node, depth, insts, action_counter);
         }
         return;
     }
     let indent = "    ".repeat(depth);
     let inner = "    ".repeat(depth + 1);
-    let _ = writeln!(out, "{indent}{{");
+    let _ = writeln!(buf, "{indent}{{");
     for s in &snippets {
-        let _ = writeln!(out, "{inner}const {}: any = undefined;", s.name);
-        let _ = writeln!(out, "{inner}void {};", s.name);
+        let _ = writeln!(buf, "{inner}const {}: any = undefined;", s.name);
+        let _ = writeln!(buf, "{inner}void {};", s.name);
     }
     for node in &fragment.nodes {
-        emit_template_node(out, source, node, depth + 1, insts, action_counter);
+        emit_template_node(buf, source, node, depth + 1, insts, action_counter);
     }
-    let _ = writeln!(out, "{indent}}}");
+    let _ = writeln!(buf, "{indent}}}");
 }
 
 /// SVELTE-4-COMPAT: when a template element carries `let:name` or
@@ -2180,7 +2045,7 @@ fn emit_template_body(
 /// If there are no `let:` directives, this is a straight passthrough
 /// to `emit_template_body`.
 fn emit_children_with_let_bindings(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     attributes: &[svn_parser::Attribute],
     children: &Fragment,
@@ -2190,20 +2055,20 @@ fn emit_children_with_let_bindings(
 ) {
     let let_names = collect_let_directive_names(source, attributes);
     if let_names.is_empty() {
-        emit_template_body(out, source, children, depth, insts, action_counter);
+        emit_template_body(buf, source, children, depth, insts, action_counter);
         return;
     }
     let indent = "    ".repeat(depth);
     let inner = "    ".repeat(depth + 1);
-    let _ = writeln!(out, "{indent}{{");
+    let _ = writeln!(buf, "{indent}{{");
     for name in &let_names {
-        let _ = writeln!(out, "{inner}let {name}: any;");
-        let _ = writeln!(out, "{inner}void {name};");
+        let _ = writeln!(buf, "{inner}let {name}: any;");
+        let _ = writeln!(buf, "{inner}void {name};");
     }
     for node in &children.nodes {
-        emit_template_node(out, source, node, depth + 1, insts, action_counter);
+        emit_template_node(buf, source, node, depth + 1, insts, action_counter);
     }
-    let _ = writeln!(out, "{indent}}}");
+    let _ = writeln!(buf, "{indent}}}");
 }
 
 /// Extract every binding name introduced by `let:X` directives on
@@ -2257,7 +2122,7 @@ fn is_simple_identifier(s: &str) -> bool {
 }
 
 fn emit_template_node(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     node: &Node,
     depth: usize,
@@ -2265,7 +2130,7 @@ fn emit_template_node(
     action_counter: &mut usize,
 ) {
     match node {
-        Node::EachBlock(b) => emit_each_block(out, source, b, depth, insts, action_counter),
+        Node::EachBlock(b) => emit_each_block(buf, source, b, depth, insts, action_counter),
         Node::IfBlock(b) => {
             // Emit as a real `if/else if/else` chain so TS's control-flow
             // analysis narrows union / nullable / type-guard references
@@ -2295,27 +2160,27 @@ fn emit_template_node(
                 .get(b.condition_range.start as usize..b.condition_range.end as usize)
                 .unwrap_or("true")
                 .trim();
-            let _ = writeln!(out, "{indent}if (({main_cond})) {{");
-            emit_condition_ref_marker(out, source, b.condition_range, depth + 1);
-            emit_template_body(out, source, &b.consequent, depth + 1, insts, action_counter);
+            let _ = writeln!(buf, "{indent}if (({main_cond})) {{");
+            emit_condition_ref_marker(buf, source, b.condition_range, depth + 1);
+            emit_template_body(buf, source, &b.consequent, depth + 1, insts, action_counter);
             for arm in &b.elseif_arms {
                 let arm_cond = source
                     .get(arm.condition_range.start as usize..arm.condition_range.end as usize)
                     .unwrap_or("true")
                     .trim();
-                let _ = writeln!(out, "{indent}}} else if (({arm_cond})) {{");
-                emit_condition_ref_marker(out, source, arm.condition_range, depth + 1);
-                emit_template_body(out, source, &arm.body, depth + 1, insts, action_counter);
+                let _ = writeln!(buf, "{indent}}} else if (({arm_cond})) {{");
+                emit_condition_ref_marker(buf, source, arm.condition_range, depth + 1);
+                emit_template_body(buf, source, &arm.body, depth + 1, insts, action_counter);
             }
             if let Some(alt) = &b.alternate {
-                let _ = writeln!(out, "{indent}}} else {{");
-                emit_template_body(out, source, alt, depth + 1, insts, action_counter);
+                let _ = writeln!(buf, "{indent}}} else {{");
+                emit_template_body(buf, source, alt, depth + 1, insts, action_counter);
             }
-            let _ = writeln!(out, "{indent}}}");
+            let _ = writeln!(buf, "{indent}}}");
         }
         Node::AwaitBlock(b) => {
             if let Some(p) = &b.pending {
-                emit_template_body(out, source, p, depth, insts, action_counter);
+                emit_template_body(buf, source, p, depth, insts, action_counter);
             }
             if let Some(t) = &b.then_branch {
                 // `{:then v}` binds `v` to the resolved value for the
@@ -2326,7 +2191,7 @@ fn emit_template_node(
                 // the body inside a fresh lexical scope so the binding
                 // doesn't leak to sibling branches.
                 emit_branch_with_binding(
-                    out,
+                    buf,
                     source,
                     t.context_range.as_ref(),
                     &t.body,
@@ -2337,7 +2202,7 @@ fn emit_template_node(
             }
             if let Some(c) = &b.catch_branch {
                 emit_branch_with_binding(
-                    out,
+                    buf,
                     source,
                     c.context_range.as_ref(),
                     &c.body,
@@ -2347,13 +2212,13 @@ fn emit_template_node(
                 );
             }
         }
-        Node::KeyBlock(b) => emit_template_body(out, source, &b.body, depth, insts, action_counter),
-        Node::SnippetBlock(b) => emit_snippet_block(out, source, b, depth, insts, action_counter),
+        Node::KeyBlock(b) => emit_template_body(buf, source, &b.body, depth, insts, action_counter),
+        Node::SnippetBlock(b) => emit_snippet_block(buf, source, b, depth, insts, action_counter),
         Node::Element(e) => {
-            emit_dom_binding_checks_inline(out, source, e.name.as_str(), &e.attributes, depth);
-            emit_bind_this_element_check_inline(out, source, e.name.as_str(), &e.attributes, depth);
+            emit_dom_binding_checks_inline(buf, source, e.name.as_str(), &e.attributes, depth);
+            emit_bind_this_element_check_inline(buf, source, e.name.as_str(), &e.attributes, depth);
             emit_use_directives_inline(
-                out,
+                buf,
                 source,
                 e.name.as_str(),
                 &e.attributes,
@@ -2361,7 +2226,7 @@ fn emit_template_node(
                 action_counter,
             );
             emit_children_with_let_bindings(
-                out,
+                buf,
                 source,
                 &e.attributes,
                 &e.children,
@@ -2370,17 +2235,17 @@ fn emit_template_node(
                 action_counter,
             );
         }
-        Node::Component(c) => emit_component_node(out, source, c, depth, insts, action_counter),
+        Node::Component(c) => emit_component_node(buf, source, c, depth, insts, action_counter),
         Node::SvelteElement(s) => {
             // `<svelte:element this={tagExpr}>` is dynamic — fall back
             // to `HTMLElement` for bind:this and skip bind:value
             // dispatch (empty tag_name → resolve_bind_value_type
             // returns None).
-            emit_dom_binding_checks_inline(out, source, "", &s.attributes, depth);
-            emit_bind_this_element_check_inline(out, source, "", &s.attributes, depth);
-            emit_use_directives_inline(out, source, "", &s.attributes, depth, action_counter);
+            emit_dom_binding_checks_inline(buf, source, "", &s.attributes, depth);
+            emit_bind_this_element_check_inline(buf, source, "", &s.attributes, depth);
+            emit_use_directives_inline(buf, source, "", &s.attributes, depth, action_counter);
             emit_children_with_let_bindings(
-                out,
+                buf,
                 source,
                 &s.attributes,
                 &s.children,
@@ -2389,7 +2254,7 @@ fn emit_template_node(
                 action_counter,
             );
         }
-        Node::Interpolation(i) => emit_interpolation(out, source, i, depth),
+        Node::Interpolation(i) => emit_interpolation(buf, source, i, depth),
         Node::Text(_) | Node::Comment(_) => {}
     }
 }
@@ -2416,7 +2281,7 @@ fn emit_template_node(
 /// plain `{EXPR}` case and falls through for anything that looks like
 /// a `{@` directive.
 fn emit_interpolation(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     interp: &svn_parser::Interpolation,
     depth: usize,
@@ -2430,29 +2295,38 @@ fn emit_interpolation(
     // (svn_parser::InterpolationKind) so we don't re-peek at the
     // source bytes here.
     if interp.kind != svn_parser::InterpolationKind::Expression {
-        emit_at_const_if_any(out, source, interp, depth);
+        emit_at_const_if_any(buf, source, interp, depth);
         return;
     }
     let expr_start = interp.expression_range.start as usize;
     let expr_end = interp.expression_range.end as usize;
-    let Some(expr) = source.get(expr_start..expr_end) else {
+    let Some(expr_raw) = source.get(expr_start..expr_end) else {
         return;
     };
-    let expr = expr.trim();
-    if expr.is_empty() {
+    let trimmed = expr_raw.trim();
+    if trimmed.is_empty() {
         return;
     }
+    // Shift the source range to point at the trimmed expression so the
+    // TokenMapEntry's overlay span exactly matches the source bytes
+    // tsgo would blame for a diagnostic. Preserves the pre-migration
+    // scanner's "overlay length == source length" invariant.
+    let leading_ws = expr_raw.len() - expr_raw.trim_start().len();
+    let trimmed_source_start = interp.expression_range.start + leading_ws as u32;
+    let trimmed_source_end = trimmed_source_start + trimmed.len() as u32;
+    // Emit shape: `INDENT(EXPR);\n`. Paren-wrap protects against
+    // multi-clause / assignment-looking expressions parsing as
+    // statement heads. `append_with_source` records the EXPR slice's
+    // TokenMapEntry at emit time, replacing the earlier post-walk
+    // `/*svn_I*/` sentinel + scan approach.
     let indent = "    ".repeat(depth);
-    // The `/*svn_I*/` prefix is a sentinel the post-walk scanner hooks
-    // to produce a TokenMapEntry covering EXPR's overlay byte span →
-    // its source range. Without the token-map entry, diagnostics
-    // against the expression (TS2339 on a wrong-branch property
-    // access under narrowing, etc.) get dropped by `map_diagnostic`'s
-    // "synthesized scaffolding with no source anchor" filter.
-    //
-    // Paren-wrap protects against multi-clause / assignment-looking
-    // expressions parsing as statement heads.
-    let _ = writeln!(out, "{indent}/*svn_I*/({expr});");
+    buf.append_synthetic(&indent);
+    buf.append_synthetic("(");
+    buf.append_with_source(
+        trimmed,
+        svn_core::Range::new(trimmed_source_start, trimmed_source_end),
+    );
+    buf.append_synthetic(");\n");
 }
 
 /// If `interp` is an `{@const <pattern> = <expr>}` tag, emit it inline
@@ -2475,7 +2349,7 @@ fn emit_interpolation(
 /// Destructured patterns (`{@const [a, { b }] = tuple}`) fall out for
 /// free — we copy the source text verbatim and TS handles the pattern.
 fn emit_at_const_if_any(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     interp: &svn_parser::Interpolation,
     depth: usize,
@@ -2501,7 +2375,7 @@ fn emit_at_const_if_any(
     // (pattern-or-name on the left of `=`, expression on the right).
     // Re-emitting inside the template-check `const` keyword pins the
     // inferred type so downstream `{#if NAME === '…'}` narrows.
-    let _ = writeln!(out, "{indent}const {body};");
+    let _ = writeln!(buf, "{indent}const {body};");
 
     // Void every binding introduced by the pattern. Without this tsgo
     // fires TS6133 ("declared but never read") on `@const` tags whose
@@ -2519,7 +2393,7 @@ fn emit_at_const_if_any(
     // `void SomeType` would fire TS2693 ("only refers to a type").
     let lhs = split_lhs(body);
     for name in collect_pattern_names(&lhs) {
-        let _ = writeln!(out, "{indent}void {name};");
+        let _ = writeln!(buf, "{indent}void {name};");
     }
 }
 
@@ -2726,7 +2600,12 @@ fn collect_pattern_names(lhs: &str) -> Vec<String> {
 /// property-access marker inside the negated branch can surface type
 /// errors (TS18047 / TS2339) that the user's inverted narrowing would
 /// normally make unreachable.
-fn emit_condition_ref_marker(out: &mut String, source: &str, range: svn_core::Range, depth: usize) {
+fn emit_condition_ref_marker(
+    buf: &mut EmitBuffer,
+    source: &str,
+    range: svn_core::Range,
+    depth: usize,
+) {
     let Some(cond_text) = source.get(range.start as usize..range.end as usize) else {
         return;
     };
@@ -2738,15 +2617,15 @@ fn emit_condition_ref_marker(out: &mut String, source: &str, range: svn_core::Ra
         return;
     }
     let indent = "    ".repeat(depth);
-    out.push_str(&indent);
-    out.push_str("void [");
+    buf.push_str(&indent);
+    buf.push_str("void [");
     for (i, chain) in chains.iter().enumerate() {
         if i > 0 {
-            out.push_str(", ");
+            buf.push_str(", ");
         }
-        out.push_str(chain);
+        buf.push_str(chain);
     }
-    out.push_str("];\n");
+    buf.push_str("];\n");
 }
 
 /// Extract every top-level identifier-or-property-access chain from
@@ -3030,7 +2909,7 @@ fn is_keyword_or_special(s: &str) -> bool {
 /// discard the value); we use `__svn_each_unused` as a placeholder binding
 /// so the emitted TypeScript stays syntactically valid.
 fn emit_each_block(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     b: &EachBlock,
     depth: usize,
@@ -3061,26 +2940,26 @@ fn emit_each_block(
         .and_then(|c| c.index_range)
         .and_then(|r| source.get(r.start as usize..r.end as usize));
     let _ = writeln!(
-        out,
+        buf,
         "{indent}for (const {binding_text} of __svn_each_items({expr_text})) {{"
     );
     if let Some(ix) = index_binding {
-        let _ = writeln!(out, "{indent}    const {ix}: number = 0;");
+        let _ = writeln!(buf, "{indent}    const {ix}: number = 0;");
     }
-    emit_template_body(out, source, &b.body, depth + 1, insts, action_counter);
+    emit_template_body(buf, source, &b.body, depth + 1, insts, action_counter);
     // Void every identifier that the binding pattern destructures, not
     // just the first. `[id, label]` and `[id, { label }]` both bind two
     // names and TS6133 fires on each unused one.
     for ident in all_identifiers(&binding_text) {
-        let _ = writeln!(out, "{indent}    void {ident};");
+        let _ = writeln!(buf, "{indent}    void {ident};");
     }
     if let Some(ix) = index_binding {
-        let _ = writeln!(out, "{indent}    void {ix};");
+        let _ = writeln!(buf, "{indent}    void {ix};");
     }
-    let _ = writeln!(out, "{indent}}}");
+    let _ = writeln!(buf, "{indent}}}");
 
     if let Some(alt) = &b.alternate {
-        emit_template_body(out, source, alt, depth, insts, action_counter);
+        emit_template_body(buf, source, alt, depth, insts, action_counter);
     }
 }
 
@@ -3094,7 +2973,7 @@ fn emit_each_block(
 /// via `all_identifiers`. An absent context range (`{:then}` with no
 /// binding) skips the scope and just walks the body inline.
 fn emit_branch_with_binding(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     context_range: Option<&svn_core::Range>,
     body: &Fragment,
@@ -3103,7 +2982,7 @@ fn emit_branch_with_binding(
     action_counter: &mut usize,
 ) {
     let Some(range) = context_range else {
-        emit_template_body(out, source, body, depth, insts, action_counter);
+        emit_template_body(buf, source, body, depth, insts, action_counter);
         return;
     };
     let binding_text = source
@@ -3111,20 +2990,20 @@ fn emit_branch_with_binding(
         .unwrap_or("")
         .trim();
     if binding_text.is_empty() {
-        emit_template_body(out, source, body, depth, insts, action_counter);
+        emit_template_body(buf, source, body, depth, insts, action_counter);
         return;
     }
     let idents = all_identifiers(binding_text);
     let indent = "    ".repeat(depth);
-    let _ = writeln!(out, "{indent}{{");
+    let _ = writeln!(buf, "{indent}{{");
     for ident in &idents {
-        let _ = writeln!(out, "{indent}    const {ident}: any = undefined;");
+        let _ = writeln!(buf, "{indent}    const {ident}: any = undefined;");
     }
-    emit_template_body(out, source, body, depth + 1, insts, action_counter);
+    emit_template_body(buf, source, body, depth + 1, insts, action_counter);
     for ident in &idents {
-        let _ = writeln!(out, "{indent}    void {ident};");
+        let _ = writeln!(buf, "{indent}    void {ident};");
     }
-    let _ = writeln!(out, "{indent}}}");
+    let _ = writeln!(buf, "{indent}}}");
 }
 
 /// Emit a lexical-scope block wrapping a `{#snippet name(params)}` body
@@ -3143,7 +3022,7 @@ fn emit_branch_with_binding(
 /// values (`foo = 1`) have the default expression stripped before
 /// identifier extraction.
 fn emit_snippet_block(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     b: &SnippetBlock,
     depth: usize,
@@ -3160,7 +3039,7 @@ fn emit_snippet_block(
     // returns an empty vec (it falls back to `__svn_each_unused`),
     // so we intercept the empty-params case before calling it.
     if params_text.is_empty() {
-        emit_template_body(out, source, &b.body, depth, insts, action_counter);
+        emit_template_body(buf, source, &b.body, depth, insts, action_counter);
         return;
     }
     // Open a fresh block, then reference the ORIGINAL params text
@@ -3191,14 +3070,14 @@ fn emit_snippet_block(
     //
     // We use a function *expression* (not a type) so default values
     // and optional-after-required orderings remain legal.
-    let _ = writeln!(out, "{indent}{{");
-    let _ = writeln!(out, "{indent}    void (({annotated}) => {{");
-    emit_template_body(out, source, &b.body, depth + 2, insts, action_counter);
+    let _ = writeln!(buf, "{indent}{{");
+    let _ = writeln!(buf, "{indent}    void (({annotated}) => {{");
+    emit_template_body(buf, source, &b.body, depth + 2, insts, action_counter);
     for ident in &idents {
-        let _ = writeln!(out, "{indent}        void {ident};");
+        let _ = writeln!(buf, "{indent}        void {ident};");
     }
-    let _ = writeln!(out, "{indent}    }});");
-    let _ = writeln!(out, "{indent}}}");
+    let _ = writeln!(buf, "{indent}    }});");
+    let _ = writeln!(buf, "{indent}}}");
 }
 
 /// Emit a typed call per `use:ACTION={PARAMS}` directive so the PARAMS
@@ -3317,7 +3196,7 @@ fn emit_legacy_action_attrs(out: &mut String, summary: &TemplateSummary) {
 /// "Cannot find name" (bench: cnblocks validated this pattern;
 /// control-svelte-4/5 had 6 such fires on real user code).
 fn emit_use_directives_inline(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     tag_name: &str,
     attributes: &[svn_parser::Attribute],
@@ -3350,23 +3229,23 @@ fn emit_use_directives_inline(
                     continue;
                 };
                 let _ = writeln!(
-                    out,
+                    buf,
                     "{indent}const __svn_action_{index} = __svn_ensure_action({action}(__svn_map_element_tag({tag_arg}), ({params})));"
                 );
             }
             _ => {
                 let _ = writeln!(
-                    out,
+                    buf,
                     "{indent}const __svn_action_{index} = __svn_ensure_action({action}(__svn_map_element_tag({tag_arg})));"
                 );
             }
         }
-        let _ = writeln!(out, "{indent}void __svn_action_{index};");
+        let _ = writeln!(buf, "{indent}void __svn_action_{index};");
     }
 }
 
 fn emit_dom_binding_checks_inline(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     tag_name: &str,
     attributes: &[svn_parser::Attribute],
@@ -3430,7 +3309,7 @@ fn emit_dom_binding_checks_inline(
         // assignment from narrowing, which produced spurious
         // "possibly undefined" errors on consumer prop-passing sites
         // against upstream's behavior (bench: FigmaPopup mainWidth).
-        let _ = writeln!(out, "{indent}{expr} = null as any as {ty};");
+        let _ = writeln!(buf, "{indent}{expr} = null as any as {ty};");
     }
 }
 
@@ -3456,7 +3335,7 @@ fn emit_dom_binding_checks_inline(
 /// `tag_name == ""` is the svelte:element dynamic-tag escape hatch:
 /// falls back to `HTMLElement`.
 fn emit_bind_this_element_check_inline(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     tag_name: &str,
     attributes: &[svn_parser::Attribute],
@@ -3505,7 +3384,7 @@ fn emit_bind_this_element_check_inline(
         // this emit from one-way DOM-binding emits during the
         // post-walk token-map scan.
         let _ = writeln!(
-            out,
+            buf,
             "{indent}/* bind:this */ {expr} = null as any as {el_type};"
         );
     }
@@ -3566,7 +3445,7 @@ fn element_type_annotation(tag_name: &str) -> String {
 /// destructures pick up contextual types from the parent's Snippet prop
 /// shape instead of reading as implicit-any.
 fn emit_component_node(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     c: &svn_parser::Component,
     depth: usize,
@@ -3595,10 +3474,10 @@ fn emit_component_node(
     } else {
         let indent = "    ".repeat(depth);
         let inner = "    ".repeat(depth + 1);
-        let _ = writeln!(out, "{indent}{{");
+        let _ = writeln!(buf, "{indent}{{");
         for name in &let_names {
-            let _ = writeln!(out, "{inner}let {name}: any;");
-            let _ = writeln!(out, "{inner}void {name};");
+            let _ = writeln!(buf, "{inner}let {name}: any;");
+            let _ = writeln!(buf, "{inner}void {name};");
         }
         (indent, depth + 1)
     };
@@ -3609,7 +3488,7 @@ fn emit_component_node(
     // template-body walk so snippet hoists still emit there.
     if let Some(inst) = inst {
         emit_component_call(
-            out,
+            buf,
             source,
             inst,
             inner_depth,
@@ -3622,10 +3501,10 @@ fn emit_component_node(
     if inst.is_none() || snippet_children.is_empty() {
         // Walk children at the same let-binding scope depth.
         for node in &c.children.nodes {
-            emit_template_node(out, source, node, inner_depth, insts, action_counter);
+            emit_template_node(buf, source, node, inner_depth, insts, action_counter);
         }
         if !let_names.is_empty() {
-            let _ = writeln!(out, "{indent}}}");
+            let _ = writeln!(buf, "{indent}}}");
         }
         return;
     }
@@ -3634,10 +3513,10 @@ fn emit_component_node(
         if matches!(node, Node::SnippetBlock(_)) {
             continue;
         }
-        emit_template_node(out, source, node, inner_depth, insts, action_counter);
+        emit_template_node(buf, source, node, inner_depth, insts, action_counter);
     }
     if !let_names.is_empty() {
-        let _ = writeln!(out, "{indent}}}");
+        let _ = writeln!(buf, "{indent}}}");
     }
 }
 
@@ -3662,7 +3541,7 @@ fn emit_component_node(
 /// avoids shadowing / redeclaration when the same parent fragment
 /// contains multiple components.
 fn emit_component_call(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     inst: &svn_analyze::ComponentInstantiation,
     depth: usize,
@@ -3689,9 +3568,9 @@ fn emit_component_call(
         String::new()
     };
 
-    let _ = writeln!(out, "{indent}{{");
+    let _ = writeln!(buf, "{indent}{{");
     let _ = writeln!(
-        out,
+        buf,
         "{inner}const {local} = __svn_ensure_component({comp});"
     );
 
@@ -3736,70 +3615,70 @@ fn emit_component_call(
 
     if snippet_children.is_empty() && inst.props.is_empty() && !emit_implicit_children {
         let _ = writeln!(
-            out,
+            buf,
             "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{}} }});"
         );
-        emit_bind_this_assignment(out, source, inst, &inst_local, &inner);
-        emit_on_event_calls(out, source, inst, &inst_local, &inner);
-        let _ = writeln!(out, "{indent}}}");
+        emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
+        emit_on_event_calls(buf, source, inst, &inst_local, &inner);
+        let _ = writeln!(buf, "{indent}}}");
         return;
     }
 
     if snippet_children.is_empty() {
         let _ = write!(
-            out,
+            buf,
             "{inner}{ctor_lhs}new {local}({{ target: __svn_any(), props: {{"
         );
         let mut first = true;
         for p in &inst.props {
             if !first {
-                let _ = write!(out, ", ");
+                let _ = write!(buf, ", ");
             }
             first = false;
-            write_prop_shape(out, source, p);
+            write_prop_shape(buf, source, p);
         }
         if emit_implicit_children {
             if !first {
-                let _ = write!(out, ", ");
+                let _ = write!(buf, ", ");
             }
-            let _ = write!(out, "children: () => __svn_snippet_return()");
+            let _ = write!(buf, "children: () => __svn_snippet_return()");
         }
-        let _ = writeln!(out, "}} }});");
-        emit_bind_this_assignment(out, source, inst, &inst_local, &inner);
-        emit_on_event_calls(out, source, inst, &inst_local, &inner);
-        let _ = writeln!(out, "{indent}}}");
+        let _ = writeln!(buf, "}} }});");
+        emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
+        emit_on_event_calls(buf, source, inst, &inst_local, &inner);
+        let _ = writeln!(buf, "{indent}}}");
         return;
     }
 
     // Multi-line form with snippets-as-arrow-props.
-    let _ = writeln!(out, "{inner}{ctor_lhs}new {local}({{");
+    let _ = writeln!(buf, "{inner}{ctor_lhs}new {local}({{");
     let opts_inner = "    ".repeat(depth + 2);
     let props_inner = "    ".repeat(depth + 3);
-    let _ = writeln!(out, "{opts_inner}target: __svn_any(),");
-    let _ = writeln!(out, "{opts_inner}props: {{");
+    let _ = writeln!(buf, "{opts_inner}target: __svn_any(),");
+    let _ = writeln!(buf, "{opts_inner}props: {{");
     for p in &inst.props {
-        out.push_str(&props_inner);
-        write_prop_shape(out, source, p);
-        let _ = writeln!(out, ",");
+        buf.push_str(&props_inner);
+        write_prop_shape(buf, source, p);
+        let _ = writeln!(buf, ",");
     }
     for s in snippet_children {
-        out.push_str(&props_inner);
-        write_snippet_arrow_prop(out, source, s, depth + 3, insts, action_counter);
-        let _ = writeln!(out, ",");
+        buf.push_str(&props_inner);
+        write_snippet_arrow_prop(buf, source, s, depth + 3, insts, action_counter);
+        let _ = writeln!(buf, ",");
     }
     // Implicit children and explicit snippet children are mutually
     // exclusive in practice — the user wrote either one or the other
     // — but defensively emit only when we haven't already covered it
     // via `snippet_children` above.
     if emit_implicit_children {
-        out.push_str(&props_inner);
-        let _ = writeln!(out, "children: () => __svn_snippet_return(),");
+        buf.push_str(&props_inner);
+        let _ = writeln!(buf, "children: () => __svn_snippet_return(),");
     }
-    let _ = writeln!(out, "{opts_inner}}},");
-    let _ = writeln!(out, "{inner}}});");
-    emit_bind_this_assignment(out, source, inst, &inst_local, &inner);
-    emit_on_event_calls(out, source, inst, &inst_local, &inner);
-    let _ = writeln!(out, "{indent}}}");
+    let _ = writeln!(buf, "{opts_inner}}},");
+    let _ = writeln!(buf, "{inner}}});");
+    emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
+    emit_on_event_calls(buf, source, inst, &inst_local, &inner);
+    let _ = writeln!(buf, "{indent}}}");
 }
 
 /// Extract the NAME from a `PropShape`, if it has one (spreads
@@ -3828,7 +3707,7 @@ fn prop_shape_name(p: &svn_analyze::PropShape) -> Option<&str> {
 /// `SvelteComponent<Props, Events, Slots>.$on`'s signature — Svelte's
 /// own typing chain, no special-casing needed on our side.
 fn emit_on_event_calls(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     inst: &svn_analyze::ComponentInstantiation,
     inst_local: &str,
@@ -3837,7 +3716,7 @@ fn emit_on_event_calls(
     for ev in &inst.on_events {
         let expr = &source[ev.handler_range.start as usize..ev.handler_range.end as usize];
         let name = &ev.event_name;
-        let _ = writeln!(out, "{inner}{inst_local}.$on(\"{name}\", ({expr}));");
+        let _ = writeln!(buf, "{inner}{inst_local}.$on(\"{name}\", ({expr}));");
     }
 }
 
@@ -3856,7 +3735,7 @@ fn emit_on_event_calls(
 /// skips hoisting the instance into a local in that case, so there's
 /// nothing to assign.
 fn emit_bind_this_assignment(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     inst: &svn_analyze::ComponentInstantiation,
     inst_local: &str,
@@ -3870,52 +3749,52 @@ fn emit_bind_this_assignment(
         if expr.is_empty() {
             return;
         }
-        let _ = writeln!(out, "{inner}{expr} = {inst_local};");
+        let _ = writeln!(buf, "{inner}{expr} = {inst_local};");
     }
 }
 
 /// Write a single property of a component-prop-check object literal,
 /// dispatching on the analyze-side `PropShape` variant.
-fn write_prop_shape(out: &mut String, source: &str, p: &svn_analyze::PropShape) {
+fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropShape) {
     match p {
         svn_analyze::PropShape::Literal { name, value } => {
-            write_object_key(out, name);
-            out.push_str(": ");
-            write_js_string_literal(out, value);
+            write_object_key(buf, name);
+            buf.push_str(": ");
+            write_js_string_literal(buf, value);
         }
         svn_analyze::PropShape::Expression { name, expr_range } => {
             let expr = &source[expr_range.start as usize..expr_range.end as usize];
-            write_object_key(out, name);
-            let _ = write!(out, ": ({expr})");
+            write_object_key(buf, name);
+            let _ = write!(buf, ": ({expr})");
         }
         svn_analyze::PropShape::Shorthand { name } => {
             // `{foo}` shorthand is only valid when the key is also a
             // valid JS identifier — otherwise expand to `"foo": foo`.
             if is_simple_js_identifier(name) {
-                out.push_str(name);
+                buf.push_str(name);
             } else {
-                write_object_key(out, name);
-                let _ = write!(out, ": {name}");
+                write_object_key(buf, name);
+                let _ = write!(buf, ": {name}");
             }
         }
         svn_analyze::PropShape::BoolShorthand { name } => {
-            write_object_key(out, name);
-            out.push_str(": true");
+            write_object_key(buf, name);
+            buf.push_str(": true");
         }
         svn_analyze::PropShape::Spread { expr_range } => {
             let expr = &source[expr_range.start as usize..expr_range.end as usize];
             // Wrap the expression in parens so things like ternaries
             // or `a, b` sequences stay a single operand of `...`.
-            let _ = write!(out, "...({expr})");
+            let _ = write!(buf, "...({expr})");
         }
         svn_analyze::PropShape::GetSetBinding { name, getter_range } => {
             let getter = &source[getter_range.start as usize..getter_range.end as usize];
-            write_object_key(out, name);
+            write_object_key(buf, name);
             // `name: (getter)()` — invoke the getter so TS resolves
             // the value to the getter's return type, which is what
             // the target Props declaration wants to check against.
             // Svelte 5 get/set bind form; setter dropped (runtime-only).
-            let _ = write!(out, ": ({getter})()");
+            let _ = write!(buf, ": ({getter})()");
         }
     }
 }
@@ -4047,7 +3926,7 @@ fn find_top_level_eq(s: &str) -> Option<usize> {
 /// The closing `}` is written without a trailing newline so the caller
 /// can append `,\n` at the property-value column.
 fn write_snippet_arrow_prop(
-    out: &mut String,
+    buf: &mut EmitBuffer,
     source: &str,
     s: &SnippetBlock,
     depth: usize,
@@ -4060,31 +3939,31 @@ fn write_snippet_arrow_prop(
         .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
         .unwrap_or("")
         .trim();
-    write_object_key(out, &s.name);
+    write_object_key(buf, &s.name);
     if params_text.is_empty() {
-        let _ = writeln!(out, ": () => {{");
-        emit_template_body(out, source, &s.body, depth + 1, insts, action_counter);
-        let _ = writeln!(out, "{body_indent}return __svn_snippet_return();");
-        let _ = write!(out, "{indent}}}");
+        let _ = writeln!(buf, ": () => {{");
+        emit_template_body(buf, source, &s.body, depth + 1, insts, action_counter);
+        let _ = writeln!(buf, "{body_indent}return __svn_snippet_return();");
+        let _ = write!(buf, "{indent}}}");
         return;
     }
-    let _ = writeln!(out, ": ({params_text}) => {{");
-    emit_template_body(out, source, &s.body, depth + 1, insts, action_counter);
+    let _ = writeln!(buf, ": ({params_text}) => {{");
+    emit_template_body(buf, source, &s.body, depth + 1, insts, action_counter);
     for ident in all_identifiers(params_text) {
-        let _ = writeln!(out, "{body_indent}void {ident};");
+        let _ = writeln!(buf, "{body_indent}void {ident};");
     }
-    let _ = writeln!(out, "{body_indent}return __svn_snippet_return();");
-    let _ = write!(out, "{indent}}}");
+    let _ = writeln!(buf, "{body_indent}return __svn_snippet_return();");
+    let _ = write!(buf, "{indent}}}");
 }
 
 /// Write an object-literal key. Plain JS identifiers are emitted bare;
 /// anything with a hyphen, a non-ident character, or a JS reserved
 /// word lookalike is double-quoted (always safe).
-fn write_object_key(out: &mut String, name: &str) {
+fn write_object_key(buf: &mut EmitBuffer, name: &str) {
     if is_simple_js_identifier(name) {
-        out.push_str(name);
+        buf.push_str(name);
     } else {
-        write_js_string_literal(out, name);
+        write_js_string_literal(buf, name);
     }
 }
 
@@ -4105,22 +3984,22 @@ fn is_simple_js_identifier(s: &str) -> bool {
 /// Write `value` as a JS double-quoted string literal, escaping the
 /// usual unsafe characters. Pure ASCII assumption — Svelte attribute
 /// values are decoded earlier in the pipeline.
-fn write_js_string_literal(out: &mut String, value: &str) {
-    out.push('"');
+fn write_js_string_literal(buf: &mut EmitBuffer, value: &str) {
+    buf.push('"');
     for c in value.chars() {
         match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
+            '"' => buf.push_str("\\\""),
+            '\\' => buf.push_str("\\\\"),
+            '\n' => buf.push_str("\\n"),
+            '\r' => buf.push_str("\\r"),
+            '\t' => buf.push_str("\\t"),
             c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
+                let _ = write!(buf, "\\u{:04x}", c as u32);
             }
-            c => out.push(c),
+            c => buf.push(c),
         }
     }
-    out.push('"');
+    buf.push('"');
 }
 
 /// Emit getter/setter tuple placeholders for `bind:foo={getter, setter}`.

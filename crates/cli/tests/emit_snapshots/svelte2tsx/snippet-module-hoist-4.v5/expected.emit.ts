@@ -16,7 +16,7 @@ async function $$render_50f1c2a8() {
             void chain3;
             const hoistable: any = undefined;
             void hoistable;
-            /*svn_I*/(foo);
+            (foo);
         }
     }
     void __svn_tpl_check;

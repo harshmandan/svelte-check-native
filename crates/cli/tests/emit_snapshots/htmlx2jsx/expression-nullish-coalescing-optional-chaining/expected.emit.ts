@@ -3,7 +3,7 @@
 async function $$render_79986fd7() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/(your?.name ?? 'Unknown');
+        (your?.name ?? 'Unknown');
     }
     void __svn_tpl_check;
 }

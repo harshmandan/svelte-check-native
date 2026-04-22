@@ -115,6 +115,17 @@ impl EmitBuffer {
         self.append_synthetic(text);
     }
 
+    /// Append a single character. Matches `String::push`'s signature so
+    /// char-at-a-time call sites (e.g. escape-encoding a JS string
+    /// literal) migrate without structural churn. Updates the overlay
+    /// line counter if the char is `\n`.
+    pub fn push(&mut self, ch: char) {
+        self.out.push(ch);
+        if ch == '\n' {
+            self.overlay_line += 1;
+        }
+    }
+
     /// Append text verbatim from `source[source_range]`, recording
     /// a [`LineMapEntry`] that maps the overlay lines back to the
     /// corresponding source lines.
@@ -349,6 +360,16 @@ mod tests {
         buf.raw_string_mut().push_str("two\nthree\n");
         buf.resync_current_line();
         assert_eq!(buf.current_line(), 4);
+    }
+
+    #[test]
+    fn push_char_advances_line_on_newline() {
+        let mut buf = EmitBuffer::with_capacity(8);
+        buf.push('a');
+        buf.push('\n');
+        buf.push('b');
+        assert_eq!(buf.as_str(), "a\nb");
+        assert_eq!(buf.current_line(), 2);
     }
 
     #[test]

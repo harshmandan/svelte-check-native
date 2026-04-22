@@ -11,7 +11,7 @@ async function $$render_1497f2af() {
     } = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/(checked ? 'on' : 'off');
+        (checked ? 'on' : 'off');
     }
     void __svn_tpl_check;
     void checked;

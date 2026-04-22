@@ -7,7 +7,7 @@ async function $$render_6743ac1f() {
   let { item }: { item: unknown } = $props()
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/(getDuration(item as AppVideo));
+        (getDuration(item as AppVideo));
     }
     void __svn_tpl_check;
     void item;

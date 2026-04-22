@@ -7,7 +7,7 @@ async function $$render_c7e1c908() {
             void __svn_each_unused;
         }
         for (const __svn_each_unused of __svn_each_items({ length: 5 }, index)) {
-            /*svn_I*/(index);
+            (index);
             void __svn_each_unused;
         }
     }

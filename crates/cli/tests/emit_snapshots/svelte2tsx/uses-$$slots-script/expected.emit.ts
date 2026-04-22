@@ -8,7 +8,7 @@ async function $$render_6270ac78() {
     let dashedName = $$slots['dashed-name'];
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/(name);
+        (name);
     }
     void __svn_tpl_check;
     void name;

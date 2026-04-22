@@ -65,8 +65,8 @@ async function $$render_f9263703() {
         }
         if ((adjusting)) {
             void [adjusting];
-            /*svn_I*/(selected.cx);
-            /*svn_I*/(selected.cy);
+            (selected.cx);
+            (selected.cy);
         }
     }
     void __svn_tpl_check;

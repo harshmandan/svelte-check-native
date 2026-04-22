@@ -13,10 +13,10 @@ async function $$render_55fa86f5() {
                     const __svn_C_ba = __svn_ensure_component(Component);
                     new __svn_C_ba({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                 }
-                /*svn_I*/(foo);
-                /*svn_I*/(bar);
+                (foo);
+                (bar);
             }
-            /*svn_I*/(foo);
+            (foo);
         }
     }
     void __svn_tpl_check;

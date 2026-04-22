@@ -7,15 +7,15 @@ async function $$render_d92c900a() {
             void [name];
             const hello = name;
             void hello;
-            /*svn_I*/(hello);
+            (hello);
         } else if ((true)) {
             const hello = name;
             void hello;
-            /*svn_I*/(hello);
+            (hello);
         } else {
             const hello = name;
             void hello;
-            /*svn_I*/(hello);
+            (hello);
         }
         if ((typeof a === 'string')) {
             void [a];
@@ -23,7 +23,7 @@ async function $$render_d92c900a() {
             void aStr;
             const aStr2 = aStr;
             void aStr2;
-            /*svn_I*/(a);
+            (a);
         } else if ((typeof a === 'number')) {
             void [a];
             const aNum = a;

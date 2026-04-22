@@ -28,12 +28,12 @@ async function $$render_8a5774d3() {
             void width;
             void height;
             void sum;
-            /*svn_I*/(area);
-            /*svn_I*/(volume);
-            /*svn_I*/(perimeter);
-            /*svn_I*/(width);
-            /*svn_I*/(height);
-            /*svn_I*/(sum);
+            (area);
+            (volume);
+            (perimeter);
+            (width);
+            (height);
+            (sum);
         }
         {
             let width: any;
@@ -49,12 +49,12 @@ async function $$render_8a5774d3() {
             void _width;
             void _height;
             void sum;
-            /*svn_I*/(area);
-            /*svn_I*/(volume);
-            /*svn_I*/(perimeter);
-            /*svn_I*/(_width);
-            /*svn_I*/(_height);
-            /*svn_I*/(sum);
+            (area);
+            (volume);
+            (perimeter);
+            (_width);
+            (_height);
+            (sum);
         }
         {
             let box: any;
@@ -68,12 +68,12 @@ async function $$render_8a5774d3() {
             void _width;
             void _height;
             void sum;
-            /*svn_I*/(area);
-            /*svn_I*/(volume);
-            /*svn_I*/(perimeter);
-            /*svn_I*/(_width);
-            /*svn_I*/(_height);
-            /*svn_I*/(sum);
+            (area);
+            (volume);
+            (perimeter);
+            (_width);
+            (_height);
+            (sum);
         }
         {
             let box: any;
@@ -94,12 +94,12 @@ async function $$render_8a5774d3() {
                 void width;
                 void height;
                 void sum;
-                /*svn_I*/(area);
-                /*svn_I*/(volume);
-                /*svn_I*/(perimeter);
-                /*svn_I*/(width);
-                /*svn_I*/(height);
-                /*svn_I*/(sum);
+                (area);
+                (volume);
+                (perimeter);
+                (width);
+                (height);
+                (sum);
             }
             {
                 let width: any;
@@ -115,12 +115,12 @@ async function $$render_8a5774d3() {
                 void _width;
                 void _height;
                 void sum;
-                /*svn_I*/(area);
-                /*svn_I*/(volume);
-                /*svn_I*/(perimeter);
-                /*svn_I*/(_width);
-                /*svn_I*/(_height);
-                /*svn_I*/(sum);
+                (area);
+                (volume);
+                (perimeter);
+                (_width);
+                (_height);
+                (sum);
             }
             const {area, volume} = calculate(box.width, box.height, constant);
             void area;
@@ -131,12 +131,12 @@ async function $$render_8a5774d3() {
             void width;
             void height;
             void sum;
-            /*svn_I*/(area);
-            /*svn_I*/(volume);
-            /*svn_I*/(perimeter);
-            /*svn_I*/(width);
-            /*svn_I*/(height);
-            /*svn_I*/(sum);
+            (area);
+            (volume);
+            (perimeter);
+            (width);
+            (height);
+            (sum);
         }
         {
             let box: any;
@@ -154,12 +154,12 @@ async function $$render_8a5774d3() {
             void _width;
             void _height;
             void sum;
-            /*svn_I*/(area);
-            /*svn_I*/(volume);
-            /*svn_I*/(perimeter);
-            /*svn_I*/(_width);
-            /*svn_I*/(_height);
-            /*svn_I*/(sum);
+            (area);
+            (volume);
+            (perimeter);
+            (_width);
+            (_height);
+            (sum);
         }
     }
     void __svn_tpl_check;

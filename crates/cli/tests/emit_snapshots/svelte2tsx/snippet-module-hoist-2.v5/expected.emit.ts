@@ -12,7 +12,7 @@ async function $$render_5559350c() {
             void hoistable;
             const not_hoistable: any = undefined;
             void not_hoistable;
-            /*svn_I*/(foo);
+            (foo);
         }
     }
     void __svn_tpl_check;

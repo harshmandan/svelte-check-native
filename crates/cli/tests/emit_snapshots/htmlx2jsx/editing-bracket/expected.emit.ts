@@ -3,7 +3,7 @@
 async function $$render_72dbb43a() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/(someRecord[anotherRecord.]);
+        (someRecord[anotherRecord.]);
     }
     void __svn_tpl_check;
 }

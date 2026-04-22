@@ -12,8 +12,8 @@ async function $$render_73106591() {
                 const __svn_C_0 = __svn_ensure_component(Component);
                 new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             }
-            /*svn_I*/(thing);
-            /*svn_I*/(n);
+            (thing);
+            (n);
         }
     }
     void __svn_tpl_check;

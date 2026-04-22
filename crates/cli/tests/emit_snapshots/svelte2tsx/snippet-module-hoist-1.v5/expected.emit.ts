@@ -34,25 +34,25 @@ async function $$render_3d709d05() {
             void not_hoistable;
             {
                 void ((bar: any) => {
-                    /*svn_I*/(bar);
+                    (bar);
                     void bar;
                 });
             }
             {
                 void ((bar: string) => {
-                    /*svn_I*/(bar);
+                    (bar);
                     void bar;
                 });
             }
             {
                 void ((foo: any) => {
-                    /*svn_I*/(foo);
+                    (foo);
                     void foo;
                 });
             }
-            /*svn_I*/(module);
-            /*svn_I*/(imported);
-            /*svn_I*/(global);
+            (module);
+            (imported);
+            (global);
             {
                 void ((props: HTMLAttributes<HTMLDivElement>) => {
                     void props;
@@ -62,11 +62,11 @@ async function $$render_3d709d05() {
                 void ((foo: any) => {
                     const bar = foo;
                     void bar;
-                    /*svn_I*/(bar);
+                    (bar);
                     void foo;
                 });
             }
-            /*svn_I*/(foo);
+            (foo);
         }
     }
     void __svn_tpl_check;

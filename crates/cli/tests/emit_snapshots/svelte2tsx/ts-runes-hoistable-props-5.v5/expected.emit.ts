@@ -21,7 +21,7 @@ async function $$render_b09ebc4f() {
     let { foo }: Props = $props()
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/($store);
+        ($store);
     }
     void __svn_tpl_check;
     void $store;

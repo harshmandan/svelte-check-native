@@ -14,21 +14,21 @@ async function $$render_c6382cf7() {
         // template type-check body (incremental)
         const k = shape.kind;
         void k;
-        /*svn_I*/(k);
+        (k);
         if ((shape.kind === 'circle')) {
             void [shape.kind];
-            /*svn_I*/(shape.radius);
+            (shape.radius);
         } else if ((shape.kind === 'square')) {
             void [shape.kind];
-            /*svn_I*/(shape.side);
+            (shape.side);
         }
         const [first, { kind: k2 }, ...rest] = [shape, shape];
         void first;
         void k2;
         void rest;
-        /*svn_I*/(first.kind);
-        /*svn_I*/(k2);
-        /*svn_I*/(rest.length);
+        (first.kind);
+        (k2);
+        (rest.length);
     }
     void __svn_tpl_check;
     void shape;

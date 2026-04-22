@@ -26,7 +26,7 @@ async function $$render_ceba0c24() {
             },
         })));
             void __svn_action_0;
-            /*svn_I*/(item);
+            (item);
             void item;
             void index;
         }

@@ -3,7 +3,7 @@
 async function $$render_aa07c32b() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/(console.log(''.));
+        (console.log(''.));
         {
             const value: any = undefined;
             void value;

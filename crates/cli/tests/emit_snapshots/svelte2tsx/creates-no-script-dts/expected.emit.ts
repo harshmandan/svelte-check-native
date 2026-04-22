@@ -5,7 +5,7 @@ async function $$render_a41f16c2() {
         // template type-check body (incremental)
         {
             const n: any = undefined;
-            /*svn_I*/(n);
+            (n);
             void n;
         }
     }

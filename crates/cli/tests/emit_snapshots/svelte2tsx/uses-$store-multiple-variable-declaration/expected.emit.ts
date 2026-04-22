@@ -18,16 +18,16 @@ async function $$render_387932bf() {
     let [store9, store10] = __svn_invalidate(() => ('')); void store9; void store10;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/($store1);
-        /*svn_I*/($store2);
-        /*svn_I*/($store3);
-        /*svn_I*/($store4);
-        /*svn_I*/($store5);
-        /*svn_I*/($store6);
-        /*svn_I*/($store7);
-        /*svn_I*/($store8);
-        /*svn_I*/($store9);
-        /*svn_I*/($store10);
+        ($store1);
+        ($store2);
+        ($store3);
+        ($store4);
+        ($store5);
+        ($store6);
+        ($store7);
+        ($store8);
+        ($store9);
+        ($store10);
     }
     void __svn_tpl_check;
     void $store1;

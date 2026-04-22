@@ -13,9 +13,9 @@ async function $$render_7c15f1e0() {
                                                
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/($storeA);
-        /*svn_I*/($storeB);
-        /*svn_I*/($storeC);
+        ($storeA);
+        ($storeB);
+        ($storeC);
     }
     void __svn_tpl_check;
     void $storeA;

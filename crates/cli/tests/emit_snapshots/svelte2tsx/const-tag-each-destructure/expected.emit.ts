@@ -24,12 +24,12 @@ async function $$render_f39ccf3a() {
             void _width;
             void _height;
             void sum;
-            /*svn_I*/(area);
-            /*svn_I*/(volume);
-            /*svn_I*/(perimeter);
-            /*svn_I*/(_width);
-            /*svn_I*/(_height);
-            /*svn_I*/(sum);
+            (area);
+            (volume);
+            (perimeter);
+            (_width);
+            (_height);
+            (sum);
             void width;
             void height;
         }

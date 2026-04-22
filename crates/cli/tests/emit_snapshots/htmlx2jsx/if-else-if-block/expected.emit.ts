@@ -5,10 +5,10 @@ async function $$render_56fdb311() {
         // template type-check body (incremental)
         if ((name1 == "world")) {
             void [name1];
-            /*svn_I*/(name2);
+            (name2);
         } else if ((name3 == "person")) {
             void [name3];
-            /*svn_I*/(name4);
+            (name4);
         }
     }
     void __svn_tpl_check;

@@ -6,7 +6,7 @@ async function $$render_39845b3c() {
            function foo() { return true; }
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/(x);
+        (x);
     }
     void __svn_tpl_check;
     void x;

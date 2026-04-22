@@ -5,9 +5,9 @@ async function $$render_e8d64080() {
         // template type-check body (incremental)
         if ((name == "world")) {
             void [name];
-            /*svn_I*/(name);
+            (name);
         } else {
-            /*svn_I*/(name);
+            (name);
         }
     }
     void __svn_tpl_check;

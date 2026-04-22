@@ -12,7 +12,7 @@ async function $$render_dc3d7c74() {
                     const __svn_C_10 = __svn_ensure_component(Comp);
                     new __svn_C_10({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                 }
-                /*svn_I*/(foo);
+                (foo);
             }
             if ((hi && bye)) {
                 void [hi, bye];
@@ -23,7 +23,7 @@ async function $$render_dc3d7c74() {
                         const __svn_C_55 = __svn_ensure_component(Comp);
                         new __svn_C_55({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                     }
-                    /*svn_I*/(bar);
+                    (bar);
                 }
             } else if ((cool)) {
                 void [cool];
@@ -36,7 +36,7 @@ async function $$render_dc3d7c74() {
                     void foo;
                     let foo1: any;
                     void foo1;
-                    /*svn_I*/(foo);
+                    (foo);
                 }
             } else {
                 {
@@ -46,7 +46,7 @@ async function $$render_dc3d7c74() {
                 {
                     let bar: any;
                     void bar;
-                    /*svn_I*/(bar);
+                    (bar);
                 }
             }
         }

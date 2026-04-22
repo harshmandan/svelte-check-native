@@ -10,9 +10,9 @@ async function $$render_06b566ea() {
     let [ store2, noStore ] = __svn_invalidate(() => (fromSomewhere())); void store2; void noStore;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /*svn_I*/($store);
-        /*svn_I*/($store1);
-        /*svn_I*/($store2);
+        ($store);
+        ($store1);
+        ($store2);
     }
     void __svn_tpl_check;
     void $store;

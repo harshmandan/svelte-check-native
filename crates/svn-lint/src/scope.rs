@@ -232,6 +232,19 @@ pub struct Binding {
     /// resolves to this binding as its base identifier. Drives
     /// `bind_invalid_each_rest`.
     pub has_bind_reference: bool,
+    /// Pre-computed answer to "does `state_referenced_locally` fire on
+    /// this binding under the user's svelte version?" Folds the
+    /// upstream-version compat gate (`state_locally_fires_on_props`,
+    /// `state_locally_rest_prop`) + the `State`-kind reassignment +
+    /// primitive-initial check into one boolean. The rule then reads
+    /// this field directly instead of re-deriving from `ctx.compat` at
+    /// every call site.
+    ///
+    /// Populated at scope-build time via `build_with_template_and_runes`,
+    /// after `reassigned` is finalised by the post-walk passes.
+    /// Defaults to `false` in intermediate states; only consult after
+    /// the scope tree is fully built.
+    pub fires_state_referenced_locally: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -356,17 +369,56 @@ pub fn build(doc: &Document<'_>) -> ScopeTree {
 
 /// Should the file be treated as runes mode for post-walk bookkeeping?
 /// Caller controls this so it matches `ctx.runes` at the rules layer.
+///
+/// `compat` bakes the upstream-version gates into per-binding fields
+/// at build time — see `Binding::fires_state_referenced_locally`. The
+/// rule layer then reads that field directly instead of re-consulting
+/// `compat` per binding.
 pub fn build_with_template_and_runes(
     doc: &Document<'_>,
     fragment: Option<&svn_parser::ast::Fragment>,
     source: &str,
     runes: bool,
+    compat: crate::compat::CompatFeatures,
 ) -> ScopeTree {
     let mut tree = build_with_template(doc, fragment, source);
     if !runes {
         promote_non_runes_exports(&mut tree, doc);
     }
+    populate_compat_gated_fields(&mut tree, compat);
     tree
+}
+
+/// Set every binding's `fires_state_referenced_locally` flag based on
+/// its kind + the user's svelte-version compat flags + (for `State`)
+/// the reassignment / primitive-initial state. Must run AFTER all
+/// post-walk passes that touch `reassigned` or kind — currently just
+/// `promote_non_runes_exports` on the non-runes path.
+fn populate_compat_gated_fields(tree: &mut ScopeTree, compat: crate::compat::CompatFeatures) {
+    for binding in &mut tree.bindings {
+        binding.fires_state_referenced_locally = match binding.kind {
+            BindingKind::RawState | BindingKind::Derived => true,
+            BindingKind::Prop => compat.state_locally_fires_on_props,
+            BindingKind::RestProp => {
+                compat.state_locally_fires_on_props && compat.state_locally_rest_prop
+            }
+            BindingKind::State => binding.reassigned || is_primitive_rune_init(&binding.initial),
+            _ => false,
+        };
+    }
+}
+
+/// Was this binding declared with a `$state(primitive)`-style init?
+/// The `InitialKind::RuneCall.primitive_arg` flag captures this —
+/// true for `$state(0)`, `$state.raw(0)`, false for `$state({})`.
+fn is_primitive_rune_init(init: &InitialKind) -> bool {
+    matches!(
+        init,
+        InitialKind::RuneCall {
+            primitive_arg: true,
+            ..
+        }
+    )
 }
 
 fn promote_non_runes_exports(tree: &mut ScopeTree, doc: &Document<'_>) {
@@ -672,6 +724,7 @@ impl TreeBuilder {
             inside_rest: false,
             prop_alias: None,
             has_bind_reference: false,
+            fires_state_referenced_locally: false,
         });
         self.scopes[scope.0 as usize].declarations.insert(name, id);
         id

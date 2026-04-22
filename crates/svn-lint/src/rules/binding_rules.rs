@@ -9,7 +9,7 @@
 use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
-use crate::scope::{BindingKind, InitialKind, RefParentKind, Reference, ScopeTree, is_rune_name};
+use crate::scope::{BindingKind, RefParentKind, Reference, ScopeTree, is_rune_name};
 
 /// Does `ref.ignored`'s snapshot include the rule's code? Port of
 /// upstream's `ignore_map.get(node)?.some(codes => codes.has(code))`.
@@ -119,26 +119,15 @@ fn state_referenced_locally(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
     for (_, binding) in tree.all_bindings() {
         // Upstream gate (visitors/Identifier.js:110-119): fires on
         // `state` (specific reassigned / primitive-init) /
-        // `raw_state` / `derived` / `prop` / `rest_prop`. Two gates
-        // are version-dependent:
+        // `raw_state` / `derived` / `prop` / `rest_prop`, version-
+        // gated on `state_locally_fires_on_props` (svelte@5.45.3,
+        // PR #17266) and `state_locally_rest_prop` (svelte@5.51.2,
+        // PR #17708).
         //
-        // - `prop` / `bindable_prop` — added in svelte@5.45.3
-        //   (PR #17266). Pre-5.45.3, only state / derived fire;
-        //   reading a regular destructured prop at top-level didn't
-        //   warn. Gated by `compat.state_locally_fires_on_props`.
-        // - `rest_prop` — added in svelte@5.51.2 (PR #17708). Gated
-        //   by `compat.state_locally_rest_prop` (which implies
-        //   `state_locally_fires_on_props`).
-        let reactive_kind = match binding.kind {
-            BindingKind::RawState | BindingKind::Derived => true,
-            BindingKind::Prop => ctx.compat.state_locally_fires_on_props,
-            BindingKind::RestProp => {
-                ctx.compat.state_locally_fires_on_props && ctx.compat.state_locally_rest_prop
-            }
-            BindingKind::State => binding.reassigned || primitive_initial(&binding.initial),
-            _ => false,
-        };
-        if !reactive_kind {
+        // The whole gate is pre-computed at scope-build time into
+        // `binding.fires_state_referenced_locally` so the rule stays
+        // a simple predicate read. See `scope::populate_compat_gated_fields`.
+        if !binding.fires_state_referenced_locally {
             continue;
         }
         let binding_depth = tree.scope(binding.scope).function_depth;
@@ -340,17 +329,3 @@ fn bind_invalid_each_rest(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
     }
 }
 
-/// Was this binding declared with a `$state(primitive)`-style init?
-/// The `InitialKind::RuneCall.primitive_arg` flag captures this —
-/// true for `$state(0)`, `$state.raw(0)`, false for `$state({})` and
-/// friends. For non-rune inits we return `false` (the check only
-/// applies in the `State` kind branch upstream).
-fn primitive_initial(init: &InitialKind) -> bool {
-    matches!(
-        init,
-        InitialKind::RuneCall {
-            primitive_arg: true,
-            ..
-        }
-    )
-}

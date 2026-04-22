@@ -135,6 +135,7 @@ pub fn walk(source: &str, ctx: &mut LintContext<'_>) {
         Some(&fragment),
         source,
         ctx.runes,
+        ctx.compat,
     ));
 
     // <script>-attribute rules (script_unknown_attribute,

@@ -98,34 +98,20 @@ pub fn split_imports(
     has_generics: bool,
     props_type_root: Option<&str>,
 ) -> SplitScript {
-    // Fast path: none of the hoistable shapes appear as substrings →
-    // skip the parse. `type ` and `interface ` catch TS type/interface
-    // declarations which we now hoist too (so the module-level default
-    // export can reference a user-declared `Props` type). `namespace`/
-    // `module` cover the `TSModuleDeclaration` case.
-    if !content.contains("import")
-        && !content.contains("export")
-        && !content.contains("interface ")
-        && !content.contains("type ")
-        && !content.contains("namespace ")
-        && !content.contains("module ")
-    {
-        return SplitScript {
-            hoisted: String::new(),
-            body: content.to_string(),
-            exported_locals: Vec::new(),
-            hoisted_byte_offsets: Vec::new(),
-            stub_prefix_len: 0,
-            export_type_infos: Vec::new(),
-            hoisted_type_names: HashSet::new(),
-        };
-    }
-
     // Always parse as TypeScript — TS is a superset of JS for our
     // purposes (we're identifying statement spans, not generating
     // runtime code). Parsing as TS lets us correctly handle scripts
     // that use type annotations even when `<script>` doesn't carry
     // `lang="ts"`. (Svelte 5 + svelte:options runes accepts this.)
+    //
+    // Earlier revisions had a 6-keyword substring-based fast path
+    // (`import`/`export`/`interface `/`type `/`namespace `/`module `)
+    // that skipped the parse for scripts with no hoistable shapes.
+    // Dropped per CLAUDE.md rule #1: character-level scans of
+    // embedded JS/TS are fragile — any false negative silently
+    // skips hoisting. The AST walk below is the single source of
+    // truth for which shapes get hoisted; there's no parallel
+    // keyword list to keep in sync.
     let allocator = Allocator::default();
     let parsed = parse_script_body(&allocator, content, ScriptLang::Ts);
 

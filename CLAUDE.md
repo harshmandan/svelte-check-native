@@ -232,9 +232,9 @@ by the suites above. Their error counts are not a shipping metric.
 - `bench/control-svelte-4` — the 1000-file parity-gate target.
   Mid-migration SvelteKit monorepo, mostly Svelte-4-syntax
   components. The "1000-file mid-migration" number in the public
-  README and CHANGELOG refers to this workspace's sub-app subset
-  (`src/apps/sub-app`, ~1124 files after monorepo-root auto-
-  escape). Ties upstream `svelte-check --tsgo` at 0 user errors.
+  README and CHANGELOG refers to this workspace's primary sub-app
+  (~1124 files after monorepo-root auto-escape). Ties upstream
+  `svelte-check --tsgo` at 0 user errors.
 - `bench/control-svelte-5` — the latest fresh extract from the
   same upstream repo's `main` branch (Svelte 5.55+ and further
   along the Svelte-5 migration). Used to spot regressions as the

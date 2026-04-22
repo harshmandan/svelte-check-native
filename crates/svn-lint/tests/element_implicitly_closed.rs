@@ -39,7 +39,7 @@ fn implicit_close_warnings(source: &str) -> Vec<&'static str> {
 }
 
 /// A component wrapping a well-formed `<div>` must not fire the
-/// warning. This is the sub-app false-positive shape.
+/// warning. This is the Component-wraps-DOM false-positive shape.
 #[test]
 fn component_wraps_well_formed_div() {
     let src = "<Component>\n  <div>\n    content\n  </div>\n</Component>\n";

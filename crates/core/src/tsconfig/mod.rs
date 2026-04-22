@@ -68,7 +68,7 @@ impl TsConfigFile {
     /// source itself — distinguished by `files: []` (explicit empty),
     /// no `include`, and a non-empty `references` array. Common at the
     /// root of SvelteKit monorepos where the root tsconfig coordinates
-    /// sub-app / functions / packages / etc.
+    /// sub-apps / functions / packages / etc.
     ///
     /// The overlay emitter can't `extends` a solution usefully — it
     /// has no `compilerOptions.paths` / `baseUrl` / real

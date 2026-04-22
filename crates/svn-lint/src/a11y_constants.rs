@@ -89,14 +89,11 @@ pub const A11Y_LABELABLE: &[&str] = &[
 /// Event names that count as "interactive" on an element.
 ///
 /// Tracks upstream `packages/svelte/.../a11y/constants.js`'s
-/// `a11y_interactive_handlers`. Newer svelte (>= 5.56-ish) extended
-/// the list with pointer/touch events; older svelte (<= 5.55) stops
-/// at mouse. We follow the newer list because our validator fixtures
-/// come from the `.svelte-upstream` submodule which pins main.
-/// Result: on workspaces whose `node_modules/svelte` predates the
-/// extension, our native pass fires on pointer/touch events upstream
-/// didn't — a known bounded over-fire that goes away once the
-/// workspace upgrades its compiler.
+/// `a11y_interactive_handlers`. The pointer/touch entries were added
+/// in **svelte@5.48.3** (upstream PR #17548). For workspaces on
+/// older svelte versions, use [`is_interactive_handler`] with the
+/// detected compat flags — it filters pointer/touch out when
+/// `compat.a11y_pointer_touch_handlers == false`.
 pub const A11Y_INTERACTIVE_HANDLERS: &[&str] = &[
     "keypress",
     "keydown",
@@ -138,6 +135,21 @@ pub const A11Y_INTERACTIVE_HANDLERS: &[&str] = &[
 /// `a11y_click_events_have_key_events` / friends).
 pub const A11Y_RECOMMENDED_INTERACTIVE_HANDLERS: &[&str] =
     &["click", "mousedown", "mouseup", "keypress", "keydown", "keyup"];
+
+/// Is `handler` considered interactive under the active compat
+/// profile? Gates the pointer/touch subset behind
+/// `compat.a11y_pointer_touch_handlers` (false for svelte < 5.48.3).
+pub fn is_interactive_handler(handler: &str, compat: crate::compat::CompatFeatures) -> bool {
+    if !A11Y_INTERACTIVE_HANDLERS.contains(&handler) {
+        return false;
+    }
+    if !compat.a11y_pointer_touch_handlers
+        && (handler.starts_with("pointer") || handler.starts_with("touch"))
+    {
+        return false;
+    }
+    true
+}
 
 /// `<header>` / `<footer>` — role depends on enclosing `<section>` /
 /// `<article>`.

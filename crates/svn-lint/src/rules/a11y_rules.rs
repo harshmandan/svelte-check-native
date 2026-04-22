@@ -19,7 +19,7 @@ use svn_parser::ast::{
 };
 
 use crate::a11y_constants::{
-    A11Y_DISTRACTING_ELEMENTS, A11Y_INTERACTIVE_HANDLERS, A11Y_RECOMMENDED_INTERACTIVE_HANDLERS,
+    A11Y_DISTRACTING_ELEMENTS, A11Y_RECOMMENDED_INTERACTIVE_HANDLERS,
     A11Y_REQUIRED_CONTENT, ABSTRACT_ROLES, ADDRESS_TYPE_TOKENS, ARIA_ATTRIBUTES, ARIA_ROLES,
     AUTOFILL_CONTACT_FIELD_NAME_TOKENS, AUTOFILL_FIELD_NAME_TOKENS, AriaType, COMBOBOX_IF_LIST,
     CONTACT_TYPE_TOKENS, INTERACTIVE_ROLES, INVISIBLE_ELEMENTS, NON_INTERACTIVE_ROLES,
@@ -417,7 +417,7 @@ fn check_element(
                                 && !attribute_map.contains_key("tabindex")
                                 && handlers
                                     .iter()
-                                    .any(|h| A11Y_INTERACTIVE_HANDLERS.contains(&h.as_str()))
+                                    .any(|h| crate::a11y_constants::is_interactive_handler(h.as_str(), ctx.compat))
                             {
                                 let msg = messages::a11y_interactive_supports_focus(role_word);
                                 ctx.emit(Code::a11y_interactive_supports_focus, msg, range);
@@ -628,7 +628,7 @@ fn check_element(
     {
         let interactive_handlers: Vec<&str> = handlers
             .iter()
-            .filter(|h| A11Y_INTERACTIVE_HANDLERS.contains(&h.as_str()))
+            .filter(|h| crate::a11y_constants::is_interactive_handler(h.as_str(), ctx.compat))
             .map(|s| s.as_str())
             .collect();
         if !interactive_handlers.is_empty() {

@@ -73,6 +73,13 @@ pub struct LintContext<'src> {
     /// Populated from `<svelte:options customElement={…}>` when the
     /// attribute is present. Gates `custom_element_props_identifier`.
     pub custom_element_info: Option<CustomElementInfo>,
+
+    /// Version-gated rule flags. Resolved once per batch from the
+    /// user's detected `node_modules/svelte` version (see
+    /// [`crate::CompatFeatures::from_version`]). Defaults to the
+    /// modern superset, which matches upstream main and the
+    /// `upstream_validator` fixture suite.
+    pub compat: crate::compat::CompatFeatures,
 }
 
 impl<'src> LintContext<'src> {
@@ -85,6 +92,7 @@ impl<'src> LintContext<'src> {
             runes: false,
             scope_tree: None,
             custom_element_info: None,
+            compat: crate::compat::CompatFeatures::MODERN,
         }
     }
 

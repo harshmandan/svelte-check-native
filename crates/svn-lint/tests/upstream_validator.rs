@@ -230,7 +230,7 @@ fn upstream_validator_fixtures() {
         enforced += 1;
 
         // Run our linter.
-        let warnings = svn_lint::lint_file(&source, &source_path, None);
+        let warnings = svn_lint::lint_file(&source, &source_path, None, svn_lint::CompatFeatures::MODERN);
         // Upstream emits line-1-based, column-0-based; we store line
         // 1-based and column 0-based in LintContext::emit.
         let actual: Vec<ExpectedWarning> = warnings

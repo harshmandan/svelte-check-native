@@ -119,13 +119,15 @@ fn state_referenced_locally(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
     for (_, binding) in tree.all_bindings() {
         // Upstream gate (visitors/Identifier.js:110-119): fires on
         // `state` (specific reassigned / primitive-init) / `raw_state`
-        // / `derived` / `prop` / `rest_prop`. NOT on `bindable_prop`
-        // (its reactivity is wired via the $bindable() runtime hook).
+        // / `derived` / `prop`. `rest_prop` was added in
+        // svelte@5.51.2 (upstream PR #17708) — gated via
+        // `compat.state_locally_rest_prop` so workspaces on older
+        // svelte don't see over-fires on `restProp.x` reads.
+        // `bindable_prop` is excluded always (reactivity wired via
+        // the $bindable() runtime hook).
         let reactive_kind = match binding.kind {
-            BindingKind::RawState
-            | BindingKind::Derived
-            | BindingKind::Prop
-            | BindingKind::RestProp => true,
+            BindingKind::RawState | BindingKind::Derived | BindingKind::Prop => true,
+            BindingKind::RestProp => ctx.compat.state_locally_rest_prop,
             BindingKind::State => {
                 binding.reassigned || primitive_initial(&binding.initial)
             }

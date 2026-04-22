@@ -34,6 +34,7 @@
 pub mod a11y_constants;
 pub mod aria_data;
 pub mod codes;
+pub mod compat;
 pub mod context;
 pub mod html5;
 pub mod ignore;
@@ -45,6 +46,7 @@ pub mod walk;
 use std::path::{Path, PathBuf};
 
 pub use codes::{CODES, Code};
+pub use compat::{CompatFeatures, SvelteVersion};
 pub use context::{LintContext, Warning};
 
 /// Run the compile-warning pass on one source file.
@@ -53,9 +55,18 @@ pub use context::{LintContext, Warning};
 /// and used only for diagnostic output. `runes` selects runes mode;
 /// if `None` it's auto-detected following upstream's logic (instance
 /// script contains a rune reference or filename is `.svelte.{js,ts}`).
-pub fn lint_file(source: &str, path: &Path, runes: Option<bool>) -> Vec<Warning> {
+/// `compat` gates rules that evolved across svelte versions; pass
+/// [`CompatFeatures::MODERN`] when the user's svelte version is
+/// unknown (matches what the upstream validator suite enforces).
+pub fn lint_file(
+    source: &str,
+    path: &Path,
+    runes: Option<bool>,
+    compat: CompatFeatures,
+) -> Vec<Warning> {
     let mut ctx = LintContext::new(source);
     ctx.runes = runes.unwrap_or_else(|| crate::walk::infer_runes_mode(source, path));
+    ctx.compat = compat;
     crate::walk::walk(source, &mut ctx);
     ctx.take_warnings()
 }
@@ -63,8 +74,9 @@ pub fn lint_file(source: &str, path: &Path, runes: Option<bool>) -> Vec<Warning>
 /// Batch entry: lint many files in parallel.
 ///
 /// Returns `(path, warnings)` pairs in arbitrary order. Callers sort/
-/// flatten as needed for display.
-pub fn lint_batch<I>(inputs: I) -> Vec<(PathBuf, Vec<Warning>)>
+/// flatten as needed for display. `compat` is applied to every file
+/// in the batch.
+pub fn lint_batch<I>(inputs: I, compat: CompatFeatures) -> Vec<(PathBuf, Vec<Warning>)>
 where
     I: IntoIterator<Item = (PathBuf, String)>,
     I::IntoIter: Send,
@@ -74,7 +86,7 @@ where
     items
         .into_par_iter()
         .map(|(path, source)| {
-            let warnings = lint_file(&source, &path, None);
+            let warnings = lint_file(&source, &path, None, compat);
             (path, warnings)
         })
         .collect()

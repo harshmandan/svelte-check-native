@@ -118,16 +118,23 @@ fn store_rune_conflict(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
 fn state_referenced_locally(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
     for (_, binding) in tree.all_bindings() {
         // Upstream gate (visitors/Identifier.js:110-119): fires on
-        // `state` (specific reassigned / primitive-init) / `raw_state`
-        // / `derived` / `prop`. `rest_prop` was added in
-        // svelte@5.51.2 (upstream PR #17708) — gated via
-        // `compat.state_locally_rest_prop` so workspaces on older
-        // svelte don't see over-fires on `restProp.x` reads.
-        // `bindable_prop` is excluded always (reactivity wired via
-        // the $bindable() runtime hook).
+        // `state` (specific reassigned / primitive-init) /
+        // `raw_state` / `derived` / `prop` / `rest_prop`. Two gates
+        // are version-dependent:
+        //
+        // - `prop` / `bindable_prop` — added in svelte@5.45.3
+        //   (PR #17266). Pre-5.45.3, only state / derived fire;
+        //   reading a regular destructured prop at top-level didn't
+        //   warn. Gated by `compat.state_locally_fires_on_props`.
+        // - `rest_prop` — added in svelte@5.51.2 (PR #17708). Gated
+        //   by `compat.state_locally_rest_prop` (which implies
+        //   `state_locally_fires_on_props`).
         let reactive_kind = match binding.kind {
-            BindingKind::RawState | BindingKind::Derived | BindingKind::Prop => true,
-            BindingKind::RestProp => ctx.compat.state_locally_rest_prop,
+            BindingKind::RawState | BindingKind::Derived => true,
+            BindingKind::Prop => ctx.compat.state_locally_fires_on_props,
+            BindingKind::RestProp => {
+                ctx.compat.state_locally_fires_on_props && ctx.compat.state_locally_rest_prop
+            }
             BindingKind::State => {
                 binding.reassigned || primitive_initial(&binding.initial)
             }

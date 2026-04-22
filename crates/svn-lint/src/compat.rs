@@ -60,10 +60,17 @@ pub struct CompatFeatures {
     /// `5872b89f`) first released in **svelte@5.48.3**. Before that,
     /// only keyboard / click / drag / mouse handlers counted.
     pub a11y_pointer_touch_handlers: bool,
+    /// `state_referenced_locally` fires on `prop` / `bindable_prop`
+    /// bindings at all. Upstream PR #17266 (commit `570f64963`) first
+    /// released in **svelte@5.45.3**. Before that, only `state` /
+    /// `raw_state` / `derived` fired — reading a regular destructured
+    /// prop at top-level didn't warn.
+    pub state_locally_fires_on_props: bool,
     /// `state_referenced_locally` fires on reads of `rest_prop`
     /// bindings (e.g. `const props = $props(); props.x`). Upstream
     /// PR #17708 (commit `dd9fc0d1a`) first released in
-    /// **svelte@5.51.2**. Before that, only `prop` kind fired.
+    /// **svelte@5.51.2**. Before that, only `prop` kind fired. Has
+    /// no effect when `state_locally_fires_on_props` is false.
     pub state_locally_rest_prop: bool,
 }
 
@@ -72,6 +79,7 @@ impl CompatFeatures {
     /// detection fails, so behavior matches the validator suite.
     pub const MODERN: Self = Self {
         a11y_pointer_touch_handlers: true,
+        state_locally_fires_on_props: true,
         state_locally_rest_prop: true,
     };
 
@@ -79,6 +87,7 @@ impl CompatFeatures {
         let Some(v) = v else { return Self::MODERN };
         Self {
             a11y_pointer_touch_handlers: v.at_least(5, 48, 3),
+            state_locally_fires_on_props: v.at_least(5, 45, 3),
             state_locally_rest_prop: v.at_least(5, 51, 2),
         }
     }
@@ -117,11 +126,21 @@ mod tests {
 
     #[test]
     fn bench_snapshot_thresholds() {
-        // bench/control-svelte-4 pins svelte 5.48.2 — legacy ruleset.
+        // bench/cryptgeon pins svelte 5.20.5 — pre-props ruleset.
+        let c = CompatFeatures::from_version(Some(SvelteVersion {
+            major: 5, minor: 20, patch: 5,
+        }));
+        assert!(!c.a11y_pointer_touch_handlers);
+        assert!(!c.state_locally_fires_on_props);
+        assert!(!c.state_locally_rest_prop);
+
+        // bench/control-svelte-4 pins svelte 5.48.2 — post-props,
+        // pre-pointer-touch, pre-rest-prop.
         let c = CompatFeatures::from_version(Some(SvelteVersion {
             major: 5, minor: 48, patch: 2,
         }));
         assert!(!c.a11y_pointer_touch_handlers);
+        assert!(c.state_locally_fires_on_props);
         assert!(!c.state_locally_rest_prop);
 
         // bench/control-svelte-5 pins svelte 5.55.4 — modern ruleset.
@@ -129,13 +148,23 @@ mod tests {
             major: 5, minor: 55, patch: 4,
         }));
         assert!(c.a11y_pointer_touch_handlers);
+        assert!(c.state_locally_fires_on_props);
         assert!(c.state_locally_rest_prop);
+
+        // Right at the threshold for props in state-locally.
+        let c = CompatFeatures::from_version(Some(SvelteVersion {
+            major: 5, minor: 45, patch: 3,
+        }));
+        assert!(c.state_locally_fires_on_props);
+        assert!(!c.a11y_pointer_touch_handlers);
+        assert!(!c.state_locally_rest_prop);
 
         // Right at the threshold for pointer/touch.
         let c = CompatFeatures::from_version(Some(SvelteVersion {
             major: 5, minor: 48, patch: 3,
         }));
         assert!(c.a11y_pointer_touch_handlers);
+        assert!(c.state_locally_fires_on_props);
         assert!(!c.state_locally_rest_prop);
 
         // Right at the threshold for rest_prop.
@@ -143,6 +172,7 @@ mod tests {
             major: 5, minor: 51, patch: 2,
         }));
         assert!(c.a11y_pointer_touch_handlers);
+        assert!(c.state_locally_fires_on_props);
         assert!(c.state_locally_rest_prop);
     }
 

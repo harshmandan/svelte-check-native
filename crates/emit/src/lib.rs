@@ -1284,11 +1284,9 @@ fn emit_document_with_render_name(
     token_map.extend(collect_on_event_token_map(&out, &instantiations_by_start));
     token_map.extend(collect_dom_binding_token_map(&out, doc.source, summary));
     token_map.extend(collect_bind_this_check_token_map(&out, doc.source, summary));
-    token_map.extend(collect_action_directive_token_map(
-        &out, doc.source, summary,
-    ));
-    // Interpolation token-map entries are now pushed inline at the
-    // splice site by `emit_interpolation` via `EmitBuffer::append_with_source`.
+    // Action-directive and interpolation token-map entries are now
+    // pushed inline at the splice site by `emit_use_directives_inline`
+    // and `emit_interpolation` via `EmitBuffer::append_with_source`.
 
     EmitOutput {
         typescript: out,
@@ -1454,117 +1452,6 @@ fn collect_bind_this_check_token_map(
             source_byte_end: source_end,
         });
         cursor = advance_to;
-    }
-    entries
-}
-
-/// Post-walk scan: for each `ActionDirective`, locate the corresponding
-/// `const __svn_action_<N> = ...` line in the emitted overlay and push
-/// a token-map entry covering the PARAMS slice.
-///
-/// tsgo reports diagnostics at the overlay byte offset of the offending
-/// identifier (e.g. a wrong name in `({form,data,submit}) => ...`). The
-/// params slice is copied verbatim from user source — the token-map
-/// entry tells the diagnostic mapper that an overlay position INSIDE
-/// the slice corresponds to the same relative position INSIDE the
-/// user's `use:ACTION={...}` value expression in their `.svelte` file.
-/// Without this mapping, `map_diagnostic` drops every diagnostic that
-/// fires inside the emitted action call, and upstream-caught errors
-/// (e.g. the user-reported `use:enhance={({form,data,submit}) => …}`
-/// pattern firing TS2339 ×3) stay invisible to our CLI.
-///
-/// Relies on: each `ActionDirective.index` maps 1:1 with a unique
-/// `__svn_action_<N>` occurrence in the overlay. The scan is linear —
-/// one pass through the output matching the index sequence — and the
-/// PARAMS span is located via simple paren-balance scanning between
-/// `__svn_map_element_tag(...)` and the directive's terminating `;`.
-fn collect_action_directive_token_map(
-    out: &str,
-    source: &str,
-    summary: &TemplateSummary,
-) -> Vec<TokenMapEntry> {
-    let mut entries: Vec<TokenMapEntry> = Vec::new();
-    let bytes = out.as_bytes();
-    for ad in &summary.action_directives {
-        let Some(range) = ad.params_range else {
-            continue;
-        };
-        // Anchor: `const __svn_action_<N> =`. Unique per directive, so
-        // a whole-overlay `find` is unambiguous and O(1)-ish per
-        // directive.
-        let anchor = format!("const __svn_action_{} = ", ad.index);
-        let Some(anchor_pos) = out.find(&anchor) else {
-            continue;
-        };
-        // Inside the statement, the params slice lives between the
-        // LAST `, (` (the closing of `__svn_map_element_tag(...)` and
-        // the open of the params wrapper) and the MATCHING `)` that
-        // closes the wrapper. Paren-balance the scan to tolerate
-        // arrow functions whose bodies contain `{...}` (paren-neutral)
-        // and nested calls.
-        let stmt_start = anchor_pos;
-        let after_anchor = stmt_start + anchor.len();
-        // Find `__svn_map_element_tag(` and its matching `)`.
-        let tag_marker = "__svn_map_element_tag(";
-        let Some(tag_rel) = out[after_anchor..].find(tag_marker) else {
-            continue;
-        };
-        let tag_arg_start = after_anchor + tag_rel + tag_marker.len();
-        let mut depth = 1usize;
-        let mut i = tag_arg_start;
-        while i < bytes.len() && depth > 0 {
-            match bytes[i] {
-                b'(' => depth += 1,
-                b')' => depth -= 1,
-                _ => {}
-            }
-            if depth == 0 {
-                break;
-            }
-            i += 1;
-        }
-        if depth != 0 {
-            continue;
-        }
-        // `i` now points at the `)` closing `__svn_map_element_tag(...)`.
-        // Next tokens are `, (` introducing the params wrapper.
-        let after_tag_close = i + 1;
-        let Some(paren_rel) = out[after_tag_close..].find(", (") else {
-            continue;
-        };
-        let params_overlay_start = (after_tag_close + paren_rel + ", (".len()) as u32;
-        // Balance-match the wrapper paren to locate the params end.
-        let mut depth = 1usize;
-        let mut j = params_overlay_start as usize;
-        while j < bytes.len() && depth > 0 {
-            match bytes[j] {
-                b'(' => depth += 1,
-                b')' => depth -= 1,
-                _ => {}
-            }
-            if depth == 0 {
-                break;
-            }
-            j += 1;
-        }
-        if depth != 0 {
-            continue;
-        }
-        let params_overlay_end = j as u32;
-        // Sanity: the overlay slice should equal the source slice.
-        // If they diverge (e.g. emit mutation we didn't account for),
-        // skip the token-map entry rather than push a wrong one.
-        let overlay_slice = &out[params_overlay_start as usize..params_overlay_end as usize];
-        let source_slice = &source[range.start as usize..range.end as usize];
-        if overlay_slice != source_slice {
-            continue;
-        }
-        entries.push(TokenMapEntry {
-            overlay_byte_start: params_overlay_start,
-            overlay_byte_end: params_overlay_end,
-            source_byte_start: range.start,
-            source_byte_end: range.end,
-        });
     }
     entries
 }
@@ -3228,10 +3115,20 @@ fn emit_use_directives_inline(
                 else {
                     continue;
                 };
-                let _ = writeln!(
+                // Split the writeln so `params` splices via
+                // `append_with_source`, which pushes a TokenMapEntry at
+                // emit time covering the params overlay span → the user's
+                // `use:ACTION={...}` expression_range. Pre-4.2.6 this
+                // mapping was produced by a post-walk scanner
+                // (`collect_action_directive_token_map`) that paren-
+                // balanced to find the same slice — inline emit is
+                // cheaper and uniquely correct.
+                let _ = write!(
                     buf,
-                    "{indent}const __svn_action_{index} = __svn_ensure_action({action}(__svn_map_element_tag({tag_arg}), ({params})));"
+                    "{indent}const __svn_action_{index} = __svn_ensure_action({action}(__svn_map_element_tag({tag_arg}), ("
                 );
+                buf.append_with_source(params, *expression_range);
+                buf.push_str(")));\n");
             }
             _ => {
                 let _ = writeln!(

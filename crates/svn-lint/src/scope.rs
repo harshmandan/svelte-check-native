@@ -329,6 +329,18 @@ impl ScopeTree {
     pub fn resolve_from_template(&self, name: &str) -> Option<BindingId> {
         self.resolve(self.instance_root, name)
     }
+
+    /// True when `name` is declared in *any* scope — module root,
+    /// instance root, or a template-side snippet / each-block scope.
+    /// Used by rules like `attribute_global_event_reference` that
+    /// only need to know "is this identifier bound somewhere?" at
+    /// the point of use, without threading the current template
+    /// scope through the rule signature.
+    pub fn is_declared_anywhere(&self, name: &str) -> bool {
+        self.scopes
+            .iter()
+            .any(|s| s.declarations.contains_key(name))
+    }
 }
 
 /// Build a scope tree for the whole document.
@@ -740,7 +752,26 @@ impl TreeBuilder {
                     ctx.in_control_flow = saved;
                 }
                 Node::SnippetBlock(b) => {
+                    // `{#snippet name(p1, p2)}…{/snippet}` — each
+                    // parameter is an implicit template-scope
+                    // binding visible inside the body. Without
+                    // declaring them, rules like
+                    // `attribute_global_event_reference` consulting
+                    // `is_declared_anywhere(name)` miss them, and
+                    // references (`{p1}`) resolve against the outer
+                    // scope (likely unresolved).
+                    let snippet_scope = self.new_scope(Some(ctx.scope));
+                    if b.parameters_range.start < b.parameters_range.end {
+                        self.declare_snippet_params(
+                            b.parameters_range,
+                            snippet_scope,
+                            ctx.source,
+                            ctx.lang,
+                        );
+                    }
+                    let saved = std::mem::replace(&mut ctx.scope, snippet_scope);
                     self.walk_template_fragment(&b.body, ctx);
+                    ctx.scope = saved;
                 }
                 Node::Interpolation(intr) => {
                     // `{@const NAME = EXPR}` is a declaration, not an
@@ -903,6 +934,28 @@ impl TreeBuilder {
                 let flags = RefFlags {
                     is_bind_this: d.kind == DirectiveKind::Bind && d.name == "this",
                 };
+                // Directives whose NAME is implicitly an identifier
+                // reference: `use:action`, `transition:fn`, `in:fn`,
+                // `out:fn`, `animate:fn`. The name is the function
+                // the user imports/declares; the directive passes it
+                // to Svelte. Without recording this, a top-level
+                // `let fn = …` used only as `use:fn` looks unused
+                // and fires `export_let_unused` / similar.
+                if matches!(
+                    d.kind,
+                    DirectiveKind::Use
+                        | DirectiveKind::Transition
+                        | DirectiveKind::In
+                        | DirectiveKind::Out
+                        | DirectiveKind::Animate
+                ) {
+                    self.record_template_ref(
+                        d.name.as_str(),
+                        d.range,
+                        ctx,
+                        RefFlags::default(),
+                    );
+                }
                 match &d.value {
                     Some(svn_parser::ast::DirectiveValue::Expression {
                         expression_range,
@@ -1100,6 +1153,50 @@ impl TreeBuilder {
     /// expressions (`{ a = expr }`) are walked in `parent_scope` so
     /// their references resolve to outer bindings — matches upstream
     /// scope.js:1244-1295.
+    /// Declare each identifier in a snippet's `(param1, param2, …)`
+    /// list into `snippet_scope` with kind `Template` — visible to
+    /// the snippet body's template walk and to
+    /// `ScopeTree::is_declared_anywhere` lookups. The slice passed
+    /// in is the bytes INSIDE the parens (mirrors
+    /// `SnippetBlock.parameters_range`). Handles destructures and
+    /// rest-params — same pattern as each-blocks.
+    fn declare_snippet_params(
+        &mut self,
+        range: Range,
+        snippet_scope: ScopeId,
+        source: &str,
+        lang: svn_parser::document::ScriptLang,
+    ) {
+        let Some(slice) = source.get(range.start as usize..range.end as usize) else {
+            return;
+        };
+        let wrapped = format!("function _({slice}) {{}}");
+        let alloc = oxc_allocator::Allocator::default();
+        let parsed = parse_script_body(&alloc, &wrapped, lang);
+        if let Some(Statement::FunctionDeclaration(f)) = parsed.program.body.first() {
+            // Prefix `function _(` is 11 bytes before params start.
+            let offset: i32 = range.start as i32 - 11;
+            for p in &f.params.items {
+                self.declare_each_pattern(
+                    &p.pattern,
+                    snippet_scope,
+                    snippet_scope,
+                    offset,
+                    false,
+                    source,
+                    lang,
+                );
+            }
+            // Re-tag from `Each` to `Template` so the kind matches
+            // the snippet semantics.
+            for bid in self.bindings_in(snippet_scope) {
+                self.bindings[bid.0 as usize].kind = BindingKind::Template;
+            }
+        }
+        drop(parsed);
+        drop(alloc);
+    }
+
     fn declare_each_context(
         &mut self,
         range: Range,
@@ -2462,7 +2559,19 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     self.visit_expr(e);
                 }
             }
-            Expression::ParenthesizedExpression(p) => self.visit_expr(&p.expression),
+            Expression::ParenthesizedExpression(p) => {
+                // `(/* svelte-ignore CODE */ expr)` — honor per-node
+                // svelte-ignore comments attached to the inner
+                // expression. Statement-level leading-comment
+                // capture doesn't see these because the comment
+                // lives inside the parens, not before the statement.
+                // Mirrors upstream's per-node `ignore_map` model.
+                let pushed = self.push_leading_ignores(Some(p.expression.span().start));
+                self.visit_expr(&p.expression);
+                if pushed {
+                    self.ignore_frames.pop();
+                }
+            }
             Expression::TemplateLiteral(t) => {
                 for e in &t.expressions {
                     self.visit_expr(e);

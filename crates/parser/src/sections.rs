@@ -959,4 +959,179 @@ let x: number = 1;
         assert!(s.content.contains("</scripting>"));
         assert!(s.content.contains("let t = 1;"));
     }
+
+    // ============================================================
+    // Tag-depth tracking + mustache-aware scan tests.
+    //
+    // These tests lock the parse shapes we observed breaking real
+    // Svelte projects — nested <script> tags inside <svelte:head>
+    // templates, mustache expressions with JS comments, template
+    // literals containing quote chars, and so on. The mustache
+    // scanner went through several iterations (missing JS-comment
+    // handling, off-by-one on self-closing tags); each test below
+    // corresponds to a class of bug we hit once and want to block.
+    // ============================================================
+
+    #[test]
+    fn nested_script_under_svelte_head_stays_in_template() {
+        // Real pattern: an analytics tag inside `<svelte:head>`
+        // behind an `{#if}` feature flag. The inner <script> is a
+        // regular HTML element and must NOT become the Svelte
+        // instance script.
+        let src = "<svelte:head>\
+                   {#if loaded}\
+                   <script defer src=\"https://x\"></script>\
+                   {/if}\
+                   </svelte:head>";
+        let doc = parse_ok(src);
+        assert!(
+            doc.instance_script.is_none(),
+            "nested <script> must not become instance script"
+        );
+    }
+
+    #[test]
+    fn nested_script_with_preceding_top_level_script() {
+        // Top-level instance script at the start, analytics script
+        // nested inside a template block. The top-level one wins;
+        // the nested one is left in the template.
+        let src = "<script lang=\"ts\">let x = 1;</script>\n\
+                   <svelte:head>{#if loaded}<script src=\"/a.js\"></script>{/if}</svelte:head>";
+        let doc = parse_ok(src);
+        let s = doc.instance_script.expect("instance script");
+        assert!(s.content.contains("let x = 1"));
+    }
+
+    #[test]
+    fn nested_style_inside_div_stays_in_template() {
+        let src = "<div><style>p { color: red; }</style></div>";
+        let doc = parse_ok(src);
+        assert!(
+            doc.style.is_none(),
+            "nested <style> inside <div> isn't the Svelte style section"
+        );
+    }
+
+    #[test]
+    fn top_level_style_after_closed_div_still_becomes_section() {
+        // `<div>hi</div><style>…</style>` is the common pattern —
+        // depth returns to 0 after the </div> so <style> is grabbed.
+        let src = "<div>hi</div><style>p { color: red; }</style>";
+        let doc = parse_ok(src);
+        let s = doc.style.expect("style section");
+        assert!(s.content.contains("color: red"));
+    }
+
+    #[test]
+    fn self_closing_svelte_options_keeps_document_level() {
+        // `<svelte:options runes />` is self-closing and conventionally
+        // precedes the script. Depth must stay 0 after it.
+        let src = "<svelte:options runes />\n<script>let x = 1;</script>";
+        let doc = parse_ok(src);
+        assert!(doc.instance_script.is_some());
+    }
+
+    #[test]
+    fn self_closing_br_in_template_still_allows_later_style() {
+        // Void-ish / self-closed tags don't accumulate depth.
+        let src = "<div><br /></div><style>p{}</style>";
+        let doc = parse_ok(src);
+        assert!(doc.style.is_some());
+    }
+
+    #[test]
+    fn mustache_with_lt_gt_operators_does_not_confuse_depth() {
+        // `{a < b}` and `{a > b}` inside interpolations should not
+        // flip tag_depth. Without mustache-aware skipping we
+        // previously treated `<b>` inside an expression as an
+        // opening tag and consumed source through the next `>`,
+        // producing wildly wrong parse results downstream.
+        let src = "<div>{a < b}</div><style>p{}</style>";
+        let doc = parse_ok(src);
+        assert!(doc.style.is_some(), "style must be grabbed after the mustache");
+    }
+
+    #[test]
+    fn mustache_with_apostrophe_in_line_comment_does_not_run_off() {
+        // The bug that landed 15 new TS parse errors on
+        // local-music-pwa: an apostrophe in `// don't` inside an
+        // attribute-value mustache opened a phantom string that
+        // never closed. Every subsequent `{` and `}` was eaten as
+        // part of the "string" and tag_depth desynced, leaving
+        // template runs misaligned.
+        let src = "<div on:click={() => {\n\
+                   // We don't close this comment with a quote\n\
+                   doSomething();\n\
+                   }}>x</div>\n\
+                   <style>p { color: red; }</style>";
+        let doc = parse_ok(src);
+        let s = doc.style.expect("style after a commented-apostrophe mustache");
+        assert!(s.content.contains("color: red"));
+    }
+
+    #[test]
+    fn mustache_with_block_comment_and_braces() {
+        // Block comments `/* … */` inside expressions containing
+        // braces must not flip mustache depth.
+        let src = "<div onclick={() => { /* { don't */ run(); }}>x</div>\n\
+                   <style>p{}</style>";
+        let doc = parse_ok(src);
+        assert!(doc.style.is_some());
+    }
+
+    #[test]
+    fn mustache_template_literal_with_dollar_braces() {
+        // `` `${x}` `` template literals contain an inner `${` that
+        // must not be counted as a mustache-open. Also apostrophes
+        // inside ordinary template-literal text must not start a
+        // string scan.
+        let src = "<div title={`don't ${a} end`}>x</div>\n\
+                   <style>p{}</style>";
+        let doc = parse_ok(src);
+        assert!(doc.style.is_some());
+    }
+
+    #[test]
+    fn mustache_with_object_literal_in_attr_value() {
+        // `use:dndzone={{ dragDisabled: !x }}` — outer `{` is
+        // mustache, inner `{` is an object literal. Depth counter
+        // correctly unwinds both.
+        let src = "<div use:dndzone={{ dragDisabled: !x, items: [1, 2] }}>y</div>\n\
+                   <style>p{}</style>";
+        let doc = parse_ok(src);
+        assert!(doc.style.is_some());
+    }
+
+    #[test]
+    fn mustache_with_nested_if_block() {
+        // `{#if a}` / `{/if}` are Svelte block tags — each a
+        // balanced `{…}`. The sections scanner doesn't need to
+        // understand the block semantics, just count braces.
+        let src = "{#if ready}<div>hi</div>{/if}<style>p{}</style>";
+        let doc = parse_ok(src);
+        assert!(doc.style.is_some());
+    }
+
+    #[test]
+    fn script_with_generic_attr_and_quoted_value() {
+        // `<script lang="ts" generics="S">` — `"` in attribute
+        // values must not be misread as tag-name chars or leak
+        // depth tracking.
+        let src = "<script lang=\"ts\" generics=\"S\">let x: S;</script>\n\
+                   <div>hi</div>\n\
+                   <style>p{}</style>";
+        let doc = parse_ok(src);
+        let s = doc.instance_script.expect("instance");
+        assert_eq!(s.generics.as_deref(), Some("S"));
+        assert!(doc.style.is_some());
+    }
+
+    #[test]
+    fn unmatched_closing_tag_doesnt_underflow_depth() {
+        // `</div>` without a matching `<div>` — depth counter must
+        // saturate at 0, not wrap.
+        let src = "</div><script>let x = 1;</script>";
+        let doc = parse_ok(src);
+        assert!(doc.instance_script.is_some());
+    }
 }

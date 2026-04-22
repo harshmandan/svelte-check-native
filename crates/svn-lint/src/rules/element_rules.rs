@@ -236,7 +236,7 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
                 && name.starts_with("on")
                 && name.len() > 2
                 && let Some(tree) = &ctx.scope_tree
-                && tree.resolve_from_template(name).is_none()
+                && !tree.is_declared_anywhere(name)
             {
                 let msg = messages::attribute_global_event_reference(name);
                 ctx.emit(Code::attribute_global_event_reference, msg, s.range);
@@ -273,7 +273,7 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
                         e.expression_range.start as usize..e.expression_range.end as usize,
                     )
                     .map(str::trim);
-                if expr_src == Some(name) && tree.resolve_from_template(name).is_none() {
+                if expr_src == Some(name) && !tree.is_declared_anywhere(name) {
                     let msg = messages::attribute_global_event_reference(name);
                     ctx.emit(Code::attribute_global_event_reference, msg, e.range);
                 }

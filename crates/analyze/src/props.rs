@@ -1,15 +1,26 @@
-//! Props analysis — find `let { ... } = $props()` destructuring patterns.
+//! Props analysis — central source of truth for the component's Props
+//! bag.
 //!
-//! For each prop declared via Svelte 5's `$props()` rune, record the local
-//! name bound by the destructuring. Emit consumes this list to produce
-//! `void <local_name>;` references: destructured props are part of the
-//! component's public API and must be treated as "used" even when the
-//! component body doesn't touch them (e.g., props only consumed via
-//! `bind:`, `<svelte:element {...}>`, or by a subcomponent after spread).
+//! Mirrors upstream's
+//! `svelte2tsx/src/svelte2tsx/nodes/ExportedNames.ts` structurally:
+//! one analyze-time pass produces every decision emit later makes
+//! about the component's Props. The result lives on [`PropsInfo`],
+//! built once by [`PropsInfo::build`] and consumed read-only by emit.
 //!
-//! Without per-prop void-refs, `noUnusedLocals` flags every destructured
-//! prop as unused — roughly 80 % of a typical project's error budget comes from
-//! this one gap.
+//! ### What's in PropsInfo
+//!
+//! - `source` — where the Props type text came from
+//!   ([`PropsSource`]). Drives decisions like SvelteKit route auto-
+//!   typing (only fires when `source == PropsSource::None`).
+//! - `type_text` — the raw Props type as a source slice or
+//!   synthesised string. `None` when no annotation / no `$$Props` /
+//!   no `export let` was found.
+//! - `type_root_name` — the leading named-type reference in
+//!   `type_text`, if any. Script-split's hoisting decision reads this.
+//! - `destructures` — every local introduced by `let { ... } =
+//!   $props()` at top-level, in source order. Feeds `void <name>;`
+//!   emission so `noUnusedLocals` doesn't fire on props only consumed
+//!   via `bind:` / spread / template.
 //!
 //! ### Destructuring patterns handled
 //!
@@ -22,6 +33,22 @@
 //!
 //! Nested destructuring (`let { foo: { bar } } = $props()`) is walked
 //! recursively; every leaf identifier is recorded.
+//!
+//! ### Type-source priority
+//!
+//! First match wins:
+//!
+//! 1. `let { ... }: PropType = $props()` → PropType source slice.
+//! 2. `let { ... } = $props<PropType>()` → PropType source slice.
+//! 3. `interface $$Props { ... }` at module scope → the literal string
+//!    `"$$Props"`. The interface declaration itself hoists via
+//!    script_split alongside other user interfaces.
+//! 4. `export let foo: T; export let bar = 42;` (Svelte-4) →
+//!    synthesize `{ foo: T; bar?: any; ... }` from each top-level
+//!    `export let`/`export const` declaration (plus `export { alias }`
+//!    specifiers).
+//! 5. None of the above → `PropsSource::None`; emit falls back to
+//!    `any`.
 
 use oxc_ast::ast::{
     BindingPatternKind, BindingProperty, Declaration, Expression, ModuleExportName, PropertyKey,
@@ -44,81 +71,178 @@ pub struct PropInfo {
     pub is_rest: bool,
 }
 
-/// Find the *type source text* for the component's Props bag — either
-/// the explicit `$props()` type annotation (Svelte 5) or a synthesized
-/// object type built from Svelte 4-style `export let` declarations.
+/// Where the Props type text in [`PropsInfo::type_text`] came from.
 ///
-/// Priority order (first match wins):
-///
-/// 1. `let { ... }: PropType = $props()` — return PropType's source.
-/// 2. `let { ... } = $props<PropType>()` — return PropType's source.
-/// 3. `export let foo: T; export let bar = 42;` (Svelte 4 style) —
-///    synthesize `{ foo: T; bar?: any; ... }` from each top-level
-///    `export let`/`export const` declaration.
-/// 4. None of the above → `None`. Callers treat `None` as "no typed
-///    prop shape available; emit default as `any`".
-///
-/// Returned shapes 1-2 are a slice of `source` cloned into a `String`
-/// (trusting the user's original syntax verbatim). Shape 3 is freshly
-/// synthesized from the declarator name + optional type annotation;
-/// declarations without an explicit type fall back to `any`.
-///
-/// `export const foo: T = ...` is handled identically to `export let`
-/// here — upstream treats `export const` as a read-only prop (a
-/// getter); for the purposes of the default export's Props shape the
-/// distinction is irrelevant. Both contribute a property to the
-/// synthesized object type.
-pub fn find_props_type_source(program: &oxc_ast::ast::Program<'_>, source: &str) -> Option<String> {
-    // Shape 1 / Shape 2: prefer an explicit `$props()` annotation when
-    // present. Svelte 5 components win over any accidental stray
-    // `export let` in the body (which would be a user error anyway —
-    // Svelte 5 doesn't use `export let` for props).
-    for stmt in &program.body {
-        let Statement::VariableDeclaration(decl) = stmt else {
-            continue;
-        };
-        for declarator in &decl.declarations {
-            let Some(init) = declarator.init.as_ref() else {
+/// Downstream emit branches on this rather than re-deriving the shape
+/// from `type_text`. Keeps the "how did we get here" decision in one
+/// place and makes it trivial to test the chosen branch per fixture.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PropsSource {
+    /// No props-shape detected at all. `type_text` is `None`.
+    /// Emit may still synthesise a SvelteKit route shape before
+    /// falling back to `any`.
+    #[default]
+    None,
+    /// `let { ... }: PropType = $props()` — annotation on the
+    /// destructure binding.
+    RuneAnnotation,
+    /// `let { ... } = $props<PropType>()` — generic arg on the call.
+    RuneGeneric,
+    /// Svelte-4 `interface $$Props { ... }` at module scope.
+    LegacyInterface,
+    /// Synthesised from `export let` / `export const` declarations
+    /// and `export { local as alias }` specifiers.
+    SynthesisedFromExports,
+}
+
+/// Everything emit needs to know about a component's Props, resolved
+/// once by [`PropsInfo::build`]. Replaces the scattered
+/// `find_props_type_source` / `find_props` / `root_type_name` calls
+/// the emit hot path used to make.
+#[derive(Debug, Clone, Default)]
+pub struct PropsInfo {
+    /// Where the Props type text came from.
+    pub source: PropsSource,
+    /// Raw Props type text — a source slice for rune/$$Props shapes,
+    /// or a freshly-synthesised object type for Svelte-4 export-let.
+    /// `None` when `source == PropsSource::None`.
+    pub type_text: Option<String>,
+    /// Leading named-type reference in `type_text`, if any. Populated
+    /// only when `type_text` starts with an identifier-ish token
+    /// (e.g. `Props`, `Props<T>`, `ChannelMessageProps`). `None` for
+    /// literal shapes (`{ ... }`), tuples, unions, intersections, or
+    /// when `type_text` is `None`.
+    pub type_root_name: Option<SmolStr>,
+    /// Every local name introduced by `let { ... } = $props()` at
+    /// top-level, in source order. Empty for Svelte-4 components and
+    /// for components with no `$props()` call.
+    pub destructures: Vec<PropInfo>,
+}
+
+impl PropsInfo {
+    /// Build [`PropsInfo`] from a parsed instance-script program.
+    ///
+    /// Single pass through `program.body`: walks variable
+    /// declarations for a `$props()` call (Shape 1/2), scans for an
+    /// `interface $$Props` at module scope (Shape 3), and — only
+    /// when neither is found — walks top-level `export let` /
+    /// `export const` / `export { alias }` to synthesise a Svelte-4
+    /// Props shape (Shape 4).
+    ///
+    /// `program` MUST be the instance-script program. Module-script
+    /// `export let`s are module-scope exports, not component props.
+    pub fn build(program: &oxc_ast::ast::Program<'_>, source: &str) -> Self {
+        let mut destructures: Vec<PropInfo> = Vec::new();
+        let mut type_text: Option<String> = None;
+        let mut props_source = PropsSource::None;
+
+        // Shape 1 / Shape 2: explicit `$props()` annotation wins over
+        // everything else. Collect the destructured names from the
+        // same call while we're here.
+        for stmt in &program.body {
+            let Statement::VariableDeclaration(decl) = stmt else {
                 continue;
             };
-            if !is_props_call_like(init) {
-                continue;
-            }
-            if let Some(ty) = declarator.id.type_annotation.as_ref() {
-                let span = ty.type_annotation.span();
-                if let Some(slice) = source.get(span.start as usize..span.end as usize) {
-                    return Some(slice.to_string());
+            for declarator in &decl.declarations {
+                let Some(init) = declarator.init.as_ref() else {
+                    continue;
+                };
+                if !is_props_call_like(init) {
+                    continue;
                 }
-            }
-            if let Expression::CallExpression(call) = init {
-                if let Some(tp) = call.type_parameters.as_ref() {
-                    if let Some(arg) = tp.params.first() {
-                        let span = arg.span();
-                        if let Some(slice) = source.get(span.start as usize..span.end as usize) {
-                            return Some(slice.to_string());
-                        }
+                collect_from_binding(&declarator.id.kind, &mut destructures);
+                if type_text.is_some() {
+                    continue;
+                }
+                if let Some(ty) = declarator.id.type_annotation.as_ref() {
+                    let span = ty.type_annotation.span();
+                    if let Some(slice) = source.get(span.start as usize..span.end as usize) {
+                        type_text = Some(slice.to_string());
+                        props_source = PropsSource::RuneAnnotation;
+                        continue;
+                    }
+                }
+                if let Expression::CallExpression(call) = init
+                    && let Some(tp) = call.type_parameters.as_ref()
+                    && let Some(arg) = tp.params.first()
+                {
+                    let span = arg.span();
+                    if let Some(slice) = source.get(span.start as usize..span.end as usize) {
+                        type_text = Some(slice.to_string());
+                        props_source = PropsSource::RuneGeneric;
                     }
                 }
             }
         }
-    }
-    // SVELTE-4-COMPAT: `interface $$Props { … }` at module scope is
-    // the pre-Svelte-5 convention for declaring component props. When
-    // no `$props()` call was found above, use `$$Props` as the Props
-    // type source. The interface declaration itself gets hoisted by
-    // script_split alongside other user interfaces, so module-scope
-    // consumers of the emitted `Component<$$Props>` can resolve it.
-    for stmt in &program.body {
-        if let Statement::TSInterfaceDeclaration(iface) = stmt {
-            if iface.id.name == "$$Props" {
-                return Some("$$Props".to_string());
+
+        if type_text.is_none() {
+            // Shape 3: Svelte-4 `interface $$Props { ... }`.
+            for stmt in &program.body {
+                if let Statement::TSInterfaceDeclaration(iface) = stmt
+                    && iface.id.name == "$$Props"
+                {
+                    type_text = Some("$$Props".to_string());
+                    props_source = PropsSource::LegacyInterface;
+                    break;
+                }
             }
         }
+
+        if type_text.is_none()
+            && let Some(synth) = synthesize_props_type_from_export_let(program, source)
+        {
+            // Shape 4: export-let fallback.
+            type_text = Some(synth);
+            props_source = PropsSource::SynthesisedFromExports;
+        }
+
+        let type_root_name = type_text.as_deref().and_then(root_type_name_of);
+
+        Self {
+            source: props_source,
+            type_text,
+            type_root_name,
+            destructures,
+        }
     }
-    // Shape 3: Svelte 4 fallback. Walk top-level `export let` / `export
-    // const` declarations and synthesize an inline object type. Only
-    // runs when no `$props()` call was seen above.
-    synthesize_props_type_from_export_let(program, source)
+}
+
+/// Compute the leading named-type reference of `ty`, if any. Returns
+/// `None` for literal shapes (`{ ... }`), tuple/array (`[...]`), and
+/// other non-reference starts. Used by script_split's hoisting
+/// decision: a named-type Props can be mentioned at module scope
+/// (script_split hoists its declaration); a literal shape stays
+/// inline.
+pub fn root_type_name_of(ty: &str) -> Option<SmolStr> {
+    let ty = ty.trim_start();
+    let bytes = ty.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let first = bytes[0];
+    if !(first.is_ascii_alphabetic() || first == b'_' || first == b'$') {
+        return None;
+    }
+    let mut end = 0usize;
+    while end < bytes.len()
+        && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_' || bytes[end] == b'$')
+    {
+        end += 1;
+    }
+    Some(SmolStr::from(&ty[..end]))
+}
+
+/// Find the *type source text* for the component's Props bag.
+///
+/// Thin wrapper over [`PropsInfo::build`]. Exists for callers that
+/// only need the type text and not the full [`PropsInfo`] result.
+/// New callers should prefer `PropsInfo::build(...)` — it's the
+/// single-pass analyze entry point.
+///
+/// Priority order, returned shapes, and fallback semantics are
+/// documented on [`PropsInfo`].
+pub fn find_props_type_source(program: &oxc_ast::ast::Program<'_>, source: &str) -> Option<String> {
+    PropsInfo::build(program, source).type_text
 }
 
 /// Build an inline object type literal from top-level `export let` /
@@ -342,20 +466,19 @@ fn arrow_signature_from_init(init: &Expression<'_>, source: &str) -> Option<Stri
 
 /// Find every `let { ... } = $props()` destructuring in `program` and
 /// return the local names introduced. Order is source order.
+///
+/// Thin wrapper over [`PropsInfo::build`] — the equivalent of
+/// `PropsInfo::build(program, source).destructures`. Exists for
+/// callers that don't need the full [`PropsInfo`] result; new callers
+/// should prefer `PropsInfo::build(...)` so they get the type text
+/// for free.
+///
+/// The no-source-needed signature is kept so existing test helpers
+/// that only have a program (not its source) keep working; an empty
+/// string is passed as `source` because `destructures` doesn't touch
+/// it.
 pub fn find_props(program: &oxc_ast::ast::Program<'_>) -> Vec<PropInfo> {
-    let mut out = Vec::new();
-    // Only top-level: $props() calls elsewhere are not component-level
-    // prop declarations.
-    for stmt in &program.body {
-        if let Statement::VariableDeclaration(decl) = stmt {
-            for declarator in &decl.declarations {
-                if declarator.init.as_ref().is_some_and(is_props_call_like) {
-                    collect_from_binding(&declarator.id.kind, &mut out);
-                }
-            }
-        }
-    }
-    out
+    PropsInfo::build(program, "").destructures
 }
 
 /// Does this expression look like a call to the `$props` rune?
@@ -712,5 +835,128 @@ mod tests {
             props_type(src).as_deref(),
             Some("{ width?: any; class?: any; }")
         );
+    }
+
+    // ---------- PropsInfo::build tests ----------
+
+    fn build(src: &str) -> PropsInfo {
+        let alloc = Allocator::default();
+        let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
+        PropsInfo::build(&parsed.program, src)
+    }
+
+    #[test]
+    fn props_info_default_is_none() {
+        let info = build("");
+        assert_eq!(info.source, PropsSource::None);
+        assert_eq!(info.type_text, None);
+        assert_eq!(info.type_root_name, None);
+        assert!(info.destructures.is_empty());
+    }
+
+    #[test]
+    fn props_info_rune_annotation_source() {
+        let info = build("let { foo }: { foo: string } = $props();");
+        assert_eq!(info.source, PropsSource::RuneAnnotation);
+        assert_eq!(info.type_text.as_deref(), Some("{ foo: string }"));
+        assert_eq!(info.type_root_name, None); // literal shape
+        let names: Vec<&str> = info.destructures.iter().map(|p| p.local_name.as_str()).collect();
+        assert_eq!(names, vec!["foo"]);
+    }
+
+    #[test]
+    fn props_info_rune_generic_source() {
+        let info = build("let { a, b } = $props<Props>();");
+        assert_eq!(info.source, PropsSource::RuneGeneric);
+        assert_eq!(info.type_text.as_deref(), Some("Props"));
+        assert_eq!(info.type_root_name.as_deref(), Some("Props"));
+        let names: Vec<&str> = info.destructures.iter().map(|p| p.local_name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn props_info_rune_generic_with_type_parameters() {
+        // Generic-instantiated Props type → type_root_name should
+        // still be the leading identifier, not include the `<T>` part.
+        let info = build("let { items } = $props<ListProps<string>>();");
+        assert_eq!(info.source, PropsSource::RuneGeneric);
+        assert_eq!(info.type_text.as_deref(), Some("ListProps<string>"));
+        assert_eq!(info.type_root_name.as_deref(), Some("ListProps"));
+    }
+
+    #[test]
+    fn props_info_legacy_interface() {
+        let info = build("interface $$Props { foo: number }");
+        assert_eq!(info.source, PropsSource::LegacyInterface);
+        assert_eq!(info.type_text.as_deref(), Some("$$Props"));
+        assert_eq!(info.type_root_name.as_deref(), Some("$$Props"));
+        assert!(info.destructures.is_empty());
+    }
+
+    #[test]
+    fn props_info_synthesised_from_export_let() {
+        let info = build("export let width: number;\nexport let count = 0;");
+        assert_eq!(info.source, PropsSource::SynthesisedFromExports);
+        assert_eq!(
+            info.type_text.as_deref(),
+            Some("{ width: number; count?: any; }")
+        );
+        assert_eq!(info.type_root_name, None); // literal shape
+        assert!(info.destructures.is_empty());
+    }
+
+    #[test]
+    fn props_info_rune_annotation_wins_over_export_let() {
+        // Priority order: explicit $props() annotation beats a stray
+        // export let (pathological but possible in migration code).
+        let info = build(
+            "export let stray: number;\nlet { foo }: { foo: string } = $props();",
+        );
+        assert_eq!(info.source, PropsSource::RuneAnnotation);
+        assert_eq!(info.type_text.as_deref(), Some("{ foo: string }"));
+    }
+
+    #[test]
+    fn props_info_rune_annotation_wins_over_legacy_interface() {
+        let info = build(
+            "interface $$Props { foo: number }\nlet { bar }: { bar: string } = $props();",
+        );
+        assert_eq!(info.source, PropsSource::RuneAnnotation);
+        assert_eq!(info.type_text.as_deref(), Some("{ bar: string }"));
+    }
+
+    #[test]
+    fn props_info_legacy_interface_wins_over_export_let() {
+        let info = build(
+            "interface $$Props { foo: number }\nexport let stray: number;",
+        );
+        assert_eq!(info.source, PropsSource::LegacyInterface);
+        assert_eq!(info.type_text.as_deref(), Some("$$Props"));
+    }
+
+    #[test]
+    fn props_info_untyped_props_call_has_destructures_but_no_type() {
+        let info = build("let { foo, bar } = $props();");
+        assert_eq!(info.source, PropsSource::None);
+        assert_eq!(info.type_text, None);
+        let names: Vec<&str> = info.destructures.iter().map(|p| p.local_name.as_str()).collect();
+        assert_eq!(names, vec!["foo", "bar"]);
+    }
+
+    #[test]
+    fn root_type_name_of_handles_common_shapes() {
+        assert_eq!(root_type_name_of("Props").as_deref(), Some("Props"));
+        assert_eq!(root_type_name_of("Props<T>").as_deref(), Some("Props"));
+        assert_eq!(
+            root_type_name_of("ChannelMessageProps").as_deref(),
+            Some("ChannelMessageProps")
+        );
+        assert_eq!(root_type_name_of("  Props").as_deref(), Some("Props"));
+        assert_eq!(root_type_name_of("$$Props").as_deref(), Some("$$Props"));
+        assert_eq!(root_type_name_of("_Private").as_deref(), Some("_Private"));
+        // Literal shapes / tuples / unions start with non-identifier chars.
+        assert_eq!(root_type_name_of("{ foo: string }"), None);
+        assert_eq!(root_type_name_of("[string, number]"), None);
+        assert_eq!(root_type_name_of(""), None);
     }
 }

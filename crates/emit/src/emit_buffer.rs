@@ -35,19 +35,6 @@
 //! generates new TS that incorporates verbatim regions. This is the
 //! smaller shape that actually fits our use case.
 //!
-//! ## Migration status
-//!
-//! Lives as a self-contained module with no call sites in `lib.rs`
-//! yet (Phase 4.1 / PLAN). The helper's public surface + tests are
-//! the contract; subsequent phases (4.2-4.4) port emit entry points
-//! to call it, starting with the smallest (module-script verbatim
-//! emission, then template interpolations) and ending with
-//! `emit_document_with_render_name`. `#[allow(dead_code)]` silences
-//! the warnings on methods not yet consumed — removed once the port
-//! reaches each method.
-
-#![allow(dead_code)]
-
 use std::fmt;
 
 use svn_core::Range;
@@ -84,7 +71,11 @@ impl EmitBuffer {
     }
 
     /// Current overlay line (1-based). Equal to the line the next
-    /// `append_*` call would start on.
+    /// `append_*` call would start on. Only used by the buffer's own
+    /// tests today — production callsites read via `as_str()` +
+    /// `current_line(s)` (the free function in `lib.rs`) when they
+    /// want an authoritative scan, or skip the counter entirely.
+    #[cfg(test)]
     pub fn current_line(&self) -> u32 {
         self.overlay_line
     }
@@ -194,20 +185,6 @@ impl EmitBuffer {
     /// the line-map-tracking path.
     pub fn raw_string_mut(&mut self) -> &mut String {
         &mut self.out
-    }
-
-    /// Direct access to the token_map vec. Escape hatch for sites
-    /// that already push their own TokenMapEntries (e.g. the
-    /// post-walk `collect_*_token_map` scanners). Intended to be
-    /// retired as those sites migrate to `append_with_source`.
-    pub fn token_map_mut(&mut self) -> &mut Vec<TokenMapEntry> {
-        &mut self.token_map
-    }
-
-    /// Direct access to the line_map vec. Same rationale as
-    /// [`token_map_mut`].
-    pub fn line_map_mut(&mut self) -> &mut Vec<LineMapEntry> {
-        &mut self.line_map
     }
 
     /// Refresh `current_line` by scanning the whole buffer. Used by

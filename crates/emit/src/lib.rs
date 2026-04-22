@@ -761,9 +761,9 @@ fn emit_document_with_render_name(
     // now (correctly) "name not found" errors.
     emit_legacy_action_attrs(buf.raw_string_mut(), summary);
     emit_bind_pair_declarations(buf.raw_string_mut(), summary);
-    // v0.3 Item 6: DOM-binding checks (`__svn_any_as<TYPE>(expr);`)
+    // v0.3 Item 6: DOM-binding checks (`EXPR = null as any as TYPE;`)
     // are emitted INLINE at each element's position during the
-    // template walk — see `emit_dom_binding_checks_inline` in
+    // template walk — see `emit_element_bind_checks_inline` in
     // `emit_template_node`'s Node::Element arm. Top-of-tpl_check
     // batching had the same scope gap that was fixed for
     // component-prop checks above: an expression referencing a
@@ -1776,8 +1776,7 @@ fn emit_template_node(
         Node::KeyBlock(b) => emit_template_body(buf, source, &b.body, depth, insts, action_counter),
         Node::SnippetBlock(b) => emit_snippet_block(buf, source, b, depth, insts, action_counter),
         Node::Element(e) => {
-            emit_dom_binding_checks_inline(buf, source, e.name.as_str(), &e.attributes, depth);
-            emit_bind_this_element_check_inline(buf, source, e.name.as_str(), &e.attributes, depth);
+            emit_element_bind_checks_inline(buf, source, e.name.as_str(), &e.attributes, depth);
             emit_use_directives_inline(
                 buf,
                 source,
@@ -1802,8 +1801,7 @@ fn emit_template_node(
             // to `HTMLElement` for bind:this and skip bind:value
             // dispatch (empty tag_name → resolve_bind_value_type
             // returns None).
-            emit_dom_binding_checks_inline(buf, source, "", &s.attributes, depth);
-            emit_bind_this_element_check_inline(buf, source, "", &s.attributes, depth);
+            emit_element_bind_checks_inline(buf, source, "", &s.attributes, depth);
             emit_use_directives_inline(buf, source, "", &s.attributes, depth, action_counter);
             emit_children_with_let_bindings(
                 buf,
@@ -2815,7 +2813,44 @@ fn emit_use_directives_inline(
     }
 }
 
-fn emit_dom_binding_checks_inline(
+/// Emit a type-check line per `bind:NAME` directive on a DOM element.
+///
+/// Shape: `{indent}EXPR = null as any as TYPE;` — direct assignment
+/// (NOT wrapped in a never-called lambda). Upstream svelte2tsx's
+/// `Binding.ts:86-146` emits the same direct form, which type-checks
+/// the LHS against the binding's value type AND narrows EXPR's flow
+/// type for subsequent uses. A `let x = $state<number>()` (type
+/// `number | undefined`) passed through `bind:clientWidth` then
+/// flows as `number` at the later `<Child {x}/>` site. The earlier
+/// lambda wrapper isolated the assignment from narrowing, producing
+/// spurious "possibly undefined" errors that upstream didn't (bench
+/// FigmaPopup mainWidth).
+///
+/// Supports all DOM bind: variants under one loop:
+///   - `bind:this` — TYPE = `HTMLElementTagNameMap['tag']` (or
+///     `HTMLElement` for the dynamic `<svelte:element>` escape hatch
+///     when `tag_name == ""`). Member expressions
+///     (`bind:this={refs.input}`) and bare identifiers both work;
+///     the assignment is verbatim from source.
+///   - `bind:value` — TYPE resolved once per element via
+///     `resolve_bind_value_type`, which inspects the literal
+///     `type="..."` sibling attribute. Non-form elements return
+///     `None` and the directive is skipped.
+///   - Other one-way bindings (`bind:checked`, `bind:files`,
+///     `bind:group`, `bind:clientWidth`, `bind:naturalHeight`, …) —
+///     TYPE from `svn_analyze::dom_binding::type_for(name)`;
+///     unknown names are skipped.
+///
+/// EXPR resolution:
+///   - `bind:NAME={expr}` → trimmed EXPR with a source range that
+///     exactly covers the trimmed slice; `append_with_source` pushes
+///     a TokenMapEntry so diagnostics land at the source position.
+///   - `bind:NAME` (shorthand, NAME ≠ `this`) → uses NAME as the
+///     target; no source range since there's no user expression to
+///     map back to.
+///   - `bind:this` without an `={EXPR}` value is not valid Svelte
+///     shorthand; skipped.
+fn emit_element_bind_checks_inline(
     buf: &mut EmitBuffer,
     source: &str,
     tag_name: &str,
@@ -2823,11 +2858,10 @@ fn emit_dom_binding_checks_inline(
     depth: usize,
 ) {
     let indent = "    ".repeat(depth);
-    // v0.3 Item 8 extended: bind:value's target type depends on the
-    // element tag + literal `type="..."` sibling attribute. Resolve
-    // once per element (not per-attribute) since all bind:value
-    // directives on the same element dispatch to the same target
-    // type.
+    // v0.3 Item 8: `bind:value`'s target type depends on the element
+    // tag + literal `type="..."` sibling attribute. Resolve once per
+    // element (not per-directive) since every `bind:value` on the
+    // same element dispatches to the same target type.
     let bind_value_type = svn_analyze::resolve_bind_value_type(tag_name, attributes);
     for attr in attributes {
         let svn_parser::Attribute::Directive(directive) = attr else {
@@ -2837,24 +2871,19 @@ fn emit_dom_binding_checks_inline(
             continue;
         }
         let name = directive.name.as_str();
-        let ty = if name == "value" {
-            let Some(ty) = bind_value_type else { continue };
-            ty
+        let ty: String = if name == "this" {
+            element_type_annotation(tag_name)
+        } else if name == "value" {
+            match bind_value_type {
+                Some(t) => t.to_string(),
+                None => continue,
+            }
         } else {
-            let Some(ty) = svn_analyze::dom_binding::type_for(name) else {
-                continue;
-            };
-            ty
+            match svn_analyze::dom_binding::type_for(name) {
+                Some(t) => t.to_string(),
+                None => continue,
+            }
         };
-        // Resolve the assignment target:
-        //   `bind:NAME={expr}` → trimmed EXPR text + a source range
-        //                         covering the same trimmed slice
-        //                         (so a TokenMapEntry maps the overlay
-        //                         EXPR back to its source bytes).
-        //   `bind:NAME`         → NAME (Svelte shorthand — desugars to
-        //                         `bind:NAME={NAME}`). No source range;
-        //                         the binding has no user-written
-        //                         expression to map back to.
         let (expr_text, expr_source_range): (std::borrow::Cow<'_, str>, Option<svn_core::Range>) =
             match &directive.value {
                 Some(svn_parser::DirectiveValue::Expression {
@@ -2866,6 +2895,9 @@ fn emit_dom_binding_checks_inline(
                         continue;
                     };
                     let trimmed = slice.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
                     let leading_ws = (slice.len() - slice.trim_start().len()) as u32;
                     let start = expression_range.start + leading_ws;
                     let end = start + trimmed.len() as u32;
@@ -2874,113 +2906,27 @@ fn emit_dom_binding_checks_inline(
                         Some(svn_core::Range::new(start, end)),
                     )
                 }
-                None => (std::borrow::Cow::Borrowed(directive.name.as_str()), None),
-                // BindPair / Quoted don't make sense for these one-way
+                None => {
+                    // `bind:this` has no shorthand form — always
+                    // carries `={EXPR}`. Skip when missing.
+                    if name == "this" {
+                        continue;
+                    }
+                    (std::borrow::Cow::Borrowed(directive.name.as_str()), None)
+                }
+                // BindPair / Quoted don't make sense for element-side
                 // bindings; skip.
                 _ => continue,
             };
         if expr_text.is_empty() {
             continue;
         }
-        // Direct assignment (NOT wrapped in a never-called lambda).
-        // Upstream emits `EXPR = $$_elN.clientWidth;` as a plain
-        // statement in the render body — both type-checks the LHS
-        // accepts the binding's value type AND narrows EXPR's flow
-        // type for subsequent uses. A `let x = $state<number>()`
-        // (type `number | undefined`) passed through `bind:clientWidth`
-        // then flows as `number` at the later `<Child {x}/>` site.
-        // The earlier `void (() => { ... })` wrapper isolated the
-        // assignment from narrowing, which produced spurious
-        // "possibly undefined" errors on consumer prop-passing sites
-        // against upstream's behavior (bench: FigmaPopup mainWidth).
         buf.push_str(&indent);
         match expr_source_range {
             Some(range) => buf.append_with_source(&expr_text, range),
             None => buf.push_str(&expr_text),
         }
         let _ = writeln!(buf, " = null as any as {ty};");
-    }
-}
-
-/// v0.3 Item 7: emit a never-called lambda `void (() => { EXPR = null
-/// as any as HTMLElementTagNameMap['tag']; });` for each
-/// `bind:this={EXPR}` directive on a DOM element. Inline at the
-/// walker's current depth so block-scoped iterators in EXPR resolve.
-///
-/// **Assignment direction matches upstream.** Upstream svelte2tsx's
-/// `Binding.ts:86-93` emits `EXPR = ${element.name}` — an assignment
-/// whose LHS (user's target) must accept the concrete element type
-/// as RHS. So `bind:this={widgetEl}` with `widgetEl: HTMLElement |
-/// null` on a `<div>` passes (HTMLElement is a supertype of
-/// HTMLDivElement); same binding with `widgetEl: HTMLSpanElement`
-/// fails. Matches the lax behavior common to idiomatic Svelte code
-/// (broad HTMLElement | null declarations).
-///
-/// Covers BOTH simple-identifier and member-expression forms. Simple
-/// identifiers keep their v0.2-shipped `!` definite-assign rewrite
-/// (separate code path, unchanged by this emit). Member expressions
-/// (`bind:this={refs.input}`) previously had NO type check at all.
-///
-/// `tag_name == ""` is the svelte:element dynamic-tag escape hatch:
-/// falls back to `HTMLElement`.
-fn emit_bind_this_element_check_inline(
-    buf: &mut EmitBuffer,
-    source: &str,
-    tag_name: &str,
-    attributes: &[svn_parser::Attribute],
-    depth: usize,
-) {
-    let indent = "    ".repeat(depth);
-    for attr in attributes {
-        let svn_parser::Attribute::Directive(directive) = attr else {
-            continue;
-        };
-        if directive.kind != svn_parser::DirectiveKind::Bind {
-            continue;
-        }
-        if directive.name.as_str() != "this" {
-            continue;
-        }
-        let Some(svn_parser::DirectiveValue::Expression {
-            expression_range, ..
-        }) = &directive.value
-        else {
-            continue;
-        };
-        let Some(slice) =
-            source.get(expression_range.start as usize..expression_range.end as usize)
-        else {
-            continue;
-        };
-        let trimmed = slice.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let leading_ws = (slice.len() - slice.trim_start().len()) as u32;
-        let expr_source_range = svn_core::Range::new(
-            expression_range.start + leading_ws,
-            expression_range.start + leading_ws + trimmed.len() as u32,
-        );
-        let el_type = element_type_annotation(tag_name);
-        // Direct assignment (NOT wrapped in a never-called lambda) —
-        // same alignment as one-way DOM bindings (commit `61fb2f5`).
-        // Upstream emits `EXPR = ${element.name};` as a plain statement
-        // so TS flow analysis narrows `EXPR` from `T | null` to `T`
-        // after the assignment. Observed case on control-svelte-5
-        // `FolderTreeItem.svelte`: `let iconEl = $state<HTMLElement |
-        // null>(null)` declared, used via `<button bind:this={iconEl}>`
-        // then passed as `{iconEl}` to child expecting `HTMLElement`.
-        // Without the narrowing, tsgo fires TS2322 at the child-call
-        // site; upstream's direct-assignment shape narrows iconEl to
-        // `HTMLElement` for the downstream use.
-        //
-        // The former `/* bind:this */` comment marker was an anchor for
-        // `collect_bind_this_check_token_map`'s post-walk scan; now that
-        // the TokenMapEntry is pushed inline via `append_with_source`,
-        // no marker is needed.
-        buf.push_str(&indent);
-        buf.append_with_source(trimmed, expr_source_range);
-        let _ = writeln!(buf, " = null as any as {el_type};");
     }
 }
 

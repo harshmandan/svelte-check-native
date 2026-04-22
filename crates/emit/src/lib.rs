@@ -4210,10 +4210,16 @@ fn try_process_let_statement(
         }
 
         // Phase 2: scan the declarator body for initializer detection
-        // and declarator/statement terminator. In this phase, NEWLINE
-        // at depth 0 terminates the declarator per JS ASI semantics —
-        // otherwise `let name1: T = v\n  let name2: T;` would be read
-        // as a single declarator and the second `let` swallowed.
+        // and declarator/statement terminator. NEWLINE at depth 0
+        // acts as ASI — but only when the next non-whitespace
+        // character isn't a union/intersection continuation (`|` /
+        // `&`). Multi-line union types like
+        //   `export let ticks: \n  | number \n  | null = undefined;`
+        // span newlines at depth 0 between the `:` and the real
+        // terminator, and treating every newline as ASI would
+        // truncate the type, miss the trailing `= undefined`, and
+        // wrongly add `!` to a declarator that already has an
+        // initializer (TS1264).
         //
         // Paren/brace tracking spans `() [] {}` plus generic-args `<>`.
         // Subtlety with `>`: TypeScript uses it for both generic close
@@ -4266,7 +4272,29 @@ fn try_process_let_statement(
                         }
                     }
                 }
-                b',' | b';' | b'\n' if paren_depth == 0 => break,
+                b',' | b';' if paren_depth == 0 => break,
+                b'\n' if paren_depth == 0 => {
+                    // ASI at a statement boundary — but only when the
+                    // next non-whitespace character doesn't continue
+                    // a type annotation. Multi-line union/
+                    // intersection types continue across newlines
+                    // with a leading `|` / `&`; single-line
+                    // declarations end at the newline. Missing this
+                    // distinction either breaks ASI (sucks `let
+                    // next_stmt` into the previous declarator) or
+                    // truncates types (`export let x:\n  | A\n  |
+                    // B = v;` looks like `x: ` followed by a new
+                    // statement, loses the `=` initializer, and
+                    // produces a false TS1264).
+                    let mut k = s + 1;
+                    while k < bytes.len() && matches!(bytes[k], b' ' | b'\t') {
+                        k += 1;
+                    }
+                    let next_nonws = bytes.get(k).copied();
+                    if !matches!(next_nonws, Some(b'|') | Some(b'&')) {
+                        break;
+                    }
+                }
                 _ => {}
             }
             s += 1;

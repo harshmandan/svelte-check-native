@@ -187,6 +187,16 @@ pub enum InputKind {
     /// the original source path into the overlay tsconfig's
     /// `exclude` list so tsgo reads only the typed version.
     KitFile,
+    /// User-authored `.ts` file that statically imports at least one
+    /// `.svelte` component whose directory ALSO contains a sibling
+    /// `.svelte.ts` runes module (the collision case that makes
+    /// tsgo's `rootDirs` resolution pick the runes module instead of
+    /// our overlay). We emit a mirror overlay at `kit_overlay_path`
+    /// with every `.svelte` specifier rewritten to `.svelte.svn.js`,
+    /// so the overlay resolves directly to the cache's generated TS.
+    /// Original source path is pushed into `exclude` so tsgo reads
+    /// only the rewritten version.
+    UserTsOverlay,
 }
 
 /// A single mapped-back diagnostic ready for presentation.
@@ -343,7 +353,9 @@ pub fn check(
             InputKind::Svelte | InputKind::SvelteAuxiliary => {
                 layout.generated_path(&input.source_path)
             }
-            InputKind::KitFile => layout.kit_overlay_path(&input.source_path),
+            InputKind::KitFile | InputKind::UserTsOverlay => {
+                layout.kit_overlay_path(&input.source_path)
+            }
         };
         write_if_changed(&gen_path, &input.generated_ts)?;
 
@@ -392,11 +404,13 @@ pub fn check(
                 );
                 write_if_changed(&ambient_path, &ambient_text)?;
             }
-            InputKind::KitFile => {
-                // Kit-file overlay: remember the original source path so
-                // the overlay tsconfig can `exclude` it — otherwise tsgo
-                // loads both the untyped original and our injected-type
-                // overlay and blends their errors.
+            InputKind::KitFile | InputKind::UserTsOverlay => {
+                // Mirror-overlay kinds: original source path goes into
+                // the overlay tsconfig's `exclude` so tsgo reads only
+                // our rewritten version. KitFile carries injected
+                // route / hooks types; UserTsOverlay carries rewritten
+                // `.svelte` imports that bypass the sibling-runes-module
+                // collision.
                 kit_overlay_sources.push(input.source_path.clone());
             }
         }
@@ -408,7 +422,10 @@ pub fn check(
                 token_map: input.token_map,
                 overlay_line_starts: input.overlay_line_starts,
                 source_line_starts: input.source_line_starts,
-                identity_map: matches!(input.kind, InputKind::KitFile),
+                identity_map: matches!(
+                    input.kind,
+                    InputKind::KitFile | InputKind::UserTsOverlay
+                ),
             },
         );
         // Only in-scope Svelte files + Kit overlays land in the

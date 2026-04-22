@@ -802,6 +802,28 @@ fn emit_document_with_render_name(
     //     = $state()` for bind:this targets).
     //   - as an `& { name: sig }` intersection on the TYPE alias, so
     //     `let ref: Foo` picks up the same shape.
+    // Per-field sanitizer: body-scoped refs (`$$Props['x']`, `typeof
+    // <exported-local>`) can't resolve at module scope. A field that
+    // referenced them was emitting TS2304 "Cannot find name" AND —
+    // because the whole exports_object used to double as the function-
+    // return shape only — quietly losing contextual-type flow at every
+    // consumer-side `new __svn_CN({ props: {…} })` site. Replace the
+    // whole field's type with `any` when any body-scoped ref appears;
+    // sibling fields keep their types and pass contextual typing
+    // through to consumers' callback props.
+    let sanitize_type_source = |t: &str| -> String {
+        let mentions_dollar = t.contains("$$Props")
+            || t.contains("$$Events")
+            || t.contains("$$Slots");
+        let touches_body_typeof = crate::script_split::typeof_targets_public(t)
+            .iter()
+            .any(|n| exported_locals.iter().any(|l| l.as_str() == n.as_str()));
+        if mentions_dollar || touches_body_typeof {
+            "any".to_string()
+        } else {
+            t.to_string()
+        }
+    };
     let exports_object: Option<String> = split.as_ref().and_then(|s| {
         if s.export_type_infos.is_empty() {
             return None;
@@ -811,7 +833,7 @@ fn emit_document_with_render_name(
             buf.push_str(info.name.as_str());
             buf.push_str(": ");
             match &info.type_source {
-                Some(t) => buf.push_str(t),
+                Some(t) => buf.push_str(&sanitize_type_source(t)),
                 None => buf.push_str("any"),
             }
             buf.push_str("; ");
@@ -939,6 +961,20 @@ fn emit_document_with_render_name(
     // those consumer-side writes valid without opening the door on
     // Svelte-5 codebases (where widening would mask real typos).
     let svelte4_style = is_svelte4_component(doc, split.as_ref());
+    // Narrower gate than `svelte4_style`: only true when the component
+    // uses `export let` (Svelte 4's prop-declaration form). `svelte4_style`
+    // also catches `export function` / `export const` which are method
+    // exports on runes components — those don't describe Props, so
+    // gating arm 3's props-base swap on `svelte4_style` would break
+    // runes fixtures (e.g. svelte2tsx/generics-attribute.v5).
+    let has_export_let = doc
+        .instance_script
+        .as_ref()
+        .is_some_and(|s| contains_export_let(s.content))
+        || doc
+            .module_script
+            .as_ref()
+            .is_some_and(|s| contains_export_let(s.content));
     // v0.3 Item 3: when the child declares `$$Events`, carry it as
     // `& { readonly __svn_events: $$Events }` on the default export.
     // Consumer-side `__svn_ensure_component` has a typed overload
@@ -1053,11 +1089,40 @@ fn emit_document_with_render_name(
             // would float `TData` unresolved at module scope if we took
             // the plain fallback. Wrap the whole declaration in the
             // generic scope so the references bind.
-            let widen = widen_for("Record<string, any>");
-            let props = wrap_props(format!("Record<string, any>{widen}"));
+            //
+            // SVELTE-4 only: use the (sanitized) exports_object as the
+            // props base rather than `Record<string, any>`. In Svelte 4
+            // `export let foo` is both a PROP and an exported member
+            // (bind:-accessible), so exports_object doubles as the
+            // Props type. Typing the props slot this way restores
+            // contextual-type flow — consumer sites like
+            // `<BarChart labels={{ format: (value) => … }}/>` see
+            // `value` contextually typed. Plain `Record<string, any>`
+            // flattens every prop slot to `any` and fires TS7006 under
+            // strict (layerchart's primary FP cluster).
+            //
+            // Svelte 5 runes keep the plain-record fallback: exports
+            // there are method-style (`export function getA()`) and
+            // don't describe the Props shape — props come from a
+            // `$props()` destructure that we've already considered
+            // unsafe-at-module-scope above. Using exports_object would
+            // reject legitimate consumer-side props as excess
+            // properties.
+            //
+            // Sanitizer above already replaced body-scoped refs in
+            // exports_object with `any`, so using it as the props base
+            // won't leak TS2304 at module scope.
+            let use_exports_as_props = has_export_let && exports_object.is_some();
+            let props_base: &str = if use_exports_as_props {
+                exports_object.as_deref().unwrap_or("Record<string, any>")
+            } else {
+                "Record<string, any>"
+            };
+            let widen = widen_for(props_base);
+            let props = wrap_props(format!("{props_base}{widen}"));
             let _ = writeln!(
                 out,
-                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<Record<string, any>{widen}>) => {};",
+                "declare const __svn_component_default: <{g}>(__anchor: any, props: Partial<{props_base}{widen}>) => {};",
                 exports_object.as_deref().unwrap_or("any"),
             );
             let _ = writeln!(

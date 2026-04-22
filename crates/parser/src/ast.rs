@@ -92,17 +92,56 @@ pub struct Text {
     pub range: Range,
 }
 
-/// `{expression}` — a single-expression mustache interpolation.
+/// `{expression}` — a single-expression mustache interpolation, OR one
+/// of Svelte's `{@…}` directive tags (`@const`, `@html`, `@render`,
+/// `@debug`, `@attach`). The [`kind`] discriminator lets consumers
+/// branch on shape without scanning the source bytes.
 ///
-/// `expression_range` is the byte range of the expression text (between `{`
-/// and `}`, exclusive of the braces). Use this range to feed oxc when a
-/// parsed AST is needed.
+/// `expression_range` is the byte range of the "expression payload"
+/// between `{` and `}`:
+///
+/// - For [`InterpolationKind::Expression`]: the whole body.
+/// - For [`InterpolationKind::AtConst`] / [`InterpolationKind::AtTag`]:
+///   the body after the directive keyword + whitespace, so `{@const
+///   foo = 1}` has `expression_range` covering `foo = 1` (not
+///   `@const foo = 1`).
 #[derive(Debug, Clone)]
 pub struct Interpolation {
-    /// Range of the expression inside the braces.
+    /// What kind of `{…}` this is — plain expression or one of
+    /// Svelte's directive tags. See [`InterpolationKind`].
+    pub kind: InterpolationKind,
+    /// Range of the expression payload inside the braces (after the
+    /// directive keyword + whitespace for `@*` tags).
     pub expression_range: Range,
-    /// Range of the full `{expression}` including braces.
+    /// Range of the full `{…}` including braces.
     pub range: Range,
+}
+
+/// What flavour of `{…}` tag an [`Interpolation`] is. Set by the
+/// template parser at parse time so downstream passes (emit, analyze,
+/// lint) don't have to re-peek at the source bytes to classify.
+///
+/// Only three variants because that's what every downstream consumer
+/// actually branches on today: plain-vs-`@const` for the emit's type-
+/// check body, plain-vs-any-directive for
+/// `collect_plain_interpolation_ranges`. If a rule later needs to
+/// distinguish `@html` from `@debug` from `@render`, split `AtTag` —
+/// consumers that currently fall through to `_` on `AtTag` keep
+/// working because `AtTag` itself stays a catch-all variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterpolationKind {
+    /// `{EXPR}` — value interpolation.
+    Expression,
+    /// `{@const NAME = EXPR}` — template-scope declaration. Emit
+    /// produces a real `const <pattern> = <expr>;` at the current
+    /// template-check block so TS pins the inferred type.
+    AtConst,
+    /// Any other `{@*}` directive (`@html`, `@render`, `@debug`,
+    /// `@attach`, or an unknown future tag). Currently treated as
+    /// "side-effect-only" by emit — the expression payload may still
+    /// reference script bindings (→ void-ref pass) but the directive
+    /// itself doesn't produce typed overlay code.
+    AtTag,
 }
 
 /// `<!-- ... -->`

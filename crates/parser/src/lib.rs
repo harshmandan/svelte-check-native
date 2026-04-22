@@ -35,8 +35,8 @@ mod template;
 pub use ast::{
     AttrValue, AttrValuePart, Attribute, AwaitBlock, CatchBranch, Comment, Component, Directive,
     DirectiveKind, DirectiveValue, EachAsClause, EachBlock, Element, ElseIfArm, ExpressionAttr,
-    Fragment, IfBlock, Interpolation, KeyBlock, Node, PlainAttr, ShorthandAttr, SnippetBlock,
-    SpreadAttr, SvelteElement, SvelteElementKind, Text as TemplateText, ThenBranch,
+    Fragment, IfBlock, Interpolation, InterpolationKind, KeyBlock, Node, PlainAttr, ShorthandAttr,
+    SnippetBlock, SpreadAttr, SvelteElement, SvelteElementKind, Text as TemplateText, ThenBranch,
     is_component_tag, is_void_element,
 };
 pub use document::{

@@ -1457,7 +1457,7 @@ fn collect_interpolation_token_map(
     fragment: &svn_parser::Fragment,
 ) -> Vec<TokenMapEntry> {
     let mut ranges: Vec<svn_core::Range> = Vec::new();
-    collect_plain_interpolation_ranges(fragment, source, &mut ranges);
+    collect_plain_interpolation_ranges(fragment, &mut ranges);
     let marker = "/*svn_I*/(";
     let bytes = out.as_bytes();
     let mut entries: Vec<TokenMapEntry> = Vec::new();
@@ -1526,52 +1526,50 @@ fn collect_interpolation_token_map(
 /// emit shape; no sentinel).
 fn collect_plain_interpolation_ranges(
     fragment: &svn_parser::Fragment,
-    source: &str,
     out: &mut Vec<svn_core::Range>,
 ) {
     use svn_parser::Node;
     for node in &fragment.nodes {
         match node {
             Node::Interpolation(i) => {
-                let tag_start = i.range.start as usize;
-                let tag_end = i.range.end as usize;
-                if let Some(full) = source.get(tag_start..tag_end) {
-                    if !full.starts_with("{@") {
-                        out.push(i.expression_range);
-                    }
+                // Plain `{EXPR}` only; `{@const}` / `{@html}` / etc.
+                // produce structured emit elsewhere (see
+                // emit_at_const_if_any) and don't want a sentinel.
+                if i.kind == svn_parser::InterpolationKind::Expression {
+                    out.push(i.expression_range);
                 }
             }
             Node::IfBlock(b) => {
-                collect_plain_interpolation_ranges(&b.consequent, source, out);
+                collect_plain_interpolation_ranges(&b.consequent, out);
                 for arm in &b.elseif_arms {
-                    collect_plain_interpolation_ranges(&arm.body, source, out);
+                    collect_plain_interpolation_ranges(&arm.body, out);
                 }
                 if let Some(alt) = &b.alternate {
-                    collect_plain_interpolation_ranges(alt, source, out);
+                    collect_plain_interpolation_ranges(alt, out);
                 }
             }
             Node::EachBlock(b) => {
-                collect_plain_interpolation_ranges(&b.body, source, out);
+                collect_plain_interpolation_ranges(&b.body, out);
                 if let Some(alt) = &b.alternate {
-                    collect_plain_interpolation_ranges(alt, source, out);
+                    collect_plain_interpolation_ranges(alt, out);
                 }
             }
             Node::AwaitBlock(b) => {
                 if let Some(p) = &b.pending {
-                    collect_plain_interpolation_ranges(p, source, out);
+                    collect_plain_interpolation_ranges(p, out);
                 }
                 if let Some(t) = &b.then_branch {
-                    collect_plain_interpolation_ranges(&t.body, source, out);
+                    collect_plain_interpolation_ranges(&t.body, out);
                 }
                 if let Some(c) = &b.catch_branch {
-                    collect_plain_interpolation_ranges(&c.body, source, out);
+                    collect_plain_interpolation_ranges(&c.body, out);
                 }
             }
-            Node::KeyBlock(b) => collect_plain_interpolation_ranges(&b.body, source, out),
-            Node::SnippetBlock(b) => collect_plain_interpolation_ranges(&b.body, source, out),
-            Node::Element(e) => collect_plain_interpolation_ranges(&e.children, source, out),
-            Node::SvelteElement(s) => collect_plain_interpolation_ranges(&s.children, source, out),
-            Node::Component(c) => collect_plain_interpolation_ranges(&c.children, source, out),
+            Node::KeyBlock(b) => collect_plain_interpolation_ranges(&b.body, out),
+            Node::SnippetBlock(b) => collect_plain_interpolation_ranges(&b.body, out),
+            Node::Element(e) => collect_plain_interpolation_ranges(&e.children, out),
+            Node::SvelteElement(s) => collect_plain_interpolation_ranges(&s.children, out),
+            Node::Component(c) => collect_plain_interpolation_ranges(&c.children, out),
             Node::Text(_) | Node::Comment(_) => {}
         }
     }
@@ -2405,12 +2403,15 @@ fn emit_interpolation(
     interp: &svn_parser::Interpolation,
     depth: usize,
 ) {
-    let tag_start = interp.range.start as usize;
-    let Some(full) = source.get(tag_start..interp.range.end as usize) else {
-        return;
-    };
-    // `{@*}` tags need structured emit — delegate.
-    if full.starts_with("{@") {
+    // Directive tags route through emit_at_const_if_any — @const is
+    // the only tag we emit structured code for today. Other @-tags
+    // (`@html`, `@render`, `@debug`, `@attach`) are side-effect-only
+    // at the TS overlay layer; the early-return preserves that.
+    //
+    // Parser classifies each interpolation's kind at parse time
+    // (svn_parser::InterpolationKind) so we don't re-peek at the
+    // source bytes here.
+    if interp.kind != svn_parser::InterpolationKind::Expression {
         emit_at_const_if_any(out, source, interp, depth);
         return;
     }
@@ -2461,22 +2462,10 @@ fn emit_at_const_if_any(
     interp: &svn_parser::Interpolation,
     depth: usize,
 ) {
-    // Peek at the raw source for `{@const ` — the parser collapsed every
-    // `{@*}` tag into an `Interpolation`, so we can't distinguish by
-    // AST shape alone.
-    let tag_start = interp.range.start as usize;
-    let tag_end = interp.range.end as usize;
-    let Some(full) = source.get(tag_start..tag_end) else {
-        return;
-    };
-    let prefix = "{@const";
-    if !full.starts_with(prefix) {
-        return;
-    }
-    let after_prefix = &full[prefix.len()..];
-    // Require a whitespace boundary after `@const` so we don't match a
-    // hypothetical `{@constfoo ...}` token.
-    if !after_prefix.starts_with(|c: char| c.is_ascii_whitespace()) {
+    // Parser labels each interpolation's kind at parse time; any
+    // non-`@const` directive falls through to side-effect-only (no
+    // structured emit).
+    if interp.kind != svn_parser::InterpolationKind::AtConst {
         return;
     }
     // Body = expression_range (parser already trimmed the keyword).

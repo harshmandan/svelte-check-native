@@ -19,8 +19,9 @@ use smol_str::SmolStr;
 use svn_core::Range;
 
 use crate::ast::{
-    CatchBranch, Comment, Component, Element, ElseIfArm, Fragment, Interpolation, Node,
-    SvelteElement, SvelteElementKind, Text, ThenBranch, is_component_tag, is_void_element,
+    CatchBranch, Comment, Component, Element, ElseIfArm, Fragment, Interpolation,
+    InterpolationKind, Node, SvelteElement, SvelteElementKind, Text, ThenBranch, is_component_tag,
+    is_void_element,
 };
 use crate::attributes::parse_attributes;
 use crate::blocks::{
@@ -161,12 +162,20 @@ impl<'src> TemplateParser<'src> {
                     Some(end) => {
                         let body_start = self.scanner.pos() + 2; // past `{@`
                         let src = self.scanner.source();
-                        // Skip the tag keyword (alpha chars).
-                        let mut p = body_start as usize;
                         let bytes = src.as_bytes();
+                        // Read the tag keyword (alpha chars) into a slice
+                        // so we can classify it (@const vs anything else).
+                        let keyword_start = body_start as usize;
+                        let mut p = keyword_start;
                         while p < end as usize && bytes[p].is_ascii_alphabetic() {
                             p += 1;
                         }
+                        let keyword = &src[keyword_start..p];
+                        let kind = if keyword == "const" {
+                            InterpolationKind::AtConst
+                        } else {
+                            InterpolationKind::AtTag
+                        };
                         // Skip whitespace after the keyword.
                         while p < end as usize && bytes[p].is_ascii_whitespace() {
                             p += 1;
@@ -174,6 +183,7 @@ impl<'src> TemplateParser<'src> {
                         let expr_range = Range::new(p as u32, end);
                         self.scanner.set_pos(end + 1);
                         nodes.push(Node::Interpolation(Interpolation {
+                            kind,
                             expression_range: expr_range,
                             range: Range::new(start, end + 1),
                         }));
@@ -582,6 +592,7 @@ impl<'src> TemplateParser<'src> {
                 let expr_range = Range::new(expr_start, end);
                 self.scanner.set_pos(end + 1);
                 Some(Node::Interpolation(Interpolation {
+                    kind: InterpolationKind::Expression,
                     expression_range: expr_range,
                     range: Range::new(start, self.scanner.pos()),
                 }))

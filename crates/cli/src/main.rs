@@ -1229,6 +1229,7 @@ fn run_typecheck(
         output_format,
         color,
         files_for_completed,
+        phase_start.elapsed(),
     );
 
     // `--tsgo-diagnostics` block — printed to stderr so machine-output
@@ -1272,6 +1273,7 @@ fn print_diagnostics(
     output_format: &str,
     color: ColorMode,
     files_checked: usize,
+    elapsed: std::time::Duration,
 ) {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1309,7 +1311,13 @@ fn print_diagnostics(
         }
         "human" => {
             print_human(workspace, diagnostics, false, use_color);
-            print_human_summary(errors, warnings, files_with_problems.len(), use_color);
+            print_human_summary(
+                errors,
+                warnings,
+                files_with_problems.len(),
+                elapsed,
+                use_color,
+            );
         }
         // human-verbose is the default
         _ => {
@@ -1320,7 +1328,13 @@ fn print_diagnostics(
             println!("Getting Svelte diagnostics...");
             println!();
             print_human(workspace, diagnostics, true, use_color);
-            print_human_summary(errors, warnings, files_with_problems.len(), use_color);
+            print_human_summary(
+                errors,
+                warnings,
+                files_with_problems.len(),
+                elapsed,
+                use_color,
+            );
         }
     }
 }
@@ -1465,15 +1479,22 @@ fn print_human(
     }
 }
 
-fn print_human_summary(errors: usize, warnings: usize, files: usize, color: bool) {
+fn print_human_summary(
+    errors: usize,
+    warnings: usize,
+    files: usize,
+    elapsed: std::time::Duration,
+    color: bool,
+) {
     let parts = format!(
-        "svelte-check found {} error{} and {} warning{} in {} file{}",
+        "svelte-check found {} error{} and {} warning{} in {} file{} in {:.1}s",
         errors,
         if errors == 1 { "" } else { "s" },
         warnings,
         if warnings == 1 { "" } else { "s" },
         files,
         if files == 1 { "" } else { "s" },
+        elapsed.as_secs_f64(),
     );
     if errors > 0 {
         println!("{}", paint(&parts, "31", color));

@@ -108,10 +108,37 @@ files|` semantic.
    and walk the AST. Hand-rolled destructuring/expression scanners are
    fragile by construction; an AST-level pattern match makes whole
    classes of bug categorically impossible.
-2. **Two-phase transformer.** Phase 1 (analyze) populates a
-   `SemanticModel` including a `VoidRefRegistry`. Phase 2 (emit) reads
-   from the model. Never mutate the model during emit. Never register
-   new names during emit.
+
+   **Known legacy violations** (target of Phase 3 in `notes/PLAN.md`,
+   do not extend): `script_split.rs::split_imports` pre-parse
+   `.contains()` guards, `emit/src/lib.rs::extract_property_chains`,
+   `emit/src/lib.rs`'s `{@const` dispatch by `starts_with("{@")`,
+   `doc.source.contains("<slot")` peeks, and
+   `template_walker.rs::collect_at_const_names`. New code must not
+   reach for a character-level scan as a shortcut.
+2. **Two-phase transformer.** Phase 1 (analyze) produces a set of
+   per-concern structs that Phase 2 (emit) reads read-only. Never
+   mutate these during emit. Never register new names during emit.
+
+   There is no single `SemanticModel` struct (yet). The analyze-phase
+   outputs today are:
+
+   - `svn_analyze::PropsInfo` — Props type source, kind, destructures
+     (see `crates/analyze/src/props.rs`).
+   - `svn_analyze::TemplateSummary` — template walker output
+     (component instantiations, DOM bindings, bind targets, slot
+     shapes, `on:event` directives, void-ref candidates).
+   - `svn_analyze::VoidRefRegistry` — single registry for every name
+     emit will synthesize. See rule #3.
+   - Plus free-function helpers (`collect_top_level_bindings`,
+     `find_store_refs`, `find_template_refs`, `collect_typed_uninit_lets`, …)
+     that emit calls directly.
+
+   The direction of travel is toward centralising these into a single
+   `SemanticModel` as each concern's shape stabilises. `PropsInfo`
+   (Phase 1 of `notes/PLAN.md`) is the first such piece; further
+   consolidation happens when a concern acquires its second consumer.
+   Don't invent placeholder fields with no reader — YAGNI wins here.
 3. **Single source of truth for synthesized-name registry.** Every name
    the emit crate creates (template-check wrapper, action attrs, bind
    pairs, store aliases, prop locals) is registered once and emitted
@@ -127,8 +154,11 @@ files|` semantic.
    crate creates so they're trivially distinguishable from user code in
    diagnostics.
 7. **Component instantiations emit as `new $$_CN({target, props})`
-   through the `__svn_ensure_component` wrapper.** Each `<Comp ...>`
-   in the template emits as:
+   through the `__svn_ensure_component` wrapper** (current shape —
+   Phase 2 of `notes/PLAN.md` will replace this with upstream's
+   class-wrapper pattern; update this rule when that lands).
+
+   Each `<Comp ...>` in the template emits as:
 
    ```ts
    { const __svn_CN = __svn_ensure_component(Comp);
@@ -166,6 +196,17 @@ files|` semantic.
    Overlay default exports are typed `import('svelte').Component<Props>`
    — the function form. Matches `ComponentProps<typeof Foo>`'s
    built-in constraint directly and keeps generics expressible.
+
+   **Why this is changing.** Upstream `svelte2tsx` wraps the whole
+   render in `class __sveltets_Render<T> { props() { ... } events()
+   { ... } slots() { ... } }` so that body-local type refs in the
+   Props type (`interface $$Props { labels?: typeof labels }` where
+   `labels` is script-body-local) resolve inside the render
+   function's scope. Our bare `function $$render_<hash>()` has them
+   leak to module scope and fire TS2304. ~224 layerchart errors plus
+   two reverted features (`23e1a25` typed dispatcher generics,
+   `e71fec7` `$$prop_def` satisfies-check) are blocked on this
+   pattern. Phase 2 ports it.
 
 8. **New emit shapes are tsgo-validated on a hand-written fixture
    before implementation.** Any change to what the emit crate produces

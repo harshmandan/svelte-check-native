@@ -1281,7 +1281,6 @@ fn emit_document_with_render_name(
     // derived from `inst.node_start`, so the scan → analyze lookup
     // is unambiguous.
     token_map.extend(collect_satisfies_token_map(&out, &instantiations_by_start));
-    token_map.extend(collect_on_event_token_map(&out, &instantiations_by_start));
     token_map.extend(collect_dom_binding_token_map(&out, doc.source, summary));
     token_map.extend(collect_bind_this_check_token_map(&out, doc.source, summary));
     // Action-directive and interpolation token-map entries are now
@@ -1297,103 +1296,6 @@ fn emit_document_with_render_name(
         source_line_starts,
     }
 }
-
-/// Post-walk scan: find every `__svn_inst_<hex>.$on("<name>",
-/// (<handler>))` in the emitted overlay and push a token-map entry
-/// covering the handler expression span → the handler's source byte
-/// range (from `inst.on_events[N].handler_range`).
-///
-/// Unlocks v0.3 Item 3 end-to-end: when the child declares a typed
-/// `$$Events`, the overload-selected `__SvnInstanceTyped<P, E>`'s
-/// `$on<K extends keyof E>` fires TS2345 on a wrong-payload handler.
-/// That diagnostic lands at the first char of the handler expression
-/// in the overlay (tsgo's argument-position reporting — verified via
-/// `/tmp/svn-item3-fixture/typed_mismatch.ts`). This entry maps it
-/// back to the user's `on:event={h}` directive position so it
-/// surfaces at the user-visible site.
-///
-/// Relies on the per-inst ordering invariant: `emit_on_event_calls`
-/// iterates `inst.on_events` in order; the Nth `$on(...)` call in
-/// the overlay for a given inst's hex corresponds to
-/// `inst.on_events[N]`. A per-inst cursor tracks N.
-fn collect_on_event_token_map(
-    out: &str,
-    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
-) -> Vec<TokenMapEntry> {
-    const PREFIX: &str = "__svn_inst_";
-    let mut entries: Vec<TokenMapEntry> = Vec::new();
-    let mut inst_cursor: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
-    let mut cursor = 0usize;
-    while let Some(rel) = out[cursor..].find(PREFIX) {
-        let prefix_start = cursor + rel;
-        let after_prefix = prefix_start + PREFIX.len();
-        // Read hex suffix.
-        let hex_len = out[after_prefix..]
-            .bytes()
-            .take_while(|b| b.is_ascii_hexdigit())
-            .count();
-        let hex_end = after_prefix + hex_len;
-        if hex_len == 0 {
-            cursor = hex_end;
-            continue;
-        }
-        let hex = &out[after_prefix..hex_end];
-        let Ok(node_start) = u32::from_str_radix(hex, 16) else {
-            cursor = hex_end;
-            continue;
-        };
-        // The only occurrence shape that carries a handler expression
-        // is `.$on("<name>", (<expr>))`. Skip other `__svn_inst_<hex>`
-        // sites (the hoist declaration `const __svn_inst_<hex> = ...`
-        // and the bind:this assignment `target = __svn_inst_<hex>;`).
-        if !out[hex_end..].starts_with(".$on(\"") {
-            cursor = hex_end;
-            continue;
-        }
-        let Some(inst) = insts.get(&node_start) else {
-            cursor = hex_end;
-            continue;
-        };
-        // Resolve N for this inst, bump cursor.
-        let idx = *inst_cursor.entry(node_start).or_insert(0);
-        inst_cursor.insert(node_start, idx + 1);
-        let Some(ev) = inst.on_events.get(idx) else {
-            cursor = hex_end;
-            continue;
-        };
-        // Emit shape: `.$on("<name>", (<expr>));`
-        //              ^ hex_end         ^ handler_overlay_start
-        // After `.$on("`, find the closing `"` to skip the name, then
-        // consume `, (` to land on the handler expression's first
-        // byte. Handler length in the overlay == length in source
-        // (emit spliced it verbatim).
-        let name_start = hex_end + PREFIX_ON_PREFIX_LEN;
-        let Some(quote_rel) = out[name_start..].find('"') else {
-            cursor = hex_end;
-            continue;
-        };
-        let comma_paren_start = name_start + quote_rel;
-        if !out[comma_paren_start..].starts_with("\", (") {
-            cursor = hex_end;
-            continue;
-        }
-        let handler_overlay_start = comma_paren_start + 4; // past `", (`
-        let handler_byte_len = ev.handler_range.end.saturating_sub(ev.handler_range.start);
-        let handler_overlay_end = handler_overlay_start + handler_byte_len as usize;
-        entries.push(TokenMapEntry {
-            overlay_byte_start: handler_overlay_start as u32,
-            overlay_byte_end: handler_overlay_end as u32,
-            source_byte_start: ev.handler_range.start,
-            source_byte_end: ev.handler_range.end,
-        });
-        cursor = handler_overlay_end;
-    }
-    entries
-}
-
-/// Byte length of `.$on("` — the prefix we skip past to land on the
-/// event-name string inside the call.
-const PREFIX_ON_PREFIX_LEN: usize = 6;
 
 /// v0.3 Item 7: post-walk scan pairing each `__svn_bind_this_check<
 /// TAG>(EXPR);` overlay occurrence with `summary.bind_this_checks`
@@ -3613,7 +3515,14 @@ fn emit_on_event_calls(
     for ev in &inst.on_events {
         let expr = &source[ev.handler_range.start as usize..ev.handler_range.end as usize];
         let name = &ev.event_name;
-        let _ = writeln!(buf, "{inner}{inst_local}.$on(\"{name}\", ({expr}));");
+        // Splice the handler expression via append_with_source so the
+        // TokenMapEntry (handler-overlay-span → handler_range) lands at
+        // emit time — replaces the former post-walk
+        // `collect_on_event_token_map` scanner that paired Nth
+        // `__svn_inst_<hex>.$on(...)` occurrences with inst.on_events[N].
+        let _ = write!(buf, "{inner}{inst_local}.$on(\"{name}\", (");
+        buf.append_with_source(expr, ev.handler_range);
+        buf.push_str("));\n");
     }
 }
 

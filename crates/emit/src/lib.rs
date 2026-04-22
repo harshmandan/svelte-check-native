@@ -598,20 +598,29 @@ fn emit_document_with_render_name(
 
     if let Some(s) = &split {
         if let Some(instance) = &doc.instance_script {
-            let overlay_line = current_line(buf.as_str());
-            let source_line = source_line_at(doc.source, instance.content_range.start);
-            let line_count = count_lines(&s.body);
-            buf.push_str(&s.body);
-            if !s.body.ends_with('\n') {
-                buf.push_str("\n");
-            }
-            if line_count > 0 {
-                buf.push_line_map(LineMapEntry {
-                    overlay_start_line: overlay_line,
-                    overlay_end_line: overlay_line + line_count,
-                    source_start_line: source_line,
-                });
-            }
+            // Resync the buffer's internal line counter — `emit_svelte4_ambients`
+            // above uses `buf.raw_string_mut()` and pushes content without
+            // updating `overlay_line`. `append_verbatim` relies on that
+            // counter for LineMapEntry.overlay_start_line, so refresh it
+            // before calling. Once those helpers take EmitBuffer directly
+            // (later phases), this resync can go.
+            buf.resync_current_line();
+            // Same padding trick as the module-script site: pad a missing
+            // trailing `\n` so `append_verbatim`'s LineMapEntry covers
+            // the same overlay span `count_lines(&s.body)` accounted for.
+            // `s.body` is the script-split output (imports removed), not
+            // a slice of `doc.source`; the mapping from overlay → source
+            // lines is an approximation starting at the original script's
+            // `content_range.start` — same approximation the old manual
+            // push was making.
+            let padded;
+            let text: &str = if s.body.ends_with('\n') {
+                &s.body
+            } else {
+                padded = format!("{}\n", s.body);
+                &padded
+            };
+            buf.append_verbatim(text, doc.source, instance.content_range);
         }
     }
 

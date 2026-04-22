@@ -75,16 +75,18 @@ pub fn run(
     // TS 7.0 parallelism knobs, exposed via env vars while we
     // validate impact. Eventually become first-class CLI flags on
     // `svelte-check-native`. See `notes/ts7-tracking.md`.
+    //
+    // `SVN_TSGO_BUILDERS` is intentionally NOT plumbed here.
+    // `--builders` is a `tsgo --build` (project-references) flag;
+    // our single-project invocation mode (`--project <overlay>`)
+    // treats it as TS5093 and exits without diagnostics. Users
+    // who set the env var would silently get 0-error runs across
+    // their whole workspace. If we ever switch to `--build` mode
+    // the flag comes back here, not before.
     if let Ok(n) = std::env::var("SVN_TSGO_CHECKERS")
         && !n.is_empty()
     {
         args.push("--checkers".into());
-        args.push(n.into());
-    }
-    if let Ok(n) = std::env::var("SVN_TSGO_BUILDERS")
-        && !n.is_empty()
-    {
-        args.push("--builders".into());
         args.push(n.into());
     }
     if std::env::var("SVN_TSGO_SINGLE_THREADED").is_ok_and(|v| !v.is_empty()) {

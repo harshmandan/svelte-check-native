@@ -87,6 +87,11 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 
+[profile.profiling]
+inherits = "release"
+debug = "full"
+strip = "none"
+
 [profile.dev]
 # keep default
 

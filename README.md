@@ -10,7 +10,7 @@
 </div>
 
 Blazing fast CLI type-checker for **Svelte** projects.
-Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check) — same flags, same output formats, same exit codes. Powered by Rust + [tsgo](https://github.com/microsoft/typescript-go). Made for:
+Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check) — compatible flags, byte-identical output, same exit codes. Powered by Rust + [tsgo](https://github.com/microsoft/typescript-go). Made for:
 
 - AI agents that need tight feedback loops
 - Fast CI/CD pipelines
@@ -31,11 +31,14 @@ Measured on a SvelteKit + TypeScript monorepo with
 
 `svelte-check-native --tsconfig tsconfig.json --diagnostic-sources 'js,svelte'`
 
-| Tool                    |      Cold |      Warm |     Dirty |   Speedup | Errors | Warnings | Files w/ issues |
-| :---------------------- | --------: | --------: | --------: | --------: | -----: | -------: | --------------: |
-| `svelte-check-native`   | **6.0 s** | **2.6 s** | **2.6 s** | **15.8×** |      1 |       44 |              16 |
-| `svelte-check` 4.4.6    |    39.9 s |    41.0 s |    41.0 s |      1.0× |      1 |       44 |              16 |
-| `svelte-check-rs` 0.9.7 |    15.0 s |     5.5 s |     4.4 s |      6.9× |    732 |       44 |             261 |
+```
+  tool                  cold     warm     dirty   speedup   errors/warnings/problems
+──────────────────────────────────────────────────────────────────────────────────────
+svelte-check-native      4.2s     1.0s     0.9s      41x           0/49/17
+svelte-check            40.0s    41.0s    41.6s     1.0x           0/49/17
+svelte-check --tsgo     14.3s     14.1s   14.1s     2.9x           1/49/18
+svelte-check-rs         12.2s     5.5      4.4s     7.5x         732/44/261
+```
 
 Diagnostic counts match `svelte-check` with same flags.
 
@@ -68,48 +71,47 @@ Same flags as `svelte-check`. See `npx svelte-check-native --help`.
 
 ## How it works
 
-```mermaid
-flowchart LR
-  A[.svelte file] --> B[parse + analyze]
-  A --> C[svelte/compiler bridge]
-  B --> D[emit .svelte.ts]
-  D --> E[tsgo type-check]
-  C --> F[merge + map back to source]
-  E --> F
-  F --> G[output]
-```
+Single Rust binary. Each `.svelte` file flows through a handful of
+crates in one process:
 
-1. Parse each `.svelte` into script + template sections
-2. Emit a `.svelte.ts` overlay file per source
-3. Run `tsgo` once against an overlay tsconfig
-4. Run `svelte/compiler` (via N parallel `bun`/`node` worker
-   subprocesses) for compiler warnings
-5. Map every diagnostic back to its `.svelte` line:column
+| Crate             | What it does                                                                                    |
+| ----------------- | ----------------------------------------------------------------------------------------------- |
+| `parser`          | Parses `.svelte` source into a Svelte-5 AST (script + template).                                |
+| `analyze`         | Builds a `SemanticModel` — runes, prop shapes, bindings, scope — used by emit and lint.         |
+| `emit`            | Generates the `.svelte.ts` overlay tsgo will type-check. Imports rewritten so tsgo lands on it. |
+| `svn-lint`        | Native Rust port of `svelte/compiler`'s warning pass. Covers all known codes; no subprocess.    |
+| `svelte-compiler` | Fallback bridge to the user's `svelte/compiler` over a persistent `bun`/`node` worker pool.     |
+| `typecheck`       | Owns the tsgo overlay tsconfig + the `tsbuildinfo` cache; invokes tsgo; maps diagnostics back.  |
+| `core`            | Shared types (spans, diagnostics, position maps) + the canonical `TsConfig` struct.             |
+| `cli`             | Entrypoint. Flag parsing, file discovery, output formatting, exit codes.                        |
 
 ## Flags
 
+Every flag not listed below behaves the same as `svelte-check`.
+
+### New Flags
+
 ```
---workspace <path>            Project root (default: cwd)
---tsconfig <path>             Path to tsconfig.json (auto-discovered)
---output <fmt>                human | human-verbose | machine | machine-verbose
---threshold <level>           warning | error
---fail-on-warnings            Exit 1 when only warnings exist
---diagnostic-sources <list>   Subset of: js, svelte
---compiler-warnings <list>    code:severity[,code:severity...]
---ignore <globs>              Comma-separated git-style globs
---color / --no-color          Force ANSI on/off
---timings                     Print phase-by-phase wall-clock breakdown
+--timings                     Phase-by-phase wall-clock breakdown
 --debug-paths                 Print resolved binaries, exit
 --tsgo-version                Print tsgo version, exit
 --tsgo-diagnostics            Print tsgo's perf/memory stats after the run
 --emit-ts                     Print generated TypeScript per file, exit
 ```
 
-Run `svelte-check-native --help` for the canonical list.
+### Not supported
+
+- `--watch` / `--preserveWatchOutput` — use [`watchexec`](https://github.com/watchexec/watchexec)
+  or your editor's file watcher externally.
+- `--no-tsconfig` — errors out. A tsconfig is required.
+- `--incremental` — always on. tsgo's `tsbuildinfo` handles it.
+- `--tsgo` — always on. Classic `tsc` is not wired up.
+- `--diagnostic-sources css` — not supported.
+
+Run `svelte-check-native --help` for the full list.
 
 Output defaults to `machine` when run from a coding-agent CLI:
-`CLAUDECODE=1` (Claude Code), `GEMINI_CLI=1` (Gemini CLI), or
-`CODEX_CI=1` (OpenAI Codex CLI).
+`CLAUDECODE=1` (Claude Code), `GEMINI_CLI=1` (Gemini CLI), or `CODEX_CI=1` (OpenAI Codex CLI).
 
 ## Environment variables
 

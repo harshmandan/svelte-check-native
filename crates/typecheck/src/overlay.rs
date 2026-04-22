@@ -73,7 +73,7 @@ pub fn build(
     // projects REFERENCED BY THE REDIRECT TARGET into the overlay so
     // transitive imports across projects reach tsgo as part of the
     // same program. Flattening the solution root's full references[]
-    // would over-include — for a app-style repo where
+    // would over-include — for a monorepo-style repo where
     // `tsconfig.json` coordinates console + functions + packages,
     // type-checking console doesn't require functions code, yet
     // including functions' tsconfig pulls its strict-mode errors
@@ -367,7 +367,7 @@ pub fn build(
         first_non_empty_patterns(&chain, |f| f.exclude.as_deref(), false);
     // Each sibling reference's own `exclude` patterns, anchored at
     // that reference's project_dir. Critical for preserving user
-    // intent — sub-app's tsconfig.playwright.json excludes binary
+    // intent — app's tsconfig.playwright.json excludes binary
     // `.ts` files under `./playwright/fixtures/videos/**/*`; without
     // propagating that, our widened include would pull them in and
     // fire tsgo "file appears to be binary" errors.

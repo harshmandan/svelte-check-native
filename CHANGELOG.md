@@ -7,12 +7,12 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 ## [0.3.9]
 
 Patch release: three parity fixes driven by a real-world user
-report on a SvelteKit sub-app monorepo. Closes the
+report on a SvelteKit monorepo. Closes the
 `use:enhance={({form,data,submit}) => …}` callback-typing miss
 (TS2339 ×3 per site upstream, silent on ours), the
 `{#if form?.success}{form.error}` narrowing miss, and — same
 root cause — the paraglide `m['login.pin']` literal-key miss.
-Parity on `control-svelte-5/sub-app` goes from 2 errors to 8,
+Parity on `control-svelte-5` goes from 2 errors to 8,
 matching upstream `svelte-check --tsgo` exactly.
 
 Full investigation trail in [`docs/parity-findings-2026-04-21.md`](https://github.com/harshmandan/svelte-check-native/blob/main/docs/parity-findings-2026-04-21.md).
@@ -33,7 +33,7 @@ shape with our `__svn_` namespace:
 
 ```ts
 const __svn_action_0 = __svn_ensure_action(
-    enhance(__svn_map_element_tag('form'), (callback))
+  enhance(__svn_map_element_tag("form"), callback)
 );
 ```
 
@@ -71,9 +71,9 @@ enclosing scope, prefixed with a sentinel comment the post-walk
 scanner uses as a token-map anchor:
 
 ```ts
-if ((form?.success)) {
-    void [form?.success];
-    /*svn_I*/(form.error);
+if (form?.success) {
+  void [form?.success];
+  /*svn_I*/ form.error;
 }
 ```
 
@@ -207,17 +207,17 @@ solution-style root tsconfig (pure references, no `include`) to a
 sub-project tsconfig that actually declares path aliases, so `$lib`
 and friends resolve. Two holes in the classifier:
 
-  1. References pointing at a variant filename like
-     `tsconfig.app.json` were resolved to the directory and then
-     rejoined with `tsconfig.json` — discarding the explicit filename
-     the user wrote. Depending on the layout, the redirect either
-     landed on a different file or bailed out entirely.
+1. References pointing at a variant filename like
+   `tsconfig.app.json` were resolved to the directory and then
+   rejoined with `tsconfig.json` — discarding the explicit filename
+   the user wrote. Depending on the layout, the redirect either
+   landed on a different file or bailed out entirely.
 
-  2. The `paths`-presence check parsed the leaf config alone and
-     missed the common monorepo pattern where `paths` is declared
-     once in a shared `tsconfig.base.json` and inherited via
-     `extends`. We'd see an empty `paths` on the leaf, skip the
-     redirect, and leave the user stuck on the solution root.
+2. The `paths`-presence check parsed the leaf config alone and
+   missed the common monorepo pattern where `paths` is declared
+   once in a shared `tsconfig.base.json` and inherited via
+   `extends`. We'd see an empty `paths` on the leaf, skip the
+   redirect, and leave the user stuck on the solution root.
 
 Honor the reference's filename when it names a file. Walk the full
 extends chain via `load_chain` for the paths-presence check. Both
@@ -318,12 +318,12 @@ Commit `b912b77`.
 
 ### Scoreboard delta on bench/palacms
 
-| metric | pre-release | post-`a654def` | post-`b912b77` |
-|---|---:|---:|---:|
-| ours errors | 321 | 340 | **384** |
-| overlap with upstream | 156 | 159 | **219** |
-| upstream-only (our misses) | 176 | 173 | **113** |
-| files_with_problems | 64 | 73 | **115** (upstream: 116) |
+| metric                     | pre-release | post-`a654def` |          post-`b912b77` |
+| -------------------------- | ----------: | -------------: | ----------------------: |
+| ours errors                |         321 |            340 |                 **384** |
+| overlap with upstream      |         156 |            159 |                 **219** |
+| upstream-only (our misses) |         176 |            173 |                 **113** |
+| files_with_problems        |          64 |             73 | **115** (upstream: 116) |
 
 Net: **63 upstream catches newly matched this release** (from 176
 misses down to 113, or +60 on the overlap axis). No regressions on
@@ -347,7 +347,8 @@ control-svelte-5 1/1/0/1, local-music-pwa 88/0/0/0, cnblocks
 ## [0.3.6]
 
 Patch release: sibling-visibility fix for solution-style monorepos
-+ pnpm isolated-install tsgo discovery + docs-URL routing accuracy.
+
+- pnpm isolated-install tsgo discovery + docs-URL routing accuracy.
 
 ### Fixed — sibling-visibility on solution-style tsconfig redirects
 
@@ -376,11 +377,11 @@ The overlay builder now consults a new helper,
 The overlay merges these into its own include/exclude/paths, with
 the redirect target's declarations winning per-key for paths
 conflicts (inner-wins). The solution root's own `references[]` is
-*not* walked — following coordinating-only refs (e.g. `functions`
+_not_ walked — following coordinating-only refs (e.g. `functions`
 alongside `console`) would pull in code the user didn't ask us to
 type-check.
 
-Concrete result on a app-style monorepo: solution-root redirect
+Concrete result on a big monorepo: solution-root redirect
 now completes without the init.ts "not listed" error. For
 `bench/control-svelte-5` specifically: 2 errors → 1 error (the
 remaining one is a legit tsgo "Excessive stack depth" on a heavy
@@ -425,11 +426,11 @@ Commit `a2b0fdf`.
 
 ### Scoreboard
 
-| bench | before (0.3.5) | after (0.3.6) | vs upstream --tsgo |
-|---|---|---|---|
-| control-svelte-4 | 1124/0/2/2 | 1124/0/2/2 | exact parity |
-| control-svelte-5 (redirected) | 2/2/0/2 | **1/1/0/1** | **exact parity** |
-| cnblocks | 832/8/127/51 | 832/8/127/51 | +8 errors vs tsgo's 0, but upstream's tsgo run fatally bails on a missing `@types/node` (our overlay filters unresolvable types entries); upstream returns 0 from silent failure. Our 8 errors are real user-code bugs. We are more correct. |
+| bench                         | before (0.3.5) | after (0.3.6) | vs upstream --tsgo                                                                                                                                                                                                                           |
+| ----------------------------- | -------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| control-svelte-4              | 1124/0/2/2     | 1124/0/2/2    | exact parity                                                                                                                                                                                                                                 |
+| control-svelte-5 (redirected) | 2/2/0/2        | **1/1/0/1**   | **exact parity**                                                                                                                                                                                                                             |
+| cnblocks                      | 832/8/127/51   | 832/8/127/51  | +8 errors vs tsgo's 0, but upstream's tsgo run fatally bails on a missing `@types/node` (our overlay filters unresolvable types entries); upstream returns 0 from silent failure. Our 8 errors are real user-code bugs. We are more correct. |
 
 ## [0.3.5]
 
@@ -450,7 +451,7 @@ Scoreboard unchanged from 0.3.0 (4/6 benches at exact `--tsgo` parity).
   past the stubs before aligning with the first real offset. Root
   cause fix, no snapshot changes.
 - **Type-only imports consumed only in template casts (`{fn(x as
-  AppVideo)}`) fired false-positive TS6133.** `AppVideo` is
+AppVideo)}`) fired false-positive TS6133.** `AppVideo` is
   type-only, so `collect_top_level_bindings` correctly skipped it
   (voiding a type name fires TS2693), which meant template-ref
   intersection never matched it, which meant the void-refs block
@@ -509,14 +510,14 @@ matching pre-session.
 
 **4 of 6 real-world benches at exact parity with `svelte-check --tsgo`.**
 
-| bench | ours (F/E/W/P) | svelte-check --tsgo | svelte-check default | Δ E |
-|---|---|---|---|---|
-| control-svelte-4 (1000-file monorepo) | 1124/**0**/2/2 | 1125/1/2/3 | **6511/0/2/2** | **0** ✓ |
-| control-svelte-5 | 1359/**2**/44/17 | 1359/**2**/44/17 | 7290/1/44/16 | **0** ✓ |
-| local-music-pwa | 88/**0**/0/0 | 88/**0**/0/0 | 1410/0/0/0 | **0** ✓ |
-| slowreader/web | 113/**0**/0/0 | 113/**0**/0/0 | 724/0/0/0 | **0** ✓ |
-| palacms | 211/321/67/64 | 211/419/67/121 | 5501/331/67/116 | −10 vs default |
-| cnblocks | 832/8/127/51 | 750/0/127/48 | 5751/6/127/49 | +8 (ours more correct) |
+| bench                                 | ours (F/E/W/P)   | svelte-check --tsgo | svelte-check default | Δ E                    |
+| ------------------------------------- | ---------------- | ------------------- | -------------------- | ---------------------- |
+| control-svelte-4 (1000-file monorepo) | 1124/**0**/2/2   | 1125/1/2/3          | **6511/0/2/2**       | **0** ✓                |
+| control-svelte-5                      | 1359/**2**/44/17 | 1359/**2**/44/17    | 7290/1/44/16         | **0** ✓                |
+| local-music-pwa                       | 88/**0**/0/0     | 88/**0**/0/0        | 1410/0/0/0           | **0** ✓                |
+| slowreader/web                        | 113/**0**/0/0    | 113/**0**/0/0       | 724/0/0/0            | **0** ✓                |
+| palacms                               | 211/321/67/64    | 211/419/67/121      | 5501/331/67/116      | −10 vs default         |
+| cnblocks                              | 832/8/127/51     | 750/0/127/48        | 5751/6/127/49        | +8 (ours more correct) |
 
 ### Added — component-prop + event typing
 
@@ -548,7 +549,7 @@ matching pre-session.
   - Bidirectional fixed-type: `bind:checked` (boolean),
     `bind:files` (FileList | null).
   - Bidirectional attribute-aware: `bind:value` on `<input
-    type="number">` / `<input type="range">` → number; on
+type="number">` / `<input type="range">` → number; on
     `<input>` default / `<input type="text">` / `<textarea>` →
     string.
 - **`bind:this` on DOM elements.** Direct-assignment emit
@@ -582,14 +583,14 @@ matching pre-session.
     component uses `$$props` / `$$restProps` (whole-document
     scan covers both script AND template `{...$$props}` spreads).
   - Both together when both apply.
-  Previous version intersected `{slot?, class?, style?} &
-  {[index: string]: any}` unconditionally, contaminating tsgo's
-  assignability check (missing-required-prop fired TS2322 top-
-  level with TS2741 as sub-message instead of TS2741 directly).
-  Now matches upstream's minimal widen pattern; TS2741 surfaces
-  with the precise error code (Svelte 5 runes) or as upstream's
-  TS2322+TS2741 chain (Svelte 4 widen cases — same underlying
-  info, same visual position).
+    Previous version intersected `{slot?, class?, style?} &
+{[index: string]: any}` unconditionally, contaminating tsgo's
+    assignability check (missing-required-prop fired TS2322 top-
+    level with TS2741 as sub-message instead of TS2741 directly).
+    Now matches upstream's minimal widen pattern; TS2741 surfaces
+    with the precise error code (Svelte 5 runes) or as upstream's
+    TS2322+TS2741 chain (Svelte 4 widen cases — same underlying
+    info, same visual position).
 
 ### Added — diagnostic method + fixture infrastructure
 
@@ -613,12 +614,12 @@ matching pre-session.
   comparison of FILES, ERRORS, WARNINGS, FILES_WITH_PROBLEMS
   counts. Exits non-zero on drift from the best-available
   upstream baseline. Solution-style tsconfig redirects detected
-  + propagated. `findUpstreamSvelteCheck` walks
-  `node_modules/.bin/`, `node_modules/.pnpm/`,
-  `node_modules/.bun/svelte-check@X/`, and
-  `node_modules/.pnpm/svelte-check@X/` layouts; prefers 4.4+
-  (first `--tsgo`-capable release) when multiple candidates
-  exist.
+  - propagated. `findUpstreamSvelteCheck` walks
+    `node_modules/.bin/`, `node_modules/.pnpm/`,
+    `node_modules/.bun/svelte-check@X/`, and
+    `node_modules/.pnpm/svelte-check@X/` layouts; prefers 4.4+
+    (first `--tsgo`-capable release) when multiple candidates
+    exist.
 
 ### Fixed — pre-existing test failures
 
@@ -640,7 +641,7 @@ matching pre-session.
   preserves each hoist span's leading same-line whitespace, so
   overlay imports keep the source indentation. Fixes column
   drift on TS2307 module-resolution errors: `import nope from
-  '../../outside'` reports col 21 (matching upstream's expected)
+'../../outside'` reports col 21 (matching upstream's expected)
   instead of col 17 (overlay with stripped indent).
 - **Hoisted-type stubs use richer type annotation.**
   `script_split`'s `declare const <body-local>` stub emitted for
@@ -653,14 +654,14 @@ matching pre-session.
   failures.
 - **Doctest fence.** Illustrative TypeScript code in
   `emit_component_call`'s doc comment now lives in a
-  ```` ```text ```` fenced block; rustdoc no longer tries to
+  ` ```text ` fenced block; rustdoc no longer tries to
   compile it as Rust.
 
 ### Fixed — corner cases
 
 - **`bind:NAME` shorthand on components.** Bare-shorthand form
   (`<Child bind:items />` desugaring to `<Child
-  bind:items={items}>`) now emits as `PropShape::Shorthand`
+bind:items={items}>`) now emits as `PropShape::Shorthand`
   rather than being silently dropped.
 - **`bind:X={getter, setter}` consumer-side.** Svelte 5's
   two-function bind form is now modeled; consumers of children
@@ -696,7 +697,7 @@ upstream source with file:line citations.
   matches.
 - **`bind:value` on `<select>`.** Accepts any type. Upstream's
   `svelte-jsx.d.ts:1342` declares `HTMLSelectAttributes['value']?:
-  any`. No `<option>` value-union inference anywhere upstream.
+any`. No `<option>` value-union inference anywhere upstream.
 - **`bind:group` on `<input type="checkbox|radio">`.** Silent.
   Upstream's `Binding.ts:99-108` emits
   `EXPR = __sveltets_2_any(null);` (widen-to-any). Neither
@@ -730,7 +731,7 @@ upstream source with file:line citations.
 ### Fixed — monorepo parity
 
 - **Monorepo-root parity closed.** Running `svelte-check-native
-  --workspace .` at the root of a TS project-references solution
+--workspace .` at the root of a TS project-references solution
   (`tsconfig.json` with `"files": []` + `"references": [...]` — the
   common SvelteKit-monorepo root shape) no longer misreports
   thousands of `Cannot find module '$lib/...'` errors. The CLI
@@ -881,7 +882,7 @@ warnings.
   upstream `svelte-check` with CSS disabled on both
   (`--diagnostic-sources 'js,svelte'` upstream, `'ts,svelte'` ours —
   semantically identical) → `0 errors / 44 warnings / 15 files with
-  issues` from both tools.
+issues` from both tools.
 - **`--tsgo-version`** — print resolved tsgo binary path + its
   `--version` output, for verifying `@typescript/native-preview` is
   at the expected version.
@@ -903,12 +904,12 @@ warnings.
 On the same ~1200-file workload (M-series 8-core, warm cache, median of
 3 runs):
 
-| Tool                      | Warm     |
-| ------------------------- | -------- |
-| `svelte-check-native`     | **~3 s** |
-| `svelte-check-rs`         | ~11 s    |
-| `svelte-check --tsgo`     | ~13 s    |
-| `svelte-check` (default)  | ~40 s    |
+| Tool                     | Warm     |
+| ------------------------ | -------- |
+| `svelte-check-native`    | **~3 s** |
+| `svelte-check-rs`        | ~11 s    |
+| `svelte-check --tsgo`    | ~13 s    |
+| `svelte-check` (default) | ~40 s    |
 
 Cold (no cache, fresh `bun` import): ~7–8 s.
 
@@ -921,7 +922,7 @@ and tsgo's incremental `tsbuildinfo` reused across runs.
 
 - **npm package** with platform-specific binaries: `svelte-check-native`
   (the wrapper) plus `svelte-check-native-{darwin-arm64, darwin-x64,
-  linux-arm64, linux-x64, win32-x64}` (the binaries). npm picks the
+linux-arm64, linux-x64, win32-x64}` (the binaries). npm picks the
   matching platform package automatically via `optionalDependencies` +
   `os` / `cpu` fields.
 - **Cross-built locally** via `cargo-zigbuild` (Zig as the C linker)

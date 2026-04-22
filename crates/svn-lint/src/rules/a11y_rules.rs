@@ -1339,19 +1339,16 @@ fn validate_aria_value(
                 );
             }
         }
-        AriaType::Boolean => {
+        AriaType::Boolean | AriaType::BooleanUndefined => {
+            // Upstream's `validate_aria_attribute_value` has one
+            // `'boolean'` branch that strict-checks for "true" /
+            // "false" regardless of whether the attribute's schema
+            // allows an undefined state. Bare attributes (shorthand
+            // `aria-hidden` without `=value`) resolve to `""` and
+            // fire here as expected. Our earlier split into
+            // Boolean / BooleanUndefined buckets was too lenient on
+            // the latter.
             if val != "true" && val != "false" {
-                let msg = messages::a11y_incorrect_aria_attribute_type_boolean(name);
-                ctx.emit(
-                    Code::a11y_incorrect_aria_attribute_type_boolean,
-                    msg,
-                    p.range,
-                );
-            }
-        }
-        AriaType::BooleanUndefined => {
-            // Accept "", "true", "false".
-            if !(val.is_empty() || val == "true" || val == "false") {
                 let msg = messages::a11y_incorrect_aria_attribute_type_boolean(name);
                 ctx.emit(
                     Code::a11y_incorrect_aria_attribute_type_boolean,

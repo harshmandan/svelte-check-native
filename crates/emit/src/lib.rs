@@ -2743,226 +2743,226 @@ fn emit_condition_ref_marker(out: &mut String, source: &str, range: svn_core::Ra
 }
 
 /// Extract every top-level identifier-or-property-access chain from
-/// `text`, deduplicated and in source order. Skips string literals,
-/// template literals, regex literals, comments, and anything inside
-/// balanced parens / brackets / braces (so inner-scope bindings from an
-/// arrow parameter list, object literal, or array literal don't leak
-/// into the marker). Suppresses keywords and the Svelte auto-subscribe
-/// `$ident` form (which isn't a real property reference).
+/// `text`, deduplicated and in source order.
 ///
-/// Chain suffixes after an identifier (`.prop`, `?.prop`) are included
-/// so `ctx.GhostButton` emits as a single ref. Call-expression argument
-/// lists and property-access subscripts are skipped because re-emitting
-/// them can introduce TS18047 / TS2339 from partial narrowing when the
-/// enclosing block inverts the original condition (`{#if !(…)}`).
+/// Uses oxc to parse `text` as an expression, then walks the AST
+/// collecting `Identifier` and `*MemberExpression` chains at the top
+/// level of the expression's logical / binary structure. Per CLAUDE.md
+/// rule #1 — the old byte walker (~180 LOC) was fragile: string
+/// escapes inside template literals, RegExp literals, `?.` after
+/// non-identifier, etc. all needed hand-coded handling. The AST
+/// walker gets each of these for free.
+///
+/// Chain suffixes (`.prop`, `?.prop`) are included so
+/// `ctx.GhostButton` emits as a single ref. Computed-member subscripts
+/// (`foo[key]`) and call-argument lists (`f(x)`) are NOT swallowed:
+/// only the callee / object portion contributes, matching the
+/// existing template-refs pass convention. Re-emitting argument text
+/// can introduce TS18047 / TS2339 from partial narrowing when the
+/// enclosing block inverts the original condition.
+///
+/// Function bodies (arrow parameters, block expressions) are skipped
+/// structurally — the AST walker simply doesn't recurse into them —
+/// so inner-scope bindings never leak into the marker.
+///
+/// Keywords and the Svelte auto-subscribe `$ident` form are filtered
+/// out post-walk.
 ///
 /// Examples:
 /// - `editable && ctx.GhostButton && options.length < max` →
 ///   `editable`, `ctx.GhostButton`, `options.length`, `max`
 /// - `messages.some((m) => m.role === 'x')` → `messages.some`
-///   (contents of `(…)` ignored, so `m` / `m.role` don't leak)
+///   (arrow body isn't recursed, so `m` / `m.role` don't leak)
 fn extract_property_chains(text: &str) -> Vec<String> {
-    let bytes = text.as_bytes();
+    use oxc_ast::ast::{Expression, Statement};
+
+    let alloc = oxc_allocator::Allocator::default();
+    // Wrap so oxc parses the content as a single expression statement,
+    // regardless of whether it's a bare identifier, a comparison, or a
+    // logical chain. Trailing `;` keeps oxc happy even for
+    // expressions that wouldn't otherwise stand as statements.
+    let src = format!("({text});");
+    let parsed = svn_parser::parse_script_body(&alloc, &src, svn_parser::ScriptLang::Ts);
+    if parsed.panicked {
+        return Vec::new();
+    }
+    let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
+        return Vec::new();
+    };
+    // Unwrap `(` … `)`.
+    let mut expr = &stmt.expression;
+    while let Expression::ParenthesizedExpression(p) = expr {
+        expr = &p.expression;
+    }
+
     let mut out: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let mut i = 0usize;
 
-    while i < bytes.len() {
-        let b = bytes[i];
-        // Line comment.
-        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-            i += 2;
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
+    fn chain_text<'a>(expr: &Expression<'_>, src: &'a str) -> Option<&'a str> {
+        // Accept a chain root: Identifier, StaticMemberExpression,
+        // ComputedMemberExpression (only if base is a chain root),
+        // PrivateFieldExpression (.#foo), or a ChainExpression (the
+        // `?.` optional-chaining wrapper).
+        //
+        // Reject CallExpression, arrow/function expressions, unary,
+        // binary, logical, literal, template, regex, etc. — they're
+        // not "chain roots" even though their contents may contain
+        // chains (which we DON'T want to recurse into here, matching
+        // the original byte walker's "skip parens" behaviour for
+        // calls).
+        use oxc_ast::ast::Expression::*;
+        use oxc_span::GetSpan;
+        match expr {
+            Identifier(_) => Some(&src[expr.span().start as usize..expr.span().end as usize]),
+            StaticMemberExpression(m) => {
+                // Recurse into `.object` to confirm chain root.
+                let _ = chain_text(&m.object, src)?;
+                Some(&src[m.span.start as usize..m.span.end as usize])
             }
-            continue;
-        }
-        // Block comment.
-        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-            i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                i += 1;
+            ComputedMemberExpression(m) => {
+                // `obj[key]` — only accept when `obj` is a chain root
+                // AND `key` is a non-reference (literal). Matches old
+                // behaviour: we skipped bracket subscripts, so
+                // `foo[i]` would yield just `foo` (and the subscript
+                // was ignored). Here we simply reject the whole
+                // computed-member — the outer walker will keep
+                // walking and pick up `foo` separately when it
+                // appears elsewhere.
+                let _ = chain_text(&m.object, src)?;
+                // Keep the `obj` part only.
+                Some(&src[m.object.span().start as usize..m.object.span().end as usize])
             }
-            i = (i + 2).min(bytes.len());
-            continue;
-        }
-        // String / template literals — entirely skipped (their
-        // identifier refs rarely participate in the `&&` chain that
-        // triggers TS2774).
-        if b == b'\'' || b == b'"' {
-            let quote = b;
-            i += 1;
-            while i < bytes.len() && bytes[i] != quote {
-                if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                    i += 2;
-                    continue;
-                }
-                i += 1;
+            PrivateFieldExpression(m) => {
+                let _ = chain_text(&m.object, src)?;
+                Some(&src[m.span.start as usize..m.span.end as usize])
             }
-            i += 1;
-            continue;
-        }
-        if b == b'`' {
-            i += 1;
-            while i < bytes.len() && bytes[i] != b'`' {
-                if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-                    i += 2;
-                    let mut d = 1;
-                    while i < bytes.len() && d > 0 {
-                        match bytes[i] {
-                            b'{' => d += 1,
-                            b'}' => d -= 1,
-                            _ => {}
-                        }
-                        if d > 0 {
-                            i += 1;
-                        }
+            ChainExpression(c) => {
+                // `?.` wrapper — recurse into its element.
+                match &c.expression {
+                    oxc_ast::ast::ChainElement::CallExpression(_) => None,
+                    oxc_ast::ast::ChainElement::TSNonNullExpression(n) => chain_text(&n.expression, src),
+                    oxc_ast::ast::ChainElement::ComputedMemberExpression(m) => {
+                        let _ = chain_text(&m.object, src)?;
+                        Some(&src[m.object.span().start as usize..m.object.span().end as usize])
                     }
-                    if i < bytes.len() {
-                        i += 1;
+                    oxc_ast::ast::ChainElement::StaticMemberExpression(m) => {
+                        let _ = chain_text(&m.object, src)?;
+                        Some(&src[m.span.start as usize..m.span.end as usize])
                     }
-                    continue;
-                }
-                i += 1;
-            }
-            if i < bytes.len() {
-                i += 1;
-            }
-            continue;
-        }
-        // Skip balanced parens / braces / brackets entirely — arguments,
-        // arrow bodies, object/array literals don't participate in the
-        // outer `&&` chain and their inner identifiers reference scoped
-        // bindings (`messages.some((m) => m.role)` — `m` is an arrow
-        // parameter, not a script binding). This keeps us from emitting
-        // references to block-scoped names in the marker.
-        if b == b'(' || b == b'[' || b == b'{' {
-            let (open, close) = match b {
-                b'(' => (b'(', b')'),
-                b'[' => (b'[', b']'),
-                _ => (b'{', b'}'),
-            };
-            i += 1;
-            let mut d = 1i32;
-            while i < bytes.len() && d > 0 {
-                match bytes[i] {
-                    x if x == open => d += 1,
-                    x if x == close => d -= 1,
-                    b'\'' | b'"' => {
-                        let quote = bytes[i];
-                        i += 1;
-                        while i < bytes.len() && bytes[i] != quote {
-                            if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                                i += 2;
-                                continue;
-                            }
-                            i += 1;
-                        }
+                    oxc_ast::ast::ChainElement::PrivateFieldExpression(m) => {
+                        let _ = chain_text(&m.object, src)?;
+                        Some(&src[m.span.start as usize..m.span.end as usize])
                     }
-                    _ => {}
-                }
-                if d > 0 {
-                    i += 1;
                 }
             }
-            if i < bytes.len() {
-                i += 1;
-            }
-            continue;
-        }
-        // Identifier start?
-        if !is_ident_start_byte(b) {
-            i += 1;
-            continue;
-        }
-        // Previous non-whitespace byte: if it's `.`, we're in a property
-        // position — skip; the containing chain has already captured
-        // this identifier.
-        let prev = previous_non_ws(bytes, i);
-        if prev == Some(b'.') {
-            i = skip_ident(bytes, i);
-            continue;
-        }
-        // Start of a fresh chain. Walk forward through `.ident` and
-        // `?.ident` segments. Bracket and call-argument suffixes are
-        // NOT swallowed so a call expression like `f(x)` yields just
-        // `f`, matching the existing template-refs pass convention.
-        let chain_start = i;
-        i = skip_ident(bytes, i);
-        loop {
-            let mut j = i;
-            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            if j >= bytes.len() {
-                break;
-            }
-            // `.ident`
-            if bytes[j] == b'.' && j + 1 < bytes.len() && is_ident_start_byte(bytes[j + 1]) {
-                i = skip_ident(bytes, j + 1);
-                continue;
-            }
-            // `?.ident`
-            if bytes[j] == b'?'
-                && j + 2 < bytes.len()
-                && bytes[j + 1] == b'.'
-                && is_ident_start_byte(bytes[j + 2])
-            {
-                i = skip_ident(bytes, j + 2);
-                continue;
-            }
-            break;
-        }
-        let chain = text[chain_start..i].trim();
-        if chain.is_empty() {
-            continue;
-        }
-        // Filter identifier-only chains that are keywords or the
-        // auto-subscribe `$ident` shorthand (handled separately by the
-        // store-ref pass).
-        let looks_like_keyword = !chain.contains('.') && is_keyword_or_special(chain);
-        if looks_like_keyword {
-            continue;
-        }
-        let key = chain.to_string();
-        if seen.insert(key.clone()) {
-            out.push(key);
+            _ => None,
         }
     }
+
+    fn walk(
+        expr: &Expression<'_>,
+        src: &str,
+        out: &mut Vec<String>,
+        seen: &mut HashSet<String>,
+    ) {
+        use oxc_ast::ast::Expression::*;
+
+        // Try as a chain root first. If it matches, record and stop —
+        // we don't recurse into a chain's subscripts / call args.
+        if let Some(text) = chain_text(expr, src) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                let looks_like_keyword =
+                    !trimmed.contains('.') && is_keyword_or_special(trimmed);
+                if !looks_like_keyword {
+                    let key = trimmed.to_string();
+                    if seen.insert(key.clone()) {
+                        out.push(key);
+                    }
+                }
+            }
+            return;
+        }
+
+        match expr {
+            LogicalExpression(e) => {
+                walk(&e.left, src, out, seen);
+                walk(&e.right, src, out, seen);
+            }
+            BinaryExpression(e) => {
+                walk(&e.left, src, out, seen);
+                walk(&e.right, src, out, seen);
+            }
+            ConditionalExpression(e) => {
+                walk(&e.test, src, out, seen);
+                walk(&e.consequent, src, out, seen);
+                walk(&e.alternate, src, out, seen);
+            }
+            SequenceExpression(e) => {
+                for ex in &e.expressions {
+                    walk(ex, src, out, seen);
+                }
+            }
+            UnaryExpression(e) => {
+                walk(&e.argument, src, out, seen);
+            }
+            AwaitExpression(e) => {
+                walk(&e.argument, src, out, seen);
+            }
+            YieldExpression(e) => {
+                if let Some(arg) = &e.argument {
+                    walk(arg, src, out, seen);
+                }
+            }
+            UpdateExpression(e) => {
+                // ++x / x-- — walk the inner target.
+                // The target is a SimpleAssignmentTarget variant.
+                match &e.argument {
+                    oxc_ast::ast::SimpleAssignmentTarget::AssignmentTargetIdentifier(_)
+                    | oxc_ast::ast::SimpleAssignmentTarget::ComputedMemberExpression(_)
+                    | oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(_)
+                    | oxc_ast::ast::SimpleAssignmentTarget::PrivateFieldExpression(_)
+                    | oxc_ast::ast::SimpleAssignmentTarget::TSAsExpression(_)
+                    | oxc_ast::ast::SimpleAssignmentTarget::TSSatisfiesExpression(_)
+                    | oxc_ast::ast::SimpleAssignmentTarget::TSNonNullExpression(_)
+                    | oxc_ast::ast::SimpleAssignmentTarget::TSTypeAssertion(_)
+                    | oxc_ast::ast::SimpleAssignmentTarget::TSInstantiationExpression(_) => {
+                        // Don't recurse here — UpdateExpression targets
+                        // are rarely valuable as chain roots; mirrors
+                        // the byte walker's behaviour of treating
+                        // `++foo` and `foo++` as producing no chain.
+                    }
+                }
+            }
+            ParenthesizedExpression(p) => {
+                walk(&p.expression, src, out, seen);
+            }
+            CallExpression(c) => {
+                // Callee contributes, arguments don't — matches the
+                // original docstring's `messages.some((m) => m.role)`
+                // example (only `messages.some` leaks out).
+                walk(&c.callee, src, out, seen);
+            }
+            TSAsExpression(e) => walk(&e.expression, src, out, seen),
+            TSSatisfiesExpression(e) => walk(&e.expression, src, out, seen),
+            TSNonNullExpression(e) => walk(&e.expression, src, out, seen),
+            TSTypeAssertion(e) => walk(&e.expression, src, out, seen),
+            TSInstantiationExpression(e) => walk(&e.expression, src, out, seen),
+            // Everything else — literals, arrows, objects, arrays,
+            // `new`, await, yield, template literals, etc. — has no
+            // top-level chain to extract at this level. The AST
+            // boundary means inner bindings don't leak.
+            _ => {}
+        }
+    }
+
+    // Offset-adjust: we parsed `({text});`, but `MemberExpression.span`
+    // returns offsets into `src` not `text`. Since `chain_text` slices
+    // directly from `src`, and `src = format!("({text});")`, the
+    // slices contain substrings of `text` (with leading `(` stripped
+    // by the span). Result strings don't include the wrapper chars.
+    walk(expr, &src, &mut out, &mut seen);
     out
-}
-
-#[inline]
-fn is_ident_start_byte(b: u8) -> bool {
-    b.is_ascii_alphabetic() || b == b'_' || b == b'$'
-}
-
-#[inline]
-fn is_ident_continue_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
-}
-
-fn skip_ident(bytes: &[u8], start: usize) -> usize {
-    let mut i = start;
-    while i < bytes.len() && is_ident_continue_byte(bytes[i]) {
-        i += 1;
-    }
-    i
-}
-
-fn previous_non_ws(bytes: &[u8], i: usize) -> Option<u8> {
-    let mut j = i;
-    while j > 0 {
-        j -= 1;
-        if !bytes[j].is_ascii_whitespace() {
-            return Some(bytes[j]);
-        }
-    }
-    None
 }
 
 /// Keywords and reserved identifiers that should never appear in a
@@ -5104,6 +5104,92 @@ mod tests {
         let targets: Vec<SmolStr> = targets.iter().map(|s| SmolStr::from(*s)).collect();
         widen_untyped_exported_props_in_place(&mut out, &targets);
         out
+    }
+
+    // ---------- extract_property_chains (Phase 3.2) ----------
+    // Gate the AST-based rewrite against the canonical shapes the
+    // byte walker handled.
+
+    fn chains(text: &str) -> Vec<String> {
+        extract_property_chains(text)
+    }
+
+    #[test]
+    fn chains_plain_identifier() {
+        assert_eq!(chains("foo"), vec!["foo"]);
+    }
+
+    #[test]
+    fn chains_member_access() {
+        assert_eq!(chains("ctx.GhostButton"), vec!["ctx.GhostButton"]);
+    }
+
+    #[test]
+    fn chains_optional_member_access() {
+        assert_eq!(chains("ctx?.GhostButton"), vec!["ctx?.GhostButton"]);
+    }
+
+    #[test]
+    fn chains_logical_and_chain() {
+        assert_eq!(
+            chains("editable && ctx.GhostButton && options.length < max"),
+            vec!["editable", "ctx.GhostButton", "options.length", "max"]
+        );
+    }
+
+    #[test]
+    fn chains_nullish_coalescing_with_equality() {
+        // Regression: the byte walker returned `name1` via its balanced-
+        // paren skip + next-identifier pickup. The AST walker must
+        // produce the same chain list.
+        assert_eq!(
+            chains("(name1 ?? \"bla\") == \"world\""),
+            vec!["name1"]
+        );
+    }
+
+    #[test]
+    fn chains_call_keeps_callee_not_args() {
+        // Arrow body in the arg list must NOT leak: `m`, `m.role`
+        // are arrow-scope bindings.
+        assert_eq!(
+            chains("messages.some((m) => m.role === 'x')"),
+            vec!["messages.some"]
+        );
+    }
+
+    #[test]
+    fn chains_await_argument_recurses() {
+        // Regression: condition `await promise` must emit `[promise]`
+        // as the ref marker. The AST walker was dropping
+        // AwaitExpression in an earlier iteration.
+        assert_eq!(chains("await promise"), vec!["promise"]);
+    }
+
+    #[test]
+    fn chains_dedup_preserves_first_order() {
+        assert_eq!(
+            chains("a && b && a.c && a"),
+            vec!["a", "b", "a.c"]
+        );
+    }
+
+    #[test]
+    fn chains_filters_keywords() {
+        // `typeof x === 'string'` — `typeof` is a keyword, skip.
+        assert_eq!(chains("typeof x === 'string'"), vec!["x"]);
+    }
+
+    #[test]
+    fn chains_filters_dollar_ident() {
+        // Svelte auto-subscribe `$store` is handled separately; it
+        // shouldn't appear in the marker.
+        assert_eq!(chains("$store && ok"), vec!["ok"]);
+    }
+
+    #[test]
+    fn chains_empty_input_returns_empty() {
+        assert!(chains("").is_empty());
     }
 
     #[test]

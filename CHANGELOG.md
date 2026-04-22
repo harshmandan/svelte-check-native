@@ -4,6 +4,109 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0]
+
+Minor release built on two themes: a native Rust compile-warning
+lint replacing the Node/Bun bridge as the default, and a
+cross-bench parity push that brought 13 of 16 bench workspaces
+to exact Svelte-side-warnings parity with upstream `svelte-check`.
+
+### Headline
+
+- **`svn-lint` crate (new).** Native Rust port of
+  `svelte/compiler`'s compile-warning pass. 66 of ~80 upstream
+  warning codes implemented, 118/129 upstream validator fixtures
+  enforced. Scope tree, a11y role tables, `svelte-ignore` stack,
+  and `warningFilter` Tier 1 + Tier 2 (static analysis of
+  `svelte.config.js`) all ship with it.
+  `--svelte-warnings=native` is the default — no `bun`/`node`
+  subprocess, warm-run wall-clock drops ~65% on benchmark
+  workspaces vs bridge. `bridge` / `both` remain available for
+  opt-in / parity testing.
+
+### Version-gated rule behavior
+
+The native pass reads the user's `node_modules/svelte/package.json`
+at startup and gates rules whose behavior changed between svelte
+minor releases:
+
+- `a11y_pointer_touch_handlers` (svelte ≥ 5.48.3).
+- `state_locally_fires_on_props` (svelte ≥ 5.45.3).
+- `state_locally_rest_prop` (svelte ≥ 5.51.2).
+
+Workspaces on older svelte see matching older rule behavior;
+newer workspaces get the fixture-tested current ruleset. Adding
+new gates is straightforward — see `crates/svn-lint/src/compat.rs`.
+
+### Parity fixes (scope walker)
+
+Reference-tracking holes that made props look unused / flagged
+free-variable reads that were actually bound:
+
+- `Expression::ChainExpression` now visited (was silently
+  skipped — identifiers inside `obj?.foo(x)` were invisible).
+- `ArrayExpressionElement::SpreadElement` and
+  `ObjectPropertyKind::SpreadProperty` arguments walked.
+- `class:foo` / `style:foo` / `use:foo` / `transition:foo` /
+  `in:foo` / `out:foo` / `animate:foo` shorthand or directive
+  NAMES recorded as implicit identifier reads.
+- `{#snippet name(params)}` parameters declared as template-
+  scope bindings visible to the body.
+- `<!-- svelte-ignore CODE -->` immediately before the instance
+  `<script>` now bridges into the script's ignore stack.
+  `svelte-ignore` inside parenthesized expressions also
+  propagates.
+- Runes-mode inference requires the rune name to be followed by
+  `(` (optionally through `.word` for `$state.raw` etc.) so
+  Svelte-4 `$$props.class` no longer flips files to runes mode.
+- `element_implicitly_closed` no longer unwinds the regular-
+  element stack on component-close tags
+  (`<Foo><div/></Foo>` no longer fires).
+- `AriaType::Boolean` validator strict-checks on all boolean
+  aria attributes including bare `aria-hidden`.
+- `use:dndzone={{ x }}` and similar object-literal attribute
+  values no longer parse-fail as `BlockStatement`; wrapped in
+  parens to force expression parsing.
+
+### Parser
+
+Sections parser tracks tag-depth with mustache-aware skipping.
+Nested `<script>` / `<style>` inside a template (e.g.
+`<svelte:head>{#if}<script>…</script>{/if}</svelte:head>` for
+analytics snippets) stays in the template as a regular element
+instead of being extracted as the Svelte instance script. The
+mustache skipper respects JS string / template-literal / line-
+comment / block-comment structure so `<`, `>`, `{` inside
+expressions don't desync depth.
+
+### CLI
+
+- `--svelte-warnings` defaults to `native`.
+- Bridge survives Node's CJS-as-ESM import shape — falls back to
+  `mod.default.compile` when Node returns only `{ default }`.
+  Fixes `compile is not a function` on Node-only installs
+  (issue #4).
+
+### Tests
+
+- 14 new tag-depth + mustache-scan tests
+  (`crates/parser/src/sections.rs`) covering every edge shape
+  surfaced during the parser iteration.
+- 18 new regression tests
+  (`crates/svn-lint/tests/rule_gate_regressions.rs`) for the
+  scope-walker / version-gate / runes-inference fixes.
+- `bench_snapshot_thresholds` pins each version gate against
+  real bench versions.
+
+### Bench state
+
+13 of 16 bench workspaces at exact Svelte-side-warnings parity:
+`cnblocks`, `cobalt`, `control-svelte-4`, `control-svelte-5`,
+`cryptgeon`, `datagrid`, `inference-playground`, `layerchart`,
+`local-music-pwa`, `Oxide-Lab`, `palacms`, `slowreader`, `ui`.
+Remaining drift is error-layer (TS emit-shape) only; focus list
+in local `notes/OPEN.md`.
+
 ## [0.3.9]
 
 Patch release: three parity fixes driven by a real-world user

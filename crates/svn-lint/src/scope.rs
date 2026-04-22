@@ -929,21 +929,40 @@ impl TreeBuilder {
                         }
                     }
                     None => {
-                        if d.kind == DirectiveKind::Bind {
-                            // `bind:foo` shorthand — implicit `{foo}`
-                            // identifier reference + reassignment.
-                            self.record_template_ref(
-                                d.name.as_str(),
-                                d.range,
-                                ctx,
-                                flags,
-                            );
-                            self.pending_updates.push(PendingUpdate {
-                                scope: ctx.scope,
-                                name: SmolStr::from(d.name.as_str()),
-                                range: d.range,
-                                is_reassign: true,
-                            });
+                        match d.kind {
+                            DirectiveKind::Bind => {
+                                // `bind:foo` shorthand — implicit
+                                // `{foo}` identifier reference +
+                                // reassignment.
+                                self.record_template_ref(
+                                    d.name.as_str(),
+                                    d.range,
+                                    ctx,
+                                    flags,
+                                );
+                                self.pending_updates.push(PendingUpdate {
+                                    scope: ctx.scope,
+                                    name: SmolStr::from(d.name.as_str()),
+                                    range: d.range,
+                                    is_reassign: true,
+                                });
+                            }
+                            // `class:foo` / `style:foo` without value
+                            // are shorthand for `class:foo={foo}` /
+                            // `style:foo={foo}` — an implicit read of
+                            // the identifier in the current scope.
+                            // Without recording this, props used only
+                            // via class/style directives look unused
+                            // to `export_let_unused`.
+                            DirectiveKind::Class | DirectiveKind::Style => {
+                                self.record_template_ref(
+                                    d.name.as_str(),
+                                    d.range,
+                                    ctx,
+                                    flags,
+                                );
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -1016,15 +1035,37 @@ impl TreeBuilder {
         else {
             return;
         };
+        // Template expression slices that start with `{` are object
+        // literals in Svelte's grammar (`use:foo={{ a: b }}`,
+        // `style={{ x: y }}`), but at program-body level oxc parses
+        // `{` as a BlockStatement and then fails on `a: b, c: d`
+        // (labelled-statement + comma is a parse error). Wrap those
+        // in parens to force expression parsing. Adjust `base_offset`
+        // backward by the wrapping-prefix length so that the absolute
+        // positions we record for identifiers remain the source's
+        // original offsets.
+        let leading = slice
+            .bytes()
+            .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'));
+        let needs_wrap = leading
+            .and_then(|i| slice.as_bytes().get(i).copied())
+            == Some(b'{');
+        let wrapped: String;
+        let (effective_slice, base_adjust): (&str, u32) = if needs_wrap && range.start > 0 {
+            wrapped = format!("({slice})");
+            (wrapped.as_str(), 1)
+        } else {
+            (slice, 0)
+        };
         let alloc = oxc_allocator::Allocator::default();
-        let parsed = parse_script_body(&alloc, slice, ctx.lang);
-        // Wrap an ExpressionStatement's expression back to the walker.
-        // The svelte expression is parsed as a program body; the first
-        // statement is almost always an ExpressionStatement.
+        let parsed = parse_script_body(&alloc, effective_slice, ctx.lang);
         let start_depth = self.scopes[ctx.scope.0 as usize].function_depth;
         let mut walker = ScriptWalker {
             tree: self,
-            base_offset: range.start,
+            // The prepended `(` shifts every oxc span by +1; offset
+            // `base_offset` by -1 so `base_offset + span.start`
+            // still lands at the correct source byte.
+            base_offset: range.start - base_adjust,
             scope_stack: vec![ctx.scope],
             function_depth: start_depth,
             rune_bump: 0,
@@ -1038,7 +1079,7 @@ impl TreeBuilder {
             // `// svelte-ignore` comments (they're inside `{…}`),
             // so skip the precollect for perf.
             script_ignore_comments: Vec::new(),
-            script_content: slice,
+            script_content: effective_slice,
             ignore_frames: Vec::new(),
         };
         for stmt in &parsed.program.body {
@@ -2377,8 +2418,21 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             Expression::ObjectExpression(o) => self.visit_object(o),
             Expression::ArrayExpression(a) => {
                 for el in &a.elements {
-                    if let Some(e) = el.as_expression() {
-                        self.visit_expr(e);
+                    // `as_expression()` returns None for SpreadElement,
+                    // so the spread's argument was silently skipped —
+                    // any identifier inside `...(cond ? [a] : [])`
+                    // wasn't being tracked, which made
+                    // `export_let_unused` over-fire on props used only
+                    // via spread-into-array.
+                    use oxc_ast::ast::ArrayExpressionElement as AE;
+                    match el {
+                        AE::SpreadElement(s) => self.visit_expr(&s.argument),
+                        AE::Elision(_) => {}
+                        other => {
+                            if let Some(e) = other.as_expression() {
+                                self.visit_expr(e);
+                            }
+                        }
                     }
                 }
             }
@@ -2475,15 +2529,25 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
 
     fn visit_object(&mut self, o: &ObjectExpression<'_>) {
         for p in &o.properties {
-            if let ObjectPropertyKind::ObjectProperty(op) = p {
-                if op.computed {
-                    if let PropertyKey::StaticIdentifier(_) = &op.key {
-                        // ignore
-                    } else if let Some(e) = expression_from_property_key(&op.key) {
-                        self.visit_expr(e);
+            match p {
+                ObjectPropertyKind::ObjectProperty(op) => {
+                    if op.computed {
+                        if let PropertyKey::StaticIdentifier(_) = &op.key {
+                            // ignore
+                        } else if let Some(e) = expression_from_property_key(&op.key) {
+                            self.visit_expr(e);
+                        }
                     }
+                    self.visit_expr(&op.value);
                 }
-                self.visit_expr(&op.value);
+                // `{ ...rest }` — walk the spread argument so
+                // identifiers inside (`adminUser`, etc.) register as
+                // references. Previously the match-guard only
+                // matched ObjectProperty, silently dropping spread
+                // properties and under-counting references.
+                ObjectPropertyKind::SpreadProperty(s) => {
+                    self.visit_expr(&s.argument);
+                }
             }
         }
     }

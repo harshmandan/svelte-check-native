@@ -1281,8 +1281,6 @@ fn emit_document_with_render_name(
     // derived from `inst.node_start`, so the scan → analyze lookup
     // is unambiguous.
     token_map.extend(collect_satisfies_token_map(&out, &instantiations_by_start));
-    token_map.extend(collect_dom_binding_token_map(&out, doc.source, summary));
-    token_map.extend(collect_bind_this_check_token_map(&out, doc.source, summary));
     // Action-directive and interpolation token-map entries are now
     // pushed inline at the splice site by `emit_use_directives_inline`
     // and `emit_interpolation` via `EmitBuffer::append_with_source`.
@@ -1295,147 +1293,6 @@ fn emit_document_with_render_name(
         overlay_line_starts,
         source_line_starts,
     }
-}
-
-/// v0.3 Item 7: post-walk scan pairing each `__svn_bind_this_check<
-/// TAG>(EXPR);` overlay occurrence with `summary.bind_this_checks`
-/// in walk order, pushing a TokenMapEntry that maps EXPR's overlay
-/// span → the user's `bind:this={EXPR}` source range. Without this
-/// entry, a TS2345 on a wrong-typed bind:this target fires inside
-/// synthesized scope and gets dropped by the diagnostic filter.
-fn collect_bind_this_check_token_map(
-    out: &str,
-    source: &str,
-    summary: &TemplateSummary,
-) -> Vec<TokenMapEntry> {
-    // Emit shape (post-narrowing-alignment):
-    //     `/* bind:this */ EXPR = null as any as TYPE;`
-    // LEAD anchors the `bind:this` marker; EXPR starts right after
-    // the marker + space. MID terminates EXPR.
-    const LEAD: &str = "/* bind:this */ ";
-    const MID: &str = " = null as any as ";
-    let mut entries: Vec<TokenMapEntry> = Vec::new();
-    let mut cursor = 0usize;
-    let mut check_idx = 0usize;
-    while let Some(rel) = out[cursor..].find(LEAD) {
-        let lead_start = cursor + rel;
-        let expr_overlay_start = lead_start + LEAD.len();
-        let Some(mid_rel) = out[expr_overlay_start..].find(MID) else {
-            break;
-        };
-        let expr_overlay_end = expr_overlay_start + mid_rel;
-        let Some(binding) = summary.bind_this_checks.get(check_idx) else {
-            break;
-        };
-        check_idx += 1;
-        // Advance past the whole statement for every iteration.
-        let advance_to = match out[expr_overlay_end..].find(';') {
-            Some(off) => expr_overlay_end + off + 1,
-            None => expr_overlay_end,
-        };
-        let Some(slice) = source
-            .get(binding.expression_range.start as usize..binding.expression_range.end as usize)
-        else {
-            cursor = advance_to;
-            continue;
-        };
-        let leading_ws = slice.len() - slice.trim_start().len();
-        let trimmed_len = slice.trim().len();
-        if expr_overlay_end - expr_overlay_start != trimmed_len {
-            cursor = advance_to;
-            continue;
-        }
-        let source_start = binding.expression_range.start + leading_ws as u32;
-        let source_end = source_start + trimmed_len as u32;
-        entries.push(TokenMapEntry {
-            overlay_byte_start: expr_overlay_start as u32,
-            overlay_byte_end: expr_overlay_end as u32,
-            source_byte_start: source_start,
-            source_byte_end: source_end,
-        });
-        cursor = advance_to;
-    }
-    entries
-}
-
-/// Post-walk scan: find every `EXPR = null as any as TYPE;` line
-/// emitted by `emit_dom_binding_checks_inline` and push a token-map
-/// entry covering the `EXPR` span → the user's `={expr}` source byte
-/// range. Without this, TS2322 firing on a wrong-typed bind target
-/// (`<img bind:naturalHeight={boolVar}>` where naturalHeight is
-/// `number`) lands in the synthesized `__svn_tpl_check` body with
-/// no line-map coverage and gets dropped by the diagnostic mapper.
-///
-/// Matches the Nth `MID` occurrence to `summary.dom_bindings[N]` via
-/// emit-order invariance. Only Range-form expressions (user-authored
-/// `bind:NAME={expr}`) get an entry — the Identifier-form bare
-/// shorthand (`bind:NAME`) has no source range.
-///
-/// Emit shape (post-§3.1-residual-alignment): direct assignment, not
-/// wrapped in a never-called lambda. Upstream emits the same direct
-/// form (`Binding.ts:97-146`) — crucially, the assignment narrows
-/// EXPR's flow type for subsequent uses, matching upstream's control-
-/// flow behavior on patterns like `let x = $state<number>();
-/// <img bind:clientWidth={x}/> <Child {x}/>` where x flows as
-/// `number` (not `number | undefined`) at the <Child> site.
-fn collect_dom_binding_token_map(
-    out: &str,
-    source: &str,
-    summary: &TemplateSummary,
-) -> Vec<TokenMapEntry> {
-    const MID: &str = " = null as any as ";
-    let mut entries: Vec<TokenMapEntry> = Vec::new();
-    let mut cursor = 0usize;
-    let mut binding_idx = 0usize;
-    let bytes = out.as_bytes();
-    while let Some(rel) = out[cursor..].find(MID) {
-        let mid_pos = cursor + rel;
-        // Back up from MID to the start of EXPR. EXPR is written after
-        // a leading indent, which is whitespace only. Walk backwards
-        // through bytes that aren't whitespace (they're EXPR chars),
-        // then stop at the first whitespace/newline.
-        let mut expr_start = mid_pos;
-        while expr_start > 0 {
-            let b = bytes[expr_start - 1];
-            if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
-                break;
-            }
-            expr_start -= 1;
-        }
-        let expr_overlay_end = mid_pos;
-        let advance_to = match out[expr_overlay_end..].find(';') {
-            Some(off) => expr_overlay_end + off + 1,
-            None => expr_overlay_end,
-        };
-        let Some(binding) = summary.dom_bindings.get(binding_idx) else {
-            break;
-        };
-        binding_idx += 1;
-        let svn_analyze::DomBindingExpression::Range(expr_range) = &binding.expression else {
-            cursor = advance_to;
-            continue;
-        };
-        let Some(slice) = source.get(expr_range.start as usize..expr_range.end as usize) else {
-            cursor = advance_to;
-            continue;
-        };
-        let leading_ws = slice.len() - slice.trim_start().len();
-        let trimmed_len = slice.trim().len();
-        if expr_overlay_end - expr_start != trimmed_len {
-            cursor = advance_to;
-            continue;
-        }
-        let source_start = expr_range.start + leading_ws as u32;
-        let source_end = source_start + trimmed_len as u32;
-        entries.push(TokenMapEntry {
-            overlay_byte_start: expr_start as u32,
-            overlay_byte_end: expr_overlay_end as u32,
-            source_byte_start: source_start,
-            source_byte_end: source_end,
-        });
-        cursor = advance_to;
-    }
-    entries
 }
 
 /// Post-walk scan: find every `new __svn_C_<hex>(...)` call in the
@@ -3075,26 +2932,39 @@ fn emit_dom_binding_checks_inline(
             ty
         };
         // Resolve the assignment target:
-        //   `bind:NAME={expr}` → EXPR text
+        //   `bind:NAME={expr}` → trimmed EXPR text + a source range
+        //                         covering the same trimmed slice
+        //                         (so a TokenMapEntry maps the overlay
+        //                         EXPR back to its source bytes).
         //   `bind:NAME`         → NAME (Svelte shorthand — desugars to
-        //                         `bind:NAME={NAME}`)
-        let expr: std::borrow::Cow<'_, str> = match &directive.value {
-            Some(svn_parser::DirectiveValue::Expression {
-                expression_range, ..
-            }) => {
-                let Some(slice) =
-                    source.get(expression_range.start as usize..expression_range.end as usize)
-                else {
-                    continue;
-                };
-                std::borrow::Cow::Borrowed(slice.trim())
-            }
-            None => std::borrow::Cow::Borrowed(directive.name.as_str()),
-            // BindPair / Quoted don't make sense for these one-way
-            // bindings; skip.
-            _ => continue,
-        };
-        if expr.is_empty() {
+        //                         `bind:NAME={NAME}`). No source range;
+        //                         the binding has no user-written
+        //                         expression to map back to.
+        let (expr_text, expr_source_range): (std::borrow::Cow<'_, str>, Option<svn_core::Range>) =
+            match &directive.value {
+                Some(svn_parser::DirectiveValue::Expression {
+                    expression_range, ..
+                }) => {
+                    let Some(slice) =
+                        source.get(expression_range.start as usize..expression_range.end as usize)
+                    else {
+                        continue;
+                    };
+                    let trimmed = slice.trim();
+                    let leading_ws = (slice.len() - slice.trim_start().len()) as u32;
+                    let start = expression_range.start + leading_ws;
+                    let end = start + trimmed.len() as u32;
+                    (
+                        std::borrow::Cow::Borrowed(trimmed),
+                        Some(svn_core::Range::new(start, end)),
+                    )
+                }
+                None => (std::borrow::Cow::Borrowed(directive.name.as_str()), None),
+                // BindPair / Quoted don't make sense for these one-way
+                // bindings; skip.
+                _ => continue,
+            };
+        if expr_text.is_empty() {
             continue;
         }
         // Direct assignment (NOT wrapped in a never-called lambda).
@@ -3108,7 +2978,12 @@ fn emit_dom_binding_checks_inline(
         // assignment from narrowing, which produced spurious
         // "possibly undefined" errors on consumer prop-passing sites
         // against upstream's behavior (bench: FigmaPopup mainWidth).
-        let _ = writeln!(buf, "{indent}{expr} = null as any as {ty};");
+        buf.push_str(&indent);
+        match expr_source_range {
+            Some(range) => buf.append_with_source(&expr_text, range),
+            None => buf.push_str(&expr_text),
+        }
+        let _ = writeln!(buf, " = null as any as {ty};");
     }
 }
 
@@ -3157,14 +3032,20 @@ fn emit_bind_this_element_check_inline(
         else {
             continue;
         };
-        let Some(expr) = source.get(expression_range.start as usize..expression_range.end as usize)
+        let Some(slice) =
+            source.get(expression_range.start as usize..expression_range.end as usize)
         else {
             continue;
         };
-        let expr = expr.trim();
-        if expr.is_empty() {
+        let trimmed = slice.trim();
+        if trimmed.is_empty() {
             continue;
         }
+        let leading_ws = (slice.len() - slice.trim_start().len()) as u32;
+        let expr_source_range = svn_core::Range::new(
+            expression_range.start + leading_ws,
+            expression_range.start + leading_ws + trimmed.len() as u32,
+        );
         let el_type = element_type_annotation(tag_name);
         // Direct assignment (NOT wrapped in a never-called lambda) —
         // same alignment as one-way DOM bindings (commit `61fb2f5`).
@@ -3178,14 +3059,13 @@ fn emit_bind_this_element_check_inline(
         // site; upstream's direct-assignment shape narrows iconEl to
         // `HTMLElement` for the downstream use.
         //
-        // `/* bind:this */` comment marker preserved as anchor for
-        // `collect_bind_this_check_token_map` so it can distinguish
-        // this emit from one-way DOM-binding emits during the
-        // post-walk token-map scan.
-        let _ = writeln!(
-            buf,
-            "{indent}/* bind:this */ {expr} = null as any as {el_type};"
-        );
+        // The former `/* bind:this */` comment marker was an anchor for
+        // `collect_bind_this_check_token_map`'s post-walk scan; now that
+        // the TokenMapEntry is pushed inline via `append_with_source`,
+        // no marker is needed.
+        buf.push_str(&indent);
+        buf.append_with_source(trimmed, expr_source_range);
+        let _ = writeln!(buf, " = null as any as {el_type};");
     }
 }
 

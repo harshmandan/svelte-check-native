@@ -3,7 +3,7 @@
 async function $$render_d2ad7865() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        /* bind:this */ element = null as any as HTMLElementTagNameMap['input'];
+        element = null as any as HTMLElementTagNameMap['input'];
     }
     void __svn_tpl_check;
 }

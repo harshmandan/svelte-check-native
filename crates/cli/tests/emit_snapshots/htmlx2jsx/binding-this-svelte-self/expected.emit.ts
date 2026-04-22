@@ -4,7 +4,7 @@ async function $$render_4dbcdbe9() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         if ((false)) {
-            /* bind:this */ element = null as any as HTMLElement;
+            element = null as any as HTMLElement;
         }
     }
     void __svn_tpl_check;

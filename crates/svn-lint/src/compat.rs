@@ -8,9 +8,11 @@
 //! under-fire (ruleset older).
 //!
 //! This module captures the known behavioral divergences as a
-//! `CompatFeatures` struct, built once per run from the user's
+//! [`CompatFeatures`] struct, built once per run from the user's
 //! detected `node_modules/svelte` version. Rules consult the flags
-//! instead of hard-coding the latest behavior.
+//! instead of hard-coding the latest behavior. [`detect_for_workspace`]
+//! is the single detection entry point — CLI and integration tests
+//! both route through it so the fallback semantics are consistent.
 //!
 //! ## Adding a new feature flag
 //!
@@ -19,8 +21,10 @@
 //!    `git tag --contains <sha>` in the svelte repo.
 //! 3. Add a bool field named after the rule + behavior.
 //! 4. Set it in [`CompatFeatures::from_version`] with the correct
-//!    threshold.
+//!    threshold. Include the upstream PR URL in the doc comment.
 //! 5. Consult `ctx.compat.YOUR_FLAG` at the rule site.
+
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SvelteVersion {
@@ -60,21 +64,30 @@ impl SvelteVersion {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CompatFeatures {
     /// `a11y_no_static_element_interactions` fires on `onpointer*` /
-    /// `ontouch*` event attributes. Upstream PR #17548 (commit
-    /// `5872b89f`) first released in **svelte@5.48.3**. Before that,
-    /// only keyboard / click / drag / mouse handlers counted.
+    /// `ontouch*` event attributes. Before this, only keyboard /
+    /// click / drag / mouse handlers counted.
+    ///
+    /// - Upstream PR: <https://github.com/sveltejs/svelte/pull/17548>
+    /// - Commit: `5872b89f`
+    /// - First released in **svelte@5.48.3**.
     pub a11y_pointer_touch_handlers: bool,
     /// `state_referenced_locally` fires on `prop` / `bindable_prop`
-    /// bindings at all. Upstream PR #17266 (commit `570f64963`) first
-    /// released in **svelte@5.45.3**. Before that, only `state` /
-    /// `raw_state` / `derived` fired — reading a regular destructured
-    /// prop at top-level didn't warn.
+    /// bindings at all. Before this, only `state` / `raw_state` /
+    /// `derived` fired — reading a regular destructured prop at
+    /// top-level didn't warn.
+    ///
+    /// - Upstream PR: <https://github.com/sveltejs/svelte/pull/17266>
+    /// - Commit: `570f64963`
+    /// - First released in **svelte@5.45.3**.
     pub state_locally_fires_on_props: bool,
     /// `state_referenced_locally` fires on reads of `rest_prop`
-    /// bindings (e.g. `const props = $props(); props.x`). Upstream
-    /// PR #17708 (commit `dd9fc0d1a`) first released in
-    /// **svelte@5.51.2**. Before that, only `prop` kind fired. Has
-    /// no effect when `state_locally_fires_on_props` is false.
+    /// bindings (e.g. `const props = $props(); props.x`). Before
+    /// this, only `prop` kind fired. Has no effect when
+    /// `state_locally_fires_on_props` is false.
+    ///
+    /// - Upstream PR: <https://github.com/sveltejs/svelte/pull/17708>
+    /// - Commit: `dd9fc0d1a`
+    /// - First released in **svelte@5.51.2**.
     pub state_locally_rest_prop: bool,
 }
 
@@ -101,6 +114,58 @@ impl Default for CompatFeatures {
     fn default() -> Self {
         Self::MODERN
     }
+}
+
+/// Resolve [`CompatFeatures`] for a workspace by locating the user's
+/// installed `svelte` package and reading its `version` field.
+///
+/// Walks upward from `workspace` looking for
+/// `node_modules/svelte/package.json`. Handles both flat npm/yarn
+/// layouts and pnpm's `.pnpm/svelte@<ver>/node_modules/svelte/`
+/// content-addressed layout (a flat-style symlink at the root still
+/// exists in that case).
+///
+/// Falls back to [`CompatFeatures::MODERN`] when:
+/// - `node_modules/svelte/package.json` isn't found at all, or
+/// - `version` is missing / unparseable.
+///
+/// The fallback matches what our `upstream_validator` fixture suite
+/// enforces, so zero-config workspaces and tests stay in sync.
+pub fn detect_for_workspace(workspace: &Path) -> CompatFeatures {
+    CompatFeatures::from_version(locate_svelte_version(workspace))
+}
+
+/// Walk up from `start` looking for `node_modules/svelte/package.json`;
+/// return its parsed semver. Exposed for callers that want the raw
+/// version for logging / diagnostics; most callers should use
+/// [`detect_for_workspace`] which folds detection + gating into one
+/// call.
+pub fn locate_svelte_version(start: &Path) -> Option<SvelteVersion> {
+    let mut cur: Option<&Path> = Some(start);
+    while let Some(dir) = cur {
+        let pkg = dir.join("node_modules").join("svelte").join("package.json");
+        if pkg.is_file()
+            && let Some(v) = read_package_version(&pkg)
+        {
+            return Some(v);
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
+/// Extract the `version` field from a `package.json`. Stringly
+/// parsed — avoids pulling serde_json just for one key.
+fn read_package_version(path: &Path) -> Option<SvelteVersion> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let idx = text.find("\"version\"")?;
+    let rest = &text[idx + 9..];
+    let colon = rest.find(':')?;
+    let after = &rest[colon + 1..];
+    let start = after.find('"')?;
+    let tail = &after[start + 1..];
+    let end = tail.find('"')?;
+    SvelteVersion::parse(&tail[..end])
 }
 
 #[cfg(test)]

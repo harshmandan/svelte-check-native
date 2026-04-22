@@ -571,7 +571,7 @@ fn emit_native_svelte_warnings(
     seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
     workspace: &Path,
 ) {
-    let compat = detect_svelte_compat(workspace);
+    let compat = svn_lint::compat::detect_for_workspace(workspace);
     let per_file = svn_lint::lint_batch(svelte_sources.iter().cloned(), compat);
 
     for (path, warnings) in per_file {
@@ -632,58 +632,6 @@ fn apply_compiler_override(
 /// Does `path` contain a `node_modules` segment? Uses path components
 /// (not string-contains) so a directory named `my_node_modules_dir`
 /// doesn't trip the check.
-/// Resolve compat flags for the lint pass by locating the user's
-/// installed `svelte` package and reading its `version` field.
-///
-/// Walks upward from `workspace` looking for
-/// `node_modules/svelte/package.json`. Handles both flat npm/yarn
-/// layouts and pnpm's `.pnpm/svelte@<ver>/node_modules/svelte/`
-/// content-addressed layout (a flat-style symlink at the root still
-/// exists in that case).
-///
-/// Defaults to [`svn_lint::CompatFeatures::MODERN`] when:
-/// - `node_modules/svelte/package.json` isn't found at all, or
-/// - `version` is missing / unparseable.
-///
-/// The fallback matches what our `upstream_validator` fixture suite
-/// enforces, so zero-config workspaces and tests stay in sync.
-fn detect_svelte_compat(workspace: &Path) -> svn_lint::CompatFeatures {
-    let Some(version) = locate_svelte_version(workspace) else {
-        return svn_lint::CompatFeatures::MODERN;
-    };
-    svn_lint::CompatFeatures::from_version(Some(version))
-}
-
-/// Walk up from `start` looking for
-/// `node_modules/svelte/package.json`; return its parsed semver.
-fn locate_svelte_version(start: &Path) -> Option<svn_lint::SvelteVersion> {
-    let mut cur: Option<&Path> = Some(start);
-    while let Some(dir) = cur {
-        let pkg = dir.join("node_modules").join("svelte").join("package.json");
-        if pkg.is_file()
-            && let Some(v) = read_package_version(&pkg)
-        {
-            return Some(v);
-        }
-        cur = dir.parent();
-    }
-    None
-}
-
-/// Extract the `version` field from a `package.json`. Stringly
-/// parsed — avoids pulling serde_json just for one key.
-fn read_package_version(path: &Path) -> Option<svn_lint::SvelteVersion> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let idx = text.find("\"version\"")?;
-    let rest = &text[idx + 9..];
-    let colon = rest.find(':')?;
-    let after = &rest[colon + 1..];
-    let start = after.find('"')?;
-    let tail = &after[start + 1..];
-    let end = tail.find('"')?;
-    svn_lint::SvelteVersion::parse(&tail[..end])
-}
-
 fn path_is_under_node_modules(path: &Path) -> bool {
     path.components().any(|c| {
         matches!(c, std::path::Component::Normal(name) if name == "node_modules")

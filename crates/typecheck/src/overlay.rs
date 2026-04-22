@@ -571,6 +571,17 @@ fn split_package_entry(entry: &str) -> (&str, &str) {
 /// package or a runtime package shipping its own .d.ts files in the
 /// workspace's `node_modules` chain. Walks up from the declaring
 /// tsconfig's directory; first match wins.
+///
+/// pnpm workspace layout: `node_modules/@types/<name>/` often does NOT
+/// exist because pnpm puts peer-dep-only packages under the hoisted
+/// `node_modules/.pnpm/node_modules/@types/<name>/` location instead.
+/// tsgo resolves that path too (via its own node_modules walk), so we
+/// include it in the check to match. Missing this check caused
+/// SvelteKit projects using pnpm to fall through to `types: []` in
+/// our emitted overlay — which suppressed auto-inclusion of the TS
+/// libraries that tsgo relies on for default-export inference, leading
+/// to spurious TS1192 errors on `<Component>.svelte` imports that
+/// sit beside a `<Component>.svelte.ts` mountpoint (Svelte 5 pattern).
 fn package_types_entry_resolves(name: &str, declaring_dir: &Path) -> bool {
     let mut cur: Option<&Path> = Some(declaring_dir);
     while let Some(dir) = cur {
@@ -583,6 +594,16 @@ fn package_types_entry_resolves(name: &str, declaring_dir: &Path) -> bool {
             // Runtime package shipping its own types: node_modules/<name>.
             if nm.join(name).join("package.json").is_file() {
                 return true;
+            }
+            // pnpm hoisted: node_modules/.pnpm/node_modules/@types/<name>.
+            let pnpm_root = nm.join(".pnpm").join("node_modules");
+            if pnpm_root.is_dir() {
+                if pnpm_root.join("@types").join(name).join("package.json").is_file() {
+                    return true;
+                }
+                if pnpm_root.join(name).join("package.json").is_file() {
+                    return true;
+                }
             }
         }
         cur = dir.parent();

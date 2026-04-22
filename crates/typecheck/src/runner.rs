@@ -72,6 +72,24 @@ pub fn run(
     if extended_diagnostics {
         args.push("--extendedDiagnostics".into());
     }
+    // TS 7.0 parallelism knobs, exposed via env vars while we
+    // validate impact. Eventually become first-class CLI flags on
+    // `svelte-check-native`. See `notes/ts7-tracking.md`.
+    if let Ok(n) = std::env::var("SVN_TSGO_CHECKERS")
+        && !n.is_empty()
+    {
+        args.push("--checkers".into());
+        args.push(n.into());
+    }
+    if let Ok(n) = std::env::var("SVN_TSGO_BUILDERS")
+        && !n.is_empty()
+    {
+        args.push("--builders".into());
+        args.push(n.into());
+    }
+    if std::env::var("SVN_TSGO_SINGLE_THREADED").is_ok_and(|v| !v.is_empty()) {
+        args.push("--singleThreaded".into());
+    }
 
     let output = if tsgo.needs_node {
         let mut cmd = Command::new("node");

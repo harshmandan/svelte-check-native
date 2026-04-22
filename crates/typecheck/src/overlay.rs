@@ -260,7 +260,16 @@ pub fn build(
     // `types`: inner wins (first config in the BFS chain that declares
     // the field). Filter against tsgo's resolution rules so a stale
     // entry can't fatally TS2688 and zero out our error count.
-    if let Some(types) = chain
+    //
+    // Sibling-project union: when the redirect solution pulls files
+    // from a sibling reference into the program (via the include
+    // merge below), that sibling's ambient-type declarations must
+    // reach the overlay too. A `web/` project referencing an
+    // `extension/` project that declares `"types": ["chrome"]` would
+    // otherwise see the extension's `.ts` files type-checked without
+    // the `chrome` namespace (TS2304 "Cannot find namespace 'chrome'"
+    // all over extension/background.ts). Union here, de-duped.
+    let user_types: Option<Vec<String>> = chain
         .iter()
         .find(|f| f.compiler_options.types.is_some())
         .and_then(|f| {
@@ -271,9 +280,25 @@ pub fn build(
                     .cloned()
                     .collect::<Vec<_>>()
             })
-        })
-    {
-        compiler_options.insert("types".into(), json!(types));
+        });
+    // Only override the inherited `types` when the user's chain
+    // explicitly set it — leaving it unset means "tsgo loads all
+    // available @types/*", and narrowing that to just sibling entries
+    // would silently hide ambients the user relied on.
+    if let Some(base) = user_types {
+        let mut merged_types = base;
+        for sibling in &sibling_refs {
+            let sibling_dir = sibling.project_dir.as_path();
+            for entry in &sibling.types {
+                if merged_types.iter().any(|e| e == entry) {
+                    continue;
+                }
+                if is_resolvable_types_entry(entry, sibling_dir) {
+                    merged_types.push(entry.clone());
+                }
+            }
+        }
+        compiler_options.insert("types".into(), json!(merged_types));
     }
     if !paths_map.is_empty() {
         compiler_options.insert("paths".into(), Value::Object(paths_map));

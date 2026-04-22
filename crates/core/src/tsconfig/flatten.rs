@@ -59,6 +59,20 @@ pub struct FlattenedReference {
     /// absent). BFS per-pattern first-wins across the reference's
     /// extends chain.
     pub paths: std::collections::BTreeMap<String, Vec<PathBuf>>,
+    /// Effective `compilerOptions.types` from the first config in the
+    /// reference's chain that declares them. Empty when no config in
+    /// the chain sets `types`. Overlay unions these with the user
+    /// workspace's own `types` so sibling projects that depend on
+    /// `@types/<pkg>` (e.g. the `chrome` extension namespace) see
+    /// their ambient declarations when tsgo checks files pulled in
+    /// from them.
+    pub types: Vec<String>,
+    /// Effective `compilerOptions.lib` — same first-non-empty rule as
+    /// `types`. Each sibling may declare a different lib set (a web
+    /// project using `["DOM"]` next to an extension project using
+    /// `["WebWorker"]`), and the overlay unions them so symbols from
+    /// either lib resolve when sibling files are checked.
+    pub lib: Vec<String>,
 }
 
 /// Parse a solution-style tsconfig, walk its `references[]`, and
@@ -175,13 +189,36 @@ fn resolve_reference(raw_path: &str, declaring_dir: &Path) -> Option<FlattenedRe
     let include = first_non_empty(&chain, |f| f.include.as_deref()).unwrap_or_default();
     let exclude = first_non_empty(&chain, |f| f.exclude.as_deref()).unwrap_or_default();
     let paths = resolve_paths_bfs(&chain);
+    let types = first_non_empty(&chain, |f| f.compiler_options.types.as_deref()).unwrap_or_default();
+    let lib = first_non_empty_raw_strings(&chain, "lib");
     Some(FlattenedReference {
         config_path,
         project_dir,
         include,
         exclude,
         paths,
+        types,
+        lib,
     })
+}
+
+/// Pull a string-array compilerOption out of the typed struct's `raw`
+/// passthrough — for fields we don't explicitly parse. `lib` is the
+/// common one; tsgo's list of accepted values is large and versioned,
+/// so we just echo the user's exact entries.
+fn first_non_empty_raw_strings(chain: &[TsConfigFile], key: &str) -> Vec<String> {
+    for file in chain {
+        if let Some(serde_json::Value::Array(a)) = file.compiler_options.raw.get(key) {
+            let values: Vec<String> = a
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect();
+            if !values.is_empty() {
+                return values;
+            }
+        }
+    }
+    Vec::new()
 }
 
 /// Return the first-declaring config's values for a multi-string
@@ -447,5 +484,38 @@ mod tests {
             vec![root.join("base-target/*")],
             "inherited path should resolve against base's dir, not sub's",
         );
+    }
+
+    #[test]
+    fn types_and_lib_flow_through_reference_chain() {
+        // Sibling extension project declaring its own types + lib.
+        // slowreader pattern: web/ references extension/ (which wants
+        // @types/chrome); the overlay needs to carry those through.
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+
+        write(
+            &root.join("extension/tsconfig.json"),
+            r#"{
+                "compilerOptions": {
+                    "types": ["chrome", "node"],
+                    "lib": ["ES2024", "DOM"]
+                },
+                "include": ["**/*.ts"]
+            }"#,
+        );
+        write(
+            &root.join("tsconfig.json"),
+            r#"{
+                "files": [],
+                "references": [{ "path": "./extension" }]
+            }"#,
+        );
+
+        let refs = flatten_references(&root.join("tsconfig.json")).unwrap();
+        assert_eq!(refs.len(), 1);
+        let r = &refs[0];
+        assert_eq!(r.types, vec!["chrome".to_string(), "node".to_string()]);
+        assert_eq!(r.lib, vec!["ES2024".to_string(), "DOM".to_string()]);
     }
 }

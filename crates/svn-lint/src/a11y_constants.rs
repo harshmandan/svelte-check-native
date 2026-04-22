@@ -87,6 +87,16 @@ pub const A11Y_LABELABLE: &[&str] = &[
 ];
 
 /// Event names that count as "interactive" on an element.
+///
+/// Tracks upstream `packages/svelte/.../a11y/constants.js`'s
+/// `a11y_interactive_handlers`. Newer svelte (>= 5.56-ish) extended
+/// the list with pointer/touch events; older svelte (<= 5.55) stops
+/// at mouse. We follow the newer list because our validator fixtures
+/// come from the `.svelte-upstream` submodule which pins main.
+/// Result: on workspaces whose `node_modules/svelte` predates the
+/// extension, our native pass fires on pointer/touch events upstream
+/// didn't — a known bounded over-fire that goes away once the
+/// workspace upgrades its compiler.
 pub const A11Y_INTERACTIVE_HANDLERS: &[&str] = &[
     "keypress",
     "keydown",

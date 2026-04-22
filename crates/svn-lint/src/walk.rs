@@ -15,17 +15,27 @@ use crate::messages;
 
 /// Infer whether a file uses runes. Upstream heuristic:
 /// - `.svelte.js` / `.svelte.ts` → runes mode
-/// - `<svelte:options runes={…}>` → explicit override (not yet honoured)
-/// - Any rune identifier (`$state`, `$derived`, …) anywhere in the
-///   instance script → runes mode
+/// - `<svelte:options runes={…}>` → explicit override (resolved later
+///   in the template walk)
+/// - Any rune CALL (`$state(…)`, `$derived(…)`, …) anywhere in the
+///   source → runes mode
 ///
-/// For now a cheap substring check is enough — full detection
-/// requires the scope model (Phase C).
+/// The call-shape check is critical: a bare substring match for
+/// `$props` (etc.) false-positives on Svelte-4 ambients like
+/// `$$props.class` (the legacy rest-props store). Runes are always
+/// called, so requiring `(` immediately after the name excludes the
+/// ambient-store pattern without needing a full parse.
+///
+/// `$state.raw(…)`, `$state.link(…)`, `$derived.by(…)` are also
+/// call-forms; the `.` between name and `(` means a simple `rune(`
+/// check would miss them. Covered by allowing optional `.WORD` before
+/// the paren.
 pub fn infer_runes_mode(source: &str, path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     if name.ends_with(".svelte.js") || name.ends_with(".svelte.ts") {
         return true;
     }
+    let bytes = source.as_bytes();
     for marker in [
         "$state",
         "$derived",
@@ -35,11 +45,45 @@ pub fn infer_runes_mode(source: &str, path: &Path) -> bool {
         "$inspect",
         "$host",
     ] {
-        if source.contains(marker) {
-            return true;
+        let mbytes = marker.as_bytes();
+        let mut i = 0;
+        while let Some(pos) = find_subslice(bytes, mbytes, i) {
+            // Guard against the `$$props` ambient: require the
+            // character before `$` to not also be `$`.
+            let prev = pos.checked_sub(1).and_then(|p| bytes.get(p)).copied();
+            if prev == Some(b'$') {
+                i = pos + mbytes.len();
+                continue;
+            }
+            // Walk past `.word` chains (`$state.raw`, `$derived.by`).
+            let mut after = pos + mbytes.len();
+            while bytes.get(after) == Some(&b'.') {
+                after += 1;
+                while after < bytes.len() && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_') {
+                    after += 1;
+                }
+            }
+            // Skip whitespace between name and `(`.
+            while after < bytes.len() && matches!(bytes[after], b' ' | b'\t') {
+                after += 1;
+            }
+            if bytes.get(after) == Some(&b'(') {
+                return true;
+            }
+            i = pos + mbytes.len();
         }
     }
     false
+}
+
+fn find_subslice(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    if from >= hay.len() || needle.is_empty() {
+        return None;
+    }
+    hay[from..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|p| p + from)
 }
 
 /// Walk a full `.svelte` source and run every phase-enabled rule.

@@ -117,8 +117,15 @@ fn store_rune_conflict(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
 /// analog in `scope.rs::is_primitive_expr`).
 fn state_referenced_locally(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
     for (_, binding) in tree.all_bindings() {
+        // Upstream gate (visitors/Identifier.js:110-119): fires on
+        // `state` (specific reassigned / primitive-init) / `raw_state`
+        // / `derived` / `prop` / `rest_prop`. NOT on `bindable_prop`
+        // (its reactivity is wired via the $bindable() runtime hook).
         let reactive_kind = match binding.kind {
-            BindingKind::RawState | BindingKind::Derived | BindingKind::Prop | BindingKind::RestProp => true,
+            BindingKind::RawState
+            | BindingKind::Derived
+            | BindingKind::Prop
+            | BindingKind::RestProp => true,
             BindingKind::State => {
                 binding.reassigned || primitive_initial(&binding.initial)
             }

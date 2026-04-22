@@ -189,8 +189,12 @@ pub struct Reference {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RefParentKind {
-    /// Plain read (e.g. `foo`, `foo.bar`, `fn(foo)`).
+    /// Plain read (e.g. `foo`, `fn(foo)`).
     Read,
+    /// Object of a MemberExpression (`foo.x` / `foo[i]`). Matters for
+    /// `state_referenced_locally` on rest-prop bindings: upstream
+    /// fires on bare `restProp` references but not on `restProp.x`.
+    MemberObject,
     /// `foo = …` — reassignment target.
     AssignmentLeft,
     /// `foo++` / `++foo` — reassignment target.
@@ -2434,25 +2438,37 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
 
     fn visit_member_expr(&mut self, e: &Expression<'_>) {
         match e {
-            Expression::StaticMemberExpression(m) => self.visit_expr(&m.object),
+            Expression::StaticMemberExpression(m) => self.visit_member_object(&m.object),
             Expression::ComputedMemberExpression(m) => {
-                self.visit_expr(&m.object);
+                self.visit_member_object(&m.object);
                 self.visit_expr(&m.expression);
             }
-            Expression::PrivateFieldExpression(m) => self.visit_expr(&m.object),
+            Expression::PrivateFieldExpression(m) => self.visit_member_object(&m.object),
             _ => {}
+        }
+    }
+
+    /// Visit the object of a MemberExpression, tagging direct
+    /// identifier reads with `RefParentKind::MemberObject`. Non-
+    /// identifier expressions (nested `(x.y).z`, calls, etc.) fall
+    /// through to the regular visitor.
+    fn visit_member_object(&mut self, e: &Expression<'_>) {
+        if let Expression::Identifier(id) = e {
+            self.record_ref(id, RefParentKind::MemberObject);
+        } else {
+            self.visit_expr(e);
         }
     }
 
     fn visit_chain_element(&mut self, el: &ChainElement<'_>) {
         match el {
             ChainElement::CallExpression(c) => self.visit_call(c),
-            ChainElement::StaticMemberExpression(m) => self.visit_expr(&m.object),
+            ChainElement::StaticMemberExpression(m) => self.visit_member_object(&m.object),
             ChainElement::ComputedMemberExpression(m) => {
-                self.visit_expr(&m.object);
+                self.visit_member_object(&m.object);
                 self.visit_expr(&m.expression);
             }
-            ChainElement::PrivateFieldExpression(m) => self.visit_expr(&m.object),
+            ChainElement::PrivateFieldExpression(m) => self.visit_member_object(&m.object),
             _ => {}
         }
     }

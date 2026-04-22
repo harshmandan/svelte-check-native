@@ -29,7 +29,23 @@ if (!svelteCompilerPath) {
   console.error('bridge: missing svelte/compiler path argument')
   process.exit(2)
 }
-const { compile } = await import(pathToFileURL(svelteCompilerPath).href)
+// svelte >= 5 publishes a CJS bundle at `./compiler/index.js`. Node's
+// ESM-import-of-CJS shows only `default` on the namespace (the whole
+// module.exports object), while Bun synthesizes named exports. Both
+// runtimes expose the same function as `mod.default.compile` though,
+// so prefer the named export and fall back through the default. If
+// neither yields a function the bridge is in a bad state and we fail
+// loudly rather than letting every request report "compile is not a
+// function" per file.
+const _svelteMod = await import(pathToFileURL(svelteCompilerPath).href)
+const compile = _svelteMod.compile ?? _svelteMod.default?.compile
+if (typeof compile !== 'function') {
+  console.error(
+    'bridge: no `compile` export found in ' + svelteCompilerPath +
+      ' (keys: ' + Object.keys(_svelteMod).join(', ') + ')',
+  )
+  process.exit(2)
+}
 
 // Optional: absolute path to the user's svelte.config.{js,mjs,cjs}.
 // Empty string when no config was discovered. Loaded once at startup

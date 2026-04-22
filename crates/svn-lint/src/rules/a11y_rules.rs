@@ -1162,6 +1162,15 @@ fn has_text_content(frag: &Fragment) -> bool {
                 if el.name.as_str() == "selectedcontent" {
                     return true;
                 }
+                // `<slot>` is a SlotElement in upstream's AST and falls
+                // through upstream's `has_content` to the pessimistic
+                // "assume everything else has content" branch — the
+                // parent might supply arbitrary content for it at
+                // render time. Our parser classes it as a regular
+                // element; gate here to keep upstream parity.
+                if el.name.as_str() == "slot" {
+                    return true;
+                }
                 if !has_text_content(&el.children) {
                     continue;
                 }

@@ -185,20 +185,21 @@ fn emit_document_with_render_name(
 
     // Module script content (already at module level — no special handling).
     if let Some(module_script) = &doc.module_script {
-        let overlay_line = current_line(buf.as_str());
-        let source_line = source_line_at(doc.source, module_script.content_range.start);
-        let line_count = count_lines(module_script.content);
-        buf.push_str(module_script.content);
-        if !module_script.content.ends_with('\n') {
-            buf.push_str("\n");
-        }
-        if line_count > 0 {
-            buf.push_line_map(LineMapEntry {
-                overlay_start_line: overlay_line,
-                overlay_end_line: overlay_line + line_count,
-                source_start_line: source_line,
-            });
-        }
+        // Pad to a trailing `\n` before calling `append_verbatim` so a
+        // single-line script (no terminating newline) still produces a
+        // LineMapEntry — append_verbatim only emits one when the text
+        // spans at least one newline, and we need source mapping for the
+        // overlay region even if the script is one line. The padded `\n`
+        // is synthetic filler, semantically equivalent to the old
+        // separate `push_str("\n")` that previous code did afterwards.
+        let padded;
+        let text: &str = if module_script.content.ends_with('\n') {
+            module_script.content
+        } else {
+            padded = format!("{}\n", module_script.content);
+            &padded
+        };
+        buf.append_verbatim(text, doc.source, module_script.content_range);
     }
 
     // `<script generics="T extends ...">` — pulled from the parser's

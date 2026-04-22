@@ -35,6 +35,14 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
 
     let mut template_runs: Vec<Range> = Vec::new();
     let mut template_cursor: u32 = 0;
+    // Tag-nesting depth. `<script>` / `<style>` are grabbed as Svelte
+    // sections only when depth == 0; nested occurrences (analytics
+    // snippet under `<svelte:head>{#if}…`) are left for the template
+    // parser. Tracked by a cheap `<NAME>` / `</NAME>` counter that
+    // respects quoted attribute values and self-closing tags. Not a
+    // real DOM — just enough to distinguish "document level" from
+    // "inside something."
+    let mut tag_depth: u32 = 0;
 
     while !scanner.eof() {
         let here = scanner.pos();
@@ -75,7 +83,8 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
             continue;
         }
 
-        if scanner.peek_byte() == Some(b'<')
+        if tag_depth == 0
+            && scanner.peek_byte() == Some(b'<')
             && (scanner.starts_with_ignore_case("<script")
                 && !is_ident_char(scanner.peek_byte_at(7)))
         {
@@ -139,7 +148,8 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
             continue;
         }
 
-        if scanner.peek_byte() == Some(b'<')
+        if tag_depth == 0
+            && scanner.peek_byte() == Some(b'<')
             && (scanner.starts_with_ignore_case("<style")
                 && !is_ident_char(scanner.peek_byte_at(6)))
         {
@@ -166,6 +176,42 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
             continue;
         }
 
+        // Mustache — skip the whole balanced `{…}` region. `<` and
+        // `>` inside a mustache expression (`{a < b}`) are operator
+        // tokens, not tag markers, and must not perturb tag_depth.
+        // Skip quickly by counting braces with string-literal
+        // awareness (`'…'`, `"…"`, template `` `…` `` so a `{` inside
+        // a string doesn't increment depth).
+        if scanner.peek_byte() == Some(b'{') {
+            scanner.set_pos(scan_past_mustache(scanner.source().as_bytes(), scanner.pos()));
+            continue;
+        }
+        // Track `<NAME>` / `</NAME>` nesting — cheap but sufficient
+        // for "is a following `<script>` at document level?".
+        if scanner.peek_byte() == Some(b'<') {
+            let bytes = scanner.source().as_bytes();
+            let pos = scanner.pos() as usize;
+            let next = bytes.get(pos + 1).copied();
+            if next == Some(b'/') {
+                if tag_depth > 0 {
+                    tag_depth -= 1;
+                }
+                let mut i = pos + 2;
+                while i < bytes.len() && bytes[i] != b'>' {
+                    i += 1;
+                }
+                scanner.set_pos((i + 1).min(bytes.len()) as u32);
+                continue;
+            }
+            if next.is_some_and(|b| b.is_ascii_alphabetic()) {
+                let (end, self_closing) = scan_past_open_tag(bytes, pos);
+                if !self_closing {
+                    tag_depth += 1;
+                }
+                scanner.set_pos(end as u32);
+                continue;
+            }
+        }
         // Anything else: keep walking.
         scanner.advance_char();
     }
@@ -531,6 +577,105 @@ fn parse_lang_attr(attrs: &[ScriptAttr], errors: &mut Vec<ParseError>) -> Script
             ScriptLang::Js
         }
     }
+}
+
+/// Skip past a balanced `{…}` mustache block at `from`, returning
+/// the index just past the matching `}`. Understands enough JS
+/// lexical structure to not get fooled by braces / quotes inside
+/// strings, template literals, or comments:
+///
+/// - `'…'`, `"…"`, `` `…` `` respect backslash escapes; embedded
+///   braces don't count.
+/// - `// … \n` and `/* … */` are skipped entirely, so an apostrophe
+///   inside `// don't` doesn't start a phantom string.
+///
+/// On EOF, returns the source length.
+fn scan_past_mustache(bytes: &[u8], from: u32) -> u32 {
+    let mut i = from as usize + 1;
+    let mut depth: u32 = 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                // Line comment — scan to end of line (or EOF).
+                i += 2;
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                // Block comment — scan to `*/`.
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(bytes.len());
+            }
+            b'\\' if i + 1 < bytes.len() => {
+                i += 2;
+                continue;
+            }
+            b'"' | b'\'' | b'`' => {
+                let quote = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                if i < bytes.len() {
+                    i += 1;
+                }
+            }
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return i as u32;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    bytes.len() as u32
+}
+
+/// Skip past `<NAME … >` or `<NAME … />` starting at `from`. Returns
+/// `(index_past_close, self_closing)`. Respects quoted attribute
+/// values.
+fn scan_past_open_tag(bytes: &[u8], from: usize) -> (usize, bool) {
+    let mut i = from + 1;
+    let mut self_closing = false;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' | b'\'' => {
+                let quote = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1;
+                }
+            }
+            b'{' => {
+                // Attribute value with mustache — skip balanced.
+                i = scan_past_mustache(bytes, i as u32) as usize;
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'>') => {
+                self_closing = true;
+                return (i + 2, true);
+            }
+            b'>' => return (i + 1, self_closing),
+            _ => i += 1,
+        }
+    }
+    (bytes.len(), self_closing)
 }
 
 #[cfg(test)]

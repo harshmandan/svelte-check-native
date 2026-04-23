@@ -343,184 +343,21 @@ fn emit_document_with_render_name(
     if let Some(t) = synthesized_events_type.as_deref() {
         let _ = writeln!(buf, "    type $$Events = {t};");
     }
-    // Analyze the instance script for store refs, destructured props, and
-    // the set of script-declared bindings. The bindings are intersected
-    // with template-referenced identifiers below to drive per-template
-    // void-refs (closes the TS6133 gap for imports/locals used only in
-    // markup).
-    //
-    // Bindings come from both the module script (`<script module>`) and
-    // the instance script — names from either scope are visible in the
-    // template, so both must seed the void-ref intersection.
-    //
-    // Two oxc parses are needed for the instance script: `s.body` has
-    // imports blanked out (so store-ref scanning and prop detection see
-    // only the body), but binding collection must see the *original*
-    // content so imports count as declared names.
-    let mut script_bindings: HashSet<String> = HashSet::new();
-    if let Some(module_script) = &doc.module_script {
-        let alloc_mod = Allocator::default();
-        let parsed_mod = parse_script_body(&alloc_mod, module_script.content, module_script.lang);
-        collect_top_level_bindings(&parsed_mod.program, &mut script_bindings);
-    }
-
-    let (prop_names, prop_type_source): (Vec<SmolStr>, Option<String>) =
-        if let (Some(_s), Some(instance), Some(parsed_orig)) =
-            (&split, &doc.instance_script, parsed_instance.as_ref())
-        {
-            // Scan bindings + props against the *original* script content
-            // (imports included). Using the imports-blanked body would
-            // miss store names imported from external modules (e.g.
-            // SvelteKit's `import { page } from '$app/stores'` plus
-            // template uses of `$page.data.foo`).
-            let props: Vec<SmolStr> = props_info
-                .destructures
-                .iter()
-                .map(|p| p.local_name.clone())
-                .collect();
-
-            // Props type text for the default-export annotation
-            // (`Component<PropType>`). Without this, `typeof X` for
-            // our overlay default resolves to the weak declared type
-            // and every `<X cb={(arg) => ...}>` destructure binding
-            // reads as implicit-any via `ComponentProps<any> = any`.
-            //
-            // SvelteKit auto-typing: when the file is a route
-            // component (`+page.svelte`, `+layout.svelte`, …) and the
-            // user wrote an untyped `$props()` destructure, synthesize
-            // a Props shape from the known kit-auto-typed prop names
-            // so `data` gets `PageData` / `LayoutData`, `form` gets
-            // `ActionData`, etc. Users writing `let { data } =
-            // $props()` expect this without writing the annotation
-            // themselves — upstream svelte2tsx injects the same shape.
-            // Only fires when PropsInfo reports no user-provided
-            // source; a user annotation (any branch) wins.
-            let ty = props_info.type_text.clone().or_else(|| {
-                sveltekit::route_kind(source_path).and_then(|kind| {
-                    let names_borrow: Vec<&str> = props.iter().map(|s| s.as_str()).collect();
-                    sveltekit::synthesize_route_props_type(kind, &names_borrow)
-                })
-            });
-
-            collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
-            // Also collect bindings from the rewritten content —
-            // reactive-destructure statements (`$: ({a, b} = expr)`)
-            // become `let {a, b} = expr;` after the reactive rewrite
-            // runs and introduce module-scope names that the original
-            // script didn't have. Without this, later template-side
-            // store-alias detection (`$a` → `a` in script_bindings)
-            // misses these names and fires TS2304.
-            if let Some(rewritten) = &rewritten_content {
-                let alloc_rw = Allocator::default();
-                let parsed_rw = parse_script_body(&alloc_rw, rewritten, instance.lang);
-                collect_top_level_bindings(&parsed_rw.program, &mut script_bindings);
-            }
-            (props, ty)
-        } else {
-            (Vec::new(), None)
-        };
-
-    // Store auto-subscribe scan happens AFTER both module + instance
-    // bindings are collected, so a `$properties` use in instance can
-    // resolve to a `properties` declared in `<script module>`.
-    let mut store_refs: Vec<SmolStr> = {
-        let mut accumulated: Vec<SmolStr> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        let push_unique =
-            |found: Vec<SmolStr>, seen: &mut HashSet<String>, out: &mut Vec<SmolStr>| {
-                for name in found {
-                    if seen.insert(name.to_string()) {
-                        out.push(name);
-                    }
-                }
-            };
-        if let Some(module_script) = &doc.module_script {
-            push_unique(
-                find_store_refs_with_bindings(module_script.content, &script_bindings),
-                &mut seen,
-                &mut accumulated,
-            );
-        }
-        if let Some(instance) = &doc.instance_script {
-            push_unique(
-                find_store_refs_with_bindings(instance.content, &script_bindings),
-                &mut seen,
-                &mut accumulated,
-            );
-        }
-        accumulated
-    };
-
-    // Type-only imports (`import type { X }` / `import { type X }`):
-    // collect_top_level_bindings deliberately excludes these (voiding a
-    // type name fires TS2693), so they never enter script_bindings. But
-    // a type-only import can still be "used" purely inside a template
-    // expression — the most common case is a type-cast in an attribute
-    // expression: `{foo(item as AppVideo)}`. Without a type-position
-    // reference in the overlay, tsgo fires TS6133 on the import.
-    //
-    // Collect them separately and intersect with template refs below so
-    // we can emit a `type __svn_tpl_type_refs = [A, B]` alias that
-    // keeps TS from flagging the import as unused.
-    let mut type_only_imports: HashSet<String> = HashSet::new();
-    if let Some(parsed) = parsed_instance.as_ref() {
-        svn_analyze::collect_type_only_import_bindings(&parsed.program, &mut type_only_imports);
-    }
-    if let Some(module_script) = &doc.module_script {
-        let alloc_mod2 = Allocator::default();
-        let parsed_mod2 = parse_script_body(&alloc_mod2, module_script.content, module_script.lang);
-        svn_analyze::collect_type_only_import_bindings(
-            &parsed_mod2.program,
-            &mut type_only_imports,
-        );
-    }
-
-    // Walk template expressions for identifier references. A single walk
-    // produces both:
-    //   - `template_void_refs`: refs that match a script binding —
-    //     consumed by emit_void_block so TS6133 doesn't fire on
-    //     imports/locals only used in markup
-    //   - additional `$store` refs to seed the auto-subscribe alias
-    //     declarations: a store imported in the script but only
-    //     auto-subscribed in the template (`{$page.data.x}`) needs the
-    //     same `let $page: any;` declaration as a script-side use.
-    //   - type-only import names referenced in template expressions —
-    //     kept alive via a module-scope type alias below.
-    let (template_void_refs, template_store_refs, template_type_refs) =
-        if script_bindings.is_empty() && type_only_imports.is_empty() {
-            (Vec::new(), Vec::new(), Vec::new())
-        } else {
-            let already: HashSet<&str> = store_refs
-                .iter()
-                .chain(prop_names.iter())
-                .map(|s| s.as_str())
-                .collect();
-            let mut tpl_voids = Vec::new();
-            let mut tpl_stores = Vec::new();
-            let mut tpl_types: Vec<SmolStr> = Vec::new();
-            let mut type_seen: HashSet<String> = HashSet::new();
-            let mut store_seen: HashSet<String> =
-                store_refs.iter().map(|s| s.to_string()).collect();
-            for name in find_template_refs(fragment, doc.source) {
-                // `$foo` where `foo` is a script binding (and not already a
-                // declared store) — synthesize the auto-subscribe alias.
-                if let Some(base) = name.as_str().strip_prefix('$') {
-                    if script_bindings.contains(base) && store_seen.insert(name.to_string()) {
-                        tpl_stores.push(name.clone());
-                        continue;
-                    }
-                }
-                if script_bindings.contains(name.as_str()) && !already.contains(name.as_str()) {
-                    tpl_voids.push(name);
-                } else if type_only_imports.contains(name.as_str())
-                    && type_seen.insert(name.to_string())
-                {
-                    tpl_types.push(name);
-                }
-            }
-            (tpl_voids, tpl_stores, tpl_types)
-        };
-    store_refs.extend(template_store_refs);
+    let ScriptAndTemplateAnalysis {
+        prop_names,
+        prop_type_source,
+        store_refs,
+        template_void_refs,
+        template_type_refs,
+    } = analyze_script_and_template_refs(
+        doc,
+        source_path,
+        fragment,
+        parsed_instance.as_ref(),
+        split.as_ref(),
+        rewritten_content.as_deref(),
+        &props_info,
+    );
 
     // Store auto-subscribe aliases: declare a typed `let $store!:
     // __SvnStoreValue<typeof store>;` for every detected `$ident`.
@@ -583,225 +420,23 @@ fn emit_document_with_render_name(
         }
     }
 
-    // Collect every `let <name>: T;` that needs a `!` definite-assignment
-    // assertion to satisfy strict flow analysis. Two sources:
-    //
-    //   1. `bind:this` targets — the user's `bind:this={x}` pattern
-    //      assigns `x` asynchronously after mount; TS can't see that.
-    //   2. `export`-stripped locals — `export let foo: T` in the
-    //      script becomes `let foo: T` in the body after
-    //      script_split removes the `export` keyword. The symbol is
-    //      consumed by the template (`{#if foo}`, `<X prop={foo}>`)
-    //      but never initialized in the body. Post-Phase-1 we emit
-    //      template `{#if foo}` as a real TS `if ((foo))`, which
-    //      reads the uninitialized `let foo: T;` and fires TS2454.
-    //
-    // The `rewrite_definite_assignment_in_place` pass only touches
-    // declarations that have a `:` type annotation and NO `=`
-    // initializer, so adding names here is safe for `export let foo
-    // = defaultValue` and `export let foo` (no annotation) — both
-    // skip the rewrite.
-    let mut def_assign_names: Vec<SmolStr> = summary
-        .bind_this_targets
-        .iter()
-        .map(|t| t.name.clone())
-        .collect();
-    if let Some(s) = &split {
-        for name in &s.exported_locals {
-            if !def_assign_names.iter().any(|n| n == name) {
-                def_assign_names.push(name.clone());
-            }
-        }
-    }
-    // Also definite-assign every store whose auto-subscribe alias
-    // `$store` got synthesized above. Svelte promises `$store` reads a
-    // value from the store runtime, but the UNDERLYING `store` local
-    // may be declared as `let store: Writable<T>` (no initializer) and
-    // only assigned inside a reactive branch. Without the `!`, TS2454
-    // fires at the type-declaration line because flow analysis sees
-    // `typeof store` being read before all branches assign. Safe to
-    // enable broadly: the definite-assign rewrite only touches `let
-    // NAME: Type` declarations with no initializer and no `!`, so
-    // store imports, store `const` declarations, and `let store =
-    // writable(0)` patterns are all unaffected.
-    for name in &store_refs {
-        let base = SmolStr::from(name.strip_prefix('$').unwrap_or(name));
-        if !def_assign_names.iter().any(|n| n == &base) {
-            def_assign_names.push(base);
-        }
-    }
-    // SVELTE-4-COMPAT: names touched by reactive destructure or
-    // reactive re-assignment (`$: ({a, b} = expr)` or `$: a = expr`
-    // where `a` is already declared) also need `!`. The reactive
-    // rewrite wraps block/expr-form `$:` in `;() => { … };` — an
-    // uncalled arrow — so TS's flow analysis doesn't see the
-    // assignment inside. A pre-existing `let a: T;` without
-    // initializer then fires TS2454 on every read of `a`.
-    for name in &reactive_touched_names {
-        if !def_assign_names.iter().any(|n| n == name) {
-            def_assign_names.push(name.clone());
-        }
-    }
-    // Every top-level `let NAME: Type;` (typed, no initializer) in
-    // the instance script — Svelte-style "declare now, assign in a
-    // handler later" pattern. Upstream svelte-check doesn't fire
-    // TS2454 on these because its TS version / transform sequence
-    // never observes the uninitialised state. Matching that with a
-    // `!` definite-assign assertion is the simplest equivalent.
-    if let Some(parsed_orig) = parsed_instance.as_ref() {
-        let mut uninit_lets: Vec<SmolStr> = Vec::new();
-        collect_typed_uninit_lets(&parsed_orig.program, &mut uninit_lets);
-        for name in uninit_lets {
-            if !def_assign_names.iter().any(|n| n == &name) {
-                def_assign_names.push(name);
-            }
-        }
-    }
-    // Widen Svelte-4-style untyped uninitialized exported props to `any`.
-    // `export let data;` → `let data: any;`. Without this, strict-mode
-    // TS infers the symbol's type as `undefined` and every template
-    // reference fires TS2339/TS18048; Svelte 4's actual semantics are
-    // that an un-annotated `export let X` is typed `any`. Only exported
-    // locals participate — body-local `let x;` keeps its `undefined`
-    // inference, because that IS the user's intent for internal state.
-    //
-    // Runs BEFORE definite-assign: widen inserts `: any` at the name
-    // position, and the downstream definite-assign pass looks for a
-    // `:` annotation to decide whether to add `!`. Running the passes
-    // in the other order means definite-assign inserts `!` first and
-    // hides the original `:` annotation from widen's scanner, which
-    // then wrongly widens typed declarations into `let foo: any!: T`.
-    if let Some(s) = &split {
-        widen_untyped_exported_props_in_place(buf.raw_string_mut(), &s.exported_locals);
-    }
-    rewrite_definite_assignment_in_place(buf.raw_string_mut(), &def_assign_names);
-    // SVELTE-4-COMPAT: de-narrow typed exported props with literal
-    // initializers. `export let size: Size = 'medium'` in Svelte 4
-    // says "default to 'medium' when consumer omits" — at runtime
-    // `size` can be any value of type Size. But TS's control-flow
-    // analysis narrows the declared symbol to the literal `'medium'`
-    // after `let size: Size = 'medium';`, so later `size === 'large'`
-    // fires TS2367 "no overlap". Inserting `size = undefined as any;`
-    // immediately after the declaration de-narrows via the
-    // `any`-cast: TS widens the flow-tracked type back to the
-    // declared annotation (Size), and subsequent comparisons work.
-    if let Some(s) = &split {
-        // De-narrow both exported props AND body-local `let X: T = lit;`
-        // declarations. Body-level `let discontinuousScale: T | null =
-        // null;` suffers the same literal-narrowing issue as exported
-        // props: TS narrows X's flow-tracked type to `null`, and a
-        // subsequent `if (X) X.foo` fires TS2339 on `never`. Reuse the
-        // same insertion.
-        let mut denarrow_targets: Vec<SmolStr> = s.exported_locals.clone();
-        if let Some(parsed_orig) = parsed_instance.as_ref() {
-            let mut typed_lets: Vec<SmolStr> = Vec::new();
-            collect_typed_top_level_lets(&parsed_orig.program, &mut typed_lets);
-            for name in typed_lets {
-                if !denarrow_targets.iter().any(|n| n == &name) {
-                    denarrow_targets.push(name);
-                }
-            }
-        }
-        denarrow_typed_exported_props_in_place(buf.raw_string_mut(), &denarrow_targets);
-    }
-
-    buf.push_str("    async function __svn_tpl_check() {\n");
-    buf.push_str("        // template type-check body (incremental)\n");
-    // `{@const}` declarations are emitted INLINE in the template-walk
-    // pass (see `emit_at_const_if_any`) — as a `const <pattern> =
-    // <expr>;` at the exact point in the template where the tag
-    // appears. Inline emission pins the inferred type so subsequent
-    // `{#if NAME === '...'}` narrows via TS control-flow analysis,
-    // and destructuring patterns (`{@const [a, { b }] = tuple}`) work
-    // for free. A top-level `let NAME: any = undefined;` stub
-    // (previous behavior) would shadow the inline const — every
-    // block-scope `const` re-use would fire TS6133 on the unused
-    // outer `let`. References out of the declaring block's scope are
-    // now (correctly) "name not found" errors.
-    emit_legacy_action_attrs(buf.raw_string_mut(), summary);
-    emit_bind_pair_declarations(buf.raw_string_mut(), summary);
-    // v0.3 Item 6: DOM-binding checks (`EXPR = null as any as TYPE;`)
-    // are emitted INLINE at each element's position during the
-    // template walk — see `emit_element_bind_checks_inline` in
-    // `emit_template_node`'s Node::Element arm. Top-of-tpl_check
-    // batching had the same scope gap that was fixed for
-    // component-prop checks above: an expression referencing a
-    // block-scoped name (`bind:clientWidth={items[i].width}`
-    // inside `{#each as _, i}`) resolved against the top-level
-    // scope and fired `Cannot find name 'i'` noise.
-    // Index component instantiations by source byte offset so the
-    // template walker can emit each prop-check inline at the component
-    // node's position — i.e. inside the enclosing `{#each}` / `{#if}` /
-    // `{#snippet}` scope. Emitting the checks as a flat block after the
-    // walk put every check at the top level of `__svn_tpl_check`, which
-    // silently broke any check whose prop expressions referenced a
-    // binding introduced by a block (each-as item, each-index, snippet
-    // param, etc.).
-    let instantiations_by_start: std::collections::HashMap<
-        u32,
-        &svn_analyze::ComponentInstantiation,
-    > = summary
-        .component_instantiations
-        .iter()
-        .map(|i| (i.node_start, i))
-        .collect();
-    let mut action_counter: usize = 0;
-    // Resync before the template walk — emit_legacy_action_attrs /
-    // emit_bind_pair_declarations above wrote via raw_string_mut and
-    // left overlay_line stale. Every append_with_source inside the
-    // walk (interpolation splice sites) reads current byte position
-    // from the buffer, which is always accurate, but the counter
-    // needs to be fresh for any LineMapEntry the walk might push.
-    buf.resync_current_line();
-    emit_template_body(
+    apply_script_body_rewrites(
         &mut buf,
-        doc.source,
-        fragment,
-        2,
-        &instantiations_by_start,
-        &mut action_counter,
+        summary,
+        split.as_ref(),
+        &store_refs,
+        &reactive_touched_names,
+        parsed_instance.as_ref(),
     );
-    buf.push_str("    }\n");
+
+    emit_template_check_fn(&mut buf, doc, fragment, summary);
 
     let exported_locals: Vec<SmolStr> = split
         .as_ref()
         .map(|s| s.exported_locals.clone())
         .unwrap_or_default();
 
-    // Build the `{ name: sig; ... }` object type for collected exports.
-    // Used two places below:
-    //   - consumed by the render body's return shape, where body-local
-    //     refs (`typeof handler`, `$$Props['x']`) resolve inside
-    //     `$$render`'s own scope.
-    //   - for class-wrapper-enabled components: projected back out at
-    //     module scope via `ReturnType<__svn_Render_<hash><T>['exports']>`,
-    //     letting consumers of the `$$IsomorphicComponent` interface see
-    //     the real `export function` / `export const` signatures without
-    //     any TS2304 risk at module scope.
-    //   - for non-class-wrapper arms (components without generics):
-    //     intersected into the default-export's SvelteComponent type
-    //     directly. These arms can still fire TS2304 if the user refs
-    //     `$$Props['x']` or `typeof <body-local>` in an `export function`
-    //     signature — a pattern that's rare in practice and only
-    //     surfaces on generic components (which use the class-wrapper
-    //     path anyway).
-    let exports_object: Option<String> = split.as_ref().and_then(|s| {
-        if s.export_type_infos.is_empty() {
-            return None;
-        }
-        let mut buf = String::from("{ ");
-        for info in &s.export_type_infos {
-            buf.push_str(info.name.as_str());
-            buf.push_str(": ");
-            match &info.type_source {
-                Some(t) => buf.push_str(t),
-                None => buf.push_str("any"),
-            }
-            buf.push_str("; ");
-        }
-        buf.push('}');
-        Some(buf)
-    });
+    let exports_object = build_exports_object(split.as_ref());
     emit_void_block(
         buf.raw_string_mut(),
         summary,
@@ -811,51 +446,14 @@ fn emit_document_with_render_name(
         &exported_locals,
     );
 
-    // Class-wrapper pattern (Phase 2 / R1 of notes/PLAN.md, upstream
-    // svelte2tsx's approach): when the component has both a Props
-    // type source and a generics list, return a typed sentinel so a
-    // sibling `declare class` can extract the Props type at module
-    // scope via `ReturnType<Render<T>['props']>`. This lets body-
-    // local `typeof X` refs in the Props type (`interface $$Props {
-    // labels?: typeof labels }`) resolve through the render
-    // function's scope — fixing the TS2304/TS7006 cluster on
-    // generic Svelte-4 components (e.g. layerchart/BarChart).
-    //
-    // Fixtures: design/class_wrapper/{current,fixed,broken}/.
-    let use_class_wrapper = generics.is_some() && prop_type_source.is_some();
-    if use_class_wrapper && let Some(ty) = prop_type_source.as_deref() {
-        // Inject just before the closing brace of $$render so the
-        // return statement is the last thing in the function body.
-        // Using `undefined as any as <ty>` (not `null as <ty>`) so
-        // `<ty>` can be a non-nullable type like `{ foo: string }`
-        // without firing TS2352.
-        //
-        // Render return matches upstream's shape (addComponentExport.ts:96-138)
-        // — { props, events, slots, bindings, exports } — so a sibling
-        // class's methods can extract each surface via
-        // `Awaited<ReturnType<typeof $$render>>['<method>']`. The
-        // `exports` field carries `exports_object` unchanged because
-        // body-local refs (`typeof handler`, `$$Props['x']`) resolve
-        // inside $$render's scope; at consumer sites the class-wrapper's
-        // `exports()` method projects them out intact.
-        let exports_field = exports_object.as_deref().unwrap_or("{}");
-        // When event narrowing is active (user declared $$Events OR
-        // synthesised from a typed dispatcher under the three-trigger
-        // gate), surface `$$Events` as the return shape's `events`
-        // field. The class-wrapper's `events()` method projects it
-        // out at module scope via `ReturnType<Render<T>['events']>`
-        // — the iso-interface's SvelteComponent<_, Events, _> slot
-        // carries it through to consumers.
-        let events_field: &str = if has_strict_events(doc) || synthesized_events_type.is_some() {
-            "$$Events"
-        } else {
-            "{}"
-        };
-        let _ = writeln!(
-            buf,
-            "    return {{ props: undefined as any as ({ty}), events: undefined as any as {events_field}, slots: undefined as any as {{}}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
-        );
-    }
+    emit_render_body_return(
+        &mut buf,
+        doc,
+        generics.as_deref(),
+        prop_type_source.as_deref(),
+        synthesized_events_type.as_deref(),
+        exports_object.as_deref(),
+    );
 
     buf.push_str("}\n");
     let _ = writeln!(buf, "{render_name};");
@@ -902,6 +500,381 @@ fn emit_document_with_render_name(
         overlay_line_starts,
         source_line_starts,
     }
+}
+
+/// Props, store auto-subscribes, and template-referenced identifier
+/// buckets — the analyze pass that runs after hoisted imports but
+/// before the template-check wrapper.
+struct ScriptAndTemplateAnalysis {
+    prop_names: Vec<SmolStr>,
+    prop_type_source: Option<String>,
+    store_refs: Vec<SmolStr>,
+    template_void_refs: Vec<SmolStr>,
+    template_type_refs: Vec<SmolStr>,
+}
+
+/// Analyze script + template for: destructured prop names, the Props
+/// type source (user-provided or SvelteKit-synthesised), `$store`
+/// auto-subscribe refs (script + template sides), template-referenced
+/// void-refs (script bindings used only in markup — avoids TS6133),
+/// and template-referenced type-only imports (kept alive via a module-
+/// scope type alias).
+///
+/// Script-binding collection unions the module script, the instance
+/// script (original, with imports visible), and the rewritten content
+/// (so reactive-destructure-introduced names — `$: ({a, b} = expr)` →
+/// `let {a, b} = …` — participate in subsequent `$a`/`$b` store-alias
+/// detection).
+fn analyze_script_and_template_refs<'alloc>(
+    doc: &svn_parser::Document<'_>,
+    source_path: &Path,
+    fragment: &svn_parser::Fragment,
+    parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
+    split: Option<&script_split::SplitScript>,
+    rewritten_content: Option<&str>,
+    props_info: &PropsInfo,
+) -> ScriptAndTemplateAnalysis {
+    let mut script_bindings: HashSet<String> = HashSet::new();
+    if let Some(module_script) = &doc.module_script {
+        let alloc_mod = Allocator::default();
+        let parsed_mod = parse_script_body(&alloc_mod, module_script.content, module_script.lang);
+        collect_top_level_bindings(&parsed_mod.program, &mut script_bindings);
+    }
+
+    let (prop_names, prop_type_source): (Vec<SmolStr>, Option<String>) =
+        if let (Some(_s), Some(instance), Some(parsed_orig)) =
+            (split, &doc.instance_script, parsed_instance)
+        {
+            let props: Vec<SmolStr> = props_info
+                .destructures
+                .iter()
+                .map(|p| p.local_name.clone())
+                .collect();
+
+            // SvelteKit auto-typing: route components (+page.svelte,
+            // +layout.svelte) with an untyped `$props()` pick up
+            // `PageData` / `LayoutData` / `ActionData` from the file
+            // path + the list of destructured prop names. Only fires
+            // when PropsInfo saw no user-provided source.
+            let ty = props_info.type_text.clone().or_else(|| {
+                sveltekit::route_kind(source_path).and_then(|kind| {
+                    let names_borrow: Vec<&str> = props.iter().map(|s| s.as_str()).collect();
+                    sveltekit::synthesize_route_props_type(kind, &names_borrow)
+                })
+            });
+
+            collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
+            if let Some(rewritten) = rewritten_content {
+                let alloc_rw = Allocator::default();
+                let parsed_rw = parse_script_body(&alloc_rw, rewritten, instance.lang);
+                collect_top_level_bindings(&parsed_rw.program, &mut script_bindings);
+            }
+            (props, ty)
+        } else {
+            (Vec::new(), None)
+        };
+
+    // Store auto-subscribe scan happens AFTER both module + instance
+    // bindings are collected, so a `$properties` use in instance can
+    // resolve to a `properties` declared in `<script module>`.
+    let mut store_refs: Vec<SmolStr> = {
+        let mut accumulated: Vec<SmolStr> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        let push_unique =
+            |found: Vec<SmolStr>, seen: &mut HashSet<String>, out: &mut Vec<SmolStr>| {
+                for name in found {
+                    if seen.insert(name.to_string()) {
+                        out.push(name);
+                    }
+                }
+            };
+        if let Some(module_script) = &doc.module_script {
+            push_unique(
+                find_store_refs_with_bindings(module_script.content, &script_bindings),
+                &mut seen,
+                &mut accumulated,
+            );
+        }
+        if let Some(instance) = &doc.instance_script {
+            push_unique(
+                find_store_refs_with_bindings(instance.content, &script_bindings),
+                &mut seen,
+                &mut accumulated,
+            );
+        }
+        accumulated
+    };
+
+    // Type-only imports can be "used" purely inside a template
+    // expression (type cast `{foo(item as AppVideo)}`); we intersect
+    // with template refs below and emit `type __svn_tpl_type_refs = [A]`
+    // so TS doesn't flag the import TS6133.
+    let mut type_only_imports: HashSet<String> = HashSet::new();
+    if let Some(parsed) = parsed_instance {
+        svn_analyze::collect_type_only_import_bindings(&parsed.program, &mut type_only_imports);
+    }
+    if let Some(module_script) = &doc.module_script {
+        let alloc_mod2 = Allocator::default();
+        let parsed_mod2 = parse_script_body(&alloc_mod2, module_script.content, module_script.lang);
+        svn_analyze::collect_type_only_import_bindings(
+            &parsed_mod2.program,
+            &mut type_only_imports,
+        );
+    }
+
+    // Single template walk produces: void-refs (script bindings used
+    // only in markup), template-side store-auto-subscribes, and type-
+    // only-import type refs.
+    let (template_void_refs, template_store_refs, template_type_refs) =
+        if script_bindings.is_empty() && type_only_imports.is_empty() {
+            (Vec::new(), Vec::new(), Vec::new())
+        } else {
+            let already: HashSet<&str> = store_refs
+                .iter()
+                .chain(prop_names.iter())
+                .map(|s| s.as_str())
+                .collect();
+            let mut tpl_voids = Vec::new();
+            let mut tpl_stores = Vec::new();
+            let mut tpl_types: Vec<SmolStr> = Vec::new();
+            let mut type_seen: HashSet<String> = HashSet::new();
+            let mut store_seen: HashSet<String> =
+                store_refs.iter().map(|s| s.to_string()).collect();
+            for name in find_template_refs(fragment, doc.source) {
+                if let Some(base) = name.as_str().strip_prefix('$') {
+                    if script_bindings.contains(base) && store_seen.insert(name.to_string()) {
+                        tpl_stores.push(name.clone());
+                        continue;
+                    }
+                }
+                if script_bindings.contains(name.as_str()) && !already.contains(name.as_str()) {
+                    tpl_voids.push(name);
+                } else if type_only_imports.contains(name.as_str())
+                    && type_seen.insert(name.to_string())
+                {
+                    tpl_types.push(name);
+                }
+            }
+            (tpl_voids, tpl_stores, tpl_types)
+        };
+    store_refs.extend(template_store_refs);
+
+    ScriptAndTemplateAnalysis {
+        prop_names,
+        prop_type_source,
+        store_refs,
+        template_void_refs,
+        template_type_refs,
+    }
+}
+
+/// Emit the `async function __svn_tpl_check() { … }` wrapper that
+/// carries every template expression as real TypeScript. The walk
+/// produces per-component prop-checks / bind:this assignments / DOM-
+/// binding assignments inline — all pinned to the enclosing block's
+/// scope (`{#each as item, i}`, `{#snippet args}`) so block-local refs
+/// resolve correctly.
+///
+/// Legacy action-attr and bind-pair declarations are emitted BEFORE
+/// the walk (both live at the top of the wrapper). They write directly
+/// via `raw_string_mut`, so the buffer's line counter needs
+/// `resync_current_line()` before the walk starts — any `LineMapEntry`
+/// the walk pushes reads the current overlay line from that counter.
+fn emit_template_check_fn(
+    buf: &mut EmitBuffer,
+    doc: &svn_parser::Document<'_>,
+    fragment: &svn_parser::Fragment,
+    summary: &svn_analyze::TemplateSummary,
+) {
+    buf.push_str("    async function __svn_tpl_check() {\n");
+    buf.push_str("        // template type-check body (incremental)\n");
+    emit_legacy_action_attrs(buf.raw_string_mut(), summary);
+    emit_bind_pair_declarations(buf.raw_string_mut(), summary);
+    // Index component instantiations by source byte offset so the
+    // template walker can emit each prop-check inline at the component
+    // node's position — i.e. inside the enclosing `{#each}` / `{#if}`
+    // / `{#snippet}` scope. Flat-block emission put every check at
+    // the top level of `__svn_tpl_check`, which silently broke any
+    // check whose prop expressions referenced a binding introduced by
+    // a block.
+    let instantiations_by_start: std::collections::HashMap<
+        u32,
+        &svn_analyze::ComponentInstantiation,
+    > = summary
+        .component_instantiations
+        .iter()
+        .map(|i| (i.node_start, i))
+        .collect();
+    let mut action_counter: usize = 0;
+    buf.resync_current_line();
+    emit_template_body(
+        buf,
+        doc.source,
+        fragment,
+        2,
+        &instantiations_by_start,
+        &mut action_counter,
+    );
+    buf.push_str("    }\n");
+}
+
+/// Apply the three post-body in-place rewrites: widen-untyped-exports →
+/// definite-assign → de-narrow-typed-literal-inits. Order is load-
+/// bearing: widen inserts `: any` at the name position, and
+/// definite-assign looks for a `:` annotation to decide whether to add
+/// `!`. Running the passes in the other order means `!` lands first and
+/// hides the original `:` annotation from widen's scanner.
+///
+/// Also builds the `def_assign_names` set from five sources (bind:this
+/// targets, export-stripped locals, store-auto-subscribe bases,
+/// reactive-rewrite-touched names, typed uninitialized top-level
+/// `let`s) — all of which produce declarations that Svelte treats as
+/// definitely-assigned at runtime but TS flow analysis can't prove.
+fn apply_script_body_rewrites<'alloc>(
+    buf: &mut EmitBuffer,
+    summary: &svn_analyze::TemplateSummary,
+    split: Option<&script_split::SplitScript>,
+    store_refs: &[SmolStr],
+    reactive_touched_names: &[SmolStr],
+    parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
+) {
+    let mut def_assign_names: Vec<SmolStr> = summary
+        .bind_this_targets
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
+    if let Some(s) = split {
+        for name in &s.exported_locals {
+            if !def_assign_names.iter().any(|n| n == name) {
+                def_assign_names.push(name.clone());
+            }
+        }
+    }
+    // `$store` auto-subscribe aliases: definite-assign the underlying
+    // `store` local. Body-declared `let store: Writable<T>` without
+    // initializer fires TS2454 at every `typeof store` read; the
+    // rewrite is a no-op for imports / `const` / initialized `let`.
+    for name in store_refs {
+        let base = SmolStr::from(name.strip_prefix('$').unwrap_or(name));
+        if !def_assign_names.iter().any(|n| n == &base) {
+            def_assign_names.push(base);
+        }
+    }
+    // SVELTE-4-COMPAT: names touched by reactive destructure /
+    // re-assignment. The reactive rewrite wraps block/expr-form `$:`
+    // in an uncalled arrow so TS flow analysis misses the assignment.
+    for name in reactive_touched_names {
+        if !def_assign_names.iter().any(|n| n == name) {
+            def_assign_names.push(name.clone());
+        }
+    }
+    // Every top-level `let NAME: Type;` (typed, no init) in the
+    // instance script — the Svelte "declare now, assign later from a
+    // handler" pattern. Upstream's TS version doesn't observe the
+    // uninitialised state across its transform pipeline; a `!` gives
+    // us the same behavior.
+    if let Some(parsed_orig) = parsed_instance {
+        let mut uninit_lets: Vec<SmolStr> = Vec::new();
+        collect_typed_uninit_lets(&parsed_orig.program, &mut uninit_lets);
+        for name in uninit_lets {
+            if !def_assign_names.iter().any(|n| n == &name) {
+                def_assign_names.push(name);
+            }
+        }
+    }
+    if let Some(s) = split {
+        widen_untyped_exported_props_in_place(buf.raw_string_mut(), &s.exported_locals);
+    }
+    rewrite_definite_assignment_in_place(buf.raw_string_mut(), &def_assign_names);
+    // SVELTE-4-COMPAT de-narrow: typed exported props with literal
+    // initializers (`export let size: Size = 'medium'`) AND body-local
+    // `let X: T = lit;` both narrow to the literal; inserting
+    // `NAME = undefined as any;` after the declaration widens back to
+    // the declared annotation, so later comparisons don't fire TS2367
+    // "no overlap".
+    if let Some(s) = split {
+        let mut denarrow_targets: Vec<SmolStr> = s.exported_locals.clone();
+        if let Some(parsed_orig) = parsed_instance {
+            let mut typed_lets: Vec<SmolStr> = Vec::new();
+            collect_typed_top_level_lets(&parsed_orig.program, &mut typed_lets);
+            for name in typed_lets {
+                if !denarrow_targets.iter().any(|n| n == &name) {
+                    denarrow_targets.push(name);
+                }
+            }
+        }
+        denarrow_typed_exported_props_in_place(buf.raw_string_mut(), &denarrow_targets);
+    }
+}
+
+/// Build the `{ name: sig; ... }` object-type text for each
+/// `export function` / `export const` / `export let` that script_split
+/// surfaced. Consumed in two places:
+///   - the render body's `return { exports: undefined as any as (…) }`
+///     where body-local refs (`typeof handler`, `$$Props['x']`) resolve
+///     inside `$$render`'s own scope.
+///   - for non-class-wrapper arms, intersected into the default-export's
+///     SvelteComponent type directly (may fire TS2304 for body-local
+///     refs — rare and acceptable; class-wrapper arms take the other
+///     path and avoid it entirely).
+fn build_exports_object(split: Option<&script_split::SplitScript>) -> Option<String> {
+    let s = split?;
+    if s.export_type_infos.is_empty() {
+        return None;
+    }
+    let mut buf = String::from("{ ");
+    for info in &s.export_type_infos {
+        buf.push_str(info.name.as_str());
+        buf.push_str(": ");
+        match &info.type_source {
+            Some(t) => buf.push_str(t),
+            None => buf.push_str("any"),
+        }
+        buf.push_str("; ");
+    }
+    buf.push('}');
+    Some(buf)
+}
+
+/// Emit the class-wrapper's `return { props, events, slots, bindings,
+/// exports };` at the tail of `$$render_<hash>`'s body. Only fires when
+/// both generics and a Props type source are present (the gate
+/// `use_class_wrapper`) — a sibling `declare class __svn_Render_<hash>`
+/// later projects each of the five surfaces back out at module scope
+/// via `Awaited<ReturnType<typeof $$render<…>>>['<field>']`.
+///
+/// Using `undefined as any as <T>` (not `null as <T>`) so `<T>` can be
+/// a non-nullable type like `{ foo: string }` without firing TS2352.
+/// Body-local `typeof X` / `$$Props['x']` refs inside `<T>` resolve
+/// inside the render function's scope where X / $$Props live.
+///
+/// `events_field` expands to `$$Events` when user-declared or
+/// synthesised under the three-trigger gate; otherwise stays `{}` to
+/// preserve lax event handling.
+fn emit_render_body_return(
+    buf: &mut EmitBuffer,
+    doc: &svn_parser::Document<'_>,
+    generics: Option<&str>,
+    prop_type_source: Option<&str>,
+    synthesized_events_type: Option<&str>,
+    exports_object: Option<&str>,
+) {
+    if generics.is_none() {
+        return;
+    }
+    let Some(ty) = prop_type_source else {
+        return;
+    };
+    let exports_field = exports_object.unwrap_or("{}");
+    let events_field: &str = if has_strict_events(doc) || synthesized_events_type.is_some() {
+        "$$Events"
+    } else {
+        "{}"
+    };
+    let _ = writeln!(
+        buf,
+        "    return {{ props: undefined as any as ({ty}), events: undefined as any as {events_field}, slots: undefined as any as {{}}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
+    );
 }
 
 /// Emit the hoisted-imports region at module scope, followed by a

@@ -244,6 +244,36 @@ fn emit_document_with_render_name(
             PropsInfo::default()
         };
 
+    // Three-trigger gate for event-type narrowing, matching upstream
+    // svelte2tsx (`ComponentEvents.ts:84-86` + `ExportedNames.isRunesMode`).
+    // Narrow ONLY when the user opted in via ONE of:
+    //   1. `interface $$Events` / `type $$Events` declared.
+    //   2. `<script strictEvents>` attribute.
+    //   3. Runes mode.
+    // Otherwise stay lax (child events flow through the default
+    // `(e: any) => any` overload). This matches upstream's behavior
+    // for Svelte-4 components that happen to use
+    // `createEventDispatcher<T>()` without opting into strict events —
+    // narrowing those without opt-in produced 18 legitimate-but-new
+    // errors on control-svelte-4 in the reverted commit 3c24f18.
+    let narrow_events = has_strict_events(doc) || has_strict_events_attr(doc) || is_runes_mode(doc);
+    // If the component doesn't already declare `$$Events` but opted in
+    // via one of the other two triggers, pull the dispatcher's type
+    // argument as the source for a synthesised `type $$Events = T;`.
+    // Returns None when the user doesn't use `createEventDispatcher<T>()`
+    // or aliases the import — fall-through to the lax shim is safe in
+    // both cases.
+    let synthesized_events_type: Option<String> = if !narrow_events || has_strict_events(doc) {
+        None
+    } else {
+        parsed_instance
+            .as_ref()
+            .zip(doc.instance_script.as_ref())
+            .and_then(|(p, s)| {
+                svn_analyze::find_dispatcher_event_type_source(&p.program, s.content)
+            })
+    };
+
     // SVELTE-4-COMPAT: rewrite `$: ...` reactive statements before
     // the Svelte-5-shaped passes run, so downstream code sees the
     // Svelte-5 equivalents:
@@ -383,6 +413,17 @@ fn emit_document_with_render_name(
         None => {
             let _ = writeln!(buf, "async function {render_name}() {{");
         }
+    }
+    // Synthesised `type $$Events = <T>;` from a typed
+    // `createEventDispatcher<T>()` call, when the three-trigger gate
+    // fires and the user didn't already declare the interface.
+    // Placed INSIDE the render body so `T` can reference body-local
+    // generics (`<script generics="A"> … createEventDispatcher<{a: A}>()`)
+    // — at module scope `A` would fire TS2304. The class-wrapper's
+    // `events()` method projects this back out to consumers via
+    // `Awaited<ReturnType<typeof $$render<…>>>['events']`.
+    if let Some(t) = synthesized_events_type.as_deref() {
+        let _ = writeln!(buf, "    type $$Events = {t};");
     }
     // Analyze the instance script for store refs, destructured props, and
     // the set of script-declared bindings. The bindings are intersected
@@ -880,9 +921,21 @@ fn emit_document_with_render_name(
         // inside $$render's scope; at consumer sites the class-wrapper's
         // `exports()` method projects them out intact.
         let exports_field = exports_object.as_deref().unwrap_or("{}");
+        // When event narrowing is active (user declared $$Events OR
+        // synthesised from a typed dispatcher under the three-trigger
+        // gate), surface `$$Events` as the return shape's `events`
+        // field. The class-wrapper's `events()` method projects it
+        // out at module scope via `ReturnType<Render<T>['events']>`
+        // — the iso-interface's SvelteComponent<_, Events, _> slot
+        // carries it through to consumers.
+        let events_field: &str = if has_strict_events(doc) || synthesized_events_type.is_some() {
+            "$$Events"
+        } else {
+            "{}"
+        };
         let _ = writeln!(
             buf,
-            "    return {{ props: undefined as any as ({ty}), events: undefined as any as {{}}, slots: undefined as any as {{}}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
+            "    return {{ props: undefined as any as ({ty}), events: undefined as any as {events_field}, slots: undefined as any as {{}}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
         );
     }
 
@@ -1140,12 +1193,15 @@ fn emit_default_export_declarations(
     // resolve inside the render function's scope (not module scope)
     // without the legacy sanitisation hack.
     //
-    // Gate: class-wrapper active AND Svelte-5 OR Svelte-4's `export let`
-    // pattern. Excludes the pure Svelte-4 synth-signal cases (has_slot
-    // alone, `createEventDispatcher` alone) where the existing dual
-    // declaration is already tuned for their widening needs.
+    // Gate: class-wrapper active AND (Svelte-5 runes mode OR Svelte-4
+    // `export let`). `!svelte4_style` is too loose — a runes-mode file
+    // that uses `createEventDispatcher` for back-compat trips
+    // `is_svelte4_component`'s signal 3 even though it's really a
+    // Svelte-5 file. Checking `is_runes_mode` directly excludes that
+    // false positive and keeps the gate aligned with upstream's
+    // runes/export-let split.
     let use_iso_interface =
-        use_class_wrapper && (has_export_let || !svelte4_style) && generics.is_some();
+        use_class_wrapper && (has_export_let || is_runes_mode(doc)) && generics.is_some();
     if use_iso_interface && let Some(g) = generics {
         let class_name = render_class_name(render_name);
         let g_args = generic_arg_names(g);
@@ -4304,6 +4360,71 @@ fn has_strict_events(doc: &svn_parser::Document<'_>) -> bool {
     let has_interface =
         |src: &str| src.contains("interface $$Events") || src.contains("type $$Events ");
     has_interface(instance_src) || has_interface(module_src)
+}
+
+/// SVELTE-4-COMPAT: Detect the `<script strictEvents>` bare attribute
+/// that upstream svelte2tsx uses as a user opt-in for event-typing
+/// narrowing without requiring a `$$Events` interface. One of the
+/// three triggers that turns on event narrowing.
+fn has_strict_events_attr(doc: &svn_parser::Document<'_>) -> bool {
+    doc.instance_script.as_ref().is_some_and(|s| {
+        s.attrs
+            .iter()
+            .any(|a| a.name.eq_ignore_ascii_case("strictEvents") && a.value.is_none())
+    })
+}
+
+/// Infer Svelte 5 runes mode from the document source. Mirrors
+/// `svn_lint::walk::infer_runes_mode` (intentionally duplicated rather
+/// than dep'ing on lint — emit needs the signal with no circular dep
+/// in the other direction).
+///
+/// Looks for any rune call (`$state(…)`, `$props(…)`, `$derived(…)`,
+/// `$effect(…)`, `$bindable(…)`, `$inspect(…)`, `$host(…)`) or a
+/// `.svelte.js` / `.svelte.ts` filename. Runes are always called, so
+/// requiring `(` after the name excludes the ambient `$$props` store
+/// pattern cheaply. Dotted variants (`$state.raw`, `$derived.by`) are
+/// matched by walking past the `.word` chain before the `(`.
+fn is_runes_mode(doc: &svn_parser::Document<'_>) -> bool {
+    let source = doc.source;
+    for marker in [
+        "$state",
+        "$derived",
+        "$effect",
+        "$props",
+        "$bindable",
+        "$inspect",
+        "$host",
+    ] {
+        let bytes = source.as_bytes();
+        let mbytes = marker.as_bytes();
+        let mut i = 0;
+        while let Some(rel) = bytes[i..].windows(mbytes.len()).position(|w| w == mbytes) {
+            let pos = i + rel;
+            // Skip `$$props` ambient (preceding `$`).
+            if pos.checked_sub(1).and_then(|p| bytes.get(p)).copied() == Some(b'$') {
+                i = pos + mbytes.len();
+                continue;
+            }
+            let mut after = pos + mbytes.len();
+            while bytes.get(after) == Some(&b'.') {
+                after += 1;
+                while after < bytes.len()
+                    && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_')
+                {
+                    after += 1;
+                }
+            }
+            while after < bytes.len() && matches!(bytes[after], b' ' | b'\t') {
+                after += 1;
+            }
+            if bytes.get(after) == Some(&b'(') {
+                return true;
+            }
+            i = pos + mbytes.len();
+        }
+    }
+    false
 }
 
 /// SVELTE-4-COMPAT: de-narrow a typed-with-initializer exported

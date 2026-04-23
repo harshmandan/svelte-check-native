@@ -462,6 +462,64 @@ fn is_props_call_like(expr: &Expression<'_>) -> bool {
     matches!(&call.callee, Expression::Identifier(id) if id.name == "$props")
 }
 
+/// SVELTE-4-COMPAT — typed-events narrowing source.
+///
+/// Find the first top-level `createEventDispatcher<T>()` call in
+/// `program` and return the source slice of `T`. The caller splices it
+/// into a synthesised `type $$Events = <T>;` so Item 3's existing
+/// intersection narrows child event handlers.
+///
+/// Simple-identifier callee only (`createEventDispatcher`); import
+/// aliasing (`import { createEventDispatcher as d }`) is not tracked —
+/// missing that case falls through to the lax shim which is correct,
+/// just non-optimal.
+///
+/// Returns the FIRST hit's type arg. Multi-declarator statements
+/// (`const a = dispatcher<A>(), b = dispatcher<B>()`) and multiple
+/// dispatcher calls in one file aren't supported; `$$Events` only has
+/// one declaration slot and the common pattern is one dispatcher per
+/// component.
+pub fn find_dispatcher_event_type_source(
+    program: &oxc_ast::ast::Program<'_>,
+    source: &str,
+) -> Option<String> {
+    for stmt in &program.body {
+        let maybe_slice = match stmt {
+            Statement::VariableDeclaration(decl) => decl
+                .declarations
+                .iter()
+                .filter_map(|d| d.init.as_ref())
+                .find_map(|e| dispatcher_type_arg_slice(e, source)),
+            Statement::ExpressionStatement(expr_stmt) => {
+                dispatcher_type_arg_slice(&expr_stmt.expression, source)
+            }
+            _ => None,
+        };
+        if let Some(slice) = maybe_slice {
+            return Some(slice);
+        }
+    }
+    None
+}
+
+/// If `expr` is a `createEventDispatcher<T>(...)` call with an explicit
+/// type argument, return `T`'s source text. Otherwise `None`.
+fn dispatcher_type_arg_slice(expr: &Expression<'_>, source: &str) -> Option<String> {
+    let Expression::CallExpression(call) = expr else {
+        return None;
+    };
+    match &call.callee {
+        Expression::Identifier(id) if id.name == "createEventDispatcher" => {}
+        _ => return None,
+    }
+    let tp = call.type_parameters.as_ref()?;
+    let arg = tp.params.first()?;
+    let span = arg.span();
+    source
+        .get(span.start as usize..span.end as usize)
+        .map(str::to_string)
+}
+
 fn collect_from_binding(pat: &BindingPatternKind<'_>, out: &mut Vec<PropInfo>) {
     match pat {
         BindingPatternKind::ObjectPattern(obj) => {

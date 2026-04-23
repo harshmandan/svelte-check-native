@@ -151,6 +151,22 @@ impl CacheLayout {
         self.svelte_dir.join(rel)
     }
 
+    /// Cache mirror of the user's `.svelte-kit/types/` tree:
+    /// `<root>/svelte-kit/types/`. Per-route `$types.d.ts` files are
+    /// written here with their `'../(…/)src/routes/…/+page.js'`
+    /// import chains rewritten to `'../(…/)svelte/src/routes/…/+page.js'`
+    /// so the chain lands in our typed Kit-file copy under
+    /// [`Self::svelte_dir`] instead of the user's untyped source.
+    ///
+    /// Wins over the real user-tree `.svelte-kit/types/` via the
+    /// overlay tsconfig's `rootDirs` priority (this dir listed FIRST).
+    /// Closes the implicit-any cascade at every `data: PageData`
+    /// consumer site that would otherwise resolve through the user
+    /// `+page.ts` and get widened to `any`.
+    pub fn kit_types_mirror_dir(&self) -> PathBuf {
+        self.root.join("svelte-kit").join("types")
+    }
+
     /// Ambient-declaration path for a `.svelte` source, sibling to the
     /// overlay. `<workspace>/lib/Foo.svelte` →
     /// `<cache>/svelte/lib/Foo.d.svelte.ts`.

@@ -48,6 +48,7 @@ pub fn build(
     user_tsconfig: &Path,
     generated_files: &[std::path::PathBuf],
     kit_overlay_sources: &[std::path::PathBuf],
+    kit_types_mirror: Option<&Path>,
 ) -> Value {
     // `extends` is resolved relative to the overlay tsconfig dir.
     let extends_rel = relative_from(layout.root.as_path(), user_tsconfig);
@@ -103,7 +104,16 @@ pub fn build(
                 out.push(s);
             }
         };
-    // Overlay svelte subdir first — that's where generated files live.
+    // Cache mirror of `.svelte-kit/types/` first, when present. tsgo's
+    // rootDirs resolution prefers the FIRST entry whose virtual file
+    // exists — listing the mirror ahead of the user's own
+    // `.svelte-kit/types/` is what makes our path-rewritten
+    // `$types.d.ts` win and keeps the `'…/src/routes/…/+page.js'`
+    // chain inside the cache instead of leaking out to user source.
+    if let Some(dir) = kit_types_mirror {
+        push_root(dir, &mut root_dirs, &mut seen);
+    }
+    // Overlay svelte subdir — where generated files live.
     push_root(layout.svelte_dir.as_path(), &mut root_dirs, &mut seen);
     // Workspace root second — so any relative import from a generated
     // overlay file (e.g. `import x from '../stores/util.ts'` written
@@ -332,6 +342,26 @@ pub fn build(
     // them; `exclude` keeps everything (dropping a pattern opens a
     // hole).
     let mut user_includes = first_non_empty_patterns(&chain, |f| f.include.as_deref(), true);
+    // Redirect `.svelte-kit/types/**/$types.d.ts` includes to the
+    // cache mirror (when present). Load-bearing companion to the
+    // mirror+rootDirs setup: without this redirect the user's
+    // `$types.d.ts` files stay in the file set, tsgo loads them, and
+    // the embedded `'../(…/)src/routes/…/+page.js'` chain still
+    // walks back to the user's untyped source — defeating the
+    // mirror entirely. With the redirect, only our path-rewritten
+    // copies under the cache mirror enter the program. See
+    // `kit_types_mirror::sync_mirror`.
+    if let Some(mirror) = kit_types_mirror {
+        let mirror_str = mirror.to_string_lossy();
+        for pat in &mut user_includes {
+            if let Some((seg_pos, seg_len)) = crate::kit_types_mirror::find_kit_types_segment(pat) {
+                let mut rebuilt = String::with_capacity(pat.len() + 32);
+                rebuilt.push_str(&mirror_str);
+                rebuilt.push_str(&pat[seg_pos + seg_len..]);
+                *pat = rebuilt;
+            }
+        }
+    }
     // Sibling-project includes: add each reference's own include
     // patterns, anchored at the reference's project_dir. Fall back to
     // `**/*.ts` + `**/*.d.ts` for references that don't declare their
@@ -747,7 +777,7 @@ mod tests {
         let gen_files = vec![PathBuf::from(
             "/projects/app/.svelte-check/svelte/++Index.svelte.ts",
         )];
-        let overlay = build(&layout, &user_ts, &gen_files, &[]);
+        let overlay = build(&layout, &user_ts, &gen_files, &[], None);
 
         let opts = &overlay["compilerOptions"];
         assert_eq!(opts["noEmit"], json!(true));
@@ -760,7 +790,7 @@ mod tests {
     fn build_overlay_extends_user_tsconfig_relatively() {
         let layout = CacheLayout::for_workspace("/projects/app");
         let user_ts = PathBuf::from("/projects/app/tsconfig.json");
-        let overlay = build(&layout, &user_ts, &[], &[]);
+        let overlay = build(&layout, &user_ts, &[], &[], None);
         // extends should point ../tsconfig.json (overlay is in
         // /projects/app/.svelte-check/, user ts in /projects/app/).
         assert_eq!(overlay["extends"], json!("../tsconfig.json"));
@@ -774,7 +804,7 @@ mod tests {
             PathBuf::from("/projects/app/.svelte-check/svelte/++A.svelte.ts"),
             PathBuf::from("/projects/app/.svelte-check/svelte/sub/++B.svelte.ts"),
         ];
-        let overlay = build(&layout, &user_ts, &gen_files, &[]);
+        let overlay = build(&layout, &user_ts, &gen_files, &[], None);
         let files = overlay["files"].as_array().unwrap();
         // 2 generated + 1 svelte-shims.d.ts = 3.
         assert_eq!(files.len(), 3);
@@ -790,7 +820,7 @@ mod tests {
         // svelte/* modules.
         let layout = CacheLayout::for_workspace("/projects/app");
         let user_ts = PathBuf::from("/projects/app/tsconfig.json");
-        let overlay = build(&layout, &user_ts, &[], &[]);
+        let overlay = build(&layout, &user_ts, &[], &[], None);
         let files = overlay["files"].as_array().unwrap();
         assert_eq!(files.len(), 1);
         assert!(files[0].as_str().unwrap().ends_with("svelte-shims.d.ts"));
@@ -848,7 +878,7 @@ mod tests {
         );
 
         let layout = CacheLayout::for_workspace(&ws);
-        let overlay = build(&layout, &user_ts, &[], &[]);
+        let overlay = build(&layout, &user_ts, &[], &[], None);
 
         let opts = &overlay["compilerOptions"];
         // rootDirs union includes svelte cache, workspace, AND the
@@ -923,7 +953,7 @@ mod tests {
         write_file(&user_ts, r#"{ "extends": "../configs/base.json" }"#);
 
         let layout = CacheLayout::for_workspace(&project_dir);
-        let overlay = build(&layout, &user_ts, &[], &[]);
+        let overlay = build(&layout, &user_ts, &[], &[], None);
 
         let opts = &overlay["compilerOptions"];
 
@@ -993,7 +1023,7 @@ mod tests {
         write_file(&user_ts, r#"{ "extends": ["./a.json", "./b.json"] }"#);
 
         let layout = CacheLayout::for_workspace(&ws);
-        let overlay = build(&layout, &user_ts, &[], &[]);
+        let overlay = build(&layout, &user_ts, &[], &[], None);
 
         let paths = overlay["compilerOptions"]["paths"].as_object().unwrap();
         // Both entries flow through to the overlay — BFS per-pattern
@@ -1072,7 +1102,7 @@ mod tests {
             &console_dir,
             Some(root.join("tsconfig.json")),
         );
-        let overlay = build(&layout, &console_ts, &[], &[]);
+        let overlay = build(&layout, &console_ts, &[], &[], None);
 
         // `include`: the services' `**/*.ts`, anchored at services'
         // project_dir.
@@ -1147,7 +1177,7 @@ mod tests {
             &app_dir,
             Some(root.join("tsconfig.json")),
         );
-        let overlay = build(&layout, &app_dir.join("tsconfig.json"), &[], &[]);
+        let overlay = build(&layout, &app_dir.join("tsconfig.json"), &[], &[], None);
 
         // `include` should contain the app's own pattern EXACTLY
         // once (anchored at app_dir via the chain walk).

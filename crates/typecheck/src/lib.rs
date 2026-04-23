@@ -33,6 +33,7 @@
 
 pub mod cache;
 pub mod discovery;
+pub mod kit_types_mirror;
 pub mod output;
 pub mod overlay;
 pub mod runner;
@@ -437,12 +438,23 @@ pub fn check(
         }
     }
 
+    // Step 1b: write the synthetic `.svelte-kit/types/` mirror so the
+    // `$types.d.ts` chain `'../(…/)src/routes/…/+page.js'` resolves
+    // through our typed Kit-file copies instead of the user's untyped
+    // source. Returns Some(mirror_dir) when the user actually has a
+    // svelte-kit-generated types tree (the common SvelteKit case),
+    // None for non-Kit projects. The overlay builder uses this signal
+    // to enable rootDirs priority + include-glob redirect; without it
+    // the overlay degrades cleanly to today's behavior.
+    let kit_types_mirror = kit_types_mirror::sync_mirror(&layout)?;
+
     // Step 2: write overlay tsconfig.
     let overlay = overlay::build(
         &layout,
         user_tsconfig,
         &generated_paths,
         &kit_overlay_sources,
+        kit_types_mirror.as_deref(),
     );
     let overlay_text = serde_json::to_string_pretty(&overlay)?;
     write_if_changed(&layout.overlay_tsconfig, &overlay_text)?;

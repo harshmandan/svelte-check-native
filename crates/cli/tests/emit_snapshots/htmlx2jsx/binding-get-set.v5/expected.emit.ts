@@ -15,13 +15,17 @@ async function $$render_9eb76bb9() {
         void __svn_bind_pair_4;
         let __svn_bind_pair_5: [() => any, (v: any) => void] = [() => undefined as any, () => {}];
         void __svn_bind_pair_5;
+        void (__svn_get_set_binding(get,  set) satisfies string);
+        void (__svn_get_set_binding(() => v,  new_v => v = new_v) satisfies string);
+        void (__svn_get_set_binding(null,  set) satisfies HTMLElement['clientWidth']);
+        void (__svn_get_set_binding(null,  set) satisfies DOMRectReadOnly);
         {
             const __svn_C_9f = __svn_ensure_component(Input);
-            new __svn_C_9f({ target: __svn_any(), props: {value: (get)()} });
+            new __svn_C_9f({ target: __svn_any(), props: {value: __svn_get_set_binding(get,  set)} });
         }
         {
             const __svn_C_bf = __svn_ensure_component(Input);
-            new __svn_C_bf({ target: __svn_any(), props: {value: (() => v)()} });
+            new __svn_C_bf({ target: __svn_any(), props: {value: __svn_get_set_binding(() => v,  new_v => v = new_v)} });
         }
     }
     void __svn_tpl_check;

@@ -827,9 +827,8 @@ fn emit_document_with_render_name(
     // sibling fields keep their types and pass contextual typing
     // through to consumers' callback props.
     let sanitize_type_source = |t: &str| -> String {
-        let mentions_dollar = t.contains("$$Props")
-            || t.contains("$$Events")
-            || t.contains("$$Slots");
+        let mentions_dollar =
+            t.contains("$$Props") || t.contains("$$Events") || t.contains("$$Slots");
         let touches_body_typeof = crate::script_split::typeof_targets_public(t)
             .iter()
             .any(|n| exported_locals.iter().any(|l| l.as_str() == n.as_str()));
@@ -877,9 +876,7 @@ fn emit_document_with_render_name(
     //
     // Fixtures: design/class_wrapper/{current,fixed,broken}/.
     let use_class_wrapper = generics.is_some() && prop_type_source.is_some();
-    if use_class_wrapper
-        && let Some(ty) = prop_type_source.as_deref()
-    {
+    if use_class_wrapper && let Some(ty) = prop_type_source.as_deref() {
         // Inject just before the closing brace of $$render so the
         // return statement is the last thing in the function body.
         // Using `undefined as any as <ty>` (not `null as <ty>`) so
@@ -973,18 +970,14 @@ fn emit_default_export_declarations(
     let exports_clause = exports_object
         .map(|e| format!(" & {e}"))
         .unwrap_or_default();
-    let component_exports_arg = exports_object
-        .map(|e| format!(", {e}"))
-        .unwrap_or_default();
+    let component_exports_arg = exports_object.map(|e| format!(", {e}")).unwrap_or_default();
 
     // Class-wrapper declaration at module scope. Its `props()` method's
     // return type is resolved THROUGH the render function, which is
     // where body-local `typeof X` refs are in scope. `Awaited<…>`
     // handles the `async` wrapper on $$render — the body is wrapped in
     // an async function so top-level `await` in user code compiles.
-    if use_class_wrapper
-        && let Some(g) = generics
-    {
+    if use_class_wrapper && let Some(g) = generics {
         let class_name = render_class_name(render_name);
         let g_args = generic_arg_names(g);
         let _ = writeln!(
@@ -2201,7 +2194,9 @@ fn extract_property_chains(text: &str) -> Vec<String> {
                 // `?.` wrapper — recurse into its element.
                 match &c.expression {
                     oxc_ast::ast::ChainElement::CallExpression(_) => None,
-                    oxc_ast::ast::ChainElement::TSNonNullExpression(n) => chain_text(&n.expression, src),
+                    oxc_ast::ast::ChainElement::TSNonNullExpression(n) => {
+                        chain_text(&n.expression, src)
+                    }
                     oxc_ast::ast::ChainElement::ComputedMemberExpression(m) => {
                         let _ = chain_text(&m.object, src)?;
                         Some(&src[m.object.span().start as usize..m.object.span().end as usize])
@@ -2220,12 +2215,7 @@ fn extract_property_chains(text: &str) -> Vec<String> {
         }
     }
 
-    fn walk(
-        expr: &Expression<'_>,
-        src: &str,
-        out: &mut Vec<String>,
-        seen: &mut HashSet<String>,
-    ) {
+    fn walk(expr: &Expression<'_>, src: &str, out: &mut Vec<String>, seen: &mut HashSet<String>) {
         use oxc_ast::ast::Expression::*;
 
         // Try as a chain root first. If it matches, record and stop —
@@ -2233,8 +2223,7 @@ fn extract_property_chains(text: &str) -> Vec<String> {
         if let Some(text) = chain_text(expr, src) {
             let trimmed = text.trim();
             if !trimmed.is_empty() {
-                let looks_like_keyword =
-                    !trimmed.contains('.') && is_keyword_or_special(trimmed);
+                let looks_like_keyword = !trimmed.contains('.') && is_keyword_or_special(trimmed);
                 if !looks_like_keyword {
                     let key = trimmed.to_string();
                     if seen.insert(key.clone()) {
@@ -2698,8 +2687,8 @@ fn emit_use_directives_inline(
             Some(svn_parser::DirectiveValue::Expression {
                 expression_range, ..
             }) => {
-                let Some(params) = source
-                    .get(expression_range.start as usize..expression_range.end as usize)
+                let Some(params) =
+                    source.get(expression_range.start as usize..expression_range.end as usize)
                 else {
                     continue;
                 };
@@ -2830,8 +2819,42 @@ fn emit_element_bind_checks_inline(
                     }
                     (std::borrow::Cow::Borrowed(directive.name.as_str()), None)
                 }
-                // BindPair / Quoted don't make sense for element-side
-                // bindings; skip.
+                // Svelte 5 `bind:X={get, set}` on DOM — two cases:
+                //
+                // - `bind:this={get, set}`: mirror upstream's direct
+                //   `(set)($$_element)` call (svelte2tsx emits this
+                //   verbatim). Setter's parameter is checked by
+                //   assignability — accepts the element type or any
+                //   supertype. Getter ignored.
+                //
+                // - Other directives (`bind:clientWidth={null, set}`,
+                //   `bind:value={get, set}`): route through the
+                //   `__svn_get_set_binding` helper with a `satisfies`
+                //   trailer so the setter's parameter is unified with
+                //   the DOM target's type, exactly like the component
+                //   path in `write_prop_shape`. TS1360 fires on
+                //   mismatch; see design/get_set_binding/.
+                Some(svn_parser::DirectiveValue::BindPair {
+                    getter_range,
+                    setter_range,
+                    ..
+                }) => {
+                    let getter = &source[getter_range.start as usize..getter_range.end as usize];
+                    let setter = &source[setter_range.start as usize..setter_range.end as usize];
+                    buf.push_str(&indent);
+                    if name == "this" {
+                        // Matches upstream `(set)($$_element)` —
+                        // getter deliberately ignored (upstream's
+                        // binding-this-get-set.v5 fixture drops it too).
+                        let _ = writeln!(buf, "({setter})(null as any as {ty});");
+                    } else {
+                        let _ = writeln!(
+                            buf,
+                            "void (__svn_get_set_binding({getter}, {setter}) satisfies {ty});"
+                        );
+                    }
+                    continue;
+                }
                 _ => continue,
             };
         if expr_text.is_empty() {
@@ -3072,10 +3095,7 @@ fn emit_component_call(
     if snippet_children.is_empty() && inst.props.is_empty() && !emit_implicit_children {
         let _ = write!(buf, "{inner}{ctor_lhs}");
         let call_start = buf.len() as u32;
-        let _ = write!(
-            buf,
-            "new {local}({{ target: __svn_any(), props: {{}} }})"
-        );
+        let _ = write!(buf, "new {local}({{ target: __svn_any(), props: {{}} }})");
         push_component_call_token_map(buf, call_start, inst.node_start);
         buf.push_str(";\n");
         emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
@@ -3277,14 +3297,22 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             // or `a, b` sequences stay a single operand of `...`.
             let _ = write!(buf, "...({expr})");
         }
-        svn_analyze::PropShape::GetSetBinding { name, getter_range } => {
+        svn_analyze::PropShape::GetSetBinding {
+            name,
+            getter_range,
+            setter_range,
+        } => {
             let getter = &source[getter_range.start as usize..getter_range.end as usize];
+            let setter = &source[setter_range.start as usize..setter_range.end as usize];
             write_object_key(buf, name);
-            // `name: (getter)()` — invoke the getter so TS resolves
-            // the value to the getter's return type, which is what
-            // the target Props declaration wants to check against.
-            // Svelte 5 get/set bind form; setter dropped (runtime-only).
-            let _ = write!(buf, ": ({getter})()");
+            // Svelte 5 `bind:name={get, set}` — emit through the
+            // `__svn_get_set_binding(get, set)` helper so TS infers
+            // `T` from the getter's return, checks the setter's
+            // parameter against `T`, and flows the return out to the
+            // prop slot. Mirrors upstream's `__sveltets_2_get_set_binding`
+            // (svelte2tsx/src/htmlxtojsx_v2/nodes/Binding.ts:179).
+            // See design/get_set_binding/ for the tsgo-locked fixture.
+            let _ = write!(buf, ": __svn_get_set_binding({getter}, {setter})");
         }
     }
 }
@@ -4617,10 +4645,7 @@ mod tests {
         // Regression: the byte walker returned `name1` via its balanced-
         // paren skip + next-identifier pickup. The AST walker must
         // produce the same chain list.
-        assert_eq!(
-            chains("(name1 ?? \"bla\") == \"world\""),
-            vec!["name1"]
-        );
+        assert_eq!(chains("(name1 ?? \"bla\") == \"world\""), vec!["name1"]);
     }
 
     #[test]
@@ -4643,10 +4668,7 @@ mod tests {
 
     #[test]
     fn chains_dedup_preserves_first_order() {
-        assert_eq!(
-            chains("a && b && a.c && a"),
-            vec!["a", "b", "a.c"]
-        );
+        assert_eq!(chains("a && b && a.c && a"), vec!["a", "b", "a.c"]);
     }
 
     #[test]

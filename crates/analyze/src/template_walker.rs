@@ -202,15 +202,21 @@ pub enum PropShape {
     /// Svelte 5 `bind:NAME={getter, setter}` get/set form. Emit
     /// `name: (getter)()` — calling the getter to obtain the bound
     /// value, whose type is what the target Props declaration
-    /// checks against. Setter is intentionally dropped; its role
-    /// is runtime plumbing (writing back to the source) with no
-    /// type-level surface at the consumer's call site.
+    /// checks against via the `__svn_get_set_binding(get, set)`
+    /// helper — `T` flows from getter's return, setter's parameter
+    /// is checked against it, return value lands in the prop slot.
+    /// Mirrors upstream's `__sveltets_2_get_set_binding`
+    /// (svelte2tsx/svelte-shims-v4.d.ts:269).
     ///
     /// Without this variant, the reverted pre-v0.3 behavior would
     /// drop the binding entirely, which v0.3's `satisfies` trailer
     /// surfaces as a spurious "missing required prop" on every
     /// Svelte 5 get/set bind consumer.
-    GetSetBinding { name: SmolStr, getter_range: Range },
+    GetSetBinding {
+        name: SmolStr,
+        getter_range: Range,
+        setter_range: Range,
+    },
 }
 
 /// One `bind:this={x}` site where `x` is a simple identifier. Used
@@ -277,7 +283,12 @@ pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
     walk_fragment(fragment, &mut summary, &mut counters, &ctx);
     let _ = &mut ctx;
     let mut seen_at_const = std::collections::HashSet::<SmolStr>::new();
-    collect_at_const_names_from_fragment(fragment, source, &mut seen_at_const, &mut summary.at_const_names);
+    collect_at_const_names_from_fragment(
+        fragment,
+        source,
+        &mut seen_at_const,
+        &mut summary.at_const_names,
+    );
     summary
 }
 
@@ -317,9 +328,7 @@ fn collect_at_const_names_from_fragment(
                 let bytes = body.as_bytes();
                 let mut p = 0usize;
                 while p < bytes.len()
-                    && (bytes[p].is_ascii_alphanumeric()
-                        || bytes[p] == b'_'
-                        || bytes[p] == b'$')
+                    && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_' || bytes[p] == b'$')
                 {
                     p += 1;
                 }
@@ -929,15 +938,18 @@ fn collect_component_instantiation(
                 // on Svelte 5 bind: idiom.
                 //
                 // Interim: push the name as Shorthand so satisfies
-                // sees the key present. Loses the read+write type
-                // flow that upstream's helper provides, but prevents
-                // the FP. Real fix: emit
-                // `__svn_get_set_binding(getter, setter)` call that
-                // TS can resolve to the getter's return type —
-                // tracked as deferred in NEXT.md.
+                // Emit site lowers this to `name: __svn_get_set_binding(
+                // <getter>, <setter>)` — mirrors upstream's
+                // `__sveltets_2_get_set_binding` helper so TS infers `T`
+                // from the getter's return AND checks the setter's
+                // parameter against the same `T`. See
+                // `design/get_set_binding/` for the fixture-locked shape.
                 if d.kind == svn_parser::DirectiveKind::Bind
-                    && let Some(svn_parser::DirectiveValue::BindPair { getter_range, .. }) =
-                        &d.value
+                    && let Some(svn_parser::DirectiveValue::BindPair {
+                        getter_range,
+                        setter_range,
+                        ..
+                    }) = &d.value
                 {
                     let target = d.name.clone();
                     props.retain(|p| match p {
@@ -951,6 +963,7 @@ fn collect_component_instantiation(
                     props.push(PropShape::GetSetBinding {
                         name: target,
                         getter_range: *getter_range,
+                        setter_range: *setter_range,
                     });
                     continue;
                 }

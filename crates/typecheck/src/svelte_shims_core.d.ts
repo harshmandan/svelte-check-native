@@ -343,6 +343,24 @@ type __SvnEachItem<T> = 0 extends 1 & T
 declare function __svn_any<T = any>(): T;
 
 /**
+ * Svelte 5 `bind:X={getter, setter}` helper. Mirrors upstream
+ * `__sveltets_2_get_set_binding` (svelte2tsx/svelte-shims-v4.d.ts:269)
+ * with the `__svn_*` prefix mandated by CLAUDE.md architecture rule #6.
+ *
+ * `T` is inferred once per call site. The getter's return and the
+ * setter's parameter are BOTH checked against `T`, and the return
+ * flows to the prop slot — so a mismatched setter (e.g. `bind:value={
+ * () => s, (n: number) => …}` where the child expects `string`) fires
+ * TS2322/TS2345 at the call site. Without this helper, emit would
+ * invoke just the getter (`(getter)()`) and the setter would go
+ * type-unchecked.
+ */
+declare function __svn_get_set_binding<T>(
+    get: (() => T) | null | undefined,
+    set: (t: T) => void,
+): T;
+
+/**
  * Normalize any component shape to a constructible so one emission
  * works uniformly across the shapes a real Svelte codebase mixes:
  *

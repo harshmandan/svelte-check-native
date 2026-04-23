@@ -13,6 +13,7 @@ async function $$render_62bedf5a() {
         // template type-check body (incremental)
         let __svn_bind_pair_0: [() => any, (v: any) => void] = [() => undefined as any, () => {}];
         void __svn_bind_pair_0;
+        void (__svn_get_set_binding(() => getValue(),  (v: string) => setValue(v)) satisfies string);
     }
     void __svn_tpl_check;
     void getValue;

@@ -17,7 +17,7 @@ async function $$render_5a7d1551<T extends { id: string }>() {
     void __svn_tpl_check;
     void item;
     void label;
-    return { props: undefined as any as (Props), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as {} };
+    return { props: undefined as any as (Props), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_5a7d1551;
 declare class __svn_Render_5a7d1551<T extends { id: string }> {
@@ -27,7 +27,12 @@ declare class __svn_Render_5a7d1551<T extends { id: string }> {
     bindings(): Awaited<ReturnType<typeof $$render_5a7d1551<T>>>['bindings'];
     exports(): Awaited<ReturnType<typeof $$render_5a7d1551<T>>>['exports'];
 }
-declare const __svn_component_default: <T extends { id: string }>(__anchor: any, props: Partial<ReturnType<__svn_Render_5a7d1551<T>['props']>>) => any;
-declare type __svn_component_default<T extends { id: string }> = import('svelte').SvelteComponent<ReturnType<__svn_Render_5a7d1551<T>['props']>>;
+interface $$IsomorphicComponent {
+    new <T extends { id: string }>(options: import('svelte').ComponentConstructorOptions<ReturnType<__svn_Render_5a7d1551<T>['props']> & { children?: any }>): import('svelte').SvelteComponent<ReturnType<__svn_Render_5a7d1551<T>['props']>, ReturnType<__svn_Render_5a7d1551<T>['events']>, ReturnType<__svn_Render_5a7d1551<T>['slots']>> & { $$bindings?: ReturnType<__svn_Render_5a7d1551<T>['bindings']> } & ReturnType<__svn_Render_5a7d1551<T>['exports']>;
+    <T extends { id: string }>(internal: unknown, props: ReturnType<__svn_Render_5a7d1551<T>['props']> & { children?: any }): ReturnType<__svn_Render_5a7d1551<T>['exports']>;
+    z_$$bindings?: ReturnType<__svn_Render_5a7d1551<any>['bindings']>;
+}
+const __svn_component_default: $$IsomorphicComponent = null as any;
+type __svn_component_default<T extends { id: string }> = InstanceType<typeof __svn_component_default<T>>;
 export default __svn_component_default;
 

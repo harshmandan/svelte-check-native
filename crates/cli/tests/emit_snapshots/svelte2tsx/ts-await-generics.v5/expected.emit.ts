@@ -54,7 +54,7 @@ async function $$render_200dbc4a<T>() {
     void prop;
     void foo;
     void promise;
-    return { props: undefined as any as ({ prop?: T }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as {} };
+    return { props: undefined as any as ({ prop?: T }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_200dbc4a;
 declare class __svn_Render_200dbc4a<T> {
@@ -64,7 +64,12 @@ declare class __svn_Render_200dbc4a<T> {
     bindings(): Awaited<ReturnType<typeof $$render_200dbc4a<T>>>['bindings'];
     exports(): Awaited<ReturnType<typeof $$render_200dbc4a<T>>>['exports'];
 }
-declare const __svn_component_default: <T>(__anchor: any, props: Partial<ReturnType<__svn_Render_200dbc4a<T>['props']>>) => any;
-declare type __svn_component_default<T> = import('svelte').SvelteComponent<ReturnType<__svn_Render_200dbc4a<T>['props']>>;
+interface $$IsomorphicComponent {
+    new <T>(options: import('svelte').ComponentConstructorOptions<ReturnType<__svn_Render_200dbc4a<T>['props']> & { children?: any }>): import('svelte').SvelteComponent<ReturnType<__svn_Render_200dbc4a<T>['props']>, ReturnType<__svn_Render_200dbc4a<T>['events']>, ReturnType<__svn_Render_200dbc4a<T>['slots']>> & { $$bindings?: ReturnType<__svn_Render_200dbc4a<T>['bindings']> } & ReturnType<__svn_Render_200dbc4a<T>['exports']>;
+    <T>(internal: unknown, props: ReturnType<__svn_Render_200dbc4a<T>['props']> & { children?: any }): ReturnType<__svn_Render_200dbc4a<T>['exports']>;
+    z_$$bindings?: ReturnType<__svn_Render_200dbc4a<any>['bindings']>;
+}
+const __svn_component_default: $$IsomorphicComponent = null as any;
+type __svn_component_default<T> = InstanceType<typeof __svn_component_default<T>>;
 export default __svn_component_default;
 

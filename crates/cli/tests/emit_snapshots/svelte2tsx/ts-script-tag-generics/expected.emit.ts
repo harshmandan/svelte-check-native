@@ -8,7 +8,7 @@ async function $$render_389427c4<T extends Record<string, any>>() {
     }
     void __svn_tpl_check;
     void init;
-    return { props: undefined as any as ({ init: T; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as {} };
+    return { props: undefined as any as ({ init: T; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ init: T; }) };
 }
 $$render_389427c4;
 declare class __svn_Render_389427c4<T extends Record<string, any>> {
@@ -18,7 +18,12 @@ declare class __svn_Render_389427c4<T extends Record<string, any>> {
     bindings(): Awaited<ReturnType<typeof $$render_389427c4<T>>>['bindings'];
     exports(): Awaited<ReturnType<typeof $$render_389427c4<T>>>['exports'];
 }
-declare const __svn_component_default: <T extends Record<string, any>>(__anchor: any, props: Partial<ReturnType<__svn_Render_389427c4<T>['props']>>) => { init: T; };
-declare type __svn_component_default<T extends Record<string, any>> = import('svelte').SvelteComponent<ReturnType<__svn_Render_389427c4<T>['props']>> & { init: T; };
+interface $$IsomorphicComponent {
+    new <T extends Record<string, any>>(options: import('svelte').ComponentConstructorOptions<ReturnType<__svn_Render_389427c4<T>['props']> & { children?: any }>): import('svelte').SvelteComponent<ReturnType<__svn_Render_389427c4<T>['props']>, ReturnType<__svn_Render_389427c4<T>['events']>, ReturnType<__svn_Render_389427c4<T>['slots']>> & { $$bindings?: ReturnType<__svn_Render_389427c4<T>['bindings']> } & ReturnType<__svn_Render_389427c4<T>['exports']>;
+    <T extends Record<string, any>>(internal: unknown, props: ReturnType<__svn_Render_389427c4<T>['props']> & { children?: any }): ReturnType<__svn_Render_389427c4<T>['exports']>;
+    z_$$bindings?: ReturnType<__svn_Render_389427c4<any>['bindings']>;
+}
+const __svn_component_default: $$IsomorphicComponent = null as any;
+type __svn_component_default<T extends Record<string, any>> = InstanceType<typeof __svn_component_default<T>>;
 export default __svn_component_default;
 

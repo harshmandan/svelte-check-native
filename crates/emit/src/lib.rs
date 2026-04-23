@@ -855,6 +855,30 @@ fn emit_document_with_render_name(
         buf.push('}');
         Some(buf)
     });
+    // Unsanitized version of exports_object for the render-body return.
+    // Body-local refs (`typeof handler`, `$$Props['x']`) resolve inside
+    // `$$render`'s scope — so the render body can carry the real shape.
+    // The class-wrapper's `exports()` method projects this out via
+    // `ReturnType<__svn_Render_<hash><T>['exports']>`, letting the
+    // `$$IsomorphicComponent` interface expose `export function` /
+    // `export const` types to consumers without sanitisation.
+    let exports_object_raw: Option<String> = split.as_ref().and_then(|s| {
+        if s.export_type_infos.is_empty() {
+            return None;
+        }
+        let mut buf = String::from("{ ");
+        for info in &s.export_type_infos {
+            buf.push_str(info.name.as_str());
+            buf.push_str(": ");
+            match &info.type_source {
+                Some(t) => buf.push_str(t),
+                None => buf.push_str("any"),
+            }
+            buf.push_str("; ");
+        }
+        buf.push('}');
+        Some(buf)
+    });
     emit_void_block(
         buf.raw_string_mut(),
         summary,
@@ -886,13 +910,15 @@ fn emit_document_with_render_name(
         // Render return matches upstream's shape (addComponentExport.ts:96-138)
         // — { props, events, slots, bindings, exports } — so a sibling
         // class's methods can extract each surface via
-        // `Awaited<ReturnType<typeof $$render>>['<method>']`. Each sub-
-        // field today is a permissive stub (`{}` / `string`); future
-        // work (Item 1c typed events, populated bindings/exports from
-        // analyze) tightens them without changing the class shape.
+        // `Awaited<ReturnType<typeof $$render>>['<method>']`. The
+        // `exports` field carries the raw (unsanitized) exports_object
+        // because body-local refs like `typeof handler` / `$$Props['x']`
+        // resolve inside $$render's scope; at consumer sites the class-
+        // wrapper's `exports()` method projects them out intact.
+        let exports_field = exports_object_raw.as_deref().unwrap_or("{}");
         let _ = writeln!(
             buf,
-            "    return {{ props: undefined as any as ({ty}), events: undefined as any as {{}}, slots: undefined as any as {{}}, bindings: undefined as any as string, exports: undefined as any as {{}} }};"
+            "    return {{ props: undefined as any as ({ty}), events: undefined as any as {{}}, slots: undefined as any as {{}}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
         );
     }
 
@@ -1140,6 +1166,81 @@ fn emit_default_export_declarations(
     } else {
         None
     };
+    // Upstream's `$$IsomorphicComponent` (addComponentExport.ts:170-179):
+    // a single interface that types both `new C({props})` (Svelte-4 class
+    // form) and `C(anchor, props)` (Svelte-5 function form) via a ctor
+    // signature + call signature on the same type. Every surface — Props,
+    // Events, Slots, Bindings, Exports — flows through the class-wrapper's
+    // `ReturnType<…>` projections, so body-local refs in `$$Props`,
+    // `$$Events`, and `export function` / `export const` signatures
+    // resolve inside the render function's scope (not module scope)
+    // without the legacy sanitisation hack.
+    //
+    // Gate: class-wrapper active AND Svelte-5 OR Svelte-4's `export let`
+    // pattern. Excludes the pure Svelte-4 synth-signal cases (has_slot
+    // alone, `createEventDispatcher` alone) where the existing dual
+    // declaration is already tuned for their widening needs.
+    let use_iso_interface =
+        use_class_wrapper && (has_export_let || !svelte4_style) && generics.is_some();
+    if use_iso_interface && let Some(g) = generics {
+        let class_name = render_class_name(render_name);
+        let g_args = generic_arg_names(g);
+        let props_ret = format!("ReturnType<{class_name}<{g_args}>['props']>");
+        let events_ret = format!("ReturnType<{class_name}<{g_args}>['events']>");
+        let slots_ret = format!("ReturnType<{class_name}<{g_args}>['slots']>");
+        let bindings_ret = format!("ReturnType<{class_name}<{g_args}>['bindings']>");
+        let exports_ret = format!("ReturnType<{class_name}<{g_args}>['exports']>");
+        // `z_$$bindings` can't reference the interface's own free `<T>`
+        // — TS interface members aren't under a generic binder. Fill
+        // the class's type params with `any` (matches upstream's
+        // `toReferencesAnyString()` in Generics.ts).
+        let g_param_count = g_args
+            .split(',')
+            .filter(|p| !p.trim().is_empty())
+            .count()
+            .max(1);
+        let g_args_any: String = std::iter::repeat_n("any", g_param_count)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let bindings_any_ret = format!("ReturnType<{class_name}<{g_args_any}>['bindings']>");
+        let widen_base = prop_type_source.unwrap_or("Record<string, any>");
+        let widen = widen_for(widen_base);
+        let _ = writeln!(buf, "interface $$IsomorphicComponent {{");
+        let _ = writeln!(
+            buf,
+            "    new <{g}>(options: import('svelte').ComponentConstructorOptions<{props_ret}{widen} & {{ children?: any }}>): import('svelte').SvelteComponent<{props_ret}, {events_ret}, {slots_ret}> & {{ $$bindings?: {bindings_ret} }} & {exports_ret};"
+        );
+        let _ = writeln!(
+            buf,
+            "    <{g}>(internal: unknown, props: {props_ret}{widen} & {{ children?: any }}): {exports_ret};"
+        );
+        let _ = writeln!(buf, "    z_$$bindings?: {bindings_any_ret};");
+        let _ = writeln!(buf, "}}");
+        let _ = writeln!(
+            buf,
+            "const __svn_component_default: $$IsomorphicComponent = null as any;"
+        );
+        let _ = writeln!(
+            buf,
+            "type __svn_component_default<{g}> = InstanceType<typeof __svn_component_default<{g_args}>>;"
+        );
+        // Type-position reference for template-used type-only imports
+        // needs to happen regardless of the dispatch path — emit here
+        // and return so the match below is skipped entirely.
+        if !template_type_refs.is_empty() {
+            buf.push_str("type __svn_tpl_type_refs = [");
+            for (i, name) in template_type_refs.iter().enumerate() {
+                if i > 0 {
+                    buf.push_str(", ");
+                }
+                buf.push_str(name.as_str());
+            }
+            buf.push_str("];\n");
+            buf.push_str("void (0 as any as __svn_tpl_type_refs);\n");
+        }
+        buf.push_str("export default __svn_component_default;\n");
+        return;
+    }
     match (prop_type_source, generics) {
         (Some(ty), Some(g)) if ty_safe_in_generic_scope => {
             let widen = widen_for(ty);

@@ -8,7 +8,7 @@ async function $$render_063ede7a<const T extends readonly string[]>() {
     }
     void __svn_tpl_check;
     void items;
-    return { props: undefined as any as ({ items: T; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as {} };
+    return { props: undefined as any as ({ items: T; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ items: T; }) };
 }
 $$render_063ede7a;
 declare class __svn_Render_063ede7a<const T extends readonly string[]> {
@@ -18,7 +18,12 @@ declare class __svn_Render_063ede7a<const T extends readonly string[]> {
     bindings(): Awaited<ReturnType<typeof $$render_063ede7a<const T>>>['bindings'];
     exports(): Awaited<ReturnType<typeof $$render_063ede7a<const T>>>['exports'];
 }
-declare const __svn_component_default: <const T extends readonly string[]>(__anchor: any, props: Partial<ReturnType<__svn_Render_063ede7a<const T>['props']>>) => { items: T; };
-declare type __svn_component_default<const T extends readonly string[]> = import('svelte').SvelteComponent<ReturnType<__svn_Render_063ede7a<const T>['props']>> & { items: T; };
+interface $$IsomorphicComponent {
+    new <const T extends readonly string[]>(options: import('svelte').ComponentConstructorOptions<ReturnType<__svn_Render_063ede7a<const T>['props']> & { children?: any }>): import('svelte').SvelteComponent<ReturnType<__svn_Render_063ede7a<const T>['props']>, ReturnType<__svn_Render_063ede7a<const T>['events']>, ReturnType<__svn_Render_063ede7a<const T>['slots']>> & { $$bindings?: ReturnType<__svn_Render_063ede7a<const T>['bindings']> } & ReturnType<__svn_Render_063ede7a<const T>['exports']>;
+    <const T extends readonly string[]>(internal: unknown, props: ReturnType<__svn_Render_063ede7a<const T>['props']> & { children?: any }): ReturnType<__svn_Render_063ede7a<const T>['exports']>;
+    z_$$bindings?: ReturnType<__svn_Render_063ede7a<any>['bindings']>;
+}
+const __svn_component_default: $$IsomorphicComponent = null as any;
+type __svn_component_default<const T extends readonly string[]> = InstanceType<typeof __svn_component_default<const T>>;
 export default __svn_component_default;
 

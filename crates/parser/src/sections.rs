@@ -183,7 +183,10 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
         // awareness (`'…'`, `"…"`, template `` `…` `` so a `{` inside
         // a string doesn't increment depth).
         if scanner.peek_byte() == Some(b'{') {
-            scanner.set_pos(scan_past_mustache(scanner.source().as_bytes(), scanner.pos()));
+            scanner.set_pos(scan_past_mustache(
+                scanner.source().as_bytes(),
+                scanner.pos(),
+            ));
             continue;
         }
         // Track `<NAME>` / `</NAME>` nesting — cheap but sufficient
@@ -1045,7 +1048,10 @@ let x: number = 1;
         // producing wildly wrong parse results downstream.
         let src = "<div>{a < b}</div><style>p{}</style>";
         let doc = parse_ok(src);
-        assert!(doc.style.is_some(), "style must be grabbed after the mustache");
+        assert!(
+            doc.style.is_some(),
+            "style must be grabbed after the mustache"
+        );
     }
 
     #[test]
@@ -1062,7 +1068,9 @@ let x: number = 1;
                    }}>x</div>\n\
                    <style>p { color: red; }</style>";
         let doc = parse_ok(src);
-        let s = doc.style.expect("style after a commented-apostrophe mustache");
+        let s = doc
+            .style
+            .expect("style after a commented-apostrophe mustache");
         assert!(s.content.contains("color: red"));
     }
 

@@ -269,10 +269,7 @@ mod tests {
         buf.append_synthetic("// header\n");
         buf.append_verbatim(source, source, Range::new(0, source.len() as u32));
         let (out, lm, tm) = buf.finish();
-        assert_eq!(
-            out,
-            "// header\nconst a = 1;\nconst b = 2;\nconst c = 3;\n"
-        );
+        assert_eq!(out, "// header\nconst a = 1;\nconst b = 2;\nconst c = 3;\n");
         assert_eq!(lm.len(), 1);
         assert_eq!(lm[0].overlay_start_line, 2);
         assert_eq!(lm[0].overlay_end_line, 5);

@@ -39,10 +39,9 @@ use std::path::{Path, PathBuf};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     ArrayExpression, ArrayExpressionElement, ArrowFunctionExpression, BinaryOperator,
-    CallExpression, ChainElement, ExportDefaultDeclarationKind, Expression,
-    FormalParameter, FunctionBody, IfStatement, LogicalOperator, ObjectExpression,
-    ObjectPropertyKind, PropertyKey, Statement, UnaryOperator,
-    VariableDeclaration,
+    CallExpression, ChainElement, ExportDefaultDeclarationKind, Expression, FormalParameter,
+    FunctionBody, IfStatement, LogicalOperator, ObjectExpression, ObjectPropertyKind, PropertyKey,
+    Statement, UnaryOperator, VariableDeclaration,
 };
 use oxc_parser::Parser;
 use oxc_span::SourceType;
@@ -205,7 +204,9 @@ fn extract_warning_filter<'a>(
                 ExportDefaultDeclarationKind::ObjectExpression(obj) => {
                     return warning_filter_in_object(obj);
                 }
-                ExportDefaultDeclarationKind::Identifier(id) => named.get(id.name.as_str()).copied(),
+                ExportDefaultDeclarationKind::Identifier(id) => {
+                    named.get(id.name.as_str()).copied()
+                }
                 _ => None,
             };
             if let Some(e) = expr_opt
@@ -275,7 +276,11 @@ fn first_param_name<'a>(params: &'a [FormalParameter<'a>]) -> Option<&'a str> {
 
 /// Analyse the callback body. Arrow with expression body is the
 /// common case; block body is supported for `if/return` shapes.
-fn analyse_filter_body<'a>(expr: &'a Expression<'a>, param: &str, source: &str) -> WarningFilterPlan {
+fn analyse_filter_body<'a>(
+    expr: &'a Expression<'a>,
+    param: &str,
+    source: &str,
+) -> WarningFilterPlan {
     match expr {
         Expression::ArrowFunctionExpression(af) => analyse_arrow(af, param, source),
         Expression::FunctionExpression(fe) => {
@@ -326,7 +331,8 @@ fn analyse_block_stmt<'a>(
     source: &str,
 ) -> WarningFilterPlan {
     let mut rules: Vec<DropRule> = Vec::new();
-    let mut arrays: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut arrays: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
     let mut partial = false;
     let mut excerpt: Option<String> = None;
     for stmt in stmts {
@@ -336,18 +342,16 @@ fn analyse_block_stmt<'a>(
                     arrays.insert(name, list);
                 }
             }
-            Statement::IfStatement(is) => {
-                match classify_if(is, param) {
-                    IfOutcome::DropWhenCondTrue(mut inner) => rules.append(&mut inner),
-                    IfOutcome::Unhandled => {
-                        partial = true;
-                        if excerpt.is_none() {
-                            excerpt = Some(source_slice(source, is.span.start, is.span.end));
-                        }
+            Statement::IfStatement(is) => match classify_if(is, param) {
+                IfOutcome::DropWhenCondTrue(mut inner) => rules.append(&mut inner),
+                IfOutcome::Unhandled => {
+                    partial = true;
+                    if excerpt.is_none() {
+                        excerpt = Some(source_slice(source, is.span.start, is.span.end));
                     }
-                    IfOutcome::NoEffect => {}
                 }
-            }
+                IfOutcome::NoEffect => {}
+            },
             Statement::ReturnStatement(ret) => {
                 if let Some(arg) = &ret.argument {
                     // Evaluate as constant first.
@@ -459,7 +463,11 @@ fn from_keep_expr<'a>(expr: &'a Expression<'a>, param: &str, source: &str) -> Wa
                 rules: Vec::new(),
                 partial: true,
                 constant: None,
-                unrecognised_excerpt: Some(source_slice(source, expr.span().start, expr.span().end)),
+                unrecognised_excerpt: Some(source_slice(
+                    source,
+                    expr.span().start,
+                    expr.span().end,
+                )),
             }
         }
     }
@@ -651,12 +659,7 @@ fn try_blocklist_return<'a>(
     if name != "code" {
         return None;
     }
-    Some(
-        list.iter()
-            .cloned()
-            .map(DropRule::CodeEquals)
-            .collect(),
-    )
+    Some(list.iter().cloned().map(DropRule::CodeEquals).collect())
 }
 
 /// Extract `const NAME = ['a','b',...];` — used for the blocklist
@@ -708,7 +711,14 @@ fn string_literal<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
     match expr {
         Expression::StringLiteral(s) => Some(s.value.as_str()),
         Expression::TemplateLiteral(tl) if tl.expressions.is_empty() && tl.quasis.len() == 1 => {
-            Some(tl.quasis[0].value.cooked.as_ref().map(|c| c.as_str()).unwrap_or(""))
+            Some(
+                tl.quasis[0]
+                    .value
+                    .cooked
+                    .as_ref()
+                    .map(|c| c.as_str())
+                    .unwrap_or(""),
+            )
         }
         _ => None,
     }
@@ -747,13 +757,15 @@ mod tests {
 
     #[test]
     fn equals_code_drops_single() {
-        let p = plan(r#"
+        let p = plan(
+            r#"
 export default {
   compilerOptions: {
     warningFilter: (w) => w.code !== 'state_referenced_locally'
   }
 };
-"#);
+"#,
+        );
         assert!(!p.partial);
         assert_eq!(
             p.rules,
@@ -763,34 +775,40 @@ export default {
 
     #[test]
     fn starts_with_a11y() {
-        let p = plan(r#"
+        let p = plan(
+            r#"
 export default {
   compilerOptions: {
     warningFilter: (w) => !w.code.startsWith('a11y_')
   }
 };
-"#);
+"#,
+        );
         assert_eq!(p.rules, vec![DropRule::CodePrefix("a11y_".into())]);
     }
 
     #[test]
     fn node_modules_filename_drop() {
-        let p = plan(r#"
+        let p = plan(
+            r#"
 export default {
   compilerOptions: {
     warningFilter: (w) => !w.filename?.includes('node_modules') && !w.code.startsWith('a11y')
   }
 };
-"#);
-        assert!(p
-            .rules
-            .contains(&DropRule::FilenameContains("node_modules".into())));
+"#,
+        );
+        assert!(
+            p.rules
+                .contains(&DropRule::FilenameContains("node_modules".into()))
+        );
         assert!(p.rules.contains(&DropRule::CodePrefix("a11y".into())));
     }
 
     #[test]
     fn block_body_if_return_false() {
-        let p = plan(r#"
+        let p = plan(
+            r#"
 export default {
   compilerOptions: {
     warningFilter: (w) => {
@@ -799,7 +817,8 @@ export default {
     }
   }
 };
-"#);
+"#,
+        );
         assert_eq!(
             p.rules,
             vec![DropRule::CodeEquals("state_referenced_locally".into())]
@@ -808,39 +827,45 @@ export default {
 
     #[test]
     fn named_const_export() {
-        let p = plan(r#"
+        let p = plan(
+            r#"
 const config = {
   compilerOptions: {
     warningFilter: (w) => w.code !== 'x'
   }
 };
 export default config;
-"#);
+"#,
+        );
         assert_eq!(p.rules, vec![DropRule::CodeEquals("x".into())]);
     }
 
     #[test]
     fn constant_filter_false_drops_all() {
-        let p = plan(r#"
+        let p = plan(
+            r#"
 export default {
   compilerOptions: {
     warningFilter: (w) => false
   }
 };
-"#);
+"#,
+        );
         assert_eq!(p.constant, Some(false));
         assert!(p.should_drop("anything", None));
     }
 
     #[test]
     fn unrecognised_callback_partial() {
-        let p = plan(r#"
+        let p = plan(
+            r#"
 export default {
   compilerOptions: {
     warningFilter: (w) => someFn(w)
   }
 };
-"#);
+"#,
+        );
         assert!(p.partial);
         assert!(p.rules.is_empty());
         // No filter should apply when partial with no rules.
@@ -849,9 +874,11 @@ export default {
 
     #[test]
     fn no_filter_empty_plan() {
-        let p = plan(r#"
+        let p = plan(
+            r#"
 export default { compilerOptions: {} };
-"#);
+"#,
+        );
         assert!(p.rules.is_empty());
         assert!(!p.partial);
     }

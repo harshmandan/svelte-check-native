@@ -189,7 +189,8 @@ fn resolve_reference(raw_path: &str, declaring_dir: &Path) -> Option<FlattenedRe
     let include = first_non_empty(&chain, |f| f.include.as_deref()).unwrap_or_default();
     let exclude = first_non_empty(&chain, |f| f.exclude.as_deref()).unwrap_or_default();
     let paths = resolve_paths_bfs(&chain);
-    let types = first_non_empty(&chain, |f| f.compiler_options.types.as_deref()).unwrap_or_default();
+    let types =
+        first_non_empty(&chain, |f| f.compiler_options.types.as_deref()).unwrap_or_default();
     let lib = first_non_empty_raw_strings(&chain, "lib");
     Some(FlattenedReference {
         config_path,

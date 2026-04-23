@@ -422,10 +422,7 @@ pub fn check(
                 token_map: input.token_map,
                 overlay_line_starts: input.overlay_line_starts,
                 source_line_starts: input.source_line_starts,
-                identity_map: matches!(
-                    input.kind,
-                    InputKind::KitFile | InputKind::UserTsOverlay
-                ),
+                identity_map: matches!(input.kind, InputKind::KitFile | InputKind::UserTsOverlay),
             },
         );
         // Only in-scope Svelte files + Kit overlays land in the

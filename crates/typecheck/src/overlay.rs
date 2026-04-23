@@ -623,7 +623,12 @@ fn package_types_entry_resolves(name: &str, declaring_dir: &Path) -> bool {
             // pnpm hoisted: node_modules/.pnpm/node_modules/@types/<name>.
             let pnpm_root = nm.join(".pnpm").join("node_modules");
             if pnpm_root.is_dir() {
-                if pnpm_root.join("@types").join(name).join("package.json").is_file() {
+                if pnpm_root
+                    .join("@types")
+                    .join(name)
+                    .join("package.json")
+                    .is_file()
+                {
                     return true;
                 }
                 if pnpm_root.join(name).join("package.json").is_file() {

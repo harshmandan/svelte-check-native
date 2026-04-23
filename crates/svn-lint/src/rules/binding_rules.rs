@@ -328,4 +328,3 @@ fn bind_invalid_each_rest(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
         ctx.emit(Code::bind_invalid_each_rest, msg, binding.range);
     }
 }
-

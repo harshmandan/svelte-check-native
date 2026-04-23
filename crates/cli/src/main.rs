@@ -633,9 +633,8 @@ fn apply_compiler_override(
 /// (not string-contains) so a directory named `my_node_modules_dir`
 /// doesn't trip the check.
 fn path_is_under_node_modules(path: &Path) -> bool {
-    path.components().any(|c| {
-        matches!(c, std::path::Component::Normal(name) if name == "node_modules")
-    })
+    path.components()
+        .any(|c| matches!(c, std::path::Component::Normal(name) if name == "node_modules"))
 }
 
 fn parse_compiler_warnings(
@@ -1022,11 +1021,8 @@ fn run_typecheck(
     if !runes_modules_set.is_empty() {
         inputs.extend(user_ts_files.iter().filter_map(|file| {
             let source = std::fs::read_to_string(file).ok()?;
-            let rewritten = rewrite_svelte_imports_for_collisions(
-                file,
-                &source,
-                &runes_modules_set,
-            )?;
+            let rewritten =
+                rewrite_svelte_imports_for_collisions(file, &source, &runes_modules_set)?;
             Some(svn_typecheck::CheckInput {
                 source_path: file.clone(),
                 generated_ts: rewritten,
@@ -1676,8 +1672,7 @@ fn rewrite_svelte_imports_for_collisions(
                 };
                 let spec_end = spec_start + offset;
                 let spec = &source[spec_start..spec_end];
-                if spec.ends_with(".svelte")
-                    && (spec.starts_with("./") || spec.starts_with("../"))
+                if spec.ends_with(".svelte") && (spec.starts_with("./") || spec.starts_with("../"))
                 {
                     let target = file_dir.join(spec);
                     // Collision requires BOTH siblings. A standalone
@@ -1693,10 +1688,7 @@ fn rewrite_svelte_imports_for_collisions(
                     }
                     let sibling_runes = target.with_file_name(format!(
                         "{}.ts",
-                        target
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("")
+                        target.file_name().and_then(|s| s.to_str()).unwrap_or("")
                     ));
                     let sibling_canon = dunce::canonicalize(&sibling_runes)
                         .ok()

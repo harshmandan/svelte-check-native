@@ -832,7 +832,11 @@ mod tests {
         assert_eq!(info.source, PropsSource::RuneAnnotation);
         assert_eq!(info.type_text.as_deref(), Some("{ foo: string }"));
         assert_eq!(info.type_root_name, None); // literal shape
-        let names: Vec<&str> = info.destructures.iter().map(|p| p.local_name.as_str()).collect();
+        let names: Vec<&str> = info
+            .destructures
+            .iter()
+            .map(|p| p.local_name.as_str())
+            .collect();
         assert_eq!(names, vec!["foo"]);
     }
 
@@ -842,7 +846,11 @@ mod tests {
         assert_eq!(info.source, PropsSource::RuneGeneric);
         assert_eq!(info.type_text.as_deref(), Some("Props"));
         assert_eq!(info.type_root_name.as_deref(), Some("Props"));
-        let names: Vec<&str> = info.destructures.iter().map(|p| p.local_name.as_str()).collect();
+        let names: Vec<&str> = info
+            .destructures
+            .iter()
+            .map(|p| p.local_name.as_str())
+            .collect();
         assert_eq!(names, vec!["a", "b"]);
     }
 
@@ -881,27 +889,22 @@ mod tests {
     fn props_info_rune_annotation_wins_over_export_let() {
         // Priority order: explicit $props() annotation beats a stray
         // export let (pathological but possible in migration code).
-        let info = build(
-            "export let stray: number;\nlet { foo }: { foo: string } = $props();",
-        );
+        let info = build("export let stray: number;\nlet { foo }: { foo: string } = $props();");
         assert_eq!(info.source, PropsSource::RuneAnnotation);
         assert_eq!(info.type_text.as_deref(), Some("{ foo: string }"));
     }
 
     #[test]
     fn props_info_rune_annotation_wins_over_legacy_interface() {
-        let info = build(
-            "interface $$Props { foo: number }\nlet { bar }: { bar: string } = $props();",
-        );
+        let info =
+            build("interface $$Props { foo: number }\nlet { bar }: { bar: string } = $props();");
         assert_eq!(info.source, PropsSource::RuneAnnotation);
         assert_eq!(info.type_text.as_deref(), Some("{ bar: string }"));
     }
 
     #[test]
     fn props_info_legacy_interface_wins_over_export_let() {
-        let info = build(
-            "interface $$Props { foo: number }\nexport let stray: number;",
-        );
+        let info = build("interface $$Props { foo: number }\nexport let stray: number;");
         assert_eq!(info.source, PropsSource::LegacyInterface);
         assert_eq!(info.type_text.as_deref(), Some("$$Props"));
     }
@@ -911,7 +914,11 @@ mod tests {
         let info = build("let { foo, bar } = $props();");
         assert_eq!(info.source, PropsSource::None);
         assert_eq!(info.type_text, None);
-        let names: Vec<&str> = info.destructures.iter().map(|p| p.local_name.as_str()).collect();
+        let names: Vec<&str> = info
+            .destructures
+            .iter()
+            .map(|p| p.local_name.as_str())
+            .collect();
         assert_eq!(names, vec!["foo", "bar"]);
     }
 

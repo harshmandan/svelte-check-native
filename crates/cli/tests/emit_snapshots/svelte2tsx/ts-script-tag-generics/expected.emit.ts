@@ -8,10 +8,16 @@ async function $$render_389427c4<T extends Record<string, any>>() {
     }
     void __svn_tpl_check;
     void init;
-    return { props: undefined as any as ({ init: T; }) };
+    return { props: undefined as any as ({ init: T; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as {} };
 }
 $$render_389427c4;
-declare class __svn_Render_389427c4<T extends Record<string, any>> { props(): Awaited<ReturnType<typeof $$render_389427c4<T>>>['props']; }
+declare class __svn_Render_389427c4<T extends Record<string, any>> {
+    props(): Awaited<ReturnType<typeof $$render_389427c4<T>>>['props'];
+    events(): Awaited<ReturnType<typeof $$render_389427c4<T>>>['events'];
+    slots(): Awaited<ReturnType<typeof $$render_389427c4<T>>>['slots'];
+    bindings(): Awaited<ReturnType<typeof $$render_389427c4<T>>>['bindings'];
+    exports(): Awaited<ReturnType<typeof $$render_389427c4<T>>>['exports'];
+}
 declare const __svn_component_default: <T extends Record<string, any>>(__anchor: any, props: Partial<ReturnType<__svn_Render_389427c4<T>['props']>>) => { init: T; };
 declare type __svn_component_default<T extends Record<string, any>> = import('svelte').SvelteComponent<ReturnType<__svn_Render_389427c4<T>['props']>> & { init: T; };
 export default __svn_component_default;

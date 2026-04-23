@@ -8,10 +8,16 @@ async function $$render_4d42b625<T>() {
     }
     void __svn_tpl_check;
     void a;
-    return { props: undefined as any as ({ a: T; }) };
+    return { props: undefined as any as ({ a: T; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as {} };
 }
 $$render_4d42b625;
-declare class __svn_Render_4d42b625<T> { props(): Awaited<ReturnType<typeof $$render_4d42b625<T>>>['props']; }
+declare class __svn_Render_4d42b625<T> {
+    props(): Awaited<ReturnType<typeof $$render_4d42b625<T>>>['props'];
+    events(): Awaited<ReturnType<typeof $$render_4d42b625<T>>>['events'];
+    slots(): Awaited<ReturnType<typeof $$render_4d42b625<T>>>['slots'];
+    bindings(): Awaited<ReturnType<typeof $$render_4d42b625<T>>>['bindings'];
+    exports(): Awaited<ReturnType<typeof $$render_4d42b625<T>>>['exports'];
+}
 declare const __svn_component_default: <T>(__anchor: any, props: Partial<ReturnType<__svn_Render_4d42b625<T>['props']>>) => { a: T; };
 declare type __svn_component_default<T> = import('svelte').SvelteComponent<ReturnType<__svn_Render_4d42b625<T>['props']>> & { a: T; };
 export default __svn_component_default;

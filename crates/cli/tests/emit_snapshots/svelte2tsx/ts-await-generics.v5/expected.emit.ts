@@ -54,10 +54,16 @@ async function $$render_200dbc4a<T>() {
     void prop;
     void foo;
     void promise;
-    return { props: undefined as any as ({ prop?: T }) };
+    return { props: undefined as any as ({ prop?: T }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as {} };
 }
 $$render_200dbc4a;
-declare class __svn_Render_200dbc4a<T> { props(): Awaited<ReturnType<typeof $$render_200dbc4a<T>>>['props']; }
+declare class __svn_Render_200dbc4a<T> {
+    props(): Awaited<ReturnType<typeof $$render_200dbc4a<T>>>['props'];
+    events(): Awaited<ReturnType<typeof $$render_200dbc4a<T>>>['events'];
+    slots(): Awaited<ReturnType<typeof $$render_200dbc4a<T>>>['slots'];
+    bindings(): Awaited<ReturnType<typeof $$render_200dbc4a<T>>>['bindings'];
+    exports(): Awaited<ReturnType<typeof $$render_200dbc4a<T>>>['exports'];
+}
 declare const __svn_component_default: <T>(__anchor: any, props: Partial<ReturnType<__svn_Render_200dbc4a<T>['props']>>) => any;
 declare type __svn_component_default<T> = import('svelte').SvelteComponent<ReturnType<__svn_Render_200dbc4a<T>['props']>>;
 export default __svn_component_default;

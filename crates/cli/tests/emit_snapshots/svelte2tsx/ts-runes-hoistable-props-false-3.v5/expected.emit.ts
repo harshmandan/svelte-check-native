@@ -11,10 +11,16 @@ async function $$render_cbdc5f31<T extends boolean>() {
     }
     void __svn_tpl_check;
     void someProp;
-    return { props: undefined as any as ({ someProp: SomeType<T>; }) };
+    return { props: undefined as any as ({ someProp: SomeType<T>; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as {} };
 }
 $$render_cbdc5f31;
-declare class __svn_Render_cbdc5f31<T extends boolean> { props(): Awaited<ReturnType<typeof $$render_cbdc5f31<T>>>['props']; }
+declare class __svn_Render_cbdc5f31<T extends boolean> {
+    props(): Awaited<ReturnType<typeof $$render_cbdc5f31<T>>>['props'];
+    events(): Awaited<ReturnType<typeof $$render_cbdc5f31<T>>>['events'];
+    slots(): Awaited<ReturnType<typeof $$render_cbdc5f31<T>>>['slots'];
+    bindings(): Awaited<ReturnType<typeof $$render_cbdc5f31<T>>>['bindings'];
+    exports(): Awaited<ReturnType<typeof $$render_cbdc5f31<T>>>['exports'];
+}
 declare const __svn_component_default: <T extends boolean>(__anchor: any, props: Partial<ReturnType<__svn_Render_cbdc5f31<T>['props']>>) => any;
 declare type __svn_component_default<T extends boolean> = import('svelte').SvelteComponent<ReturnType<__svn_Render_cbdc5f31<T>['props']>>;
 export default __svn_component_default;

@@ -882,7 +882,18 @@ fn emit_document_with_render_name(
         // Using `undefined as any as <ty>` (not `null as <ty>`) so
         // `<ty>` can be a non-nullable type like `{ foo: string }`
         // without firing TS2352.
-        let _ = writeln!(buf, "    return {{ props: undefined as any as ({ty}) }};");
+        //
+        // Render return matches upstream's shape (addComponentExport.ts:96-138)
+        // — { props, events, slots, bindings, exports } — so a sibling
+        // class's methods can extract each surface via
+        // `Awaited<ReturnType<typeof $$render>>['<method>']`. Each sub-
+        // field today is a permissive stub (`{}` / `string`); future
+        // work (Item 1c typed events, populated bindings/exports from
+        // analyze) tightens them without changing the class shape.
+        let _ = writeln!(
+            buf,
+            "    return {{ props: undefined as any as ({ty}), events: undefined as any as {{}}, slots: undefined as any as {{}}, bindings: undefined as any as string, exports: undefined as any as {{}} }};"
+        );
     }
 
     buf.push_str("}\n");
@@ -980,10 +991,45 @@ fn emit_default_export_declarations(
     if use_class_wrapper && let Some(g) = generics {
         let class_name = render_class_name(render_name);
         let g_args = generic_arg_names(g);
-        let _ = writeln!(
-            buf,
-            "declare class {class_name}<{g}> {{ props(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['props']; }}"
-        );
+        // Full upstream class-wrapper shape (addComponentExport.ts:96-138).
+        // Each method's return type is `Awaited<ReturnType<typeof $$render<…>>>['<field>']`
+        // — all five projections into the render body's return object.
+        // With this shape a sibling `$$IsomorphicComponent` can extract
+        // every surface (props, events, slots, bindings, exports) at
+        // module scope, while body-local `typeof X` refs in $$Props
+        // resolve THROUGH the render function's scope where X lives.
+        let _ = writeln!(buf, "declare class {class_name}<{g}> {{")
+            .and_then(|_| {
+                writeln!(
+                    buf,
+                    "    props(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['props'];"
+                )
+            })
+            .and_then(|_| {
+                writeln!(
+                    buf,
+                    "    events(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['events'];"
+                )
+            })
+            .and_then(|_| {
+                writeln!(
+                    buf,
+                    "    slots(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['slots'];"
+                )
+            })
+            .and_then(|_| {
+                writeln!(
+                    buf,
+                    "    bindings(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['bindings'];"
+                )
+            })
+            .and_then(|_| {
+                writeln!(
+                    buf,
+                    "    exports(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['exports'];"
+                )
+            })
+            .and_then(|_| writeln!(buf, "}}"));
     }
 
     // The Props source has to be "safe" to reference at module scope:

@@ -23,7 +23,10 @@ mod flatten;
 mod load;
 mod parse;
 
-pub use flatten::{FlattenedReference, flatten_references, flatten_references_from_chain};
+pub use flatten::{
+    FlattenedReference, discover_workspace_member_refs, flatten_references,
+    flatten_references_from_chain,
+};
 pub use load::{LoadError, load, load_chain};
 pub use parse::{ParseError, parse_file, parse_str};
 

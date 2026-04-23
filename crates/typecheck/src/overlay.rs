@@ -31,7 +31,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use svn_core::tsconfig::{
-    FlattenedReference, TsConfigFile, flatten_references_from_chain, load_chain,
+    FlattenedReference, TsConfigFile, discover_workspace_member_refs,
+    flatten_references_from_chain, load_chain,
 };
 
 use crate::cache::CacheLayout;
@@ -86,10 +87,25 @@ pub fn build(
     // whose types I need." Skip a reference pointing at the current
     // workspace — its own tsconfig chain already covers it via
     // `chain`. Empty vec for flat-project runs.
-    let sibling_refs: Vec<FlattenedReference> = flatten_references_from_chain(user_tsconfig)
+    let mut sibling_refs: Vec<FlattenedReference> = flatten_references_from_chain(user_tsconfig)
         .into_iter()
         .filter(|r| r.project_dir != layout.workspace)
         .collect();
+    // Pnpm/npm/yarn workspace fallback: when the entry chain has no
+    // explicit `references[]` (no TS project-references setup), look
+    // for a workspace manifest (pnpm-workspace.yaml or
+    // package.json#workspaces) at the workspace root and treat each
+    // member's tsconfig as an implicit sibling. Closes the
+    // `Cannot find module '$lib/...'` cluster on monorepos that
+    // declare paths only on the per-app level (classroomio,
+    // datagrid sites, etc.) without restructuring the user's
+    // tsconfig wiring.
+    if sibling_refs.is_empty() {
+        sibling_refs = discover_workspace_member_refs(&layout.workspace)
+            .into_iter()
+            .filter(|r| r.project_dir != layout.workspace)
+            .collect();
+    }
     // Acknowledge but don't consume the solution root — the CLI
     // still passes it down for future expansion (e.g.
     // paths-level aliases from the solution root).
@@ -179,23 +195,35 @@ pub fn build(
             }
         }
     }
-    // Sibling-project paths: only fill in patterns NOT already
-    // declared by the redirect target's chain. Inner-wins policy
-    // preserves user intent when the redirect target has its own
-    // alias for the same pattern; sibling projects only contribute
-    // aliases that the redirect target hasn't claimed.
+    // Sibling-project paths: COMBINE values across siblings (and the
+    // entry chain) for the same pattern. tsgo tries each value in
+    // order and uses the first that resolves to an existing file —
+    // so multiple sub-apps each contributing their own `$lib` →
+    // `<that-app>/src/lib` works as long as module names don't
+    // collide across sub-apps. Without this combine the first sibling
+    // wins outright and other sub-apps' files fail with TS2307. See
+    // `discover_workspace_member_refs`.
     for sibling in &sibling_refs {
         for (pattern, values) in &sibling.paths {
-            if paths_accumulated.contains_key(pattern) {
-                continue;
-            }
             let resolved: Vec<String> = values
                 .iter()
                 .map(|v| v.to_string_lossy().into_owned())
                 .collect();
-            if !resolved.is_empty() {
-                paths_keys_order.push(pattern.clone());
-                paths_accumulated.insert(pattern.clone(), resolved);
+            if resolved.is_empty() {
+                continue;
+            }
+            match paths_accumulated.get_mut(pattern) {
+                Some(existing) => {
+                    for v in resolved {
+                        if !existing.contains(&v) {
+                            existing.push(v);
+                        }
+                    }
+                }
+                None => {
+                    paths_keys_order.push(pattern.clone());
+                    paths_accumulated.insert(pattern.clone(), resolved);
+                }
             }
         }
     }

@@ -314,89 +314,7 @@ fn emit_document_with_render_name(
         )
     });
 
-    if let Some(s) = &split {
-        if !s.hoisted.is_empty() {
-            // Build a per-import line-map entry so a diagnostic on a
-            // hoisted import line points at the original `<script>`
-            // import line. Each hoisted statement is concatenated
-            // verbatim into `s.hoisted` — line counts inside each
-            // statement match the source 1:1, so we emit one entry per
-            // statement.
-            //
-            // `s.hoisted` starts with synthetic `declare const <name>:
-            // ...;` stubs for body-referenced names — those have NO
-            // entry in `hoisted_byte_offsets`, so we skip past them
-            // before aligning the walk cursor with the first real
-            // offset. Without this skip, every overlay line in the
-            // hoist region gets mapped to the wrong source line (every
-            // entry's source_offset is applied N-stubs too early).
-            if let Some(instance) = &doc.instance_script {
-                let stub_line_count =
-                    count_lines(&s.hoisted[..s.stub_prefix_len.min(s.hoisted.len())]);
-                let mut overlay_cursor = current_line(buf.as_str()) + stub_line_count;
-                let bytes = s.hoisted.as_bytes();
-                let mut byte = s.stub_prefix_len.min(bytes.len());
-                for &source_offset in &s.hoisted_byte_offsets {
-                    // Each hoisted statement runs until either the next
-                    // `\n` followed by a non-blank line, or the next
-                    // hoisted offset's projection in the concatenated
-                    // string. Simplest: count lines until we hit the
-                    // next statement (we know there's an extra `\n`
-                    // between statements).
-                    let stmt_start_byte = byte;
-                    while byte < bytes.len() && bytes[byte] != b'\n' {
-                        byte += 1;
-                    }
-                    // Multi-line imports: keep walking while indented
-                    // continuations or close-brace tokens follow.
-                    while byte < bytes.len() {
-                        let next = byte + 1;
-                        if next >= bytes.len() {
-                            break;
-                        }
-                        // If the next char starts a new statement that
-                        // also appears in `hoisted_byte_offsets`, stop
-                        // here. Otherwise keep walking to allow
-                        // multi-line imports.
-                        let after_nl = bytes[next];
-                        if after_nl == b'\n' {
-                            // Blank line — definitely end of statement.
-                            byte += 1;
-                            break;
-                        }
-                        // Heuristic: if the line starts with an alpha
-                        // character at column 0, it's a new statement.
-                        if after_nl.is_ascii_alphabetic() {
-                            byte += 1;
-                            break;
-                        }
-                        byte += 1;
-                        while byte < bytes.len() && bytes[byte] != b'\n' {
-                            byte += 1;
-                        }
-                    }
-                    let stmt_text = &s.hoisted[stmt_start_byte..byte];
-                    let stmt_line_count = count_lines(stmt_text).max(1);
-                    let source_line =
-                        source_line_at(doc.source, instance.content_range.start + source_offset);
-                    buf.push_line_map(LineMapEntry {
-                        overlay_start_line: overlay_cursor,
-                        overlay_end_line: overlay_cursor + stmt_line_count,
-                        source_start_line: source_line,
-                    });
-                    overlay_cursor += stmt_line_count;
-                    // Skip the trailing newline we wrote.
-                    if byte < bytes.len() && bytes[byte] == b'\n' {
-                        byte += 1;
-                    }
-                }
-            }
-            buf.push_str(&s.hoisted);
-            if !s.hoisted.ends_with('\n') {
-                buf.push_str("\n");
-            }
-        }
-    }
+    emit_hoisted_imports(&mut buf, split.as_ref(), doc);
 
     // `<script generics="T extends ...">` (extracted above) — expose
     // the type params as generics on the wrapping function so
@@ -983,6 +901,89 @@ fn emit_document_with_render_name(
         token_map,
         overlay_line_starts,
         source_line_starts,
+    }
+}
+
+/// Emit the hoisted-imports region at module scope, followed by a
+/// per-statement LineMapEntry so a diagnostic on a hoisted import line
+/// points at the original `<script>` import line. Each hoisted
+/// statement was concatenated verbatim into `s.hoisted` — line counts
+/// inside a statement match the source 1:1, so we emit one entry per
+/// statement.
+///
+/// `s.hoisted` starts with synthetic `declare const <name>: …;` stubs
+/// for body-referenced names — those have NO entry in
+/// `hoisted_byte_offsets`, so we skip past them before aligning the
+/// walk cursor with the first real offset. Without this skip, every
+/// overlay line in the hoist region gets mapped to the wrong source
+/// line (every entry's source_offset is applied N-stubs too early).
+fn emit_hoisted_imports(
+    buf: &mut EmitBuffer,
+    split: Option<&script_split::SplitScript>,
+    doc: &svn_parser::Document<'_>,
+) {
+    let Some(s) = split else { return };
+    if s.hoisted.is_empty() {
+        return;
+    }
+    if let Some(instance) = &doc.instance_script {
+        let stub_line_count = count_lines(&s.hoisted[..s.stub_prefix_len.min(s.hoisted.len())]);
+        let mut overlay_cursor = current_line(buf.as_str()) + stub_line_count;
+        let bytes = s.hoisted.as_bytes();
+        let mut byte = s.stub_prefix_len.min(bytes.len());
+        for &source_offset in &s.hoisted_byte_offsets {
+            // Each hoisted statement runs until either the next `\n`
+            // followed by a non-blank line, or the next hoisted
+            // offset's projection in the concatenated string. Simplest:
+            // count lines until we hit the next statement (we know
+            // there's an extra `\n` between statements).
+            let stmt_start_byte = byte;
+            while byte < bytes.len() && bytes[byte] != b'\n' {
+                byte += 1;
+            }
+            // Multi-line imports: keep walking while indented
+            // continuations or close-brace tokens follow.
+            while byte < bytes.len() {
+                let next = byte + 1;
+                if next >= bytes.len() {
+                    break;
+                }
+                let after_nl = bytes[next];
+                if after_nl == b'\n' {
+                    // Blank line — definitely end of statement.
+                    byte += 1;
+                    break;
+                }
+                // Heuristic: if the line starts with an alpha character
+                // at column 0, it's a new statement.
+                if after_nl.is_ascii_alphabetic() {
+                    byte += 1;
+                    break;
+                }
+                byte += 1;
+                while byte < bytes.len() && bytes[byte] != b'\n' {
+                    byte += 1;
+                }
+            }
+            let stmt_text = &s.hoisted[stmt_start_byte..byte];
+            let stmt_line_count = count_lines(stmt_text).max(1);
+            let source_line =
+                source_line_at(doc.source, instance.content_range.start + source_offset);
+            buf.push_line_map(LineMapEntry {
+                overlay_start_line: overlay_cursor,
+                overlay_end_line: overlay_cursor + stmt_line_count,
+                source_start_line: source_line,
+            });
+            overlay_cursor += stmt_line_count;
+            // Skip the trailing newline we wrote.
+            if byte < bytes.len() && bytes[byte] == b'\n' {
+                byte += 1;
+            }
+        }
+    }
+    buf.push_str(&s.hoisted);
+    if !s.hoisted.ends_with('\n') {
+        buf.push_str("\n");
     }
 }
 

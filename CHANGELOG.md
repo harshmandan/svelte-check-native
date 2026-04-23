@@ -4,6 +4,150 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2]
+
+Patch release. Closes the long-standing `.svelte` + `.svelte.ts`
+sibling-collision bug (kampsy-ui / shadcn-svelte style component
+libraries), lands a substantial internal emit refactor with zero
+behavior change on the three parity-gate benches, and removes one
+broken escape-hatch env var. No breaking changes; no new CLI
+surface.
+
+### Emit / overlay
+
+- **`.svelte` + `.svelte.ts` sibling collision fixed.** When a
+  user `.ts` file does `import X from './Foo.svelte'` and
+  `Foo.svelte` sits next to a sibling `Foo.svelte.ts` runes
+  module (Svelte 5 convention used by shadcn-svelte, bits-ui,
+  kampsy-ui, and similar), tsgo's `rootDirs` resolution strips
+  `.svelte`, checks `Foo.d.svelte.ts` (ours, in cache) — doesn't
+  find it — then falls through to `Foo.svelte.ts` via bundler
+  auto-extension, landing on the runes module. The runes module
+  has named exports but no `default`, firing TS2305 "has no
+  exported member 'default'".
+
+  Fix: emit a mirror overlay of the user's `.ts` file at the
+  cache path (same pattern as SvelteKit Kit-file overlays), with
+  every collision-case `.svelte` specifier rewritten from
+  `./Foo.svelte` → `./Foo.svelte.svn.js`. Bundler module
+  resolution then resolves straight to the cache-side
+  `Foo.svelte.svn.ts` overlay without the auto-extension
+  fallthrough. Scoped narrowly: a rewrite only fires when BOTH
+  `Foo.svelte` AND `Foo.svelte.ts` are present as siblings —
+  standalone `.svelte.ts` runes modules (no component) resolve
+  unchanged.
+
+  Bench deltas: `ui` 8 errors → 0 (exact match with upstream);
+  `Oxide-Lab` -3 vs tsgo → 0 (exact match with upstream). No
+  user source tree writes; no pollution of
+  `allowArbitraryExtensions`-less tsconfigs or language-server
+  consumers.
+
+### Internal refactor (no behavior change)
+
+Major cleanup of the emit crate, landed across 14 commits
+between `4484c83` (phase 4.2.1) and `86e5fca` (default-export
+extraction). Emit now uses a single `EmitBuffer` position-
+tracking primitive instead of threading `String` +
+`Vec<LineMapEntry>` + `Vec<TokenMapEntry>` through 20+ entry
+points. Every TokenMapEntry is pushed at emit time (at the exact
+byte position of the splice) instead of being reconstructed by
+a post-walk scanner.
+
+- **All six post-walk `collect_*_token_map` scanners deleted.**
+  `collect_interpolation_token_map` (~140 LOC,
+  paren-balance + sentinel lookup),
+  `collect_action_directive_token_map` (~90 LOC,
+  `const __svn_action_N =` + `__svn_map_element_tag(` +
+  paren-balance), `collect_on_event_token_map` (~95 LOC,
+  `__svn_inst_<hex>.$on(...)` + inst cursor),
+  `collect_dom_binding_token_map` (~70 LOC, MID-anchor backtrack),
+  `collect_bind_this_check_token_map` (~55 LOC, `/* bind:this */`
+  anchor), `collect_satisfies_token_map` (~75 LOC,
+  `new __svn_C_<hex>` + paren-balance). Replaced wholesale with
+  `buf.append_with_source(text, source_range)` at each splice
+  site (and `buf.push_token_map(...)` for the synthesized
+  component-call span). ~530 LOC of character-level scanner
+  code deleted.
+
+- **Related markers removed.** The `/*svn_I*/` interpolation
+  sentinel is gone (no more scanner anchoring, no more
+  paren-balance). The `/* bind:this */` marker comment is gone
+  (same reason).
+
+- **DOM-element bind emit paths unified.**
+  `emit_dom_binding_checks_inline` (`bind:value`, `bind:checked`,
+  `bind:files`, `bind:group`, `bind:clientWidth`, …) and
+  `emit_bind_this_element_check_inline` merged into one loop
+  dispatching the target-type per directive name — both already
+  emitted the same `EXPR = null as any as TYPE;` shape after
+  the earlier direct-assignment alignment. 123 → 69 LOC in the
+  emit block.
+
+- **Default-export declarations extracted.**
+  `emit_default_export_declarations` now owns the class-wrapper
+  `declare class`, the 4-arm `declare const __svn_component_default`
+  / type alias pair, the `type __svn_tpl_type_refs = [...]`
+  alias, and the final `export default`. Drops
+  `emit_document_with_render_name` from ~1110 LOC → 763 LOC
+  toward the 400-LOC goal; default-export helper is self-
+  contained in 239 LOC.
+
+- **`state_referenced_locally` compat gate baked into `Binding`.**
+  Previously the rule consulted `ctx.compat` at every binding
+  (multiple version gates — `state_locally_fires_on_props`,
+  `state_locally_rest_prop`, plus kind + reassigned + primitive-
+  init). The resolved boolean is now pre-computed as
+  `Binding::fires_state_referenced_locally` at scope-build time
+  by a new `populate_compat_gated_fields` pass. The rule reads
+  one flag; the scope tree is now version-invariant for this
+  question.
+
+### Removed
+
+- **`SVN_TSGO_BUILDERS` env var removed.** Previously plumbed as
+  a tuning knob alongside `SVN_TSGO_CHECKERS` and
+  `SVN_TSGO_SINGLE_THREADED`. Setting it produced **fake
+  speedups** of 3–6× on both cold and warm runs by silently
+  hiding errors: `--builders` is a `tsgo --build` (project-
+  references) flag, but our single-project invocation mode
+  (`--project <overlay>`) rejects it with TS5093 and exits
+  without diagnostics. The wrapper then treated the empty
+  output as "0 errors", so any user who set the env var got
+  zero-error runs across their entire workspace. Fixed by
+  removing the plumbing entirely; if tsgo `--build` mode is
+  ever adopted here, the flag comes back. `SVN_TSGO_CHECKERS`
+  and `SVN_TSGO_SINGLE_THREADED` stay — both valid in single-
+  project mode.
+
+### Performance investigation (no code change)
+
+Profiled cs-4 and cs-5 cold + warm with `samply` @ 4 kHz.
+Findings captured in `notes/ts7-tracking.md`:
+
+- **tsgo dominates.** 95% cold / 84% warm / 83% dirty of
+  wall-clock on cs-5. Our Rust code consumes ~150–200 ms total
+  in every scenario — a rounding error.
+- **Parallelism underutilised.** user/real ~3× on 8-core; 5
+  cores effectively idle. Not CPU-bound.
+- **tsgo's own breakdown** (cs-5 warm, 1.28M lines across 8106
+  files): Parse 568 ms, Check 4 ms (incremental), Changes
+  compute 286 ms. Parse is the floor.
+- Conclusion: no easy wins without tsgo-side changes; our
+  overlay shape already uses `skipLibCheck`, incremental
+  tsbuildinfo, scoped `include`. Content-addressable emit cache
+  might save ~50 ms warm but adds infrastructure.
+
+### Bench state at release
+
+| Bench | Files | Errors | Warnings | FWP | vs upstream |
+|---|---:|---:|---:|---:|---|
+| control-svelte-4 admin-app | 1124 | 0 | 2 | 2 | exact parity |
+| control-svelte-5 admin-app | 1357 | 0 | 49 | 17 | exact parity |
+| layerchart | 348 | 211 | 0 | 59 | -1 file; +185 vs tsgo (see `notes/OPEN.md` — blocked on structural tsgo constraint) |
+| ui | 183 | 0 | 30 | 17 | exact parity (was +8 errors pre-fix) |
+| Oxide-Lab | 206 | 0 | 0 | 0 | exact parity (was -3 errors pre-fix) |
+
 ## [0.4.1]
 
 Patch release: error-side parity improvements targeting TS-emit-shape

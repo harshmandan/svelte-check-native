@@ -811,58 +811,22 @@ fn emit_document_with_render_name(
 
     // Build the `{ name: sig; ... }` object type for collected exports.
     // Used two places below:
-    //   - as the Exports type parameter of `Component<Props, Exports>`
-    //     on the VALUE declaration, so `ReturnType<typeof Foo>` carries
-    //     user exports (common pattern: `let ref: ReturnType<typeof X>
-    //     = $state()` for bind:this targets).
-    //   - as an `& { name: sig }` intersection on the TYPE alias, so
-    //     `let ref: Foo` picks up the same shape.
-    // Per-field sanitizer: body-scoped refs (`$$Props['x']`, `typeof
-    // <exported-local>`) can't resolve at module scope. A field that
-    // referenced them was emitting TS2304 "Cannot find name" AND —
-    // because the whole exports_object used to double as the function-
-    // return shape only — quietly losing contextual-type flow at every
-    // consumer-side `new __svn_CN({ props: {…} })` site. Replace the
-    // whole field's type with `any` when any body-scoped ref appears;
-    // sibling fields keep their types and pass contextual typing
-    // through to consumers' callback props.
-    let sanitize_type_source = |t: &str| -> String {
-        let mentions_dollar =
-            t.contains("$$Props") || t.contains("$$Events") || t.contains("$$Slots");
-        let touches_body_typeof = crate::script_split::typeof_targets_public(t)
-            .iter()
-            .any(|n| exported_locals.iter().any(|l| l.as_str() == n.as_str()));
-        if mentions_dollar || touches_body_typeof {
-            "any".to_string()
-        } else {
-            t.to_string()
-        }
-    };
+    //   - consumed by the render body's return shape, where body-local
+    //     refs (`typeof handler`, `$$Props['x']`) resolve inside
+    //     `$$render`'s own scope.
+    //   - for class-wrapper-enabled components: projected back out at
+    //     module scope via `ReturnType<__svn_Render_<hash><T>['exports']>`,
+    //     letting consumers of the `$$IsomorphicComponent` interface see
+    //     the real `export function` / `export const` signatures without
+    //     any TS2304 risk at module scope.
+    //   - for non-class-wrapper arms (components without generics):
+    //     intersected into the default-export's SvelteComponent type
+    //     directly. These arms can still fire TS2304 if the user refs
+    //     `$$Props['x']` or `typeof <body-local>` in an `export function`
+    //     signature — a pattern that's rare in practice and only
+    //     surfaces on generic components (which use the class-wrapper
+    //     path anyway).
     let exports_object: Option<String> = split.as_ref().and_then(|s| {
-        if s.export_type_infos.is_empty() {
-            return None;
-        }
-        let mut buf = String::from("{ ");
-        for info in &s.export_type_infos {
-            buf.push_str(info.name.as_str());
-            buf.push_str(": ");
-            match &info.type_source {
-                Some(t) => buf.push_str(&sanitize_type_source(t)),
-                None => buf.push_str("any"),
-            }
-            buf.push_str("; ");
-        }
-        buf.push('}');
-        Some(buf)
-    });
-    // Unsanitized version of exports_object for the render-body return.
-    // Body-local refs (`typeof handler`, `$$Props['x']`) resolve inside
-    // `$$render`'s scope — so the render body can carry the real shape.
-    // The class-wrapper's `exports()` method projects this out via
-    // `ReturnType<__svn_Render_<hash><T>['exports']>`, letting the
-    // `$$IsomorphicComponent` interface expose `export function` /
-    // `export const` types to consumers without sanitisation.
-    let exports_object_raw: Option<String> = split.as_ref().and_then(|s| {
         if s.export_type_infos.is_empty() {
             return None;
         }
@@ -911,11 +875,11 @@ fn emit_document_with_render_name(
         // — { props, events, slots, bindings, exports } — so a sibling
         // class's methods can extract each surface via
         // `Awaited<ReturnType<typeof $$render>>['<method>']`. The
-        // `exports` field carries the raw (unsanitized) exports_object
-        // because body-local refs like `typeof handler` / `$$Props['x']`
-        // resolve inside $$render's scope; at consumer sites the class-
-        // wrapper's `exports()` method projects them out intact.
-        let exports_field = exports_object_raw.as_deref().unwrap_or("{}");
+        // `exports` field carries `exports_object` unchanged because
+        // body-local refs (`typeof handler`, `$$Props['x']`) resolve
+        // inside $$render's scope; at consumer sites the class-wrapper's
+        // `exports()` method projects them out intact.
+        let exports_field = exports_object.as_deref().unwrap_or("{}");
         let _ = writeln!(
             buf,
             "    return {{ props: undefined as any as ({ty}), events: undefined as any as {{}}, slots: undefined as any as {{}}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
@@ -1203,7 +1167,15 @@ fn emit_default_export_declarations(
             .collect::<Vec<_>>()
             .join(", ");
         let bindings_any_ret = format!("ReturnType<{class_name}<{g_args_any}>['bindings']>");
-        let widen_base = prop_type_source.unwrap_or("Record<string, any>");
+        // Widen base must be module-scope-safe: if the Props type
+        // source references body-locals (e.g. `$$Props` declared
+        // inside $$render), using it as the `__SvnSvelte4PropsWiden<…>`
+        // argument would fire TS2304 at module scope. Route through
+        // the class-wrapper's ReturnType projection — same shape,
+        // body-local refs resolved via the render function's scope.
+        let widen_base: &str = prop_type_source
+            .filter(|_| ty_safe_in_generic_scope)
+            .unwrap_or(&props_ret);
         let widen = widen_for(widen_base);
         let _ = writeln!(buf, "interface $$IsomorphicComponent {{");
         let _ = writeln!(

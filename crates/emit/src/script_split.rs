@@ -813,12 +813,6 @@ fn typeof_targets(text: &str) -> Vec<SmolStr> {
     typeof_targets_inner(text, false)
 }
 
-/// Variant exported for the emit crate's body-scoped-ref sanitizer.
-/// Every `typeof <ident>` target in `text` (excludes `keyof typeof`).
-pub fn typeof_targets_public(text: &str) -> Vec<SmolStr> {
-    typeof_targets_inner(text, false)
-}
-
 fn typeof_targets_inner(text: &str, require_keyof: bool) -> Vec<SmolStr> {
     let bytes = text.as_bytes();
     let mut out: Vec<SmolStr> = Vec::new();

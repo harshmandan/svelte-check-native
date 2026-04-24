@@ -5177,7 +5177,11 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             // prop slot. Mirrors upstream's `__sveltets_2_get_set_binding`
             // (svelte2tsx/src/htmlxtojsx_v2/nodes/Binding.ts:179).
             // See design/get_set_binding/ for the tsgo-locked fixture.
-            let _ = write!(buf, ": __svn_get_set_binding({getter}, {setter})");
+            buf.push_str(": __svn_get_set_binding(");
+            buf.append_with_source(getter, *getter_range);
+            buf.push_str(", ");
+            buf.append_with_source(setter, *setter_range);
+            buf.push_str(")");
         }
     }
 }

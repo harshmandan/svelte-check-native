@@ -61,7 +61,12 @@ async function $$render_a154bb54() {
     return { props: undefined as any as ({ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ exported1: string; exported2: string; }) };
 }
 $$render_a154bb54;
-declare const __svn_component_default: import('svelte').Component<{ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }, Awaited<ReturnType<typeof $$render_a154bb54>>['exports']>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }> & Awaited<ReturnType<typeof $$render_a154bb54>>['exports'];
+interface $$IsomorphicComponent {
+    new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_a154bb54>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_a154bb54>>['props'], Awaited<ReturnType<typeof $$render_a154bb54>>['events'], Awaited<ReturnType<typeof $$render_a154bb54>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_a154bb54>>['bindings'] } & Awaited<ReturnType<typeof $$render_a154bb54>>['exports'];
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_a154bb54>>['props']): Awaited<ReturnType<typeof $$render_a154bb54>>['exports'];
+    z_$$bindings?: Awaited<ReturnType<typeof $$render_a154bb54>>['bindings'];
+}
+const __svn_component_default: $$IsomorphicComponent = null as any;
+type __svn_component_default = InstanceType<typeof __svn_component_default>;
 export default __svn_component_default;
 

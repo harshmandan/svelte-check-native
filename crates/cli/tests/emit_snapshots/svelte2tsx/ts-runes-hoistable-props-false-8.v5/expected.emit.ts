@@ -29,8 +29,8 @@ declare class __svn_Render_f45a6d7c<T extends { a: string }> {
     exports(): Awaited<ReturnType<typeof $$render_f45a6d7c<T>>>['exports'];
 }
 interface $$IsomorphicComponent {
-    new <T extends { a: string }>(options: import('svelte').ComponentConstructorOptions<ReturnType<__svn_Render_f45a6d7c<T>['props']> & { children?: any }>): import('svelte').SvelteComponent<ReturnType<__svn_Render_f45a6d7c<T>['props']>, ReturnType<__svn_Render_f45a6d7c<T>['events']>, ReturnType<__svn_Render_f45a6d7c<T>['slots']>> & { $$bindings?: ReturnType<__svn_Render_f45a6d7c<T>['bindings']> } & ReturnType<__svn_Render_f45a6d7c<T>['exports']>;
-    <T extends { a: string }>(internal: unknown, props: ReturnType<__svn_Render_f45a6d7c<T>['props']> & { children?: any }): ReturnType<__svn_Render_f45a6d7c<T>['exports']>;
+    new <T extends { a: string }>(options: import('svelte').ComponentConstructorOptions<ReturnType<__svn_Render_f45a6d7c<T>['props']>>): import('svelte').SvelteComponent<ReturnType<__svn_Render_f45a6d7c<T>['props']>, ReturnType<__svn_Render_f45a6d7c<T>['events']>, ReturnType<__svn_Render_f45a6d7c<T>['slots']>> & { $$bindings?: ReturnType<__svn_Render_f45a6d7c<T>['bindings']> } & ReturnType<__svn_Render_f45a6d7c<T>['exports']>;
+    <T extends { a: string }>(internal: unknown, props: ReturnType<__svn_Render_f45a6d7c<T>['props']>): ReturnType<__svn_Render_f45a6d7c<T>['exports']>;
     z_$$bindings?: ReturnType<__svn_Render_f45a6d7c<any>['bindings']>;
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

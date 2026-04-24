@@ -23,7 +23,12 @@ async function $$render_39dbed3c() {
     return { props: undefined as any as ({ bar: Bar; foobar?: typeof foobar; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ bar: Bar; foobar: typeof foobar; }) };
 }
 $$render_39dbed3c;
-declare const __svn_component_default: import('svelte').Component<Partial<Awaited<ReturnType<typeof $$render_39dbed3c>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_39dbed3c>>['props']>>, Awaited<ReturnType<typeof $$render_39dbed3c>>['exports']>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_39dbed3c>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_39dbed3c>>['props']>>> & Awaited<ReturnType<typeof $$render_39dbed3c>>['exports'];
+interface $$IsomorphicComponent {
+    new (options: import('svelte').ComponentConstructorOptions<Partial<Awaited<ReturnType<typeof $$render_39dbed3c>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_39dbed3c>>['props']>> & { children?: any }>): import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_39dbed3c>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_39dbed3c>>['props']>>, Awaited<ReturnType<typeof $$render_39dbed3c>>['events'], Awaited<ReturnType<typeof $$render_39dbed3c>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_39dbed3c>>['bindings'] } & Awaited<ReturnType<typeof $$render_39dbed3c>>['exports'];
+    (internal: unknown, props: Partial<Awaited<ReturnType<typeof $$render_39dbed3c>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_39dbed3c>>['props']>> & { children?: any }): Awaited<ReturnType<typeof $$render_39dbed3c>>['exports'];
+    z_$$bindings?: Awaited<ReturnType<typeof $$render_39dbed3c>>['bindings'];
+}
+const __svn_component_default: $$IsomorphicComponent = null as any;
+type __svn_component_default = InstanceType<typeof __svn_component_default>;
 export default __svn_component_default;
 

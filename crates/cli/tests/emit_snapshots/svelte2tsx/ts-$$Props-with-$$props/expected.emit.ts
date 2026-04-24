@@ -28,7 +28,12 @@ async function $$render_1764a80f() {
     return { props: undefined as any as ($$Props), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ c: () => void; }) };
 }
 $$render_1764a80f;
-declare const __svn_component_default: import('svelte').Component<$$Props & __SvnAllProps, Awaited<ReturnType<typeof $$render_1764a80f>>['exports']>;
-declare type __svn_component_default = import('svelte').SvelteComponent<$$Props & __SvnAllProps> & Awaited<ReturnType<typeof $$render_1764a80f>>['exports'];
+interface $$IsomorphicComponent {
+    new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_1764a80f>>['props'] & __SvnAllProps>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_1764a80f>>['props'] & __SvnAllProps, Awaited<ReturnType<typeof $$render_1764a80f>>['events'], Awaited<ReturnType<typeof $$render_1764a80f>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_1764a80f>>['bindings'] } & Awaited<ReturnType<typeof $$render_1764a80f>>['exports'];
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_1764a80f>>['props'] & __SvnAllProps): Awaited<ReturnType<typeof $$render_1764a80f>>['exports'];
+    z_$$bindings?: Awaited<ReturnType<typeof $$render_1764a80f>>['bindings'];
+}
+const __svn_component_default: $$IsomorphicComponent = null as any;
+type __svn_component_default = InstanceType<typeof __svn_component_default>;
 export default __svn_component_default;
 

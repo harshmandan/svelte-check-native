@@ -27,10 +27,15 @@ async function $$render_d1f99cf5() {
         // template type-check body (incremental)
     }
     void __svn_tpl_check;
-    return { props: undefined as any as (Record<string, any>), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as { [K in keyof $$Events]: CustomEvent<$$Events[K]> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_d1f99cf5;
-declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_d1f99cf5>>['props']> & { readonly __svn_events: $$Events };
-declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_d1f99cf5>>['props']>;
+interface $$IsomorphicComponent {
+    new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_d1f99cf5>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_d1f99cf5>>['props'], Awaited<ReturnType<typeof $$render_d1f99cf5>>['events'], Awaited<ReturnType<typeof $$render_d1f99cf5>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_d1f99cf5>>['bindings'] } & Awaited<ReturnType<typeof $$render_d1f99cf5>>['exports'];
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_d1f99cf5>>['props']): Awaited<ReturnType<typeof $$render_d1f99cf5>>['exports'];
+    z_$$bindings?: Awaited<ReturnType<typeof $$render_d1f99cf5>>['bindings'];
+}
+const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: $$Events } = null as any;
+type __svn_component_default = InstanceType<typeof __svn_component_default>;
 export default __svn_component_default;
 

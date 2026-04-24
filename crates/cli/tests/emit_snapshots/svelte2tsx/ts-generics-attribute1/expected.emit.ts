@@ -33,8 +33,8 @@ declare class __svn_Render_94f45523<A, B extends keyof A, C extends boolean> {
     exports(): Awaited<ReturnType<typeof $$render_94f45523<A, B, C>>>['exports'];
 }
 interface $$IsomorphicComponent {
-    new <A, B extends keyof A, C extends boolean>(options: import('svelte').ComponentConstructorOptions<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }> & { children?: any }>): import('svelte').SvelteComponent<ReturnType<__svn_Render_94f45523<A, B, C>['props']>, ReturnType<__svn_Render_94f45523<A, B, C>['events']>, ReturnType<__svn_Render_94f45523<A, B, C>['slots']>> & { $$bindings?: ReturnType<__svn_Render_94f45523<A, B, C>['bindings']> } & ReturnType<__svn_Render_94f45523<A, B, C>['exports']>;
-    <A, B extends keyof A, C extends boolean>(internal: unknown, props: ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }> & { children?: any }): ReturnType<__svn_Render_94f45523<A, B, C>['exports']>;
+    new <A, B extends keyof A, C extends boolean>(options: import('svelte').ComponentConstructorOptions<Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }>): import('svelte').SvelteComponent<Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>, ReturnType<__svn_Render_94f45523<A, B, C>['events']>, ReturnType<__svn_Render_94f45523<A, B, C>['slots']>> & { $$bindings?: ReturnType<__svn_Render_94f45523<A, B, C>['bindings']> } & ReturnType<__svn_Render_94f45523<A, B, C>['exports']>;
+    <A, B extends keyof A, C extends boolean>(internal: unknown, props: Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }): ReturnType<__svn_Render_94f45523<A, B, C>['exports']>;
     z_$$bindings?: ReturnType<__svn_Render_94f45523<any, any, any>['bindings']>;
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

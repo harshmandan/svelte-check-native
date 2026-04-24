@@ -469,37 +469,91 @@ declare function __svn_get_set_binding<T>(
 // Without the conditional, TS's overload resolver falls through to
 // the `c: unknown` fallback when T is a union, giving `props?: any`
 // and silently accepting any prop literal.
-declare function __svn_ensure_component<C extends new (...args: any[]) => any>(c: C): C;
+// 2026-04-25: unified with upstream's single-overload conditional-
+// return pattern (svelte-shims-v4.d.ts:224-251). Produces instance
+// shapes identical to what the default-export emit's
+// `$$IsomorphicComponent` pattern yields — so consumer-side
+// `bind:this={ref}` against a user-declared `let ref: MyComp`
+// target matches structurally.
+//
+// Branch order matters. TS tries each conditional in turn:
+//
+// 1. Typed-events marker: the child's emit intersects
+//    `& { readonly __svn_events: $$Events }` onto its default-export
+//    VALUE when `interface $$Events` / `type $$Events` is declared.
+//    We match that first so narrowed event-handler typing fires
+//    even when the input ALSO has a `new` signature (which
+//    `$$IsomorphicComponent` does). The events shape is wrapped in
+//    `CustomEvent<>` here so user handlers written as
+//    `(e: CustomEvent<{id:number}>) => …` match
+//    `SvelteComponent.$on<K>(cb: (e: Events[K]) => void)` where
+//    Events[K] = CustomEvent<{id:number}>.
+//
+// 2. Constructor passthrough: Svelte-4 legacy class components
+//    (extending `SvelteComponent` directly) pass through unchanged
+//    — `new C({…})` on the returned type already produces the
+//    right `InstanceType<C>` shape.
+//
+// 3. `Component<P, Exports, Bindings>` — Svelte-5 component shape
+//    without typed-events marker. Returns a ctor whose instance
+//    matches what the default-export's `$$IsomorphicComponent` new
+//    signature yields.
+//
+// 4. Function-component fallback: `(anchor, props: P) => any`
+//    shape. Mostly covers user-authored raw functions; rare.
+//
+// 5. Fallback `any`-prop ctor for unknown shapes (union types, etc.)
+//    that fall through the above.
 declare function __svn_ensure_component<
-    T extends import('svelte').Component<any, any, any> & {
-        readonly __svn_events: any;
-    },
+    T extends
+        | (new (...args: any[]) => any)
+        | import('svelte').Component<any, any, any>
+        | ((anchor: any, props: any) => any)
+        | { readonly __svn_events: any }
+        | null
+        | undefined,
 >(
     c: T,
-): T extends import('svelte').Component<
-    infer P extends Record<string, any>,
-    any,
-    any
-> & { readonly __svn_events: infer E }
-    ? new (options: { target?: any; props?: P }) => __SvnInstanceTyped<P, E>
-    : never;
-declare function __svn_ensure_component<
-    T extends import('svelte').Component<any, any, any>,
->(
-    c: T,
-): T extends import('svelte').Component<
-    infer P extends Record<string, any>,
-    any,
-    any
->
-    ? new (options: { target?: any; props?: P }) => __SvnInstance<P>
-    : never;
-declare function __svn_ensure_component<P>(
-    c: (anchor: any, props: P) => any,
-): new (options: { target?: any; props?: P }) => __SvnInstance<P>;
-declare function __svn_ensure_component(
-    c: unknown,
-): new (options: { target?: any; props?: any }) => __SvnInstance<any>;
+): NonNullable<
+    T extends { readonly __svn_events: infer E extends Record<string, any> } & import('svelte').Component<
+        infer P extends Record<string, any>,
+        infer X extends Record<string, any>,
+        infer B extends string
+    >
+        ? new (options: { target?: any; props?: P }) => import('svelte').SvelteComponent<
+              P,
+              { [K in keyof E]: CustomEvent<E[K]> },
+              Record<string, any>
+          > &
+              X & { $$bindings?: B }
+        : T extends new (...args: any[]) => any
+          ? T
+          : T extends import('svelte').Component<
+                  infer P extends Record<string, any>,
+                  infer X extends Record<string, any>,
+                  infer B extends string
+              >
+            ? new (options: { target?: any; props?: P }) => import('svelte').SvelteComponent<
+                  P,
+                  Record<string, any>,
+                  Record<string, any>
+              > &
+                  X & { $$bindings?: B }
+            : T extends (anchor: any, props: infer P) => any
+              ? P extends Record<string, any>
+                  ? new (options: {
+                        target?: any;
+                        props?: P;
+                    }) => import('svelte').SvelteComponent<P>
+                  : new (options: {
+                        target?: any;
+                        props?: any;
+                    }) => import('svelte').SvelteComponent<Record<string, any>>
+              : new (options: {
+                    target?: any;
+                    props?: any;
+                }) => import('svelte').SvelteComponent<Record<string, any>>
+>;
 
 /**
  * Shape returned by a `new __svn_ensure_component(C)({target, props})`

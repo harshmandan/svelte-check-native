@@ -604,6 +604,17 @@ declare function __svn_any_as<T>(value: T): void;
 declare function __svn_snippet_return(): any;
 
 /**
+ * CSS-custom-property prop on a component — Svelte 5 accepts
+ * `<Foo --accent-color="red">` as a CSS variable passthrough to
+ * the component's wrapper, NOT as a typed prop. Emit spreads the
+ * value through this helper so the key contributes `{}` (nothing)
+ * to the component's Props object — no TS2353 "does not exist in
+ * type" against the component's declared Props. Mirrors upstream
+ * svelte2tsx's `__sveltets_2_cssProp`.
+ */
+declare function __svn_css_prop(prop: Record<string, any>): {};
+
+/**
  * Action-directive return shape — matches Svelte's `ActionReturn` plus
  * the `$$_attributes` hook svelte2tsx uses to forward action-declared
  * attributes back onto the element.

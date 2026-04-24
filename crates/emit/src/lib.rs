@@ -5107,12 +5107,32 @@ fn emit_bind_this_assignment(
 fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropShape) {
     match p {
         svn_analyze::PropShape::Literal { name, value } => {
+            // CSS custom-property prop (`--foo-bar="#fff"`) — Svelte 5
+            // applies these as CSS variables on the component's
+            // wrapper element, not as Props. Spread through the
+            // `__svn_css_prop` helper which returns `{}` so the key
+            // contributes nothing to the typed props object. Mirrors
+            // upstream's `__sveltets_2_cssProp(...)` treatment.
+            if is_css_custom_prop_name(name) {
+                buf.push_str("...__svn_css_prop({");
+                write_quoted_prop_key(buf, name);
+                buf.push_str(": ");
+                write_js_string_literal(buf, value);
+                buf.push_str("})");
+                return;
+            }
             write_quoted_prop_key(buf, name);
             buf.push_str(": ");
             write_js_string_literal(buf, value);
         }
         svn_analyze::PropShape::Expression { name, expr_range } => {
             let expr = &source[expr_range.start as usize..expr_range.end as usize];
+            if is_css_custom_prop_name(name) {
+                buf.push_str("...__svn_css_prop({");
+                write_quoted_prop_key(buf, name);
+                let _ = write!(buf, ": ({expr})}})");
+                return;
+            }
             write_quoted_prop_key(buf, name);
             let _ = write!(buf, ": ({expr})");
         }
@@ -5333,6 +5353,15 @@ fn write_object_key(buf: &mut EmitBuffer, name: &str) {
     } else {
         write_js_string_literal(buf, name);
     }
+}
+
+/// True for CSS-custom-property attribute names (`--foo`, `--some-var`).
+/// Svelte 5 treats `<Comp --css-var={...}>` as a CSS variable on the
+/// component's wrapper element, not as a typed prop — so the emit
+/// routes these through `__svn_css_prop` which returns `{}` and
+/// doesn't contribute to the Props object type.
+fn is_css_custom_prop_name(name: &str) -> bool {
+    name.starts_with("--")
 }
 
 /// True for ASCII identifiers `[A-Za-z_$][A-Za-z0-9_$]*`. We don't try

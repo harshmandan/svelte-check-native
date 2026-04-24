@@ -5130,11 +5130,15 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             if is_css_custom_prop_name(name) {
                 buf.push_str("...__svn_css_prop({");
                 write_quoted_prop_key(buf, name);
-                let _ = write!(buf, ": ({expr})}})");
+                buf.push_str(": (");
+                buf.append_with_source(expr, *expr_range);
+                buf.push_str(")})");
                 return;
             }
             write_quoted_prop_key(buf, name);
-            let _ = write!(buf, ": ({expr})");
+            buf.push_str(": (");
+            buf.append_with_source(expr, *expr_range);
+            buf.push_str(")");
         }
         svn_analyze::PropShape::Shorthand { name } => {
             // `{foo}` shorthand is only valid when the key is also a
@@ -5154,7 +5158,9 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             let expr = &source[expr_range.start as usize..expr_range.end as usize];
             // Wrap the expression in parens so things like ternaries
             // or `a, b` sequences stay a single operand of `...`.
-            let _ = write!(buf, "...({expr})");
+            buf.push_str("...(");
+            buf.append_with_source(expr, *expr_range);
+            buf.push_str(")");
         }
         svn_analyze::PropShape::GetSetBinding {
             name,

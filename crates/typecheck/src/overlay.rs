@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use svn_core::tsconfig::{
-    FlattenedReference, TsConfigFile, discover_workspace_member_refs,
+    FlattenedReference, ModuleResolution, TsConfigFile, discover_workspace_member_refs,
     flatten_references_from_chain, load_chain,
 };
 
@@ -282,11 +282,28 @@ pub fn build(
     );
     compiler_options.insert("skipLibCheck".into(), json!(true));
     // tsgo has removed the legacy `node`/`node10` moduleResolution
-    // values. Force `bundler` in the overlay so tsgo accepts the
-    // project; the user's runtime moduleResolution setting is
-    // unaffected (we never touch their files).
-    compiler_options.insert("moduleResolution".into(), json!("bundler"));
-    compiler_options.insert("module".into(), json!("esnext"));
+    // values. Only force `bundler` in the overlay when the user's
+    // effective moduleResolution is the unsupported legacy — for
+    // `node16`/`nodenext`/`bundler`/unset we inherit so the user's
+    // runtime module-graph shape carries through. Overriding
+    // unconditionally changed how packages with differing
+    // `main`/`module`/`types` package.json entries resolved under the
+    // overlay; concretely, a user who wrote `// @ts-expect-error`
+    // above a call that's an error under their actual setup (e.g.
+    // typed as `unknown` or with a subset overload) would see our
+    // overlay widen the type and fire TS2578 "Unused directive".
+    // Inheriting matches upstream svelte-check and lets the directive
+    // consume the underlying error the user expected.
+    //
+    // NodeNext requires `module: NodeNext` too, so we only override
+    // `module` when we override `moduleResolution`.
+    let effective_resolution = chain
+        .iter()
+        .find_map(|c| c.compiler_options.module_resolution);
+    if matches!(effective_resolution, Some(ModuleResolution::Node)) {
+        compiler_options.insert("moduleResolution".into(), json!("bundler"));
+        compiler_options.insert("module".into(), json!("esnext"));
+    }
     compiler_options.insert("rootDirs".into(), json!(root_dirs));
     // Filter the user's `types` to drop entries that don't resolve.
     // tsgo treats a missing `types` entry as a fatal TS2688 and stops

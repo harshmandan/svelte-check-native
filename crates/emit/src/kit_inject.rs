@@ -3,7 +3,7 @@
 //! Mirrors a subset of upstream svelte2tsx's `upsertKitFile` behavior:
 //! for a Kit file whose user source omits a handler's parameter type
 //! or a config variable's annotation, splice in the expected
-//! `: import('./$types').Xxx` / `: boolean | ...` annotation. The
+//! `: import('./$types.js').Xxx` / `: boolean | ...` annotation. The
 //! result is the original source with insertions at specific byte
 //! positions — positions that line up with where the user would have
 //! hand-written the annotation, so diagnostic positions map back
@@ -13,12 +13,12 @@
 //!
 //! - `+server.ts` HTTP handlers (`GET` / `POST` / `PUT` / `PATCH` /
 //!   `DELETE` / `OPTIONS` / `HEAD` / `fallback`) — inject
-//!   `: import('./$types').RequestEvent` on the single untyped
+//!   `: import('./$types.js').RequestEvent` on the single untyped
 //!   parameter.
 //! - `+page.ts` / `+layout.ts` / `+page.server.ts` /
 //!   `+layout.server.ts`:
 //!     - `load` function's first parameter gets
-//!       `: import('./$types').(Page|Layout)(Server)?LoadEvent` — the
+//!       `: import('./$types.js').(Page|Layout)(Server)?LoadEvent` — the
 //!       name matrix matches upstream's naming exactly.
 //!     - SvelteKit page-option exports (`ssr`, `csr`, `prerender`,
 //!       `trailingSlash`) get their fixed value-union types injected
@@ -116,7 +116,7 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                         }
                         collect_handler_insert(
                             func,
-                            "import('./$types').RequestEvent",
+                            "import('./$types.js').RequestEvent",
                             &mut insertions,
                         );
                     }
@@ -182,7 +182,7 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
 fn load_event_type(is_layout: bool, is_server: bool) -> String {
     let page_or_layout = if is_layout { "Layout" } else { "Page" };
     let server_infix = if is_server { "Server" } else { "" };
-    format!("import('./$types').{page_or_layout}{server_infix}LoadEvent")
+    format!("import('./$types.js').{page_or_layout}{server_infix}LoadEvent")
 }
 
 /// SvelteKit page-option exports with fixed value-union types. Names
@@ -248,14 +248,14 @@ mod tests {
         let source =
             "export async function GET({ url }) {\n    return new Response(url.pathname);\n}";
         let got = inject(&server_path(), source).unwrap();
-        assert!(got.contains("({ url }: import('./$types').RequestEvent)"));
+        assert!(got.contains("({ url }: import('./$types.js').RequestEvent)"));
     }
 
     #[test]
     fn injects_on_identifier_param() {
         let source = "export function POST(event) { return new Response(''); }";
         let got = inject(&server_path(), source).unwrap();
-        assert!(got.contains("(event: import('./$types').RequestEvent)"));
+        assert!(got.contains("(event: import('./$types.js').RequestEvent)"));
     }
 
     #[test]
@@ -271,8 +271,8 @@ export async function GET({ url }) { return new Response(url.pathname); }
 export async function POST({ request }) { return new Response(''); }
 ";
         let got = inject(&server_path(), source).unwrap();
-        assert!(got.contains("{ url }: import('./$types').RequestEvent"));
-        assert!(got.contains("{ request }: import('./$types').RequestEvent"));
+        assert!(got.contains("{ url }: import('./$types.js').RequestEvent"));
+        assert!(got.contains("{ request }: import('./$types.js').RequestEvent"));
     }
 
     #[test]
@@ -311,28 +311,28 @@ export async function POST({ request }) { return new Response(''); }
     fn page_load_gets_page_load_event() {
         let source = "export async function load({ params, fetch }) { return {}; }";
         let got = inject(&page_path(), source).unwrap();
-        assert!(got.contains(": import('./$types').PageLoadEvent"));
+        assert!(got.contains(": import('./$types.js').PageLoadEvent"));
     }
 
     #[test]
     fn layout_load_gets_layout_load_event() {
         let source = "export async function load({ params }) { return {}; }";
         let got = inject(&layout_path(), source).unwrap();
-        assert!(got.contains(": import('./$types').LayoutLoadEvent"));
+        assert!(got.contains(": import('./$types.js').LayoutLoadEvent"));
     }
 
     #[test]
     fn page_server_load_gets_page_server_load_event() {
         let source = "export async function load({ request }) { return {}; }";
         let got = inject(&page_server_path(), source).unwrap();
-        assert!(got.contains(": import('./$types').PageServerLoadEvent"));
+        assert!(got.contains(": import('./$types.js').PageServerLoadEvent"));
     }
 
     #[test]
     fn layout_server_load_gets_layout_server_load_event() {
         let source = "export async function load({ request }) { return {}; }";
         let got = inject(&layout_server_path(), source).unwrap();
-        assert!(got.contains(": import('./$types').LayoutServerLoadEvent"));
+        assert!(got.contains(": import('./$types.js').LayoutServerLoadEvent"));
     }
 
     #[test]

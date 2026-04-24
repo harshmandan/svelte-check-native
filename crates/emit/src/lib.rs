@@ -5316,6 +5316,20 @@ fn emit_bind_this_assignment(
         if expr.is_empty() {
             return;
         }
+        // DELIBERATE: no TokenMapEntry on the LHS. Routing the
+        // `refs.child` span through `append_with_source` would surface
+        // TS2322 whenever tsgo fires on the assignment site — which it
+        // DOES on our overlay because `__SvnInstance<P>` doesn't
+        // structurally satisfy the target types users declare
+        // (typically `let x: ComponentDefault` or
+        // `Component<ComponentProps<typeof Child>>`). Upstream's
+        // instance shape (`SvelteComponent<P, E, S> & Exports & {
+        // $$bindings: B }`) IS accepted by those types, so upstream
+        // doesn't fire. Surfacing our diagnostic without also
+        // broadening the shim creates over-fires (+2 on
+        // layerchart/Chart.svelte + palacms/Pala.svelte in testing).
+        // Bundle the TokenMapEntry with the shim shape fix (see
+        // OPEN.md "Component bind:this target type mismatch").
         let _ = writeln!(buf, "{inner}{expr} = {inst_local};");
     }
 }

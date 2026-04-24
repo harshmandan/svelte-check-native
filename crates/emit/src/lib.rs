@@ -3904,12 +3904,15 @@ fn emit_element_bind_checks_inline(
                         // Matches upstream `(set)($$_element)` —
                         // getter deliberately ignored (upstream's
                         // binding-this-get-set.v5 fixture drops it too).
-                        let _ = writeln!(buf, "({setter})(null as any as {ty});");
+                        buf.push_str("(");
+                        buf.append_with_source(setter, *setter_range);
+                        let _ = writeln!(buf, ")(null as any as {ty});");
                     } else {
-                        let _ = writeln!(
-                            buf,
-                            "void (__svn_get_set_binding({getter}, {setter}) satisfies {ty});"
-                        );
+                        buf.push_str("void (__svn_get_set_binding(");
+                        buf.append_with_source(getter, *getter_range);
+                        buf.push_str(", ");
+                        buf.append_with_source(setter, *setter_range);
+                        let _ = writeln!(buf, ") satisfies {ty});");
                     }
                     continue;
                 }

@@ -5,44 +5,47 @@ async function $$render_b67cf125() {
         // template type-check body (incremental)
         if ((hello)) {
             void [hello];
-            {
-                const y: any = undefined;
+            ;(async () => {
+                const $$_await = await (hello.foo); const y = $$_await;
                 (y);
                 void y;
-            }
-            {
-                const y: any = undefined;
+            });
+            ;(async () => {
+                const $$_await = await (x); const y = $$_await;
                 (y);
                 void y;
-            }
+            });
             (hello);
             if ((hi && bye)) {
                 void [hi, bye];
-                {
-                    const y: any = undefined;
+                ;(async () => {
+                    const $$_await = await (x); const y = $$_await;
                     (y);
                     void y;
-                }
+                });
             } else if ((cool)) {
                 void [cool];
-                {
-                    const y: any = undefined;
+                ;(async () => {
+                    const $$_await = await (x); const y = $$_await;
                     (y);
                     void y;
-                }
+                });
             } else {
-                {
-                    const y: any = undefined;
+                ;(async () => {
+                    const $$_await = await (x); const y = $$_await;
                     (y);
                     void y;
-                }
+                });
             }
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_b67cf125;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_b67cf125>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

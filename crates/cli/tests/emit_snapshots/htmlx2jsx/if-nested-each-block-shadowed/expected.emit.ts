@@ -6,9 +6,10 @@ async function $$render_64a5d390() {
         if ((hello)) {
             void [hello];
             for (const hello of __svn_each_items(items)) {
-                const i: number = 0;
-                (hello);
-                (i);
+                /** @type {number} */ const i = 0;
+                { svelteHTML.createElement("div", {});                     (hello);
+                    (i);
+                }
                 if ((hello)) {
                     void [hello];
                     for (const hello of __svn_each_items(items)) {
@@ -38,7 +39,8 @@ async function $$render_64a5d390() {
             if ((hi && bye)) {
                 void [hi, bye];
                 for (const bye of __svn_each_items(items)) {
-                    (bye);
+                    { svelteHTML.createElement("div", {});                         (bye);
+                    }
                     void bye;
                 }
                 if ((bye)) {
@@ -48,21 +50,23 @@ async function $$render_64a5d390() {
             } else if ((cool)) {
                 void [cool];
                 for (const item of __svn_each_items(items)) {
-                    const cool: number = 0;
-                    (item);
-                    (cool);
+                    /** @type {number} */ const cool = 0;
+                    { svelteHTML.createElement("div", {});                         (item);
+                        (cool);
+                    }
                     void item;
                     void cool;
                 }
             } else {
                 for (const hello of __svn_each_items(items)) {
-                    (hello);
+                    { svelteHTML.createElement("div", {});                         (hello);
+                    }
                     void hello;
                 }
             }
         }
         for (const hello of __svn_each_items(items)) {
-            const i: number = 0;
+            /** @type {number} */ const i = 0;
             if ((hello && i && bye)) {
                 void [hello, i, bye];
                 (hello);
@@ -97,10 +101,13 @@ async function $$render_64a5d390() {
             (bye);
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_64a5d390;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_64a5d390>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

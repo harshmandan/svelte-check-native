@@ -3,15 +3,24 @@
 async function $$render_13e7324c() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        $compile_options = null as any as HTMLElement['offsetHeight'];
-        $compile_options.foo = null as any as HTMLElement['offsetHeight'];
-        $compile_options = null as any as HTMLElementTagNameMap['div'];
-        $compile_options.foo = null as any as HTMLElementTagNameMap['div'];
+        { svelteHTML.createElement("div", {});             $compile_options = /** @type {HTMLElement['offsetHeight']} */ (null);
+        }
+        { svelteHTML.createElement("div", {});             $compile_options.foo = /** @type {HTMLElement['offsetHeight']} */ (null);
+        }
+        { svelteHTML.createElement("div", {});             $compile_options = /** @type {HTMLElementTagNameMap['div']} */ (null);
+        }
+        { svelteHTML.createElement("div", {});             $compile_options.foo = /** @type {HTMLElementTagNameMap['div']} */ (null);
+        }
+        { svelteHTML.createElement("div", {});         }
+        { svelteHTML.createElement("div", {});         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_13e7324c;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_13e7324c>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

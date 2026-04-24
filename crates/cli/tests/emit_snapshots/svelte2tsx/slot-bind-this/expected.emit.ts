@@ -3,12 +3,15 @@
 async function $$render_0dda80aa() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        s = null as any as HTMLElementTagNameMap['slot'];
+        s = /** @type {HTMLElementTagNameMap['slot']} */ (null);
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_0dda80aa;
-declare const __svn_component_default: import('svelte').Component<Partial<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Partial<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_0dda80aa>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

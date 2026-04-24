@@ -3,31 +3,39 @@
 async function $$render_a3a3d9ca() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        let __svn_action_attrs_0: any = {};
+        /** @type {any} */ let __svn_action_attrs_0 = {};
         void __svn_action_attrs_0;
-        let __svn_action_attrs_1: any = {};
+        /** @type {any} */ let __svn_action_attrs_1 = {};
         void __svn_action_attrs_1;
-        let __svn_action_attrs_2: any = {};
+        /** @type {any} */ let __svn_action_attrs_2 = {};
         void __svn_action_attrs_2;
-        let __svn_action_attrs_3: any = {};
+        /** @type {any} */ let __svn_action_attrs_3 = {};
         void __svn_action_attrs_3;
-        let __svn_action_attrs_4: any = {};
+        /** @type {any} */ let __svn_action_attrs_4 = {};
         void __svn_action_attrs_4;
-        const __svn_action_0 = __svn_ensure_action(svgAction(__svn_map_element_tag('svg')));
-        void __svn_action_0;
-        const __svn_action_1 = __svn_ensure_action(divAction(__svn_map_element_tag('div')));
-        void __svn_action_1;
-        const __svn_action_2 = __svn_ensure_action(action(__svn_map_element_tag('input')));
-        void __svn_action_2;
-        const __svn_action_3 = __svn_ensure_action(pAction(__svn_map_element_tag('p')));
-        void __svn_action_3;
-        const __svn_action_4 = __svn_ensure_action(unknownAction(__svn_map_element_tag('unknownTag')));
-        void __svn_action_4;
+            const __svn_action_0 = __svn_ensure_action(svgAction(__svn_map_element_tag('svg')));
+        { svelteHTML.createElement("svg", __svn_union(__svn_action_0), {});             void __svn_action_0;
+        }
+            const __svn_action_1 = __svn_ensure_action(divAction(__svn_map_element_tag('div')));
+        { svelteHTML.createElement("div", __svn_union(__svn_action_1), {});             void __svn_action_1;
+                const __svn_action_2 = __svn_ensure_action(action(__svn_map_element_tag('input')));
+            { svelteHTML.createElement("input", __svn_union(__svn_action_2), {});                 void __svn_action_2;
+            }
+                const __svn_action_3 = __svn_ensure_action(pAction(__svn_map_element_tag('p')));
+            { svelteHTML.createElement("p", __svn_union(__svn_action_3), {});                 void __svn_action_3;
+            }
+                const __svn_action_4 = __svn_ensure_action(unknownAction(__svn_map_element_tag('unknownTag')));
+            { svelteHTML.createElement("unknownTag", __svn_union(__svn_action_4), {});                 void __svn_action_4;
+            }
+        }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_a3a3d9ca;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_a3a3d9ca>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

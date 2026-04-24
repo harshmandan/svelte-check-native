@@ -9,13 +9,17 @@ async function $$render_672f27a9() {
         (a+);
         {
             const __svn_C_20 = __svn_ensure_component(Component);
-            new __svn_C_20({ target: __svn_any(), props: {regex: (/.*/)} });
+            new __svn_C_20({ target: __svn_any(), props: {"regex": (/.*/)} });
         }
+        { svelteHTML.createElement("span", {});         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_672f27a9;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_672f27a9>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

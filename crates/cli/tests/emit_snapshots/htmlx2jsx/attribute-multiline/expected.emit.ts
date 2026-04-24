@@ -5,17 +5,36 @@ async function $$render_04fb2c94() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(Comp);
-            new __svn_C_0({ target: __svn_any(), props: {multilineattr: "hello\nworld"} });
+            new __svn_C_0({ target: __svn_any(), props: {"multilineattr": "hello\nworld"} });
         }
         {
             const __svn_C_25 = __svn_ensure_component(Comp);
-            new __svn_C_25({ target: __svn_any(), props: {multilineattr: "he`llo\nworld"} });
+            new __svn_C_25({ target: __svn_any(), props: {"multilineattr": "he`llo\nworld"} });
+        }
+        { svelteHTML.createElement("div", {
+            "multilineattr": `hello
+world`,
+        });
+        }
+        { svelteHTML.createElement("div", {
+            "multilineattr": `he\`llo
+world`,
+        });
+        }
+        { svelteHTML.createElement("div", {
+            "multilineattr": `
+color: ${color}
+display: block`,
+        });
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_04fb2c94;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_04fb2c94>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

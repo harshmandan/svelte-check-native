@@ -5,13 +5,24 @@ async function $$render_9244ee92() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(SomeComponent);
-            new __svn_C_0({ target: __svn_any(), props: {relaxed: true} });
+            new __svn_C_0({ target: __svn_any(), props: {"relaxed": true} });
+        }
+        { svelteHTML.createElement("input", {
+            "disabled": true,
+        });
+        }
+        { svelteHTML.createElement("div", {
+            "popover": "",
+        });
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_9244ee92;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_9244ee92>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

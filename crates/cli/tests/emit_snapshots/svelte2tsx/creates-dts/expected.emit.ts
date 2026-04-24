@@ -8,20 +8,24 @@ async function $$render_87d6d062() {
                                                  
 
   /** @type {boolean} */
-         let bar!: any;
+         let bar = /** @type {any} */ (null);
          let foobar = '';
 
   const dispatch = createEventDispatcher();
   dispatch('hi');
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        { svelteHTML.createElement("button", {});         }
     }
-    void __svn_tpl_check;
     void bar;
     void foobar;
+    return { props: /** @type {{ bar: any; foobar?: any; }} */({}) };
 }
 $$render_87d6d062;
-declare const __svn_component_default: import('svelte').Component<Partial<{ bar: any; foobar?: any; } & __SvnSvelte4PropsWiden<{ bar: any; foobar?: any; }>>, { bar: any; foobar: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Partial<{ bar: any; foobar?: any; } & __SvnSvelte4PropsWiden<{ bar: any; foobar?: any; }>>> & { bar: any; foobar: any; };
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_87d6d062>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

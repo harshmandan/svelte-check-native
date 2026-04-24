@@ -7,15 +7,18 @@ async function $$render_d92c900a() {
             void [name];
             const hello = name;
             void hello;
-            (hello);
+            { svelteHTML.createElement("h1", {});                 (hello);
+            }
         } else if ((true)) {
             const hello = name;
             void hello;
-            (hello);
+            { svelteHTML.createElement("h1", {});                 (hello);
+            }
         } else {
             const hello = name;
             void hello;
-            (hello);
+            { svelteHTML.createElement("h1", {});                 (hello);
+            }
         }
         if ((typeof a === 'string')) {
             void [a];
@@ -41,10 +44,13 @@ async function $$render_d92c900a() {
         } else {
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_d92c900a;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_d92c900a>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

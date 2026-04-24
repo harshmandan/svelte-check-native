@@ -207,12 +207,12 @@ Total: ~1 work-week assuming no unforeseen interactions with existing hoisting /
 
 ## Out-of-band observations from bench data
 
-- **cnblocks** (9 bench errors remaining) has two `$state<Promise<T>>` patterns we just fixed in 0.1.2; the rest are genuine bits-ui / tsgo union-complexity limits, not Svelte-4-pattern-related.
-- **ui** (8 bench errors) are all sibling-collision barrel-re-export errors — Svelte 5 codebase, not Svelte 4.
-- **Oxide-Lab, pixzip-lite** (1 error each) also Svelte 5.
-- **slowreader** (270 errors) hasn't been investigated; likely Svelte 4 mixed codebase — Phase G's blast radius sample.
+- **A component-lib bench** (9 bench errors remaining) has two `$state<Promise<T>>` patterns we just fixed in 0.1.2; the rest are genuine bits-ui / tsgo union-complexity limits, not Svelte-4-pattern-related.
+- **A UI-lib bench** (8 bench errors) are all sibling-collision barrel-re-export errors — Svelte 5 codebase, not Svelte 4.
+- **A desktop-app bench and a PWA bench** (1 error each) also Svelte 5.
+- **A reader-app bench** (270 errors) hasn't been investigated; likely Svelte 4 mixed codebase — Phase G's blast-radius sample.
 
-Phase G success criteria on slowreader specifically: unblock at least 75% of the 270 errors.
+Phase G success criteria on the reader-app bench specifically: unblock at least 75% of the 270 errors.
 
 ## Non-goals
 

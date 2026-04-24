@@ -31,6 +31,26 @@ pub struct Document<'src> {
     pub template: Template,
 }
 
+impl<'src> Document<'src> {
+    /// Effective script language for emit/cache decisions.
+    ///
+    /// Picks the instance script's `lang=` when present (the dominant
+    /// case — instance script holds runtime logic). Falls back to the
+    /// module script when there's no instance. With neither script tag
+    /// present the file is treated as JS, matching upstream's
+    /// "no script = JS" behaviour (the resulting overlay carries no
+    /// user code anyway, only template scaffolding).
+    pub fn script_lang(&self) -> ScriptLang {
+        if let Some(s) = self.instance_script.as_ref() {
+            return s.lang;
+        }
+        if let Some(s) = self.module_script.as_ref() {
+            return s.lang;
+        }
+        ScriptLang::Js
+    }
+}
+
 /// A `<script>` block.
 #[derive(Debug, Clone)]
 pub struct ScriptSection<'src> {

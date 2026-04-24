@@ -842,6 +842,29 @@ let x: number = 1;
     }
 
     #[test]
+    fn script_lang_helper_picks_instance_then_module_then_js() {
+        let doc = parse_ok(r#"<script lang="ts">let x:number=1;</script>"#);
+        assert_eq!(doc.script_lang(), ScriptLang::Ts);
+
+        let doc = parse_ok("<script>let x=1;</script>");
+        assert_eq!(doc.script_lang(), ScriptLang::Js);
+
+        // Module-only script falls back to module's lang.
+        let doc = parse_ok(r#"<script context="module" lang="ts">let M=1;</script>"#);
+        assert_eq!(doc.script_lang(), ScriptLang::Ts);
+
+        // Neither script tag → JS by default.
+        let doc = parse_ok("<div>only template</div>");
+        assert_eq!(doc.script_lang(), ScriptLang::Js);
+
+        // Instance script wins over module script.
+        let doc = parse_ok(
+            r#"<script context="module" lang="ts">let M=1;</script><script>let I=1;</script>"#,
+        );
+        assert_eq!(doc.script_lang(), ScriptLang::Js);
+    }
+
+    #[test]
     fn unknown_lang_emits_error_and_falls_back_to_js() {
         let (doc, errors) = parse_sections(r#"<script lang="coffee">let a = 1;</script>"#);
         assert_eq!(doc.instance_script.unwrap().lang, ScriptLang::Js);
@@ -1056,8 +1079,8 @@ let x: number = 1;
 
     #[test]
     fn mustache_with_apostrophe_in_line_comment_does_not_run_off() {
-        // The bug that landed 15 new TS parse errors on
-        // local-music-pwa: an apostrophe in `// don't` inside an
+        // The bug that landed 15 new TS parse errors on a
+        // real-world bench: an apostrophe in `// don't` inside an
         // attribute-value mustache opened a phantom string that
         // never closed. Every subsequent `{` and `}` was eaten as
         // part of the "string" and tag_depth desynced, leaving

@@ -17,6 +17,7 @@ let {Abc}: A = $props()
     }
     void __svn_tpl_check;
     void Abc;
+    return { props: undefined as any as (A), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_28c7ccd4;
 declare const __svn_component_default: import('svelte').Component<A>;

@@ -15,10 +15,12 @@ async function $$render_39dbed3c() {
   const dispatch = createEventDispatcher<{swipe: string}>();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        { svelteHTML.createElement("button", {});         }
     }
     void __svn_tpl_check;
     void bar;
     void foobar;
+    return { props: undefined as any as ({ bar: Bar; foobar?: any; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ bar: Bar; foobar: any; }) };
 }
 $$render_39dbed3c;
 declare const __svn_component_default: import('svelte').Component<Partial<{ bar: Bar; foobar?: any; } & __SvnSvelte4PropsWiden<{ bar: Bar; foobar?: any; }>>, { bar: Bar; foobar: any; }>;

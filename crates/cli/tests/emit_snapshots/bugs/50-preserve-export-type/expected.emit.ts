@@ -17,16 +17,17 @@ async function $$render_a4d674e0() {
         // template type-check body (incremental)
         {
             const __svn_C_1e3 = __svn_ensure_component(Panel);
-            new __svn_C_1e3({ target: __svn_any(), props: {config: (cfg)} });
+            new __svn_C_1e3({ target: __svn_any(), props: {"config": (cfg)} });
         }
     }
     void __svn_tpl_check;
     void Panel;
     void cfg;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_a4d674e0;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_a4d674e0>>['props']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_a4d674e0>>['props']>;
 export default __svn_component_default;
 
 // === Panel.svelte ===
@@ -36,6 +37,9 @@ export default __svn_component_default;
         section: Section;
         count: number;
     }
+type $$ComponentProps = {
+        config: PanelConfig;
+    };
 async function $$render_6e910aea() {
 
     // `export type` at the instance-script level is pure type surface. It
@@ -55,18 +59,16 @@ async function $$render_6e910aea() {
     } = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        (config.section);
-        (config.count);
+        { svelteHTML.createElement("p", {});             (config.section);
+            (config.count);
+        }
     }
     void __svn_tpl_check;
     void config;
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_6e910aea;
-declare const __svn_component_default: import('svelte').Component<{
-        config: PanelConfig;
-    }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{
-        config: PanelConfig;
-    }>;
+declare const __svn_component_default: import('svelte').Component<$$ComponentProps>;
+declare type __svn_component_default = import('svelte').SvelteComponent<$$ComponentProps>;
 export default __svn_component_default;
 

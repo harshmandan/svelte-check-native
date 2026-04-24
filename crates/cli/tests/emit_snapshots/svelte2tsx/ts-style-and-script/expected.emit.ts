@@ -8,6 +8,7 @@ async function $$render_40b54088() {
     }
     void __svn_tpl_check;
     void foo;
+    return { props: undefined as any as ({ foo: string; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: string; }) };
 }
 $$render_40b54088;
 declare const __svn_component_default: import('svelte').Component<{ foo: string; }, { foo: string; }>;

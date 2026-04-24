@@ -17,6 +17,7 @@ async function $$render_94c42fc9() {
     }
     void __svn_tpl_check;
     void prop;
+    return { props: undefined as any as (Props), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_94c42fc9;
 declare const __svn_component_default: import('svelte').Component<Props>;

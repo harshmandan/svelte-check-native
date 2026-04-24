@@ -14,11 +14,14 @@ store = undefined as any;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
-    void __svn_tpl_check;
     void store;
+    return { props: /** @type {any} */({}) };
 }
 $$render_9827a5f8;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>, { store: Writable<string[]> | null; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>> & { store: Writable<string[]> | null; };
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_9827a5f8>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

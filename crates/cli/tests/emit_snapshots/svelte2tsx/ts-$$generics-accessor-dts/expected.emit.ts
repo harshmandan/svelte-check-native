@@ -8,9 +8,14 @@ async function $$render_5c38c881() {
            let a!: A;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        { svelteHTML.createElement("svelte:options", {
+            "accessors": true,
+        });
+        }
     }
     void __svn_tpl_check;
     void a;
+    return { props: undefined as any as ({ a: A; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: A; }) };
 }
 $$render_5c38c881;
 declare const __svn_component_default: import('svelte').Component<{ a: A; }, { a: A; }>;

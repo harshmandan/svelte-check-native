@@ -127,13 +127,29 @@ impl CacheLayout {
     ///     `Foo.d.svelte.ts` ambient — see `ambient_path` below,
     ///     which re-exports from this overlay.
     pub fn generated_path(&self, source: &Path) -> PathBuf {
+        self.generated_path_with_lang(source, true)
+    }
+
+    /// Like [`generated_path`] but lets the caller pick the overlay's
+    /// extension based on the source's effective script language.
+    /// `is_ts = true` → `.svelte.svn.ts`; `is_ts = false` → `.svelte.svn.js`.
+    ///
+    /// Mirroring upstream svelte-check's incremental.ts: the overlay
+    /// extension is what tells tsgo whether to apply TS-strict
+    /// inference (empty array → `never[]`, null literal → `null`) or
+    /// JS-loose inference (both → `any` under `noImplicitAny: false`).
+    /// On JS-Svelte sources the user's tsconfig usually carries
+    /// `noImplicitAny: false`, and emitting a `.ts` overlay forces
+    /// strict inference that the user never opted into.
+    pub fn generated_path_with_lang(&self, source: &Path, is_ts: bool) -> PathBuf {
         let rel = source.strip_prefix(&self.workspace).unwrap_or(source);
         let parent = rel.parent().unwrap_or_else(|| Path::new(""));
         let file_stem = rel
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown.svelte");
-        let renamed = format!("{file_stem}.svn.ts");
+        let ext = if is_ts { "ts" } else { "js" };
+        let renamed = format!("{file_stem}.svn.{ext}");
         self.svelte_dir.join(parent).join(renamed)
     }
 
@@ -208,6 +224,11 @@ impl CacheLayout {
         let parent = rel.parent().unwrap_or_else(|| Path::new(""));
         let file = rel.file_name().and_then(|s| s.to_str())?;
         let original_name = if let Some(stem) = file.strip_suffix(".svelte.svn.ts") {
+            format!("{stem}.svelte")
+        } else if let Some(stem) = file.strip_suffix(".svelte.svn.js") {
+            // JS-overlay form (emitted when the source has no
+            // `<script lang="ts">`). Same reverse map as the TS form —
+            // the source basename is the prefix before `.svelte.svn.js`.
             format!("{stem}.svelte")
         } else if let Some(stem) = file.strip_suffix(".d.svelte.ts") {
             format!("{stem}.svelte")
@@ -309,6 +330,29 @@ mod tests {
             gen_path,
             Path::new("/p/.svelte-check/svelte/Index.svelte.svn.ts")
         );
+    }
+
+    #[test]
+    fn generated_path_with_lang_emits_js_extension_for_js_sources() {
+        let layout = CacheLayout::for_workspace("/p");
+        let gen_ts = layout.generated_path_with_lang(Path::new("/p/src/Foo.svelte"), true);
+        assert_eq!(
+            gen_ts,
+            Path::new("/p/.svelte-check/svelte/src/Foo.svelte.svn.ts")
+        );
+        let gen_js = layout.generated_path_with_lang(Path::new("/p/src/Foo.svelte"), false);
+        assert_eq!(
+            gen_js,
+            Path::new("/p/.svelte-check/svelte/src/Foo.svelte.svn.js")
+        );
+    }
+
+    #[test]
+    fn original_from_generated_inverts_js_overlay_path() {
+        let layout = CacheLayout::for_workspace("/p");
+        let gen_js = layout.generated_path_with_lang(Path::new("/p/src/Foo.svelte"), false);
+        let back = layout.original_from_generated(&gen_js).unwrap();
+        assert_eq!(back, Path::new("/p/src/Foo.svelte"));
     }
 
     #[test]

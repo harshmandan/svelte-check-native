@@ -4,21 +4,26 @@
     import { store1 } from './somewhere';
     const store2 = '';
 async function $$render_386ab038() {
-    let $store1!: __SvnStoreValue<typeof store1>;
-    let $store2!: __SvnStoreValue<typeof store2>;
+    /** @type {__SvnStoreValue<typeof store1>} */
+    let $store1 = /** @type {any} */ (/** @type {any} */ (null));
+    /** @type {__SvnStoreValue<typeof store2>} */
+    let $store2 = /** @type {any} */ (/** @type {any} */ (null));
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         ($store1);
         ($store2);
     }
-    void __svn_tpl_check;
     void $store1;
     void store1;
     void $store2;
     void store2;
+    return { props: /** @type {any} */({}) };
 }
 $$render_386ab038;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_386ab038>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

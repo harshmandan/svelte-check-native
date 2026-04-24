@@ -60,16 +60,45 @@ async function $$render_f9263703() {
 	}
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        for (const circle of __svn_each_items(circles)) {
-            void circle;
+        { svelteHTML.createElement("div", {
+            "class": `controls`,
+        });
+            { svelteHTML.createElement("button", {
+                "disabled": (i === 0),
+            });
+            }
+            { svelteHTML.createElement("button", {
+                "disabled": (i === undoStack.length -1),
+            });
+            }
+        }
+        { svelteHTML.createElement("svg", {});             for (const circle of __svn_each_items(circles)) {
+                { svelteHTML.createElement("circle", {
+                    "cx": (circle.cx),
+                    "cy": (circle.cy),
+                    "r": (circle.r),
+                    "fill": (circle === selected ? '#ccc': 'white'),
+                });
+                }
+                void circle;
+            }
         }
         if ((adjusting)) {
             void [adjusting];
-            (selected.cx);
-            (selected.cy);
+            { svelteHTML.createElement("div", {
+                "class": `adjuster`,
+            });
+                { svelteHTML.createElement("p", {});                     (selected.cx);
+                    (selected.cy);
+                }
+                { svelteHTML.createElement("input", {
+                    "type": `range`,
+                    "value": (selected.r),
+                });
+                }
+            }
         }
     }
-    void __svn_tpl_check;
     void travel;
     void i;
     void undoStack;
@@ -79,9 +108,13 @@ async function $$render_f9263703() {
     void adjusting;
     void selected;
     void adjust;
+    return { props: /** @type {any} */({}) };
 }
 $$render_f9263703;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_f9263703>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

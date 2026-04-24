@@ -10,11 +10,14 @@ async function $$render_5be9bf92() {
             new __svn_C_2b({ target: __svn_any(), props: {} });
         }
     }
-    void __svn_tpl_check;
     void Script;
+    return { props: /** @type {any} */({}) };
 }
 $$render_5be9bf92;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_5be9bf92>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

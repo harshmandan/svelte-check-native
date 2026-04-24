@@ -7,11 +7,14 @@ name = undefined as any;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
-    void __svn_tpl_check;
     void name;
+    return { props: /** @type {any} */({}) };
 }
 $$render_8ef383be;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>, { name: string | number; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>> & { name: string | number; };
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_8ef383be>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

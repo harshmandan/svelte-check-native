@@ -3,23 +3,29 @@
 async function $$render_c31127f3() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        let __svn_action_attrs_0: any = {};
+        /** @type {any} */ let __svn_action_attrs_0 = {};
         void __svn_action_attrs_0;
-        let __svn_action_attrs_1: any = {};
+        /** @type {any} */ let __svn_action_attrs_1 = {};
         void __svn_action_attrs_1;
-        let __svn_action_attrs_2: any = {};
+        /** @type {any} */ let __svn_action_attrs_2 = {};
         void __svn_action_attrs_2;
-        const __svn_action_0 = __svn_ensure_action(blink(__svn_map_element_tag('h1'), (500,2)));
-        void __svn_action_0;
-        const __svn_action_1 = __svn_ensure_action(blink(__svn_map_element_tag('h1')));
-        void __svn_action_1;
-        const __svn_action_2 = __svn_ensure_action(blink(__svn_map_element_tag('h1')));
-        void __svn_action_2;
+            const __svn_action_0 = __svn_ensure_action(blink(__svn_map_element_tag('h1'), (500,2)));
+        { svelteHTML.createElement("h1", __svn_union(__svn_action_0), {});             void __svn_action_0;
+        }
+            const __svn_action_1 = __svn_ensure_action(blink(__svn_map_element_tag('h1')));
+        { svelteHTML.createElement("h1", __svn_union(__svn_action_1), {});             void __svn_action_1;
+        }
+            const __svn_action_2 = __svn_ensure_action(blink(__svn_map_element_tag('h1')));
+        { svelteHTML.createElement("h1", __svn_union(__svn_action_2), {});             void __svn_action_2;
+        }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_c31127f3;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_c31127f3>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

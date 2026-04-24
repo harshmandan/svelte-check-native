@@ -65,10 +65,45 @@ pub struct PropInfo {
     /// in the script refers to. For a rename `{ class: classValue }` this
     /// is `classValue`, not `class`.
     pub local_name: SmolStr,
+    /// The original prop key — what the parent passes when instantiating
+    /// the component. For rename `{ class: classValue }` this is `class`;
+    /// for shorthand `{ foo }` this equals `local_name`.
+    pub prop_key: SmolStr,
     /// Byte range of the local identifier in the source.
     pub range: Range,
     /// True for `...rest` elements.
     pub is_rest: bool,
+    /// True when the destructure entry has a default value (`= …`)
+    /// or is wrapped in `$bindable(...)`. JS-overlay Props synthesis
+    /// uses this to mark the prop as optional in the typedef.
+    pub has_default: bool,
+    /// True when the destructure entry's default is `$bindable(...)`
+    /// — the Svelte 5 marker that the prop participates in two-way
+    /// binding. Excluded from the divergence check that decides
+    /// whether to synthesise `$$ComponentProps` vs use the user's
+    /// Props typedef: bindable-only extras like `element = $bindable()`
+    /// are typically not declared in Props by convention, but
+    /// upstream svelte2tsx still keeps Props (the destructure is
+    /// effectively a subset of "real" props).
+    pub is_bindable: bool,
+    /// Type text inferred from the default-value literal — used by
+    /// the JS-overlay `$$ComponentProps` synthesis when the prop has
+    /// a default. `None` when no default is present, or when the
+    /// default's expression doesn't match a recognised literal form
+    /// (caller falls back to `any`).
+    ///
+    /// Mirrors upstream svelte2tsx's per-default inference:
+    ///   `= ''`            → "string"
+    ///   `= 0`             → "number"
+    ///   `= true|false`    → "boolean"
+    ///   `= null`          → "null"
+    ///   `= {}`            → "Record<string, any>"
+    ///   `= []`            → "any[]"
+    ///   `= () => {…}`     → "Function"
+    ///   `= function(){…}` → "Function"
+    ///   `= $bindable(x)`  → recurse on `x`
+    ///   anything else     → `None`
+    pub default_type_text: Option<SmolStr>,
 }
 
 /// Where the Props type text in [`PropsInfo::type_text`] came from.
@@ -93,6 +128,13 @@ pub enum PropsSource {
     /// Synthesised from `export let` / `export const` declarations
     /// and `export { local as alias }` specifiers.
     SynthesisedFromExports,
+    /// Synthesised `{ k: T, k?: U, … }` literal from the `$props()`
+    /// destructure defaults — mirrors upstream svelte2tsx's "Hard mode"
+    /// best-effort synthesis for TS-source files with no annotation.
+    /// Populated post-hoc by emit (not `PropsInfo::build`) because it
+    /// depends on the source script's lang, which analyze does not
+    /// consult. See `synthesise_destructure_props_literal` in emit.
+    SynthesisedFromDestructure,
 }
 
 /// Everything emit needs to know about a component's Props, resolved
@@ -538,42 +580,169 @@ fn collect_from_binding(pat: &BindingPatternKind<'_>, out: &mut Vec<PropInfo>) {
             }
         }
         BindingPatternKind::BindingIdentifier(id) => {
+            let name = SmolStr::from(id.name.as_str());
             out.push(PropInfo {
-                local_name: SmolStr::from(id.name.as_str()),
+                local_name: name.clone(),
+                prop_key: name,
                 range: Range::new(id.span.start, id.span.end),
                 is_rest: false,
+                has_default: false,
+                is_bindable: false,
+                default_type_text: None,
             });
         }
         BindingPatternKind::AssignmentPattern(asn) => {
+            // `name = default` at the top level (no surrounding object
+            // pattern key) — the local name is the LHS identifier and
+            // `has_default` is true. Mostly hit through nested patterns;
+            // top-level entries flow through `collect_from_object_property`
+            // which sets has_default itself.
+            let before = out.len();
             collect_from_binding(&asn.left.kind, out);
+            let inferred = infer_default_type(&asn.right);
+            let bindable = is_bindable_call(&asn.right);
+            for entry in &mut out[before..] {
+                entry.has_default = true;
+                if bindable {
+                    entry.is_bindable = true;
+                }
+                if entry.default_type_text.is_none() {
+                    entry.default_type_text = inferred.clone();
+                }
+            }
         }
     }
 }
 
 fn collect_from_object_property(prop: &BindingProperty<'_>, out: &mut Vec<PropInfo>) {
-    // Shorthand `{ foo }` vs rename `{ foo: bar }` — both come through
-    // `value` on the property. For shorthand the key and value identifier
-    // are the same; for rename they differ. Either way, the *local* name
-    // is in `value` — which is what we record.
-    let _ = prop.key; // intentionally unused — local name lives in value
-    if let PropertyKey::StaticIdentifier(_) = &prop.key {
-        // nothing needed — value is the binding pattern we care about
-    }
+    // Shorthand `{ foo }` vs rename `{ foo: bar }` vs default-value
+    // `{ foo = bar }` vs `{ foo: bar = baz }`. The local name lives in
+    // `prop.value`; the prop key is `prop.key` (set when not shorthand);
+    // a top-level AssignmentPattern in `prop.value` carries the default.
+    let prop_key: Option<SmolStr> = match &prop.key {
+        PropertyKey::StaticIdentifier(id) => Some(SmolStr::from(id.name.as_str())),
+        PropertyKey::StringLiteral(s) => Some(SmolStr::from(s.value.as_str())),
+        _ => None,
+    };
+    let before = out.len();
+    let (has_default, inferred_default, bindable) = match &prop.value.kind {
+        BindingPatternKind::AssignmentPattern(asn) => (
+            true,
+            infer_default_type(&asn.right),
+            is_bindable_call(&asn.right),
+        ),
+        _ => (false, None, false),
+    };
     collect_from_binding(&prop.value.kind, out);
+    // Patch the entries this property added: their prop_key should
+    // reflect the source property key (not the local name) for renames,
+    // and `has_default` should propagate when this property carried the
+    // default at its own level even if the local was a sub-pattern.
+    if let Some(key) = prop_key {
+        // `{ foo: alias }` or `{ foo: alias = default }` — the destructure
+        // pulls `foo` from $props() and binds it locally as `alias`. Only
+        // the immediate first entry corresponds to this property; deeper
+        // entries belong to sub-patterns and keep their own key.
+        if let Some(first) = out.get_mut(before) {
+            if !prop.shorthand {
+                first.prop_key = key;
+            }
+        }
+    }
+    if has_default {
+        for entry in &mut out[before..] {
+            entry.has_default = true;
+            if bindable {
+                entry.is_bindable = true;
+            }
+            if entry.default_type_text.is_none() {
+                entry.default_type_text = inferred_default.clone();
+            }
+        }
+    }
 }
 
 fn collect_rest(pat: &BindingPatternKind<'_>, out: &mut Vec<PropInfo>, is_rest: bool) {
     match pat {
         BindingPatternKind::BindingIdentifier(id) => {
+            let name = SmolStr::from(id.name.as_str());
             out.push(PropInfo {
-                local_name: SmolStr::from(id.name.as_str()),
+                local_name: name.clone(),
+                prop_key: name,
                 range: Range::new(id.span.start, id.span.end),
                 is_rest,
+                has_default: false,
+                is_bindable: false,
+                default_type_text: None,
             });
         }
         // Rest patterns holding further destructuring are allowed but
         // unusual; walk recursively.
         other => collect_from_binding(other, out),
+    }
+}
+
+/// True when `expr` is a `$bindable(…)` call (with or without args).
+/// Walks through parenthesised wrappers so `($bindable())` still
+/// matches.
+fn is_bindable_call(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::CallExpression(call) => matches!(
+            &call.callee,
+            Expression::Identifier(id) if id.name == "$bindable",
+        ),
+        Expression::ParenthesizedExpression(p) => is_bindable_call(&p.expression),
+        _ => false,
+    }
+}
+
+/// Infer a TypeScript type from a JS literal default-value expression.
+/// Mirrors upstream svelte2tsx's `getTypeForDefault` for the common
+/// cases. Returns `None` for unrecognised expressions; callers fall
+/// back to `any` in the synthesised typedef.
+///
+/// Notably `null` and `undefined` default values widen to `None`
+/// (caller emits `any`) rather than the literal `null` / `undefined`
+/// type — consumers passing real values would otherwise fail. Matches
+/// upstream's behaviour for the same reason: `let { x = null } =
+/// $props()` is the canonical "no real default" pattern, and binding
+/// the prop type to `null` is almost always wrong.
+fn infer_default_type(expr: &Expression<'_>) -> Option<SmolStr> {
+    match expr {
+        Expression::StringLiteral(_) | Expression::TemplateLiteral(_) => {
+            Some(SmolStr::new_static("string"))
+        }
+        Expression::NumericLiteral(_) | Expression::BigIntLiteral(_) => {
+            Some(SmolStr::new_static("number"))
+        }
+        Expression::BooleanLiteral(_) => Some(SmolStr::new_static("boolean")),
+        // `null` and `undefined` defaults: widen to `any` (upstream
+        // `getTypeForDefault` does the same — these are placeholder
+        // defaults, not assertions about the real type).
+        Expression::NullLiteral(_) => None,
+        Expression::Identifier(id) if id.name == "undefined" => None,
+        Expression::ArrayExpression(_) => Some(SmolStr::new_static("any[]")),
+        Expression::ObjectExpression(_) => Some(SmolStr::new_static("Record<string, any>")),
+        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
+            Some(SmolStr::new_static("Function"))
+        }
+        Expression::CallExpression(call) => {
+            // `$bindable()` and `$bindable(default)` — recurse on the
+            // first arg when present, otherwise unknown.
+            let is_bindable = matches!(
+                &call.callee,
+                Expression::Identifier(id) if id.name == "$bindable",
+            );
+            if is_bindable {
+                call.arguments
+                    .first()
+                    .and_then(|a| a.as_expression().and_then(infer_default_type))
+            } else {
+                None
+            }
+        }
+        Expression::ParenthesizedExpression(p) => infer_default_type(&p.expression),
+        _ => None,
     }
 }
 

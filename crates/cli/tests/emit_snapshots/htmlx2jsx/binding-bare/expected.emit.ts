@@ -3,21 +3,34 @@
 async function $$render_6ce80dfb() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        value = null as any as string;
-        checked = null as any as HTMLInputElement['checked'];
+        { svelteHTML.createElement("input", {
+            "type": `text`,
+        });
+            value = /** @type {string} */ (null);
+        }
+        { svelteHTML.createElement("input", {
+            "type": `checkbox`,
+        });
+            checked = /** @type {HTMLInputElement['checked']} */ (null);
+        }
         {
             const __svn_C_49 = __svn_ensure_component(Input);
-            new __svn_C_49({ target: __svn_any(), props: {type: "text", value} });
+            new __svn_C_49({ target: __svn_any(), props: {"type": "text", value} });
+            /*svn:ignore_start*/void (() => { value = __svn_any(null); });/*svn:ignore_end*/
         }
         {
             const __svn_C_6a = __svn_ensure_component(Input);
-            new __svn_C_6a({ target: __svn_any(), props: {type: "checkbox", checked} });
+            new __svn_C_6a({ target: __svn_any(), props: {"type": "checkbox", checked} });
+            /*svn:ignore_start*/void (() => { checked = __svn_any(null); });/*svn:ignore_end*/
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_6ce80dfb;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_6ce80dfb>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

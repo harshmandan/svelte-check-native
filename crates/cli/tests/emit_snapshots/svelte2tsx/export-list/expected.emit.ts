@@ -6,7 +6,7 @@ async function $$render_1b9e86d7() {
     let name2
 
     let rename1 = '';
-    let rename2!: any;
+    let rename2 = /** @type {any} */ (null);
 
     class Foo {}
     function bar() {}
@@ -20,7 +20,6 @@ async function $$render_1b9e86d7() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
-    void __svn_tpl_check;
     void name1;
     void name2;
     void rename1;
@@ -31,9 +30,13 @@ async function $$render_1b9e86d7() {
     void RenameFoo;
     void renamebar;
     void renamebaz;
+    return { props: /** @type {{ name1?: any; name2: any; renamed1?: any; renamed2: any; Foo: any; bar: any; baz?: any; RenamedFoo: any; renamedbar: any; renamedbaz?: any; }} */({}) };
 }
 $$render_1b9e86d7;
-declare const __svn_component_default: import('svelte').Component<{ name1?: any; name2: any; renamed1?: any; renamed2: any; Foo: any; bar: any; baz?: any; RenamedFoo: any; renamedbar: any; renamedbaz?: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ name1?: any; name2: any; renamed1?: any; renamed2: any; Foo: any; bar: any; baz?: any; RenamedFoo: any; renamedbar: any; renamedbaz?: any; }>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_1b9e86d7>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

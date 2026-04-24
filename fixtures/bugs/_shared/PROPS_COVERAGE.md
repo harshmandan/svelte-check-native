@@ -49,7 +49,7 @@ synthesis path is exercised by `PropsInfo::build`'s tests:
 Props type even when its body referenced body-scoped locals via
 `keyof typeof X`. This exposed the declare-const stub's
 `keyof typeof X → string | number` widening as a TS7053 index-
-signature error on real components (cnblocks `ProgressiveBlur.svelte`).
+signature error on real components (a blur-effect component on a component-lib bench).
 
 **Fixture coverage:** `57-hoisted-type-referencing-body-name/`
 exercises the type-visibility decision that replaced the force-hoist.

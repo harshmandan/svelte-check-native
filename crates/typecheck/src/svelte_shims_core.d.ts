@@ -233,6 +233,20 @@ declare type $$Generic<T = any> = T;
 // Mirrors upstream svelte2tsx's `__sveltets_2_invalidate` helper.
 declare function __svn_invalidate<T>(fn: () => T): T;
 
+// @@STATE_AMBIENTS_BEGIN@@
+// `$state<T>` ambient declarations. Stripped when real svelte 5 is
+// installed — Svelte's `types/index.d.ts:3221-3222` declares the
+// same two overloads. Keeping both sets produces 4 identical
+// overloads, which poisons TS's overload resolution: a mismatch on
+// `$state<T>(initial: T)` reports TS2769 "No overload matches this
+// call" instead of the expected TS2741 "Property 'X' is missing in
+// type Y" that fires with 2 overloads. Minimal repro at
+// test_dup_overload.ts confirmed. Other rune ambients ($derived,
+// $effect, etc.) aren't stripped because either their single-overload
+// form is immune to the dedup issue or our shim carries extra
+// overloads (e.g. `$props<T = any>()`) that Svelte's simpler
+// declarations don't provide — stripping those would fire TS2558 on
+// user-authored `$props<MyShape>()` calls.
 /** `$state<T>(initial?)` declares reactive state. Macro.
  *
  * Two overloads:
@@ -263,6 +277,7 @@ declare function __svn_invalidate<T>(fn: () => T): T;
  */
 declare function $state<T>(initial: T): T;
 declare function $state<T>(): T | undefined;
+// @@STATE_AMBIENTS_END@@
 declare namespace $state {
     function eager<T>(value: T): T;
     function raw<T>(initial: null): T;
@@ -343,6 +358,22 @@ type __SvnEachItem<T> = 0 extends 1 & T
 declare function __svn_any<T = any>(): T;
 
 /**
+ * JS-overlay definite-assign: `let b; b = __svn_any(b);` is the JS
+ * equivalent of the TS-overlay `let b!: T;` splice — a self-assign
+ * through an any-cast helper that satisfies TS flow analysis without
+ * emitting TS-only syntax (`!:`, `as`) that would fire TS8010 in a
+ * `.svelte.svn.js` file. Mirrors upstream svelte2tsx's
+ * `__sveltets_2_any(name)` self-assignment pattern (see
+ * ExportedNames.ts; produces `b = __sveltets_2_any(b)` after each
+ * Svelte-4 `export let` declaration).
+ *
+ * Return type is `any` unconditionally — the purpose is to widen,
+ * not preserve, so downstream reads aren't flow-narrowed back to
+ * the original (possibly uninitialised-shaped) type.
+ */
+declare function __svn_any(x: any): any;
+
+/**
  * Svelte 5 `bind:X={getter, setter}` helper. Mirrors upstream
  * `__sveltets_2_get_set_binding` (svelte2tsx/svelte-shims-v4.d.ts:269)
  * with the `__svn_*` prefix mandated by CLAUDE.md architecture rule #6.
@@ -420,13 +451,49 @@ declare function __svn_get_set_binding<T>(
 // Overload order MATTERS: typed must come first so it's preferred
 // when the intersection is present. Validated end-to-end via
 // /tmp/svn-item3-fixture/real_component.ts.
-declare function __svn_ensure_component<P extends Record<string, any>, E>(
-    c: import('svelte').Component<P> & { readonly __svn_events: E },
-): new (options: { target?: any; props?: P }) => __SvnInstanceTyped<P, E>;
-declare function __svn_ensure_component<P extends Record<string, any>>(
-    c: import('svelte').Component<P>,
-): new (options: { target?: any; props?: P }) => __SvnInstance<P>;
+//
+// The Component-arm uses conditional-type distribution (via
+// `T extends … ? … : never`) instead of a plain generic binding
+// `<P extends Record<string, any>>(c: Component<P, any, any>)`. When
+// the input is a UNION of `Component<P1> | Component<P2> | …`
+// (the dynamic-component pattern
+// `{@const X = fieldType.component}` seen on a CMS-style bench),
+// the conditional distributes: each union member produces
+// its own ctor type, and the union of ctors intersects their
+// contravariant arg positions — the resulting `options.props?` slot
+// becomes `P1 & P2 & … & Pn`. Consumer prop literals must satisfy
+// that intersection (TS2322 on structural mismatches), matching
+// upstream svelte2tsx byte-for-byte on PageFieldField.svelte /
+// SiteField.svelte.
+//
+// Without the conditional, TS's overload resolver falls through to
+// the `c: unknown` fallback when T is a union, giving `props?: any`
+// and silently accepting any prop literal.
 declare function __svn_ensure_component<C extends new (...args: any[]) => any>(c: C): C;
+declare function __svn_ensure_component<
+    T extends import('svelte').Component<any, any, any> & {
+        readonly __svn_events: any;
+    },
+>(
+    c: T,
+): T extends import('svelte').Component<
+    infer P extends Record<string, any>,
+    any,
+    any
+> & { readonly __svn_events: infer E }
+    ? new (options: { target?: any; props?: P }) => __SvnInstanceTyped<P, E>
+    : never;
+declare function __svn_ensure_component<
+    T extends import('svelte').Component<any, any, any>,
+>(
+    c: T,
+): T extends import('svelte').Component<
+    infer P extends Record<string, any>,
+    any,
+    any
+>
+    ? new (options: { target?: any; props?: P }) => __SvnInstance<P>
+    : never;
 declare function __svn_ensure_component<P>(
     c: (anchor: any, props: P) => any,
 ): new (options: { target?: any; props?: P }) => __SvnInstance<P>;
@@ -568,6 +635,34 @@ declare function __svn_ensure_action<T extends __SvnActionReturnType>(
 ): T extends { $$_attributes?: any } ? T['$$_attributes'] : {};
 
 /**
+ * Intersect up to N action-return-attributes types so they flow
+ * through `svelteHTML.createElement("tag", actions, attrs)`'s 3-arg
+ * overload. Upstream `svelte2tsx` emits this as `__sveltets_2_union`;
+ * the signature is the same — return type is `T1 & T2 & T3 & …`.
+ *
+ * Called as `__svn_union(__svn_action_0, __svn_action_1, …)` when an
+ * element has `use:` directives. The intersection is the second arg
+ * to `svelteHTML.createElement` (the `attrsEnhancers: T` slot); the
+ * attrs literal's type becomes `Elements[Key] & T` which tsgo
+ * eagerly expands (unlike the 2-arg overload's `Elements[Key]` alias
+ * form). This gives TS2353 diagnostic messages against the expanded
+ * `Omit<HTMLAttributes<HTMLDivElement>, never> & HTMLAttributes<any>`
+ * form that matches upstream byte-for-byte.
+ */
+declare function __svn_union<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>(
+    t1: T1,
+    t2?: T2,
+    t3?: T3,
+    t4?: T4,
+    t5?: T5,
+    t6?: T6,
+    t7?: T7,
+    t8?: T8,
+    t9?: T9,
+    t10?: T10,
+): T1 & T2 & T3 & T4 & T5 & T6 & T7 & T8 & T9 & T10;
+
+/**
  * Map an HTML/SVG tag name back to the real element type so action
  * directives emit `action(__svn_map_element_tag('form'), params)` with
  * a proper `HTMLFormElement` in the first slot rather than `unknown`
@@ -585,6 +680,282 @@ declare function __svn_map_element_tag<K extends keyof SVGElementTagNameMap>(
     tag: K,
 ): SVGElementTagNameMap[K];
 declare function __svn_map_element_tag(tag: string): HTMLElement;
+
+/**
+ * Validate that a style-directive value expression type-checks
+ * against the set of legal CSS-value runtime types. Emitted for
+ * each `style:prop={value}` as
+ *   `__svn_ensure_type(String, Number, value);`
+ * and for each text+mustache quoted form as
+ *   `__svn_ensure_type(String, Number, \`…${expr}…\`);`
+ *
+ * The single-type form accepts `T | undefined | null`; the two-type
+ * form accepts `T1 | T2 | undefined | null`. Passing an `unknown`
+ * binding fires TS2345 "Argument of type 'unknown' is not
+ * assignable…", mirroring upstream svelte2tsx's
+ * `__sveltets_2_ensureType` behavior
+ * (`language-tools/packages/svelte2tsx/svelte-shims-v4.d.ts:180-181`).
+ *
+ * Historical note: previously the 3rd param was loose `unknown`.
+ * That was a workaround for charting-lib-style Canvas/Html/Svg
+ * TS7034/7005 false-positives on Svelte-4 `export let zIndex =
+ * undefined` props. The JS-overlay flip (`.svelte.svn.js` for
+ * lang=js sources) routes those files through `noImplicitAny:false`,
+ * so the strict constraint is safe now. The stricter form is
+ * load-bearing for CMS-style component-preview / style-directive
+ * TS2345/TS18046 diagnostics.
+ */
+declare function __svn_ensure_type<T>(
+    type: new (...args: any[]) => T,
+    el: T | undefined | null,
+): {};
+declare function __svn_ensure_type<T1, T2>(
+    type1: new (...args: any[]) => T1,
+    type2: new (...args: any[]) => T2,
+    el: T1 | T2 | undefined | null,
+): {};
+
+// Ambient `svelteHTML` namespace — VENDORED VERBATIM from upstream
+// language-tools/packages/svelte2tsx/svelte-jsx-v4.d.ts (MIT-licensed).
+// Mirrors upstream svelte-check's bundled `svelte-jsx-v4.d.ts` so the
+// DOM-element emit (`svelteHTML.createElement("tag", { …attrs })`)
+// resolves with full per-element attribute typing.
+//
+// Why vendor instead of referencing user's `svelte/svelte-html.d.ts`:
+// svelte's package.json doesn't expose svelte-html.d.ts through its
+// `exports` map (by design — "deliberately not exposed through the
+// exports map" per its header). Upstream `svelte-check` vendors this
+// same file; we follow suit.
+//
+// Per-element attribute types resolve through
+// `import('svelte/elements').SvelteHTMLElements[K]`. When the user has
+// svelte installed, real attribute catalogs flow through (full
+// per-element typing: `button.type: "button"|"reset"|"submit"|...`).
+// Without svelte, our fallback resolves `HTMLAttributes<T> = any` and
+// the check degrades gracefully.
+
+declare namespace svelteHTML {
+    function mapElementTag<K extends keyof ElementTagNameMap>(
+        tag: K
+    ): ElementTagNameMap[K];
+    function mapElementTag<K extends keyof SVGElementTagNameMap>(
+        tag: K
+    ): SVGElementTagNameMap[K];
+    function mapElementTag(tag: any): any;
+
+    function createElement<Elements extends IntrinsicElements, Key extends keyof Elements>(
+        element: Key | undefined | null,
+        attrs: string extends Key ? import('svelte/elements').HTMLAttributes<any> : Elements[Key]
+    ): Key extends keyof ElementTagNameMap
+        ? ElementTagNameMap[Key]
+        : Key extends keyof SVGElementTagNameMap
+            ? SVGElementTagNameMap[Key]
+            : any;
+    function createElement<Elements extends IntrinsicElements, Key extends keyof Elements, T>(
+        element: Key | undefined | null,
+        attrsEnhancers: T,
+        attrs: (string extends Key ? import('svelte/elements').HTMLAttributes<any> : Elements[Key]) & T
+    ): Key extends keyof ElementTagNameMap
+        ? ElementTagNameMap[Key]
+        : Key extends keyof SVGElementTagNameMap
+            ? SVGElementTagNameMap[Key]
+            : any;
+
+    interface HTMLAttributes<T extends EventTarget = any> {}
+    interface SVGAttributes<T extends EventTarget = any> {}
+
+    type HTMLProps<Property extends string, Override> =
+        Omit<import('svelte/elements').SvelteHTMLElements[Property], keyof Override> & Override;
+
+    interface IntrinsicElements {
+        a: HTMLProps<'a', HTMLAttributes>;
+        abbr: HTMLProps<'abbr', HTMLAttributes>;
+        address: HTMLProps<'address', HTMLAttributes>;
+        area: HTMLProps<'area', HTMLAttributes>;
+        article: HTMLProps<'article', HTMLAttributes>;
+        aside: HTMLProps<'aside', HTMLAttributes>;
+        audio: HTMLProps<'audio', HTMLAttributes>;
+        b: HTMLProps<'b', HTMLAttributes>;
+        base: HTMLProps<'base', HTMLAttributes>;
+        bdi: HTMLProps<'bdi', HTMLAttributes>;
+        bdo: HTMLProps<'bdo', HTMLAttributes>;
+        big: HTMLProps<'big', HTMLAttributes>;
+        blockquote: HTMLProps<'blockquote', HTMLAttributes>;
+        body: HTMLProps<'body', HTMLAttributes>;
+        br: HTMLProps<'br', HTMLAttributes>;
+        button: HTMLProps<'button', HTMLAttributes>;
+        canvas: HTMLProps<'canvas', HTMLAttributes>;
+        caption: HTMLProps<'caption', HTMLAttributes>;
+        cite: HTMLProps<'cite', HTMLAttributes>;
+        code: HTMLProps<'code', HTMLAttributes>;
+        col: HTMLProps<'col', HTMLAttributes>;
+        colgroup: HTMLProps<'colgroup', HTMLAttributes>;
+        data: HTMLProps<'data', HTMLAttributes>;
+        datalist: HTMLProps<'datalist', HTMLAttributes>;
+        dd: HTMLProps<'dd', HTMLAttributes>;
+        del: HTMLProps<'del', HTMLAttributes>;
+        details: HTMLProps<'details', HTMLAttributes>;
+        dfn: HTMLProps<'dfn', HTMLAttributes>;
+        dialog: HTMLProps<'dialog', HTMLAttributes>;
+        div: HTMLProps<'div', HTMLAttributes>;
+        dl: HTMLProps<'dl', HTMLAttributes>;
+        dt: HTMLProps<'dt', HTMLAttributes>;
+        em: HTMLProps<'em', HTMLAttributes>;
+        embed: HTMLProps<'embed', HTMLAttributes>;
+        fieldset: HTMLProps<'fieldset', HTMLAttributes>;
+        figcaption: HTMLProps<'figcaption', HTMLAttributes>;
+        figure: HTMLProps<'figure', HTMLAttributes>;
+        footer: HTMLProps<'footer', HTMLAttributes>;
+        form: HTMLProps<'form', HTMLAttributes>;
+        h1: HTMLProps<'h1', HTMLAttributes>;
+        h2: HTMLProps<'h2', HTMLAttributes>;
+        h3: HTMLProps<'h3', HTMLAttributes>;
+        h4: HTMLProps<'h4', HTMLAttributes>;
+        h5: HTMLProps<'h5', HTMLAttributes>;
+        h6: HTMLProps<'h6', HTMLAttributes>;
+        head: HTMLProps<'head', HTMLAttributes>;
+        header: HTMLProps<'header', HTMLAttributes>;
+        hgroup: HTMLProps<'hgroup', HTMLAttributes>;
+        hr: HTMLProps<'hr', HTMLAttributes>;
+        html: HTMLProps<'html', HTMLAttributes>;
+        i: HTMLProps<'i', HTMLAttributes>;
+        iframe: HTMLProps<'iframe', HTMLAttributes>;
+        img: HTMLProps<'img', HTMLAttributes>;
+        input: HTMLProps<'input', HTMLAttributes>;
+        ins: HTMLProps<'ins', HTMLAttributes>;
+        kbd: HTMLProps<'kbd', HTMLAttributes>;
+        keygen: HTMLProps<'keygen', HTMLAttributes>;
+        label: HTMLProps<'label', HTMLAttributes>;
+        legend: HTMLProps<'legend', HTMLAttributes>;
+        li: HTMLProps<'li', HTMLAttributes>;
+        link: HTMLProps<'link', HTMLAttributes>;
+        main: HTMLProps<'main', HTMLAttributes>;
+        map: HTMLProps<'map', HTMLAttributes>;
+        mark: HTMLProps<'mark', HTMLAttributes>;
+        menu: HTMLProps<'menu', HTMLAttributes>;
+        menuitem: HTMLProps<'menuitem', HTMLAttributes>;
+        meta: HTMLProps<'meta', HTMLAttributes>;
+        meter: HTMLProps<'meter', HTMLAttributes>;
+        nav: HTMLProps<'nav', HTMLAttributes>;
+        noscript: HTMLProps<'noscript', HTMLAttributes>;
+        object: HTMLProps<'object', HTMLAttributes>;
+        ol: HTMLProps<'ol', HTMLAttributes>;
+        optgroup: HTMLProps<'optgroup', HTMLAttributes>;
+        option: HTMLProps<'option', HTMLAttributes>;
+        output: HTMLProps<'output', HTMLAttributes>;
+        p: HTMLProps<'p', HTMLAttributes>;
+        param: HTMLProps<'param', HTMLAttributes>;
+        picture: HTMLProps<'picture', HTMLAttributes>;
+        pre: HTMLProps<'pre', HTMLAttributes>;
+        progress: HTMLProps<'progress', HTMLAttributes>;
+        q: HTMLProps<'q', HTMLAttributes>;
+        rp: HTMLProps<'rp', HTMLAttributes>;
+        rt: HTMLProps<'rt', HTMLAttributes>;
+        ruby: HTMLProps<'ruby', HTMLAttributes>;
+        s: HTMLProps<'s', HTMLAttributes>;
+        samp: HTMLProps<'samp', HTMLAttributes>;
+        slot: HTMLProps<'slot', HTMLAttributes>;
+        script: HTMLProps<'script', HTMLAttributes>;
+        section: HTMLProps<'section', HTMLAttributes>;
+        select: HTMLProps<'select', HTMLAttributes>;
+        small: HTMLProps<'small', HTMLAttributes>;
+        source: HTMLProps<'source', HTMLAttributes>;
+        span: HTMLProps<'span', HTMLAttributes>;
+        strong: HTMLProps<'strong', HTMLAttributes>;
+        style: HTMLProps<'style', HTMLAttributes>;
+        sub: HTMLProps<'sub', HTMLAttributes>;
+        summary: HTMLProps<'summary', HTMLAttributes>;
+        sup: HTMLProps<'sup', HTMLAttributes>;
+        table: HTMLProps<'table', HTMLAttributes>;
+        template: HTMLProps<'template', HTMLAttributes>;
+        tbody: HTMLProps<'tbody', HTMLAttributes>;
+        td: HTMLProps<'td', HTMLAttributes>;
+        textarea: HTMLProps<'textarea', HTMLAttributes>;
+        tfoot: HTMLProps<'tfoot', HTMLAttributes>;
+        th: HTMLProps<'th', HTMLAttributes>;
+        thead: HTMLProps<'thead', HTMLAttributes>;
+        time: HTMLProps<'time', HTMLAttributes>;
+        title: HTMLProps<'title', HTMLAttributes>;
+        tr: HTMLProps<'tr', HTMLAttributes>;
+        track: HTMLProps<'track', HTMLAttributes>;
+        u: HTMLProps<'u', HTMLAttributes>;
+        ul: HTMLProps<'ul', HTMLAttributes>;
+        var: HTMLProps<'var', HTMLAttributes>;
+        video: HTMLProps<'video', HTMLAttributes>;
+        wbr: HTMLProps<'wbr', HTMLAttributes>;
+        webview: HTMLProps<'webview', HTMLAttributes>;
+        // SVG
+        svg: HTMLProps<'svg', SVGAttributes>;
+
+        animate: HTMLProps<'animate', SVGAttributes>;
+        animateMotion: HTMLProps<'animateMotion', SVGAttributes>;
+        animateTransform: HTMLProps<'animateTransform', SVGAttributes>;
+        circle: HTMLProps<'circle', SVGAttributes>;
+        clipPath: HTMLProps<'clipPath', SVGAttributes>;
+        defs: HTMLProps<'defs', SVGAttributes>;
+        desc: HTMLProps<'desc', SVGAttributes>;
+        ellipse: HTMLProps<'ellipse', SVGAttributes>;
+        feBlend: HTMLProps<'feBlend', SVGAttributes>;
+        feColorMatrix: HTMLProps<'feColorMatrix', SVGAttributes>;
+        feComponentTransfer: HTMLProps<'feComponentTransfer', SVGAttributes>;
+        feComposite: HTMLProps<'feComposite', SVGAttributes>;
+        feConvolveMatrix: HTMLProps<'feConvolveMatrix', SVGAttributes>;
+        feDiffuseLighting: HTMLProps<'feDiffuseLighting', SVGAttributes>;
+        feDisplacementMap: HTMLProps<'feDisplacementMap', SVGAttributes>;
+        feDistantLight: HTMLProps<'feDistantLight', SVGAttributes>;
+        feDropShadow: HTMLProps<'feDropShadow', SVGAttributes>;
+        feFlood: HTMLProps<'feFlood', SVGAttributes>;
+        feFuncA: HTMLProps<'feFuncA', SVGAttributes>;
+        feFuncB: HTMLProps<'feFuncB', SVGAttributes>;
+        feFuncG: HTMLProps<'feFuncG', SVGAttributes>;
+        feFuncR: HTMLProps<'feFuncR', SVGAttributes>;
+        feGaussianBlur: HTMLProps<'feGaussianBlur', SVGAttributes>;
+        feImage: HTMLProps<'feImage', SVGAttributes>;
+        feMerge: HTMLProps<'feMerge', SVGAttributes>;
+        feMergeNode: HTMLProps<'feMergeNode', SVGAttributes>;
+        feMorphology: HTMLProps<'feMorphology', SVGAttributes>;
+        feOffset: HTMLProps<'feOffset', SVGAttributes>;
+        fePointLight: HTMLProps<'fePointLight', SVGAttributes>;
+        feSpecularLighting: HTMLProps<'feSpecularLighting', SVGAttributes>;
+        feSpotLight: HTMLProps<'feSpotLight', SVGAttributes>;
+        feTile: HTMLProps<'feTile', SVGAttributes>;
+        feTurbulence: HTMLProps<'feTurbulence', SVGAttributes>;
+        filter: HTMLProps<'filter', SVGAttributes>;
+        foreignObject: HTMLProps<'foreignObject', SVGAttributes>;
+        g: HTMLProps<'g', SVGAttributes>;
+        image: HTMLProps<'image', SVGAttributes>;
+        line: HTMLProps<'line', SVGAttributes>;
+        linearGradient: HTMLProps<'linearGradient', SVGAttributes>;
+        marker: HTMLProps<'marker', SVGAttributes>;
+        mask: HTMLProps<'mask', SVGAttributes>;
+        metadata: HTMLProps<'metadata', SVGAttributes>;
+        mpath: HTMLProps<'mpath', SVGAttributes>;
+        path: HTMLProps<'path', SVGAttributes>;
+        pattern: HTMLProps<'pattern', SVGAttributes>;
+        polygon: HTMLProps<'polygon', SVGAttributes>;
+        polyline: HTMLProps<'polyline', SVGAttributes>;
+        radialGradient: HTMLProps<'radialGradient', SVGAttributes>;
+        rect: HTMLProps<'rect', SVGAttributes>;
+        stop: HTMLProps<'stop', SVGAttributes>;
+        switch: HTMLProps<'switch', SVGAttributes>;
+        symbol: HTMLProps<'symbol', SVGAttributes>;
+        text: HTMLProps<'text', SVGAttributes>;
+        textPath: HTMLProps<'textPath', SVGAttributes>;
+        tspan: HTMLProps<'tspan', SVGAttributes>;
+        use: HTMLProps<'use', SVGAttributes>;
+        view: HTMLProps<'view', SVGAttributes>;
+
+        // Svelte specific
+        'svelte:window': HTMLProps<'svelte:window', HTMLAttributes>;
+        'svelte:body': HTMLProps<'svelte:body', HTMLAttributes>;
+        'svelte:document': HTMLProps<'svelte:document', HTMLAttributes>;
+        'svelte:fragment': { slot?: string };
+        'svelte:options': { [name: string]: any };
+        'svelte:head': { [name: string]: any };
+
+        [name: string]: { [name: string]: any };
+    }
+}
 
 /**
  * Extract the NON-optional Props type from any supported component

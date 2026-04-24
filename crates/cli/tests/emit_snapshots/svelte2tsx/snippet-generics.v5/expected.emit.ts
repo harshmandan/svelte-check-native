@@ -6,19 +6,20 @@ async function $$render_ba1a20ec() {
         // template type-check body (incremental)
         {
             const __svn_C_2f = __svn_ensure_component(T);
-            new __svn_C_2f({ target: __svn_any(), props: {extends: true, string: true, children: () => __svn_snippet_return()} });
+            new __svn_C_2f({ target: __svn_any(), props: {"extends": true, "string": true, children: () => __svn_snippet_return()} });
         }
         (val);
         {
             const __svn_C_77 = __svn_ensure_component(T);
-            new __svn_C_77({ target: __svn_any(), props: {extends: true, "|": true, "|": true, Set: true, children: () => __svn_snippet_return()} });
+            new __svn_C_77({ target: __svn_any(), props: {"extends": true, "|": true, "|": true, "Set": true, children: () => __svn_snippet_return()} });
         }
         (val);
     }
     void __svn_tpl_check;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_ba1a20ec;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_ba1a20ec>>['props']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_ba1a20ec>>['props']>;
 export default __svn_component_default;
 

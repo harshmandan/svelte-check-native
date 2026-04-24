@@ -8,6 +8,7 @@ declare const b: { [key: string]: any } & ((...args: any[]) => any);
         a: number;
         b: typeof value;
     }
+type $$ComponentProps = { a: Dependency, b: string };
 async function $$render_07606356() {
 
                           
@@ -22,9 +23,10 @@ async function $$render_07606356() {
     void __svn_tpl_check;
     void a;
     void b;
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_07606356;
-declare const __svn_component_default: import('svelte').Component<{ a: Dependency, b: string }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ a: Dependency, b: string }>;
+declare const __svn_component_default: import('svelte').Component<$$ComponentProps>;
+declare type __svn_component_default = import('svelte').SvelteComponent<$$ComponentProps>;
 export default __svn_component_default;
 

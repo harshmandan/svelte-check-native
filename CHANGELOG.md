@@ -37,8 +37,9 @@ surface.
   standalone `.svelte.ts` runes modules (no component) resolve
   unchanged.
 
-  Bench deltas: `ui` 8 errors → 0 (exact match with upstream);
-  `Oxide-Lab` -3 vs tsgo → 0 (exact match with upstream). No
+  Bench deltas: a UI-library bench 8 errors → 0 (exact match with
+  upstream); a desktop-app bench -3 vs tsgo → 0 (exact match with
+  upstream). No
   user source tree writes; no pollution of
   `allowArbitraryExtensions`-less tsconfigs or language-server
   consumers.
@@ -142,11 +143,11 @@ Findings captured in `notes/ts7-tracking.md`:
 
 | Bench | Files | Errors | Warnings | FWP | vs upstream |
 |---|---:|---:|---:|---:|---|
-| control-svelte-4 admin-app | 1124 | 0 | 2 | 2 | exact parity |
-| control-svelte-5 admin-app | 1357 | 0 | 49 | 17 | exact parity |
-| layerchart | 348 | 211 | 0 | 59 | -1 file; +185 vs tsgo (see `notes/OPEN.md` — blocked on structural tsgo constraint) |
-| ui | 183 | 0 | 30 | 17 | exact parity (was +8 errors pre-fix) |
-| Oxide-Lab | 206 | 0 | 0 | 0 | exact parity (was -3 errors pre-fix) |
+| our Svelte-4 control admin-app | 1124 | 0 | 2 | 2 | exact parity |
+| our Svelte-5 control admin-app | 1357 | 0 | 49 | 17 | exact parity |
+| a charting-lib bench | 348 | 211 | 0 | 59 | -1 file; +185 vs tsgo (see `notes/OPEN.md` — blocked on structural tsgo constraint) |
+| a UI-library bench | 183 | 0 | 30 | 17 | exact parity (was +8 errors pre-fix) |
+| a desktop-app bench | 206 | 0 | 0 | 0 | exact parity (was -3 errors pre-fix) |
 
 ## [0.4.1]
 
@@ -297,12 +298,12 @@ expressions don't desync depth.
 
 ### Bench state
 
-13 of 16 bench workspaces at exact Svelte-side-warnings parity:
-`cnblocks`, `cobalt`, `control-svelte-4`, `control-svelte-5`,
-`cryptgeon`, `datagrid`, `inference-playground`, `layerchart`,
-`local-music-pwa`, `Oxide-Lab`, `palacms`, `slowreader`, `ui`.
-Remaining drift is error-layer (TS emit-shape) only; focus list
-in local `notes/OPEN.md`.
+13 of 16 bench workspaces at exact Svelte-side-warnings parity
+(Svelte-4 control, Svelte-5 control, plus real-world CMS / chart /
+component-lib / UI-lib / tabular-data / file-share / media / music-PWA /
+desktop-app / reader / ML-playground workspaces). Remaining drift
+is error-layer (TS emit-shape) only; focus list in local
+`notes/OPEN.md`.
 
 ## [0.3.9]
 
@@ -312,7 +313,7 @@ report on a SvelteKit monorepo. Closes the
 (TS2339 ×3 per site upstream, silent on ours), the
 `{#if form?.success}{form.error}` narrowing miss, and — same
 root cause — the paraglide `m['login.pin']` literal-key miss.
-Parity on `control-svelte-5` goes from 2 errors to 8,
+Parity on `our Svelte-5 control` goes from 2 errors to 8,
 matching upstream `svelte-check --tsgo` exactly.
 
 Full investigation trail in [`docs/parity-findings-2026-04-21.md`](https://github.com/harshmandan/svelte-check-native/blob/main/docs/parity-findings-2026-04-21.md).
@@ -550,7 +551,7 @@ Commit `28ba5fd`.
 
 ## [0.3.7]
 
-Patch release: two correctness fixes that close ~30% of the palacms
+Patch release: two correctness fixes that close ~30% of the a CMS bench
 parity gap with upstream `svelte-check` (default mode). No emit-
 shape surprises; no regression on any other bench.
 
@@ -570,7 +571,7 @@ identifier (`UI`) is voided via the existing template-refs pass so
 the barrel import doesn't trip TS6133.
 
 Dropping the return unlocks the full component-check emission for
-member-expression components. palacms (which leans heavily on this
+member-expression components. a CMS bench (which leans heavily on this
 pattern in its `UI` barrel) picked up 20 real user-code bugs that
 were previously invisible.
 
@@ -616,7 +617,7 @@ fixture's note explains the parity rule.
 
 Commit `b912b77`.
 
-### Scoreboard delta on bench/palacms
+### Scoreboard delta on bench/a CMS bench
 
 | metric                     | pre-release | post-`a654def` |          post-`b912b77` |
 | -------------------------- | ----------: | -------------: | ----------------------: |
@@ -627,14 +628,14 @@ Commit `b912b77`.
 
 Net: **63 upstream catches newly matched this release** (from 176
 misses down to 113, or +60 on the overlap axis). No regressions on
-the other four benches (control-svelte-4 1124/0/2/2,
-control-svelte-5 1/1/0/1, local-music-pwa 88/0/0/0, cnblocks
+the other four benches (our Svelte-4 control 1124/0/2/2,
+our Svelte-5 control 1/1/0/1, a music-PWA bench 88/0/0/0, a component-lib bench
 832/8/127/51 all unchanged).
 
 ### Not in this release (documented for context)
 
 - **Template-attribute-expression preservation for DOM elements.**
-  Investigated as a candidate for closing the remaining 113 palacms
+  Investigated as a candidate for closing the remaining 113 a CMS bench
   misses. Source-location classification showed the reachable yield
   was only ~20-35 catches (18-30%), not the ~80 originally estimated:
   ~55 of the 113 misses are in component-callback contexts we
@@ -683,7 +684,7 @@ type-check.
 
 Concrete result on a big monorepo: solution-root redirect
 now completes without the init.ts "not listed" error. For
-`bench/control-svelte-5` specifically: 2 errors → 1 error (the
+`bench/our Svelte-5 control` specifically: 2 errors → 1 error (the
 remaining one is a legit tsgo "Excessive stack depth" on a heavy
 conditional type).
 
@@ -728,9 +729,9 @@ Commit `a2b0fdf`.
 
 | bench                         | before (0.3.5) | after (0.3.6) | vs upstream --tsgo                                                                                                                                                                                                                           |
 | ----------------------------- | -------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| control-svelte-4              | 1124/0/2/2     | 1124/0/2/2    | exact parity                                                                                                                                                                                                                                 |
-| control-svelte-5 (redirected) | 2/2/0/2        | **1/1/0/1**   | **exact parity**                                                                                                                                                                                                                             |
-| cnblocks                      | 832/8/127/51   | 832/8/127/51  | +8 errors vs tsgo's 0, but upstream's tsgo run fatally bails on a missing `@types/node` (our overlay filters unresolvable types entries); upstream returns 0 from silent failure. Our 8 errors are real user-code bugs. We are more correct. |
+| our Svelte-4 control              | 1124/0/2/2     | 1124/0/2/2    | exact parity                                                                                                                                                                                                                                 |
+| our Svelte-5 control (redirected) | 2/2/0/2        | **1/1/0/1**   | **exact parity**                                                                                                                                                                                                                             |
+| a component-lib bench                      | 832/8/127/51   | 832/8/127/51  | +8 errors vs tsgo's 0, but upstream's tsgo run fatally bails on a missing `@types/node` (our overlay filters unresolvable types entries); upstream returns 0 from silent failure. Our 8 errors are real user-code bugs. We are more correct. |
 
 ## [0.3.5]
 
@@ -801,7 +802,7 @@ AppVideo)}`) fired false-positive TS6133.** `AppVideo` is
 
 ### Scoreboard
 
-Unchanged from 0.3.0. Warmed bench on cnblocks: 832/8/127/51,
+Unchanged from 0.3.0. Warmed bench on a component-lib bench: 832/8/127/51,
 matching pre-session.
 
 ## [0.3.0]
@@ -812,12 +813,12 @@ matching pre-session.
 
 | bench                                 | ours (F/E/W/P)   | svelte-check --tsgo | svelte-check default | Δ E                    |
 | ------------------------------------- | ---------------- | ------------------- | -------------------- | ---------------------- |
-| control-svelte-4 (1000-file monorepo) | 1124/**0**/2/2   | 1125/1/2/3          | **6511/0/2/2**       | **0** ✓                |
-| control-svelte-5                      | 1359/**2**/44/17 | 1359/**2**/44/17    | 7290/1/44/16         | **0** ✓                |
-| local-music-pwa                       | 88/**0**/0/0     | 88/**0**/0/0        | 1410/0/0/0           | **0** ✓                |
-| slowreader/web                        | 113/**0**/0/0    | 113/**0**/0/0       | 724/0/0/0            | **0** ✓                |
-| palacms                               | 211/321/67/64    | 211/419/67/121      | 5501/331/67/116      | −10 vs default         |
-| cnblocks                              | 832/8/127/51     | 750/0/127/48        | 5751/6/127/49        | +8 (ours more correct) |
+| our Svelte-4 control (1000-file monorepo) | 1124/**0**/2/2   | 1125/1/2/3          | **6511/0/2/2**       | **0** ✓                |
+| our Svelte-5 control                      | 1359/**2**/44/17 | 1359/**2**/44/17    | 7290/1/44/16         | **0** ✓                |
+| a music-PWA bench                       | 88/**0**/0/0     | 88/**0**/0/0        | 1410/0/0/0           | **0** ✓                |
+| a reader bench/web                        | 113/**0**/0/0    | 113/**0**/0/0       | 724/0/0/0            | **0** ✓                |
+| a CMS bench                               | 211/321/67/64    | 211/419/67/121      | 5501/331/67/116      | −10 vs default         |
+| a component-lib bench                              | 832/8/127/51     | 750/0/127/48        | 5751/6/127/49        | +8 (ours more correct) |
 
 ### Added — component-prop + event typing
 
@@ -973,12 +974,12 @@ bind:items={items}>`) now emits as `PropShape::Shorthand`
   assignment from TS flow analysis. Now emits as a plain
   statement so the assignment's RHS type narrows EXPR for
   subsequent uses, matching upstream's `Binding.ts:86-93`
-  semantics. Eliminates `control-svelte-4`'s last FP (1→0 errors).
+  semantics. Eliminates `our Svelte-4 control`'s last FP (1→0 errors).
 - **`bind:this` on DOM elements: same narrowing fix.** Previously
   lambda-wrapped; now plain assignment. Closes the
   `let iconEl = $state<HTMLElement | null>(null)` →
   `<button bind:this={iconEl}>` → `<Child {iconEl}>` narrowing
-  gap that caused a FP on control-svelte-5.
+  gap that caused a FP on our Svelte-5 control.
 
 ### Known limitations (match upstream behavior)
 
@@ -1011,7 +1012,7 @@ any`. No `<option>` value-union inference anywhere upstream.
 ### Known bench discrepancies
 
 - **Upstream default `svelte-check` reports 5-12× more FILES** on
-  large workspaces (control-svelte-4: 6511 FILES vs ours 1124
+  large workspaces (our Svelte-4 control: 6511 FILES vs ours 1124
   vs `svelte-check --tsgo` 1125). Upstream default crawls all
   `.svelte/.ts/.js/.d.ts` on disk via TypeScript's LanguageService
   (supporting hover/autocomplete paths), including declaration
@@ -1023,7 +1024,7 @@ any`. No `<option>` value-union inference anywhere upstream.
 
 ### Performance
 
-- control-svelte-4 bench (1124 files): warm 2.31s median (v0.2.5
+- our Svelte-4 control bench (1124 files): warm 2.31s median (v0.2.5
   baseline: 2.30s, within noise). Cold 3.4s, dirty 2.4s.
 
 ## [0.2.5]
@@ -1147,7 +1148,7 @@ any`. No `<option>` value-union inference anywhere upstream.
   from the annotation replaces the literal-type overloads. Net:
   real-world parity bench picks up 2 errors on the reference
   SvelteKit project (which just landed a `$state<Promise<T>>(…)`
-  trendline refactor) and 2 errors on `inference-playground`.
+  trendline refactor) and 2 errors on `an ML-playground bench`.
 
 ## [0.1.1] — docs update
 

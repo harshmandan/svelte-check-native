@@ -20,9 +20,10 @@ async function $$render_85d4c6eb() {
         // template type-check body (incremental)
     }
     void __svn_tpl_check;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_85d4c6eb;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_85d4c6eb>>['props']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_85d4c6eb>>['props']>;
 export default __svn_component_default;
 

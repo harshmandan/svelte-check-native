@@ -92,6 +92,70 @@ pub struct ExportedLocalInfo {
 /// available to consumers via `import type { Foo } from './X.svelte'`,
 /// and those types are user-facing surface so they're unlikely to
 /// reference private render-scope generics.
+/// Walk backwards from `span_start` through contiguous
+/// `// @ts-ignore` / `// @ts-expect-error` / `// @ts-nocheck` line
+/// comments and return the position that includes them. Returns
+/// `span_start` unchanged when the preceding line isn't such a
+/// directive.
+///
+/// Used when hoisting imports so the directive travels with the
+/// import it annotates. Without this, hoisting strands the directive
+/// in the body (where it suppresses nothing) and the import fires
+/// unsuppressed errors at module scope.
+fn extend_span_for_ts_directives(content: &str, span_start: usize) -> usize {
+    let bytes = content.as_bytes();
+    // Scan-only backtrack through same-line leading whitespace —
+    // indented imports have `\t`/` ` between the newline and
+    // span_start. We DO NOT commit this to the returned value
+    // unless we actually find a directive: otherwise we'd over-eat
+    // the line's indent into the hoist span, which changes the
+    // body's leading whitespace after blanking and breaks unrelated
+    // snapshots.
+    let mut scan = span_start;
+    while scan > 0 {
+        let b = bytes[scan - 1];
+        if b == b' ' || b == b'\t' {
+            scan -= 1;
+        } else {
+            break;
+        }
+    }
+    let mut new_start = span_start;
+    let mut cur = scan;
+    loop {
+        if cur == 0 {
+            return new_start;
+        }
+        if bytes[cur - 1] != b'\n' {
+            return new_start;
+        }
+        let mut line_end = cur - 1;
+        if line_end > 0 && bytes[line_end - 1] == b'\r' {
+            line_end -= 1;
+        }
+        let mut line_start = line_end;
+        while line_start > 0 && bytes[line_start - 1] != b'\n' {
+            line_start -= 1;
+        }
+        let trimmed = content[line_start..line_end].trim();
+        let is_directive = trimmed
+            .strip_prefix("//")
+            .map(|rest| {
+                let r = rest.trim_start();
+                r.starts_with("@ts-ignore")
+                    || r.starts_with("@ts-expect-error")
+                    || r.starts_with("@ts-nocheck")
+            })
+            .unwrap_or(false);
+        if is_directive {
+            new_start = line_start;
+            cur = line_start;
+            continue;
+        }
+        return new_start;
+    }
+}
+
 pub fn split_imports(
     content: &str,
     _lang: ScriptLang,
@@ -176,7 +240,15 @@ pub fn split_imports(
     for stmt in &parsed.program.body {
         match stmt {
             Statement::ImportDeclaration(decl) => {
-                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+                // Extend the span backwards to eat any immediately-
+                // preceding `// @ts-ignore` / `// @ts-expect-error` /
+                // `// @ts-nocheck` directive line(s). The comment has
+                // to travel WITH the import it annotates — otherwise
+                // hoisting strands it in the body where it suppresses
+                // nothing and the import fires unsuppressed errors at
+                // module scope.
+                let start = extend_span_for_ts_directives(content, decl.span.start as usize);
+                hoist_spans.push((start, decl.span.end as usize));
             }
             Statement::VariableDeclaration(decl) => {
                 // Body-level `const/let/var` — stays in body. Record its

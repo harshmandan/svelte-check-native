@@ -12,12 +12,21 @@ async function $$render_a02e67d1() {
                                         
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        { svelteHTML.createElement("svelte:head", {});             { svelteHTML.createElement("script", {
+                "src": `https://example.com/script.js`,
+                "async": true,
+                "defer": true,
+                "onload": (useThing('hi')),
+            });
+            }
+        }
     }
     void __svn_tpl_check;
     void useThing;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_a02e67d1;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_a02e67d1>>['props']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_a02e67d1>>['props']>;
 export default __svn_component_default;
 

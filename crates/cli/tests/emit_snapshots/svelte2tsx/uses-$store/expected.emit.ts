@@ -4,12 +4,16 @@ async function $$render_636933a9() {
 $b=$b.concat(5)
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        ($b);
+        { svelteHTML.createElement("h1", {});             ($b);
+        }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_636933a9;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_636933a9>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

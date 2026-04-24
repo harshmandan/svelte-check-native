@@ -11,8 +11,9 @@ async function $$render_5a7d1551<T extends { id: string }>() {
     let { item, label }: Props = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        (label);
-        (item.id);
+        { svelteHTML.createElement("p", {});             (label);
+            (item.id);
+        }
     }
     void __svn_tpl_check;
     void item;

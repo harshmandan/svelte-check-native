@@ -31,10 +31,10 @@ async function $$render_43de206c() {
                 void item;
                 void i;
             }
-            {
-                const result: any = undefined;
+            ;(async () => {
+                const $$_await = await (foo as Promise<void>); const result: any = $$_await;
                 void result;
-            }
+            });
             {
                 const error: any = undefined;
                 void error;
@@ -76,22 +76,32 @@ async function $$render_43de206c() {
                     void baz;
                 });
             }
+            { svelteHTML.createElement("button", {
+                "onclick": ((e: Event) => {e as any}),
+            });
+            }
             {
                 const __svn_C_354 = __svn_ensure_component(Component);
-                new __svn_C_354({ target: __svn_any(), props: {attr: (attr as boolean)} });
+                new __svn_C_354({ target: __svn_any(), props: {"attr": (attr as boolean)} });
+            }
+            { svelteHTML.createElement("label", {
+                "id": (ok!),
+            });
             }
             {
                 const __svn_C_392 = __svn_ensure_component(Component);
                 const __svn_inst_392 = new __svn_C_392({ target: __svn_any(), props: {} });
                 x as any = __svn_inst_392;
             }
-            x as any = null as any as HTMLElement['clientWidth'];
+            { svelteHTML.createElement("div", {});                 x as any = null as any as HTMLElement['clientWidth'];
+            }
         }
     }
     void __svn_tpl_check;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_43de206c;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_43de206c>>['props']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_43de206c>>['props']>;
 export default __svn_component_default;
 

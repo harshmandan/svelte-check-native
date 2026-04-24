@@ -4,42 +4,43 @@ async function $$render_df3e76f3() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         {
-            const snippetBlock: any = undefined;
+            const snippetBlock = undefined;
             void snippetBlock;
             if ((true)) {
                 {
-                    const foo: any = undefined;
+                    const foo = undefined;
                     void foo;
                 }
             }
             for (const item of __svn_each_items(arr)) {
                 {
-                    const foo: any = undefined;
+                    const foo = undefined;
                     void foo;
                 }
                 void item;
             }
             {
-                const foo: any = undefined;
+                const foo = undefined;
                 void foo;
             }
             {
-                const foo: any = undefined;
+                const foo = undefined;
                 void foo;
-                const foo2: any = undefined;
+                const foo2 = undefined;
                 void foo2;
             }
-            {
-                const bar: any = undefined;
+            ;(async () => {
+                const $$_await = await (Promise.resolve()); const bar = $$_await;
                 {
-                    const foo: any = undefined;
+                    const foo = undefined;
                     void foo;
                 }
                 void bar;
-            }
-            {
-                const foo: any = undefined;
-                void foo;
+            });
+            { svelteHTML.createElement("div", {});                 {
+                    const foo = undefined;
+                    void foo;
+                }
             }
             {
                 const __svn_C_1f7 = __svn_ensure_component(Component);
@@ -55,10 +56,13 @@ async function $$render_df3e76f3() {
             }
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_df3e76f3;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_df3e76f3>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

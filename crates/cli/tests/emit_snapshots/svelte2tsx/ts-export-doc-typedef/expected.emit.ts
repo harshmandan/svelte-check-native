@@ -10,15 +10,18 @@ async function $$render_1d4edb02() {
      * DOCS!
      * @typedef {'ABC'} ABC
      */
-           let a!: any;
+           let a = /** @type {any} */ (null);
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
-    void __svn_tpl_check;
     void a;
+    return { props: /** @type {FOO} */({}) };
 }
 $$render_1d4edb02;
-declare const __svn_component_default: import('svelte').Component<{ a: any; }, { a: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ a: any; }> & { a: any; };
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_1d4edb02>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

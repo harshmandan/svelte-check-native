@@ -12,11 +12,12 @@ async function $$render_03b58764() {
             void shadowed2;
             let subthing: any;
             void subthing;
-            {
-                let subthing: any;
-                void subthing;
-                (thing);
-                (subthing);
+            { svelteHTML.createElement("p", {});                 {
+                    let subthing: any;
+                    void subthing;
+                    (thing);
+                    (subthing);
+                }
             }
             {
                 let subthing: any;
@@ -44,10 +45,13 @@ async function $$render_03b58764() {
             }
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_03b58764;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_03b58764>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

@@ -3,11 +3,18 @@
 async function $$render_62c79e0f() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        { svelteHTML.createElement("iframe", {
+            "src": "",
+        });
+        }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_62c79e0f;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_62c79e0f>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

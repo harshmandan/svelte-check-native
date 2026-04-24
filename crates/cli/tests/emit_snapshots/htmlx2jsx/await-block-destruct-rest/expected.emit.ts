@@ -3,47 +3,47 @@
 async function $$render_8b99b80f() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        {
-            const a: any = undefined;
-            const rest: any = undefined;
+        ;(async () => {
+            const $$_await = await (object); const { a, ...rest } = $$_await;
             void a;
             void rest;
-        }
-        {
-            const a: any = undefined;
-            const b: any = undefined;
-            const rest: any = undefined;
+        });
+        ;(async () => {
+            const $$_await = await (array); const [a, b, ...rest] = $$_await;
             void a;
             void b;
             void rest;
-        }
-        {
-            const value: any = undefined;
+        });
+        ;(async () => {
+            const $$_await = await (objectReject); const value = $$_await;
             void value;
-        }
+        });
         {
-            const a: any = undefined;
-            const rest: any = undefined;
+            const a = undefined;
+            const rest = undefined;
             void a;
             void rest;
         }
-        {
-            const value: any = undefined;
+        ;(async () => {
+            const $$_await = await (arrayReject); const value = $$_await;
             void value;
-        }
+        });
         {
-            const a: any = undefined;
-            const b: any = undefined;
-            const rest: any = undefined;
+            const a = undefined;
+            const b = undefined;
+            const rest = undefined;
             void a;
             void b;
             void rest;
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_8b99b80f;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_8b99b80f>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

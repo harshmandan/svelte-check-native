@@ -12,14 +12,17 @@ async function $$render_5559350c() {
             void hoistable;
             const not_hoistable: any = undefined;
             void not_hoistable;
-            (foo);
+            { svelteHTML.createElement("div", {});             }
+            { svelteHTML.createElement("div", {});                 (foo);
+            }
         }
     }
     void __svn_tpl_check;
     void foo;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_5559350c;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_5559350c>>['props']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_5559350c>>['props']>;
 export default __svn_component_default;
 

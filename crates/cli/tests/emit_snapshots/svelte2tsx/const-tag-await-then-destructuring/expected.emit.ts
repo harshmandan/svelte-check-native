@@ -11,9 +11,8 @@ async function $$render_6a482dcb() {
 	}
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        {
-            const width: any = undefined;
-            const height: any = undefined;
+        ;(async () => {
+            const $$_await = await (promise1); const { width, height } = $$_await;
             const {area, volume} = calculate(width, height, constant);
             void area;
             void volume;
@@ -23,18 +22,19 @@ async function $$render_6a482dcb() {
             void _width;
             void _height;
             void sum;
-            (area);
-            (volume);
-            (perimeter);
-            (_width);
-            (_height);
-            (sum);
+            { svelteHTML.createElement("div", {});                 (area);
+                (volume);
+                (perimeter);
+                (_width);
+                (_height);
+                (sum);
+            }
             void width;
             void height;
-        }
+        });
         {
-            const width: any = undefined;
-            const height: any = undefined;
+            const width = undefined;
+            const height = undefined;
             const {area, volume} = calculate(width, height, constant);
             void area;
             void volume;
@@ -44,24 +44,28 @@ async function $$render_6a482dcb() {
             void _width;
             void _height;
             void sum;
-            (area);
-            (volume);
-            (perimeter);
-            (_width);
-            (_height);
-            (sum);
+            { svelteHTML.createElement("div", {});                 (area);
+                (volume);
+                (perimeter);
+                (_width);
+                (_height);
+                (sum);
+            }
             void width;
             void height;
         }
     }
-    void __svn_tpl_check;
     void promise1;
     void calculate;
     void constant;
     void promise2;
+    return { props: /** @type {{ promise1?: any; promise2?: any; constant?: any; }} */({}) };
 }
 $$render_6a482dcb;
-declare const __svn_component_default: import('svelte').Component<{ promise1?: any; promise2?: any; constant?: any; }, { promise1: any; promise2: any; constant: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ promise1?: any; promise2?: any; constant?: any; }> & { promise1: any; promise2: any; constant: any; };
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_6a482dcb>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

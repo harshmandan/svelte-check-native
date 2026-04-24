@@ -32,27 +32,38 @@ async function $$render_3d709d05() {
             void hoistable10;
             const not_hoistable: any = undefined;
             void not_hoistable;
+            { svelteHTML.createElement("div", {});             }
             {
                 void ((bar: any) => {
-                    (bar);
+                    { svelteHTML.createElement("div", {});                         (bar);
+                    }
                     void bar;
                 });
             }
             {
                 void ((bar: string) => {
-                    (bar);
+                    { svelteHTML.createElement("div", {});                         (bar);
+                    }
                     void bar;
                 });
             }
             {
                 void ((foo: any) => {
-                    (foo);
+                    { svelteHTML.createElement("div", {});                         (foo);
+                    }
                     void foo;
                 });
             }
-            (module);
-            (imported);
-            (global);
+            { svelteHTML.createElement("button", {
+                "onclick": (e => e),
+            });
+            }
+            { svelteHTML.createElement("div", {});                 (module);
+            }
+            { svelteHTML.createElement("div", {});                 (imported);
+            }
+            { svelteHTML.createElement("div", {});                 (global);
+            }
             {
                 void ((props: HTMLAttributes<HTMLDivElement>) => {
                     void props;
@@ -66,16 +77,18 @@ async function $$render_3d709d05() {
                     void foo;
                 });
             }
-            (foo);
+            { svelteHTML.createElement("div", {});                 (foo);
+            }
         }
     }
     void __svn_tpl_check;
     void foo;
     void module;
     void imported;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_3d709d05;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_3d709d05>>['props']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_3d709d05>>['props']>;
 export default __svn_component_default;
 

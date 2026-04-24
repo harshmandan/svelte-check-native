@@ -8,14 +8,16 @@ async function $$render_ec2f74ae() {
     const parent$ = writable(0);
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        ($parent$);
+        { svelteHTML.createElement("p", {});             ($parent$);
+        }
     }
     void __svn_tpl_check;
     void $parent$;
     void parent$;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_ec2f74ae;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_ec2f74ae>>['props']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_ec2f74ae>>['props']>;
 export default __svn_component_default;
 

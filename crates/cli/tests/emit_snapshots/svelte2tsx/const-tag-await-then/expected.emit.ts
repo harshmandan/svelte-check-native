@@ -11,8 +11,8 @@ async function $$render_e1dcebf1() {
 	}
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        {
-            const box: any = undefined;
+        ;(async () => {
+            const $$_await = await (promise1); const box = $$_await;
             const {area, volume} = calculate(box.width, box.height, constant);
             void area;
             void volume;
@@ -22,16 +22,17 @@ async function $$render_e1dcebf1() {
             void width;
             void height;
             void sum;
-            (area);
-            (volume);
-            (perimeter);
-            (width);
-            (height);
-            (sum);
+            { svelteHTML.createElement("div", {});                 (area);
+                (volume);
+                (perimeter);
+                (width);
+                (height);
+                (sum);
+            }
             void box;
-        }
+        });
         {
-            const box: any = undefined;
+            const box = undefined;
             const {area, volume} = calculate(box.width, box.height, constant);
             void area;
             void volume;
@@ -41,23 +42,27 @@ async function $$render_e1dcebf1() {
             void width;
             void height;
             void sum;
-            (area);
-            (volume);
-            (perimeter);
-            (width);
-            (height);
-            (sum);
+            { svelteHTML.createElement("div", {});                 (area);
+                (volume);
+                (perimeter);
+                (width);
+                (height);
+                (sum);
+            }
             void box;
         }
     }
-    void __svn_tpl_check;
     void promise1;
     void calculate;
     void constant;
     void promise2;
+    return { props: /** @type {{ promise1?: any; promise2?: any; constant?: any; }} */({}) };
 }
 $$render_e1dcebf1;
-declare const __svn_component_default: import('svelte').Component<{ promise1?: any; promise2?: any; constant?: any; }, { promise1: any; promise2: any; constant: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ promise1?: any; promise2?: any; constant?: any; }> & { promise1: any; promise2: any; constant: any; };
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_e1dcebf1>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

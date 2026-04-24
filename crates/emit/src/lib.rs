@@ -167,8 +167,39 @@ pub fn emit_document(
     summary: &TemplateSummary,
     source_path: &Path,
 ) -> EmitOutput {
+    emit_document_with_lang(doc, fragment, summary, source_path, true)
+}
+
+/// Like [`emit_document`] but lets the caller pick whether the overlay
+/// is TypeScript (`is_ts = true` — `.svelte.svn.ts`, TS-strict
+/// inference) or JavaScript (`is_ts = false` — `.svelte.svn.js`,
+/// JS-loose inference under `checkJs:true + noImplicitAny:false`).
+///
+/// The CLI dispatches per-file based on the source's `<script lang=>`
+/// attribute, mirroring upstream svelte-check's `isTsSvelte(text)`
+/// dispatch in
+/// `language-tools/packages/svelte-check/src/incremental.ts:213`.
+/// Two effects flow from the choice:
+///   - TS-only syntax (`!:` definite-assign, `as any` casts, function
+///     generics, `declare const`, `interface`/`type` aliases) is
+///     replaced with the equivalent JSDoc form for JS overlays.
+///   - The `.svelte.svn.js` extension flips tsgo's per-file inference
+///     mode — `let x = $state([])` widens to `any[]` in JS, stays
+///     `never[]` in TS. Load-bearing for JSDoc-typed Props
+///     components that wrap a third-party default export (the
+///     CodeMirror integration pattern) and for any JSDoc-typed
+///     Props component,
+///     where tsgo natively reads `/** @typedef */` / `/** @type */`
+///     annotations only under `.js`.
+pub fn emit_document_with_lang(
+    doc: &Document<'_>,
+    fragment: &Fragment,
+    summary: &TemplateSummary,
+    source_path: &Path,
+    is_ts: bool,
+) -> EmitOutput {
     let render_name = render_function_name(source_path);
-    emit_document_with_render_name(doc, fragment, summary, render_name, source_path)
+    emit_document_with_render_name(doc, fragment, summary, render_name, source_path, is_ts)
 }
 
 fn emit_document_with_render_name(
@@ -177,7 +208,13 @@ fn emit_document_with_render_name(
     summary: &TemplateSummary,
     render_name: SmolStr,
     source_path: &Path,
+    is_ts: bool,
 ) -> EmitOutput {
+    // Set the thread-local so deep emit sites (bind:this casts,
+    // each-block `let i`, branch bindings, snippet params) can branch
+    // on TS-vs-JS overlay shape without threading `is_ts` through 9+
+    // function signatures. Reset on scope exit via `IsTsGuard`.
+    let _ts_guard = IsTsGuard::enter(is_ts);
     let estimated_capacity = doc.source.len().saturating_mul(2).saturating_add(256);
     let mut buf = EmitBuffer::with_capacity(estimated_capacity);
 
@@ -237,12 +274,49 @@ fn emit_document_with_render_name(
     // that reference body-locals via `typeof` stay body-scoped so
     // `keyof typeof X` resolves against the real declaration rather
     // than the lossy declare-const stub.
-    let props_info: PropsInfo =
+    let mut props_info: PropsInfo =
         if let (Some(s), Some(parsed)) = (doc.instance_script.as_ref(), parsed_instance.as_ref()) {
             PropsInfo::build(&parsed.program, s.content)
         } else {
             PropsInfo::default()
         };
+
+    // TS-source hard-mode synthesis: when the overlay is TS AND the
+    // source script is `<script lang="ts">` AND there's a `$props()`
+    // destructure AND PropsInfo found no other type source (no TS
+    // annotation / no $$Props / no export-let), synthesise a literal
+    // `{ k: T, k?: U, … }` from the destructure and inject it as the
+    // Props type source.
+    //
+    // Mirrors upstream svelte2tsx's `ExportedNames.handle$propsRune`
+    // lines 286-399: TS files fall through the JSDoc-comment path
+    // (`if (!this.isTsFile)` gate at line 240) and go straight to the
+    // "best-effort" synthesis from the destructure object pattern.
+    //
+    // Rationale for the lang-gate: if we mirrored upstream exactly for
+    // JS-source files too, we'd need to convert JSDoc `@typedef` Props
+    // into a TS type alias, which is a bigger fix. For the BlockEditor
+    // / SectionEditor-style `head` under-fire cluster — the
+    // real-diagnostic gap on the CMS-style bench — only
+    // TS-source components are load-bearing, so scope the change
+    // narrowly and expand later if needed.
+    // SvelteKit route files (+page.svelte / +layout.svelte) have their
+    // own synthesis path (`sveltekit::synthesize_route_props_type`) that
+    // injects `import('./$types.js').PageData` etc. onto the recognized
+    // `data` / `form` / `params` destructure keys. Skip the generic TS
+    // synthesis on those so the route-aware path wins.
+    let is_route_file = sveltekit::route_kind(source_path).is_some();
+    if is_ts
+        && !is_route_file
+        && doc.script_lang() == svn_parser::ScriptLang::Ts
+        && props_info.type_text.is_none()
+        && !props_info.destructures.is_empty()
+        && let Some(literal) = synthesise_js_props_typedef_body(&props_info)
+    {
+        props_info.type_text = Some(literal);
+        props_info.type_root_name = None;
+        props_info.source = svn_analyze::PropsSource::SynthesisedFromDestructure;
+    }
 
     // Three-trigger gate for event-type narrowing, matching upstream
     // svelte2tsx (`ComponentEvents.ts:84-86` + `ExportedNames.isRunesMode`).
@@ -255,7 +329,7 @@ fn emit_document_with_render_name(
     // for Svelte-4 components that happen to use
     // `createEventDispatcher<T>()` without opting into strict events —
     // narrowing those without opt-in produced 18 legitimate-but-new
-    // errors on control-svelte-4 in the reverted commit 3c24f18.
+    // errors on a Svelte-4 bench in the reverted commit 3c24f18.
     let narrow_events = has_strict_events(doc) || has_strict_events_attr(doc) || is_runes_mode(doc);
     // If the component doesn't already declare `$$Events` but opted in
     // via one of the other two triggers, pull the dispatcher's type
@@ -314,7 +388,7 @@ fn emit_document_with_render_name(
         )
     });
 
-    emit_hoisted_imports(&mut buf, split.as_ref(), doc);
+    emit_hoisted_imports(&mut buf, split.as_ref(), doc, is_ts);
 
     // `<script generics="T extends ...">` (extracted above) — expose
     // the type params as generics on the wrapping function so
@@ -324,6 +398,77 @@ fn emit_document_with_render_name(
     // The wrapper is `async` because Svelte 5 components are allowed to
     // use top-level `await` in their `<script>` body (TLA via Vite/SvelteKit
     // is supported); without `async` we'd report TS1308 for those.
+    // For JS overlays, synthesise `@typedef {...} $$ComponentProps`
+    // when the destructure has non-bindable keys that aren't in the
+    // user's `@typedef Props` block — upstream svelte2tsx's
+    // selector. Bindable-only extras (e.g. `element = $bindable()`)
+    // don't trigger synthesis; upstream treats them as part of the
+    // "real" props shape that Props may omit. When the user has
+    // no Props at all, synthesis fires unconditionally.
+    //
+    // Per-default-value type inference in
+    // `analyze::infer_default_type` mirrors upstream's
+    // `getTypeForDefault` (`= ''` → `string`, `= () => {}` →
+    // `Function`, `= {}` → `Record<string, any>`, `= null` → widen
+    // to `any`, …) so the synthesised typedef matches upstream's
+    // shape on the synth path.
+    let synthesised_js_props_typedef = if !is_ts {
+        let script = doc
+            .instance_script
+            .as_ref()
+            .map(|s| s.content)
+            .unwrap_or("");
+        if should_synthesise_js_props(&props_info, script) {
+            synthesise_js_props_typedef_body(&props_info)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(body) = synthesised_js_props_typedef.as_deref() {
+        // JSDoc `@typedef {<typespec>} Name` — body already includes
+        // the outer `{}` for object-literal types, so the JSDoc
+        // wrapping pair gives `{{...}}` in the final output.
+        buf.push_str("/** @typedef {");
+        buf.push_str(body);
+        buf.push_str("} $$ComponentProps */\n");
+    }
+
+    // TS overlay: wrap inline-literal Props types in a module-scope
+    // `type $$ComponentProps = …;` alias and swap the literal for the
+    // alias name in downstream emit. Two cases feed this path:
+    //
+    //   1. `PropsSource::SynthesisedFromDestructure` — the TS-source
+    //      hard-mode synthesis block above replaced `type_text` with
+    //      a literal from the destructure shape.
+    //   2. `PropsSource::RuneAnnotation` with a literal `{ … }`
+    //      annotation on the `$props()` destructure — e.g.
+    //      `let { site }: { site?: Site } = $props()`. Upstream
+    //      svelte2tsx aliases these too (see their emit for
+    //      SitePreview.svelte).
+    //
+    // Consumer error messages then reference `$$ComponentProps` as the
+    // target type rather than the inlined literal structure — matches
+    // upstream byte-for-byte on excess-prop errors.
+    let ty_is_literal = props_info
+        .type_text
+        .as_deref()
+        .is_some_and(|t| t.trim_start().starts_with('{'));
+    let should_alias = is_ts
+        && ty_is_literal
+        && matches!(
+            props_info.source,
+            svn_analyze::PropsSource::SynthesisedFromDestructure
+                | svn_analyze::PropsSource::RuneAnnotation
+                | svn_analyze::PropsSource::RuneGeneric
+        );
+    if should_alias && let Some(body) = props_info.type_text.as_deref() {
+        let _ = writeln!(buf, "type $$ComponentProps = {body};");
+        props_info.type_text = Some("$$ComponentProps".to_string());
+        props_info.type_root_name = Some(SmolStr::new("$$ComponentProps"));
+    }
+
     match &generics {
         Some(g) => {
             let _ = writeln!(buf, "async function {render_name}<{g}>() {{");
@@ -379,7 +524,19 @@ fn emit_document_with_render_name(
     //     compiler treats the identifier as initialized at runtime.
     for name in &store_refs {
         let base = name.strip_prefix('$').unwrap_or(name);
-        let _ = writeln!(buf, "    let {name}!: __SvnStoreValue<typeof {base}>;");
+        if is_ts {
+            let _ = writeln!(buf, "    let {name}!: __SvnStoreValue<typeof {base}>;");
+        } else {
+            // JS-overlay form — `!:` definite-assign is TS-only
+            // syntax, so initialise via a JSDoc-typed double-cast
+            // through `any` (matches the design fixture pattern in
+            // `design/js_overlay/fixture/src/04_store_unwrap.svelte.svn.js`).
+            let _ = writeln!(buf, "    /** @type {{__SvnStoreValue<typeof {base}>}} */");
+            let _ = writeln!(
+                buf,
+                "    let {name} = /** @type {{any}} */ (/** @type {{any}} */ (null));"
+            );
+        }
     }
 
     // SVELTE-4-COMPAT: `$$slots`, `$$props`, `$$restProps` ambients.
@@ -390,7 +547,7 @@ fn emit_document_with_render_name(
     // (script + template). Ambiguity risk: a literal `$$slots` inside
     // a string or comment would trigger the declaration, but that's
     // harmless — the `let` just goes unused in the overlay.
-    emit_svelte4_ambients(buf.raw_string_mut(), doc);
+    emit_svelte4_ambients(buf.raw_string_mut(), doc, is_ts);
 
     if let Some(s) = &split {
         if let Some(instance) = &doc.instance_script {
@@ -427,9 +584,14 @@ fn emit_document_with_render_name(
         &store_refs,
         &reactive_touched_names,
         parsed_instance.as_ref(),
+        source_path,
     );
 
-    emit_template_check_fn(&mut buf, doc, fragment, summary);
+    // Emit the template-check function for both TS and JS overlays.
+    // TS-only syntax sites inside (bind: casts, typed lets, each-block
+    // `i: number = 0`) are conditionalized on `is_ts` by the
+    // sub-emitters; JS overlays get JSDoc equivalents or plain lets.
+    emit_template_check_fn(&mut buf, doc, fragment, summary, is_ts);
 
     let exported_locals: Vec<SmolStr> = split
         .as_ref()
@@ -444,6 +606,7 @@ fn emit_document_with_render_name(
         &prop_names,
         &template_void_refs,
         &exported_locals,
+        is_ts,
     );
 
     emit_render_body_return(
@@ -453,11 +616,35 @@ fn emit_document_with_render_name(
         prop_type_source.as_deref(),
         synthesized_events_type.as_deref(),
         exports_object.as_deref(),
+        &props_info,
     );
 
     buf.push_str("}\n");
     let _ = writeln!(buf, "{render_name};");
 
+    // When the template forwards events from a sub-component via the
+    // bare `on:EVENT` bubble shorthand (no `={…}` value), upstream's
+    // `event-handler.ts` emits
+    // `__sveltets_2_bubbleEventDef(__sveltets_2_instanceOf(<Child>).$$events_def, '<event>')`
+    // for each bubble. The resulting events literal contains a circular
+    // `typeof import('./Child.svelte')` reference that defeats generic
+    // inference in `__sveltets_2_with_any_event`, collapsing Props to
+    // its `{}` default. The downstream `__sveltets_2_isomorphic_component`
+    // inherits that, and `__sveltets_2_ensureComponent(child)` returns
+    // a ctor with `props?: {}` — no TS2353/TS2322 on consumer calls.
+    //
+    // We mirror this by widening the default-export's Props type to
+    // `Record<string, any>` when the summary saw any bubble directive.
+    // Closes the TS2322 over-fires at component-instantiation
+    // sites that pass-through a parent's `page`/`page_slug` to a
+    // child that forwards events via `on:delete` / `on:create`
+    // (the recursive SitePages/Item pattern that surfaced the
+    // need for this widening).
+    let prop_type_effective: Option<String> = if summary.has_bubbled_component_event {
+        Some("Record<string, any>".to_string())
+    } else {
+        prop_type_source.clone()
+    };
     emit_default_export_declarations(
         &mut buf,
         doc,
@@ -465,9 +652,10 @@ fn emit_document_with_render_name(
         split.as_ref(),
         &render_name,
         generics.as_deref(),
-        prop_type_source.as_deref(),
+        prop_type_effective.as_deref(),
         exports_object.as_deref(),
         &template_type_refs,
+        is_ts,
     );
 
     // `.svelte` import specifiers are left unchanged. TS resolves
@@ -685,11 +873,12 @@ fn emit_template_check_fn(
     doc: &svn_parser::Document<'_>,
     fragment: &svn_parser::Fragment,
     summary: &svn_analyze::TemplateSummary,
+    is_ts: bool,
 ) {
     buf.push_str("    async function __svn_tpl_check() {\n");
     buf.push_str("        // template type-check body (incremental)\n");
-    emit_legacy_action_attrs(buf.raw_string_mut(), summary);
-    emit_bind_pair_declarations(buf.raw_string_mut(), summary);
+    emit_legacy_action_attrs(buf.raw_string_mut(), summary, is_ts);
+    emit_bind_pair_declarations(buf.raw_string_mut(), summary, is_ts);
     // Index component instantiations by source byte offset so the
     // template walker can emit each prop-check inline at the component
     // node's position — i.e. inside the enclosing `{#each}` / `{#if}`
@@ -737,6 +926,7 @@ fn apply_script_body_rewrites<'alloc>(
     store_refs: &[SmolStr],
     reactive_touched_names: &[SmolStr],
     parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
+    source_path: &Path,
 ) {
     let mut def_assign_names: Vec<SmolStr> = summary
         .bind_this_targets
@@ -782,10 +972,25 @@ fn apply_script_body_rewrites<'alloc>(
             }
         }
     }
-    if let Some(s) = split {
-        widen_untyped_exported_props_in_place(buf.raw_string_mut(), &s.exported_locals);
+    let route_kind = sveltekit::route_kind(source_path);
+    if emit_is_ts() {
+        if let Some(s) = split {
+            widen_untyped_exported_props_in_place(
+                buf.raw_string_mut(),
+                &s.exported_locals,
+                route_kind,
+            );
+        }
+        rewrite_definite_assignment_in_place(buf.raw_string_mut(), &def_assign_names);
+    } else {
+        // JS overlay: a single inline-initializer rewrite replaces
+        // both TS-mode passes. `let NAME;` → `let NAME = /** @type
+        // {any} */ (null);` carries both the type-widen (no TS7034/7005)
+        // and definite-assign (no TS2454) semantics in a JSDoc-only
+        // form — tsgo parses it cleanly under `.svelte.svn.js` without
+        // firing TS8010.
+        widen_untyped_exports_jsdoc_in_place(buf.raw_string_mut(), &def_assign_names, route_kind);
     }
-    rewrite_definite_assignment_in_place(buf.raw_string_mut(), &def_assign_names);
     // SVELTE-4-COMPAT de-narrow: typed exported props with literal
     // initializers (`export let size: Size = 'medium'`) AND body-local
     // `let X: T = lit;` both narrow to the literal; inserting
@@ -851,6 +1056,254 @@ fn build_exports_object(split: Option<&script_split::SplitScript>) -> Option<Str
 /// `events_field` expands to `$$Events` when user-declared or
 /// synthesised under the three-trigger gate; otherwise stays `{}` to
 /// preserve lax event handling.
+/// Scan a JS script for a JSDoc `@typedef {Object} Name` block and
+/// return the type name. Prefers a typedef named "Props" when
+/// multiple are present — the Svelte-4 / JS-Svelte convention that
+/// `/** @type {Props} */ let {...} = $props()` reads from. Falls back
+/// to the first typedef when no "Props" is present.
+///
+/// Cheap substring-based match — avoids the full JSDoc parser. The
+/// `@typedef` tag is distinctive enough that false positives (e.g.
+/// a documented string literal) are vanishingly rare.
+fn scan_jsdoc_typedef_name(script: &str) -> Option<String> {
+    let mut first: Option<String> = None;
+    let mut rest = script;
+    while let Some(pos) = rest.find("@typedef") {
+        let after = &rest[pos + "@typedef".len()..];
+        // Skip optional `{Object}` / `{T}` type-spec block.
+        let after = after.trim_start();
+        let after = if let Some(stripped) = after.strip_prefix('{') {
+            let mut depth = 1u32;
+            let mut end = 0usize;
+            for (i, c) in stripped.char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            &stripped[end..]
+        } else {
+            after
+        };
+        let after = after.trim_start();
+        // Extract the identifier that follows.
+        let name: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '$')
+            .collect();
+        if !name.is_empty() && !name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            if name == "Props" {
+                return Some(name);
+            }
+            if first.is_none() {
+                first = Some(name);
+            }
+        }
+        rest = &rest[pos + "@typedef".len()..];
+    }
+    first
+}
+
+/// Extract the `@property` key names from the user's
+/// `@typedef {Object} Props` (or `Props<...>`) block. Used by the
+/// synth-vs-use-Props heuristic in `emit_render` and
+/// `emit_render_body_return` — when the destructure has non-bindable
+/// keys NOT declared in Props, upstream synthesises
+/// `$$ComponentProps`; otherwise it keeps the user's Props typedef.
+///
+/// Returns:
+///   - `Some(keys)` when a Props typedef block was found (possibly
+///     empty if there are no `@property` lines).
+///   - `None` when no Props typedef is present.
+///
+/// Heuristic-only parser — no full JSDoc AST. Walks the block
+/// between the `@typedef` start and the next `*/`, collecting the
+/// identifier that follows each `@property {...}` (skipping the
+/// type-spec inside balanced `{...}` and the optional `[` for
+/// optional markers).
+fn scan_jsdoc_props_typedef_keys(script: &str) -> Option<Vec<String>> {
+    // Locate the Props typedef block.
+    let mut rest = script;
+    let mut block_start: Option<usize> = None;
+    let mut block_end: usize = 0;
+    let mut consumed: usize = 0;
+    while let Some(pos) = rest.find("@typedef") {
+        let abs = consumed + pos;
+        let after = &rest[pos + "@typedef".len()..];
+        let after = after.trim_start();
+        let after = if let Some(stripped) = after.strip_prefix('{') {
+            let mut depth = 1u32;
+            let mut end = 0usize;
+            for (i, c) in stripped.char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            &stripped[end..]
+        } else {
+            after
+        };
+        let after = after.trim_start();
+        let name: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '$')
+            .collect();
+        if name == "Props" {
+            block_start = Some(abs);
+            block_end = script[abs..]
+                .find("*/")
+                .map(|e| abs + e)
+                .unwrap_or(script.len());
+            break;
+        }
+        consumed = abs + "@typedef".len();
+        rest = &script[consumed..];
+    }
+    let start = block_start?;
+    let block = &script[start..block_end];
+    // Walk `@property {<typespec>} [name]` (or `name`) entries.
+    let mut keys: Vec<String> = Vec::new();
+    let mut cursor = block;
+    while let Some(p) = cursor.find("@property") {
+        cursor = &cursor[p + "@property".len()..];
+        let trimmed = cursor.trim_start();
+        let after_type = if let Some(stripped) = trimmed.strip_prefix('{') {
+            let mut depth = 1i32;
+            let mut end = 0usize;
+            for (i, c) in stripped.char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            &stripped[end..]
+        } else {
+            trimmed
+        };
+        let after_type = after_type.trim_start();
+        let rest_name = after_type.strip_prefix('[').unwrap_or(after_type);
+        let name: String = rest_name
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '$')
+            .collect();
+        if !name.is_empty() {
+            keys.push(name);
+        }
+        cursor = after_type;
+    }
+    Some(keys)
+}
+
+/// Decide whether to synthesise `$$ComponentProps` for a JS overlay
+/// vs keep the user's Props typedef. Currently: synthesise only when
+/// the user has no Props at all.
+///
+/// Tried matching upstream's "synth when destructure introduces
+/// non-bindable keys not in Props" heuristic — empirically regresses
+/// because user Props (when present) is a stricter type than our
+/// `any`-laden synthesis can reproduce. CodeMirror's
+/// `<CodeMirror completions={...}>` fires TS2353 against `Props`
+/// (Props lacks `completions`); under the divergence heuristic we
+/// synthesised `$$ComponentProps` WITH `completions` (because it's
+/// in the destructure) and silently accepted the call.
+///
+/// `is_bindable` and `scan_jsdoc_props_typedef_keys` are kept for a
+/// future pass that combines user-Props per-key types with
+/// destructure-derived shape.
+fn should_synthesise_js_props(props_info: &svn_analyze::PropsInfo, script: &str) -> bool {
+    if props_info.destructures.is_empty() {
+        return false;
+    }
+    // Synthesise only when no user Props typedef exists.
+    scan_jsdoc_props_typedef_keys(script).is_none()
+}
+
+/// Build the body of a JSDoc `@typedef <body> $$ComponentProps` from a
+/// `$props()` destructure. Returns `Some("{name: any, opt?: string}")`
+/// (a complete object-type typespec including the outer `{}`) when
+/// there's at least one non-rest entry; `None` when the destructure
+/// list is empty (caller falls back to `any`).
+///
+/// Each entry maps to:
+///   - `key: any` for required (no default, not $bindable, not rest)
+///   - `key?: <inferred>` for optional, where `<inferred>` is the
+///     literal-type derived from the default expression (string for
+///     `= ''`, `Function` for `= () => {}`, `Record<string, any>`
+///     for `= {}`, etc.); falls back to `any` for unrecognised
+///     default expressions.
+///   - `[key: string]: any` for `...rest` (loosens the typedef so
+///     extra props at consumers don't trigger excess-prop errors)
+///
+/// Mirrors upstream svelte2tsx's `getTypeForDefault` so consumers'
+/// callback / scalar mismatches surface the same TS2322 / TS2353
+/// diagnostics. See `infer_default_type` in `crates/analyze/src/props.rs`.
+fn synthesise_js_props_typedef_body(props_info: &svn_analyze::PropsInfo) -> Option<String> {
+    use std::fmt::Write;
+    if props_info.destructures.is_empty() {
+        return None;
+    }
+    let mut body = String::from("{");
+    let mut first = true;
+    let mut emitted_index_signature = false;
+    for entry in &props_info.destructures {
+        if entry.is_rest {
+            // `...rest` — widen the type with an index signature so any
+            // remaining prop the parent passes is accepted. Only one
+            // index signature is allowed per type literal.
+            if !emitted_index_signature {
+                if !first {
+                    body.push_str(", ");
+                }
+                body.push_str("[key: string]: any");
+                emitted_index_signature = true;
+                first = false;
+            }
+            continue;
+        }
+        let key = entry.prop_key.as_str();
+        if !first {
+            body.push_str(", ");
+        }
+        first = false;
+        let key_text = if is_simple_js_identifier(key) {
+            key.to_string()
+        } else {
+            format!("\"{}\"", key.replace('"', "\\\""))
+        };
+        let optional = if entry.has_default { "?" } else { "" };
+        let value_type = entry
+            .default_type_text
+            .as_deref()
+            .filter(|_| entry.has_default)
+            .unwrap_or("any");
+        let _ = write!(body, "{key_text}{optional}: {value_type}");
+    }
+    body.push('}');
+    Some(body)
+}
+
 fn emit_render_body_return(
     buf: &mut EmitBuffer,
     doc: &svn_parser::Document<'_>,
@@ -858,22 +1311,136 @@ fn emit_render_body_return(
     prop_type_source: Option<&str>,
     synthesized_events_type: Option<&str>,
     exports_object: Option<&str>,
+    props_info: &svn_analyze::PropsInfo,
 ) {
-    if generics.is_none() {
+    // JS overlay: always emit a return so the default-export's
+    // `Awaited<ReturnType<typeof $$render>>['props']` extraction
+    // resolves to a real Props type. When the script has a
+    // `/** @typedef {Object} Props */` block and
+    // `/** @type {Props} */ let {...} = $props()`, PropsInfo captures
+    // the root name ("Props"), and we reference it here via
+    // `/** @type {Props} */({})`. Without a Props name, fall back to
+    // `any` (degrades to no excess-prop check, but no regression).
+    //
+    // `Props` is a function-local JSDoc typedef in the user's script;
+    // referencing it inside $$render's return resolves because the
+    // return expression is in the same lexical scope. The module-level
+    // typedef at the default-export site uses `Awaited<ReturnType<...>>`
+    // to pull the type out (JSDoc typedefs don't leak across function
+    // boundaries).
+    if !emit_is_ts() {
+        // Prefer a TS-annotated Props name if PropsInfo captured one,
+        // else fall back to scanning the instance script for a JSDoc
+        // `@typedef {Object} <Name>` declaration — the standard
+        // Svelte-4/JS-Svelte props shape.
+        let name_from_ts = prop_type_source.and_then(|ty| {
+            let root = ty.trim();
+            if !root.is_empty()
+                && root
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+                && !root.chars().next().is_some_and(|c| c.is_ascii_digit())
+            {
+                Some(root.to_string())
+            } else {
+                None
+            }
+        });
+        let name_from_jsdoc = doc
+            .instance_script
+            .as_ref()
+            .and_then(|s| scan_jsdoc_typedef_name(s.content));
+        // Svelte-4 `export let` synthesis: PropsInfo captures a
+        // literal `{k: T, …}` type_text (PropsSource::SynthesisedFromExports)
+        // that doesn't match the named-type predicate above. Embed the
+        // literal body directly as the JSDoc `@type` so the default
+        // export's `Awaited<ReturnType<…>>['props']` resolves to the
+        // typed shape (e.g. `{b: any}`) — restoring the required-prop
+        // signal that powers TS2741 on consumers.
+        let literal_from_exports = prop_type_source
+            .filter(|_| {
+                matches!(
+                    props_info.source,
+                    svn_analyze::PropsSource::SynthesisedFromExports
+                )
+            })
+            .map(|ty| ty.trim().to_string());
+        // Selection precedence — mirrors the synthesis decision in
+        // emit_render (must match or `$$ComponentProps` won't be in
+        // scope for this cast):
+        //   1. Synthesised `$$ComponentProps` — fires when the
+        //      destructure introduces non-bindable keys not in
+        //      user Props (or when there's no user Props at all).
+        //      See `should_synthesise_js_props`.
+        //   2. TS-annotated Props name (`/** @type {Props} */ let {...} = $props()`).
+        //   3. User-declared `@typedef {Object} <Name>` block.
+        //   4. Svelte-4 `export let` literal shape from PropsInfo.
+        //   5. `any` cast — when no Props source exists at all.
+        let script = doc
+            .instance_script
+            .as_ref()
+            .map(|s| s.content)
+            .unwrap_or("");
+        let synthesised_name = if should_synthesise_js_props(props_info, script) {
+            synthesise_js_props_typedef_body(props_info).map(|_| "$$ComponentProps".to_string())
+        } else {
+            None
+        };
+        let props_expr = match synthesised_name
+            .or(name_from_ts)
+            .or(name_from_jsdoc)
+            .or(literal_from_exports)
+        {
+            Some(body) => format!("/** @type {{{body}}} */({{}})"),
+            None => "/** @type {any} */({})".to_string(),
+        };
+        let _ = writeln!(buf, "    return {{ props: {props_expr} }};");
         return;
     }
-    let Some(ty) = prop_type_source else {
-        return;
-    };
+    // TS overlay path. Emit a structured return `{ props, events,
+    // slots, exports, bindings }` whose field types drive the default
+    // export's `Awaited<ReturnType<typeof $$render>>['props']`
+    // extraction at module scope — matches upstream's
+    // `__sveltets_2_isomorphic_component($$render())` pattern.
+    //
+    // Props field source priority:
+    //   1. User-declared Props type (`interface $$Props`, `: Props`
+    //      annotation on destructure, etc.) — always used when present.
+    //   2. For Svelte-4 `export let`, `exports_object` doubles as the
+    //      Props shape (every exported local is a prop) — use it
+    //      when no user Props type is available.
+    //   3. Fall back to `Record<string, any>` when nothing else is
+    //      known.
     let exports_field = exports_object.unwrap_or("{}");
     let events_field: &str = if has_strict_events(doc) || synthesized_events_type.is_some() {
         "$$Events"
     } else {
         "{}"
     };
+    // With-generics branch preserves the original behaviour for
+    // class-wrapper emission: the caller already synthesised the
+    // props-ref via the render class, so we emit the typed literal
+    // exactly as before to keep the shape stable.
+    if generics.is_some() {
+        let Some(ty) = prop_type_source else {
+            return;
+        };
+        let _ = writeln!(
+            buf,
+            "    return {{ props: undefined as any as ({ty}), events: undefined as any as {events_field}, slots: undefined as any as {{}}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
+        );
+        return;
+    }
+    // No generics. Pick the Props source per priority above.
+    let props_ty: String = match prop_type_source {
+        Some(ty) => ty.to_string(),
+        None => exports_object
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "Record<string, any>".to_string()),
+    };
     let _ = writeln!(
         buf,
-        "    return {{ props: undefined as any as ({ty}), events: undefined as any as {events_field}, slots: undefined as any as {{}}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
+        "    return {{ props: undefined as any as ({props_ty}), events: undefined as any as {events_field}, slots: undefined as any as {{}}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
     );
 }
 
@@ -894,14 +1461,31 @@ fn emit_hoisted_imports(
     buf: &mut EmitBuffer,
     split: Option<&script_split::SplitScript>,
     doc: &svn_parser::Document<'_>,
+    is_ts: bool,
 ) {
     let Some(s) = split else { return };
     if s.hoisted.is_empty() {
         return;
     }
+    // For JS overlays, drop the synthetic `declare const X: { [key:
+    // string]: any } & ((...args: any[]) => any);` stub prelude —
+    // `declare const` is TS-only syntax that tsgo refuses to parse in
+    // a `.js` file (TS8009/TS8010), and even one such error aborts
+    // the whole-program type-check (Types: 340 / Instantiations: 0
+    // signal). The stubs exist to keep `typeof X` usable in hoisted
+    // Props types, which JS overlays don't carry anyway (Props is
+    // expressed via JSDoc @typedef, not a real type alias).
+    //
+    // TS overlays keep the stubs; JS overlays slice them off. Line
+    // map entries cover ONLY the user-import region in both modes —
+    // stubs don't map to any source line.
     if let Some(instance) = &doc.instance_script {
-        let stub_line_count = count_lines(&s.hoisted[..s.stub_prefix_len.min(s.hoisted.len())]);
-        let mut overlay_cursor = current_line(buf.as_str()) + stub_line_count;
+        let stub_line_count_ts = count_lines(&s.hoisted[..s.stub_prefix_len.min(s.hoisted.len())]);
+        // Overlay cursor starts AFTER the stub block in TS mode (those
+        // lines are emitted but not mapped), and at the current line
+        // in JS mode (no stubs emitted).
+        let mut overlay_cursor =
+            current_line(buf.as_str()) + if is_ts { stub_line_count_ts } else { 0 };
         let bytes = s.hoisted.as_bytes();
         let mut byte = s.stub_prefix_len.min(bytes.len());
         for &source_offset in &s.hoisted_byte_offsets {
@@ -954,7 +1538,16 @@ fn emit_hoisted_imports(
             }
         }
     }
-    buf.push_str(&s.hoisted);
+    if is_ts {
+        buf.push_str(&s.hoisted);
+    } else {
+        let user_imports = &s.hoisted[s.stub_prefix_len.min(s.hoisted.len())..];
+        buf.push_str(user_imports);
+        if !user_imports.ends_with('\n') {
+            buf.push_str("\n");
+        }
+        return;
+    }
     if !s.hoisted.ends_with('\n') {
         buf.push_str("\n");
     }
@@ -993,7 +1586,60 @@ fn emit_default_export_declarations(
     prop_type_source: Option<&str>,
     exports_object: Option<&str>,
     template_type_refs: &[SmolStr],
+    is_ts: bool,
 ) {
+    if !is_ts {
+        // JS-overlay default-export shape. Captures Props via
+        // `Awaited<ReturnType<typeof $$render>>['props']` so consumer
+        // overlays see real per-element prop types (e.g. the user's
+        // local `@typedef {Object} Props` JSDoc) — not the previous
+        // loose `Record<string, any>` which let every excess prop
+        // silently pass. Closes ~40 TS2353 under-fire sites on a
+        // real-world CMS bench (FieldItem / sidebar components
+        // passing `placement="bottom-end"` etc. to children that
+        // don't declare that prop).
+        //
+        // The $$render function was modified earlier to `return {
+        // props: /** @type {PropsName} */({}) }` when PropsInfo
+        // provided a root name; otherwise it returns an empty object
+        // literal and the extracted type falls back to `{}` which
+        // degrades gracefully (no excess-prop check but no regression).
+        //
+        // TS-only machinery below (`interface`, `declare class`, type
+        // intersections) is skipped for JS overlays since those parse
+        // errors abort tsgo's whole-program check. See
+        // design/js_overlay/fixture/src/03_default_export.svelte.svn.js
+        // for the vetted shape.
+        // `| null` in the const's type would cause downstream
+        // `__svn_ensure_component(C)` calls to skip the strict
+        // `Component<P>` overload and fall through to the
+        // `unknown → props?: any` overload — masking excess-prop
+        // checks at every consumer. Use a double-cast so the const's
+        // TYPE is `Component<Props>` (matches the strict overload)
+        // while its runtime VALUE is `null` (no actual runtime needed
+        // in a .d.ts-esque overlay).
+        let _ = writeln!(
+            buf,
+            "/**\n * @typedef {{Awaited<ReturnType<typeof {render_name}>>['props']}} __SvnDefaultProps\n */"
+        );
+        let _ = writeln!(
+            buf,
+            "/** @type {{import('svelte').Component<__SvnDefaultProps>}} */"
+        );
+        let _ = writeln!(
+            buf,
+            "const __svn_component_default = /** @type {{any}} */ (null);"
+        );
+        buf.push_str("export default __svn_component_default;\n");
+        let _ = template_type_refs;
+        let _ = doc;
+        let _ = fragment;
+        let _ = split;
+        let _ = generics;
+        let _ = prop_type_source;
+        let _ = exports_object;
+        return;
+    }
     let use_class_wrapper = generics.is_some() && prop_type_source.is_some();
     let exports_clause = exports_object
         .map(|e| format!(" & {e}"))
@@ -1065,7 +1711,14 @@ fn emit_default_export_declarations(
     // from './types'`).
     let module_script_text = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
     let prop_ty_module_visible = prop_ty_root_name.as_deref().is_some_and(|n| {
-        split.is_some_and(|s| s.hoisted_type_names.contains(n))
+        // `$$ComponentProps` is the reserved name for our TS-source
+        // hard-mode synthesis (see `PropsSource::SynthesisedFromDestructure`
+        // in `emit_document_with_render_name`). When the name appears as
+        // the Props root, the corresponding `type $$ComponentProps = …;`
+        // alias was already emitted at module scope by the same pass —
+        // so treat it as module-visible without a hoisted-types lookup.
+        n == "$$ComponentProps"
+            || split.is_some_and(|s| s.hoisted_type_names.contains(n))
             || module_script_declares_type(module_script_text, n)
             || split.is_some_and(|s| imports_name(&s.hoisted, n))
     });
@@ -1310,8 +1963,27 @@ fn emit_default_export_declarations(
             );
         }
         _ => {
-            let widen = widen_for("Record<string, any>");
-            let props = wrap_props(format!("Record<string, any>{widen}"));
+            // TS-overlay no-generics fallback. Source the Props shape
+            // from the render function's return via
+            // `Awaited<ReturnType<typeof $$render>>['props']` —
+            // matches upstream's `__sveltets_2_isomorphic_component(
+            // $$render())` pattern and keeps parity with our JS
+            // overlay path. The render body's return was already
+            // wired to emit a typed `props` field (sourcing from
+            // user Props type → exports_object → Record<string, any>
+            // in that priority order).
+            //
+            // Without this, the Props slot would fall back to
+            // `Record<string, any>`, which loses contextual typing
+            // on consumer arrow callbacks (e.g. `onclick={(e) => …}`
+            // fires TS7006 because the loose record never pinned
+            // `e`'s type).
+            let props_ref = format!(
+                "Awaited<ReturnType<typeof {render_name}>>['props']",
+                render_name = render_name
+            );
+            let widen = widen_for(&props_ref);
+            let props = wrap_props(format!("{props_ref}{widen}"));
             let _ = writeln!(
                 buf,
                 "declare const __svn_component_default: import('svelte').Component<{props}{component_exports_arg}>{typed_events_intersection};"
@@ -1641,8 +2313,13 @@ fn emit_template_body(
     let indent = "    ".repeat(depth);
     let inner = "    ".repeat(depth + 1);
     let _ = writeln!(buf, "{indent}{{");
+    let is_ts = emit_is_ts();
     for s in &snippets {
-        let _ = writeln!(buf, "{inner}const {}: any = undefined;", s.name);
+        if is_ts {
+            let _ = writeln!(buf, "{inner}const {}: any = undefined;", s.name);
+        } else {
+            let _ = writeln!(buf, "{inner}const {} = undefined;", s.name);
+        }
         let _ = writeln!(buf, "{inner}void {};", s.name);
     }
     for node in &fragment.nodes {
@@ -1802,16 +2479,19 @@ fn emit_template_node(
                 emit_template_body(buf, source, p, depth, insts, action_counter);
             }
             if let Some(t) = &b.then_branch {
-                // `{:then v}` binds `v` to the resolved value for the
-                // duration of the then-branch body. Declare each
-                // identifier the context pattern destructures so
-                // references inside the branch (component-prop checks,
-                // each-blocks iterating over `v`, etc.) resolve. Walk
-                // the body inside a fresh lexical scope so the binding
-                // doesn't leak to sibling branches.
-                emit_branch_with_binding(
+                // `{:then v}` — upstream svelte2tsx emits
+                //   `const $$_value = await (PROMISE); { const v = $$_value; ... }`
+                // so `v` is typed as the resolved promise value (e.g.
+                // `Promise<T[] | undefined>` → `v: T[] | undefined`).
+                // Without the `await` binding, naive `const v: any = …`
+                // loses downstream narrowing — descendants like
+                // `{#each v as d}` read `d` as `any`, letting bugs
+                // like `vizColorsCssVarMap[d.color]` pass without a
+                // TS7053 when upstream tsgo is silent.
+                emit_await_then_branch(
                     buf,
                     source,
+                    b.expression_range,
                     t.context_range.as_ref(),
                     &t.body,
                     depth,
@@ -1820,6 +2500,9 @@ fn emit_template_node(
                 );
             }
             if let Some(c) = &b.catch_branch {
+                // `{:catch e}` — upstream types `e` as `any` (errors
+                // don't carry shape info in JS). Keep the existing
+                // `const e: any = undefined;` pattern.
                 emit_branch_with_binding(
                     buf,
                     source,
@@ -1834,24 +2517,78 @@ fn emit_template_node(
         Node::KeyBlock(b) => emit_template_body(buf, source, &b.body, depth, insts, action_counter),
         Node::SnippetBlock(b) => emit_snippet_block(buf, source, b, depth, insts, action_counter),
         Node::Element(e) => {
-            emit_element_bind_checks_inline(buf, source, e.name.as_str(), &e.attributes, depth);
-            emit_use_directives_inline(
+            // `<slot>` is the Svelte-4 named-slot mechanism — its attrs are
+            // slot props passed to the consumer via `let:propName`, NOT
+            // HTML attributes. Upstream svelte2tsx emits these via
+            // `__sveltets_createSlot("name", {...})` against the
+            // synthesized component slot type; we don't model that yet,
+            // so skip the createElement emit entirely (which would
+            // otherwise fire TS2353 for every slot prop against the real
+            // HTMLSlotElement attribute shape).
+            let dom_emit = dom_element_emit_enabled() && e.name.as_str() != "slot";
+            let inner_depth = if dom_emit { depth + 1 } else { depth };
+            // Action declarations emitted BEFORE createElement so the
+            // 3-arg overload can reference them in its second arg. See
+            // emit_dom_action_decls / emit_dom_element_open.
+            let action_indices = if dom_emit {
+                emit_dom_action_decls(
+                    buf,
+                    source,
+                    e.name.as_str(),
+                    &e.attributes,
+                    inner_depth,
+                    action_counter,
+                )
+            } else {
+                let first = *action_counter;
+                first..first
+            };
+            if dom_emit {
+                emit_dom_element_open(
+                    buf,
+                    source,
+                    e.name.as_str(),
+                    true,
+                    &e.attributes,
+                    depth,
+                    &action_indices,
+                );
+                emit_dom_directive_checks(buf, source, &e.attributes, inner_depth);
+            }
+            emit_element_bind_checks_inline(
                 buf,
                 source,
                 e.name.as_str(),
                 &e.attributes,
-                depth,
-                action_counter,
+                inner_depth,
             );
+            if dom_emit {
+                emit_dom_action_void_refs(buf, &action_indices, inner_depth);
+            } else {
+                // Emit action decls + void refs in a non-dom-emit path
+                // (retains pre-Phase-2 behavior when the feature was
+                // gated off).
+                emit_use_directives_inline_legacy(
+                    buf,
+                    source,
+                    e.name.as_str(),
+                    &e.attributes,
+                    inner_depth,
+                    action_counter,
+                );
+            }
             emit_children_with_let_bindings(
                 buf,
                 source,
                 &e.attributes,
                 &e.children,
-                depth,
+                inner_depth,
                 insts,
                 action_counter,
             );
+            if dom_emit {
+                emit_dom_element_close(buf, depth);
+            }
         }
         Node::Component(c) => emit_component_node(buf, source, c, depth, insts, action_counter),
         Node::SvelteElement(s) => {
@@ -1859,17 +2596,43 @@ fn emit_template_node(
             // to `HTMLElement` for bind:this and skip bind:value
             // dispatch (empty tag_name → resolve_bind_value_type
             // returns None).
-            emit_element_bind_checks_inline(buf, source, "", &s.attributes, depth);
-            emit_use_directives_inline(buf, source, "", &s.attributes, depth, action_counter);
+            let dom_emit = dom_element_emit_enabled();
+            let inner_depth = if dom_emit { depth + 1 } else { depth };
+            let action_indices = if dom_emit {
+                emit_dom_action_decls(buf, source, "", &s.attributes, inner_depth, action_counter)
+            } else {
+                let first = *action_counter;
+                first..first
+            };
+            if dom_emit {
+                emit_svelte_element_open(buf, source, s, depth, &action_indices);
+                emit_dom_directive_checks(buf, source, &s.attributes, inner_depth);
+            }
+            emit_element_bind_checks_inline(buf, source, "", &s.attributes, inner_depth);
+            if dom_emit {
+                emit_dom_action_void_refs(buf, &action_indices, inner_depth);
+            } else {
+                emit_use_directives_inline_legacy(
+                    buf,
+                    source,
+                    "",
+                    &s.attributes,
+                    inner_depth,
+                    action_counter,
+                );
+            }
             emit_children_with_let_bindings(
                 buf,
                 source,
                 &s.attributes,
                 &s.children,
-                depth,
+                inner_depth,
                 insts,
                 action_counter,
             );
+            if dom_emit {
+                emit_dom_element_close(buf, depth);
+            }
         }
         Node::Interpolation(i) => emit_interpolation(buf, source, i, depth),
         Node::Text(_) | Node::Comment(_) => {}
@@ -2530,10 +3293,23 @@ fn emit_each_block(
     action_counter: &mut usize,
 ) {
     let indent = "    ".repeat(depth);
-    let expr_text = source
+    let raw_expr = source
         .get(b.expression_range.start as usize..b.expression_range.end as usize)
-        .unwrap_or("undefined")
-        .trim();
+        .unwrap_or("undefined");
+    let expr_text = raw_expr.trim();
+    // Trimmed-slice source range so tsgo diagnostics fired anywhere
+    // inside the expression (e.g. TS18048 on `.sort((a, b) => …)`
+    // callback params) map back to their actual user-source byte
+    // positions via the token map. Without this, callback-param
+    // diagnostics fall in a synthesized region (the `__svn_each_items(...)`
+    // wrapper span) and `map_diagnostic` drops them.
+    let expr_source_range: Option<svn_core::Range> = if expr_text.is_empty() {
+        None
+    } else {
+        let leading_ws = (raw_expr.len() - raw_expr.trim_start().len()) as u32;
+        let start = b.expression_range.start + leading_ws;
+        Some(svn_core::Range::new(start, start + expr_text.len() as u32))
+    };
     let binding_text = match &b.as_clause {
         Some(c) => source
             .get(c.context_range.start as usize..c.context_range.end as usize)
@@ -2552,12 +3328,21 @@ fn emit_each_block(
         .as_ref()
         .and_then(|c| c.index_range)
         .and_then(|r| source.get(r.start as usize..r.end as usize));
-    let _ = writeln!(
+    let _ = write!(
         buf,
-        "{indent}for (const {binding_text} of __svn_each_items({expr_text})) {{"
+        "{indent}for (const {binding_text} of __svn_each_items("
     );
+    match expr_source_range {
+        Some(r) => buf.append_with_source(expr_text, r),
+        None => buf.push_str(expr_text),
+    }
+    let _ = writeln!(buf, ")) {{");
     if let Some(ix) = index_binding {
-        let _ = writeln!(buf, "{indent}    const {ix}: number = 0;");
+        if emit_is_ts() {
+            let _ = writeln!(buf, "{indent}    const {ix}: number = 0;");
+        } else {
+            let _ = writeln!(buf, "{indent}    /** @type {{number}} */ const {ix} = 0;");
+        }
     }
     emit_template_body(buf, source, &b.body, depth + 1, insts, action_counter);
     // Void every identifier that the binding pattern destructures, not
@@ -2609,14 +3394,90 @@ fn emit_branch_with_binding(
     let idents = all_identifiers(binding_text);
     let indent = "    ".repeat(depth);
     let _ = writeln!(buf, "{indent}{{");
+    let is_ts = emit_is_ts();
     for ident in &idents {
-        let _ = writeln!(buf, "{indent}    const {ident}: any = undefined;");
+        if is_ts {
+            let _ = writeln!(buf, "{indent}    const {ident}: any = undefined;");
+        } else {
+            let _ = writeln!(buf, "{indent}    const {ident} = undefined;");
+        }
     }
     emit_template_body(buf, source, body, depth + 1, insts, action_counter);
     for ident in &idents {
         let _ = writeln!(buf, "{indent}    void {ident};");
     }
     let _ = writeln!(buf, "{indent}}}");
+}
+
+/// Emit `{:then v}` branch with upstream's await-binding shape:
+///     ;async () => {
+///         const $$_await = await (PROMISE_EXPR);
+///         { const v = $$_await; ...body... }
+///     };
+/// so `v`'s type flows from the promise's resolved value (upstream
+/// svelte2tsx behavior — see htmlxtojsx_v2/nodes/AwaitPendingCatchBlock.ts).
+/// The outer `async () => {}` is a bare expression-statement — never
+/// called, just provides the async context TS's `await` requires.
+/// Necessary because `{#await}` can nest inside a sync snippet
+/// callback (`children: () => {…}`), where bare `await` fires TS1375.
+/// For `{:then {a, b, c}}` destructure patterns the binding text is
+/// emitted verbatim as the destructure target.
+#[allow(clippy::too_many_arguments)]
+fn emit_await_then_branch(
+    buf: &mut EmitBuffer,
+    source: &str,
+    promise_range: svn_core::Range,
+    context_range: Option<&svn_core::Range>,
+    body: &Fragment,
+    depth: usize,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
+) {
+    let promise_text = source
+        .get(promise_range.start as usize..promise_range.end as usize)
+        .unwrap_or("")
+        .trim();
+    if promise_text.is_empty() {
+        emit_branch_with_binding(
+            buf,
+            source,
+            context_range,
+            body,
+            depth,
+            insts,
+            action_counter,
+        );
+        return;
+    }
+    let indent = "    ".repeat(depth);
+    let inner = "    ".repeat(depth + 1);
+    let binding_text = context_range
+        .and_then(|r| source.get(r.start as usize..r.end as usize))
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let _ = writeln!(buf, "{indent};(async () => {{");
+    match binding_text {
+        Some(bind) => {
+            let idents = all_identifiers(bind);
+            let _ = writeln!(
+                buf,
+                "{inner}const $$_await = await ({promise_text}); const {bind} = $$_await;"
+            );
+            emit_template_body(buf, source, body, depth + 1, insts, action_counter);
+            for ident in &idents {
+                let _ = writeln!(buf, "{inner}void {ident};");
+            }
+        }
+        None => {
+            let _ = writeln!(
+                buf,
+                "{inner}const $$_await = await ({promise_text}); void $$_await;"
+            );
+            emit_template_body(buf, source, body, depth + 1, insts, action_counter);
+        }
+    }
+    let _ = writeln!(buf, "{indent}}});");
 }
 
 /// Emit a lexical-scope block wrapping a `{#snippet name(params)}` body
@@ -2729,7 +3590,7 @@ fn emit_snippet_block(
 /// bound identifiers referenced inside the params expression
 /// (`{#each items as item, i}`'s `i`, `{@const}` declarations, snippet
 /// parameters) stay visible in the emitted TS.
-fn emit_legacy_action_attrs(out: &mut String, summary: &TemplateSummary) {
+fn emit_legacy_action_attrs(out: &mut String, summary: &TemplateSummary, is_ts: bool) {
     // Keep the old `__svn_action_attrs_N` void registration alive so
     // external references (e.g. template spreads that consumed the
     // action's declared `$$_attributes`) still resolve. The outer
@@ -2737,7 +3598,11 @@ fn emit_legacy_action_attrs(out: &mut String, summary: &TemplateSummary) {
     // declaring the binding here avoids TS2304 at that reference site.
     for name in summary.void_refs.names() {
         if name.starts_with("__svn_action_attrs_") {
-            let _ = writeln!(out, "        let {name}: any = {{}};");
+            if is_ts {
+                let _ = writeln!(out, "        let {name}: any = {{}};");
+            } else {
+                let _ = writeln!(out, "        /** @type {{any}} */ let {name} = {{}};");
+            }
             let _ = writeln!(out, "        void {name};");
         }
     }
@@ -2806,22 +3671,35 @@ fn emit_legacy_action_attrs(out: &mut String, summary: &TemplateSummary) {
 /// from the callback bodies inside PARAMS. Pre-fix we hoisted all
 /// action calls to the top of `__svn_tpl_check`, which left
 /// `{#each items as _, i}<div use:a={{on:()=>i}}>` reading `i` as
-/// "Cannot find name" (bench: cnblocks validated this pattern;
-/// control-svelte-4/5 had 6 such fires on real user code).
-fn emit_use_directives_inline(
+/// "Cannot find name" (validated on a component-library bench;
+/// our Svelte-4/5 control rigs had 6 such fires on real user code).
+/// Emit `const __svn_action_N = __svn_ensure_action(...)` declarations
+/// for each `use:` directive on an element. Runs BEFORE the
+/// `svelteHTML.createElement` call so the action-attribute returns can
+/// be passed as the second arg (3-arg overload), which forces tsgo to
+/// expand the attrs param type's alias into `Omit<HTMLAttributes<...>,
+/// never> & <actions>` — matching upstream's byte-for-byte diagnostic
+/// message format.
+///
+/// Returns the range of indices allocated (`first..first+count`) so
+/// the caller can splice the union at the createElement site and emit
+/// matching `void __svn_action_N;` references after the element
+/// closes.
+fn emit_dom_action_decls(
     buf: &mut EmitBuffer,
     source: &str,
     tag_name: &str,
     attributes: &[svn_parser::Attribute],
     depth: usize,
     action_counter: &mut usize,
-) {
+) -> std::ops::Range<usize> {
     let indent = "    ".repeat(depth);
     let tag_arg = if tag_name.is_empty() {
         "'' as string".to_string()
     } else {
         format!("'{tag_name}'")
     };
+    let first = *action_counter;
     for attr in attributes {
         let svn_parser::Attribute::Directive(d) = attr else {
             continue;
@@ -2839,6 +3717,9 @@ fn emit_use_directives_inline(
                 let Some(params) =
                     source.get(expression_range.start as usize..expression_range.end as usize)
                 else {
+                    // Undo the counter bump on skip so subsequent
+                    // indices stay contiguous.
+                    *action_counter -= 1;
                     continue;
                 };
                 // Split the writeln so `params` splices via
@@ -2863,8 +3744,36 @@ fn emit_use_directives_inline(
                 );
             }
         }
+    }
+    first..*action_counter
+}
+
+/// Emit `void __svn_action_N;` references for each allocated action
+/// index. Placed AFTER the `svelteHTML.createElement` call to prevent
+/// the unused-variable diagnostic — the action's value is carried into
+/// `createElement`'s second arg, then referenced here to mark it used.
+fn emit_dom_action_void_refs(buf: &mut EmitBuffer, indices: &std::ops::Range<usize>, depth: usize) {
+    let indent = "    ".repeat(depth);
+    for index in indices.clone() {
         let _ = writeln!(buf, "{indent}void __svn_action_{index};");
     }
+}
+
+/// Legacy emission for the feature-gated non-dom-emit path: emit both
+/// the action declaration and its void-reference in one block, without
+/// feeding the action into a createElement 3-arg overload. Preserves
+/// the pre-Phase-2 behavior when `SVN_DOM_ELEMENT_EMIT=0` opts out of
+/// the DOM-element emit entirely.
+fn emit_use_directives_inline_legacy(
+    buf: &mut EmitBuffer,
+    source: &str,
+    tag_name: &str,
+    attributes: &[svn_parser::Attribute],
+    depth: usize,
+    action_counter: &mut usize,
+) {
+    let indices = emit_dom_action_decls(buf, source, tag_name, attributes, depth, action_counter);
+    emit_dom_action_void_refs(buf, &indices, depth);
 }
 
 /// Emit a type-check line per `bind:NAME` directive on a DOM element.
@@ -3014,8 +3923,750 @@ fn emit_element_bind_checks_inline(
             Some(range) => buf.append_with_source(&expr_text, range),
             None => buf.push_str(&expr_text),
         }
-        let _ = writeln!(buf, " = null as any as {ty};");
+        if emit_is_ts() {
+            let _ = writeln!(buf, " = null as any as {ty};");
+        } else {
+            // JS overlay: `as T` is TS-only syntax. Use a JSDoc cast
+            // on the RHS instead — `/** @type {T} */(null)` gives the
+            // null literal type T, which assigns into the LHS (the
+            // bound variable) and fires TS2322 when the LHS's declared
+            // type can't accept T. Mirrors upstream svelte2tsx's
+            // `rect = null as DOMRectReadOnly;` shape byte-for-byte
+            // in behaviour (see
+            // `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/Binding.ts`).
+            let _ = writeln!(buf, " = /** @type {{{ty}}} */ (null);");
+        }
     }
+}
+
+// Thread-local holding the current emit's `is_ts` flag. Set at the
+// top of `emit_document_with_render_name` via `IsTsGuard::enter`,
+// read by deep emit sites (bind:this casts, each-block `let i`,
+// branch bindings, snippet params) without threading the flag
+// through 9+ function signatures. Per-thread because rayon parallelises
+// emission — each file runs on whatever rayon worker picks it up, so
+// the guard must set+reset per-invocation.
+thread_local! {
+    static EMIT_IS_TS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+struct IsTsGuard {
+    prev: bool,
+}
+
+impl IsTsGuard {
+    fn enter(is_ts: bool) -> Self {
+        let prev = EMIT_IS_TS.with(|c| c.replace(is_ts));
+        Self { prev }
+    }
+}
+
+impl Drop for IsTsGuard {
+    fn drop(&mut self) {
+        EMIT_IS_TS.with(|c| c.set(self.prev));
+    }
+}
+
+fn emit_is_ts() -> bool {
+    EMIT_IS_TS.with(|c| c.get())
+}
+
+/// Default-ON as of 2026-04-24 after A/B validation across our
+/// bench fleet (Svelte-4 control, Svelte-5 control, a CMS bench,
+/// a charting-lib bench, a component-lib bench, a reader bench,
+/// an ML-playground bench — all at or below prior error counts,
+/// with the CMS bench closing +7 upstream-parity diagnostics).
+/// Opt OUT via `SVN_DOM_ELEMENT_EMIT=0` / `=false` /
+/// `=off` if a user reports a regression while the shape is being
+/// tuned. Opt-out path retained for a release or two; delete when
+/// Phase 2 (directives + svelte:* namespaces) also lands.
+fn dom_element_emit_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        !matches!(
+            std::env::var("SVN_DOM_ELEMENT_EMIT")
+                .ok()
+                .as_deref()
+                .map(str::trim)
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("0" | "false" | "no" | "off")
+        )
+    })
+}
+
+/// Emit the upstream-shape `svelteHTML.createElement("tag", { …attrs });`
+/// call for a DOM element. Opens a scoped `{ }` block so element-local
+/// let-bindings (`{@const}`, `let:x`, action-attr `const $$action_N`)
+/// stay confined to this element — matches upstream Element.ts's
+/// transformation result.
+///
+/// Phase 1 scope:
+///   - Plain `name="value"` / `name={expr}` / `name` (boolean) attrs.
+///   - Shorthand `{name}` attrs.
+///   - Expression `name={expr}` attrs.
+///   - Skips Spread (Phase 2) and Directives (Bind/Use handled
+///     separately; Class/Style deferred to Phase 2).
+///
+/// Output shape (matches upstream svelte2tsx):
+///   `{ svelteHTML.createElement("tag", { "name": value, name2, … }); `
+/// Closing `}` is emitted by the caller after children + bind/use
+/// checks recurse into the same scope. `tag_literal` controls whether
+/// the first arg is a quoted string literal (`"div"`) — set false for
+/// `svelte:element this={tag}` where the caller passes the expression
+/// verbatim as `tag_name`.
+fn emit_dom_element_open(
+    buf: &mut EmitBuffer,
+    source: &str,
+    tag_name: &str,
+    tag_literal: bool,
+    attributes: &[svn_parser::Attribute],
+    depth: usize,
+    action_indices: &std::ops::Range<usize>,
+) {
+    let indent = "    ".repeat(depth);
+    // Build the `__svn_union(__svn_action_0, __svn_action_1, …)`
+    // second arg when any `use:` directives are present. Matches
+    // upstream `svelte2tsx`'s 3-arg overload emit — the `attrs`
+    // parameter type becomes `Elements[Key] & T` (intersection)
+    // which tsgo eagerly expands in error messages (the alias form
+    // would be preserved in the 2-arg overload). See the shim's
+    // `__svn_union` helper.
+    let union_prefix = if action_indices.is_empty() {
+        String::new()
+    } else {
+        let mut args = String::new();
+        for (i, index) in action_indices.clone().enumerate() {
+            if i > 0 {
+                args.push_str(", ");
+            }
+            let _ = write!(args, "__svn_action_{index}");
+        }
+        format!("__svn_union({args}), ")
+    };
+    if tag_literal {
+        let _ = write!(
+            buf,
+            "{indent}{{ svelteHTML.createElement(\"{tag_name}\", {union_prefix}{{"
+        );
+    } else {
+        let _ = write!(
+            buf,
+            "{indent}{{ svelteHTML.createElement({tag_name}, {union_prefix}{{"
+        );
+    }
+    let mut any = false;
+    for attr in attributes {
+        match attr {
+            svn_parser::Attribute::Plain(p) => {
+                if dom_attr_should_skip(p.name.as_str()) {
+                    continue;
+                }
+                if !any {
+                    buf.push_str("\n");
+                    any = true;
+                }
+                emit_dom_plain_attr(buf, source, p, depth + 1);
+            }
+            svn_parser::Attribute::Expression(e) => {
+                if dom_attr_should_skip(e.name.as_str()) {
+                    continue;
+                }
+                if !any {
+                    buf.push_str("\n");
+                    any = true;
+                }
+                emit_dom_expression_attr(buf, source, e, depth + 1);
+            }
+            svn_parser::Attribute::Shorthand(s) => {
+                if dom_attr_should_skip(s.name.as_str()) {
+                    continue;
+                }
+                if !any {
+                    buf.push_str("\n");
+                    any = true;
+                }
+                emit_dom_shorthand_attr(buf, source, s, depth + 1);
+            }
+            svn_parser::Attribute::Spread(s) => {
+                let Some(expr) =
+                    source.get(s.expression_range.start as usize..s.expression_range.end as usize)
+                else {
+                    continue;
+                };
+                let trimmed = expr.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if !any {
+                    buf.push_str("\n");
+                    any = true;
+                }
+                let inner = "    ".repeat(depth + 1);
+                let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
+                let start = s.expression_range.start + leading_ws;
+                let end = start + trimmed.len() as u32;
+                let _ = write!(buf, "{inner}...");
+                buf.append_with_source(trimmed, svn_core::Range::new(start, end));
+                let _ = writeln!(buf, ",");
+            }
+            // Directives (bind:, use:, class:, style:, transition:, …)
+            // are handled outside createElement — by the existing bind/use
+            // passes and by emit_dom_directive_checks.
+            svn_parser::Attribute::Directive(_) => {}
+        }
+    }
+    if any {
+        let _ = writeln!(buf, "{indent}}});");
+    } else {
+        buf.push_str("}); ");
+    }
+}
+
+/// Post-createElement directive checks for `class:` and `style:`
+/// attributes. Emit each directive's value expression (or shorthand
+/// identifier) as a bare statement inside the element's scoped block.
+///
+/// - `class:foo={cond}` / `class:foo` (shorthand) → `(cond);` or
+///   `(foo);`. Type-checks the reference without constraining the
+///   attribute slot.
+/// - `style:prop={value}` / `style:color` (shorthand) → wraps the
+///   value in `__svn_ensure_type(String, Number, value)` to validate
+///   against the CSS-value union.
+///
+/// Mirrors upstream svelte2tsx's `Class.ts` and `StyleDirective.ts`
+/// — directives aren't in the createElement attrs object; their
+/// values are type-checked via bare statements in the surrounding
+/// scoped block.
+fn emit_dom_directive_checks(
+    buf: &mut EmitBuffer,
+    source: &str,
+    attributes: &[svn_parser::Attribute],
+    depth: usize,
+) {
+    let indent = "    ".repeat(depth);
+    for attr in attributes {
+        let svn_parser::Attribute::Directive(d) = attr else {
+            continue;
+        };
+        match d.kind {
+            svn_parser::DirectiveKind::Class => match &d.value {
+                Some(svn_parser::DirectiveValue::Expression {
+                    expression_range, ..
+                }) => {
+                    let Some(expr) =
+                        source.get(expression_range.start as usize..expression_range.end as usize)
+                    else {
+                        continue;
+                    };
+                    let trimmed = expr.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
+                    let start = expression_range.start + leading_ws;
+                    let end = start + trimmed.len() as u32;
+                    let _ = write!(buf, "{indent}(");
+                    buf.append_with_source(trimmed, svn_core::Range::new(start, end));
+                    let _ = writeln!(buf, ");");
+                }
+                _ => {
+                    // Shorthand `class:foo` — type-check `foo` as an
+                    // identifier reference.
+                    let _ = writeln!(buf, "{indent}({name});", name = d.name.as_str());
+                }
+            },
+            // Style directives: wrap the value in
+            // `__svn_ensure_type(String, Number, <value>)` so it type-
+            // checks against `String | Number | null | undefined`.
+            // Mirrors upstream svelte2tsx's `handleStyleDirective` (at
+            // `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/StyleDirective.ts:11-55`).
+            // Fires TS2345 on non-stringish values and TS18046 /
+            // TS7005 on reads of `unknown` / implicit-any bindings
+            // inside the value expression — matching upstream's
+            // diagnostics byte-for-byte on the CMS-bench component-
+            // preview patterns.
+            //
+            // Two value shapes to handle:
+            //   - `style:prop={expr}` — `DirectiveValue::Expression`,
+            //     emit the trimmed expr verbatim as the 3rd arg.
+            //   - `style:prop="…{expr}…"` — `DirectiveValue::Quoted`
+            //     with an `AttrValue` carrying `Text`/`Expression`
+            //     parts. Build a template literal from the parts and
+            //     pass as the 3rd arg. Single-Text and single-Expression
+            //     degenerate forms fall out of the template-literal
+            //     branch naturally.
+            svn_parser::DirectiveKind::Style => match &d.value {
+                Some(svn_parser::DirectiveValue::Expression {
+                    expression_range, ..
+                }) => {
+                    let Some(expr) =
+                        source.get(expression_range.start as usize..expression_range.end as usize)
+                    else {
+                        continue;
+                    };
+                    let trimmed = expr.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
+                    let start = expression_range.start + leading_ws;
+                    let end = start + trimmed.len() as u32;
+                    let _ = write!(buf, "{indent}__svn_ensure_type(String, Number, ");
+                    buf.append_with_source(trimmed, svn_core::Range::new(start, end));
+                    let _ = writeln!(buf, ");");
+                }
+                Some(svn_parser::DirectiveValue::Quoted(av)) => {
+                    emit_style_directive_template_literal(buf, source, av, &indent);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+}
+
+/// Emit the template-literal form for a quoted
+/// `style:prop="…{expr}…"` AttrValue. Produces
+/// `__svn_ensure_type(String, Number, <template-literal>);` where the
+/// template literal splices in each `Text` part verbatim (with
+/// backticks, dollar-signs, and backslashes escaped) and each
+/// `Expression` part as a `${…}` interpolation. Each expression
+/// interpolation carries a TokenMapEntry covering the user-source
+/// range so tsgo diagnostics fired inside map back to the correct
+/// source position.
+///
+/// Degenerate cases (parts.len() == 1) fall out of the template-literal
+/// branch naturally: a single-Expression part renders as an interp
+/// with no surrounding text, which TS still type-checks against
+/// `String | Number | null | undefined` via the generic constraint on
+/// `__svn_ensure_type`. Upstream's `StyleDirective.ts` splits these
+/// into three branches (single-Text, single-Expression, template); our
+/// unified branch produces functionally equivalent emit.
+fn emit_style_directive_template_literal(
+    buf: &mut EmitBuffer,
+    source: &str,
+    av: &svn_parser::AttrValue,
+    indent: &str,
+) {
+    if av.parts.is_empty() {
+        return;
+    }
+    let _ = write!(buf, "{indent}__svn_ensure_type(String, Number, `");
+    for part in &av.parts {
+        match part {
+            svn_parser::AttrValuePart::Text { content, .. } => {
+                for ch in content.chars() {
+                    match ch {
+                        '`' => buf.push_str("\\`"),
+                        '\\' => buf.push_str("\\\\"),
+                        '$' => buf.push_str("\\$"),
+                        _ => {
+                            let mut b = [0u8; 4];
+                            buf.push_str(ch.encode_utf8(&mut b));
+                        }
+                    }
+                }
+            }
+            svn_parser::AttrValuePart::Expression {
+                expression_range, ..
+            } => {
+                let Some(expr) =
+                    source.get(expression_range.start as usize..expression_range.end as usize)
+                else {
+                    continue;
+                };
+                let trimmed = expr.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
+                let start = expression_range.start + leading_ws;
+                let end = start + trimmed.len() as u32;
+                buf.push_str("${");
+                buf.append_with_source(trimmed, svn_core::Range::new(start, end));
+                buf.push_str("}");
+            }
+        }
+    }
+    let _ = writeln!(buf, "`);");
+}
+
+/// Drop data-* attributes unconditionally: the svelte-jsx typings
+/// reject any `data-foo` key at the strict interface, but real Svelte
+/// allows them. Upstream wraps with `...__sveltets_2_empty({})` to
+/// bypass; we'd need the same helper. Phase 1 skips rather than
+/// regress.
+fn dom_attr_should_skip(name: &str) -> bool {
+    // Skip `data-*` (except sveltekit's typed ones), `aria-*` in
+    // preserving-case form, and CSS custom properties. Conservative
+    // skip — the goal is to avoid TS2353 regressions on real-world
+    // attributes our declaration model doesn't cover in Phase 1.
+    if name.starts_with("data-") || name.starts_with("aria-") {
+        return true;
+    }
+    if name.starts_with("--") {
+        return true;
+    }
+    // `xmlns`, `xml:lang`, `xlink:*` etc. are SVG specific; skip in
+    // Phase 1 since svg element support needs its own namespace.
+    if name.contains(':') {
+        return true;
+    }
+    // `this` is a Svelte directive on `<svelte:element>` (selects the
+    // tag) — its expression is consumed by emit_svelte_element_open
+    // via the createElement first arg. Emitting it as an attr key
+    // would fire a spurious TS2353 against the resolved tag's
+    // HTMLAttributes shape.
+    if name == "this" {
+        return true;
+    }
+    // `slot="name"` assigns an element to a named slot of the parent
+    // component. It's a Svelte directive that shouldn't appear in
+    // the createElement attrs literal — upstream svelte2tsx strips it
+    // from the createElement call and handles slot binding via
+    // `$$slot_def["name"]`. Emitting it would fire TS2353 against
+    // SVGAttributes shapes that don't declare `slot`.
+    if name == "slot" {
+        return true;
+    }
+    // React-style camelCase synonyms for HTML attributes (`tabIndex`,
+    // `className`, `htmlFor`, `readOnly`, `maxLength`, etc.). Real
+    // Svelte components frequently carry these (3rd-party-ported
+    // patterns from React) but svelte-jsx only declares the
+    // lowercase form. Upstream `svelte2tsx` doesn't filter them
+    // either — but tsgo's diagnostic on the synthesized key is
+    // dropped by upstream's source-map-driven filter for the same
+    // reason ours did pre-token-mapping. Mirror that behavior
+    // explicitly: real diagnostics on user-facing camelCase attrs
+    // would also flag elsewhere (browser ignores them, Svelte
+    // forwards as-is), so the skip is safe and matches upstream's
+    // observable surface.
+    if dom_attr_is_react_camelcase_synonym(name) {
+        return true;
+    }
+    false
+}
+
+/// React-style camelCase HTML attribute names that have a lowercase
+/// HTML5 counterpart. svelte-jsx declares only the lowercase form;
+/// upstream silently drops these via source-map filtering.
+fn dom_attr_is_react_camelcase_synonym(name: &str) -> bool {
+    matches!(
+        name,
+        "tabIndex"
+            | "className"
+            | "htmlFor"
+            | "readOnly"
+            | "maxLength"
+            | "minLength"
+            | "colSpan"
+            | "rowSpan"
+            | "autoFocus"
+            | "autoComplete"
+            | "autoCorrect"
+            | "autoCapitalize"
+            | "spellCheck"
+            | "contentEditable"
+    )
+}
+
+/// Close the scoped block opened by `emit_dom_element_open`.
+fn emit_dom_element_close(buf: &mut EmitBuffer, depth: usize) {
+    let indent = "    ".repeat(depth);
+    let _ = writeln!(buf, "{indent}}}");
+}
+
+/// Open a `svelteHTML.createElement` scoped block for a
+/// `<svelte:*>` element. Dispatches on `SvelteElementKind`:
+///   - Body/Head/Window/Document/Options/Fragment: literal
+///     `"svelte:<name>"` tag string. IntrinsicElements in our
+///     shim has these as named keys.
+///   - Element: `<svelte:element this={expr}>` — pass the `this`
+///     expression verbatim as the first createElement arg so TS
+///     checks the tag against IntrinsicElements keys.
+///   - SelfRef/Component/Boundary/missing-this: skip the
+///     createElement scope (not DOM elements). Open a bare
+///     `{ }` block so child emit still scopes locals correctly.
+fn emit_svelte_element_open(
+    buf: &mut EmitBuffer,
+    source: &str,
+    s: &svn_parser::SvelteElement,
+    depth: usize,
+    action_indices: &std::ops::Range<usize>,
+) {
+    use svn_parser::SvelteElementKind::*;
+    let indent = "    ".repeat(depth);
+    match s.kind {
+        Body | Head | Window | Document | Options | Fragment => {
+            let tag = format!("svelte:{}", s.kind.as_str());
+            emit_dom_element_open(
+                buf,
+                source,
+                &tag,
+                true,
+                &s.attributes,
+                depth,
+                action_indices,
+            );
+        }
+        Element => {
+            // Find `this={expr}` among attributes.
+            let this_expr = s.attributes.iter().find_map(|a| {
+                let svn_parser::Attribute::Expression(e) = a else {
+                    return None;
+                };
+                if e.name.as_str() != "this" {
+                    return None;
+                }
+                source
+                    .get(e.expression_range.start as usize..e.expression_range.end as usize)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            });
+            match this_expr {
+                Some(expr) => {
+                    emit_dom_element_open(
+                        buf,
+                        source,
+                        &format!("({expr})"),
+                        false,
+                        &s.attributes,
+                        depth,
+                        action_indices,
+                    );
+                }
+                None => {
+                    // Missing `this` — bare scope. Child emit still runs.
+                    let _ = writeln!(buf, "{indent}{{");
+                }
+            }
+        }
+        SelfRef | Component | Boundary => {
+            // Not a DOM element — bare scope for children.
+            let _ = writeln!(buf, "{indent}{{");
+        }
+    }
+}
+
+/// Attributes that svelte-elements types as `number | undefined | null`.
+/// Upstream svelte2tsx's `Attribute.ts::numberOnlyAttributes` — when
+/// the attribute value is a pure-numeric Text (no `{expr}` interpolation),
+/// emit the value as a bare number literal instead of a string template
+/// so TS binds it against the typed number slot. Without this, e.g.
+/// `<div tabindex="0">` emits `"tabindex": \`0\`` which fires TS2322
+/// "Type 'string' is not assignable to type 'number'".
+fn is_number_only_attr(name: &str) -> bool {
+    matches!(
+        name,
+        "aria-colcount"
+            | "aria-colindex"
+            | "aria-colspan"
+            | "aria-level"
+            | "aria-posinset"
+            | "aria-rowcount"
+            | "aria-rowindex"
+            | "aria-rowspan"
+            | "aria-setsize"
+            | "aria-valuemax"
+            | "aria-valuemin"
+            | "aria-valuenow"
+            | "results"
+            | "span"
+            | "marginheight"
+            | "marginwidth"
+            | "maxlength"
+            | "minlength"
+            | "currenttime"
+            | "defaultplaybackrate"
+            | "volume"
+            | "high"
+            | "low"
+            | "optimum"
+            | "start"
+            | "size"
+            | "border"
+            | "cols"
+            | "rows"
+            | "colspan"
+            | "rowspan"
+            | "tabindex"
+    )
+}
+
+fn emit_dom_plain_attr(
+    buf: &mut EmitBuffer,
+    source: &str,
+    p: &svn_parser::PlainAttr,
+    depth: usize,
+) {
+    let indent = "    ".repeat(depth);
+    let name = p.name.as_str();
+    // Map the synthesized `"name"` key back to the user-source attribute
+    // name. TS2353 "does not exist in type" pins on the property key;
+    // without this token-map entry the diagnostic mapper drops the
+    // diagnostic as falling outside any verbatim region.
+    let name_range = svn_core::Range::new(p.range.start, p.range.start + name.len() as u32);
+    let key_text = format!("\"{name}\"");
+    match &p.value {
+        None => {
+            // Boolean attribute: `<input required>` → `"required": true,`
+            // `<div popover>` carve-out: upstream emits `"": ""`.
+            let value = if name == "popover" { "\"\"" } else { "true" };
+            buf.push_str(&indent);
+            buf.append_with_source(&key_text, name_range);
+            let _ = writeln!(buf, ": {value},");
+        }
+        Some(v) if v.parts.is_empty() => {
+            buf.push_str(&indent);
+            buf.append_with_source(&key_text, name_range);
+            buf.push_str(": \"\",\n");
+        }
+        Some(v) if v.parts.len() == 1 => {
+            match &v.parts[0] {
+                svn_parser::AttrValuePart::Text { content, .. } => {
+                    // numberOnlyAttributes carve-out: emit bare number
+                    // literal when the text parses as a number.
+                    if is_number_only_attr(name)
+                        && !content.is_empty()
+                        && content.trim().parse::<f64>().is_ok()
+                    {
+                        buf.push_str(&indent);
+                        buf.append_with_source(&key_text, name_range);
+                        let _ = writeln!(buf, ": {},", content.trim());
+                        return;
+                    }
+                    // Backtick template literal so the user source's
+                    // quote style doesn't affect the check. Backticks
+                    // in content force JSON escape fallback.
+                    let escaped = content.replace('\\', "\\\\").replace('`', "\\`");
+                    buf.push_str(&indent);
+                    buf.append_with_source(&key_text, name_range);
+                    let _ = writeln!(buf, ": `{escaped}`,");
+                }
+                svn_parser::AttrValuePart::Expression {
+                    expression_range, ..
+                } => {
+                    let Some(expr) =
+                        source.get(expression_range.start as usize..expression_range.end as usize)
+                    else {
+                        return;
+                    };
+                    let trimmed = expr.trim();
+                    if trimmed.is_empty() {
+                        return;
+                    }
+                    let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
+                    let start = expression_range.start + leading_ws;
+                    let end = start + trimmed.len() as u32;
+                    buf.push_str(&indent);
+                    buf.append_with_source(&key_text, name_range);
+                    buf.push_str(": (");
+                    buf.append_with_source(trimmed, svn_core::Range::new(start, end));
+                    let _ = writeln!(buf, "),");
+                }
+            }
+        }
+        Some(v) => {
+            // Multi-part (text + interpolations). Template literal
+            // with `${expr}` placeholders so the whole attribute
+            // binds as a string. Follows upstream Attribute.ts's
+            // multi-value branch.
+            buf.push_str(&indent);
+            buf.append_with_source(&key_text, name_range);
+            buf.push_str(": `");
+            for part in &v.parts {
+                match part {
+                    svn_parser::AttrValuePart::Text { content, .. } => {
+                        let escaped = content.replace('\\', "\\\\").replace('`', "\\`");
+                        buf.push_str(&escaped);
+                    }
+                    svn_parser::AttrValuePart::Expression {
+                        expression_range, ..
+                    } => {
+                        let Some(expr) = source
+                            .get(expression_range.start as usize..expression_range.end as usize)
+                        else {
+                            continue;
+                        };
+                        let trimmed = expr.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
+                        let start = expression_range.start + leading_ws;
+                        let end = start + trimmed.len() as u32;
+                        buf.push_str("${");
+                        buf.append_with_source(trimmed, svn_core::Range::new(start, end));
+                        buf.push_str("}");
+                    }
+                }
+            }
+            let _ = writeln!(buf, "`,");
+        }
+    }
+}
+
+fn emit_dom_expression_attr(
+    buf: &mut EmitBuffer,
+    source: &str,
+    e: &svn_parser::ExpressionAttr,
+    depth: usize,
+) {
+    let indent = "    ".repeat(depth);
+    let Some(expr) = source.get(e.expression_range.start as usize..e.expression_range.end as usize)
+    else {
+        return;
+    };
+    let trimmed = expr.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
+    let start = e.expression_range.start + leading_ws;
+    let end = start + trimmed.len() as u32;
+    let name = e.name.as_str();
+    buf.push_str(&indent);
+    // Map the synthesized `"name"` key back to the user-source attribute
+    // name. tsgo reports excess-property TS2353 ("does not exist in
+    // type") at the key position; without this token-map entry the
+    // diagnostic mapper drops the diagnostic as falling outside any
+    // verbatim region.
+    let name_range = svn_core::Range::new(e.range.start, e.range.start + name.len() as u32);
+    buf.append_with_source(&format!("\"{name}\""), name_range);
+    buf.push_str(": (");
+    buf.append_with_source(trimmed, svn_core::Range::new(start, end));
+    let _ = writeln!(buf, "),");
+}
+
+fn emit_dom_shorthand_attr(
+    buf: &mut EmitBuffer,
+    source: &str,
+    s: &svn_parser::ShorthandAttr,
+    depth: usize,
+) {
+    let indent = "    ".repeat(depth);
+    // Shorthand's identifier is emitted as bare `name,` — the
+    // property-shorthand object literal form. Name must be a valid JS
+    // identifier (it's a DOM attribute name like `value`, `type`).
+    //
+    // Map the synthesized identifier back to its source byte range
+    // (just past the `{` and any whitespace) so TS2322 ("not
+    // assignable to type") diagnostics — pinned by tsgo at the
+    // shorthand reference position — survive the diagnostic mapper's
+    // require-source-map-entry filter.
+    let name = s.name.as_str();
+    let inner = source
+        .get(s.range.start as usize + 1..s.range.end as usize)
+        .unwrap_or("");
+    let leading_ws = (inner.len() - inner.trim_start().len()) as u32;
+    let name_start = s.range.start + 1 + leading_ws;
+    let name_end = name_start + name.len() as u32;
+    buf.push_str(&indent);
+    buf.append_with_source(name, svn_core::Range::new(name_start, name_end));
+    buf.push_str(",\n");
 }
 
 /// Map a static HTML/SVG tag name to a `HTMLElementTagNameMap['tag']`
@@ -3247,6 +4898,7 @@ fn emit_component_call(
         let _ = write!(buf, "new {local}({{ target: __svn_any(), props: {{}} }})");
         push_component_call_token_map(buf, call_start, inst.node_start);
         buf.push_str(";\n");
+        emit_component_bind_widen_trailers(buf, inst, &inner);
         emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
         emit_on_event_calls(buf, source, inst, &inst_local, &inner);
         let _ = writeln!(buf, "{indent}}}");
@@ -3274,6 +4926,7 @@ fn emit_component_call(
         let _ = write!(buf, "}} }})");
         push_component_call_token_map(buf, call_start, inst.node_start);
         buf.push_str(";\n");
+        emit_component_bind_widen_trailers(buf, inst, &inner);
         emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
         emit_on_event_calls(buf, source, inst, &inst_local, &inner);
         let _ = writeln!(buf, "{indent}}}");
@@ -3310,9 +4963,46 @@ fn emit_component_call(
     let _ = write!(buf, "{inner}}})");
     push_component_call_token_map(buf, call_start, inst.node_start);
     buf.push_str(";\n");
+    emit_component_bind_widen_trailers(buf, inst, &inner);
     emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
     emit_on_event_calls(buf, source, inst, &inst_local, &inner);
     let _ = writeln!(buf, "{indent}}}");
+}
+
+/// Emit `void (() => { TARGET = __svn_any(null); });` after the
+/// component's `new` expression for each simple-identifier
+/// `bind:NAME={TARGET}` on this instantiation. TS flow analysis sees
+/// the assignment inside the uncalled arrow and widens TARGET's
+/// inferred type to `any` — models the Svelte runtime's async prop
+/// writeback that TS can't see statically. Without this, `let target
+/// = $state()` targets stay narrowed to `{}` / `unknown` and
+/// downstream reads like `target.focus()` fire TS2339 / TS18046.
+///
+/// Mirrors upstream svelte2tsx's `() => x = __sveltets_2_any(null);`
+/// trailer (emitted inside `/*Ωignore_startΩ*/…/*Ωignore_endΩ*/`
+/// markers there, stripped by svelte-check before reporting to the
+/// user). Wrapping in a `void (...)` expression here serves the same
+/// role: TS type-checks the body but the expression statement
+/// itself produces no diagnostic (the assignment is always valid
+/// because `__svn_any(null)` returns `any`).
+fn emit_component_bind_widen_trailers(
+    buf: &mut EmitBuffer,
+    inst: &svn_analyze::ComponentInstantiation,
+    inner: &str,
+) {
+    for target in &inst.component_bind_widen_targets {
+        // Wrap in ignore-region markers so any diagnostic firing
+        // inside this purely-synthetic trailer is filtered out at
+        // mapping time. The trailer is emit scaffolding — the user
+        // didn't write it and has no ability to fix anything
+        // reported here. Mirrors upstream svelte2tsx's
+        // `/*Ωignore_startΩ*/ () => target = __sveltets_2_any(null);
+        // /*Ωignore_endΩ*/` shape.
+        let _ = writeln!(
+            buf,
+            "{inner}/*svn:ignore_start*/void (() => {{ {target} = __svn_any(null); }});/*svn:ignore_end*/"
+        );
+    }
 }
 
 /// Push a TokenMapEntry for a `new __svn_C_<hex>(...)` component call.
@@ -3417,13 +5107,13 @@ fn emit_bind_this_assignment(
 fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropShape) {
     match p {
         svn_analyze::PropShape::Literal { name, value } => {
-            write_object_key(buf, name);
+            write_quoted_prop_key(buf, name);
             buf.push_str(": ");
             write_js_string_literal(buf, value);
         }
         svn_analyze::PropShape::Expression { name, expr_range } => {
             let expr = &source[expr_range.start as usize..expr_range.end as usize];
-            write_object_key(buf, name);
+            write_quoted_prop_key(buf, name);
             let _ = write!(buf, ": ({expr})");
         }
         svn_analyze::PropShape::Shorthand { name } => {
@@ -3432,12 +5122,12 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             if is_simple_js_identifier(name) {
                 buf.push_str(name);
             } else {
-                write_object_key(buf, name);
+                write_quoted_prop_key(buf, name);
                 let _ = write!(buf, ": {name}");
             }
         }
         svn_analyze::PropShape::BoolShorthand { name } => {
-            write_object_key(buf, name);
+            write_quoted_prop_key(buf, name);
             buf.push_str(": true");
         }
         svn_analyze::PropShape::Spread { expr_range } => {
@@ -3453,7 +5143,7 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
         } => {
             let getter = &source[getter_range.start as usize..getter_range.end as usize];
             let setter = &source[setter_range.start as usize..setter_range.end as usize];
-            write_object_key(buf, name);
+            write_quoted_prop_key(buf, name);
             // Svelte 5 `bind:name={get, set}` — emit through the
             // `__svn_get_set_binding(get, set)` helper so TS infers
             // `T` from the getter's return, checks the setter's
@@ -3464,6 +5154,17 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             let _ = write!(buf, ": __svn_get_set_binding({getter}, {setter})");
         }
     }
+}
+
+/// Always-quote variant of `write_object_key` for component prop
+/// keys. Matches upstream svelte2tsx's component-instantiation prop
+/// emit (`new __$$_C({ target, props: { "name": value } })`), so
+/// tsgo's TS2353 ("does not exist in type") echoes the property key
+/// as `'"name"'` (the literal form) rather than `'name'` (bare-ident
+/// form). The quote-style change lets diagnostics with the same
+/// semantics tally as matches against upstream.
+fn write_quoted_prop_key(buf: &mut EmitBuffer, name: &str) {
+    write_js_string_literal(buf, name);
 }
 
 /// Split `params_text` on top-level commas and, for each part that
@@ -3671,13 +5372,20 @@ fn write_js_string_literal(buf: &mut EmitBuffer, value: &str) {
 
 /// Emit getter/setter tuple placeholders for `bind:foo={getter, setter}`.
 /// Same pattern as action-attrs: declare + void inside `__svn_tpl_check`.
-fn emit_bind_pair_declarations(out: &mut String, summary: &TemplateSummary) {
+fn emit_bind_pair_declarations(out: &mut String, summary: &TemplateSummary, is_ts: bool) {
     for name in summary.void_refs.names() {
         if name.starts_with("__svn_bind_pair_") {
-            let _ = writeln!(
-                out,
-                "        let {name}: [() => any, (v: any) => void] = [() => undefined as any, () => {{}}];"
-            );
+            if is_ts {
+                let _ = writeln!(
+                    out,
+                    "        let {name}: [() => any, (v: any) => void] = [() => undefined as any, () => {{}}];"
+                );
+            } else {
+                let _ = writeln!(
+                    out,
+                    "        /** @type {{[() => any, (v: any) => void]}} */ let {name} = [() => undefined, () => {{}}];"
+                );
+            }
             let _ = writeln!(out, "        void {name};");
         }
     }
@@ -3690,6 +5398,7 @@ fn emit_void_block(
     prop_names: &[SmolStr],
     template_refs: &[SmolStr],
     exported_locals: &[SmolStr],
+    is_ts: bool,
 ) {
     // One `void <name>;` statement per synthesized name — NOT a single
     // `void (a, b, c);` block. The block form uses comma operators which
@@ -3718,6 +5427,12 @@ fn emit_void_block(
     };
     for name in summary.void_refs.names() {
         if name.starts_with("__svn_action_attrs_") || name.starts_with("__svn_bind_pair_") {
+            continue;
+        }
+        // JS overlays skip `emit_template_check_fn` (TS-only casts), so
+        // the `__svn_tpl_check` name never materializes — voiding it
+        // would fire TS2304. Every other synthesized name still applies.
+        if !is_ts && name == "__svn_tpl_check" {
             continue;
         }
         emit(out, name);
@@ -4625,14 +6340,30 @@ fn try_process_let_statement_for_denarrow(
 /// slot is typed as `boolean | ''`), but that requires walking the
 /// template to collect slot names and emit a shape literal. We'll do
 /// that in Phase 2 if the loose ambient isn't sufficient.
-fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document<'_>) {
+fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document<'_>, is_ts: bool) {
     let src = doc.source;
+    // In TS overlays we emit inline `: T` annotations. In JS overlays
+    // we must not — tsgo fires TS8010 ("Type annotations can only be
+    // used in TypeScript files"), and even worse tsgo's semantic
+    // check aborts project-wide once TS8010 is hit, silently
+    // suppressing every legitimate TS2322/TS7005/… diagnostic
+    // elsewhere. Emit JSDoc casts on the RHS for JS overlays.
     if src.contains("$$slots") {
-        out.push_str("    let $$slots: Record<string, boolean | undefined> = {};\n");
+        if is_ts {
+            out.push_str("    let $$slots: Record<string, boolean | undefined> = {};\n");
+        } else {
+            out.push_str(
+                "    let $$slots = /** @type {Record<string, boolean | undefined>} */ ({});\n",
+            );
+        }
         out.push_str("    void $$slots;\n");
     }
     if src.contains("$$restProps") {
-        out.push_str("    let $$restProps: Record<string, any> = {};\n");
+        if is_ts {
+            out.push_str("    let $$restProps: Record<string, any> = {};\n");
+        } else {
+            out.push_str("    let $$restProps = /** @type {Record<string, any>} */ ({});\n");
+        }
         out.push_str("    void $$restProps;\n");
     }
     // `$$props` detection has to avoid `$$restProps` — the word
@@ -4642,13 +6373,49 @@ fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document<'_>) {
         let prev = src.as_bytes().get(idx.saturating_sub(4)..idx);
         let is_rest = matches!(prev, Some(b"rest"));
         if !is_rest || src.matches("$$props").count() > src.matches("$$restProps").count() {
-            out.push_str("    let $$props: Record<string, any> = {};\n");
+            if is_ts {
+                out.push_str("    let $$props: Record<string, any> = {};\n");
+            } else {
+                out.push_str("    let $$props = /** @type {Record<string, any>} */ ({});\n");
+            }
             out.push_str("    void $$props;\n");
         }
     }
 }
 
-fn widen_untyped_exported_props_in_place(out: &mut String, target_names: &[SmolStr]) {
+/// JS-overlay equivalent of `rewrite_definite_assignment_in_place` +
+/// `widen_untyped_exported_props_in_place` rolled into one. For each
+/// `let NAME[, NAME…];` declaration where NAME is a target AND that
+/// declarator has no initializer, splice `= /** @type {any} */ (null)`
+/// between NAME (or its type annotation) and the terminator — turning
+/// `let b;` into `let b = /** @type {any} */ (null);`.
+///
+/// Fixes three TS-strict-mode JS-overlay diagnostics in one pass:
+///   - TS7034/TS7005 on the declaration ("variable implicitly any in
+///     some locations") — the initializer's `any` gives TS an explicit
+///     type for subsequent flow.
+///   - TS2454 on later reads ("used before being assigned") — the
+///     initializer satisfies definite-assign flow.
+///   - TS2367/TS2322 on type-check expressions that would have
+///     otherwise narrowed against a body-local `undefined`-inferred
+///     type.
+///
+/// User-authored JSDoc `/** @type {T} */` preceding the declaration is
+/// preserved and takes priority: TS reads user's `@type` to declare
+/// NAME as `T`, the initializer's `any` is assignable to `T` via JS-loose
+/// rules, no TS2322 secondary fires.
+///
+/// No TS-only syntax is emitted, so tsgo doesn't fire TS8010 on the
+/// generated `.svelte.svn.js` file. Mirrors the outcome of upstream
+/// svelte2tsx's `let NAME; NAME = __sveltets_2_any(NAME);` shape
+/// (wrapped in `/*Ωignore_startΩ*/…/*Ωignore_endΩ*/` markers upstream
+/// uses to suppress diagnostics the self-assign would otherwise fire)
+/// without needing the ignore-range filtering machinery.
+fn widen_untyped_exports_jsdoc_in_place(
+    out: &mut String,
+    target_names: &[SmolStr],
+    route_kind: Option<sveltekit::RouteKind>,
+) {
     if target_names.is_empty() {
         return;
     }
@@ -4660,9 +6427,64 @@ fn widen_untyped_exported_props_in_place(out: &mut String, target_names: &[SmolS
             try_process_let_statement_for_widening(bytes, i, target_names)
         {
             let mut cursor = i;
-            for pos in &insertions {
+            for (pos, name) in &insertions {
                 out.push_str(&original[cursor..*pos]);
-                out.push_str(": any");
+                let kit_type = route_kind.and_then(|k| sveltekit::kit_widen_type(name, k));
+                match kit_type {
+                    // Kit types must launder through `any` first — a
+                    // direct cast from `null` to `PageData` fires
+                    // TS2352 in strict mode when PageData doesn't
+                    // overlap with `null`. Matches upstream's
+                    // `data = __sveltets_2_any(data)` any-assign
+                    // trick in spirit.
+                    Some(ty) => {
+                        out.push_str(" = /** @type {");
+                        out.push_str(ty);
+                        out.push_str("} */ (/** @type {any} */ (null))");
+                    }
+                    None => {
+                        out.push_str(" = /** @type {any} */ (null)");
+                    }
+                }
+                cursor = *pos;
+            }
+            out.push_str(&original[cursor..stmt_end]);
+            i = stmt_end;
+        } else {
+            let ch_len = utf8_char_len(bytes[i]);
+            out.push_str(&original[i..i + ch_len]);
+            i += ch_len;
+        }
+    }
+}
+
+fn widen_untyped_exported_props_in_place(
+    out: &mut String,
+    target_names: &[SmolStr],
+    route_kind: Option<sveltekit::RouteKind>,
+) {
+    if target_names.is_empty() {
+        return;
+    }
+    let original = std::mem::take(out);
+    let bytes = original.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some((stmt_end, insertions)) =
+            try_process_let_statement_for_widening(bytes, i, target_names)
+        {
+            let mut cursor = i;
+            for (pos, name) in &insertions {
+                out.push_str(&original[cursor..*pos]);
+                // SvelteKit route files get `import('./$types.js').PageData`
+                // injected for `data`/`form`/`snapshot` — matches upstream
+                // `svelte2tsx/src/svelte2tsx/nodes/ExportedNames.ts:424-440`.
+                // All other names widen to `: any` as before.
+                let widen_type = route_kind
+                    .and_then(|k| sveltekit::kit_widen_type(name, k))
+                    .unwrap_or("any");
+                out.push_str(": ");
+                out.push_str(widen_type);
                 cursor = *pos;
             }
             out.push_str(&original[cursor..stmt_end]);
@@ -4683,7 +6505,7 @@ fn try_process_let_statement_for_widening(
     bytes: &[u8],
     i: usize,
     target_names: &[SmolStr],
-) -> Option<(usize, Vec<usize>)> {
+) -> Option<(usize, Vec<(usize, SmolStr)>)> {
     if i + 3 > bytes.len() || &bytes[i..i + 3] != b"let" {
         return None;
     }
@@ -4695,7 +6517,7 @@ fn try_process_let_statement_for_widening(
         return None;
     }
 
-    let mut insertions: Vec<usize> = Vec::new();
+    let mut insertions: Vec<(usize, SmolStr)> = Vec::new();
     let mut p = after_let;
     loop {
         while p < bytes.len() && is_ascii_ws(bytes[p]) {
@@ -4761,7 +6583,8 @@ fn try_process_let_statement_for_widening(
             && !has_initializer
             && target_names.iter().any(|t| t.as_bytes() == name)
         {
-            insertions.push(name_end);
+            let name_str = std::str::from_utf8(name).ok().map(SmolStr::from)?;
+            insertions.push((name_end, name_str));
         }
 
         if s >= bytes.len() {
@@ -4819,7 +6642,7 @@ mod tests {
     fn widen(src: &str, targets: &[&str]) -> String {
         let mut out = String::from(src);
         let targets: Vec<SmolStr> = targets.iter().map(|s| SmolStr::from(*s)).collect();
-        widen_untyped_exported_props_in_place(&mut out, &targets);
+        widen_untyped_exported_props_in_place(&mut out, &targets, None);
         out
     }
 
@@ -4948,7 +6771,7 @@ mod tests {
         // `let data;` → `let data: any;` (widen) → `let data!: any;` (def_assign).
         let mut out = String::from("let data;");
         let targets: Vec<SmolStr> = vec![SmolStr::from("data")];
-        widen_untyped_exported_props_in_place(&mut out, &targets);
+        widen_untyped_exported_props_in_place(&mut out, &targets, None);
         rewrite_definite_assignment_in_place(&mut out, &targets);
         assert_eq!(out, "let data!: any;");
     }

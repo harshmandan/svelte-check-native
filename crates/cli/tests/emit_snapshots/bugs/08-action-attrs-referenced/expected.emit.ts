@@ -12,14 +12,16 @@ async function $$render_a1303664() {
         // template type-check body (incremental)
         let __svn_action_attrs_0: any = {};
         void __svn_action_attrs_0;
-        const __svn_action_0 = __svn_ensure_action(myAction(__svn_map_element_tag('div')));
-        void __svn_action_0;
+            const __svn_action_0 = __svn_ensure_action(myAction(__svn_map_element_tag('div')));
+        { svelteHTML.createElement("div", __svn_union(__svn_action_0), {});             void __svn_action_0;
+        }
     }
     void __svn_tpl_check;
     void myAction;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_a1303664;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_a1303664>>['props']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_a1303664>>['props']>;
 export default __svn_component_default;
 

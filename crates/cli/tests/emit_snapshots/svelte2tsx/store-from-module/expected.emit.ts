@@ -5,19 +5,24 @@
     const store3 = writable('');
     const store4 = writable('');
 async function $$render_2b74b188() {
-    let $store1!: __SvnStoreValue<typeof store1>;
-    let $store3!: __SvnStoreValue<typeof store3>;
-    let $store2!: __SvnStoreValue<typeof store2>;
-    let $store4!: __SvnStoreValue<typeof store4>;
+    /** @type {__SvnStoreValue<typeof store1>} */
+    let $store1 = /** @type {any} */ (/** @type {any} */ (null));
+    /** @type {__SvnStoreValue<typeof store3>} */
+    let $store3 = /** @type {any} */ (/** @type {any} */ (null));
+    /** @type {__SvnStoreValue<typeof store2>} */
+    let $store2 = /** @type {any} */ (/** @type {any} */ (null));
+    /** @type {__SvnStoreValue<typeof store4>} */
+    let $store4 = /** @type {any} */ (/** @type {any} */ (null));
 
     $store1;
     $store3;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        ($store2);
-        ($store4);
+        { svelteHTML.createElement("p", {});             ($store2);
+        }
+        { svelteHTML.createElement("p", {});             ($store4);
+        }
     }
-    void __svn_tpl_check;
     void $store1;
     void store1;
     void $store3;
@@ -26,9 +31,13 @@ async function $$render_2b74b188() {
     void store2;
     void $store4;
     void store4;
+    return { props: /** @type {any} */({}) };
 }
 $$render_2b74b188;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_2b74b188>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

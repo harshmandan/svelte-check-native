@@ -9,6 +9,7 @@ foo = undefined as any;
     }
     void __svn_tpl_check;
     void foo;
+    return { props: undefined as any as ({ foo?: number; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: number; }) };
 }
 $$render_4a2d9092;
 declare const __svn_component_default: import('svelte').Component<{ foo?: number; }, { foo: number; }>;

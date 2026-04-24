@@ -97,9 +97,9 @@ pub fn build(
     // package.json#workspaces) at the workspace root and treat each
     // member's tsconfig as an implicit sibling. Closes the
     // `Cannot find module '$lib/...'` cluster on monorepos that
-    // declare paths only on the per-app level (classroomio,
-    // datagrid sites, etc.) without restructuring the user's
-    // tsconfig wiring.
+    // declare paths only on the per-app level (real-world
+    // workspace-heavy layouts with multiple sites) without
+    // restructuring the user's tsconfig wiring.
     if sibling_refs.is_empty() {
         sibling_refs = discover_workspace_member_refs(&layout.workspace)
             .into_iter()
@@ -270,7 +270,7 @@ pub fn build(
     // the user sets in their tsconfig carries through. Setting it to
     // `true` unconditionally here silently widened user-authored
     // `.ts`-extension imports that upstream svelte-check flags via
-    // TS5097 — 44 such errors on bench/palacms alone. Upstream's own
+    // TS5097 — 44 such errors on one bench alone. Upstream's own
     // overlay doesn't set the flag either; our `.svelte` overlay
     // resolution doesn't need it (handled by `allowArbitraryExtensions`
     // + the `.d.svelte.ts` ambient sidecars whose `.ts` re-exports are

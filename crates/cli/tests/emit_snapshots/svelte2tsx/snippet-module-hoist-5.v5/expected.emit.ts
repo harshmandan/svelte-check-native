@@ -6,14 +6,17 @@ async function $$render_3a14f9f8() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         {
-            const foo: any = undefined;
+            const foo = undefined;
             void foo;
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_3a14f9f8;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_3a14f9f8>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

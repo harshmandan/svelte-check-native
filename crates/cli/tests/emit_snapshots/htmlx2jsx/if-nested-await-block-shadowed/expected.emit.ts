@@ -5,52 +5,52 @@ async function $$render_bdea4648() {
         // template type-check body (incremental)
         if ((hello)) {
             void [hello];
-            {
-                const hello: any = undefined;
+            ;(async () => {
+                const $$_await = await (aPromise); const hello = $$_await;
                 (hello);
                 void hello;
-            }
+            });
             (hello);
-            {
-                const foo: any = undefined;
+            ;(async () => {
+                const $$_await = await (aPromise); const foo = $$_await;
                 const hello = foo;
                 void hello;
                 (hello);
                 void foo;
-            }
+            });
             (hello);
-            {
-                const hi: any = undefined;
+            ;(async () => {
+                const $$_await = await (aPromise); const hi = $$_await;
                 (hello);
                 void hi;
-            }
+            });
             {
-                const hello: any = undefined;
+                const hello = undefined;
                 (hello);
                 void hello;
             }
-            {
-                const hello: any = undefined;
+            ;(async () => {
+                const $$_await = await (hello); const hello = $$_await;
                 (hello);
                 if ((hello)) {
                     void [hello];
                     (hello);
                     (hello);
                     {
-                        const hello: any = undefined;
+                        const hello = undefined;
                         (hello);
                         void hello;
                     }
-                    {
-                        const hello: any = undefined;
+                    ;(async () => {
+                        const $$_await = await (x); const hello = $$_await;
                         if ((hello)) {
                             void [hello];
                             (hello);
                         }
                         void hello;
-                    }
-                    {
-                        const foo: any = undefined;
+                    });
+                    ;(async () => {
+                        const $$_await = await (x); const foo = $$_await;
                         const hello = foo;
                         void hello;
                         if ((hello)) {
@@ -58,19 +58,19 @@ async function $$render_bdea4648() {
                             (hello);
                         }
                         void foo;
-                    }
+                    });
                 }
                 void hello;
-            }
+            });
             if ((hi && bye)) {
                 void [hi, bye];
-                {
-                    const bye: any = undefined;
+                ;(async () => {
+                    const $$_await = await (x); const bye = $$_await;
                     (bye);
                     void bye;
-                }
+                });
                 {
-                    const hello: any = undefined;
+                    const hello = undefined;
                     if ((hello)) {
                         void [hello];
                         (hello);
@@ -79,32 +79,32 @@ async function $$render_bdea4648() {
                 }
             } else if ((cool)) {
                 void [cool];
-                {
-                    const cool: any = undefined;
+                ;(async () => {
+                    const $$_await = await (cool); const cool = $$_await;
                     if ((cool)) {
                         void [cool];
                         (cool);
                     }
                     void cool;
-                }
+                });
                 {
-                    const cool: any = undefined;
+                    const cool = undefined;
                     void cool;
                 }
-                {
-                    const cool: any = undefined;
+                ;(async () => {
+                    const $$_await = await (aPromise); const cool = $$_await;
                     (cool);
                     void cool;
-                }
+                });
             } else {
-                {
-                    const hello: any = undefined;
+                ;(async () => {
+                    const $$_await = await (x); const hello = $$_await;
                     if ((hello)) {
                         void [hello];
                         (hello);
                     }
                     void hello;
-                }
+                });
             }
         }
         if ((cool)) {
@@ -114,8 +114,8 @@ async function $$render_bdea4648() {
             void [hello];
             (hello);
         }
-        {
-            const cool: any = undefined;
+        ;(async () => {
+            const $$_await = await (cool); const cool = $$_await;
             if ((cool)) {
                 void [cool];
                 (cool);
@@ -124,9 +124,9 @@ async function $$render_bdea4648() {
                 (hello);
             }
             void cool;
-        }
+        });
         {
-            const cool: any = undefined;
+            const cool = undefined;
             if ((cool)) {
                 void [cool];
                 (cool);
@@ -137,10 +137,13 @@ async function $$render_bdea4648() {
             void cool;
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_bdea4648;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_bdea4648>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

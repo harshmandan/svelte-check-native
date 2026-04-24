@@ -9,18 +9,21 @@ async function $$render_03f92358() {
         for (const y of __svn_each_items(x)) {
             void y;
         }
-        {
-            const y: any = undefined;
+        ;(async () => {
+            const $$_await = await (x); const y = $$_await;
             void y;
-        }
+        });
         if ((bla)) {
             void [bla];
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_03f92358;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_03f92358>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

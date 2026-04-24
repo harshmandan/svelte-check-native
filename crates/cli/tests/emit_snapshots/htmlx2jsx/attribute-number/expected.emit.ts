@@ -5,13 +5,24 @@ async function $$render_cfb295d3() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(SomeComponent);
-            new __svn_C_0({ target: __svn_any(), props: {tabindex: "1"} });
+            new __svn_C_0({ target: __svn_any(), props: {"tabindex": "1"} });
+        }
+        { svelteHTML.createElement("div", {
+            "tabindex": 1,
+            "maxlength": 1,
+            "minlength": (1),
+            "span": (1),
+            "role": `none`,
+        });
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_cfb295d3;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_cfb295d3>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

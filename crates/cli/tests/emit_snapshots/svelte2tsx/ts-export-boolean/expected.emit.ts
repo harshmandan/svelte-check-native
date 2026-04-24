@@ -14,7 +14,6 @@ b2 = undefined as any;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
-    void __svn_tpl_check;
     void bla;
     void blubb;
     void bla1;
@@ -23,9 +22,13 @@ b2 = undefined as any;
     void a2;
     void b1;
     void b2;
+    return { props: /** @type {any} */({}) };
 }
 $$render_6affb005;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>, { bla: any; blubb: any; bla1: boolean; blubb1: boolean; a1: any; a2: any; b1: boolean; b2: boolean; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>> & { bla: any; blubb: any; bla1: boolean; blubb1: boolean; a1: any; a2: any; b1: boolean; b2: boolean; };
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_6affb005>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

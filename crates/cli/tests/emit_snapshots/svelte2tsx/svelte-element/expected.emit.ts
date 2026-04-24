@@ -5,13 +5,26 @@ async function $$render_4160f2ef() {
   let tag = 'div';
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        (tag);
+        { svelteHTML.createElement((tag), {});         }
+        {
+        }
+        { svelteHTML.createElement((tag ? 'a' : 'b'), {});         }
+        { svelteHTML.createElement((tag), {});             (tag);
+        }
+        { svelteHTML.createElement((tag), {});         }
+        { svelteHTML.createElement(('a'), {
+            "href": `https://kit.svelte.dev`,
+        });
+        }
     }
-    void __svn_tpl_check;
     void tag;
+    return { props: /** @type {any} */({}) };
 }
 $$render_4160f2ef;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_4160f2ef>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

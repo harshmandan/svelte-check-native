@@ -4,18 +4,21 @@
 async function $$render_7a575470() {
 
                   
-           let a!: A;
+           let a: A;
            let b: A = {};
 b = undefined as any;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
-    void __svn_tpl_check;
     void a;
     void b;
+    return { props: /** @type {any} */({}) };
 }
 $$render_7a575470;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>, { a: A; b: A; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>> & { a: A; b: A; };
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_7a575470>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

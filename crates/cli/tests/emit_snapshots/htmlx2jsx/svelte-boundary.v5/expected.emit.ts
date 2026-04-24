@@ -4,24 +4,30 @@ async function $$render_e5ad478b() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         {
-            const failed: any = undefined;
-            void failed;
             {
-                const __svn_C_27 = __svn_ensure_component(ComponentThatFails);
-                new __svn_C_27({ target: __svn_any(), props: {} });
-            }
-            {
-                void ((e: any) => {
-                    (e);
-                    void e;
-                });
+                const failed = undefined;
+                void failed;
+                {
+                    const __svn_C_27 = __svn_ensure_component(ComponentThatFails);
+                    new __svn_C_27({ target: __svn_any(), props: {} });
+                }
+                {
+                    void ((e: any) => {
+                        { svelteHTML.createElement("p", {});                             (e);
+                        }
+                        void e;
+                    });
+                }
             }
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_e5ad478b;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_e5ad478b>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

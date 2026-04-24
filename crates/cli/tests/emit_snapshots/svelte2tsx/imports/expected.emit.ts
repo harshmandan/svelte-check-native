@@ -10,13 +10,17 @@ async function $$render_df4c5ef7() {
            let world = "name"
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        (world);
+        { svelteHTML.createElement("h1", {});             (world);
+        }
     }
-    void __svn_tpl_check;
     void world;
+    return { props: /** @type {{ world?: any; }} */({}) };
 }
 $$render_df4c5ef7;
-declare const __svn_component_default: import('svelte').Component<{ world?: any; }, { world: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ world?: any; }> & { world: any; };
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_df4c5ef7>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

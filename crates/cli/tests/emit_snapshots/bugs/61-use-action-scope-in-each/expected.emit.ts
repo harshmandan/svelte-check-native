@@ -19,14 +19,15 @@ async function $$render_ceba0c24() {
             const index: number = 0;
             const label = `slide-${index}`;
             void label;
-            const __svn_action_0 = __svn_ensure_action(intersection(__svn_map_element_tag('div'), ({
+                const __svn_action_0 = __svn_ensure_action(intersection(__svn_map_element_tag('div'), ({
             cb: (_n) => {
                 active = index
                 void label
             },
         })));
-            void __svn_action_0;
-            (item);
+            { svelteHTML.createElement("div", __svn_union(__svn_action_0), {});                 void __svn_action_0;
+                (item);
+            }
             void item;
             void index;
         }
@@ -35,9 +36,10 @@ async function $$render_ceba0c24() {
     void items;
     void intersection;
     void active;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_ceba0c24;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_ceba0c24>>['props']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_ceba0c24>>['props']>;
 export default __svn_component_default;
 

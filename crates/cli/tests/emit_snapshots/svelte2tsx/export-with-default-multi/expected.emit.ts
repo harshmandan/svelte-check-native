@@ -8,12 +8,15 @@ async function $$render_68adadcb() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
-    void __svn_tpl_check;
     void name;
     void world;
+    return { props: /** @type {{ name?: any; world?: any; }} */({}) };
 }
 $$render_68adadcb;
-declare const __svn_component_default: import('svelte').Component<{ name?: any; world?: any; }, { name: any; world: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ name?: any; world?: any; }> & { name: any; world: any; };
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_68adadcb>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

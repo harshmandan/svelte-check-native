@@ -4,13 +4,13 @@ async function $$render_643dbbd8() {
 
     let name1: string = "world"
 name1 = undefined as any;
-    let name2!: string;
-    let name3: string = '', name4!: string;
+    let name2: string;
+    let name3: string = '', name4: string;
 name3 = undefined as any;
 
     let rename1: string = '';
 rename1 = undefined as any;
-    let rename2!: string;
+    let rename2: string;
 
     class Foo {}
     function bar() {}
@@ -23,8 +23,11 @@ rename1 = undefined as any;
                                                                                                                                                                               
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        { svelteHTML.createElement("svelte:options", {
+            "runes": (false),
+        });
+        }
     }
-    void __svn_tpl_check;
     void name1;
     void name2;
     void name3;
@@ -37,9 +40,13 @@ rename1 = undefined as any;
     void RenameFoo;
     void renamebar;
     void renamebaz;
+    return { props: /** @type {any} */({}) };
 }
 $$render_643dbbd8;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_643dbbd8>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

@@ -109,6 +109,36 @@ pub fn kit_prop_decl(name: &str, kind: RouteKind) -> Option<String> {
     }
 }
 
+/// Return just the TYPE source (no name, no `:`) for a Kit-auto-typed
+/// Svelte-4 `export let <name>` declaration on a route file. The
+/// caller splices `: <type>` after the identifier in the overlay.
+///
+/// Mirrors upstream `svelte2tsx/src/svelte2tsx/nodes/ExportedNames.ts`
+/// `handleTypeAssertion` (lines 424-440): when the exported local is
+/// one of `data` / `form` / `snapshot` on a Kit route file AND the
+/// user didn't already annotate it, upstream synthesizes
+/// `: import('./$types.js').<Type>`. We match the same set but widen
+/// `form`/`snapshot` with `| undefined` because `let X: T;` can't
+/// carry TS's object-member `?` optional marker — the declaration
+/// needs a value-position `T | undefined` union. `data` stays
+/// required (upstream emits `: PageData` without `| undefined` since
+/// the reassignment via `__sveltets_2_any(data)` loosens it
+/// downstream anyway; our `!` definite-assign has the same net
+/// effect).
+///
+/// Returns `None` for names that aren't kit-auto-typed — the caller
+/// falls back to `: any` (our legacy widen).
+pub fn kit_widen_type(name: &str, kind: RouteKind) -> Option<&'static str> {
+    match (kind, name) {
+        (RouteKind::Page, "data") => Some("import('./$types.js').PageData"),
+        (RouteKind::Page, "form") => Some("import('./$types.js').ActionData | undefined"),
+        (RouteKind::Page, "snapshot") => Some("import('./$types.js').Snapshot | undefined"),
+        (RouteKind::Layout, "data") => Some("import('./$types.js').LayoutData"),
+        (RouteKind::Layout, "snapshot") => Some("import('./$types.js').Snapshot | undefined"),
+        _ => None,
+    }
+}
+
 /// Build the synthesized Props object type for a route-file `.svelte`
 /// that has no explicit `$props()` annotation. Returns `None` when no
 /// prop in the destructure list is kit-auto-typed; the caller then

@@ -81,6 +81,26 @@ pub struct TemplateSummary {
     /// emits unanchored and every destructure silently passes as
     /// implicit `any`.
     pub action_directives: Vec<ActionDirective>,
+    /// True when any `<ChildComponent on:EVENT />` bare re-dispatch
+    /// directive was seen (the `on:EVENT` form with no `={…}` value —
+    /// event bubbling). Drives the default-export Props-widen path
+    /// in emit: upstream svelte2tsx's event-handler emit for this
+    /// shape produces
+    /// `__sveltets_2_bubbleEventDef(__sveltets_2_instanceOf(<Child>).$$events_def, '<event>')`,
+    /// which contains a `typeof import('./Child.svelte')` self-
+    /// reference in Events-as-return. The circular type chain defeats
+    /// generic inference in `__sveltets_2_with_any_event<Props, Events,
+    /// …>`, falling back to the `Props = {}` default — effectively
+    /// widening the exported component's Props to `{}`. Consumers
+    /// then silently accept any object-literal `props`, skipping the
+    /// TS2353 excess-prop + TS2322 per-field checks that a strict
+    /// Props would fire.
+    ///
+    /// We mirror the effective behavior by emitting
+    /// `Component<Record<string, any>>` for the default export
+    /// whenever this flag is set, instead of the strict
+    /// `Component<$$ComponentProps>` we'd otherwise use.
+    pub has_bubbled_component_event: bool,
 }
 
 /// One `use:NAME={PARAMS}` directive site. Populated by the template
@@ -159,6 +179,20 @@ pub struct ComponentInstantiation {
     /// in turn stops collisions with user props whose names start
     /// with "on" (`oneTouchReaction`, `onVideoMoments`, etc.).
     pub on_events: Vec<OnEventDirective>,
+    /// Simple-identifier targets of `bind:NAME={target}` directives
+    /// on this component (excluding `bind:this` which lives in
+    /// `bind_this_target`). Emit writes
+    /// `() => TARGET = __svn_any(null);` as an uncalled-arrow trailer
+    /// after the component's `new` expression so TS flow analysis
+    /// sees the target as "assigned to any somewhere" — widens its
+    /// inferred type enough to model the Svelte runtime's async
+    /// prop writeback. Critical for `let target = $state()` with no
+    /// initializer: without the trailer, TS binds `$state<T>()`'s
+    /// generic to `{}` / `unknown` and downstream reads
+    /// (`target.focus()`) fire TS2339 / TS18046. Mirrors upstream
+    /// svelte2tsx's `() => x = __sveltets_2_any(null);` shape in
+    /// `htmlxtojsx_v2/nodes/InlineComponent.ts`.
+    pub component_bind_widen_targets: Vec<SmolStr>,
     /// Byte offset of the `<Component` token in the source. Emit keys
     /// the prop-check on this to locate the correct enclosing scope
     /// (i.e. inside the right `{#each}` / `{#if}` / `{#snippet}` body)
@@ -758,12 +792,13 @@ fn is_ident_continue(c: char) -> bool {
 /// skipped so the satisfies object stays correct on the rest.
 fn collect_component_instantiation(
     c: &svn_parser::Component,
-    _source: &str,
+    source: &str,
     summary: &mut TemplateSummary,
 ) {
     let mut props: Vec<PropShape> = Vec::with_capacity(c.attributes.len());
     let mut on_events: Vec<OnEventDirective> = Vec::new();
     let mut bind_this_target: Option<Range> = None;
+    let mut component_bind_widen_targets: Vec<SmolStr> = Vec::new();
     // Detect "implicit children": any non-snippet, non-whitespace
     // child node between the open/close tags. Pure `{#snippet}`
     // children hoist as explicit props (different code path); pure
@@ -834,9 +869,18 @@ fn collect_component_instantiation(
                             event_name: d.name.clone(),
                             handler_range: *expression_range,
                         });
+                    } else {
+                        // `on:event` with no value — bare re-dispatch
+                        // (event bubbling from sub-component). Flag at
+                        // summary level so emit can widen this
+                        // component's own default-export Props to
+                        // match upstream's `with_any_event` +
+                        // `isomorphic_component` inference-failure
+                        // widening (see
+                        // `TemplateSummary::has_bubbled_component_event`
+                        // docs for the mechanism).
+                        summary.has_bubbled_component_event = true;
                     }
-                    // `on:event` with no value is a bare re-dispatch
-                    // — runtime-only, no handler to type-check.
                     continue;
                 }
                 // `bind:NAME={x}` on a component (other than
@@ -905,6 +949,17 @@ fn collect_component_instantiation(
                         name: target,
                         expr_range: *expression_range,
                     });
+                    // Widen target if the expression is a simple
+                    // identifier — emit's post-`new` trailer will write
+                    // `() => <ident> = __svn_any(null);` so TS flow
+                    // analysis widens the target's type to `any`. Only
+                    // simple identifiers are safe; member expressions
+                    // (`bind:prop={x.y}`) and destructures aren't
+                    // assignable in a one-liner arrow without matching
+                    // the exact declaration shape.
+                    if let Some(ident) = simple_identifier_in(source, *expression_range) {
+                        component_bind_widen_targets.push(ident);
+                    }
                     continue;
                 }
                 // Bare shorthand `bind:NAME` desugars to
@@ -925,6 +980,9 @@ fn collect_component_instantiation(
                         | PropShape::GetSetBinding { name, .. } => name != &target,
                         PropShape::Spread { .. } => true,
                     });
+                    // Bare `bind:NAME` is `bind:NAME={NAME}` — same
+                    // widening trailer as the explicit form.
+                    component_bind_widen_targets.push(target.clone());
                     props.push(PropShape::Shorthand { name: target });
                     continue;
                 }
@@ -998,6 +1056,7 @@ fn collect_component_instantiation(
             has_implicit_children,
             on_events,
             bind_this_target,
+            component_bind_widen_targets,
             node_start: c.range.start,
         });
 }

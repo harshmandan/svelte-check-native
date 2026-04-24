@@ -3,35 +3,42 @@
 async function $$render_9eb76bb9() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        let __svn_bind_pair_0: [() => any, (v: any) => void] = [() => undefined as any, () => {}];
+        /** @type {[() => any, (v: any) => void]} */ let __svn_bind_pair_0 = [() => undefined, () => {}];
         void __svn_bind_pair_0;
-        let __svn_bind_pair_1: [() => any, (v: any) => void] = [() => undefined as any, () => {}];
+        /** @type {[() => any, (v: any) => void]} */ let __svn_bind_pair_1 = [() => undefined, () => {}];
         void __svn_bind_pair_1;
-        let __svn_bind_pair_2: [() => any, (v: any) => void] = [() => undefined as any, () => {}];
+        /** @type {[() => any, (v: any) => void]} */ let __svn_bind_pair_2 = [() => undefined, () => {}];
         void __svn_bind_pair_2;
-        let __svn_bind_pair_3: [() => any, (v: any) => void] = [() => undefined as any, () => {}];
+        /** @type {[() => any, (v: any) => void]} */ let __svn_bind_pair_3 = [() => undefined, () => {}];
         void __svn_bind_pair_3;
-        let __svn_bind_pair_4: [() => any, (v: any) => void] = [() => undefined as any, () => {}];
+        /** @type {[() => any, (v: any) => void]} */ let __svn_bind_pair_4 = [() => undefined, () => {}];
         void __svn_bind_pair_4;
-        let __svn_bind_pair_5: [() => any, (v: any) => void] = [() => undefined as any, () => {}];
+        /** @type {[() => any, (v: any) => void]} */ let __svn_bind_pair_5 = [() => undefined, () => {}];
         void __svn_bind_pair_5;
-        void (__svn_get_set_binding(get,  set) satisfies string);
-        void (__svn_get_set_binding(() => v,  new_v => v = new_v) satisfies string);
-        void (__svn_get_set_binding(null,  set) satisfies HTMLElement['clientWidth']);
-        void (__svn_get_set_binding(null,  set) satisfies DOMRectReadOnly);
+        { svelteHTML.createElement("input", {});             void (__svn_get_set_binding(get,  set) satisfies string);
+        }
+        { svelteHTML.createElement("input", {});             void (__svn_get_set_binding(() => v,  new_v => v = new_v) satisfies string);
+        }
+        { svelteHTML.createElement("div", {});             void (__svn_get_set_binding(null,  set) satisfies HTMLElement['clientWidth']);
+        }
+        { svelteHTML.createElement("div", {});             void (__svn_get_set_binding(null,  set) satisfies DOMRectReadOnly);
+        }
         {
             const __svn_C_9f = __svn_ensure_component(Input);
-            new __svn_C_9f({ target: __svn_any(), props: {value: __svn_get_set_binding(get,  set)} });
+            new __svn_C_9f({ target: __svn_any(), props: {"value": __svn_get_set_binding(get,  set)} });
         }
         {
             const __svn_C_bf = __svn_ensure_component(Input);
-            new __svn_C_bf({ target: __svn_any(), props: {value: __svn_get_set_binding(() => v,  new_v => v = new_v)} });
+            new __svn_C_bf({ target: __svn_any(), props: {"value": __svn_get_set_binding(() => v,  new_v => v = new_v)} });
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_9eb76bb9;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_9eb76bb9>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

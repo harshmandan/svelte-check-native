@@ -4,17 +4,21 @@ async function $$render_d0e284e2() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         for (const item of __svn_each_items(items)) {
-            const i: number = 0;
-            (item);
-            (i);
+            /** @type {number} */ const i = 0;
+            { svelteHTML.createElement("div", {});                 (item);
+                (i);
+            }
             void item;
             void i;
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_d0e284e2;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_d0e284e2>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

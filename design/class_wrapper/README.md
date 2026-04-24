@@ -7,7 +7,7 @@ begins. This directory holds the fixtures gating Phase 2
 
 ## The problem we're solving
 
-**Real-world repro:** `bench/layerchart/src/lib/components/charts/BarChart.svelte`.
+**Real-world repro:** a charting-lib `BarChart.svelte` component under `src/lib/components/charts/`.
 
 The user's component declares `interface $$Props` with properties
 typed as `typeof <body-local>`:

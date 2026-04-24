@@ -11,6 +11,7 @@ foo = undefined as any;
     void __svn_tpl_check;
     void foo;
     void bar;
+    return { props: undefined as any as ({ foo?: number; bar?: string; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: number; bar: string; }) };
 }
 $$render_bf84b3dd;
 declare const __svn_component_default: import('svelte').Component<{ foo?: number; bar?: string; }, { foo: number; bar: string; }>;

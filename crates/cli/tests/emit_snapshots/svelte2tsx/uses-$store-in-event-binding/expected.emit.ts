@@ -8,11 +8,15 @@ async function $$render_6d8f9d53() {
             const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {} });
             __svn_inst_0.$on("click", ($check ? method1 : method2));
         }
+        { svelteHTML.createElement("button", {});         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_6d8f9d53;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_6d8f9d53>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

@@ -3,11 +3,22 @@
 async function $$render_15c46473() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        { svelteHTML.createElement("div", {
+            "is": `custom-element`,
+            "camelCase": `true`,
+            "kebab-case": `true`,
+            "PascalCase": `true`,
+            "snake_case": `true`,
+        });
+        }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_15c46473;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_15c46473>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

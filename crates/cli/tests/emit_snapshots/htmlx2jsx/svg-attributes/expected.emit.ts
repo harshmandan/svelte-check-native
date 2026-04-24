@@ -3,11 +3,20 @@
 async function $$render_bed93296() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        { svelteHTML.createElement("svg", {
+            "width": `12`,
+            "height": `12`,
+            "viewBox": `0 0 24 24`,
+        });
+        }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_bed93296;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_bed93296>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

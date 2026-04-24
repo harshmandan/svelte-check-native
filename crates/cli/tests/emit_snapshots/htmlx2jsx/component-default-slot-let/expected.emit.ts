@@ -12,14 +12,18 @@ async function $$render_73106591() {
                 const __svn_C_0 = __svn_ensure_component(Component);
                 new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             }
-            (thing);
-            (n);
+            { svelteHTML.createElement("h1", {});                 (thing);
+                (n);
+            }
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_73106591;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_73106591>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

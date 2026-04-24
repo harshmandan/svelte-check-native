@@ -24,22 +24,26 @@ async function $$render_48a7b4ac() {
             void width;
             void height;
             void sum;
-            (area);
-            (volume);
-            (perimeter);
-            (width);
-            (height);
-            (sum);
+            { svelteHTML.createElement("div", {});                 (area);
+                (volume);
+                (perimeter);
+                (width);
+                (height);
+                (sum);
+            }
             void box;
         }
     }
-    void __svn_tpl_check;
     void boxes;
     void calculate;
     void constant;
+    return { props: /** @type {{ boxes?: any; constant?: any; }} */({}) };
 }
 $$render_48a7b4ac;
-declare const __svn_component_default: import('svelte').Component<{ boxes?: any; constant?: any; }, { boxes: any; constant: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ boxes?: any; constant?: any; }> & { boxes: any; constant: any; };
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_48a7b4ac>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

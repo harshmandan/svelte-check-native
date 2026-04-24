@@ -5,15 +5,15 @@ async function $$render_0e0b7d84() {
     /**
      * DOCS!
      */
-           let a!: any;
+           let a = /** @type {any} */ (null);
     /**
      * not this
      */
     /**
      * MORE DOCS!
      */
-           let b!: any;
-           let c!: any;
+           let b = /** @type {any} */ (null);
+           let c = /** @type {any} */ (null);
     /**
      * d
      */
@@ -25,15 +25,18 @@ async function $$render_0e0b7d84() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
-    void __svn_tpl_check;
     void a;
     void b;
     void c;
     void d;
     void e;
+    return { props: /** @type {{ a: any; b: any; c: any; d: any; e: any; }} */({}) };
 }
 $$render_0e0b7d84;
-declare const __svn_component_default: import('svelte').Component<{ a: any; b: any; c: any; d: any; e: any; }, { a: any; b: any; c: any; d: any; e: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ a: any; b: any; c: any; d: any; e: any; }> & { a: any; b: any; c: any; d: any; e: any; };
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_0e0b7d84>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

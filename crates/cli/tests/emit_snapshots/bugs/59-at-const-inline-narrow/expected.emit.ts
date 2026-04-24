@@ -3,6 +3,7 @@
   type Shape =
     | { kind: 'circle'; radius: number }
     | { kind: 'square'; side: number }
+type $$ComponentProps = { shape: Shape };
 async function $$render_c6382cf7() {
 
               
@@ -14,27 +15,32 @@ async function $$render_c6382cf7() {
         // template type-check body (incremental)
         const k = shape.kind;
         void k;
-        (k);
+        { svelteHTML.createElement("p", {});             (k);
+        }
         if ((shape.kind === 'circle')) {
             void [shape.kind];
-            (shape.radius);
+            { svelteHTML.createElement("p", {});                 (shape.radius);
+            }
         } else if ((shape.kind === 'square')) {
             void [shape.kind];
-            (shape.side);
+            { svelteHTML.createElement("p", {});                 (shape.side);
+            }
         }
         const [first, { kind: k2 }, ...rest] = [shape, shape];
         void first;
         void k2;
         void rest;
-        (first.kind);
-        (k2);
-        (rest.length);
+        { svelteHTML.createElement("p", {});             (first.kind);
+            (k2);
+            (rest.length);
+        }
     }
     void __svn_tpl_check;
     void shape;
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_c6382cf7;
-declare const __svn_component_default: import('svelte').Component<{ shape: Shape }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ shape: Shape }>;
+declare const __svn_component_default: import('svelte').Component<$$ComponentProps>;
+declare type __svn_component_default = import('svelte').SvelteComponent<$$ComponentProps>;
 export default __svn_component_default;
 

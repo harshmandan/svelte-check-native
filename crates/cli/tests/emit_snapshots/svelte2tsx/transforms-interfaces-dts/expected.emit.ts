@@ -36,6 +36,7 @@ async function $$render_a34657fb() {
     void __svn_tpl_check;
     void foo;
     void bar;
+    return { props: undefined as any as ({ foo: Foo; bar: Bar3; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: Foo; bar: Bar3; }) };
 }
 $$render_a34657fb;
 declare const __svn_component_default: import('svelte').Component<{ foo: Foo; bar: Bar3; }, { foo: Foo; bar: Bar3; }>;

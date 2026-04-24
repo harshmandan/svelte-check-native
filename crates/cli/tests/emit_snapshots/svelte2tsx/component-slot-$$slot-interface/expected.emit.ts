@@ -22,12 +22,14 @@ async function $$render_d4619873() {
     let b = 7;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        { svelteHTML.createElement("div", {});         }
     }
     void __svn_tpl_check;
     void b;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_d4619873;
-declare const __svn_component_default: import('svelte').Component<Partial<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Partial<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>>;
+declare const __svn_component_default: import('svelte').Component<Partial<Awaited<ReturnType<typeof $$render_d4619873>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_d4619873>>['props']>>>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_d4619873>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_d4619873>>['props']>>>;
 export default __svn_component_default;
 

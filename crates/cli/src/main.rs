@@ -966,7 +966,17 @@ fn run_typecheck(
             let (fragment, _template_errors) =
                 svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
             let summary = svn_analyze::walk_template(&fragment, source);
-            let emitted = svn_emit::emit_document(&doc, &fragment, &summary, file);
+            // Overlay extension mirrors upstream svelte-check's
+            // `isTsSvelte(text)` per-file dispatch
+            // (`language-tools/packages/svelte-check/src/incremental.ts:213`):
+            // `<script lang="ts">` → `.svelte.svn.ts` with TS-strict
+            // inference; otherwise `.svelte.svn.js`, which flips tsgo
+            // into JS-loose inference (`$state([])` → `any[]`;
+            // `noImplicitAny:false` defaults) and lets tsgo natively
+            // parse user-authored JSDoc `@typedef` / `@type`
+            // annotations on Svelte-4 `export let` props.
+            let is_ts = doc.script_lang() == svn_parser::ScriptLang::Ts;
+            let emitted = svn_emit::emit_document_with_lang(&doc, &fragment, &summary, file, is_ts);
             let kind = if idx < svelte_sources_in_scope_end {
                 svn_typecheck::InputKind::Svelte
             } else {
@@ -980,6 +990,7 @@ fn run_typecheck(
                 overlay_line_starts: emitted.overlay_line_starts,
                 source_line_starts: emitted.source_line_starts,
                 kind,
+                is_ts_overlay: is_ts,
             }
         })
         .collect_into_vec(&mut inputs);
@@ -1002,6 +1013,7 @@ fn run_typecheck(
             overlay_line_starts: Vec::new(),
             source_line_starts: Vec::new(),
             kind: svn_typecheck::InputKind::KitFile,
+            is_ts_overlay: true,
         })
     }));
 
@@ -1031,6 +1043,7 @@ fn run_typecheck(
                 overlay_line_starts: Vec::new(),
                 source_line_starts: Vec::new(),
                 kind: svn_typecheck::InputKind::UserTsOverlay,
+                is_ts_overlay: true,
             })
         }));
     }
@@ -1596,7 +1609,8 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
         }
 
         let summary = svn_analyze::walk_template(&fragment, &source);
-        let emitted = svn_emit::emit_document(&doc, &fragment, &summary, file);
+        let is_ts = doc.script_lang() == svn_parser::ScriptLang::Ts;
+        let emitted = svn_emit::emit_document_with_lang(&doc, &fragment, &summary, file, is_ts);
         let display_path = file
             .strip_prefix(workspace)
             .unwrap_or(file)

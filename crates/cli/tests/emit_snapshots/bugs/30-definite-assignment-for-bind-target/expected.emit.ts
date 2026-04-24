@@ -11,13 +11,15 @@ async function $$render_b44f0ee2() {
     focusLater();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        inputEl = null as any as HTMLElementTagNameMap['div'];
+        { svelteHTML.createElement("div", {});             inputEl = null as any as HTMLElementTagNameMap['div'];
+        }
     }
     void __svn_tpl_check;
     void inputEl;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_b44f0ee2;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_b44f0ee2>>['props']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_b44f0ee2>>['props']>;
 export default __svn_component_default;
 

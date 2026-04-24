@@ -10,12 +10,17 @@ foo = undefined as any;
 	       const bar: string = ''
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        { svelteHTML.createElement("svelte:options", {
+            "accessors": (true),
+        });
+        }
     }
     void __svn_tpl_check;
     void foo;
     void foo2;
     void clazz;
     void bar;
+    return { props: undefined as any as ({ foo?: number; foo2?: any; class: string; bar?: string; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: number; foo2: any; bar: string; }) };
 }
 $$render_90d89a0a;
 declare const __svn_component_default: import('svelte').Component<{ foo?: number; foo2?: any; class: string; bar?: string; }, { foo: number; foo2: any; bar: string; }>;

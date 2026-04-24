@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn bench_snapshot_thresholds() {
-        // bench/cryptgeon pins svelte 5.20.5 — pre-props ruleset.
+        // A real bench pins svelte 5.20.5 — pre-props ruleset.
         let c = CompatFeatures::from_version(Some(SvelteVersion {
             major: 5,
             minor: 20,
@@ -209,8 +209,8 @@ mod tests {
         assert!(!c.state_locally_fires_on_props);
         assert!(!c.state_locally_rest_prop);
 
-        // bench/control-svelte-4 pins svelte 5.48.2 — post-props,
-        // pre-pointer-touch, pre-rest-prop.
+        // Our Svelte-4 control bench pins svelte 5.48.2 —
+        // post-props, pre-pointer-touch, pre-rest-prop.
         let c = CompatFeatures::from_version(Some(SvelteVersion {
             major: 5,
             minor: 48,
@@ -220,7 +220,7 @@ mod tests {
         assert!(c.state_locally_fires_on_props);
         assert!(!c.state_locally_rest_prop);
 
-        // bench/control-svelte-5 pins svelte 5.55.4 — modern ruleset.
+        // Our Svelte-5 control bench pins svelte 5.55.4 — modern ruleset.
         let c = CompatFeatures::from_version(Some(SvelteVersion {
             major: 5,
             minor: 55,

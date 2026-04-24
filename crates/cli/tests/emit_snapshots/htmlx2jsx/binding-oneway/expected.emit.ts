@@ -3,21 +3,32 @@
 async function $$render_6cdf582f() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        width = null as any as HTMLElement['clientWidth'];
-        height = null as any as HTMLElement['clientHeight'];
-        offsetWidth = null as any as HTMLElement['offsetWidth'];
-        offsetHeight = null as any as HTMLElement['offsetHeight'];
-        duration = null as any as HTMLMediaElement['duration'];
-        buffered = null as any as import('svelte/elements').SvelteMediaTimeRange[];
-        seekable = null as any as import('svelte/elements').SvelteMediaTimeRange[];
-        seeking = null as any as HTMLMediaElement['seeking'];
-        played = null as any as import('svelte/elements').SvelteMediaTimeRange[];
-        ended = null as any as HTMLMediaElement['ended'];
+        { svelteHTML.createElement("div", {
+            "type": `text`,
+        });
+            width = /** @type {HTMLElement['clientWidth']} */ (null);
+            height = /** @type {HTMLElement['clientHeight']} */ (null);
+            offsetWidth = /** @type {HTMLElement['offsetWidth']} */ (null);
+            offsetHeight = /** @type {HTMLElement['offsetHeight']} */ (null);
+        }
+        { svelteHTML.createElement("video", {
+            "src": (clip),
+        });
+            duration = /** @type {HTMLMediaElement['duration']} */ (null);
+            buffered = /** @type {import('svelte/elements').SvelteMediaTimeRange[]} */ (null);
+            seekable = /** @type {import('svelte/elements').SvelteMediaTimeRange[]} */ (null);
+            seeking = /** @type {HTMLMediaElement['seeking']} */ (null);
+            played = /** @type {import('svelte/elements').SvelteMediaTimeRange[]} */ (null);
+            ended = /** @type {HTMLMediaElement['ended']} */ (null);
+        }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_6cdf582f;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_6cdf582f>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

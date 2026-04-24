@@ -8,12 +8,15 @@ async function $$render_21a352ca() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
-    void __svn_tpl_check;
     void name;
     void name2;
+    return { props: /** @type {{ name3?: any; name4?: any; }} */({}) };
 }
 $$render_21a352ca;
-declare const __svn_component_default: import('svelte').Component<{ name3?: any; name4?: any; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ name3?: any; name4?: any; }>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_21a352ca>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

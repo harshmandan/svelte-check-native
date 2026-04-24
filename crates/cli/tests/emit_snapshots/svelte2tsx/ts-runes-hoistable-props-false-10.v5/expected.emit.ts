@@ -18,6 +18,7 @@ type B = (typeof data)['cfg'];
     }
     void __svn_tpl_check;
     void data;
+    return { props: undefined as any as (Props), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_654e105f;
 declare const __svn_component_default: import('svelte').Component<Props>;

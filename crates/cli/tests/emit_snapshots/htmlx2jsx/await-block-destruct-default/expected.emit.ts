@@ -3,51 +3,50 @@
 async function $$render_7177a532() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        {
-            const a: any = undefined;
-            const b: any = undefined;
-            const c: any = undefined;
+        ;(async () => {
+            const $$_await = await (object); const { a = 3, b = 4, c } = $$_await;
             void a;
             void b;
             void c;
-        }
-        {
-            const a: any = undefined;
-            const b: any = undefined;
-            const c: any = undefined;
+        });
+        ;(async () => {
+            const $$_await = await (array); const [a, b, c = 3] = $$_await;
             void a;
             void b;
             void c;
-        }
-        {
-            const value: any = undefined;
+        });
+        ;(async () => {
+            const $$_await = await (objectReject); const value = $$_await;
             void value;
-        }
+        });
         {
-            const a: any = undefined;
-            const b: any = undefined;
-            const c: any = undefined;
+            const a = undefined;
+            const b = undefined;
+            const c = undefined;
             void a;
             void b;
             void c;
         }
-        {
-            const value: any = undefined;
+        ;(async () => {
+            const $$_await = await (arrayReject); const value = $$_await;
             void value;
-        }
+        });
         {
-            const a: any = undefined;
-            const b: any = undefined;
-            const c: any = undefined;
+            const a = undefined;
+            const b = undefined;
+            const c = undefined;
             void a;
             void b;
             void c;
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_7177a532;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_7177a532>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

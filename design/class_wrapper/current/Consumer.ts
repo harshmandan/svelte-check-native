@@ -1,4 +1,5 @@
-// Consumer — reproduces the TS7006 we observe on layerchart BarChart.
+// Consumer — reproduces the TS7006 we observe on a charting-lib
+// BarChart-style component.
 //
 // With the current emit shape above, Component_default's props slot is
 // `Partial<{ handler: any }>`. When the consumer passes an arrow

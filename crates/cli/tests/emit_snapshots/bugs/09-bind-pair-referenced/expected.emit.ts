@@ -13,14 +13,16 @@ async function $$render_62bedf5a() {
         // template type-check body (incremental)
         let __svn_bind_pair_0: [() => any, (v: any) => void] = [() => undefined as any, () => {}];
         void __svn_bind_pair_0;
-        void (__svn_get_set_binding(() => getValue(),  (v: string) => setValue(v)) satisfies string);
+        { svelteHTML.createElement("input", {});             void (__svn_get_set_binding(() => getValue(),  (v: string) => setValue(v)) satisfies string);
+        }
     }
     void __svn_tpl_check;
     void getValue;
     void setValue;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_62bedf5a;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_62bedf5a>>['props']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_62bedf5a>>['props']>;
 export default __svn_component_default;
 

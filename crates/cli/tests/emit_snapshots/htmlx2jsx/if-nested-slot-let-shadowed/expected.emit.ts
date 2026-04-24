@@ -37,20 +37,22 @@ async function $$render_ddf2ba9e() {
                         (hello);
                     }
                 }
-                {
-                    let hello: any;
-                    void hello;
-                    if ((hello)) {
-                        void [hello];
-                        (hello);
+                { svelteHTML.createElement("svelte:fragment", {});                     {
+                        let hello: any;
+                        void hello;
+                        if ((hello)) {
+                            void [hello];
+                            (hello);
+                        }
                     }
                 }
-                {
-                    let hello: any;
-                    void hello;
-                    if ((hello)) {
-                        void [hello];
-                        (hello);
+                { svelteHTML.createElement("p", {});                     {
+                        let hello: any;
+                        void hello;
+                        if ((hello)) {
+                            void [hello];
+                            (hello);
+                        }
                     }
                 }
                 {
@@ -112,24 +114,26 @@ async function $$render_ddf2ba9e() {
                     const __svn_C_452 = __svn_ensure_component(Comp);
                     new __svn_C_452({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                 }
-                {
-                    let cool: any;
-                    void cool;
-                    let hello: any;
-                    void hello;
-                    (hello);
+                { svelteHTML.createElement("div", {});                     {
+                        let cool: any;
+                        void cool;
+                        let hello: any;
+                        void hello;
+                        (hello);
+                    }
                 }
             } else {
                 {
                     const __svn_C_4da = __svn_ensure_component(Comp);
                     new __svn_C_4da({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                 }
-                {
-                    let hello: any;
-                    void hello;
-                    let other: any;
-                    void other;
-                    (hello);
+                { svelteHTML.createElement("div", {});                     {
+                        let hello: any;
+                        void hello;
+                        let other: any;
+                        void other;
+                        (hello);
+                    }
                 }
             }
         }
@@ -152,62 +156,68 @@ async function $$render_ddf2ba9e() {
                 (hello);
                 (bye);
             }
-            {
-                let hello: any;
-                void hello;
-                if ((hello && bye)) {
-                    void [hello, bye];
-                    (hello);
-                    (bye);
-                } else if ((hello && bye)) {
-                    void [hello, bye];
-                    (hello);
-                    (bye);
-                } else {
-                    (hello);
-                    (bye);
+            { svelteHTML.createElement("svelte:fragment", {});                 {
+                    let hello: any;
+                    void hello;
+                    if ((hello && bye)) {
+                        void [hello, bye];
+                        (hello);
+                        (bye);
+                    } else if ((hello && bye)) {
+                        void [hello, bye];
+                        (hello);
+                        (bye);
+                    } else {
+                        (hello);
+                        (bye);
+                    }
                 }
             }
-            {
-                let hello: any;
-                void hello;
-                if ((hello && bye)) {
-                    void [hello, bye];
-                    (hello);
-                    (bye);
-                } else if ((hello && bye)) {
-                    void [hello, bye];
-                    (hello);
-                    (bye);
-                } else {
-                    (hello);
-                    (bye);
+            { svelteHTML.createElement("p", {});                 {
+                    let hello: any;
+                    void hello;
+                    if ((hello && bye)) {
+                        void [hello, bye];
+                        (hello);
+                        (bye);
+                    } else if ((hello && bye)) {
+                        void [hello, bye];
+                        (hello);
+                        (bye);
+                    } else {
+                        (hello);
+                        (bye);
+                    }
                 }
             }
-            {
-                let foo: any;
-                void foo;
-                const hello = foo;
-                void hello;
-                if ((hello && bye)) {
-                    void [hello, bye];
-                    (hello);
-                    (bye);
-                } else if ((hello && bye)) {
-                    void [hello, bye];
-                    (hello);
-                    (bye);
-                } else {
-                    (hello);
-                    (bye);
+            { svelteHTML.createElement("p", {});                 {
+                    let foo: any;
+                    void foo;
+                    const hello = foo;
+                    void hello;
+                    if ((hello && bye)) {
+                        void [hello, bye];
+                        (hello);
+                        (bye);
+                    } else if ((hello && bye)) {
+                        void [hello, bye];
+                        (hello);
+                        (bye);
+                    } else {
+                        (hello);
+                        (bye);
+                    }
                 }
             }
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_ddf2ba9e;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_ddf2ba9e>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

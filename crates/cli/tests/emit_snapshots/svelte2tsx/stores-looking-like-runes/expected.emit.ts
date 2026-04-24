@@ -13,12 +13,15 @@ async function $$render_f1e333d8() {
         (state);
         (derived);
     }
-    void __svn_tpl_check;
     void state;
     void derived;
+    return { props: /** @type {any} */({}) };
 }
 $$render_f1e333d8;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_f1e333d8>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

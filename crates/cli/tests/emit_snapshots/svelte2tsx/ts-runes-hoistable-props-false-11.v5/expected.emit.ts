@@ -24,6 +24,7 @@ let {}: Abc = $props();
         // template type-check body (incremental)
     }
     void __svn_tpl_check;
+    return { props: undefined as any as (Abc), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_42b49b9a;
 declare const __svn_component_default: import('svelte').Component<Abc>;

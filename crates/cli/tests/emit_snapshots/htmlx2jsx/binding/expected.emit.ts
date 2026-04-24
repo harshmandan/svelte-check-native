@@ -3,28 +3,45 @@
 async function $$render_d9f25341() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        test = null as any as string;
+        { svelteHTML.createElement("input", {
+            "type": `text`,
+        });
+            test = /** @type {string} */ (null);
+        }
+        { svelteHTML.createElement("input", {
+            "type": `text`,
+        });
+        }
+        { svelteHTML.createElement("input", {
+            "type": `text`,
+        });
+        }
         {
             const __svn_C_7a = __svn_ensure_component(Input);
-            new __svn_C_7a({ target: __svn_any(), props: {type: "text", value: (test)} });
+            new __svn_C_7a({ target: __svn_any(), props: {"type": "text", "value": (test)} });
+            /*svn:ignore_start*/void (() => { test = __svn_any(null); });/*svn:ignore_end*/
         }
         {
             const __svn_C_a1 = __svn_ensure_component(Input);
-            new __svn_C_a1({ target: __svn_any(), props: {type: "text"} });
+            new __svn_C_a1({ target: __svn_any(), props: {"type": "text"} });
         }
         {
             const __svn_C_ca = __svn_ensure_component(Input);
-            new __svn_C_ca({ target: __svn_any(), props: {type: "text"} });
+            new __svn_C_ca({ target: __svn_any(), props: {"type": "text"} });
         }
         {
             const __svn_C_f3 = __svn_ensure_component(Input);
-            new __svn_C_f3({ target: __svn_any(), props: {type: "text", value: (test)} });
+            new __svn_C_f3({ target: __svn_any(), props: {"type": "text", "value": (test)} });
+            /*svn:ignore_start*/void (() => { test = __svn_any(null); });/*svn:ignore_end*/
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_d9f25341;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_d9f25341>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

@@ -7,11 +7,15 @@ async function $$render_9164d0bc() {
             const __svn_C_0 = __svn_ensure_component(Component);
             new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
         }
+        { svelteHTML.createElement("h1", {});         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_9164d0bc;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_9164d0bc>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

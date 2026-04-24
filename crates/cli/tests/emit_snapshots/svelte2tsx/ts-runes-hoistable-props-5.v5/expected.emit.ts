@@ -27,6 +27,7 @@ async function $$render_b09ebc4f() {
     void $store;
     void store;
     void foo;
+    return { props: undefined as any as (Props), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_b09ebc4f;
 declare const __svn_component_default: import('svelte').Component<Props>;

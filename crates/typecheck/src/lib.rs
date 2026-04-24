@@ -62,30 +62,69 @@ const SVELTE_SHIMS: &str = include_str!("svelte_shims_core.d.ts");
 
 const FALLBACK_BEGIN: &str = "// @@FALLBACK_BEGIN@@";
 const FALLBACK_END: &str = "// @@FALLBACK_END@@";
+const STATE_AMBIENTS_BEGIN: &str = "// @@STATE_AMBIENTS_BEGIN@@";
+const STATE_AMBIENTS_END: &str = "// @@STATE_AMBIENTS_END@@";
+
+/// Marker pair used by emit to wrap emit-synthesised scaffolding
+/// bytes that should never produce user-visible diagnostics. Mirrors
+/// upstream svelte2tsx's `/*Ωignore_startΩ*/…/*Ωignore_endΩ*/` pair
+/// (see `language-tools/packages/language-server/src/plugins/
+/// typescript/features/utils.ts:86-109`) but uses an ASCII-only
+/// spelling so byte-offset arithmetic stays simple.
+///
+/// The filter lives in [`map_diagnostic`]: when a diagnostic's
+/// overlay byte offset falls between a `IGNORE_START_MARKER` and
+/// the next matching `IGNORE_END_MARKER`, the diagnostic is
+/// dropped. Lets emit mark regions like component-instantiation
+/// scaffolding (`$$bindings = '...'` trail, intermediate helper
+/// locals) as "this is our code, not the user's — don't surface
+/// errors here".
+pub const IGNORE_START_MARKER: &str = "/*svn:ignore_start*/";
+pub const IGNORE_END_MARKER: &str = "/*svn:ignore_end*/";
 
 /// Return the shim text with the fallback `declare module 'svelte/*'`
-/// block stripped when `keep_fallback` is false. Line count is
-/// preserved — the stripped range is replaced with blank lines so
-/// diagnostic positions in the shim stay stable across the two modes.
+/// block AND our `$state<T>` ambient overloads stripped when
+/// `keep_fallback` is false (i.e. real svelte is installed). Line
+/// count is preserved — stripped ranges are replaced with blank lines
+/// so diagnostic positions in the shim stay stable.
+///
+/// Why strip `$state<T>`: Svelte 5's `types/index.d.ts:3221-3222`
+/// declares the same two overloads. Keeping both produces 4 identical
+/// overloads, which poisons TS's overload resolution — a mismatch
+/// reports TS2769 "No overload matches this call" instead of the
+/// expected TS2741 on structurally-incomplete initial values. Other
+/// rune ambients ($derived/$effect/$props/etc.) aren't stripped —
+/// either single-overload forms don't hit the dedup issue or our
+/// shim carries extra overloads (e.g. `$props<T>()`) that Svelte's
+/// simpler `$props(): any` doesn't provide.
 fn resolve_shim_text(keep_fallback: bool) -> String {
     if keep_fallback {
         return SVELTE_SHIMS.to_string();
     }
-    let Some(begin) = SVELTE_SHIMS.find(FALLBACK_BEGIN) else {
-        return SVELTE_SHIMS.to_string();
+    let mut out = SVELTE_SHIMS.to_string();
+    out = strip_range_blanking(&out, FALLBACK_BEGIN, FALLBACK_END);
+    out = strip_range_blanking(&out, STATE_AMBIENTS_BEGIN, STATE_AMBIENTS_END);
+    out
+}
+
+/// Replace the text between `begin` and `end` markers (inclusive)
+/// with blank lines, preserving line count so diagnostic positions in
+/// the shim stay stable.
+fn strip_range_blanking(text: &str, begin_marker: &str, end_marker: &str) -> String {
+    let Some(begin) = text.find(begin_marker) else {
+        return text.to_string();
     };
-    let Some(end_offset) = SVELTE_SHIMS[begin..].find(FALLBACK_END) else {
-        return SVELTE_SHIMS.to_string();
+    let Some(end_offset) = text[begin..].find(end_marker) else {
+        return text.to_string();
     };
-    let end = begin + end_offset + FALLBACK_END.len();
-    let stripped = &SVELTE_SHIMS[begin..end];
-    let mut out = String::with_capacity(SVELTE_SHIMS.len());
-    out.push_str(&SVELTE_SHIMS[..begin]);
-    // Preserve line count so diagnostic positions stay stable.
+    let end = begin + end_offset + end_marker.len();
+    let stripped = &text[begin..end];
+    let mut out = String::with_capacity(text.len());
+    out.push_str(&text[..begin]);
     for _ in 0..stripped.bytes().filter(|&b| b == b'\n').count() {
         out.push('\n');
     }
-    out.push_str(&SVELTE_SHIMS[end..]);
+    out.push_str(&text[end..]);
     out
 }
 
@@ -128,6 +167,13 @@ pub struct MapData {
     /// the original source plus sparse `: T` insertions that never add
     /// lines — diagnostics against unmodified regions line up 1:1.
     pub identity_map: bool,
+    /// Byte-offset ranges (start, end) in the overlay where emit has
+    /// marked scaffolding with [`IGNORE_START_MARKER`] /
+    /// [`IGNORE_END_MARKER`]. Diagnostics whose start position falls
+    /// inside any of these ranges are dropped in `map_diagnostic`.
+    /// Ranges are sorted by start and non-overlapping (each
+    /// `ignore_start` pairs with the NEXT `ignore_end`).
+    pub ignore_regions: Vec<(u32, u32)>,
 }
 
 /// One file to type-check.
@@ -165,6 +211,18 @@ pub struct CheckInput {
     /// for the original `.svelte`; Kit files add the original `.ts`
     /// to `exclude` so tsgo only sees our injected-type overlay).
     pub kind: InputKind,
+    /// Whether the generated overlay is TypeScript (`.svelte.svn.ts`)
+    /// or JavaScript (`.svelte.svn.js`). True for Kit/UserTsOverlay
+    /// kinds (always TS) and for Svelte sources whose
+    /// `Document::script_lang()` resolves to `Ts`. False only when
+    /// the JS-overlay branch is enabled AND the Svelte source has no
+    /// `<script lang="ts">`. The tsgo-applied inference rules differ
+    /// per extension under `checkJs:true + noImplicitAny:false`
+    /// (a common Svelte-5 CMS-style tsconfig shape): `.js` widens
+    /// `let x = $state([])` to `any[]`, `.ts` keeps it `never[]` —
+    /// load-bearing for third-party-integration clusters like the
+    /// CodeMirror.svelte wrapper pattern.
+    pub is_ts_overlay: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -352,12 +410,23 @@ pub fn check(
     for input in inputs {
         let gen_path = match input.kind {
             InputKind::Svelte | InputKind::SvelteAuxiliary => {
-                layout.generated_path(&input.source_path)
+                layout.generated_path_with_lang(&input.source_path, input.is_ts_overlay)
             }
             InputKind::KitFile | InputKind::UserTsOverlay => {
                 layout.kit_overlay_path(&input.source_path)
             }
         };
+        // When the source's script-lang toggles between JS and TS
+        // across runs, the previously-written sibling (`.svn.ts` when
+        // we now emit `.svn.js`, or vice versa) becomes stale. TS's
+        // bundler resolver prefers `.ts` when `./foo.svelte.svn.js` is
+        // imported, so a stale `.svn.ts` wins and tsgo reads outdated
+        // emit. Remove the other-extension sibling on every write —
+        // cheap `fs::remove_file` ignored-not-found.
+        if matches!(input.kind, InputKind::Svelte | InputKind::SvelteAuxiliary) {
+            let sibling = layout.generated_path_with_lang(&input.source_path, !input.is_ts_overlay);
+            let _ = std::fs::remove_file(&sibling);
+        }
         write_if_changed(&gen_path, &input.generated_ts)?;
 
         match input.kind {
@@ -416,6 +485,7 @@ pub fn check(
             }
         }
 
+        let ignore_regions = scan_ignore_regions(&input.generated_ts);
         map_data.insert(
             gen_path.clone(),
             MapData {
@@ -424,6 +494,7 @@ pub fn check(
                 overlay_line_starts: input.overlay_line_starts,
                 source_line_starts: input.source_line_starts,
                 identity_map: matches!(input.kind, InputKind::KitFile | InputKind::UserTsOverlay),
+                ignore_regions,
             },
         );
         // Only in-scope Svelte files + Kit overlays land in the
@@ -555,35 +626,101 @@ fn is_overlay_tsconfig_noise(raw: &RawDiagnostic, layout: &CacheLayout) -> bool 
     false
 }
 
-/// SVELTE-4-COMPAT: suppress TS2695 "Left side of comma operator is
-/// unused and has no side effects" on `.svelte` files.
+/// SVELTE-4-COMPAT candidate: suppress TS2695 "Left side of comma
+/// operator is unused and has no side effects" on `.svelte` files
+/// that specifically trigger the Svelte-4 `$: (a, b, c)` dep-tracking
+/// idiom. Upstream svelte-check filters these via
+/// `isInReactiveStatement` in
+/// `language-server/src/plugins/typescript/features/DiagnosticsProvider.ts:512-543`
+/// — only diagnostics whose overlay AST node has a `$:` labeled-
+/// statement ancestor get suppressed.
 ///
-/// Svelte 4 projects routinely use the `void (a, b, c)` pattern inside
-/// `$: ...` blocks to tell the Svelte compiler "this reactive runs
-/// when a, b, or c changes" — a dependency-tracking idiom that's a
-/// noop at the value level but necessary for the reactive subscription
-/// graph. Tsgo's TS2695 fires on the left comma operands because they
-/// don't contribute a value. Upstream svelte-check filters these
-/// specifically in `expandRemainingNoopWarnings` of
-/// language-server/src/plugins/typescript/features/DiagnosticsProvider.ts,
-/// keeping only the warnings whose identifiers aren't `let`-declared
-/// reactives.
-///
-/// Our blanket filter (drop TS2695 for any `.svelte` source) is
-/// coarser than upstream's: a user writing `void (realBug, thing)`
-/// in a non-reactive context would no longer see the warning. The
-/// trade-off is acceptable here — TS2695 is an advisory lint, the
-/// Svelte-4 comma-list-in-reactives pattern is the dominant usage,
-/// and a precise filter would need an AST walk to identify `$:`
-/// enclosing scope. If the precise-filter version is needed later,
-/// see upstream's `isInReactiveStatement` helper for the pattern.
+/// Historical note: this used to be a blanket drop of ALL TS2695 on
+/// `.svelte` files. Empirical survey across our bench fleet
+/// (Svelte-4 / Svelte-5 controls plus a CMS, a charting-lib, and a
+/// component-lib bench — ~3600 files total) found exactly ZERO
+/// legitimate dep-tracking hits the blanket filter silenced that
+/// weren't already silenced by emit rewrites (destructure
+/// `$: ({a,b} = expr)` becomes a plain `let {a,b} = ...` with no
+/// surviving comma), and ONE upstream-matching fire it wrongly
+/// suppressed (a Svelte-5 `$effect(() => { ;(a, b()) })` site on
+/// the CMS bench where `$effect` doesn't use comma-dep-tracking, so the
+/// comma really is a bug and upstream correctly fires TS2695). The
+/// blanket filter was removed in favour of this narrower, currently
+/// never-fires path. If a future Svelte-4 project surfaces the
+/// dep-tracking idiom, extend this function to walk back from the
+/// overlay line for a `$:` label (our emit preserves the label —
+/// see `crates/emit/src/svelte4/reactive.rs`'s block-form rewrite).
 fn is_svelte4_reactive_noop_comma(diag: &CheckDiagnostic) -> bool {
-    if !matches!(diag.code, DiagnosticCode::Numeric(2695)) {
-        return false;
+    let _ = diag;
+    false
+}
+
+/// Scan `overlay_text` for `IGNORE_START_MARKER` / `IGNORE_END_MARKER`
+/// pairs and return their byte-offset ranges in the overlay.
+///
+/// Each `ignore_start` pairs with the NEXT `ignore_end` (mirrors
+/// upstream's `isInGeneratedCode` pairing semantics). A stray
+/// unmatched `ignore_start` with no subsequent `ignore_end` extends
+/// to `overlay_text.len()` — equivalent to "everything after this
+/// marker is scaffolding". Empty result when the overlay has no
+/// markers.
+pub fn scan_ignore_regions(overlay_text: &str) -> Vec<(u32, u32)> {
+    let bytes = overlay_text.as_bytes();
+    let start_marker = IGNORE_START_MARKER.as_bytes();
+    let end_marker = IGNORE_END_MARKER.as_bytes();
+    let mut regions: Vec<(u32, u32)> = Vec::new();
+    let mut cursor: usize = 0;
+    while let Some(rel) = find_subslice(&bytes[cursor..], start_marker) {
+        let start = cursor + rel;
+        // Region begins AFTER the start marker (so the marker itself
+        // is tolerated — no diagnostic can legitimately originate
+        // inside a comment).
+        let region_start = start + start_marker.len();
+        let after_start = region_start;
+        let end = match find_subslice(&bytes[after_start..], end_marker) {
+            Some(rel_end) => after_start + rel_end,
+            None => bytes.len(),
+        };
+        regions.push((region_start as u32, end as u32));
+        cursor = end + end_marker.len().min(bytes.len() - end);
     }
-    diag.source_path
-        .extension()
-        .is_some_and(|ext| ext == "svelte")
+    regions
+}
+
+/// `memmem`-style byte-slice search. Rust stdlib doesn't expose this
+/// for byte slices so we roll a small one. Linear in haystack size,
+/// which is fine for overlay files (~hundreds of KB at most).
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// Translate an overlay `(line, column)` into a byte offset using
+/// [`MapData::overlay_line_starts`]. Both line and column are
+/// 1-based (matching tsgo's diagnostic output). Returns `None` when
+/// the overlay-line-starts table is empty (non-Svelte input) or the
+/// requested line is out of range.
+fn overlay_byte_offset(data: &MapData, line: u32, column: u32) -> Option<u32> {
+    if data.overlay_line_starts.is_empty() || line == 0 {
+        return None;
+    }
+    let idx = (line - 1) as usize;
+    let line_start = *data.overlay_line_starts.get(idx)?;
+    // `column` is 1-based. Column 1 == the first byte of the line.
+    Some(line_start + column.saturating_sub(1))
+}
+
+/// Check whether `offset` falls inside any `(start, end)` range in
+/// `regions`. Linear scan; regions are typically few per file.
+fn is_in_ignore_region(regions: &[(u32, u32)], offset: u32) -> bool {
+    regions
+        .iter()
+        .any(|&(start, end)| offset >= start && offset < end)
 }
 
 fn map_diagnostic(
@@ -611,10 +748,22 @@ fn map_diagnostic(
             // (bits-ui, shadcn-style) surface dozens of false
             // positives against synthesized `new $$_C({...})` sites
             // that upstream silently filters.
-            match map_data
-                .get(&absolute_file)
-                .and_then(|data| translate_position(data, raw.line, raw.column))
+            let data = map_data.get(&absolute_file)?;
+            // Ignore-region filter: if the diagnostic's overlay byte
+            // position falls inside a `/*svn:ignore_start*/…
+            // /*svn:ignore_end*/` region, drop it. Mirrors upstream
+            // `isInGeneratedCode` at
+            // `language-server/src/plugins/typescript/features/
+            // utils.ts:102-109`. Wrapping emit-synthesised scaffolding
+            // in these markers at emit time lets this filter drop
+            // false-positive diagnostics that would otherwise surface
+            // on overlay bytes the user never wrote.
+            if let Some(offset) = overlay_byte_offset(data, raw.line, raw.column)
+                && is_in_ignore_region(&data.ignore_regions, offset)
             {
+                return None;
+            }
+            match translate_position(data, raw.line, raw.column) {
                 Some((mapped_line, mapped_col)) => (orig, mapped_line, mapped_col),
                 None => return None,
             }
@@ -831,6 +980,71 @@ mod tests {
         let full_lines = resolve_shim_text(true).lines().count();
         let stripped_lines = stripped.lines().count();
         assert_eq!(full_lines, stripped_lines);
+    }
+
+    #[test]
+    fn scan_ignore_regions_paired() {
+        let text = "line1\n/*svn:ignore_start*/inside/*svn:ignore_end*/outside\n".to_string();
+        let regions = scan_ignore_regions(&text);
+        // The scanned region covers bytes from END of start-marker to
+        // START of end-marker — i.e. just "inside".
+        assert_eq!(regions.len(), 1);
+        let (start, end) = regions[0];
+        let inside = &text[start as usize..end as usize];
+        assert_eq!(inside, "inside");
+    }
+
+    #[test]
+    fn scan_ignore_regions_unmatched_start_extends_to_eof() {
+        let text = "/*svn:ignore_start*/dangling".to_string();
+        let regions = scan_ignore_regions(&text);
+        assert_eq!(regions.len(), 1);
+        let (start, end) = regions[0];
+        assert_eq!(end as usize, text.len());
+        assert_eq!(&text[start as usize..end as usize], "dangling");
+    }
+
+    #[test]
+    fn scan_ignore_regions_multiple_non_overlapping() {
+        let text =
+            "a /*svn:ignore_start*/X/*svn:ignore_end*/ b /*svn:ignore_start*/Y/*svn:ignore_end*/ c"
+                .to_string();
+        let regions = scan_ignore_regions(&text);
+        assert_eq!(regions.len(), 2);
+        assert_eq!(&text[regions[0].0 as usize..regions[0].1 as usize], "X");
+        assert_eq!(&text[regions[1].0 as usize..regions[1].1 as usize], "Y");
+    }
+
+    #[test]
+    fn scan_ignore_regions_no_markers_returns_empty() {
+        let text = "plain overlay with no markers\n".to_string();
+        assert!(scan_ignore_regions(&text).is_empty());
+    }
+
+    #[test]
+    fn is_in_ignore_region_boundary_semantics() {
+        let regions = vec![(10u32, 20u32)];
+        // Exclusive end: 20 is NOT inside.
+        assert!(is_in_ignore_region(&regions, 10));
+        assert!(is_in_ignore_region(&regions, 15));
+        assert!(is_in_ignore_region(&regions, 19));
+        assert!(!is_in_ignore_region(&regions, 20));
+        assert!(!is_in_ignore_region(&regions, 9));
+    }
+
+    #[test]
+    fn overlay_byte_offset_one_based_lines_and_columns() {
+        let data = MapData {
+            // line 1 starts at 0, line 2 starts at 6 (`line1\n` = 6 bytes).
+            overlay_line_starts: vec![0, 6],
+            ..Default::default()
+        };
+        // (1, 1) == byte 0 (start of line 1).
+        assert_eq!(overlay_byte_offset(&data, 1, 1), Some(0));
+        // (1, 4) == byte 3.
+        assert_eq!(overlay_byte_offset(&data, 1, 4), Some(3));
+        // (2, 1) == byte 6.
+        assert_eq!(overlay_byte_offset(&data, 2, 1), Some(6));
     }
 
     fn line_maps_for(path: &str, entries: Vec<LineMapEntry>) -> HashMap<PathBuf, MapData> {
@@ -1306,6 +1520,7 @@ mod tests {
             overlay_line_starts: vec![0, 20, 40, 60],
             source_line_starts: vec![0, 20, 40, 60],
             identity_map: false,
+            ignore_regions: Vec::new(),
         };
         // Line 3 (overlay byte ~40) — outside the token span [0, 10)
         // AND outside the line-map range [5, 15).

@@ -27,9 +27,10 @@ async function $$render_406cac59() {
         // template type-check body (incremental)
     }
     void __svn_tpl_check;
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_406cac59;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>> & { readonly __svn_events: $$Events };
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_406cac59>>['props']> & { readonly __svn_events: $$Events };
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_406cac59>>['props']>;
 export default __svn_component_default;
 

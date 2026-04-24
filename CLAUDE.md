@@ -26,6 +26,10 @@ top of both.
   CLI behavior, the 63 `.v5` test fixtures from `svelte2tsx` that form
   our parity gate, and the `isKitFile` / `findFiles` algorithms whose
   output we mirror byte-for-byte.
+- **Strictness:** We are not stricter or lax-er than the upstream. The
+  goal of this project is to remain at parity with upstream. Not
+  compete with it. Parity means same errors, same warnings and same
+  number of problematic files.
 
 ## Scope discipline (repeated here because it's easy to forget)
 
@@ -38,42 +42,10 @@ Out of scope — do NOT implement:
 - Formatting
 - CSS lint rules beyond the narrow vendor-prefix carve-out in ROADMAP
 
-Svelte-4 compat is shipped but isolated: every Svelte-4-specific
-helper goes under `crates/*/src/svelte4/` with a `// SVELTE-4-COMPAT`
-marker at each callsite. When Svelte 4 is officially retired the
-removal is mechanical — delete the submodule and grep for the marker.
-
-### Svelte-4 feature coverage (internal reference)
-
-What each Svelte-4-specific surface feature maps to in the emit:
-
-| Syntax                                 | Handled by                                  |
-| :------------------------------------- | :------------------------------------------ |
-| `export let foo` / `export let foo: T` | `crates/analyze/src/props.rs` — synthesized Props entry |
-| `export let foo = v` (untyped default) | widen to `any` in script_split so Props stays permissive |
-| `export { name as alias }`             | specifier-form in `crates/analyze/src/props.rs` |
-| `$: NAME = EXPR` (declaration)         | `crates/emit/src/svelte4/reactive.rs` — `let NAME = __svn_invalidate(() => EXPR); void NAME;` |
-| `$: EXPR;` (statement)                 | arrow-wrap: `;() => { $: EXPR };` so body's TDZ is function-scope not top-level |
-| `$: ({a, b} = expr)` (destructure)     | rewrite to `let {a, b} = __svn_invalidate(() => (expr));` |
-| `on:event={handler}` on components     | `ComponentInstantiation.on_events` + emit `$inst.$on("evt", handler);` after construction |
-| `on:event={handler}` on DOM elements   | translated to `onXXX` attribute key in `svelteHTML.createElement` call |
-| `<slot>` / `<slot name="X">` / `<slot {prop}>` | synthesized `children` / named Snippet props on the generated Props type |
-| `<Foo let:item>` slot-let subtree      | let-binding scope opened before `emit_component_call`; `let item: any; void item;` |
-| `createEventDispatcher<T>()`           | dispatcher call recognized; `$on` signature keeps `handler: (...args: any[]) => any` (matches upstream's `__sveltets_2_with_any_event` widening of the default export) |
-| `bind:` on components                  | silently dropped at analyze; `__SvnPropsPartial<P>` makes the target prop optional so nothing fires |
-| `bind:this={x}` on elements            | `BindThisTarget` recorded; script's `let x: T` gets the `!` definite-assign rewrite so async bind doesn't trip TDZ |
-| `$$Props` / `$$Events` / `$$Slots`     | `crates/analyze/src/svelte4/` — pulls the interface as the props-type source if present |
-| `$$slots` / `$$props` / `$$restProps` ambients | injected per-file in the script prelude so references resolve |
-| `export function` / `export const`     | surfaced on the synthesized instance return; consumers see the field via `__SvnInstance<P>` + default-export type |
-
-Parity gate: 0 errors on a 1000-file mid-migration SvelteKit
-monorepo, tying upstream `svelte-check --tsgo`. See `ROADMAP.md`
-for the exact bench numbers and known tsgo ceiling limits.
-
-In scope: CLI flags matching upstream, byte-identical output formats,
-tsgo invocation, diagnostics mapping back to `.svelte` source,
-`<N> FILES` denominator matching upstream's `|entries ∪ diagnostic
-files|` semantic.
+Svelte-4 compat isolated: every Svelte-4-specific helper goes under
+`crates/*/src/svelte4/` with a `// SVELTE-4-COMPAT` marker at each
+callsite. When Svelte 4 is officially retired the removal is
+mechanical — delete the submodule and grep for the marker.
 
 ## Commit-and-continue
 
@@ -109,36 +81,18 @@ files|` semantic.
    fragile by construction; an AST-level pattern match makes whole
    classes of bug categorically impossible.
 
-   **Known legacy violations** (target of Phase 3 in `notes/PLAN.md`,
-   do not extend): `script_split.rs::split_imports` pre-parse
-   `.contains()` guards, `emit/src/lib.rs::extract_property_chains`,
-   `emit/src/lib.rs`'s `{@const` dispatch by `starts_with("{@")`,
-   `doc.source.contains("<slot")` peeks, and
-   `template_walker.rs::collect_at_const_names`. New code must not
-   reach for a character-level scan as a shortcut.
 2. **Two-phase transformer.** Phase 1 (analyze) produces a set of
    per-concern structs that Phase 2 (emit) reads read-only. Never
    mutate these during emit. Never register new names during emit.
 
-   There is no single `SemanticModel` struct (yet). The analyze-phase
-   outputs today are:
+   Analyze outputs today: `PropsInfo` (props.rs), `TemplateSummary`
+   (template walker), `VoidRefRegistry` (see rule #3), plus
+   free-function helpers (`collect_top_level_bindings`,
+   `find_store_refs`, `find_template_refs`, `collect_typed_uninit_lets`).
+   Direction of travel is centralising into a single `SemanticModel`
+   as each concern gets its second consumer — don't invent placeholder
+   fields with no reader.
 
-   - `svn_analyze::PropsInfo` — Props type source, kind, destructures
-     (see `crates/analyze/src/props.rs`).
-   - `svn_analyze::TemplateSummary` — template walker output
-     (component instantiations, DOM bindings, bind targets, slot
-     shapes, `on:event` directives, void-ref candidates).
-   - `svn_analyze::VoidRefRegistry` — single registry for every name
-     emit will synthesize. See rule #3.
-   - Plus free-function helpers (`collect_top_level_bindings`,
-     `find_store_refs`, `find_template_refs`, `collect_typed_uninit_lets`, …)
-     that emit calls directly.
-
-   The direction of travel is toward centralising these into a single
-   `SemanticModel` as each concern's shape stabilises. `PropsInfo`
-   (Phase 1 of `notes/PLAN.md`) is the first such piece; further
-   consolidation happens when a concern acquires its second consumer.
-   Don't invent placeholder fields with no reader — YAGNI wins here.
 3. **Single source of truth for synthesized-name registry.** Every name
    the emit crate creates (template-check wrapper, action attrs, bind
    pairs, store aliases, prop locals) is registered once and emitted
@@ -149,16 +103,13 @@ files|` semantic.
    JSON-reading shortcuts.
 5. **Pre-allocated buffers.** Estimate output size from AST, allocate
    `Vec<u8>::with_capacity(n)` once. Use `write!` macro, not `format!`
-   + `push_str`.
+   - `push_str`.
 6. **Synthesized-name prefix:** `__svn_*`. Used for every name the emit
    crate creates so they're trivially distinguishable from user code in
    diagnostics.
 7. **Component instantiations emit as `new $$_CN({target, props})`
-   through the `__svn_ensure_component` wrapper** (current shape —
-   Phase 2 of `notes/PLAN.md` will replace this with upstream's
-   class-wrapper pattern; update this rule when that lands).
-
-   Each `<Comp ...>` in the template emits as:
+   through the `__svn_ensure_component` wrapper.** Each `<Comp ...>`
+   emits as:
 
    ```ts
    { const __svn_CN = __svn_ensure_component(Comp);
@@ -167,46 +118,32 @@ files|` semantic.
    }
    ```
 
-   The wrapper handles both our callable-default overlays and
-   third-party Svelte-4-style classes uniformly. The intermediate
-   `const __svn_CN = ...` local is load-bearing — it's what lets TS
-   bind generic components' `<T>` at the `new` site against concrete
-   prop values (dropped local → `T` resolves to `unknown`, snippet
-   arrows fire implicit-any).
+   The intermediate `const __svn_CN = ...` is load-bearing — it's
+   what lets TS bind generic components' `<T>` at the `new` site
+   against concrete prop values. Dropped local → `T` resolves to
+   `unknown` and snippet arrows fire implicit-any.
 
    Constructor's `props?` slot is `__SvnPropsPartial<Props>` =
-   `{[K in keyof P]?: P[K] | null}` — required props stay optional at
-   the call site (bind:directives, spreads, implicit `children` from
-   the template body don't show up in the emitted object literal) and
-   `bind:this`-style `T | null` patterns pass through without TS2322
-   nullability mismatch. The `on${string}` index-signature intersection
-   that used to live here was removed when `on:event` directives
-   switched to the `$inst.$on("evt", fn)` shape — without it, user
-   props whose name happens to start with `on` (e.g. `oneTouchReaction`)
-   no longer collide with the widen's callable-or-primitive value
-   union.
+   `{[K in keyof P]?: P[K] | null}` — required props stay optional
+   (bind:, spreads, implicit `children` don't appear in the literal)
+   and `bind:this`-style `T | null` passes without TS2322.
 
-   The instance-local `__svn_inst_N` is only emitted when the
-   component has at least one `on:event` directive to dispatch —
-   otherwise the `new $$_CN(...)` statement stands alone. `$on`'s
-   signature (`handler: (...args: any[]) => any`) gives the arrow its
-   contextual-callable typing, so `({detail}) => …` destructures
-   without implicit-any.
+   `__svn_inst_N` is only emitted when the component has at least
+   one `on:event` directive. `$on`'s signature
+   (`handler: (...args: any[]) => any`) gives the arrow contextual
+   typing so `({detail}) => …` destructures without implicit-any.
 
    Overlay default exports are typed `import('svelte').Component<Props>`
-   — the function form. Matches `ComponentProps<typeof Foo>`'s
-   built-in constraint directly and keeps generics expressible.
+   — matches `ComponentProps<typeof Foo>`'s built-in constraint and
+   keeps generics expressible.
 
-   **Why this is changing.** Upstream `svelte2tsx` wraps the whole
-   render in `class __sveltets_Render<T> { props() { ... } events()
-   { ... } slots() { ... } }` so that body-local type refs in the
-   Props type (`interface $$Props { labels?: typeof labels }` where
-   `labels` is script-body-local) resolve inside the render
-   function's scope. Our bare `function $$render_<hash>()` has them
-   leak to module scope and fire TS2304. ~224 layerchart errors plus
-   two reverted features (`23e1a25` typed dispatcher generics,
-   `e71fec7` `$$prop_def` satisfies-check) are blocked on this
-   pattern. Phase 2 ports it.
+   For generic components with a Props type source, the render
+   function is wrapped in `class __svn_Render_<hash><T> { props()
+   { ... } events() { ... } slots() { ... } }` (gated on
+   `use_class_wrapper = generics.is_some() && prop_type_source.is_some()`).
+   Mirrors upstream's `__sveltets_Render<T>` pattern so body-local
+   type refs in the Props type resolve inside the render scope
+   rather than leaking to module scope (TS2304).
 
 8. **New emit shapes are tsgo-validated on a hand-written fixture
    before implementation.** Any change to what the emit crate produces
@@ -229,18 +166,18 @@ independently so a red signal points at exactly one stage.
 **Stage 1 — emit shape (`emit_snapshots`).** Primary gate. Per-sample
 `expected.emit.ts` snapshots locked against our binary's `--emit-ts`
 output. No tsgo in the loop. Mirrors upstream svelte2tsx's
-`expectedv2.js` pattern against *our* emit. `UPDATE_SNAPSHOTS=1
+`expectedv2.js` pattern against _our_ emit. `UPDATE_SNAPSHOTS=1
 cargo test --test emit_snapshots` accepts deliberate emit changes;
 default mode fails on any mismatch with a contextual diff. ~190
 snapshots across three corpora:
 
-  - `svelte2tsx_v5/` — upstream's 63 `.v5` samples (full-component).
-  - `htmlx2jsx/` — upstream's ~125 template-control-flow samples,
-    filtered against a 22-sample Svelte-4 skip list.
-  - `bugs/` — our grey-box fixtures.
+- `svelte2tsx_v5/` — upstream's 63 `.v5` samples (full-component).
+- `htmlx2jsx/` — upstream's ~125 template-control-flow samples,
+  filtered against a 22-sample Svelte-4 skip list.
+- `bugs/` — our grey-box fixtures.
 
-  Runs in <1 s. Any emit change that's not deliberate must fail this
-  gate before anything else is considered.
+Runs in <1 s. Any emit change that's not deliberate must fail this
+gate before anything else is considered.
 
 **Stage 2 — tsgo is trusted.** No tests; it's the TypeScript team's
 code. Integration tests below cover "does the emit work end-to-end"
@@ -264,19 +201,20 @@ broad type-check surveying is the emit_snapshots job, not these.
 upstream test update applied for free. Known-failing today on
 SvelteKit-ambient-typing cases (scoped out for v0.1).
 
-**Discovery (not tests).** Real-world repos in `bench/` are *not*
+**Discovery (not tests).** Real-world repos in `bench/` are _not_
 part of `cargo test`. They're used interactively to find bug classes
 that get extracted into new `bug_fixtures/<NN>-*` entries and locked
 by the suites above. Their error counts are not a shipping metric.
 
 **Bench targets for perf measurement (`scripts/bench.mjs`):**
-- `bench/control-svelte-4` — the 1000-file parity-gate target.
-  Mid-migration SvelteKit monorepo, mostly Svelte-4-syntax
-  components. The "1000-file mid-migration" number in the public
-  README and CHANGELOG refers to this workspace's primary sub-app
-  (~1124 files after monorepo-root auto-escape). Ties upstream
-  `svelte-check --tsgo` at 0 user errors.
-- `bench/control-svelte-5` — the latest fresh extract from the
+
+- A Svelte-4 control-rig bench — the 1000-file parity-gate
+  target. Mid-migration SvelteKit monorepo, mostly Svelte-4-
+  syntax components. The "1000-file mid-migration" number in the
+  public README and CHANGELOG refers to this workspace's primary
+  sub-app (~1124 files after monorepo-root auto-escape). Ties
+  upstream `svelte-check --tsgo` at 0 user errors.
+- A Svelte-5 control-rig bench — the latest fresh extract of the
   same upstream repo's `main` branch (Svelte 5.55+ and further
   along the Svelte-5 migration). Used to spot regressions as the
   codebase moves forward.
@@ -294,8 +232,15 @@ so the scenario is reproducible against any workspace.
 
 ## Diagnostic method — "diff the real upstream artifact"
 
-When a diagnostic fires on our binary that upstream doesn't (or vice
-versa), the debugging path that SHORT-CIRCUITS hours of speculation:
+**Any time our error count diverges from upstream on any file, the
+FIRST move is to diff emits with upstream AND read the relevant
+section of the `language-tools/` submodule source.** No synthetic
+repros, no theorizing about "why TS should fire here", no speculative
+Rust changes — the upstream artifact and the upstream source are the
+ground truth, and reading them is almost always faster than reasoning
+about them.
+
+The debugging path:
 
 1. **Anchor on a real failing file.** Pick the exact `.svelte` file
    from a bench or submodule test fixture where the diagnostics
@@ -303,39 +248,63 @@ versa), the debugging path that SHORT-CIRCUITS hours of speculation:
    captures all the context that matters (`$state()` uninit patterns,
    `bind:` combinations, destructured `$props()`, slot shapes, etc.).
 
-2. **Read upstream's actual overlay for that file.** Install
-   `svelte2tsx` from any bench's `node_modules` (different versions
-   exist across benches — any recent one is fine) and run it directly:
+2-4. **Diff upstream's overlay vs ours.** One command via
+`scripts/diff-emit.mjs`:
 
-   ```sh
-   node -e "
-     import('<bench>/node_modules/.../svelte2tsx/index.mjs').then(m => {
-       const src = require('fs').readFileSync('/path/to/File.svelte', 'utf8');
-       console.log(m.svelte2tsx(src, { filename: 'File.svelte', isTsFile: true }).code);
-     });
-   "
-   ```
+```sh
+# Side-by-side diff of upstream's overlay vs ours.
+node scripts/diff-emit.mjs path/to/File.svelte
 
-3. **Read our overlay for the same file.** Run our binary with
-   `--emit-ts` on the same directory:
+# Dump only one side.
+node scripts/diff-emit.mjs path/to/File.svelte --upstream
+node scripts/diff-emit.mjs path/to/File.svelte --ours
 
-   ```sh
-   target/debug/svelte-check-native --workspace <dir> --tsconfig <cfg> --emit-ts
-   ```
+# Probe: append a type-check trap to our overlay that reveals
+# what a specific identifier (typically a component or import)
+# resolves to. Prints the TS2322 diagnostic that leaks the
+# inferred type. Useful when a site should fire an excess-prop
+# check but doesn't — tells you whether the Props type is being
+# extracted correctly or is falling through to `any`.
+node scripts/diff-emit.mjs path/to/File.svelte --probe "UI.Dropdown"
+```
 
-4. **Side-by-side diff at the diagnostic site.** Focus on the
-   specific LINES tsgo flags (grep the overlay for the relevant
-   variable names, not whole-file diffs). The structural delta is
-   usually a wrapper / lambda / parenthesization / extra intersection
-   — not a primitive type difference.
+Workspace + tsconfig are inferred from the file path (walks up
+for `node_modules`). `--isTsFile` / `--isJsFile` overrides the
+`<script lang="ts">` auto-detection. When the workspace itself
+has no `svelte2tsx` (e.g. pure npm projects), the script falls
+back to any sibling `bench/*` install.
 
-5. **Lock upstream's shape as a tsgo fixture first** (Rule #8 of
-   "Architecture rules"). Minimal `.ts` files under `design/<topic>/`
-   that produce exactly the expected diagnostics from tsgo. Commit
-   before any Rust change. If the fixture doesn't reproduce the
-   desired behavior, the theory is wrong and coding won't fix it.
+Focus on the specific LINES tsgo flags (grep the overlay for
+the relevant variable names, not whole-file diffs). The
+structural delta is usually a wrapper / lambda / parenthesization
+/ extra intersection — not a primitive type difference.
 
-6. **Only then port the shape into our emit.**
+5. **Read the upstream source that produces the shape you saw in
+   step 4.** The submodule at `language-tools/` is pinned — use it.
+   For emit-shape questions:
+
+   - `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/` is the
+     template → JS/TS walker. Elements, components, blocks
+     (`{#each}`, `{#if}`, `{#snippet}`, `{#await}`), directives,
+     bindings, actions, slots each have their own file.
+   - `language-tools/packages/svelte2tsx/src/svelte2tsx/` is the
+     script → overlay wrapper (render fn, props-type source,
+     default-export shape).
+   - `language-tools/packages/svelte-check/src/incremental.ts` is
+     CLI/output glue — kit file injection, diagnostic mapping,
+     `.svelte.js` vs `.svelte.ts` extension choice.
+
+   Find the one upstream source file whose output matches the shape
+   you saw in the overlay dump. That file is the spec.
+
+6. **Lock upstream's shape as a tsgo fixture first** (Rule #8 of
+   "Architecture rules"). Minimal `.ts` / `.js` files under
+   `design/<topic>/` that produce exactly the expected diagnostics
+   from tsgo. Commit before any Rust change. If the fixture doesn't
+   reproduce the desired behavior, the theory is wrong and coding
+   won't fix it.
+
+7. **Only then port the shape into our emit.**
 
 ### When to deploy it
 
@@ -347,401 +316,55 @@ versa), the debugging path that SHORT-CIRCUITS hours of speculation:
   real artifact is the ground truth; reading it is almost always
   faster than reasoning about it.
 
-### Case study (2026-04-20)
-
-`control-svelte-4` FigmaPopup FP: we had a theory that
-`$state<T>()` → child expecting `T` should fire TS2322, and ran a
-synthetic repro that confirmed. But upstream `svelte-check --tsgo`
-didn't fire on the same file. Reading the real svelte2tsx output
-showed `bind:clientWidth={mainWidth}` emits as a plain
-`mainWidth = $$_div2.clientWidth;` statement — the assignment
-narrows `mainWidth` via TS flow analysis. Our emit wrapped the
-equivalent assignment in a never-called lambda (`void (() => { ... })`),
-deliberately isolating it from narrowing. One-line unwrap, 1-FP
-eliminated, bench went 1 → 0 errors. Full trace in
-`crates/emit/src/lib.rs::emit_dom_binding_checks_inline` + commit
-`61fb2f5`.
-
-## When in doubt
-
-- Read `README.md` for the public-facing overview.
-- Read `ROADMAP.md` for current scoreboard, next-version plan,
-  explicit out-of-scope items, and documented won't-fix limitations.
-  This file is gitignored — it's the private working notes that stay
-  in the local checkout only, not part of the shipped repo. Always
-  treat it as the source of truth for "what's next" and "known
-  limits".
-- Check `language-tools/packages/svelte-check/src/` for how upstream
-  solves CLI/output problems.
-- Check `language-tools/packages/svelte2tsx/src/` for how the upstream
-  Svelte → TS transpilation works (informs our `emit` crate).
-
 ---
 
-## Technical reference (kept here, not in README)
-
-### Cache layout
-
-Cache root is chosen by `crates/typecheck/src/cache.rs::CacheLayout::for_workspace`:
-
-1. `<workspace>/node_modules/.cache/svelte-check-native/` when
-   `node_modules/` exists (gitignored everywhere by convention — same
-   pattern as eslint, prettier, vite, vitest cache dirs).
-2. `<workspace>/.svelte-check/` as the fallback for fresh-clone or
-   no-deps fixtures.
-
-```
-<cache root>/
-  tsconfig.json           overlay — extends user tsconfig, adds rootDirs,
-                          paths-mirror, allowImportingTsExtensions
-  tsbuildinfo.json        tsgo's incremental build state
-  svelte-shims.d.ts       rune ambients, store unwrap helper, module shims
-  svelte/<rel>/Foo.svelte.ts
-                          generated TS per .svelte file. Imports are
-                          rewritten to `.svelte.ts` so tsgo lands on the
-                          overlay file rather than the *.svelte ambient
-                          declaration shipped with the svelte package.
-```
-
-### Why the binary is fast
-
-- **Single Rust process**, no per-file Node startup, no svelte2tsx
-  subprocess per check.
-- **Multi-worker JS bridge.** N `bun`/`node` subprocesses (default
-  `cores/2`, capped at 8, override via `SVN_BRIDGE_WORKERS=N`) each
-  import `svelte/compiler` once and process a chunk of files in
-  parallel. Sweet spot empirically tracks the perf-core count on Apple
-  Silicon — over-subscribing past it costs more in scheduler/IPC
-  contention than it saves in serial work.
-- **OXC for JS/TS parsing.** AST construction ~10× faster than swc and
-  ~50× faster than the typescript parser.
-- **rayon for the per-file parse → analyze → emit loop.** Pure compute,
-  no shared state, scales linearly.
-- **Incremental tsgo via tsbuildinfo.** Only changed files get re-typed
-  across runs.
-
-### Output formats (byte-spec)
-
-All four match upstream svelte-check byte-for-byte (modulo timestamp
-prefix). Editor extensions / CI dashboards / shell wrappers consuming
-`svelte-check`'s output work unchanged.
-
-`machine`:
-```
-1776349615385 START "/path/to/workspace"
-1776349615386 WARNING "src/lib/X.svelte" 22:5 "..."
-1776349615386 ERROR "src/lib/Y.svelte" 8:3 "..."
-1776349615387 COMPLETED 1206 FILES 0 ERRORS 44 WARNINGS 15 FILES_WITH_PROBLEMS
-```
-
-`machine-verbose`:
-```
-1776349615385 START "/path/to/workspace"
-1776349615386 {"type":"WARNING","filename":"src/lib/X.svelte",
-               "start":{"line":21,"character":4},"end":{"line":21,"character":13},
-               "message":"...","code":"state_referenced_locally",
-               "codeDescription":{"href":"https://svelte.dev/docs/svelte/compiler-warnings#..."},
-               "source":"svelte"}
-1776349615387 COMPLETED 1206 FILES 0 ERRORS 44 WARNINGS 15 FILES_WITH_PROBLEMS
-```
-
-`<N> FILES` denominator semantic matches upstream's
-`|emit entries ∪ files with diagnostics|`. "Emit entries" means every
-`.svelte` file plus every SvelteKit Kit file (route modules like
-`+page.ts` / `+layout.server.ts` / `+server.ts`, hooks files under
-`src/hooks.*`, params under `src/params/`). Detection lives in
-`crates/cli/src/kit_files.rs` and is locked against upstream's
-`isKitFile` via the `kit_file_parity` integration test.
-
-`human` is the colored compact form (file:line:col + Error/Warn label +
-message). `human-verbose` (default) adds a banner prelude and a 3-line
-code frame around each diagnostic with caret underlines, in cyan.
-
-`machine` is forced when any of `CLAUDECODE=1`, `GEMINI_CLI=1`,
-`CODEX_CI=1` is set in the environment.
-
-### Exit codes
+## Exit codes
 
 - `0` — no errors (and no warnings if `--fail-on-warnings`)
 - `1` — errors detected (or warnings with `--fail-on-warnings`)
 - `2` — invocation error (bad flag, missing tsconfig, missing tsgo)
 
-### Missing flags (intentionally)
+## Release workflow
 
-- `--watch` / `--preserveWatchOutput` — out-of-scope, won't implement.
-- `--no-tsconfig` — reserved, errors out today.
-- `--diagnostic-sources css` — hard-rejected (exits 2 with a hint).
+Six packages ship together: `svelte-check-native` (meta wrapper) +
+five platform binaries (`-darwin-arm64`, `-darwin-x64`,
+`-linux-arm64`, `-linux-x64`, `-win32-x64`). The wrapper's
+`optionalDependencies` pins each platform at the same version.
+`scripts/prepare-release.mjs` keeps the six `package.json` versions
+and pins in lockstep — always re-run after any version bump.
 
-### CSS rejection rationale
+**Bump:** update `Cargo.toml` `[workspace.package].version` and root
+`package.json` `version` (must match), add a `CHANGELOG.md` entry,
+commit as `release: vX.Y.Z`.
 
-Upstream `svelte-check` runs CSS diagnostics through PostCSS-style
-linting. We don't ship a CSS linter, and silently doing nothing when
-the user explicitly asks for CSS coverage is a worse failure mode than
-telling them upfront. When `--diagnostic-sources` is omitted the
-default is `js,svelte` (NOT `js,svelte,css`), matching what the binary
-actually produces.
-
-### Test corpora and baselines
-
-Two parity bars in `crates/cli/tests/`:
-
-1. **63 `.v5` fixtures** from `language-tools/packages/svelte2tsx/test/svelte2tsx/samples/*.v5/`.
-   For each, generate the overlay TS, hand it to tsgo, compare diagnostic count.
-2. **24 store-pattern fixtures** locally authored exercising
-   `$store` auto-subscribe through scoped/destructured/re-exported/
-   external-imported store boundaries (upstream coverage is sparse).
-
-A handful of upstream fixtures test **verbatim emit fidelity** rather
-than type correctness: they contain intentionally broken user code (an
-undefined ref, a mismatched generic, an import from nowhere) and the
-test passes when our overlay preserves that user code character-for-
-character so tsgo reports the SAME error a real user would.
-
-`crates/cli/tests/v5_fixtures/baselines.json` declares an expected
-`max_errors` count and a `reason` for those:
-
-```jsonc
-{
-    "verbatim_emit_fixtures": {
-        "runes-best-effort-types.v5": {
-            "max_errors": 1,
-            "reason": "let { g = foo } = $props() — `foo` is undefined; the fixture
-                       preserves the user's reference verbatim. svelte2tsx emits
-                       the same error in expectedv2.ts."
-        }
-    }
-}
-```
-
-A baselined fixture passes if `errors ≤ max_errors`. Non-baselined
-fixtures must produce zero errors. Catches two regression classes:
-
-- A fixture that should be clean starts producing errors → fails on the
-  zero-error rule.
-- A baselined fixture starts producing MORE errors than its cap →
-  fails on the count rule.
-
-The `max_errors` mechanism is interim; future work replaces it with
-exact `{code, line, column, message}` assertions per expected error so
-a regression that swaps one error for a different one (silent today)
-gets caught too.
-
-### Recommended CI invocation
+**Publish (in order):**
 
 ```sh
-svelte-check-native \
-  --workspace . \
-  --tsconfig ./tsconfig.json \
-  --output machine \
-  --threshold warning \
-  --fail-on-warnings
+npm run publish:dry       # dry run first — builds + packs, no registry writes
+npm run publish:all       # real publish; enforces platforms first, wrapper last
+git push origin main      # publish:all does NOT push
 ```
 
-Grep `^.* COMPLETED ` for the summary line, or pipe
-`--output machine-verbose` into `jq` for full structured access.
-
-The compiler-warning bridge silently no-ops if `bun`/`node` isn't on
-`PATH`. Force it OFF explicitly with `--diagnostic-sources js`.
-
-### Release workflow
-
-v0.3.0 process, documented for the next bump.
-
-**Six packages ship together:**
-- `svelte-check-native` — the meta/wrapper npm package users install.
-- `svelte-check-native-darwin-arm64` — M-series Mac native binary.
-- `svelte-check-native-darwin-x64` — Intel Mac native binary.
-- `svelte-check-native-linux-arm64` — ARM Linux native binary.
-- `svelte-check-native-linux-x64` — x86_64 Linux native binary.
-- `svelte-check-native-win32-x64` — Windows native binary.
-
-The meta package `optionalDependencies` pins each platform package
-at the exact same version so `npm install svelte-check-native` gives
-each user their correct binary. `scripts/prepare-release.mjs` is the
-single source of truth that keeps the six `package.json` versions +
-`optionalDependencies` pins in lockstep — always re-run it after any
-version bump.
-
-**Prerequisites (check once per workstation):**
+**Cut the GitHub release last.** `gh release create "v$VER"` creates
+the tag on the remote pointing at main's HEAD, so tag+release stay
+in sync by construction. Body: 2-3 line prose summary, blank line,
+hand-curated grouped list (max 10 entries, `<sha>` or `<a>..<b>` per
+bullet). Drop `release: vX.Y.Z` commits from the list.
 
 ```sh
-rustup target list --installed | grep -E "apple|linux|windows"
-# expect: aarch64-apple-darwin, x86_64-apple-darwin,
-#         aarch64-unknown-linux-gnu, x86_64-unknown-linux-gnu,
-#         x86_64-pc-windows-gnu
-# add missing with: rustup target add <triple>
-
-zig version && cargo zigbuild --version
-# install with: brew install zig && cargo install cargo-zigbuild
-
-npm whoami
-# must return a user with publish rights to @harshmandan/*
-```
-
-**Bump:**
-
-1. Update `Cargo.toml` `[workspace.package].version` + root `package.json` `version` (both must match exactly).
-2. Update `CHANGELOG.md` — add a new `## [X.Y.Z]` section at the top with what shipped.
-3. Commit: `git commit -am "release: vX.Y.Z"`.
-
-**No manual `git tag`.** `gh release create` in the final step creates
-the tag on the remote pointing at main's HEAD. One artifact (the
-release), one command, no chance of the tag and release drifting out
-of sync the way they did on v0.3.8 (amended the release commit,
-forgot to move the tag, tag pointed at an orphaned commit on the
-remote while the release pointed at the amended one). Local tags
-don't exist after release unless you `git fetch --tags` explicitly;
-that's fine — they were never load-bearing.
-
-**Publish:**
-
-```sh
-# Dry run — builds all platform binaries, regenerates dist-packs/,
-# packs + validates without writing to the registry. Use this FIRST.
-npm run publish:dry
-
-# If dry-run is clean, publish for real. Order is enforced by
-# scripts/publish-all.mjs: 5 platform packages first, then the
-# meta wrapper last so optionalDependencies are resolvable when
-# the wrapper hits the registry.
-npm run publish:all
-```
-
-`publish:all` chains `build:all` → `prepare-release` → `publish-all.mjs`.
-It does NOT push to git — push `main` separately:
-
-```sh
-git push origin main
-```
-
-**Cut a GitHub release** (this is both "tag the commit" AND "publish
-release notes" in one step — automated dep-update bots like Renovate
-and Dependabot surface release notes to downstream users when
-evaluating upgrades).
-
-Body layout is **2-3 line human-readable summary on top, blank line,
-then a hand-curated, grouped list — max 10 entries.** The summary is
-what Renovate/Dependabot quote into PR descriptions and what someone
-clicking through a tag skims first; the entries are the proof it
-stands on.
-
-Each entry in the list is one of:
-  - A single commit: `- <short-sha> <description>`
-  - A contiguous or thematic range: `- <oldest-sha>..<newest-sha> <description>`
-
-Group related commits into logical buckets (Windows fixes, emit
-refactors, docs, etc.) so the list stays scannable. Do NOT just dump
-`git log --pretty=...` — a 40-commit release rendered as 40 bullets
-is noise. Readers evaluating an upgrade want "what thematically
-changed," not "every micro-commit that happened."
-
-Rules:
-  - **Summary first, 2-3 lines, prose.** Name the release character
-    (patch / minor / "correctness fixes" / "Windows fixes" / etc.),
-    the 1-2 headline changes, and any user-visible impact. Drop-in
-    example below.
-  - **Hard cap at 10 entries** in the list. More than that means the
-    groups are too fine-grained.
-  - **Range notation (`a..b`) when useful**, even if the range isn't
-    strictly contiguous in `git log` order — readers care about which
-    theme the commits belong to, not git topology. Pick the oldest
-    and newest SHA from the group as bookends.
-  - **Subject must describe the change, not repeat the prefix.** Drop
-    conventional-commit prefixes (`fix(windows):`) when they don't
-    add signal in prose form. Write "Windows fixes: UNC paths, PATHEXT
-    discovery" not "fix(windows): apply PATHEXT when discovering the
-    JS runtime."
-  - **Filter the `release: vX.Y.Z` commit** — it's the tag's own
-    bump, no content.
-
-Workflow:
-
-```sh
-# 1. Pull the raw commits since the previous release's tag and skim them.
-PREV=<previous-release-tag>   # e.g. v0.3.8 when cutting v0.3.9
-VER=X.Y.Z
+PREV=<previous-tag>; VER=X.Y.Z
 git log --pretty=format:"%h %s" "$PREV..HEAD" | grep -v "release: v"
-
-# 2. Hand-write the body: summary paragraph first, blank line, then
-#    the grouped list. Sample v0.3.8:
-cat > /tmp/release-notes.md <<'BODY'
-Patch release: Windows fixes plus correctness bugs in monorepo and
-SvelteKit-Vite setups. Reported by a user on `D:\…` whose
-`svelte-check-native` went from "0 errors in 0 files" to matching
-upstream `svelte-check --tsgo` byte-for-byte after the UNC-path fix.
-
-- 7ce4d8e..f11711e Windows fixes: dunce::canonicalize for UNC workspace paths, PATHEXT discovery for node/bun
-- a7d6adb CLI: redirect solution tsconfig honors reference filename + extends chain
-- f563021 Overlay: keep package-subpath types entries like vite/client
-- 507a08f Discovery: semver-aware version compare in pnpm/bun package store
-- 28ba5fd Chore: remove dead svn-lint crate
-- 72af3e6..a8d23c2 Docs: README + usage instructions
-BODY
-
-# 3. Create the release. Creates the tag on the remote pointing at
-#    main's current HEAD and publishes the release notes in one shot.
-#    --latest=true moves GitHub's "Latest release" pointer to this
-#    version. Title matches the tag for a clean releases list.
-gh release create "v$VER" --title "v$VER" --notes-file /tmp/release-notes.md --latest=true
+gh release create "v$VER" --title "v$VER" --notes-file /tmp/notes.md --latest=true
 ```
 
-(The `$PREV..HEAD` range works pre-tag because `HEAD` is the release
-commit you just pushed; after `gh release create` runs, the new tag
-will also resolve to this same commit, so the range is stable
-whether you rerun it before or after release creation.)
-
-Why summary + grouped list (not raw commit dump, not prose-only):
-CHANGELOG gets the long "what + why + how" narrative for humans
-doing a deep read. The release body is what appears inline in
-Renovate/Dependabot PR descriptions and in GitHub's "click a tag to
-see what changed" flow — readers there want a quick read on the
-character of the release backed by a commit trail they can click
-through if curious.
-
-Do this AFTER `npm publish:all` + `git push origin main` complete —
-the release page surfaces install instructions and a "Browse files"
-link that resolves through the tag; users clicking through expect
-both to work. A release cut before `npm publish` or before `git push`
-shows a version that isn't yet installable or a tag pointing at a
-commit the remote doesn't know about.
-
-**Do NOT** mark stable releases as `--prerelease`; we don't use that
-channel. Pre-1.0 versions are regular releases, not pre-releases — the
-published npm package has been on `latest` since v0.1.0, so the GitHub
-surface should match.
-
-**Post-release verification:**
-
-```sh
-npm view svelte-check-native version
-# expect: X.Y.Z
-
-# Fresh-install smoke test
-cd /tmp && rm -rf sc-smoke && mkdir sc-smoke && cd sc-smoke
-npm init -y
-npm i -D svelte-check-native @typescript/native-preview
-npx svelte-check-native --version
-# expect: svelte-check-native X.Y.Z
-```
+**Post-release:** `npm view svelte-check-native version` should
+return `X.Y.Z`; smoke-install in a scratch dir.
 
 **Don't:**
-- Don't run `npm publish` manually in individual package dirs — ordering
-  must be enforced (platforms first, wrapper last) or installs break.
-- Don't bump version without re-running `prepare-release.mjs` — the six
-  package.json versions will drift out of sync and the wrapper's
-  `optionalDependencies` will point at nonexistent platform versions.
-- Don't `git tag` manually. `gh release create` creates the tag for
-  you pointing at main's HEAD; that keeps tag and release in sync by
-  construction. We burned a session on v0.3.8 where the manual tag
-  landed at the pre-amendment release commit while the release was
-  moved to the amended one — the tag then had to be force-pushed to
-  align.
-- Don't create a release before `npm publish:all` completes — users
-  clicking install instructions on the release page will see a
-  version that isn't on the registry yet.
-- Don't skip `gh release create` after pushing a release commit. A
-  bare tag (which is what you'd have if you tagged manually and
-  stopped) shows up as an empty changelog in Renovate/Dependabot PR
-  descriptions; end users evaluating the upgrade have zero context.
-  We backfilled the whole pre-0.3.8 tag history once (see issue #2);
-  don't let it drift again.
+
+- Don't `npm publish` in individual package dirs — the platforms-first
+  ordering is load-bearing.
+- Don't bump version without re-running `prepare-release.mjs`.
+- Don't `git tag` manually — let `gh release create` do it.
+- Don't create the release before `npm publish:all` and `git push` complete.
+- Don't mark stable releases `--prerelease`.

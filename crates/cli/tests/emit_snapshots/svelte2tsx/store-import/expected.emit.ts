@@ -4,29 +4,38 @@
     import { storeB } from './store';
     import { storeB as storeC } from './store';
 async function $$render_7c15f1e0() {
-    let $storeA!: __SvnStoreValue<typeof storeA>;
-    let $storeB!: __SvnStoreValue<typeof storeB>;
-    let $storeC!: __SvnStoreValue<typeof storeC>;
+    /** @type {__SvnStoreValue<typeof storeA>} */
+    let $storeA = /** @type {any} */ (/** @type {any} */ (null));
+    /** @type {__SvnStoreValue<typeof storeB>} */
+    let $storeB = /** @type {any} */ (/** @type {any} */ (null));
+    /** @type {__SvnStoreValue<typeof storeC>} */
+    let $storeC = /** @type {any} */ (/** @type {any} */ (null));
 
                                  
                                      
                                                
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        ($storeA);
-        ($storeB);
-        ($storeC);
+        { svelteHTML.createElement("p", {});             ($storeA);
+        }
+        { svelteHTML.createElement("p", {});             ($storeB);
+        }
+        { svelteHTML.createElement("p", {});             ($storeC);
+        }
     }
-    void __svn_tpl_check;
     void $storeA;
     void storeA;
     void $storeB;
     void storeB;
     void $storeC;
     void storeC;
+    return { props: /** @type {any} */({}) };
 }
 $$render_7c15f1e0;
-declare const __svn_component_default: import('svelte').Component<Record<string, any>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Record<string, any>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_7c15f1e0>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

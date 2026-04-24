@@ -7,15 +7,19 @@ async function $$render_b9dbbb3b() {
             const __svn_C_0 = __svn_ensure_component(Component);
             new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
         }
-        {
-            let a: any;
-            void a;
+        { svelteHTML.createElement("div", {});             {
+                let a: any;
+                void a;
+            }
         }
     }
-    void __svn_tpl_check;
+    return { props: /** @type {any} */({}) };
 }
 $$render_b9dbbb3b;
-declare const __svn_component_default: import('svelte').Component<Partial<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Partial<Record<string, any> & __SvnSvelte4PropsWiden<Record<string, any>>>>;
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_b9dbbb3b>>['props']} __SvnDefaultProps
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps>} */
+const __svn_component_default = /** @type {any} */ (null);
 export default __svn_component_default;
 

@@ -207,8 +207,8 @@ fn resolve_reference(raw_path: &str, declaring_dir: &Path) -> Option<FlattenedRe
 /// root. Returns a [`FlattenedReference`] per member that has its own
 /// `tsconfig.json`.
 ///
-/// Background. Many monorepos (classroomio, slowreader, datagrid)
-/// have a no-op root `tsconfig.json` (`{ "extends": "tsconfig/base.json" }`)
+/// Background. Many real-world monorepo layouts have a no-op
+/// root `tsconfig.json` (`{ "extends": "tsconfig/base.json" }`)
 /// alongside a `pnpm-workspace.yaml` listing `apps/*` / `packages/*`
 /// globs. Each app/package carries its own real `tsconfig.json` with
 /// the meaningful `compilerOptions.paths` (`$lib`, `$mail`, etc.).
@@ -665,8 +665,9 @@ mod tests {
     #[test]
     fn types_and_lib_flow_through_reference_chain() {
         // Sibling extension project declaring its own types + lib.
-        // slowreader pattern: web/ references extension/ (which wants
-        // @types/chrome); the overlay needs to carry those through.
+        // Real-world pattern: a web app references an extension
+        // sub-project (which wants @types/chrome); the overlay needs
+        // to carry those through.
         let tmp = tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
 

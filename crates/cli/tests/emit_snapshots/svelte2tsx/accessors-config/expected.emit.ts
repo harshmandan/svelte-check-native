@@ -12,7 +12,7 @@ foo = undefined as any;
     return { props: undefined as any as ({ foo?: number; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: number; }) };
 }
 $$render_4a2d9092;
-declare const __svn_component_default: import('svelte').Component<{ foo?: number; }, { foo: number; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ foo?: number; }> & { foo: number; };
+declare const __svn_component_default: import('svelte').Component<{ foo?: number; }, Awaited<ReturnType<typeof $$render_4a2d9092>>['exports']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ foo?: number; }> & Awaited<ReturnType<typeof $$render_4a2d9092>>['exports'];
 export default __svn_component_default;
 

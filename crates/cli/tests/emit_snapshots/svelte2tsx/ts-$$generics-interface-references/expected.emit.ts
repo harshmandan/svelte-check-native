@@ -37,7 +37,7 @@ async function $$render_a02d9190() {
     return { props: undefined as any as ({ a: ReferencesGeneric; b: B; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: ReferencesGeneric; b: B; }) };
 }
 $$render_a02d9190;
-declare const __svn_component_default: import('svelte').Component<{ a: ReferencesGeneric; b: B; }, { a: ReferencesGeneric; b: B; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ a: ReferencesGeneric; b: B; }> & { a: ReferencesGeneric; b: B; };
+declare const __svn_component_default: import('svelte').Component<{ a: ReferencesGeneric; b: B; }, Awaited<ReturnType<typeof $$render_a02d9190>>['exports']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ a: ReferencesGeneric; b: B; }> & Awaited<ReturnType<typeof $$render_a02d9190>>['exports'];
 export default __svn_component_default;
 

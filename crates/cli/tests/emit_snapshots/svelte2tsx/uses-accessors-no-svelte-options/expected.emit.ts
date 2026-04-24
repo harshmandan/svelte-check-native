@@ -14,7 +14,7 @@ foo = undefined as any;
     return { props: undefined as any as ({ foo?: number; bar?: string; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: number; bar: string; }) };
 }
 $$render_bf84b3dd;
-declare const __svn_component_default: import('svelte').Component<{ foo?: number; bar?: string; }, { foo: number; bar: string; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ foo?: number; bar?: string; }> & { foo: number; bar: string; };
+declare const __svn_component_default: import('svelte').Component<{ foo?: number; bar?: string; }, Awaited<ReturnType<typeof $$render_bf84b3dd>>['exports']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ foo?: number; bar?: string; }> & Awaited<ReturnType<typeof $$render_bf84b3dd>>['exports'];
 export default __svn_component_default;
 

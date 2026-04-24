@@ -14,7 +14,7 @@ async function $$render_39845b3c() {
     return { props: undefined as any as ({ foo: () => void; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: () => void; }) };
 }
 $$render_39845b3c;
-declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_39845b3c>>['props'], { foo: () => void; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_39845b3c>>['props']> & { foo: () => void; };
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_39845b3c>>['props'], Awaited<ReturnType<typeof $$render_39845b3c>>['exports']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_39845b3c>>['props']> & Awaited<ReturnType<typeof $$render_39845b3c>>['exports'];
 export default __svn_component_default;
 

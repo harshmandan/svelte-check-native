@@ -32,7 +32,7 @@ async function $$render_960ff640() {
     return { props: undefined as any as ({ a: A; b: B; c: C; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: A; b: B; c: C; getA: () => void; }) };
 }
 $$render_960ff640;
-declare const __svn_component_default: import('svelte').Component<Partial<{ a: A; b: B; c: C; } & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>, { a: A; b: B; c: C; getA: () => void; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Partial<{ a: A; b: B; c: C; } & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>> & { a: A; b: B; c: C; getA: () => void; };
+declare const __svn_component_default: import('svelte').Component<Partial<{ a: A; b: B; c: C; } & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>, Awaited<ReturnType<typeof $$render_960ff640>>['exports']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Partial<{ a: A; b: B; c: C; } & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>> & Awaited<ReturnType<typeof $$render_960ff640>>['exports'];
 export default __svn_component_default;
 

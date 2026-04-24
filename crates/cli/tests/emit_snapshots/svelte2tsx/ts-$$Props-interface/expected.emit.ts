@@ -64,7 +64,7 @@ rename1 = undefined as any;
     return { props: undefined as any as ({ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ exported1: string; exported2: string; }) };
 }
 $$render_a154bb54;
-declare const __svn_component_default: import('svelte').Component<{ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }, { exported1: string; exported2: string; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }> & { exported1: string; exported2: string; };
+declare const __svn_component_default: import('svelte').Component<{ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }, Awaited<ReturnType<typeof $$render_a154bb54>>['exports']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }> & Awaited<ReturnType<typeof $$render_a154bb54>>['exports'];
 export default __svn_component_default;
 

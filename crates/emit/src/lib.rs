@@ -1091,7 +1091,28 @@ fn build_exports_object(split: Option<&script_split::SplitScript>) -> Option<Str
         buf.push_str(": ");
         match &info.type_source {
             Some(t) => buf.push_str(t),
-            None => buf.push_str("any"),
+            // When no explicit type annotation exists on the local,
+            // use `typeof <name>` — a body-scope reference that
+            // resolves to whatever TS inferred from the local's
+            // initializer. Mirrors upstream svelte2tsx
+            // (ExportedNames.ts `createReturnElementsType`): upstream
+            // emits `translate?: typeof translate` so a local like
+            // `let translate = writable({x:0,y:0})` preserves its
+            // `Writable<{x,y}>` type through the default export's
+            // Exports slot instead of collapsing to `any`.
+            //
+            // Critical: the output is embedded INSIDE `$$render`'s
+            // body via `return { ... exports: undefined as any as
+            // <string> };`, so `typeof <name>` resolves against the
+            // body-local declaration. At module scope the same
+            // reference would fire TS2304, so any module-scope use
+            // of the Exports type MUST go through the
+            // `Awaited<ReturnType<typeof $$render>>['exports']`
+            // projection instead of the raw string.
+            None => {
+                buf.push_str("typeof ");
+                buf.push_str(info.name.as_str());
+            }
         }
         buf.push_str("; ");
     }
@@ -1781,10 +1802,32 @@ fn emit_default_export_declarations(
         return;
     }
     let use_class_wrapper = generics.is_some() && prop_type_source.is_some();
-    let exports_clause = exports_object
+    // Module-scope references to the Exports slot MUST go through
+    // `Awaited<ReturnType<typeof $$render>>['exports']`, NOT through
+    // the `exports_object` string directly. The string contains
+    // `typeof <name>` body-scope references (so initializer-inferred
+    // types like `Writable<{x,y}>` for `let translate = writable(...)`
+    // are preserved through the render function's lexical scope);
+    // those refs would fire TS2304 at module scope. Mirrors upstream
+    // svelte2tsx's `__sveltets_2_isomorphic_component($$render())`
+    // pattern, which threads Exports through the call-site
+    // evaluation rather than naming body-locals from module scope.
+    //
+    // When the component has no `export let`s at all, `exports_object`
+    // is `None` — in that case `Awaited<…>['exports']` still resolves
+    // (to `{}` from the render body's `exports: {} as {}` literal) so
+    // we prefer it unconditionally once a render name is in play.
+    let exports_projection = exports_object
+        .as_ref()
+        .map(|_| format!("Awaited<ReturnType<typeof {render_name}>>['exports']"));
+    let exports_clause = exports_projection
+        .as_deref()
         .map(|e| format!(" & {e}"))
         .unwrap_or_default();
-    let component_exports_arg = exports_object.map(|e| format!(", {e}")).unwrap_or_default();
+    let component_exports_arg = exports_projection
+        .as_deref()
+        .map(|e| format!(", {e}"))
+        .unwrap_or_default();
 
     // Class-wrapper declaration at module scope. Its `props()` method's
     // return type is resolved THROUGH the render function, which is

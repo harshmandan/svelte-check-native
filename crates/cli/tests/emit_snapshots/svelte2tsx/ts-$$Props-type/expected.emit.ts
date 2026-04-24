@@ -64,7 +64,7 @@ rename1 = undefined as any;
     return { props: undefined as any as ($$Props), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ exported1: string; exported2: string; }) };
 }
 $$render_02fefb5b;
-declare const __svn_component_default: import('svelte').Component<$$Props, { exported1: string; exported2: string; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<$$Props> & { exported1: string; exported2: string; };
+declare const __svn_component_default: import('svelte').Component<$$Props, Awaited<ReturnType<typeof $$render_02fefb5b>>['exports']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<$$Props> & Awaited<ReturnType<typeof $$render_02fefb5b>>['exports'];
 export default __svn_component_default;
 

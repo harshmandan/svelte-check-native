@@ -16,7 +16,7 @@ c = undefined as any;
     return { props: undefined as any as ({ a: number; b: number | undefined; c?: number; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: number; b: number | undefined; c: number; }) };
 }
 $$render_50fd1c6b;
-declare const __svn_component_default: import('svelte').Component<{ a: number; b: number | undefined; c?: number; }, { a: number; b: number | undefined; c: number; }>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ a: number; b: number | undefined; c?: number; }> & { a: number; b: number | undefined; c: number; };
+declare const __svn_component_default: import('svelte').Component<{ a: number; b: number | undefined; c?: number; }, Awaited<ReturnType<typeof $$render_50fd1c6b>>['exports']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<{ a: number; b: number | undefined; c?: number; }> & Awaited<ReturnType<typeof $$render_50fd1c6b>>['exports'];
 export default __svn_component_default;
 

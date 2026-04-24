@@ -4,6 +4,121 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0]
+
+Minor release. Three diagnostic-correctness fixes driven by a
+root-cause investigation that exposed a tsgo semantic-abort
+masking errors across multiple bench workspaces, plus the
+parity-push work accumulated since 0.4.2.
+
+### Emit
+
+- **SvelteKit `$types` injection for Svelte-4 `export let data`**
+  on `+page.svelte` / `+layout.svelte` Kit-route files. Now
+  injects `: import('./$types.js').PageData` (or LayoutData,
+  ActionData, Snapshot) to match upstream svelte2tsx's
+  `handleTypeAssertion` behavior
+  (`svelte2tsx/src/svelte2tsx/nodes/ExportedNames.ts:424-440`).
+  Closes a 130-error cluster on a charting-lib bench where
+  `data.geojson.objects.states` was collapsing to `any` and
+  routing `topojson-client`'s `feature()` overload to the
+  wrong branch.
+
+- **TS-overlay default export sources Props via
+  `Awaited<ReturnType<typeof $$render>>['props']`** instead of
+  the previous `Component<Record<string, any> & __SvnAllProps,
+  {exports}>` shape. The old shape put the actual prop type in
+  the Exports slot (second generic of `Component<>`), leaving
+  the Props slot as a loose record — which broke contextual
+  typing on arrow-callback props at consumer sites. New shape
+  routes through the render function's return object, matching
+  upstream's `__sveltets_2_isomorphic_component($$render())`
+  pattern. Restores `(e: MouseEvent) => void` contextual typing
+  on patterns like `<Bar onclick={(e) => e.clientX} />`.
+
+- **JS-overlay Svelte-4 ambient declarations use JSDoc casts
+  instead of TS annotations.** Previously emitted `let $$props:
+  Record<string, any> = {};` directly into `.svn.js` overlays
+  — tsgo fires TS8010 ("Type annotations can only be used in
+  TypeScript files") on every such overlay AND silently
+  aborts the project-wide semantic-check pass once TS8010
+  surfaces anywhere. Now emits `let $$props = /** @type
+  {Record<string, any>} */ ({});`. Unblocks full semantic
+  checking on projects with SVG icon libraries or other
+  Svelte-4 `.js` component libraries — exposed real errors
+  that had been silently suppressed.
+
+- **Leading `@ts-ignore` / `@ts-expect-error` / `@ts-nocheck`
+  hoists with its import.** Previously, when our overlay
+  hoisted an `import QR from 'qrious'` statement with a
+  preceding `// @ts-ignore`, the directive was stranded in
+  the body and no longer suppressed its target error. The
+  hoist now extends backwards through contiguous directive
+  comments. Matches upstream `svelte2tsx`'s behavior (see
+  `test/svelte2tsx/samples/import-leading-comment/`).
+
+- **Leading `/** @ts-ignore */` handled** across the whole
+  import-leading-comment test family; snapshots reflect the
+  corrected hoist shape.
+
+### Typecheck — ignore-region diagnostic filter
+
+- **New `/*svn:ignore_start*/…/*svn:ignore_end*/` marker
+  pair.** Emit can wrap scaffolding bytes with the markers
+  and the mapper drops any diagnostic whose overlay byte
+  position falls inside a marked region. Mirrors upstream
+  `language-server/src/plugins/typescript/features/utils.ts:86-109`
+  `isInGeneratedCode`. First adopter site:
+  `emit_component_bind_widen_trailers` — the
+  `void (() => { target = __svn_any(null); })` scaffolding
+  emitted after component instantiations with `bind:X`
+  widen targets. More emit sites can adopt the markers
+  incrementally.
+
+### Parity push (cumulative since 0.4.2)
+
+- JS-overlay default for `.svelte` without `<script lang="ts">`.
+  JSDoc `@typedef Props` flows through `Awaited<ReturnType>`.
+- `$$ComponentProps` synthesis (JS and TS) for `$props()`
+  destructure without annotation. Per-key type inference
+  from default values + user JSDoc Props.
+- Class-wrapper emit: `$$IsomorphicComponent`,
+  `__sveltets_2_isomorphic_component`,
+  `__sveltets_2_with_any_event` wrapping. Props type refs
+  resolve in render scope.
+- `style:X` directive type-checked via
+  `__svn_ensure_type(String|Number, expr)` pin.
+- `bind:X` widening on simple-identifier component targets.
+- Token-map coverage for shorthand DOM attrs, `{#each}` expr,
+  hoisted JS-overlay imports.
+- Blanket TS2695 filter removed; upstream-matching fires
+  through.
+- Conditional-distribution `__svn_ensure_component` — class
+  passthrough first so generics bind; callable-form second
+  for our overlays.
+
+### Documentation & infrastructure
+
+- Bench repo names scrubbed from source comments, design
+  fixture READMEs, and CHANGELOG. Generic descriptors
+  throughout (e.g. "a charting-lib bench", "our Svelte-4
+  control"). Private working notes unaffected (gitignored).
+- `classroomio` bench removed from the fleet (its tsconfig
+  extends chain depends on `svelte-kit sync` output that
+  isn't checked in; upstream can't run cleanly against it).
+
+### Bench state at release
+
+| Workspace | Errors | vs upstream-tsgo |
+| :-- | --: | :-- |
+| Svelte-4 control (1124-file monorepo sub-app) | 0 | exact |
+| Svelte-5 control (1357-file monorepo sub-app) | 0 | exact |
+| A component-lib bench | 0 | exact |
+| A file-share bench | 6 | matches upstream's 6 |
+| A tabular-data bench | 63 | +2 (Kit route-type injection gap) |
+| A CMS bench | 422 | +4 (strict-mode diagnostics upstream filters via byte-granular source-map machinery) |
+| A charting-lib bench | 58 | +32 (residual unused-@ts-expect-error + arrow-param clusters) |
+
 ## [0.4.2]
 
 Patch release. Closes the long-standing `.svelte` + `.svelte.ts`

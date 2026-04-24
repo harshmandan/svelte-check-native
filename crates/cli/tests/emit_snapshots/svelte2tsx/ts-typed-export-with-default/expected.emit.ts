@@ -3,7 +3,6 @@
 async function $$render_8ef383be() {
 
            let name: string | number = "world"
-name = undefined as any;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }

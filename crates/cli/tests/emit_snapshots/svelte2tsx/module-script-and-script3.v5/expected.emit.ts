@@ -12,7 +12,7 @@ async function $$render_39303eb1() {
         }
     }
     void world;
-    return { props: /** @type {{ world?: any; }} */({}) };
+    return { props: /** @type {{ world?: typeof world; }} */({}) };
 }
 $$render_39303eb1;
 /**

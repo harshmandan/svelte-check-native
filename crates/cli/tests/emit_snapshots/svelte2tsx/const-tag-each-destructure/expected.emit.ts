@@ -38,7 +38,7 @@ async function $$render_f39ccf3a() {
     void boxes;
     void calculate;
     void constant;
-    return { props: /** @type {{ boxes?: any; constant?: any; }} */({}) };
+    return { props: /** @type {{ boxes?: typeof boxes; constant?: typeof constant; }} */({}) };
 }
 $$render_f39ccf3a;
 /**

@@ -178,7 +178,7 @@ async function $$render_8a5774d3() {
     void box;
     void calculate;
     void constant;
-    return { props: /** @type {{ box?: any; constant?: any; }} */({}) };
+    return { props: /** @type {{ box?: typeof box; constant?: typeof constant; }} */({}) };
 }
 $$render_8a5774d3;
 /**

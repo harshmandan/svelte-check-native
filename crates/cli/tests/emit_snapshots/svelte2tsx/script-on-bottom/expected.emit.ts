@@ -9,7 +9,7 @@ async function $$render_9a2c7966() {
         }
     }
     void world;
-    return { props: /** @type {{ world?: any; }} */({}) };
+    return { props: /** @type {{ world?: typeof world; }} */({}) };
 }
 $$render_9a2c7966;
 /**

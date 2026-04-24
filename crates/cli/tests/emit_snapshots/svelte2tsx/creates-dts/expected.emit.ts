@@ -19,7 +19,7 @@ async function $$render_87d6d062() {
     }
     void bar;
     void foobar;
-    return { props: /** @type {{ bar: any; foobar?: any; }} */({}) };
+    return { props: /** @type {{ bar: any; foobar?: typeof foobar; }} */({}) };
 }
 $$render_87d6d062;
 /**

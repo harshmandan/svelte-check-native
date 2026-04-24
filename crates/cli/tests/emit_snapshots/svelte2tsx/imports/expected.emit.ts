@@ -14,7 +14,7 @@ async function $$render_df4c5ef7() {
         }
     }
     void world;
-    return { props: /** @type {{ world?: any; }} */({}) };
+    return { props: /** @type {{ world?: typeof world; }} */({}) };
 }
 $$render_df4c5ef7;
 /**

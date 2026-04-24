@@ -5,12 +5,8 @@ async function $$render_6affb005() {
            let bla = false;
            let blubb = true;
            let bla1: boolean = false;
-bla1 = undefined as any;
            let blubb1: boolean = true;
-blubb1 = undefined as any;
            let a1 = true, a2 = false, b1: boolean = true, b2: boolean = false;
-b1 = undefined as any;
-b2 = undefined as any;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }

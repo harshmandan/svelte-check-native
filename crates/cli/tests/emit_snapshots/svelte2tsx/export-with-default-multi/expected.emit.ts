@@ -10,7 +10,7 @@ async function $$render_68adadcb() {
     }
     void name;
     void world;
-    return { props: /** @type {{ name?: any; world?: any; }} */({}) };
+    return { props: /** @type {{ name?: typeof name; world?: typeof world; }} */({}) };
 }
 $$render_68adadcb;
 /**

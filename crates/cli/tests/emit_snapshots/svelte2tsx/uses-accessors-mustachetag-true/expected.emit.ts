@@ -21,10 +21,10 @@ foo2 = undefined as any;
     void foo2;
     void clazz;
     void bar;
-    return { props: undefined as any as ({ foo?: number; foo2?: any; class: string; bar?: string; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: number; foo2: typeof foo2; bar: string; }) };
+    return { props: undefined as any as ({ foo?: number; foo2?: typeof foo2; class: string; bar?: string; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: number; foo2: typeof foo2; bar: string; }) };
 }
 $$render_90d89a0a;
-declare const __svn_component_default: import('svelte').Component<{ foo?: number; foo2?: any; class: string; bar?: string; }, Awaited<ReturnType<typeof $$render_90d89a0a>>['exports']>;
-declare type __svn_component_default = import('svelte').SvelteComponent<{ foo?: number; foo2?: any; class: string; bar?: string; }> & Awaited<ReturnType<typeof $$render_90d89a0a>>['exports'];
+declare const __svn_component_default: import('svelte').Component<Awaited<ReturnType<typeof $$render_90d89a0a>>['props'], Awaited<ReturnType<typeof $$render_90d89a0a>>['exports']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_90d89a0a>>['props']> & Awaited<ReturnType<typeof $$render_90d89a0a>>['exports'];
 export default __svn_component_default;
 

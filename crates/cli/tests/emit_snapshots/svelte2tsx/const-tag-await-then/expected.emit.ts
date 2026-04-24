@@ -56,7 +56,7 @@ async function $$render_e1dcebf1() {
     void calculate;
     void constant;
     void promise2;
-    return { props: /** @type {{ promise1?: any; promise2?: any; constant?: any; }} */({}) };
+    return { props: /** @type {{ promise1?: typeof promise1; promise2?: typeof promise2; constant?: typeof constant; }} */({}) };
 }
 $$render_e1dcebf1;
 /**

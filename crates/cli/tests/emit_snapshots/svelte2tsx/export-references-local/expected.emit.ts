@@ -8,7 +8,7 @@ async function $$render_e05c0865() {
         // template type-check body (incremental)
     }
     void name;
-    return { props: /** @type {{ name?: any; }} */({}) };
+    return { props: /** @type {{ name?: typeof name; }} */({}) };
 }
 $$render_e05c0865;
 /**

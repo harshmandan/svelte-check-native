@@ -11,6 +11,7 @@ async function $$render_39dbed3c() {
 
          let bar!: Bar;
          let foobar = '';
+foobar = undefined as any;
 
   const dispatch = createEventDispatcher<{swipe: string}>();
     async function __svn_tpl_check() {
@@ -20,10 +21,10 @@ async function $$render_39dbed3c() {
     void __svn_tpl_check;
     void bar;
     void foobar;
-    return { props: undefined as any as ({ bar: Bar; foobar?: any; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ bar: Bar; foobar: typeof foobar; }) };
+    return { props: undefined as any as ({ bar: Bar; foobar?: typeof foobar; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ bar: Bar; foobar: typeof foobar; }) };
 }
 $$render_39dbed3c;
-declare const __svn_component_default: import('svelte').Component<Partial<{ bar: Bar; foobar?: any; } & __SvnSvelte4PropsWiden<{ bar: Bar; foobar?: any; }>>, Awaited<ReturnType<typeof $$render_39dbed3c>>['exports']>;
-declare type __svn_component_default = import('svelte').SvelteComponent<Partial<{ bar: Bar; foobar?: any; } & __SvnSvelte4PropsWiden<{ bar: Bar; foobar?: any; }>>> & Awaited<ReturnType<typeof $$render_39dbed3c>>['exports'];
+declare const __svn_component_default: import('svelte').Component<Partial<Awaited<ReturnType<typeof $$render_39dbed3c>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_39dbed3c>>['props']>>, Awaited<ReturnType<typeof $$render_39dbed3c>>['exports']>;
+declare type __svn_component_default = import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_39dbed3c>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_39dbed3c>>['props']>>> & Awaited<ReturnType<typeof $$render_39dbed3c>>['exports'];
 export default __svn_component_default;
 

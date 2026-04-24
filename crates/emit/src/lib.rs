@@ -1055,7 +1055,14 @@ fn apply_script_body_rewrites<'alloc>(
     // `NAME = undefined as any;` after the declaration widens back to
     // the declared annotation, so later comparisons don't fire TS2367
     // "no overlap".
-    if let Some(s) = split {
+    //
+    // TS-only: the inserted trailer uses `as any` which is TS syntax.
+    // JS-overlay paths go through `widen_untyped_exports_jsdoc_in_place`
+    // above, which emits the equivalent JSDoc-cast form that survives
+    // `.svelte.svn.js` parsing without firing TS8010.
+    if emit_is_ts()
+        && let Some(s) = split
+    {
         let mut denarrow_targets: Vec<SmolStr> = s.exported_locals.clone();
         if let Some(parsed_orig) = parsed_instance {
             let mut typed_lets: Vec<SmolStr> = Vec::new();
@@ -1885,7 +1892,16 @@ fn emit_default_export_declarations(
     // generic without re-binding it, or because they reference a
     // body-level const via `typeof`) can't be named from the
     // default-export declaration — emit falls back to `any` for those.
-    let prop_ty_is_literal = prop_type_source.is_some_and(|t| t.trim().starts_with('{'));
+    // A synthesised Props literal that back-references body-local
+    // declarations via `typeof <name>` is NOT safe to name from
+    // module scope — the reference would fire TS2304. Emit must
+    // route those through the `Awaited<ReturnType<typeof
+    // $$render>>['props']` projection (path 4 below) so the
+    // `typeof` refs resolve inside the render function's lexical
+    // scope. Mirrors the same treatment we apply to the Exports
+    // slot via the `build_exports_object` change.
+    let prop_ty_is_literal = prop_type_source
+        .is_some_and(|t| t.trim().starts_with('{') && !svn_analyze::contains_typeof_ref(t));
     let prop_ty_root_name = prop_type_source.and_then(svn_analyze::root_type_name_of);
     // Consider a named Props type module-scope-visible if either (a)
     // script_split hoisted it out of the instance script, (b) it's
@@ -6526,10 +6542,23 @@ fn try_process_let_statement_for_denarrow(
             s += 1;
         }
 
-        if has_type_annotation
-            && has_initializer
-            && target_names.iter().any(|t| t.as_bytes() == name_bytes)
-        {
+        // De-narrow target `let` declarations that have an initializer.
+        // The post-declaration `NAME = undefined as any;` trailer is
+        // what makes `typeof NAME` at subsequent points widen back to
+        // `any` when downstream emission references it via
+        // `typeof <local>` (e.g. Props / Exports synth of
+        // `export let resetOnEnd = false;` — without the trailer
+        // `typeof resetOnEnd` narrows to the literal `false`,
+        // rejecting consumer writes like `resetOnEnd: true`).
+        //
+        // Applies regardless of whether the declaration has a type
+        // annotation — mirrors upstream svelte2tsx's
+        // `__sveltets_2_any(<name>)` trailer that upstream emits
+        // unconditionally after every `export let <name> = …;`. The
+        // prior gate was `has_type_annotation && has_initializer`
+        // which missed Svelte-4's bare-primitive-default pattern
+        // `export let resetOnEnd = false`.
+        if has_initializer && target_names.iter().any(|t| t.as_bytes() == name_bytes) {
             if let Ok(name_str) = std::str::from_utf8(name_bytes) {
                 matched.push(SmolStr::from(name_str));
             }
@@ -6833,6 +6862,20 @@ fn try_process_let_statement_for_widening(
         // Widen when: target name, NO type annotation, AND either NO
         // initializer OR the initializer is a bare `undefined`/`null`
         // literal (Svelte-4 `export let x = undefined` pattern).
+        //
+        // We do NOT widen object / factory initializers (`= writable(...)`,
+        // `= motionStore(...)`) — those benefit from the inferred type
+        // staying intact (so `typeof <name>` resolves to
+        // `Writable<{x,y}>` instead of `any`). Primitive literal
+        // initializers (`= false`, `= 0`, `= ""`) narrow `typeof`
+        // through the `let`'s flow-type, which would reject widened
+        // consumer writes — but the companion post-declaration
+        // reassignment (`<name> = undefined as any;` emitted by
+        // `rewrite_definite_assignment_in_place`) already widens the
+        // flow type to `any` once the declaration completes, so
+        // subsequent `typeof` references land on `any`. That matches
+        // upstream svelte2tsx's `__sveltets_2_any(<name>)` trailer
+        // pattern byte-for-byte in effect.
         let should_widen = !has_type_annotation
             && (!has_initializer || initializer_is_nullish)
             && target_names.iter().any(|t| t.as_bytes() == name);

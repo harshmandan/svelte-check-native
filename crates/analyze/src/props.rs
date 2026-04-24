@@ -447,9 +447,47 @@ fn append_props_from_var_decl(
         let ty_src = ty_text
             .map(ToOwned::to_owned)
             .or(arrow_sig)
-            .unwrap_or_else(|| "any".to_string());
+            // Unannotated with an initializer: `typeof <name>` lets
+            // TS pick up the initializer-inferred type (e.g.
+            // `let translate = writable({x,y})` →
+            // `Writable<{x,y}>`) instead of collapsing to `any`.
+            // Mirrors upstream svelte2tsx's ExportedNames emit for
+            // Svelte-4 prop types (`createReturnElementsType` →
+            // `${key}?: typeof ${key}`).
+            //
+            // Unannotated with NO initializer: `typeof <name>` at
+            // a `let <name>;` site narrows to `undefined` under
+            // strict mode, rejecting consumer writes. Fall back to
+            // `any` for that case — matches the prior behavior for
+            // legitimately-uninitialised props.
+            //
+            // Critical: the `typeof <name>` form is embedded inside
+            // `$$render`'s body scope where it resolves. Any
+            // module-scope consumer of this type MUST route through
+            // the `Awaited<ReturnType<typeof $$render>>['props']`
+            // projection instead of naming the literal directly —
+            // `contains_typeof_ref` below flags that.
+            .unwrap_or_else(|| {
+                if has_init {
+                    format!("typeof {name}")
+                } else {
+                    "any".to_string()
+                }
+            });
         out.push(format!("{name}{optional_marker}: {ty_src};"));
     }
+}
+
+/// Cheap substring check: does a Props type-source string reference
+/// any body-local via `typeof <name>`? Used by emit to decide whether
+/// the literal is safe to name at module scope or must go through the
+/// `Awaited<ReturnType<typeof $$render>>['props']` projection.
+pub fn contains_typeof_ref(ty: &str) -> bool {
+    // Match `typeof ` (with trailing space) — the regular TS grammar
+    // form. Comments / string literals with the substring are not a
+    // real concern because this synthesis never embeds user comments
+    // into the output; it only concatenates structured type text.
+    ty.contains("typeof ")
 }
 
 /// For `init` = an arrow function, synthesize a function-type
@@ -933,9 +971,16 @@ mod tests {
     }
 
     #[test]
-    fn synth_props_type_no_type_with_default_is_any_optional() {
+    fn synth_props_type_no_type_with_default_is_typeof_optional() {
+        // Unannotated-with-initializer emits `typeof <name>` so
+        // downstream consumers see the initializer-inferred type
+        // (number in this case) rather than collapsing to `any`.
+        // `has_init = true` path in `append_props_from_var_decl`.
         let src = "export let count = 42;";
-        assert_eq!(props_type(src).as_deref(), Some("{ count?: any; }"));
+        assert_eq!(
+            props_type(src).as_deref(),
+            Some("{ count?: typeof count; }")
+        );
     }
 
     #[test]
@@ -1032,7 +1077,7 @@ mod tests {
             "export let width = 40;\nlet className: any = \"\";\nexport { className as class };";
         assert_eq!(
             props_type(src).as_deref(),
-            Some("{ width?: any; class?: any; }")
+            Some("{ width?: typeof width; class?: any; }")
         );
     }
 
@@ -1106,7 +1151,7 @@ mod tests {
         assert_eq!(info.source, PropsSource::SynthesisedFromExports);
         assert_eq!(
             info.type_text.as_deref(),
-            Some("{ width: number; count?: any; }")
+            Some("{ width: number; count?: typeof count; }")
         );
         assert_eq!(info.type_root_name, None); // literal shape
         assert!(info.destructures.is_empty());

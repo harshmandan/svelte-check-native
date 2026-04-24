@@ -7,7 +7,7 @@ async function $$render_d90fc472() {
         // template type-check body (incremental)
     }
     void name;
-    return { props: /** @type {{ name?: any; }} */({}) };
+    return { props: /** @type {{ name?: typeof name; }} */({}) };
 }
 $$render_d90fc472;
 /**

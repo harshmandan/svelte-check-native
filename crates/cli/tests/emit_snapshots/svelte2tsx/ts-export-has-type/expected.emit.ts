@@ -6,7 +6,6 @@ async function $$render_7a575470() {
                   
            let a: A;
            let b: A = {};
-b = undefined as any;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }

@@ -11,7 +11,7 @@ async function $$render_6a73bb59() {
     void a;
     void b;
     void c;
-    return { props: /** @type {{ a: any; b: any; c?: any; }} */({}) };
+    return { props: /** @type {{ a: any; b: any; c?: typeof c; }} */({}) };
 }
 $$render_6a73bb59;
 /**

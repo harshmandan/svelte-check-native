@@ -30,7 +30,8 @@ pub mod template_walker;
 pub mod void_refs;
 
 pub use props::{
-    PropInfo, PropsInfo, PropsSource, find_dispatcher_event_type_source, root_type_name_of,
+    PropInfo, PropsInfo, PropsSource, contains_typeof_ref, find_dispatcher_event_type_source,
+    root_type_name_of,
 };
 pub use rune::{RuneCall, RuneKind, find_runes};
 pub use store::{

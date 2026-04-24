@@ -6,7 +6,6 @@ async function $$render_9827a5f8() {
                                                  
     
            let store: Writable<string[]> | null = null;
-store = undefined as any;
     
     if ($store) {
         $store.length

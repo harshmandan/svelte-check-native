@@ -37,7 +37,7 @@ async function $$render_48a7b4ac() {
     void boxes;
     void calculate;
     void constant;
-    return { props: /** @type {{ boxes?: any; constant?: any; }} */({}) };
+    return { props: /** @type {{ boxes?: typeof boxes; constant?: typeof constant; }} */({}) };
 }
 $$render_48a7b4ac;
 /**

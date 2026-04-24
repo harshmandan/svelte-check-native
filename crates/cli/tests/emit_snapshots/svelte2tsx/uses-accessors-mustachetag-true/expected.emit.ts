@@ -4,7 +4,8 @@ async function $$render_90d89a0a() {
 
 	       let foo: number = undefined
 foo = undefined as any;
-	       let foo2 = undefined
+	       let foo2: any = undefined
+foo2 = undefined as any;
 	let clazz!: string
 	                         
 	       const bar: string = ''

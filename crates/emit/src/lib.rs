@@ -6545,6 +6545,14 @@ fn try_process_let_statement_for_widening(
         }
 
         let mut has_initializer = false;
+        // When the initializer is literally `undefined` or `null`, we
+        // still want to widen. Upstream widens Svelte-4 `export let x
+        // = <literal>` via a trailing `x = __sveltets_2_any(x)`
+        // reassignment; our equivalent is to annotate `: any` so the
+        // declared type doesn't narrow to the literal. Without this,
+        // `export let zIndex = undefined;` narrows to `zIndex:
+        // undefined` and downstream reads fire TS7005 / TS7034.
+        let mut initializer_is_nullish = false;
         let mut paren_depth: i32 = 0;
         while s < bytes.len() {
             let c = bytes[s];
@@ -6569,6 +6577,25 @@ fn try_process_let_statement_for_widening(
                         }
                         _ => {
                             has_initializer = true;
+                            // Peek past whitespace for a literal
+                            // `undefined` / `null` initializer.
+                            let mut p2 = s + 1;
+                            while p2 < bytes.len() && is_ascii_ws(bytes[p2]) {
+                                p2 += 1;
+                            }
+                            let rest = &bytes[p2..];
+                            let is_word_end = |off: usize| {
+                                bytes
+                                    .get(p2 + off)
+                                    .copied()
+                                    .map(|b| !is_ident_byte(b))
+                                    .unwrap_or(true)
+                            };
+                            if (rest.starts_with(b"undefined") && is_word_end(9))
+                                || (rest.starts_with(b"null") && is_word_end(4))
+                            {
+                                initializer_is_nullish = true;
+                            }
                         }
                     }
                 }
@@ -6578,11 +6605,13 @@ fn try_process_let_statement_for_widening(
             s += 1;
         }
 
-        // Widen only when: target name, NO type annotation, NO initializer.
-        if !has_type_annotation
-            && !has_initializer
-            && target_names.iter().any(|t| t.as_bytes() == name)
-        {
+        // Widen when: target name, NO type annotation, AND either NO
+        // initializer OR the initializer is a bare `undefined`/`null`
+        // literal (Svelte-4 `export let x = undefined` pattern).
+        let should_widen = !has_type_annotation
+            && (!has_initializer || initializer_is_nullish)
+            && target_names.iter().any(|t| t.as_bytes() == name);
+        if should_widen {
             let name_str = std::str::from_utf8(name).ok().map(SmolStr::from)?;
             insertions.push((name_end, name_str));
         }

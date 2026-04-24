@@ -25,15 +25,12 @@ async function $$render_02fefb5b() {
      
 
            let exported1!: string;
-           let exported2: string = '';
-exported2 = undefined as any;
+           let exported2: string = ''; exported2 = undefined as any;
 
-    let name1: string = "world"
-name1 = undefined as any;
+    let name1: string = "world"; name1 = undefined as any;
     let name2!: string;
 
-    let rename1: string = '';
-rename1 = undefined as any;
+    let rename1: string = ''; rename1 = undefined as any;
     let rename2!: string;
 
     class Foo {}

@@ -2942,11 +2942,11 @@ fn emit_at_const_if_any(
     // Body = expression_range (parser already trimmed the keyword).
     let body_start = interp.expression_range.start as usize;
     let body_end = interp.expression_range.end as usize;
-    let Some(body) = source.get(body_start..body_end) else {
+    let Some(body_raw) = source.get(body_start..body_end) else {
         return;
     };
-    let body = body.trim();
-    if body.is_empty() {
+    let trimmed = body_raw.trim();
+    if trimmed.is_empty() {
         return;
     }
     let indent = "    ".repeat(depth);
@@ -2954,7 +2954,23 @@ fn emit_at_const_if_any(
     // (pattern-or-name on the left of `=`, expression on the right).
     // Re-emitting inside the template-check `const` keyword pins the
     // inferred type so downstream `{#if NAME === '…'}` narrows.
-    let _ = writeln!(buf, "{indent}const {body};");
+    //
+    // The body is emitted via `append_verbatim` so diagnostics
+    // landing inside a multi-line body map back to the source
+    // line that tsgo reported. Without this, a template
+    // expression like `(_data, min, max) => value?.foo.map((d) =>
+    // d.valueOf())` that spans three overlay lines has no line_map
+    // coverage, and tsgo's TS7006 on the arrow parameter drops.
+    //
+    // Use the UNTRIMMED body + full expression_range so
+    // count_newlines(text) matches count_newlines(source_slice) —
+    // trim-dropped leading whitespace would desync the entry's
+    // source mapping by one line.
+    buf.push_str(&indent);
+    buf.push_str("const ");
+    buf.append_verbatim(body_raw, source, interp.expression_range);
+    buf.push_str(";\n");
+    let body = trimmed;
 
     // Void every binding introduced by the pattern. Without this tsgo
     // fires TS6133 ("declared but never read") on `@const` tags whose
@@ -6379,14 +6395,33 @@ fn denarrow_typed_exported_props_in_place(out: &mut String, target_names: &[Smol
             try_process_let_statement_for_denarrow(bytes, i, target_names)
         {
             // Emit the original statement verbatim (start..stmt_end)
-            // then append `NAME = undefined as any;\n` for each matched
-            // name. Keeps byte positions of the original unchanged —
-            // only appends.
+            // then append ` NAME = undefined as any;` for each matched
+            // name on the SAME line. A newline here would inflate the
+            // already-emitted instance-script line_map entry, dropping
+            // diagnostics that land past the pre-rewrite end line.
+            //
+            // Only emit the trailer when there's a real match. When
+            // matched is empty the scanner still returns the scanned
+            // stmt_end, but the original bytes must pass through
+            // untouched — the scanner's paren-depth tracking misreads
+            // `>` comparisons in some RHS expressions and returns an
+            // incorrect stmt_end; touching the output in that case
+            // splices stray characters into the overlay.
             out.push_str(&original[i..stmt_end]);
-            for name in &matched_names {
-                out.push('\n');
-                out.push_str(name);
-                out.push_str(" = undefined as any;");
+            if !matched_names.is_empty() {
+                // When `stmt_end` points AT a `\n` (ASI-terminated let
+                // without a trailing `;`), the slice has no
+                // terminator, so jamming `NAME =` against the RHS
+                // would parse as continuation. Insert a defensive `;`
+                // first.
+                if !out.ends_with(';') {
+                    out.push(';');
+                }
+                for name in &matched_names {
+                    out.push(' ');
+                    out.push_str(name);
+                    out.push_str(" = undefined as any;");
+                }
             }
             i = stmt_end;
         } else {

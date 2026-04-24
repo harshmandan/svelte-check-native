@@ -4,8 +4,7 @@ async function $$render_50fd1c6b() {
 
            let a!: number;
            let b!: number | undefined;
-           let c: number = 123;
-c = undefined as any;
+           let c: number = 123; c = undefined as any;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }

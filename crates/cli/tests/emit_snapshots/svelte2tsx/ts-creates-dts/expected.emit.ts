@@ -10,8 +10,7 @@ async function $$render_39dbed3c() {
                                                  
 
          let bar!: Bar;
-         let foobar = '';
-foobar = undefined as any;
+         let foobar = ''; foobar = undefined as any;
 
   const dispatch = createEventDispatcher<{swipe: string}>();
     async function __svn_tpl_check() {

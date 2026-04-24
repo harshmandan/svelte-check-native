@@ -5312,25 +5312,31 @@ fn emit_bind_this_assignment(
         let Some(expr) = source.get(range.start as usize..range.end as usize) else {
             return;
         };
-        let expr = expr.trim();
-        if expr.is_empty() {
+        if expr.trim().is_empty() {
             return;
         }
-        // DELIBERATE: no TokenMapEntry on the LHS. Routing the
-        // `refs.child` span through `append_with_source` would surface
-        // TS2322 whenever tsgo fires on the assignment site — which it
-        // DOES on our overlay because `__SvnInstance<P>` doesn't
-        // structurally satisfy the target types users declare
-        // (typically `let x: ComponentDefault` or
-        // `Component<ComponentProps<typeof Child>>`). Upstream's
-        // instance shape (`SvelteComponent<P, E, S> & Exports & {
-        // $$bindings: B }`) IS accepted by those types, so upstream
-        // doesn't fire. Surfacing our diagnostic without also
-        // broadening the shim creates over-fires (+2 on
-        // layerchart/Chart.svelte + palacms/Pala.svelte in testing).
-        // Bundle the TokenMapEntry with the shim shape fix (see
-        // OPEN.md "Component bind:this target type mismatch").
-        let _ = writeln!(buf, "{inner}{expr} = {inst_local};");
+        // Route the LHS through `append_with_source` so TS2322
+        // diagnostics on the assignment-site target map back to the
+        // user's `bind:this={EXPR}` source position. Matches upstream
+        // svelte-check's behavior on the explicit-`Component<P>`
+        // target shape (see fixtures/bugs/68-component-bind-this-member).
+        //
+        // Surfaces pre-existing over-fires on cases where upstream's
+        // richer `SvelteComponent<P, E, S> & Exports & { $$bindings: B }`
+        // instance shape (assembled via the `$$IsomorphicComponent`
+        // pattern in upstream's addComponentExport.ts:168-179) accepts
+        // the user's declared target but our `__SvnInstance<P>` does
+        // not — layerchart/Chart.svelte 421:20 and palacms/Pala.svelte
+        // 146:15 in particular. Those are tracked in OPEN.md under
+        // "Component bind:this target type mismatch" and need a
+        // bundled default-export shape refactor (value +
+        // `InstanceType<typeof VALUE>` type, matching upstream's
+        // isomorphic interface) — see notes for details.
+        buf.push_str(inner);
+        buf.append_with_source(expr, *range);
+        buf.push_str(" = ");
+        buf.push_str(inst_local);
+        buf.push_str(";\n");
     }
 }
 

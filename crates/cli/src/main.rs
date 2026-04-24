@@ -1027,11 +1027,19 @@ fn run_typecheck(
     // auto-extension entirely; tsgo resolves via bundler module
     // resolution straight to the cache-side `.svelte.svn.ts`.
     //
+    // Scope: both plain user `.ts` files AND `.svelte.ts` runes
+    // modules themselves — a `Foo.svelte.ts` module can import a
+    // sibling-collision `./Bar.svelte` (where `Bar.svelte.ts` also
+    // exists), and that specifier has the same resolution bug. No
+    // current bench exercises the `.svelte.ts` → collision-sibling
+    // path, but handling it here completes the pattern.
+    //
     // Only files that actually contain a collision-case import get an
     // overlay; others pass through tsgo's regular include. Fast-path
     // skip when no runes modules were discovered.
     if !runes_modules_set.is_empty() {
-        inputs.extend(user_ts_files.iter().filter_map(|file| {
+        let rewrite_candidates = user_ts_files.iter().chain(runes_modules_set.iter());
+        inputs.extend(rewrite_candidates.filter_map(|file| {
             let source = std::fs::read_to_string(file).ok()?;
             let rewritten =
                 rewrite_svelte_imports_for_collisions(file, &source, &runes_modules_set)?;

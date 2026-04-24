@@ -300,13 +300,40 @@ fn emit_document_with_render_name(
     // real-diagnostic gap on the CMS-style bench — only
     // TS-source components are load-bearing, so scope the change
     // narrowly and expand later if needed.
-    // SvelteKit route files (+page.svelte / +layout.svelte) have their
-    // own synthesis path (`sveltekit::synthesize_route_props_type`) that
-    // injects `import('./$types.js').PageData` etc. onto the recognized
-    // `data` / `form` / `params` destructure keys. Skip the generic TS
-    // synthesis on those so the route-aware path wins.
+    // SvelteKit route files (+page.svelte / +layout.svelte) with an
+    // untyped `$props()` destructure: synthesise
+    // `{ data: import('./$types.js').PageData }` etc. from the
+    // destructure + the route kind. Mirrors upstream svelte2tsx's
+    // `ExportedNames.handle$propsRune` route-aware branch.
+    //
+    // Feeds `props_info.type_text` so the downstream `$$ComponentProps`
+    // alias emission AND the `: $$ComponentProps` destructure-annotation
+    // injection both trigger. Without this, consumers like
+    // `<LineChart data={data.chartData} y={(d) => …} />` see `data`
+    // typed as `any`, generic `TData` collapses to `unknown`, and
+    // implicit-any / TS18046 fires on the arrow parameter.
     let is_route_file = sveltekit::route_kind(source_path).is_some();
-    if is_ts
+    let route_props_synth: Option<String> = if is_route_file
+        && is_ts
+        && doc.script_lang() == svn_parser::ScriptLang::Ts
+        && props_info.type_text.is_none()
+    {
+        sveltekit::route_kind(source_path).and_then(|kind| {
+            let names_borrow: Vec<&str> = props_info
+                .destructures
+                .iter()
+                .map(|p| p.local_name.as_str())
+                .collect();
+            sveltekit::synthesize_route_props_type(kind, &names_borrow)
+        })
+    } else {
+        None
+    };
+    if let Some(literal) = route_props_synth {
+        props_info.type_text = Some(literal);
+        props_info.type_root_name = None;
+        props_info.source = svn_analyze::PropsSource::SynthesisedFromDestructure;
+    } else if is_ts
         && !is_route_file
         && doc.script_lang() == svn_parser::ScriptLang::Ts
         && props_info.type_text.is_none()
@@ -356,6 +383,26 @@ fn emit_document_with_render_name(
     //   - `$: console.log` → `() => { $: console.log };` (expr/block wrap)
     // See crates/emit/src/svelte4/reactive.rs.
     let mut reactive_touched_names: Vec<SmolStr> = Vec::new();
+    // Pre-compute whether we'll emit `type $$ComponentProps = {...}`
+    // at module scope. The script-rewrite pipeline needs to know so
+    // it can also annotate the `$props()` destructure with
+    // `: $$ComponentProps`. Mirrors upstream svelte2tsx's two-part
+    // emission (`ExportedNames.ts:380-389`): the module-scope alias
+    // AND the destructure-site `: $$ComponentProps` BOTH land for
+    // rename/find-references to work seamlessly and for the
+    // destructure's `data`/`form`/etc. locals to pick up the
+    // synthesized route type rather than `$props()`'s loose return.
+    let will_emit_component_props_alias = is_ts
+        && props_info
+            .type_text
+            .as_deref()
+            .is_some_and(|t| t.trim_start().starts_with('{'))
+        && matches!(
+            props_info.source,
+            svn_analyze::PropsSource::SynthesisedFromDestructure
+                | svn_analyze::PropsSource::RuneAnnotation
+                | svn_analyze::PropsSource::RuneGeneric
+        );
     let rewritten_content: Option<String> = doc.instance_script.as_ref().map(|s| {
         let (after_reactive, touched) =
             svelte4::reactive::rewrite_with_touched_names(s.content, s.lang);
@@ -372,7 +419,18 @@ fn emit_document_with_render_name(
         // `$state<Promise<T>>(new Promise(() => {}))`, where the
         // explicit `<T>` no longer propagates as contextual type to
         // the argument.
-        state_nullish_rewrite::rewrite(&after_reactive, s.lang)
+        let after_state = state_nullish_rewrite::rewrite(&after_reactive, s.lang);
+        // Inject `: $$ComponentProps` on the untyped `$props()`
+        // destructure pattern when an alias was synthesized. Without
+        // this, `const { data } = $props()` picks up `$props()`'s loose
+        // return type (not our synthesized `{ data: PageData }`) and
+        // downstream reads of `data.chartData` collapse to `any`,
+        // breaking generic-component inference on consumers.
+        if will_emit_component_props_alias {
+            inject_component_props_annotation(&after_state, s.lang)
+        } else {
+            after_state
+        }
     });
 
     // Hoist imports out of the instance script. Required because the
@@ -1302,6 +1360,88 @@ fn synthesise_js_props_typedef_body(props_info: &svn_analyze::PropsInfo) -> Opti
     }
     body.push('}');
     Some(body)
+}
+
+/// Inject `: $$ComponentProps` onto the destructure pattern of an
+/// untyped top-level `let/const { … } = $props()` declaration.
+///
+/// Mirrors upstream svelte2tsx's `ExportedNames.ts:388` — when a
+/// `$$ComponentProps` type alias is synthesized at module scope, the
+/// `$props()` destructure gets the matching annotation so each
+/// destructured local (`data`, `form`, etc.) picks up the declared
+/// type rather than falling through to `$props()`'s loose return.
+///
+/// Returns `content` unchanged when:
+/// - No `let/const { … } = $props()` at top level, OR
+/// - The pattern already has a type annotation (user-written), OR
+/// - Parse fails (conservative: don't break a valid script).
+///
+/// The rewrite is AST-driven to avoid false positives on comment /
+/// string-literal content that happens to include `= $props()`.
+fn inject_component_props_annotation(content: &str, lang: svn_parser::ScriptLang) -> String {
+    use oxc_ast::ast::{BindingPatternKind, Expression, Statement, VariableDeclarator};
+    let alloc = Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, content, lang);
+    let mut insert_at: Option<usize> = None;
+    for stmt in &parsed.program.body {
+        let decl = match stmt {
+            Statement::VariableDeclaration(d) => d,
+            _ => continue,
+        };
+        for declarator in &decl.declarations {
+            if insertion_site(declarator).is_some() {
+                // Use the FIRST $props destructure — upstream only
+                // recognises one.
+                insert_at = insertion_site(declarator);
+                break;
+            }
+        }
+        if insert_at.is_some() {
+            break;
+        }
+    }
+    let Some(pos) = insert_at else {
+        return content.to_string();
+    };
+    let mut out = String::with_capacity(content.len() + 20);
+    out.push_str(&content[..pos]);
+    out.push_str(": $$ComponentProps");
+    out.push_str(&content[pos..]);
+    return out;
+
+    fn insertion_site(declarator: &VariableDeclarator<'_>) -> Option<usize> {
+        // Destructure pattern, no existing annotation.
+        let BindingPatternKind::ObjectPattern(obj) = &declarator.id.kind else {
+            return None;
+        };
+        if declarator.id.type_annotation.is_some() {
+            return None;
+        }
+        // Initializer must be a bare `$props()` call with NO
+        // explicit type argument. When the user wrote `$props<T>()`
+        // they already expressed the intended type — upstream's
+        // `ExportedNames` swaps the generic argument in place with
+        // `$$ComponentProps` (via ignore markers) rather than adding
+        // a destructure annotation, so we leave it alone on that
+        // shape to match. Annotating on top of `$props<T>()` would
+        // double-specify and silence downstream errors that upstream
+        // catches.
+        let init = declarator.init.as_ref()?;
+        let Expression::CallExpression(call) = init else {
+            return None;
+        };
+        let Expression::Identifier(callee_id) = &call.callee else {
+            return None;
+        };
+        if callee_id.name != "$props" {
+            return None;
+        }
+        if call.type_parameters.is_some() {
+            return None;
+        }
+        // Splice after the destructure pattern's closing `}`.
+        Some(obj.span.end as usize)
+    }
 }
 
 fn emit_render_body_return(

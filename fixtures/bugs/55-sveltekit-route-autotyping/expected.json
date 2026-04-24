@@ -2,10 +2,12 @@
     "emit_contains": [
         "import('./$types.js').PageData",
         "import('./$types.js').ActionData",
-        "declare const __svn_component_default: import('svelte').Component<{ data: import('./$types.js').PageData; form?: import('./$types.js').ActionData; }>;"
+        "type $$ComponentProps = { data: import('./$types.js').PageData; form?: import('./$types.js').ActionData; };",
+        "declare const __svn_component_default: import('svelte').Component<$$ComponentProps>;",
+        "let { data, form }: $$ComponentProps = $props()"
     ],
     "emit_not_contains": [
         "constructor(options: { target?: any; props?: any });"
     ],
-    "_note": "SvelteKit route files (+page.svelte, +layout.svelte) get contextual type information for kit-injected props from ./$types.js. Upstream's svelte2tsx auto-injects this on untyped $props() destructures; our emit does the same by synthesizing an inline type from the destructured prop names and feeding it through the existing prop_type_source pipeline. This grey-box fixture asserts the synthesized default export carries PageData + ActionData so downstream consumers see the real shape instead of the permissive `any` Props."
+    "_note": "SvelteKit route files (+page.svelte, +layout.svelte) get contextual type information for kit-injected props from ./$types.js. Upstream's svelte2tsx synthesizes a `type $$ComponentProps = {…}` alias at module scope AND annotates the `$props()` destructure with `: $$ComponentProps` — mirrored here. The destructure annotation is load-bearing: without it, `const { data } = $props()` picks up $props()'s loose return type, `data.chartData` collapses to `any`, and downstream generic-component inference (e.g. `<LineChart data={data.chartData} y={d => …}>`) loses TData, firing TS18046 on the arrow parameter."
 }

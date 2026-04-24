@@ -3,7 +3,7 @@
 type $$ComponentProps = {a: any, b?: any};
 async function $$render_664a119c() {
 
-    let { a, b = $bindable() } = $props();
+    let { a, b = $bindable() }: $$ComponentProps = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }

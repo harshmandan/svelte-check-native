@@ -394,107 +394,41 @@ pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
     let ctx = WalkCtx { source };
     let mut shadow = ShadowStack::default();
     walk_fragment(fragment, &mut summary, &mut counters, &ctx, &mut shadow);
-    let mut seen_at_const = std::collections::HashSet::<SmolStr>::new();
-    collect_at_const_names_from_fragment(
-        fragment,
-        source,
-        &mut seen_at_const,
-        &mut summary.at_const_names,
-    );
     summary
 }
 
-/// Walk the template fragment for `{@const NAME = EXPR}` directive
-/// interpolations and record each bound name.
-///
-/// The parser now labels each interpolation's `kind` (see
-/// `svn_parser::InterpolationKind`) so this walk doesn't re-scan the
-/// raw source for `{@const ` — it just matches on the AST node's
-/// kind. The expression range covers the body AFTER the `@const`
-/// keyword + whitespace (e.g. `foo = 1`), so the leading identifier
-/// is the binding name.
-///
-/// Destructured patterns (`{@const { a, b } = obj}`) are skipped —
-/// the expression body starts with `{`, no identifier. Matches the
-/// old byte scan's behaviour.
+/// Extract the binding name from a `{@const NAME = EXPR}` interpolation
+/// body. Returns None for destructured patterns (body starts with `{`)
+/// or malformed input — both match upstream's behaviour of emitting
+/// nothing for those cases.
 ///
 /// Multiple `{@const}` declarations with the same name across the
 /// template are deduped via the caller's `seen` set so emit doesn't
 /// generate `let X: any;` twice (TS2451 redeclaration).
-fn collect_at_const_names_from_fragment(
-    fragment: &Fragment,
+fn record_at_const_name(
+    interp: &svn_parser::Interpolation,
     source: &str,
     seen: &mut std::collections::HashSet<SmolStr>,
     out: &mut Vec<SmolStr>,
 ) {
-    for node in &fragment.nodes {
-        match node {
-            svn_parser::Node::Interpolation(i)
-                if i.kind == svn_parser::InterpolationKind::AtConst =>
-            {
-                let start = i.expression_range.start as usize;
-                let end = i.expression_range.end as usize;
-                let Some(body) = source.get(start..end) else {
-                    continue;
-                };
-                let bytes = body.as_bytes();
-                let mut p = 0usize;
-                while p < bytes.len()
-                    && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_' || bytes[p] == b'$')
-                {
-                    p += 1;
-                }
-                if p == 0 {
-                    continue; // destructure or malformed
-                }
-                let name = SmolStr::from(&body[..p]);
-                if seen.insert(name.clone()) {
-                    out.push(name);
-                }
-            }
-            svn_parser::Node::IfBlock(b) => {
-                collect_at_const_names_from_fragment(&b.consequent, source, seen, out);
-                for arm in &b.elseif_arms {
-                    collect_at_const_names_from_fragment(&arm.body, source, seen, out);
-                }
-                if let Some(alt) = &b.alternate {
-                    collect_at_const_names_from_fragment(alt, source, seen, out);
-                }
-            }
-            svn_parser::Node::EachBlock(b) => {
-                collect_at_const_names_from_fragment(&b.body, source, seen, out);
-                if let Some(alt) = &b.alternate {
-                    collect_at_const_names_from_fragment(alt, source, seen, out);
-                }
-            }
-            svn_parser::Node::AwaitBlock(b) => {
-                if let Some(f) = &b.pending {
-                    collect_at_const_names_from_fragment(f, source, seen, out);
-                }
-                if let Some(t) = &b.then_branch {
-                    collect_at_const_names_from_fragment(&t.body, source, seen, out);
-                }
-                if let Some(c) = &b.catch_branch {
-                    collect_at_const_names_from_fragment(&c.body, source, seen, out);
-                }
-            }
-            svn_parser::Node::KeyBlock(b) => {
-                collect_at_const_names_from_fragment(&b.body, source, seen, out);
-            }
-            svn_parser::Node::SnippetBlock(b) => {
-                collect_at_const_names_from_fragment(&b.body, source, seen, out);
-            }
-            svn_parser::Node::Element(e) => {
-                collect_at_const_names_from_fragment(&e.children, source, seen, out);
-            }
-            svn_parser::Node::Component(c) => {
-                collect_at_const_names_from_fragment(&c.children, source, seen, out);
-            }
-            svn_parser::Node::SvelteElement(e) => {
-                collect_at_const_names_from_fragment(&e.children, source, seen, out);
-            }
-            _ => {}
-        }
+    let start = interp.expression_range.start as usize;
+    let end = interp.expression_range.end as usize;
+    let Some(body) = source.get(start..end) else {
+        return;
+    };
+    let bytes = body.as_bytes();
+    let mut p = 0usize;
+    while p < bytes.len()
+        && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_' || bytes[p] == b'$')
+    {
+        p += 1;
+    }
+    if p == 0 {
+        return; // destructure or malformed
+    }
+    let name = SmolStr::from(&body[..p]);
+    if seen.insert(name.clone()) {
+        out.push(name);
     }
 }
 
@@ -506,6 +440,11 @@ struct WalkCtx<'src> {
 struct Counters {
     action_attrs: usize,
     bind_pair: usize,
+    /// Names seen from `{@const NAME = …}` interpolations during this
+    /// walk. Used to dedup before pushing into
+    /// `summary.at_const_names`; the same name declared twice in the
+    /// template (legal Svelte) emits a single `let NAME: any;`.
+    at_const_seen: std::collections::HashSet<SmolStr>,
 }
 
 /// Per-walk template-scope shadow tracker. Names entered into the
@@ -669,6 +608,14 @@ fn walk_node(
             let mark = shadow.push_many(names);
             walk_fragment(&b.body, summary, counters, ctx, shadow);
             shadow.truncate(mark);
+        }
+        Node::Interpolation(i) if i.kind == svn_parser::InterpolationKind::AtConst => {
+            record_at_const_name(
+                i,
+                ctx.source,
+                &mut counters.at_const_seen,
+                &mut summary.at_const_names,
+            );
         }
         // Leaf nodes — no children to descend into, no attributes.
         Node::Text(_) | Node::Interpolation(_) | Node::Comment(_) => {}

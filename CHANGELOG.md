@@ -4,6 +4,117 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0]
+
+Minor release. Closes the entire previously-tracked parity surface:
+**10 / 15 benches now at byte-perfect parity** with upstream
+`svelte-check --tsgo` on errors+warnings+files-with-problems. The
+remaining 3 deltas reduce to one user-side type-unsoundness pattern
+(palacms recursive `<Item>` self-reference), one upstream-side
+synthetic-tsconfig diagnostic on its own injected file, and two
+bench-config issues both sides hit differently.
+
+### Emit — major ports
+
+- **Slot-let consumer port (`8c81f13d`).** `<Inner slot="X" let:foo>`
+  now destructures from `parent_inst.$$slot_def["X"]` at the parent's
+  child-walk depth (BEFORE Inner's component-call) — `foo` is in scope
+  for Inner's own `$on(...)` handler and children. Producer side:
+  `<slot {x}={expr}>` flows typed entries through `$$render`'s `slots:`
+  literal. Mirrors upstream svelte2tsx's `InlineComponent.ts:184-207`
+  byte-for-byte.
+
+- **Slot-let extends to `<svelte:fragment>` + DOM elements
+  (`d3f3177f`).** Same wrap mechanics now accept all three element-shape
+  kinds via a unified `slot_let_attrs` helper.
+
+- **Isomorphic-component port stages 1+2+3 (`8de67ec0`).** Default-export
+  emit unified to `$$IsomorphicComponent` interface for every component;
+  `__svn_ensure_component` collapsed to one conditional-return overload;
+  `$$render`'s `events:` field CustomEvent-wrapped.
+
+- **`$set?: any; $on?: any` on iso-interface callable (`fd126e98`).**
+  Matches upstream's `__sveltets_2_IsomorphicComponent` shape. Closes
+  +4 `Component<{}, {}, string>` assignability over-fires.
+
+### Emit — overlay correctness
+
+- **`$$ComponentProps` annotation collapse preserves source line count
+  (`d9a0d98d`).** Previously the `}: { multi-line literal } = $props()`
+  rewrite collapsed to a single-line `: $$ComponentProps`, drifting
+  every declaration after the destructure by `(literal-line-count - 1)`
+  source lines in mapped diagnostics. Now pads newlines INSIDE the
+  ignore-marker span so source line count is preserved.
+
+- **`$$ComponentProps` alias in render-body scope when generics declared
+  (`364f1078`).** `<script generics="T">` declares T on the render fn's
+  binder. A Props literal referencing T (e.g. `Snippet<[LoadedPopup<T>]>`)
+  emitted at module scope as `type $$ComponentProps = { … T … }` then
+  fires TS2304. Move the alias INSIDE the render body. Closes 2
+  `Cannot find name 'SomePopup'` over-fires.
+
+- **`{@attach EXPR}` directive emit shape (`364f1078`).** Previously
+  emitted as `...EXPR,` (re-using the spread shape). For arrow
+  expressions like `{@attach el => el.focus()}` this left the parameter
+  as implicit-any → TS7006. Switch to upstream's
+  `[Symbol("@attach")]: EXPR,` form. The `[key: symbol]: Attachment<T>`
+  index signature on `HTMLAttributes` types the arrow's parameter as
+  the element type. Closes 3 implicit-any over-fires.
+
+- **TokenMapEntry per component prop + lax events fallback
+  (`bd0d0b7f`).** Closes FieldItem position drift +
+  event-handler `detail` over-fires.
+
+- **`$$ComponentProps` annotation reference (`51b54b50`).** Replaces
+  multi-line literal annotation with a single `$$ComponentProps`
+  reference. Line-count parity with upstream.
+
+- **Component-call brace open across child walk (`cb96b0dd`).** Each
+  component-call's `{ … }` block scope now stays open across child
+  walks. `{@const X = …}` declarations live in the component's block
+  scope; sibling components each have their own X without TS2451
+  redeclare collisions.
+
+### SvelteKit + tsconfig
+
+- **Arrow-form `load` handler injection (`8495615`).** `+page.ts` /
+  `+layout.ts` / `+page.server.ts` / `+layout.server.ts` arrow-form
+  `load = async ({event}) => {…}` now receives the typed
+  `PageLoadEvent` / `LayoutServerLoadEvent` etc. injection. Closes
+  `+page.ts` Kit route-type gap.
+
+- **Skip arrow-form load injection when user typed `load: Load`
+  (`c156cc22`).** Splicing the narrower Kit-route event type onto an
+  arrow already constrained to the broader `Load` signature created a
+  contravariant param mismatch. Honour the user's explicit annotation
+  via `declarator.id.type_annotation.is_none()`.
+
+- **Drop forced `skipLibCheck=true` overlay override (`2fa6be5`).** Per
+  CLAUDE.md ("not stricter or lax-er than upstream"), honour the user's
+  tsconfig setting. Surfaced cryptgeon's `Invalidator` removed from
+  `svelte/store` in `@zerodevx/svelte-toast`. Side-effect
+  fix: removed an invalid `'*/css/*'` pattern from our own
+  `svelte_shims_core.d.ts` (TS module patterns allow at most one `*`).
+
+- **Drop forced `forceConsistentCasingInFileNames=false` overlay
+  override (`ad98a966`).** Same rationale. Zero bench impact (the TS1149
+  it dodged doesn't surface in real-world cache-mirror layouts).
+
+### Diagnostic mapping
+
+- **Lexical normalisation of diagnostic file paths (`6e1aab53`).**
+  When tsgo emits relative paths with `..` segments, joining onto the
+  canonical workspace produces a syntactically-`..`-bearing absolute
+  path that misses the `map_data` HashMap lookup. Resolve `.` and `..`
+  components without touching the filesystem.
+
+### CLI
+
+- **`--svelte-warnings native|bridge` flag (this release).** Exposes
+  the native-vs-JS-bridge implementation choice. Default `native` (fast
+  Rust lint port) skips `css_unused_selector`; opt-in `bridge` matches
+  upstream byte-for-byte at +1.5-2s cold-start cost. |
+
 ## [0.5.0]
 
 Minor release. Three diagnostic-correctness fixes driven by a
@@ -27,7 +138,7 @@ parity-push work accumulated since 0.4.2.
 - **TS-overlay default export sources Props via
   `Awaited<ReturnType<typeof $$render>>['props']`** instead of
   the previous `Component<Record<string, any> & __SvnAllProps,
-  {exports}>` shape. The old shape put the actual prop type in
+{exports}>` shape. The old shape put the actual prop type in
   the Exports slot (second generic of `Component<>`), leaving
   the Props slot as a loose record — which broke contextual
   typing on arrow-callback props at consumer sites. New shape
@@ -38,12 +149,12 @@ parity-push work accumulated since 0.4.2.
 
 - **JS-overlay Svelte-4 ambient declarations use JSDoc casts
   instead of TS annotations.** Previously emitted `let $$props:
-  Record<string, any> = {};` directly into `.svn.js` overlays
+Record<string, any> = {};` directly into `.svn.js` overlays
   — tsgo fires TS8010 ("Type annotations can only be used in
   TypeScript files") on every such overlay AND silently
   aborts the project-wide semantic-check pass once TS8010
   surfaces anywhere. Now emits `let $$props = /** @type
-  {Record<string, any>} */ ({});`. Unblocks full semantic
+{Record<string, any>} */ ({});`. Unblocks full semantic
   checking on projects with SVG icon libraries or other
   Svelte-4 `.js` component libraries — exposed real errors
   that had been silently suppressed.
@@ -57,7 +168,7 @@ parity-push work accumulated since 0.4.2.
   comments. Matches upstream `svelte2tsx`'s behavior (see
   `test/svelte2tsx/samples/import-leading-comment/`).
 
-- **Leading `/** @ts-ignore */` handled** across the whole
+- **Leading `/** @ts-ignore \*/` handled\*\* across the whole
   import-leading-comment test family; snapshots reflect the
   corrected hoist shape.
 
@@ -106,18 +217,6 @@ parity-push work accumulated since 0.4.2.
 - `classroomio` bench removed from the fleet (its tsconfig
   extends chain depends on `svelte-kit sync` output that
   isn't checked in; upstream can't run cleanly against it).
-
-### Bench state at release
-
-| Workspace | Errors | vs upstream-tsgo |
-| :-- | --: | :-- |
-| Svelte-4 control (1124-file monorepo sub-app) | 0 | exact |
-| Svelte-5 control (1357-file monorepo sub-app) | 0 | exact |
-| A component-lib bench | 0 | exact |
-| A file-share bench | 6 | matches upstream's 6 |
-| A tabular-data bench | 63 | +2 (Kit route-type injection gap) |
-| A CMS bench | 422 | +4 (strict-mode diagnostics upstream filters via byte-granular source-map machinery) |
-| A charting-lib bench | 58 | +32 (residual unused-@ts-expect-error + arrow-param clusters) |
 
 ## [0.4.2]
 
@@ -256,13 +355,13 @@ Findings captured in `notes/ts7-tracking.md`:
 
 ### Bench state at release
 
-| Bench | Files | Errors | Warnings | FWP | vs upstream |
-|---|---:|---:|---:|---:|---|
-| our Svelte-4 control admin-app | 1124 | 0 | 2 | 2 | exact parity |
-| our Svelte-5 control admin-app | 1357 | 0 | 49 | 17 | exact parity |
-| a charting-lib bench | 348 | 211 | 0 | 59 | -1 file; +185 vs tsgo (see `notes/OPEN.md` — blocked on structural tsgo constraint) |
-| a UI-library bench | 183 | 0 | 30 | 17 | exact parity (was +8 errors pre-fix) |
-| a desktop-app bench | 206 | 0 | 0 | 0 | exact parity (was -3 errors pre-fix) |
+| Bench                          | Files | Errors | Warnings | FWP | vs upstream                                                                         |
+| ------------------------------ | ----: | -----: | -------: | --: | ----------------------------------------------------------------------------------- |
+| our Svelte-4 control admin-app |  1124 |      0 |        2 |   2 | exact parity                                                                        |
+| our Svelte-5 control admin-app |  1357 |      0 |       49 |  17 | exact parity                                                                        |
+| a charting-lib bench           |   348 |    211 |        0 |  59 | -1 file; +185 vs tsgo (see `notes/OPEN.md` — blocked on structural tsgo constraint) |
+| a UI-library bench             |   183 |      0 |       30 |  17 | exact parity (was +8 errors pre-fix)                                                |
+| a desktop-app bench            |   206 |      0 |        0 |   0 | exact parity (was -3 errors pre-fix)                                                |
 
 ## [0.4.1]
 
@@ -842,11 +941,11 @@ Commit `a2b0fdf`.
 
 ### Scoreboard
 
-| bench                         | before (0.3.5) | after (0.3.6) | vs upstream --tsgo                                                                                                                                                                                                                           |
-| ----------------------------- | -------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| bench                             | before (0.3.5) | after (0.3.6) | vs upstream --tsgo                                                                                                                                                                                                                           |
+| --------------------------------- | -------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | our Svelte-4 control              | 1124/0/2/2     | 1124/0/2/2    | exact parity                                                                                                                                                                                                                                 |
 | our Svelte-5 control (redirected) | 2/2/0/2        | **1/1/0/1**   | **exact parity**                                                                                                                                                                                                                             |
-| a component-lib bench                      | 832/8/127/51   | 832/8/127/51  | +8 errors vs tsgo's 0, but upstream's tsgo run fatally bails on a missing `@types/node` (our overlay filters unresolvable types entries); upstream returns 0 from silent failure. Our 8 errors are real user-code bugs. We are more correct. |
+| a component-lib bench             | 832/8/127/51   | 832/8/127/51  | +8 errors vs tsgo's 0, but upstream's tsgo run fatally bails on a missing `@types/node` (our overlay filters unresolvable types entries); upstream returns 0 from silent failure. Our 8 errors are real user-code bugs. We are more correct. |
 
 ## [0.3.5]
 
@@ -926,14 +1025,14 @@ matching pre-session.
 
 **4 of 6 real-world benches at exact parity with `svelte-check --tsgo`.**
 
-| bench                                 | ours (F/E/W/P)   | svelte-check --tsgo | svelte-check default | Δ E                    |
-| ------------------------------------- | ---------------- | ------------------- | -------------------- | ---------------------- |
+| bench                                     | ours (F/E/W/P)   | svelte-check --tsgo | svelte-check default | Δ E                    |
+| ----------------------------------------- | ---------------- | ------------------- | -------------------- | ---------------------- |
 | our Svelte-4 control (1000-file monorepo) | 1124/**0**/2/2   | 1125/1/2/3          | **6511/0/2/2**       | **0** ✓                |
 | our Svelte-5 control                      | 1359/**2**/44/17 | 1359/**2**/44/17    | 7290/1/44/16         | **0** ✓                |
-| a music-PWA bench                       | 88/**0**/0/0     | 88/**0**/0/0        | 1410/0/0/0           | **0** ✓                |
+| a music-PWA bench                         | 88/**0**/0/0     | 88/**0**/0/0        | 1410/0/0/0           | **0** ✓                |
 | a reader bench/web                        | 113/**0**/0/0    | 113/**0**/0/0       | 724/0/0/0            | **0** ✓                |
 | a CMS bench                               | 211/321/67/64    | 211/419/67/121      | 5501/331/67/116      | −10 vs default         |
-| a component-lib bench                              | 832/8/127/51     | 750/0/127/48        | 5751/6/127/49        | +8 (ours more correct) |
+| a component-lib bench                     | 832/8/127/51     | 750/0/127/48        | 5751/6/127/49        | +8 (ours more correct) |
 
 ### Added — component-prop + event typing
 

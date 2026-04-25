@@ -109,12 +109,11 @@ struct Cli {
     timings: bool,
 
     /// How to source compile warnings. `native` (default) runs our
-    /// in-process Rust lint pass — no subprocess, full parity with
-    /// svelte/compiler on every ported warning code. `bridge` falls
-    /// back to spawning bun/node workers that import the user's
-    /// `svelte/compiler` directly; slower, but useful if a
-    /// just-released compiler emits a code we haven't ported yet.
-    /// `both` runs both and dedups, for parity testing.
+    /// in-process Rust lint pass — no subprocess, fast. `bridge`
+    /// spawns bun/node workers that import the user's `svelte/compiler`
+    /// directly; slower (~+1.5-2s cold), but matches upstream
+    /// byte-for-byte including `css_unused_selector` and any
+    /// just-released codes our native port hasn't covered yet.
     #[arg(long = "svelte-warnings", default_value = "native")]
     svelte_warnings: String,
 
@@ -290,10 +289,9 @@ fn main() -> ExitCode {
     let svelte_warnings_mode = match cli.svelte_warnings.as_str() {
         "bridge" => SvelteWarningsMode::Bridge,
         "native" => SvelteWarningsMode::Native,
-        "both" => SvelteWarningsMode::Both,
         other => {
             eprintln!(
-                "svelte-check-native: unknown --svelte-warnings value `{other}` (expected bridge/native/both)"
+                "svelte-check-native: unknown --svelte-warnings value `{other}` (expected native or bridge)"
             );
             return ExitCode::from(2);
         }
@@ -323,14 +321,12 @@ fn main() -> ExitCode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SvelteWarningsMode {
     /// Fallback: spawn the multi-worker Node bridge against the
-    /// user's `svelte/compiler`. Useful when a just-released
-    /// compiler emits a code we haven't ported yet.
+    /// user's `svelte/compiler`. Slower than native but matches
+    /// upstream byte-for-byte (including `css_unused_selector` and
+    /// any just-released codes our native port hasn't covered yet).
     Bridge,
     /// Default: run the native Rust lint pass in-process.
     Native,
-    /// Run both and dedup by (code, start, end). Useful for parity
-    /// testing during the port.
-    Both,
 }
 
 /// Tri-state color mode resolved from `--color` / `--no-color` / isatty.
@@ -1101,11 +1097,7 @@ fn run_typecheck(
         let mut seen: std::collections::HashSet<(String, PathBuf, u32, u32)> =
             std::collections::HashSet::new();
 
-        // Run native first when requested.
-        let run_native = matches!(
-            svelte_warnings_mode,
-            SvelteWarningsMode::Native | SvelteWarningsMode::Both
-        );
+        let run_native = matches!(svelte_warnings_mode, SvelteWarningsMode::Native);
         if run_native {
             emit_native_svelte_warnings(
                 &svelte_sources,
@@ -1116,12 +1108,7 @@ fn run_typecheck(
             );
         }
 
-        // Run bridge when requested. Native path moves svelte_sources
-        // only at the end, because both paths need it.
-        let run_bridge = matches!(
-            svelte_warnings_mode,
-            SvelteWarningsMode::Bridge | SvelteWarningsMode::Both
-        );
+        let run_bridge = matches!(svelte_warnings_mode, SvelteWarningsMode::Bridge);
         if run_bridge {
             match svn_svelte_compiler::compile_batch(workspace, std::mem::take(&mut svelte_sources))
             {

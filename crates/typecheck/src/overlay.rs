@@ -27,6 +27,7 @@
 //! ALSO resolves against
 //! `<workspace>/src/lib/components/ai/loading-labels`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
@@ -166,7 +167,10 @@ pub fn build(
     // relative paths).
     let mut paths_map: serde_json::Map<String, Value> = serde_json::Map::new();
     let mut paths_keys_order: Vec<String> = Vec::new();
-    let mut paths_accumulated: std::collections::HashMap<String, Vec<String>> =
+    // Per-pattern accumulator: ordered Vec for emit-stable output
+    // alongside a parallel HashSet so dedup-on-insert is O(1) instead
+    // of the O(n²) `Vec::contains` scan the previous design used.
+    let mut paths_accumulated: std::collections::HashMap<String, (Vec<String>, HashSet<String>)> =
         std::collections::HashMap::new();
     for file in &chain {
         let dir = file.config_dir();
@@ -180,18 +184,21 @@ pub fn build(
             if paths_accumulated.contains_key(pattern) {
                 continue; // inner wins per pattern
             }
-            let mut resolved: Vec<String> = Vec::new();
+            let mut entry: (Vec<String>, HashSet<String>) = (Vec::new(), HashSet::new());
             for v in values {
                 let abs = if Path::new(v).is_absolute() {
                     PathBuf::from(v)
                 } else {
                     base_url.join(v)
                 };
-                resolved.push(normalize(&abs).to_string_lossy().into_owned());
+                let s = normalize(&abs).to_string_lossy().into_owned();
+                if entry.1.insert(s.clone()) {
+                    entry.0.push(s);
+                }
             }
-            if !resolved.is_empty() {
+            if !entry.0.is_empty() {
                 paths_keys_order.push(pattern.clone());
-                paths_accumulated.insert(pattern.clone(), resolved);
+                paths_accumulated.insert(pattern.clone(), entry);
             }
         }
     }
@@ -205,40 +212,45 @@ pub fn build(
     // `discover_workspace_member_refs`.
     for sibling in &sibling_refs {
         for (pattern, values) in &sibling.paths {
-            let resolved: Vec<String> = values
-                .iter()
-                .map(|v| v.to_string_lossy().into_owned())
-                .collect();
-            if resolved.is_empty() {
+            if values.is_empty() {
                 continue;
             }
-            match paths_accumulated.get_mut(pattern) {
-                Some(existing) => {
-                    for v in resolved {
-                        if !existing.contains(&v) {
-                            existing.push(v);
-                        }
-                    }
-                }
-                None => {
-                    paths_keys_order.push(pattern.clone());
-                    paths_accumulated.insert(pattern.clone(), resolved);
+            // Track key ordering for first-time-seen patterns; the
+            // entry API can't side-effect that, so do the lookup
+            // before falling through to or_insert_with.
+            if !paths_accumulated.contains_key(pattern) {
+                paths_keys_order.push(pattern.clone());
+            }
+            let entry = paths_accumulated
+                .entry(pattern.clone())
+                .or_insert_with(|| (Vec::new(), HashSet::new()));
+            for v in values {
+                let s = v.to_string_lossy().into_owned();
+                if entry.1.insert(s.clone()) {
+                    entry.0.push(s);
                 }
             }
         }
     }
     for pattern in paths_keys_order {
-        let values = paths_accumulated.remove(&pattern).unwrap_or_default();
-        let mut merged: Vec<String> = Vec::new();
+        let (values, _) = paths_accumulated.remove(&pattern).unwrap_or_default();
+        // Each pattern's value list runs through two passes: the
+        // mirror-into-overlay rewriting first (so overlay-cache paths
+        // win on lookup) and the original paths second (so out-of-cache
+        // imports keep resolving). `seen` deduplicates across both
+        // passes; the entry-side set above only deduplicates within
+        // the input `values` per sibling.
+        let mut merged: Vec<String> = Vec::with_capacity(values.len() * 2);
+        let mut seen: HashSet<String> = HashSet::with_capacity(values.len() * 2);
         for v in &values {
-            if let Some(m) = mirror_into_overlay(layout, v) {
-                if !merged.iter().any(|x| x == &m) {
-                    merged.push(m);
-                }
+            if let Some(m) = mirror_into_overlay(layout, v)
+                && seen.insert(m.clone())
+            {
+                merged.push(m);
             }
         }
         for v in values {
-            if !merged.iter().any(|x| x == &v) {
+            if seen.insert(v.clone()) {
                 merged.push(v);
             }
         }

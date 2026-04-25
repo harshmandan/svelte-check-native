@@ -12,7 +12,7 @@ async function $$render_50fd1c6b() {
     void a;
     void b;
     void c;
-    return { props: undefined as any as ({ a: number; b: number | undefined; c?: number; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: number; b: number | undefined; c: number; }) };
+    return { props: undefined as any as ({ a: number; b: number | undefined; c?: number; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: number; b: number | undefined; c: number; }) };
 }
 $$render_50fd1c6b;
 interface $$IsomorphicComponent {

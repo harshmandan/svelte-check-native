@@ -58,7 +58,7 @@ async function $$render_02fefb5b() {
     void RenameFoo;
     void renamebar;
     void renamebaz;
-    return { props: undefined as any as ($$Props), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ exported1: string; exported2: string; }) };
+    return { props: undefined as any as ($$Props), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ exported1: string; exported2: string; }) };
 }
 $$render_02fefb5b;
 interface $$IsomorphicComponent {

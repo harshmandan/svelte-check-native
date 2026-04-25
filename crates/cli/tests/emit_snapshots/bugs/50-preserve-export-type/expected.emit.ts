@@ -23,7 +23,7 @@ async function $$render_a4d674e0() {
     void __svn_tpl_check;
     void Panel;
     void cfg;
-    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_a4d674e0;
 interface $$IsomorphicComponent {
@@ -68,7 +68,7 @@ async function $$render_6e910aea() {
     }
     void __svn_tpl_check;
     void config;
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_6e910aea;
 interface $$IsomorphicComponent {

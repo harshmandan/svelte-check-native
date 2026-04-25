@@ -8,7 +8,7 @@ async function $$render_4d42b625<T>() {
     }
     void __svn_tpl_check;
     void a;
-    return { props: undefined as any as ({ a: T; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: T; }) };
+    return { props: undefined as any as ({ a: T; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: T; }) };
 }
 $$render_4d42b625;
 declare class __svn_Render_4d42b625<T> {

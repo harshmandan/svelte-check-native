@@ -1635,7 +1635,13 @@ fn emit_render_body_return(
     let events_field: String = if has_strict_events(doc) || synthesized_events_type.is_some() {
         "{ [K in keyof $$Events]: CustomEvent<$$Events[K]> }".to_string()
     } else {
-        "{}".to_string()
+        // Mirrors upstream's `__sveltets_2_with_any_event` lax wrap:
+        // when no `$$Events` interface is declared, every `on:NAME`
+        // handler's payload type defaults to `CustomEvent<any>` so
+        // `(e) => e.detail.x` doesn't fire `Property 'detail' does
+        // not exist on type 'never'` (which it would if Events were
+        // bare `{}` and Events[K] resolved to `never`).
+        "{ [evt: string]: CustomEvent<any> }".to_string()
     };
     // With-generics branch preserves the original behaviour for
     // class-wrapper emission: the caller already synthesised the
@@ -5306,8 +5312,8 @@ fn prop_shape_name(p: &svn_analyze::PropShape) -> Option<&str> {
     match p {
         svn_analyze::PropShape::Literal { name, .. }
         | svn_analyze::PropShape::Expression { name, .. }
-        | svn_analyze::PropShape::Shorthand { name }
-        | svn_analyze::PropShape::BoolShorthand { name }
+        | svn_analyze::PropShape::Shorthand { name, .. }
+        | svn_analyze::PropShape::BoolShorthand { name, .. }
         | svn_analyze::PropShape::GetSetBinding { name, .. } => Some(name),
         svn_analyze::PropShape::Spread { .. } => None,
     }
@@ -5400,8 +5406,17 @@ fn emit_bind_this_assignment(
 /// Write a single property of a component-prop-check object literal,
 /// dispatching on the analyze-side `PropShape` variant.
 fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropShape) {
+    // Push a TokenMapEntry covering the synthesized prop-key text
+    // ("name") that we're about to emit, pointing back at the user's
+    // attribute span. tsgo diagnostics on the prop check (TS2353
+    // "does not exist", TS2322 type mismatch, etc.) then map to the
+    // user's `name=...` source position rather than the
+    // nearest preceding component-name token. Closes the per-prop
+    // position-drift class on bench files like palacms FieldItem
+    // where errors used to coalesce to the enclosing component name.
+    let attr_range = p.attr_range();
     match p {
-        svn_analyze::PropShape::Literal { name, value } => {
+        svn_analyze::PropShape::Literal { name, value, .. } => {
             // CSS custom-property prop (`--foo-bar="#fff"`) — Svelte 5
             // applies these as CSS variables on the component's
             // wrapper element, not as Props. Spread through the
@@ -5410,46 +5425,48 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             // upstream's `__sveltets_2_cssProp(...)` treatment.
             if is_css_custom_prop_name(name) {
                 buf.push_str("...__svn_css_prop({");
-                write_quoted_prop_key(buf, name);
+                write_quoted_prop_key_with_source(buf, name, attr_range);
                 buf.push_str(": ");
                 write_js_string_literal(buf, value);
                 buf.push_str("})");
                 return;
             }
-            write_quoted_prop_key(buf, name);
+            write_quoted_prop_key_with_source(buf, name, attr_range);
             buf.push_str(": ");
             write_js_string_literal(buf, value);
         }
-        svn_analyze::PropShape::Expression { name, expr_range } => {
+        svn_analyze::PropShape::Expression {
+            name, expr_range, ..
+        } => {
             let expr = &source[expr_range.start as usize..expr_range.end as usize];
             if is_css_custom_prop_name(name) {
                 buf.push_str("...__svn_css_prop({");
-                write_quoted_prop_key(buf, name);
+                write_quoted_prop_key_with_source(buf, name, attr_range);
                 buf.push_str(": (");
                 buf.append_with_source(expr, *expr_range);
                 buf.push_str(")})");
                 return;
             }
-            write_quoted_prop_key(buf, name);
+            write_quoted_prop_key_with_source(buf, name, attr_range);
             buf.push_str(": (");
             buf.append_with_source(expr, *expr_range);
             buf.push_str(")");
         }
-        svn_analyze::PropShape::Shorthand { name } => {
+        svn_analyze::PropShape::Shorthand { name, .. } => {
             // `{foo}` shorthand is only valid when the key is also a
             // valid JS identifier — otherwise expand to `"foo": foo`.
             if is_simple_js_identifier(name) {
-                buf.push_str(name);
+                buf.append_with_source(name, attr_range);
             } else {
-                write_quoted_prop_key(buf, name);
+                write_quoted_prop_key_with_source(buf, name, attr_range);
                 let _ = write!(buf, ": {name}");
             }
         }
-        svn_analyze::PropShape::BoolShorthand { name } => {
-            write_quoted_prop_key(buf, name);
+        svn_analyze::PropShape::BoolShorthand { name, .. } => {
+            write_quoted_prop_key_with_source(buf, name, attr_range);
             buf.push_str(": true");
         }
-        svn_analyze::PropShape::Spread { expr_range } => {
+        svn_analyze::PropShape::Spread { expr_range, .. } => {
             let expr = &source[expr_range.start as usize..expr_range.end as usize];
             // Wrap the expression in parens so things like ternaries
             // or `a, b` sequences stay a single operand of `...`.
@@ -5461,10 +5478,11 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             name,
             getter_range,
             setter_range,
+            ..
         } => {
             let getter = &source[getter_range.start as usize..getter_range.end as usize];
             let setter = &source[setter_range.start as usize..setter_range.end as usize];
-            write_quoted_prop_key(buf, name);
+            write_quoted_prop_key_with_source(buf, name, attr_range);
             // Svelte 5 `bind:name={get, set}` — emit through the
             // `__svn_get_set_binding(get, set)` helper so TS infers
             // `T` from the getter's return, checks the setter's
@@ -5490,6 +5508,24 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
 /// semantics tally as matches against upstream.
 fn write_quoted_prop_key(buf: &mut EmitBuffer, name: &str) {
     write_js_string_literal(buf, name);
+}
+
+/// Source-anchored variant of [`write_quoted_prop_key`] used for
+/// component-call prop literal emit. Pushes a `TokenMapEntry`
+/// covering the synthesized `"name"` text in the overlay and pointing
+/// to the user's attribute span (`name="value"`, `name={expr}`,
+/// `{name}`, etc.) so tsgo diagnostics on the prop check
+/// (TS2353 "does not exist", TS2322 wrong type, etc.) land at the
+/// user's source position rather than the nearest preceding
+/// component-name token.
+fn write_quoted_prop_key_with_source(buf: &mut EmitBuffer, name: &str, attr_range: svn_core::Range) {
+    // Emit just the quoted key as a single source-anchored chunk.
+    // The downstream `: value` is unanchored (synthesized punctuation)
+    // and falls back to the line_map; the value itself, when an
+    // expression, has its own `append_with_source` call.
+    let mut quoted = String::with_capacity(name.len() + 2);
+    write_js_string_literal_into_string(&mut quoted, name);
+    buf.append_with_source(&quoted, attr_range);
 }
 
 /// Split `params_text` on top-level commas and, for each part that
@@ -5702,6 +5738,29 @@ fn write_js_string_literal(buf: &mut EmitBuffer, value: &str) {
         }
     }
     buf.push('"');
+}
+
+/// String-builder twin of [`write_js_string_literal`] used by
+/// `write_quoted_prop_key_with_source`'s pre-format step. Escapes
+/// the value into a freshly-allocated `String` so the caller can
+/// hand it as a single chunk to `EmitBuffer::append_with_source`.
+fn write_js_string_literal_into_string(out: &mut String, value: &str) {
+    use std::fmt::Write;
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 /// Emit getter/setter tuple placeholders for `bind:foo={getter, setter}`.

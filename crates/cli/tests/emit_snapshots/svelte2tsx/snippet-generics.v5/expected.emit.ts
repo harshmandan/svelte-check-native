@@ -16,7 +16,7 @@ async function $$render_ba1a20ec() {
         (val);
     }
     void __svn_tpl_check;
-    return { props: undefined as any as (Record<string, any>), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_ba1a20ec;
 interface $$IsomorphicComponent {

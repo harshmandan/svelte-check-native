@@ -8,7 +8,7 @@ async function $$render_063ede7a<const T extends readonly string[]>() {
     }
     void __svn_tpl_check;
     void items;
-    return { props: undefined as any as ({ items: T; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ items: T; }) };
+    return { props: undefined as any as ({ items: T; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ items: T; }) };
 }
 $$render_063ede7a;
 declare class __svn_Render_063ede7a<const T extends readonly string[]> {

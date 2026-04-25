@@ -12,7 +12,7 @@ async function $$render_bf18a5c0() {
     }
     void __svn_tpl_check;
     void someProp;
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_bf18a5c0;
 interface $$IsomorphicComponent {

@@ -59,7 +59,7 @@ async function $$render_200dbc4a<T>() {
     void prop;
     void foo;
     void promise;
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_200dbc4a;
 declare class __svn_Render_200dbc4a<T> {

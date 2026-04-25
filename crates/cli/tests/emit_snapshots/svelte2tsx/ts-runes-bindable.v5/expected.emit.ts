@@ -11,7 +11,7 @@ async function $$render_cae62ddc() {
     void a;
     void b;
     void c;
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_cae62ddc;
 interface $$IsomorphicComponent {

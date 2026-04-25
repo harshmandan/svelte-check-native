@@ -216,23 +216,45 @@ pub struct OnEventDirective {
 }
 
 /// One prop on a component instantiation.
+///
+/// Each variant carries `attr_range`: the source byte range of the
+/// FULL attribute declaration in the user's `<Component …>` site
+/// (e.g. `placement="bottom-end"` covers from `p` to the closing
+/// `"`). Emit uses this to push a `TokenMapEntry` for the synthetic
+/// `"name": value,` text it generates, so tsgo diagnostics on the
+/// prop's typed-check (TS2353 "does not exist", TS2322 wrong type)
+/// land at the user's source attribute position rather than the
+/// nearest preceding component-name token. Closes the per-prop
+/// position-drift class on bench files like palacms FieldItem.svelte
+/// where errors used to drift to the enclosing component name.
 #[derive(Debug, Clone)]
 pub enum PropShape {
     /// `name="literal"` — quoted string value with no interpolation.
-    Literal { name: SmolStr, value: String },
+    Literal {
+        name: SmolStr,
+        value: String,
+        attr_range: Range,
+    },
     /// `name={expr}` — emit the expression source verbatim as the value.
-    Expression { name: SmolStr, expr_range: Range },
+    Expression {
+        name: SmolStr,
+        expr_range: Range,
+        attr_range: Range,
+    },
     /// `{name}` — shorthand `name={name}`.
-    Shorthand { name: SmolStr },
+    Shorthand { name: SmolStr, attr_range: Range },
     /// `name` (no `=`) — boolean shorthand.
-    BoolShorthand { name: SmolStr },
+    BoolShorthand { name: SmolStr, attr_range: Range },
     /// `{...expr}` spread — emit as `...(expr)` in the props literal.
     /// TS type-checks the spread's inferred shape against the
     /// destination type; mismatched spreads fire the usual structural
     /// mismatch errors. Unlike named props, spreads can contribute
     /// any subset of the declared Props AND extra keys in a single
     /// expression.
-    Spread { expr_range: Range },
+    Spread {
+        expr_range: Range,
+        attr_range: Range,
+    },
     /// Svelte 5 `bind:NAME={getter, setter}` get/set form. Emit
     /// `name: (getter)()` — calling the getter to obtain the bound
     /// value, whose type is what the target Props declaration
@@ -250,7 +272,25 @@ pub enum PropShape {
         name: SmolStr,
         getter_range: Range,
         setter_range: Range,
+        attr_range: Range,
     },
+}
+
+impl PropShape {
+    /// Source range of the user-side attribute (`name="value"`,
+    /// `name={expr}`, `{...spread}`, etc.) — used by emit to push
+    /// a TokenMapEntry on the synthesized prop literal so tsgo
+    /// diagnostics map to the user's source attribute position.
+    pub fn attr_range(&self) -> Range {
+        match self {
+            PropShape::Literal { attr_range, .. }
+            | PropShape::Expression { attr_range, .. }
+            | PropShape::Shorthand { attr_range, .. }
+            | PropShape::BoolShorthand { attr_range, .. }
+            | PropShape::Spread { attr_range, .. }
+            | PropShape::GetSetBinding { attr_range, .. } => *attr_range,
+        }
+    }
 }
 
 /// One `bind:this={x}` site where `x` is a simple identifier. Used
@@ -826,6 +866,7 @@ fn collect_component_instantiation(
                 let Some(v) = &p.value else {
                     props.push(PropShape::BoolShorthand {
                         name: p.name.clone(),
+                        attr_range: p.range,
                     });
                     continue;
                 };
@@ -835,6 +876,7 @@ fn collect_component_instantiation(
                         props.push(PropShape::Literal {
                             name: p.name.clone(),
                             value: content.clone(),
+                            attr_range: p.range,
                         });
                         continue;
                     }
@@ -847,11 +889,13 @@ fn collect_component_instantiation(
                 props.push(PropShape::Expression {
                     name: e.name.clone(),
                     expr_range: e.expression_range,
+                    attr_range: e.range,
                 });
             }
             Attribute::Shorthand(s) => {
                 props.push(PropShape::Shorthand {
                     name: s.name.clone(),
+                    attr_range: s.range,
                 });
             }
             Attribute::Directive(d) => {
@@ -938,16 +982,17 @@ fn collect_component_instantiation(
                     // the prior entry so the bind: expression is the
                     // final authority.
                     props.retain(|p| match p {
-                        PropShape::BoolShorthand { name }
+                        PropShape::BoolShorthand { name, .. }
                         | PropShape::Literal { name, .. }
                         | PropShape::Expression { name, .. }
-                        | PropShape::Shorthand { name }
+                        | PropShape::Shorthand { name, .. }
                         | PropShape::GetSetBinding { name, .. } => name != &target,
                         PropShape::Spread { .. } => true, // spreads pass through
                     });
                     props.push(PropShape::Expression {
                         name: target,
                         expr_range: *expression_range,
+                        attr_range: d.range,
                     });
                     // Widen target if the expression is a simple
                     // identifier — emit's post-`new` trailer will write
@@ -973,17 +1018,20 @@ fn collect_component_instantiation(
                 if d.kind == svn_parser::DirectiveKind::Bind && d.value.is_none() {
                     let target = d.name.clone();
                     props.retain(|p| match p {
-                        PropShape::BoolShorthand { name }
+                        PropShape::BoolShorthand { name, .. }
                         | PropShape::Literal { name, .. }
                         | PropShape::Expression { name, .. }
-                        | PropShape::Shorthand { name }
+                        | PropShape::Shorthand { name, .. }
                         | PropShape::GetSetBinding { name, .. } => name != &target,
                         PropShape::Spread { .. } => true,
                     });
                     // Bare `bind:NAME` is `bind:NAME={NAME}` — same
                     // widening trailer as the explicit form.
                     component_bind_widen_targets.push(target.clone());
-                    props.push(PropShape::Shorthand { name: target });
+                    props.push(PropShape::Shorthand {
+                        name: target,
+                        attr_range: d.range,
+                    });
                     continue;
                 }
                 // Svelte 5 `bind:NAME={getter, setter}` get/set form
@@ -1011,10 +1059,10 @@ fn collect_component_instantiation(
                 {
                     let target = d.name.clone();
                     props.retain(|p| match p {
-                        PropShape::BoolShorthand { name }
+                        PropShape::BoolShorthand { name, .. }
                         | PropShape::Literal { name, .. }
                         | PropShape::Expression { name, .. }
-                        | PropShape::Shorthand { name }
+                        | PropShape::Shorthand { name, .. }
                         | PropShape::GetSetBinding { name, .. } => name != &target,
                         PropShape::Spread { .. } => true,
                     });
@@ -1022,6 +1070,7 @@ fn collect_component_instantiation(
                         name: target,
                         getter_range: *getter_range,
                         setter_range: *setter_range,
+                        attr_range: d.range,
                     });
                     continue;
                 }
@@ -1044,6 +1093,7 @@ fn collect_component_instantiation(
                 // tolerant-by-spread without false-positive.
                 props.push(PropShape::Spread {
                     expr_range: s.expression_range,
+                    attr_range: s.range,
                 });
             }
         }

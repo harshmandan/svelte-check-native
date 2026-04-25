@@ -34,7 +34,7 @@ async function $$render_a02d9190() {
     void __svn_tpl_check;
     void a;
     void b;
-    return { props: undefined as any as ({ a: ReferencesGeneric; b: B; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: ReferencesGeneric; b: B; }) };
+    return { props: undefined as any as ({ a: ReferencesGeneric; b: B; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: ReferencesGeneric; b: B; }) };
 }
 $$render_a02d9190;
 interface $$IsomorphicComponent {

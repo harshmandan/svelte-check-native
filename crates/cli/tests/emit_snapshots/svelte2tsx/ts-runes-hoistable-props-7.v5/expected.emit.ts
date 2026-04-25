@@ -22,7 +22,7 @@ let {Abc}: A = $props()
     }
     void __svn_tpl_check;
     void Abc;
-    return { props: undefined as any as (A), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (A), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_ed055030;
 interface $$IsomorphicComponent {

@@ -8,7 +8,7 @@ async function $$render_389427c4<T extends Record<string, any>>() {
     }
     void __svn_tpl_check;
     void init;
-    return { props: undefined as any as ({ init: T; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ init: T; }) };
+    return { props: undefined as any as ({ init: T; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ init: T; }) };
 }
 $$render_389427c4;
 declare class __svn_Render_389427c4<T extends Record<string, any>> {

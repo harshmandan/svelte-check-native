@@ -15,7 +15,7 @@ async function $$render_5c38c881() {
     }
     void __svn_tpl_check;
     void a;
-    return { props: undefined as any as ({ a: A; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: A; }) };
+    return { props: undefined as any as ({ a: A; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: A; }) };
 }
 $$render_5c38c881;
 interface $$IsomorphicComponent {

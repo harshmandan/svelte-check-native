@@ -12,7 +12,7 @@ async function $$render_cbdc5f31<T extends boolean>() {
     }
     void __svn_tpl_check;
     void someProp;
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_cbdc5f31;
 declare class __svn_Render_cbdc5f31<T extends boolean> {

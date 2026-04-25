@@ -12,7 +12,7 @@ async function $$render_9f697d02() {
     }
     void __svn_tpl_check;
     void foo;
-    return { props: undefined as any as ({ foo?: number; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: number; }) };
+    return { props: undefined as any as ({ foo?: number; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: number; }) };
 }
 $$render_9f697d02;
 interface $$IsomorphicComponent {

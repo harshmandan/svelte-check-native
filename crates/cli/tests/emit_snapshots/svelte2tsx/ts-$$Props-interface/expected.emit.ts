@@ -58,7 +58,7 @@ async function $$render_a154bb54() {
     void RenameFoo;
     void renamebar;
     void renamebaz;
-    return { props: undefined as any as ({ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }), events: undefined as any as {}, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ exported1: string; exported2: string; }) };
+    return { props: undefined as any as ({ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ exported1: string; exported2: string; }) };
 }
 $$render_a154bb54;
 interface $$IsomorphicComponent {

@@ -22,9 +22,6 @@ pub mod dom_binding;
 pub mod props;
 pub mod rune;
 pub mod store;
-// SVELTE-4-COMPAT: droppable submodule for Svelte-4 syntax handling.
-// See design/phase_g/DESIGN.md.
-pub mod svelte4;
 pub mod template_refs;
 pub mod template_walker;
 pub mod void_refs;

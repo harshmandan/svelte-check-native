@@ -81,7 +81,6 @@ pub fn rewrite_with_touched_names(content: &str, lang: ScriptLang) -> (String, V
     let declared_vars = collect_top_level_var_names(&parsed.program);
 
     let mut edits: Vec<Edit> = Vec::new();
-    let mut hoisted_names: Vec<SmolStr> = Vec::new();
     let mut touched_names: Vec<SmolStr> = Vec::new();
     for stmt in &parsed.program.body {
         let Statement::LabeledStatement(labeled) = stmt else {
@@ -91,8 +90,7 @@ pub fn rewrite_with_touched_names(content: &str, lang: ScriptLang) -> (String, V
             continue;
         }
         collect_touched_names_for_statement(labeled, &declared_vars, &mut touched_names);
-        let edit = classify_and_rewrite(labeled, content, &declared_vars, &mut hoisted_names);
-        edits.push(edit);
+        edits.push(classify_and_rewrite(labeled, content, &declared_vars));
     }
 
     if edits.is_empty() {
@@ -106,7 +104,6 @@ pub fn rewrite_with_touched_names(content: &str, lang: ScriptLang) -> (String, V
     for edit in edits {
         out.replace_range(edit.start..edit.end, &edit.replacement);
     }
-    let _ = hoisted_names;
     (out, touched_names)
 }
 
@@ -223,7 +220,6 @@ fn classify_and_rewrite(
     labeled: &LabeledStatement<'_>,
     content: &str,
     declared: &HashSet<SmolStr>,
-    hoisted_names: &mut Vec<SmolStr>,
 ) -> Edit {
     let full_start = labeled.span.start as usize;
     let full_end = labeled.span.end as usize;
@@ -280,7 +276,6 @@ fn classify_and_rewrite(
                         // `__sveltets_2_invalidate` helper. `void
                         // NAME;` suppresses TS6133 when NAME is only
                         // used in the template.
-                        let _ = hoisted_names;
                         return Edit {
                             start: full_start,
                             end: full_end,
@@ -326,7 +321,6 @@ fn classify_and_rewrite(
                     // later in the emit). Hoisting to `let NAME!: any`
                     // at the top is DELIBERATELY skipped — see the
                     // matching branch for the simple-identifier case.
-                    let _ = hoisted_names;
                     let voids: String = destructure_names
                         .iter()
                         .map(|n| format!(" void {n};"))

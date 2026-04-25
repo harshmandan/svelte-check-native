@@ -2016,38 +2016,14 @@ fn emit_default_export_declarations(
         // every surface (props, events, slots, bindings, exports) at
         // module scope, while body-local `typeof X` refs in $$Props
         // resolve THROUGH the render function's scope where X lives.
-        let _ = writeln!(buf, "declare class {class_name}<{g}> {{")
-            .and_then(|_| {
-                writeln!(
-                    buf,
-                    "    props(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['props'];"
-                )
-            })
-            .and_then(|_| {
-                writeln!(
-                    buf,
-                    "    events(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['events'];"
-                )
-            })
-            .and_then(|_| {
-                writeln!(
-                    buf,
-                    "    slots(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['slots'];"
-                )
-            })
-            .and_then(|_| {
-                writeln!(
-                    buf,
-                    "    bindings(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['bindings'];"
-                )
-            })
-            .and_then(|_| {
-                writeln!(
-                    buf,
-                    "    exports(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['exports'];"
-                )
-            })
-            .and_then(|_| writeln!(buf, "}}"));
+        let _ = writeln!(buf, "declare class {class_name}<{g}> {{");
+        for field in ["props", "events", "slots", "bindings", "exports"] {
+            let _ = writeln!(
+                buf,
+                "    {field}(): Awaited<ReturnType<typeof {render_name}<{g_args}>>>['{field}'];"
+            );
+        }
+        let _ = writeln!(buf, "}}");
     }
 
     // The Props source has to be "safe" to reference at module scope:

@@ -1,0 +1,83 @@
+# cargo-deny config — supply-chain hygiene for the Rust workspace.
+#
+# Run locally:
+#   cargo install --locked cargo-deny
+#   cargo deny check
+#
+# CI runs this on every Cargo.toml/Cargo.lock change + weekly via
+# .github/workflows/cargo-deny.yml. Failures block PR merge.
+
+# ──────────────────── Security advisories ────────────────────
+# Source: https://github.com/rustsec/advisory-db (RustSec advisory DB).
+# Updated continuously. We pull the latest at CI run time — no pinning.
+
+[advisories]
+version = 2
+# A vulnerability in any path is a hard failure. There's no triage tier
+# above this; either upgrade the dep, fork it, or remove it.
+# Default behaviour: vulnerability = error. We don't override.
+yanked = "warn"
+# Crates whose maintainers stopped publishing get a warning, not a
+# block. Forces a per-case review without auto-failing CI when an
+# upstream just goes quiet.
+ignore = []
+
+# ──────────────────────── Licenses ─────────────────────────
+# Allowlist approach: every license used by every transitive dep
+# must be in this list, otherwise CI fails. Catches new copyleft
+# (GPL-2.0+, AGPL) sneaking in via a transitive update.
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unlicense",
+    "MPL-2.0",
+    # LGPL-2.1 is permissible for our use because we link as a library
+    # consumer — it's a Rust dep, not statically linked into a
+    # closed-source binary in a way the LGPL constrains. Dynamically
+    # linked / Cargo dep usage is widely accepted as compliant.
+    "LGPL-2.1-or-later",
+]
+confidence-threshold = 0.93
+
+# ─────────────────────── Bans ───────────────────────────────
+# Bans cover: explicitly-banned crates (we have none today), and
+# duplicate versions of the same crate (warn, not deny — the Rust
+# ecosystem has lots of legitimate duplication, e.g. syn 1.x + 2.x
+# coexisting during the syn 2 migration).
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+highlight = "all"
+deny = []
+skip = []
+skip-tree = []
+
+# ─────────────────── Sources ────────────────────────────────
+# Allowed registries + git source hosts. crates.io is the only
+# registry we use; git deps are allowed from the major forges
+# (we don't have any today, but the allowlist keeps a future
+# tactical patch from a random self-hosted git from going
+# unnoticed).
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = ["rust-lang", "tokio-rs", "rustsec", "EmbarkStudios"]

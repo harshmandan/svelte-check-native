@@ -1,0 +1,63 @@
+# cargo-deny: supply-chain hygiene gate.
+#
+# Runs on every PR that touches Cargo.toml or Cargo.lock + weekly
+# (catches new advisories on un-touched deps) + manual dispatch.
+#
+# Failure modes (per deny.toml):
+#   - advisories: vulnerability in any path -> hard fail
+#   - licenses:   unknown / unallowed license -> hard fail
+#   - sources:    crate from a registry/git host not in the allowlist -> hard fail
+#   - bans:       duplicate versions / wildcard requirements -> warn-only
+#
+# Local repro: `cargo install --locked cargo-deny && cargo deny check`.
+
+name: cargo-deny
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**/Cargo.toml"
+      - "deny.toml"
+      - ".github/workflows/cargo-deny.yml"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**/Cargo.toml"
+      - "deny.toml"
+      - ".github/workflows/cargo-deny.yml"
+  schedule:
+    # Weekly Monday 06:00 UTC — catches new advisories on stable deps
+    # that haven't been touched in a regular PR.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+# Cancel an in-flight run if a newer commit lands on the same ref.
+concurrency:
+  group: cargo-deny-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-deny:
+    name: cargo-deny ${{ matrix.checks }}
+    runs-on: ubuntu-latest
+    # Run each check as a separate job so the failure surface is
+    # readable in PR status — "advisories failed" is more useful than
+    # "cargo-deny failed".
+    strategy:
+      fail-fast: false
+      matrix:
+        checks:
+          - advisories
+          - bans licenses sources
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.checks }}
+          # The action pulls the latest cargo-deny release matching
+          # major version; pin major for reproducibility, allow
+          # patch/minor for advisory-DB freshness.

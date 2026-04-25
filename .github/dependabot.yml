@@ -6,9 +6,12 @@
 # is opened. Security advisories (GHSA + OSV) bypass cooldown entirely
 # — they're meant to land fast.
 #
-# Grouping: one PR per ecosystem per week for routine updates so the
-# review queue stays small. Security PRs are individual (so each can be
-# triaged on its own merits).
+# Grouping: ALL update types (patch + minor + major) collapsed into a
+# single group per ecosystem. Combined with `open-pull-requests-limit: 1`,
+# this caps each ecosystem at exactly one PR per week (or zero when no
+# deps need updating). Dependabot can't merge across ecosystems —
+# cargo, npm, and github-actions own different lockfiles — so the
+# upper bound across the whole repo is 3 PRs/week.
 #
 # Reference: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 
@@ -23,17 +26,17 @@ updates:
       day: monday
       time: "06:00"
       timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
     cooldown:
       default-days: 7
       semver-major-days: 14
     groups:
-      cargo-patch-and-minor:
+      cargo:
+        patterns:
+          - "*"
         update-types:
           - patch
           - minor
-      cargo-major:
-        update-types:
           - major
     labels:
       - dependencies
@@ -52,25 +55,25 @@ updates:
       day: monday
       time: "06:00"
       timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
     cooldown:
       default-days: 7
       semver-major-days: 14
     # @typescript/native-preview ships dev releases multiple times per
-    # week; cooldown alone would block updates indefinitely. Allow it
-    # through faster (1 day) since it's the load-bearing tsgo binary
-    # and we want fresh tsgo on the supported floor.
+    # week; cooldown alone would block updates indefinitely. Skip its
+    # patch-bump churn — the version pin in package.json is open
+    # (`>=7.0.0-dev.0`), so users always get the latest at install.
     ignore:
       - dependency-name: "@typescript/native-preview"
         update-types:
           - version-update:semver-patch
     groups:
-      npm-patch-and-minor:
+      npm:
+        patterns:
+          - "*"
         update-types:
           - patch
           - minor
-      npm-major:
-        update-types:
           - major
     labels:
       - dependencies
@@ -87,9 +90,17 @@ updates:
       day: monday
       time: "06:00"
       timezone: Etc/UTC
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     cooldown:
       default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+          - major
     labels:
       - dependencies
       - github-actions

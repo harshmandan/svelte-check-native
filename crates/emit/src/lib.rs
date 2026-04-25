@@ -729,18 +729,21 @@ fn emit_document_with_render_name(
     } else {
         prop_type_source.clone()
     };
-    emit_default_export_declarations(
-        &mut buf,
-        doc,
-        fragment,
-        split.as_ref(),
-        &render_name,
-        generics.as_deref(),
-        prop_type_effective.as_deref(),
-        exports_object.as_deref(),
-        &template_type_refs,
-        is_ts,
-    );
+    if is_ts {
+        emit_default_export_declarations_ts(
+            &mut buf,
+            doc,
+            fragment,
+            split.as_ref(),
+            &render_name,
+            generics.as_deref(),
+            prop_type_effective.as_deref(),
+            exports_object.as_deref(),
+            &template_type_refs,
+        );
+    } else {
+        emit_default_export_declarations_js(&mut buf, &render_name);
+    }
 
     // `.svelte` import specifiers are left unchanged. TS resolves
     // them via `allowArbitraryExtensions` + the ambient
@@ -1908,8 +1911,50 @@ fn emit_hoisted_imports(
 /// `typeof X` references in `interface $$Props { … }` resolve
 /// through the render function's scope instead of module scope. See
 /// `notes/PLAN.md` Phase 2 for the full rationale.
+/// JS-overlay default-export shape. Captures Props via
+/// `Awaited<ReturnType<typeof $$render>>['props']` so consumer
+/// overlays see real per-element prop types (e.g. the user's local
+/// `@typedef {Object} Props` JSDoc) — not the previous loose
+/// `Record<string, any>` which let every excess prop silently pass.
+/// Closes ~40 TS2353 under-fire sites on a real-world CMS bench.
+///
+/// `$$render` was modified earlier to `return { props: /** @type
+/// {PropsName} */({}) }` when PropsInfo provided a root name;
+/// otherwise it returns an empty object literal and the extracted
+/// type falls back to `{}` which degrades gracefully (no excess-prop
+/// check but no regression).
+///
+/// TS-only machinery (`interface`, `declare class`, type
+/// intersections) is intentionally absent here since those parse
+/// errors abort tsgo's whole-program check on JS overlays. See
+/// `design/js_overlay/fixture/src/03_default_export.svelte.svn.js`
+/// for the vetted shape.
+///
+/// `| null` in the const's type would cause downstream
+/// `__svn_ensure_component(C)` calls to skip the strict
+/// `Component<P>` overload and fall through to the
+/// `unknown → props?: any` overload — masking excess-prop checks at
+/// every consumer. Use a double-cast so the const's TYPE is
+/// `Component<Props>` while its runtime VALUE is `null` (no actual
+/// runtime needed in a .d.ts-esque overlay).
+fn emit_default_export_declarations_js(buf: &mut EmitBuffer, render_name: &SmolStr) {
+    let _ = writeln!(
+        buf,
+        "/**\n * @typedef {{Awaited<ReturnType<typeof {render_name}>>['props']}} __SvnDefaultProps\n */"
+    );
+    let _ = writeln!(
+        buf,
+        "/** @type {{import('svelte').Component<__SvnDefaultProps>}} */"
+    );
+    let _ = writeln!(
+        buf,
+        "const __svn_component_default = /** @type {{any}} */ (null);"
+    );
+    buf.push_str("export default __svn_component_default;\n");
+}
+
 #[allow(clippy::too_many_arguments)]
-fn emit_default_export_declarations(
+fn emit_default_export_declarations_ts(
     buf: &mut EmitBuffer,
     doc: &Document<'_>,
     fragment: &Fragment,
@@ -1919,60 +1964,7 @@ fn emit_default_export_declarations(
     prop_type_source: Option<&str>,
     exports_object: Option<&str>,
     template_type_refs: &[SmolStr],
-    is_ts: bool,
 ) {
-    if !is_ts {
-        // JS-overlay default-export shape. Captures Props via
-        // `Awaited<ReturnType<typeof $$render>>['props']` so consumer
-        // overlays see real per-element prop types (e.g. the user's
-        // local `@typedef {Object} Props` JSDoc) — not the previous
-        // loose `Record<string, any>` which let every excess prop
-        // silently pass. Closes ~40 TS2353 under-fire sites on a
-        // real-world CMS bench (FieldItem / sidebar components
-        // passing `placement="bottom-end"` etc. to children that
-        // don't declare that prop).
-        //
-        // The $$render function was modified earlier to `return {
-        // props: /** @type {PropsName} */({}) }` when PropsInfo
-        // provided a root name; otherwise it returns an empty object
-        // literal and the extracted type falls back to `{}` which
-        // degrades gracefully (no excess-prop check but no regression).
-        //
-        // TS-only machinery below (`interface`, `declare class`, type
-        // intersections) is skipped for JS overlays since those parse
-        // errors abort tsgo's whole-program check. See
-        // design/js_overlay/fixture/src/03_default_export.svelte.svn.js
-        // for the vetted shape.
-        // `| null` in the const's type would cause downstream
-        // `__svn_ensure_component(C)` calls to skip the strict
-        // `Component<P>` overload and fall through to the
-        // `unknown → props?: any` overload — masking excess-prop
-        // checks at every consumer. Use a double-cast so the const's
-        // TYPE is `Component<Props>` (matches the strict overload)
-        // while its runtime VALUE is `null` (no actual runtime needed
-        // in a .d.ts-esque overlay).
-        let _ = writeln!(
-            buf,
-            "/**\n * @typedef {{Awaited<ReturnType<typeof {render_name}>>['props']}} __SvnDefaultProps\n */"
-        );
-        let _ = writeln!(
-            buf,
-            "/** @type {{import('svelte').Component<__SvnDefaultProps>}} */"
-        );
-        let _ = writeln!(
-            buf,
-            "const __svn_component_default = /** @type {{any}} */ (null);"
-        );
-        buf.push_str("export default __svn_component_default;\n");
-        let _ = template_type_refs;
-        let _ = doc;
-        let _ = fragment;
-        let _ = split;
-        let _ = generics;
-        let _ = prop_type_source;
-        let _ = exports_object;
-        return;
-    }
     let use_class_wrapper = generics.is_some() && prop_type_source.is_some();
     // Module-scope references to the Exports slot MUST go through
     // `Awaited<ReturnType<typeof $$render>>['exports']`, NOT through

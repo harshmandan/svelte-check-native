@@ -6,22 +6,20 @@ async function $$render_dc3d7c74() {
         if ((hello)) {
             void [hello];
             {
-                let foo: any;
-                void foo;
+                const __svn_C_10 = __svn_ensure_component(Comp);
+                const __svn_inst_10 = new __svn_C_10({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                 {
-                    const __svn_C_10 = __svn_ensure_component(Comp);
-                    new __svn_C_10({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                    const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo } = __svn_inst_10.$$slot_def.default; $$_$$;
                     (foo);
                 }
             }
             if ((hi && bye)) {
                 void [hi, bye];
                 {
-                    let bar: any;
-                    void bar;
+                    const __svn_C_55 = __svn_ensure_component(Comp);
+                    const __svn_inst_55 = new __svn_C_55({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                     {
-                        const __svn_C_55 = __svn_ensure_component(Comp);
-                        new __svn_C_55({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                        const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo: bar } = __svn_inst_55.$$slot_def.default; $$_$$;
                         (bar);
                     }
                 }

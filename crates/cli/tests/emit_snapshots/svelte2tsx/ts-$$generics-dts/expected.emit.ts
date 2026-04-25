@@ -29,7 +29,7 @@ async function $$render_960ff640() {
     void a;
     void b;
     void getA;
-    return { props: undefined as any as ({ a: A; b: B; c: C; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: A; b: B; c: C; getA: () => void; }) };
+    return { props: undefined as any as ({ a: A; b: B; c: C; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': { c: (c) } }, bindings: undefined as any as string, exports: undefined as any as ({ a: A; b: B; c: C; getA: () => void; }) };
 }
 $$render_960ff640;
 interface $$IsomorphicComponent {

@@ -4,8 +4,6 @@ async function $$render_19f891e5() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         {
-            let foo: any;
-            void foo;
         }
     }
     return { props: /** @type {any} */({}) };

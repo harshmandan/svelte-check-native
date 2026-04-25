@@ -4,15 +4,10 @@ async function $$render_b08c173d() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         {
-            let n: any;
-            void n;
-            let thing: any;
-            void thing;
-            let whatever: any;
-            void whatever;
+            const __svn_C_0 = __svn_ensure_component(Component);
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
-                const __svn_C_0 = __svn_ensure_component(Component);
-                new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, name: n, thing, whatever: { bla } } = __svn_inst_0.$$slot_def.default; $$_$$;
             }
         }
     }

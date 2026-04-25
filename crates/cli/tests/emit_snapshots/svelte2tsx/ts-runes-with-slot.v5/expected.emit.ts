@@ -14,7 +14,7 @@ async function $$render_17f189ba<T>() {
     void b;
     void x;
     void y;
-    return { props: undefined as any as (Props), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Props), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': { x: (x), y: (y) } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_17f189ba;
 declare class __svn_Render_17f189ba<T> {

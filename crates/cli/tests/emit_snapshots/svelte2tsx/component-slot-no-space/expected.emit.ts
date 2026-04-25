@@ -7,11 +7,10 @@ async function $$render_4e520e33() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});             {
-                let t: any;
-                void t;
+                const __svn_C_3f = __svn_ensure_component(Test);
+                const __svn_inst_3f = new __svn_C_3f({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                 {
-                    const __svn_C_3f = __svn_ensure_component(Test);
-                    new __svn_C_3f({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                    const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, t } = __svn_inst_3f.$$slot_def.default; $$_$$;
                 }
             }
         }

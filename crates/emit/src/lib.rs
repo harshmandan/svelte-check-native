@@ -675,6 +675,7 @@ fn emit_document_with_render_name(
         synthesized_events_type.as_deref(),
         exports_object.as_deref(),
         &props_info,
+        &summary.slot_defs,
     );
 
     buf.push_str("}\n");
@@ -1521,6 +1522,7 @@ fn emit_render_body_return(
     synthesized_events_type: Option<&str>,
     exports_object: Option<&str>,
     props_info: &svn_analyze::PropsInfo,
+    slot_defs: &[svn_analyze::SlotDef],
 ) {
     // JS overlay: always emit a return so the default-export's
     // `Awaited<ReturnType<typeof $$render>>['props']` extraction
@@ -1643,6 +1645,24 @@ fn emit_render_body_return(
         // bare `{}` and Events[K] resolved to `never`).
         "{ [evt: string]: CustomEvent<any> }".to_string()
     };
+    // Build the `slots:` field type. When the template has any
+    // `<slot [name="X"] [attr=…]>` sites, emit each as a scope-
+    // resolved value literal — the `slots: { 'X': { name1: (expr1)
+    // …}}` value flows through `Awaited<ReturnType<typeof
+    // $$render>>['slots']` into `SvelteComponent<P, E, S>`'s slots
+    // generic. Consumer-side `<Comp let:foo>` reads `foo` from
+    // `inst.$$slot_def.X.foo` typed accordingly. Without this, slot-
+    // let consumers fall back to `any` (the pre-port behavior).
+    //
+    // Identifiers that the analyze-side walker saw as scope-shadowed
+    // (let-bound or each-bound in active scope) were already SKIPPED
+    // from `slot_defs` — emitting them at module scope would
+    // resolve to the wrong (module-scope) declaration. Closing those
+    // properly needs the full SlotHandler scope-rewrite port (see
+    // design/slot_handler/PLAN.md §1.2). For now, they fall through
+    // to `any` (consumer destructure picks up `undefined` from the
+    // missing field).
+    let slots_field: String = build_slots_field_type(slot_defs);
     // With-generics branch preserves the original behaviour for
     // class-wrapper emission: the caller already synthesised the
     // props-ref via the render class, so we emit the typed literal
@@ -1653,7 +1673,7 @@ fn emit_render_body_return(
         };
         let _ = writeln!(
             buf,
-            "    return {{ props: undefined as any as ({ty}), events: undefined as any as {events_field}, slots: undefined as any as {{}}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
+            "    return {{ props: undefined as any as ({ty}), events: undefined as any as {events_field}, slots: {slots_field}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
         );
         return;
     }
@@ -1666,8 +1686,53 @@ fn emit_render_body_return(
     };
     let _ = writeln!(
         buf,
-        "    return {{ props: undefined as any as ({props_ty}), events: undefined as any as {events_field}, slots: undefined as any as {{}}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
+        "    return {{ props: undefined as any as ({props_ty}), events: undefined as any as {events_field}, slots: {slots_field}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
     );
+}
+
+/// Build the `slots:` field expression for `$$render`'s return.
+/// When `slot_defs` is empty, returns `undefined as any as {}` (the
+/// pre-port shape). When non-empty, builds a value literal:
+///
+/// ```ts
+/// { 'default': { nodes: (_nodes), links: (_links) }, 'footer': { … } }
+/// ```
+///
+/// TS infers the slots type from the literal (each prop's type is
+/// the inferred type of its expression). Consumer-side
+/// `inst.$$slot_def.default.nodes` then has the right type.
+///
+/// Mirrors upstream svelte2tsx's `slotsAsDef` builder in
+/// `createRenderFunction.ts:125-133`.
+fn build_slots_field_type(slot_defs: &[svn_analyze::SlotDef]) -> String {
+    if slot_defs.is_empty() {
+        return "undefined as any as {}".to_string();
+    }
+    let mut out = String::from("{ ");
+    let mut first_slot = true;
+    for def in slot_defs {
+        if !first_slot {
+            out.push_str(", ");
+        }
+        first_slot = false;
+        out.push('\'');
+        out.push_str(def.slot_name.as_str());
+        out.push_str("': { ");
+        let mut first_attr = true;
+        for (name, expr) in &def.attrs {
+            if !first_attr {
+                out.push_str(", ");
+            }
+            first_attr = false;
+            out.push_str(name.as_str());
+            out.push_str(": (");
+            out.push_str(expr);
+            out.push(')');
+        }
+        out.push_str(" }");
+    }
+    out.push_str(" }");
+    out
 }
 
 /// Emit the hoisted-imports region at module scope, followed by a
@@ -2667,6 +2732,186 @@ fn collect_let_directive_names(source: &str, attributes: &[svn_parser::Attribute
         }
     }
     out
+}
+
+/// One `<Comp let:NAME[={alias|pattern}]>` directive on a component
+/// instantiation, captured for the consumer-side slot-def
+/// destructure emit (`const { …, NAME } = inst.$$slot_def[…];`).
+struct LetDestructure {
+    /// Source slice for the destructure pattern. For bare `let:foo`
+    /// this is `"foo"`; for `let:foo={alias}` it's `"foo: alias"`;
+    /// for destructure `let:foo={{a, b}}` it's `"foo: {a, b}"`.
+    /// Spliced verbatim into the destructure literal.
+    pattern_text: String,
+}
+
+/// Build the `LetDestructure` list for one let-bearing element/component.
+/// Each `let:` directive becomes one entry in the consumer-side
+/// destructure literal. The slot name (default vs `slot="X"`) is the
+/// caller's concern — the same list is destructured against either
+/// `inst.$$slot_def.default` (let on the component itself) or
+/// `parent.$$slot_def["X"]` (let on a `slot="X"` child).
+fn collect_let_destructures(
+    source: &str,
+    attributes: &[svn_parser::Attribute],
+) -> Vec<LetDestructure> {
+    use svn_parser::{Attribute, Directive, DirectiveKind, DirectiveValue};
+    let mut out: Vec<LetDestructure> = Vec::new();
+    for attr in attributes {
+        let Attribute::Directive(Directive {
+            kind: DirectiveKind::Let,
+            name,
+            value,
+            ..
+        }) = attr
+        else {
+            continue;
+        };
+        let pattern_text: String = match value {
+            Some(DirectiveValue::Expression {
+                expression_range, ..
+            }) => {
+                let start = expression_range.start as usize;
+                let end = expression_range.end as usize;
+                let slice = source.get(start..end).unwrap_or("").trim();
+                if slice.is_empty() {
+                    name.to_string()
+                } else if is_simple_identifier(slice) && slice == name.as_str() {
+                    // `let:foo={foo}` — same name on both sides;
+                    // emit shorthand `foo`.
+                    name.to_string()
+                } else {
+                    // `let:foo={alias}` or `let:foo={{a, b}}` —
+                    // destructure rename / nested pattern. Emit as
+                    // `foo: <pattern>`.
+                    format!("{}: {}", name.as_str(), slice)
+                }
+            }
+            _ => name.to_string(),
+        };
+        out.push(LetDestructure { pattern_text });
+    }
+    out
+}
+
+/// Emit the consumer-side `const { $$_$$, foo, bar } =
+/// __svn_inst_<hex>.$$slot_def.<slotName>; $$_$$;` line(s) inside
+/// the component-call block. One line per slot referenced (for
+/// default-only consumers, exactly one line). Mirrors upstream
+/// svelte2tsx's InlineComponent.ts:184-207.
+///
+/// The `$$_$$` dummy + immediate void usage is upstream's trick to
+/// suppress TS6133 ("declared but never read") on the whole
+/// destructure list when all let-bindings happen to be unused.
+/// Wrapping the dummy name in `/*Ωignore_startΩ*/.../*Ωignore_endΩ*/`
+/// markers keeps any source-position diagnostic on it from
+/// surfacing.
+fn emit_let_slot_destructure(
+    buf: &mut EmitBuffer,
+    inst: &svn_analyze::ComponentInstantiation,
+    let_destructures: &[LetDestructure],
+    slot_name: &str,
+    depth: usize,
+) {
+    if let_destructures.is_empty() {
+        return;
+    }
+    let inst_local = format!("__svn_inst_{:x}", inst.node_start);
+    let indent = "    ".repeat(depth);
+    let mut entries = String::new();
+    // Upstream's `$$_$$` dummy keeps TS6133 quiet on unused
+    // destructure lists; the ignore markers tell svelte-check's
+    // diagnostic mapper to drop any error on the synthetic name.
+    entries.push_str("/*\u{03A9}ignore_start\u{03A9}*/$$_$$/*\u{03A9}ignore_end\u{03A9}*/");
+    for d in let_destructures {
+        entries.push_str(", ");
+        entries.push_str(d.pattern_text.as_str());
+    }
+    let access = if slot_name == "default" {
+        format!("{inst_local}.$$slot_def.default")
+    } else {
+        format!("{inst_local}.$$slot_def[\"{slot_name}\"]")
+    };
+    let _ = writeln!(buf, "{indent}const {{ {entries} }} = {access}; $$_$$;");
+}
+
+/// True when `node` is a child component with both `slot="X"` and at
+/// least one `let:` directive — a slot-let consumer of its parent.
+/// Used to pre-flag the parent so its instance gets hoisted to a local
+/// (the wrapper destructure references `parent_inst.$$slot_def["X"]`).
+fn child_is_slot_let_consumer(source: &str, node: &Node) -> bool {
+    let Node::Component(c) = node else {
+        return false;
+    };
+    if svn_analyze::literal_attr_value(&c.attributes, "slot").is_none() {
+        return false;
+    }
+    !collect_let_destructures(source, &c.attributes).is_empty()
+}
+
+/// If `node` is a child component carrying both `slot="X"` and one or
+/// more `let:` directives, open a wrapper block at the parent's
+/// child-walk depth and emit the consumer-side destructure against
+/// `parent_inst.$$slot_def["X"]`. Returns `true` when the wrapper was
+/// opened — caller closes it via `emit_slot_let_consumer_close` after
+/// walking the child.
+///
+/// Mirrors upstream svelte2tsx's InlineComponent.ts:184-207, where the
+/// destructure for `<Inner slot="X" let:foo>` lives in the OUTER
+/// component's block — so `foo` is in scope across the inner
+/// component-call's own emissions (notably the `$on(...)` handler that
+/// references `foo`, which sits at the inner component-call's outer
+/// block before the inner's own children walk).
+fn try_emit_slot_let_consumer_open(
+    buf: &mut EmitBuffer,
+    source: &str,
+    node: &Node,
+    parent_inst: &svn_analyze::ComponentInstantiation,
+    depth: usize,
+) -> bool {
+    let Node::Component(c) = node else {
+        return false;
+    };
+    let Some(slot_name) = svn_analyze::literal_attr_value(&c.attributes, "slot") else {
+        return false;
+    };
+    let lets = collect_let_destructures(source, &c.attributes);
+    if lets.is_empty() {
+        return false;
+    }
+    let indent = "    ".repeat(depth);
+    let _ = writeln!(buf, "{indent}{{");
+    emit_let_slot_destructure(buf, parent_inst, &lets, slot_name, depth + 1);
+    true
+}
+
+#[inline]
+fn emit_slot_let_consumer_close(buf: &mut EmitBuffer, depth: usize) {
+    let indent = "    ".repeat(depth);
+    let _ = writeln!(buf, "{indent}}}");
+}
+
+/// Walk one child of a component, opening a slot-let consumer wrapper
+/// first when the child is a `<Inner slot="X" let:foo>` pattern.
+/// Bumps the walk depth by one inside the wrapper so the child's own
+/// emit nests under the destructure.
+fn walk_child_with_slot_let(
+    buf: &mut EmitBuffer,
+    source: &str,
+    node: &Node,
+    depth: usize,
+    insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
+    parent_inst: Option<&svn_analyze::ComponentInstantiation>,
+) {
+    let opened = parent_inst
+        .map(|p| try_emit_slot_let_consumer_open(buf, source, node, p, depth))
+        .unwrap_or(false);
+    let walk_depth = if opened { depth + 1 } else { depth };
+    emit_template_node(buf, source, node, walk_depth, insts, action_counter);
+    if opened {
+        emit_slot_let_consumer_close(buf, depth);
+    }
 }
 
 #[inline]
@@ -5023,24 +5268,52 @@ fn emit_component_node(
         .collect();
 
     let inst = insts.get(&c.range.start);
-    // SVELTE-4-COMPAT: `<Foo let:item on:click={() => item.x}>` passes
-    // `item` inside the `onclick` prop expression. The slot-let
-    // binding must be in scope BEFORE emit_component_call runs, so
-    // open the block scope + declare let-bindings up front, then
-    // emit the call + children inside.
-    let let_names = collect_let_directive_names(source, &c.attributes);
-    let (indent, inner_depth) = if let_names.is_empty() {
-        (String::new(), depth)
+    // SVELTE-4-COMPAT: `<Comp let:foo>` consumer-side bindings.
+    //
+    // Pre-port: emit `{ let foo: any; void foo; …children… }` —
+    // outer block, untyped placeholder, no type flow from
+    // producer-side `<slot {foo}>`. Children type-checked `foo` as
+    // `any`.
+    //
+    // Post-port (this commit + producer-side `slots:` literal in
+    // `emit_render_body_return`): emit `{ const { $$_$$, foo } =
+    // <inst>.$$slot_def.default; $$_$$; …children… }` INSIDE the
+    // component-call block, after the `new` expression. The instance
+    // local's `$$slot_def: S` field carries the typed slot shape
+    // from the producer's `slots:` return field — `foo` lands at
+    // its true producer-side declared type. Mirrors upstream
+    // svelte2tsx's InlineComponent.ts:184-207 destructure shape.
+    //
+    // The `$$_$$` dummy-then-void pattern is upstream's trick for
+    // suppressing TS6133 ("declared but never read") on whole-
+    // destructure list when all let-bindings are unused. The
+    // ignore_start/end markers wrap the dummy so source-map
+    // diagnostics on the synthetic name don't surface.
+    // `let:` directives on a component WITHOUT `slot="X"` consume the
+    // component's own default slot — destructured against
+    // `inst.$$slot_def.default` inside its inner block.
+    //
+    // `let:` directives on a component WITH `slot="X"` are slot-CONSUMER
+    // bindings: they pull from the PARENT component's `$$slot_def["X"]`
+    // and the destructure must wrap this child at the parent's child-walk
+    // depth (handled in the parent's loop via
+    // `try_emit_slot_let_consumer_open` — see below). Skipping here
+    // prevents a double destructure / wrong access path.
+    let has_slot_attr = svn_analyze::literal_attr_value(&c.attributes, "slot").is_some();
+    let let_destructures = if has_slot_attr {
+        Vec::new()
     } else {
-        let indent = "    ".repeat(depth);
-        let inner = "    ".repeat(depth + 1);
-        let _ = writeln!(buf, "{indent}{{");
-        for name in &let_names {
-            let _ = writeln!(buf, "{inner}let {name}: any;");
-            let _ = writeln!(buf, "{inner}void {name};");
-        }
-        (indent, depth + 1)
+        collect_let_destructures(source, &c.attributes)
     };
+    let has_let_bindings = !let_destructures.is_empty();
+    // Pre-scan children for the `<Inner slot="X" let:foo>` shape — when
+    // present, the parent (this component) needs its instance hoisted to
+    // a local so the consumer wrapper can reference `parent.$$slot_def["X"]`.
+    let any_child_consumes_slot_let = c
+        .children
+        .nodes
+        .iter()
+        .any(|n| child_is_slot_let_consumer(source, n));
 
     // Only emit the call when analyze collected an instantiation for
     // this node. Components disqualified at analyze time (e.g.
@@ -5055,31 +5328,63 @@ fn emit_component_node(
     // closes via `emit_component_call_close` after the walk.
     let opened_call_block = inst.is_some();
     let child_depth = if opened_call_block {
-        inner_depth + 1
+        depth + 1
     } else {
-        inner_depth
+        depth
     };
     if let Some(inst) = inst {
         emit_component_call(
             buf,
             source,
             inst,
-            inner_depth,
+            depth,
             &snippet_children,
             insts,
             action_counter,
+            has_let_bindings || any_child_consumes_slot_let,
         );
     }
 
+    // Slot-let destructure goes in an INNER block so the
+    // user-source names declared via `let:foo` shadow only inside
+    // the children walk. The component-call's `new __svn_C({props:
+    // {foo: foo}})` references at the OUTER block resolve to
+    // module-scope `foo` (avoids TDZ on consumers like
+    // layerchart Chart.svelte's `<LayerCake yScale={yScale}
+    // let:yScale>` where the let-name shadows a module-scope export
+    // of the same name). Mirrors upstream svelte2tsx's
+    // InlineComponent.ts:184-207 inner-block destructure pattern.
+    let inner_block_for_let = has_let_bindings;
+    let final_child_depth = if inner_block_for_let {
+        let inner_open_indent = "    ".repeat(child_depth);
+        let _ = writeln!(buf, "{inner_open_indent}{{");
+        let dest_depth = child_depth + 1;
+        if let Some(inst) = inst {
+            emit_let_slot_destructure(buf, inst, &let_destructures, "default", dest_depth);
+        }
+        dest_depth
+    } else {
+        child_depth
+    };
+
     if inst.is_none() || snippet_children.is_empty() {
         for node in &c.children.nodes {
-            emit_template_node(buf, source, node, child_depth, insts, action_counter);
+            walk_child_with_slot_let(
+                buf,
+                source,
+                node,
+                final_child_depth,
+                insts,
+                action_counter,
+                inst.copied(),
+            );
+        }
+        if inner_block_for_let {
+            let inner_close_indent = "    ".repeat(child_depth);
+            let _ = writeln!(buf, "{inner_close_indent}}}");
         }
         if opened_call_block {
-            emit_component_call_close(buf, inner_depth);
-        }
-        if !let_names.is_empty() {
-            let _ = writeln!(buf, "{indent}}}");
+            emit_component_call_close(buf, depth);
         }
         return;
     }
@@ -5088,13 +5393,22 @@ fn emit_component_node(
         if matches!(node, Node::SnippetBlock(_)) {
             continue;
         }
-        emit_template_node(buf, source, node, child_depth, insts, action_counter);
+        walk_child_with_slot_let(
+            buf,
+            source,
+            node,
+            final_child_depth,
+            insts,
+            action_counter,
+            inst.copied(),
+        );
+    }
+    if inner_block_for_let {
+        let inner_close_indent = "    ".repeat(child_depth);
+        let _ = writeln!(buf, "{inner_close_indent}}}");
     }
     if opened_call_block {
-        emit_component_call_close(buf, inner_depth);
-    }
-    if !let_names.is_empty() {
-        let _ = writeln!(buf, "{indent}}}");
+        emit_component_call_close(buf, depth);
     }
 }
 
@@ -5126,6 +5440,7 @@ fn emit_component_call(
     snippet_children: &[&SnippetBlock],
     insts: &std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation>,
     action_counter: &mut usize,
+    needs_inst_for_let: bool,
 ) {
     let indent = "    ".repeat(depth);
     let inner = "    ".repeat(depth + 1);
@@ -5137,9 +5452,12 @@ fn emit_component_call(
     // local when one of the post-construction emits needs it:
     //   - `$inst.$on("evt", h)` per `on:event` directive
     //   - `x = $inst;` for `bind:this={x}` on the component
+    //   - `const { foo } = $inst.$$slot_def.default;` for `let:foo`
+    //     consumer-side destructure (the slot-let port).
     let local = format!("__svn_C_{:x}", inst.node_start);
     let inst_local = format!("__svn_inst_{:x}", inst.node_start);
-    let hoist_instance = !inst.on_events.is_empty() || inst.bind_this_target.is_some();
+    let hoist_instance =
+        !inst.on_events.is_empty() || inst.bind_this_target.is_some() || needs_inst_for_let;
     let ctor_lhs = if hoist_instance {
         format!("const {inst_local} = ")
     } else {

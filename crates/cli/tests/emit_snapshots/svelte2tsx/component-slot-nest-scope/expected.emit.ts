@@ -10,11 +10,10 @@ async function $$render_ce1c3a62() {
             void item;
         }
         {
-            let c: any;
-            void c;
+            const __svn_C_89 = __svn_ensure_component(Component);
+            const __svn_inst_89 = new __svn_C_89({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
-                const __svn_C_89 = __svn_ensure_component(Component);
-                new __svn_C_89({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, c } = __svn_inst_89.$$slot_def.default; $$_$$;
                 (c);
             }
         }

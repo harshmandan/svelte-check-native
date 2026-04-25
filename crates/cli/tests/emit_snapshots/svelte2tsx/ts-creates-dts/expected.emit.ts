@@ -20,7 +20,7 @@ async function $$render_39dbed3c() {
     void __svn_tpl_check;
     void bar;
     void foobar;
-    return { props: undefined as any as ({ bar: Bar; foobar?: typeof foobar; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ bar: Bar; foobar: typeof foobar; }) };
+    return { props: undefined as any as ({ bar: Bar; foobar?: typeof foobar; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': { bar: (bar) } }, bindings: undefined as any as string, exports: undefined as any as ({ bar: Bar; foobar: typeof foobar; }) };
 }
 $$render_39dbed3c;
 interface $$IsomorphicComponent {

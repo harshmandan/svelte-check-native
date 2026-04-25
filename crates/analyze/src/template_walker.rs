@@ -101,6 +101,44 @@ pub struct TemplateSummary {
     /// whenever this flag is set, instead of the strict
     /// `Component<$$ComponentProps>` we'd otherwise use.
     pub has_bubbled_component_event: bool,
+    /// `<slot {name}={expr}>` sites encountered, grouped by slot name
+    /// (default = unnamed slot). Each entry maps the user's attribute
+    /// `name` to the source TEXT of its expression. Emit consumes
+    /// these to populate the `slots:` field of `$$render`'s return —
+    /// upstream-style scope-resolved literal that flows the
+    /// component's slot-prop types into `SvelteComponent<…, …, S>`.
+    /// Consumer-side `<Comp let:foo>` then reads typed `foo` from
+    /// `inst.$$slot_def[slotName].foo`.
+    ///
+    /// Identifiers that the walker saw as let-bound or each-bound at
+    /// the slot site (i.e. shadowed by a template-scope binding) are
+    /// SKIPPED from the attrs map — emitting them at module scope
+    /// would resolve them to the wrong (module-scope) declaration.
+    /// Skipped names fall through to `any` on the consumer side
+    /// (matches the pre-port placeholder behavior). Closing those
+    /// cases properly needs the full SlotHandler scope-rewrite port
+    /// (see `design/slot_handler/PLAN.md`); this minimal version
+    /// targets the Sankey-style case where slot attrs reference
+    /// module-scope locals only.
+    pub slot_defs: Vec<SlotDef>,
+}
+
+/// One `<slot [name="X"] [attr1={expr1}] [attr2]>` site captured for
+/// emit-side `slots:` literal generation.
+#[derive(Debug, Clone)]
+pub struct SlotDef {
+    /// Slot name from `name="X"`; `"default"` when omitted.
+    pub slot_name: SmolStr,
+    /// `(attribute_name, expression_text)` pairs. Expression text is
+    /// extracted directly from the source for `={expr}` form, or is
+    /// the bare identifier for `{name}` shorthand. `name="literal"`
+    /// form falls into the literal-string variant. Expressions that
+    /// the walker identified as scope-shadowed (referencing a
+    /// let-bound or each-bound name in the active scope) are omitted
+    /// from this list — those need the full SlotHandler resolver to
+    /// emit correctly and would otherwise resolve to the wrong
+    /// module-scope declaration.
+    pub attrs: Vec<(SmolStr, String)>,
 }
 
 /// One `use:NAME={PARAMS}` directive site. Populated by the template
@@ -354,7 +392,8 @@ pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
     summary.void_refs.register("__svn_tpl_check");
     let mut counters = Counters::default();
     let mut ctx = WalkCtx { source };
-    walk_fragment(fragment, &mut summary, &mut counters, &ctx);
+    let mut shadow = ShadowStack::default();
+    walk_fragment(fragment, &mut summary, &mut counters, &ctx, &mut shadow);
     let _ = &mut ctx;
     let mut seen_at_const = std::collections::HashSet::<SmolStr>::new();
     collect_at_const_names_from_fragment(
@@ -470,14 +509,45 @@ struct Counters {
     bind_pair: usize,
 }
 
+/// Per-walk template-scope shadow tracker. Names entered into the
+/// stack as the walker descends into scope-introducing nodes
+/// (`{#each X as Y}` → `Y`; `{:then Y}` → `Y`; `<Comp let:Y>` /
+/// `<el let:Y>` → `Y`; `{#snippet name(Y, …)}` — pattern names);
+/// popped on exit. Used by `<slot {Y}>` capture to skip slot-attr
+/// expressions that reference scope-bound names — emitting those at
+/// module scope (where the `slots:` literal lives in `$$render`'s
+/// return) would resolve them to the wrong (module-scope)
+/// declaration. Skipped names fall through to `any` on the consumer
+/// side. Closing those properly needs the full SlotHandler scope-
+/// rewrite port (design/slot_handler/PLAN.md §1.2).
+#[derive(Default)]
+struct ShadowStack {
+    names: Vec<SmolStr>,
+}
+
+impl ShadowStack {
+    fn push_many(&mut self, names: impl IntoIterator<Item = SmolStr>) -> usize {
+        let mark = self.names.len();
+        self.names.extend(names);
+        mark
+    }
+    fn truncate(&mut self, mark: usize) {
+        self.names.truncate(mark);
+    }
+    fn contains(&self, name: &str) -> bool {
+        self.names.iter().any(|n| n == name)
+    }
+}
+
 fn walk_fragment(
     fragment: &Fragment,
     summary: &mut TemplateSummary,
     counters: &mut Counters,
     ctx: &WalkCtx<'_>,
+    shadow: &mut ShadowStack,
 ) {
     for node in &fragment.nodes {
-        walk_node(node, summary, counters, ctx);
+        walk_node(node, summary, counters, ctx, shadow);
     }
 }
 
@@ -486,13 +556,26 @@ fn walk_node(
     summary: &mut TemplateSummary,
     counters: &mut Counters,
     ctx: &WalkCtx<'_>,
+    shadow: &mut ShadowStack,
 ) {
     match node {
         Node::Element(e) => {
             walk_attributes(&e.attributes, summary, counters, ctx, Some(e.name.as_str()));
             collect_bind_this_checks(&e.attributes, summary);
             collect_bind_value_bindings(&e.attributes, e.name.as_str(), summary);
-            walk_fragment(&e.children, summary, counters, ctx);
+            // `<slot [name="X"] [attr=…]>`: capture for emit's `slots:`
+            // literal. Walks the attrs and skips any whose
+            // expression references a name in the active shadow stack.
+            if e.name.as_str() == "slot" {
+                collect_slot_def(&e.attributes, ctx.source, shadow, summary);
+            }
+            // `let:` directives on an element add their bindings into
+            // scope for the element's children. `<svelte:fragment
+            // slot="x" let:foo>` is the typical case.
+            let let_names = collect_let_directive_names_for_shadow(&e.attributes, ctx.source);
+            let mark = shadow.push_many(let_names);
+            walk_fragment(&e.children, summary, counters, ctx, shadow);
+            shadow.truncate(mark);
         }
         Node::Component(c) => {
             // `use:` on a component is nonsensical at the Svelte level
@@ -503,7 +586,11 @@ fn walk_node(
             // pattern doesn't break the program.
             walk_attributes(&c.attributes, summary, counters, ctx, None);
             collect_component_instantiation(c, ctx.source, summary);
-            walk_fragment(&c.children, summary, counters, ctx);
+            // `<Comp let:foo>` adds `foo` into scope for the children.
+            let let_names = collect_let_directive_names_for_shadow(&c.attributes, ctx.source);
+            let mark = shadow.push_many(let_names);
+            walk_fragment(&c.children, summary, counters, ctx, shadow);
+            shadow.truncate(mark);
         }
         Node::SvelteElement(s) => {
             // `<svelte:element this={dynamic}>` — tag is only known at
@@ -514,39 +601,267 @@ fn walk_node(
             // (action narrowness flags dynamic-tag misuse).
             walk_attributes(&s.attributes, summary, counters, ctx, None);
             collect_bind_this_checks(&s.attributes, summary);
-            walk_fragment(&s.children, summary, counters, ctx);
+            let let_names = collect_let_directive_names_for_shadow(&s.attributes, ctx.source);
+            let mark = shadow.push_many(let_names);
+            walk_fragment(&s.children, summary, counters, ctx, shadow);
+            shadow.truncate(mark);
         }
         Node::IfBlock(b) => {
-            walk_fragment(&b.consequent, summary, counters, ctx);
+            walk_fragment(&b.consequent, summary, counters, ctx, shadow);
             for arm in &b.elseif_arms {
-                walk_fragment(&arm.body, summary, counters, ctx);
+                walk_fragment(&arm.body, summary, counters, ctx, shadow);
             }
             if let Some(alt) = &b.alternate {
-                walk_fragment(alt, summary, counters, ctx);
+                walk_fragment(alt, summary, counters, ctx, shadow);
             }
         }
         Node::EachBlock(b) => {
             summary.each_block_count += 1;
-            walk_fragment(&b.body, summary, counters, ctx);
+            // `{#each items as item, i (key)}` — `item` and `i` enter
+            // scope for the body. The pattern in `context_range` may
+            // be a destructure (`as { a, b }`); we collect the
+            // top-level identifier names via a simple identifier-
+            // extraction pass over the source slice.
+            let mut binding_names: Vec<SmolStr> = Vec::new();
+            if let Some(as_clause) = &b.as_clause {
+                collect_pattern_idents(ctx.source, as_clause.context_range, &mut binding_names);
+                if let Some(idx) = &as_clause.index_range {
+                    collect_pattern_idents(ctx.source, *idx, &mut binding_names);
+                }
+            }
+            let mark = shadow.push_many(binding_names);
+            walk_fragment(&b.body, summary, counters, ctx, shadow);
+            shadow.truncate(mark);
             if let Some(alt) = &b.alternate {
-                walk_fragment(alt, summary, counters, ctx);
+                // `{:else}` branch — empty-list body. No bindings in
+                // scope (the `as` binding doesn't apply here).
+                walk_fragment(alt, summary, counters, ctx, shadow);
             }
         }
         Node::AwaitBlock(b) => {
             if let Some(p) = &b.pending {
-                walk_fragment(p, summary, counters, ctx);
+                walk_fragment(p, summary, counters, ctx, shadow);
             }
             if let Some(t) = &b.then_branch {
-                walk_fragment(&t.body, summary, counters, ctx);
+                let mut names: Vec<SmolStr> = Vec::new();
+                if let Some(ctx_range) = &t.context_range {
+                    collect_pattern_idents(ctx.source, *ctx_range, &mut names);
+                }
+                let mark = shadow.push_many(names);
+                walk_fragment(&t.body, summary, counters, ctx, shadow);
+                shadow.truncate(mark);
             }
             if let Some(c) = &b.catch_branch {
-                walk_fragment(&c.body, summary, counters, ctx);
+                let mut names: Vec<SmolStr> = Vec::new();
+                if let Some(ctx_range) = &c.context_range {
+                    collect_pattern_idents(ctx.source, *ctx_range, &mut names);
+                }
+                let mark = shadow.push_many(names);
+                walk_fragment(&c.body, summary, counters, ctx, shadow);
+                shadow.truncate(mark);
             }
         }
-        Node::KeyBlock(b) => walk_fragment(&b.body, summary, counters, ctx),
-        Node::SnippetBlock(b) => walk_fragment(&b.body, summary, counters, ctx),
+        Node::KeyBlock(b) => walk_fragment(&b.body, summary, counters, ctx, shadow),
+        Node::SnippetBlock(b) => {
+            // `{#snippet name(p1, p2)}` — params enter scope for the
+            // snippet body.
+            let mut names: Vec<SmolStr> = Vec::new();
+            collect_pattern_idents(ctx.source, b.parameters_range, &mut names);
+            let mark = shadow.push_many(names);
+            walk_fragment(&b.body, summary, counters, ctx, shadow);
+            shadow.truncate(mark);
+        }
         // Leaf nodes — no children to descend into, no attributes.
         Node::Text(_) | Node::Interpolation(_) | Node::Comment(_) => {}
+    }
+}
+
+/// Capture a `<slot [name="X"] [attr=…]>` site into
+/// `summary.slot_defs`. Skips attrs whose expression references a
+/// name in the active shadow stack — those need full scope
+/// resolution to emit at module scope correctly. The slot is still
+/// recorded (with a possibly-empty attrs list) so consumer-side
+/// `<Comp let:foo>` destructure has SOMETHING to read from
+/// `inst.$$slot_def[name]`.
+fn collect_slot_def(
+    attrs: &[Attribute],
+    source: &str,
+    shadow: &ShadowStack,
+    summary: &mut TemplateSummary,
+) {
+    use svn_parser::{Attribute as A, AttrValuePart};
+    let mut slot_name = SmolStr::new("default");
+    let mut entries: Vec<(SmolStr, String)> = Vec::new();
+    for attr in attrs {
+        match attr {
+            A::Plain(p) if p.name.as_str() == "name" => {
+                if let Some(v) = &p.value
+                    && v.parts.len() == 1
+                    && let AttrValuePart::Text { content, .. } = &v.parts[0]
+                {
+                    slot_name = SmolStr::from(content.as_str());
+                }
+            }
+            A::Expression(e) => {
+                let start = e.expression_range.start as usize;
+                let end = e.expression_range.end as usize;
+                let Some(text) = source.get(start..end) else {
+                    continue;
+                };
+                let trimmed = text.trim();
+                if is_simple_identifier(trimmed) && shadow.contains(trimmed) {
+                    continue;
+                }
+                entries.push((e.name.clone(), text.to_string()));
+            }
+            A::Shorthand(s) => {
+                if shadow.contains(s.name.as_str()) {
+                    continue;
+                }
+                entries.push((s.name.clone(), s.name.to_string()));
+            }
+            // Plain literal attrs on `<slot>` (other than `name=`)
+            // are unusual; skip them for now. Spread, directives:
+            // also skip — full slot-handler port territory.
+            _ => {}
+        }
+    }
+    summary.slot_defs.push(SlotDef {
+        slot_name,
+        attrs: entries,
+    });
+}
+
+fn is_simple_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+/// Extract every let:NAME / let:NAME={alias} binding name from a set
+/// of attributes — twin of emit's `collect_let_directive_names`,
+/// scoped here for the shadow stack. Identifiers ONLY (no
+/// destructure shapes); the bare directive `name` is used as a
+/// fallback when the alias isn't a simple identifier.
+fn collect_let_directive_names_for_shadow(attrs: &[Attribute], source: &str) -> Vec<SmolStr> {
+    use svn_parser::{Directive, DirectiveKind, DirectiveValue};
+    let mut out: Vec<SmolStr> = Vec::new();
+    for attr in attrs {
+        if let Attribute::Directive(Directive {
+            kind: DirectiveKind::Let,
+            name,
+            value,
+            ..
+        }) = attr
+        {
+            let bound = match value {
+                Some(DirectiveValue::Expression {
+                    expression_range, ..
+                }) => {
+                    let start = expression_range.start as usize;
+                    let end = expression_range.end as usize;
+                    let slice = source.get(start..end).unwrap_or("").trim();
+                    if is_simple_identifier(slice) {
+                        SmolStr::from(slice)
+                    } else {
+                        // Destructure pattern: extract top-level
+                        // identifier names so each one shadows.
+                        let mut names: Vec<SmolStr> = Vec::new();
+                        collect_pattern_idents(
+                            source,
+                            *expression_range,
+                            &mut names,
+                        );
+                        if !names.is_empty() {
+                            out.extend(names);
+                            continue;
+                        }
+                        name.clone()
+                    }
+                }
+                _ => name.clone(),
+            };
+            if !out.iter().any(|n| n == &bound) {
+                out.push(bound);
+            }
+        }
+    }
+    out
+}
+
+/// Extract every simple-identifier name from a binding-pattern byte
+/// range. Handles `as item`, `as item, i`, `as { a, b }`, `as [x,
+/// y]`, and the snippet param list `(a, b: T, { c })`. Used by the
+/// shadow stack to know which names are scope-bound at any point in
+/// the walk.
+///
+/// Implementation: oxc parse of the slice as an arrow-function
+/// pattern (the closest parse shape that accepts both destructures
+/// and identifiers). On parse failure, falls back to the SmolStr
+/// of the trimmed source slice IF it's a simple identifier.
+fn collect_pattern_idents(source: &str, range: svn_core::Range, out: &mut Vec<SmolStr>) {
+    let start = range.start as usize;
+    let end = range.end as usize;
+    let Some(slice) = source.get(start..end) else {
+        return;
+    };
+    let trimmed = slice.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    // Fast path: bare identifier.
+    if is_simple_identifier(trimmed) {
+        out.push(SmolStr::from(trimmed));
+        return;
+    }
+    // Use oxc to parse the slice as a JS expression in the shape
+    // of an arrow-function parameter list. Wrap in `(` … `) => 0`.
+    let alloc = oxc_allocator::Allocator::default();
+    let wrapped = format!("({trimmed}) => 0");
+    let parsed =
+        svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    if parsed.panicked {
+        return;
+    }
+    use oxc_ast::ast::{BindingPatternKind, Expression, Statement};
+    let Some(stmt) = parsed.program.body.first() else {
+        return;
+    };
+    let Statement::ExpressionStatement(es) = stmt else {
+        return;
+    };
+    let Expression::ArrowFunctionExpression(arrow) = &es.expression else {
+        return;
+    };
+    for param in &arrow.params.items {
+        collect_from_pattern(&param.pattern.kind, out);
+    }
+
+    fn collect_from_pattern(pat: &BindingPatternKind<'_>, out: &mut Vec<SmolStr>) {
+        match pat {
+            BindingPatternKind::BindingIdentifier(id) => {
+                out.push(SmolStr::from(id.name.as_str()));
+            }
+            BindingPatternKind::ObjectPattern(obj) => {
+                for p in &obj.properties {
+                    collect_from_pattern(&p.value.kind, out);
+                }
+                if let Some(rest) = &obj.rest {
+                    collect_from_pattern(&rest.argument.kind, out);
+                }
+            }
+            BindingPatternKind::ArrayPattern(arr) => {
+                for el in arr.elements.iter().flatten() {
+                    collect_from_pattern(&el.kind, out);
+                }
+            }
+            BindingPatternKind::AssignmentPattern(asn) => {
+                collect_from_pattern(&asn.left.kind, out);
+            }
+        }
     }
 }
 

@@ -26,7 +26,7 @@ declare class __svn_Render_17f189ba<T> {
 }
 interface $$IsomorphicComponent {
     new <T>(options: import('svelte').ComponentConstructorOptions<Partial<ReturnType<__svn_Render_17f189ba<T>['props']> & __SvnSvelte4PropsWiden<ReturnType<__svn_Render_17f189ba<T>['props']>>> & { children?: any }>): import('svelte').SvelteComponent<Partial<ReturnType<__svn_Render_17f189ba<T>['props']> & __SvnSvelte4PropsWiden<ReturnType<__svn_Render_17f189ba<T>['props']>>>, ReturnType<__svn_Render_17f189ba<T>['events']>, ReturnType<__svn_Render_17f189ba<T>['slots']>> & { $$bindings?: ReturnType<__svn_Render_17f189ba<T>['bindings']> } & ReturnType<__svn_Render_17f189ba<T>['exports']>;
-    <T>(internal: unknown, props: Partial<ReturnType<__svn_Render_17f189ba<T>['props']> & __SvnSvelte4PropsWiden<ReturnType<__svn_Render_17f189ba<T>['props']>>> & { children?: any }): ReturnType<__svn_Render_17f189ba<T>['exports']>;
+    <T>(internal: unknown, props: Partial<ReturnType<__svn_Render_17f189ba<T>['props']> & __SvnSvelte4PropsWiden<ReturnType<__svn_Render_17f189ba<T>['props']>>> & { children?: any }): ReturnType<__svn_Render_17f189ba<T>['exports']> & { $set?: any; $on?: any };
     z_$$bindings?: ReturnType<__svn_Render_17f189ba<any>['bindings']>;
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

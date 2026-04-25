@@ -2143,6 +2143,16 @@ fn emit_default_export_declarations(
     // props without the widening. Matches upstream's
     // `__sveltets_2_partial(...)` render-return wrapping (which puts
     // the wrap at a different stage but reaches the same result).
+    // The CALLABLE return uses `Exports & { $set?: any; $on?: any }`
+    // — matches upstream's `__sveltets_2_IsomorphicComponent`'s
+    // shape (svelte-shims-v4.d.ts:282-286). Without these phantom
+    // `$set?`/`$on?` fields, assigning the iso-interface to a bare
+    // user-declared `Component<{}, {}, string>` (whose callable
+    // returns `{ $on?, $set? } & {}`) fails TS2322 because our
+    // return doesn't structurally include the required optional
+    // fields. Adding them at the iso-interface preserves the
+    // structural compat without affecting any other code path
+    // (the fields are optional + phantom, not consumed by emit).
     let _ = writeln!(buf, "interface $$IsomorphicComponent {{");
     if let Some(g) = generics {
         let _ = writeln!(
@@ -2151,7 +2161,7 @@ fn emit_default_export_declarations(
         );
         let _ = writeln!(
             buf,
-            "    <{g}>(internal: unknown, props: {props_wrapped}{children_intersection}): {exports_src};"
+            "    <{g}>(internal: unknown, props: {props_wrapped}{children_intersection}): {exports_src} & {{ $set?: any; $on?: any }};"
         );
     } else {
         let _ = writeln!(
@@ -2160,7 +2170,7 @@ fn emit_default_export_declarations(
         );
         let _ = writeln!(
             buf,
-            "    (internal: unknown, props: {props_wrapped}{children_intersection}): {exports_src};"
+            "    (internal: unknown, props: {props_wrapped}{children_intersection}): {exports_src} & {{ $set?: any; $on?: any }};"
         );
     }
     let _ = writeln!(buf, "    z_$$bindings?: {bindings_any_src};");

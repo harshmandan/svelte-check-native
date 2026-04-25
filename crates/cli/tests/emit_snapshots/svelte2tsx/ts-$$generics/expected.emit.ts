@@ -34,7 +34,7 @@ async function $$render_7c9879e0() {
 $$render_7c9879e0;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Partial<Awaited<ReturnType<typeof $$render_7c9879e0>>['props'] & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }>): import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_7c9879e0>>['props'] & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>, Awaited<ReturnType<typeof $$render_7c9879e0>>['events'], Awaited<ReturnType<typeof $$render_7c9879e0>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_7c9879e0>>['bindings'] } & Awaited<ReturnType<typeof $$render_7c9879e0>>['exports'];
-    (internal: unknown, props: Partial<Awaited<ReturnType<typeof $$render_7c9879e0>>['props'] & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }): Awaited<ReturnType<typeof $$render_7c9879e0>>['exports'];
+    (internal: unknown, props: Partial<Awaited<ReturnType<typeof $$render_7c9879e0>>['props'] & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }): Awaited<ReturnType<typeof $$render_7c9879e0>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_7c9879e0>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

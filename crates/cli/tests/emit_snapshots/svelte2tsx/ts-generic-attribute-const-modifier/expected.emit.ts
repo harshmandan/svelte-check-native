@@ -20,7 +20,7 @@ declare class __svn_Render_063ede7a<const T extends readonly string[]> {
 }
 interface $$IsomorphicComponent {
     new <const T extends readonly string[]>(options: import('svelte').ComponentConstructorOptions<ReturnType<__svn_Render_063ede7a<const T>['props']>>): import('svelte').SvelteComponent<ReturnType<__svn_Render_063ede7a<const T>['props']>, ReturnType<__svn_Render_063ede7a<const T>['events']>, ReturnType<__svn_Render_063ede7a<const T>['slots']>> & { $$bindings?: ReturnType<__svn_Render_063ede7a<const T>['bindings']> } & ReturnType<__svn_Render_063ede7a<const T>['exports']>;
-    <const T extends readonly string[]>(internal: unknown, props: ReturnType<__svn_Render_063ede7a<const T>['props']>): ReturnType<__svn_Render_063ede7a<const T>['exports']>;
+    <const T extends readonly string[]>(internal: unknown, props: ReturnType<__svn_Render_063ede7a<const T>['props']>): ReturnType<__svn_Render_063ede7a<const T>['exports']> & { $set?: any; $on?: any };
     z_$$bindings?: ReturnType<__svn_Render_063ede7a<any>['bindings']>;
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

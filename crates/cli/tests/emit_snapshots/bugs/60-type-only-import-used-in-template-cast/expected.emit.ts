@@ -19,7 +19,7 @@ async function $$render_6743ac1f() {
 $$render_6743ac1f;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_6743ac1f>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_6743ac1f>>['props'], Awaited<ReturnType<typeof $$render_6743ac1f>>['events'], Awaited<ReturnType<typeof $$render_6743ac1f>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_6743ac1f>>['bindings'] } & Awaited<ReturnType<typeof $$render_6743ac1f>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_6743ac1f>>['props']): Awaited<ReturnType<typeof $$render_6743ac1f>>['exports'];
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_6743ac1f>>['props']): Awaited<ReturnType<typeof $$render_6743ac1f>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_6743ac1f>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

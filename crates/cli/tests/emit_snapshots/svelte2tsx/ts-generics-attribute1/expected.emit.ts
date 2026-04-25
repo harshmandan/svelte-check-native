@@ -34,7 +34,7 @@ declare class __svn_Render_94f45523<A, B extends keyof A, C extends boolean> {
 }
 interface $$IsomorphicComponent {
     new <A, B extends keyof A, C extends boolean>(options: import('svelte').ComponentConstructorOptions<Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }>): import('svelte').SvelteComponent<Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>, ReturnType<__svn_Render_94f45523<A, B, C>['events']>, ReturnType<__svn_Render_94f45523<A, B, C>['slots']>> & { $$bindings?: ReturnType<__svn_Render_94f45523<A, B, C>['bindings']> } & ReturnType<__svn_Render_94f45523<A, B, C>['exports']>;
-    <A, B extends keyof A, C extends boolean>(internal: unknown, props: Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }): ReturnType<__svn_Render_94f45523<A, B, C>['exports']>;
+    <A, B extends keyof A, C extends boolean>(internal: unknown, props: Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }): ReturnType<__svn_Render_94f45523<A, B, C>['exports']> & { $set?: any; $on?: any };
     z_$$bindings?: ReturnType<__svn_Render_94f45523<any, any, any>['bindings']>;
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

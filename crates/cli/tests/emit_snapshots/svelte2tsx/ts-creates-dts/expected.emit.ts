@@ -25,7 +25,7 @@ async function $$render_39dbed3c() {
 $$render_39dbed3c;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Partial<Awaited<ReturnType<typeof $$render_39dbed3c>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_39dbed3c>>['props']>> & { children?: any }>): import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_39dbed3c>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_39dbed3c>>['props']>>, Awaited<ReturnType<typeof $$render_39dbed3c>>['events'], Awaited<ReturnType<typeof $$render_39dbed3c>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_39dbed3c>>['bindings'] } & Awaited<ReturnType<typeof $$render_39dbed3c>>['exports'];
-    (internal: unknown, props: Partial<Awaited<ReturnType<typeof $$render_39dbed3c>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_39dbed3c>>['props']>> & { children?: any }): Awaited<ReturnType<typeof $$render_39dbed3c>>['exports'];
+    (internal: unknown, props: Partial<Awaited<ReturnType<typeof $$render_39dbed3c>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_39dbed3c>>['props']>> & { children?: any }): Awaited<ReturnType<typeof $$render_39dbed3c>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_39dbed3c>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

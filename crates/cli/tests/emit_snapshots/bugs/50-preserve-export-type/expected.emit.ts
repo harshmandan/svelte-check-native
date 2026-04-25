@@ -28,7 +28,7 @@ async function $$render_a4d674e0() {
 $$render_a4d674e0;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_a4d674e0>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_a4d674e0>>['props'], Awaited<ReturnType<typeof $$render_a4d674e0>>['events'], Awaited<ReturnType<typeof $$render_a4d674e0>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_a4d674e0>>['bindings'] } & Awaited<ReturnType<typeof $$render_a4d674e0>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_a4d674e0>>['props']): Awaited<ReturnType<typeof $$render_a4d674e0>>['exports'];
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_a4d674e0>>['props']): Awaited<ReturnType<typeof $$render_a4d674e0>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_a4d674e0>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;
@@ -75,7 +75,7 @@ async function $$render_6e910aea() {
 $$render_6e910aea;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_6e910aea>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_6e910aea>>['props'], Awaited<ReturnType<typeof $$render_6e910aea>>['events'], Awaited<ReturnType<typeof $$render_6e910aea>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_6e910aea>>['bindings'] } & Awaited<ReturnType<typeof $$render_6e910aea>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_6e910aea>>['props']): Awaited<ReturnType<typeof $$render_6e910aea>>['exports'];
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_6e910aea>>['props']): Awaited<ReturnType<typeof $$render_6e910aea>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_6e910aea>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

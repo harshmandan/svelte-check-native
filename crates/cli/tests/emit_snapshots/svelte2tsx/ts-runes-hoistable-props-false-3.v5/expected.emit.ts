@@ -24,7 +24,7 @@ declare class __svn_Render_cbdc5f31<T extends boolean> {
 }
 interface $$IsomorphicComponent {
     new <T extends boolean>(options: import('svelte').ComponentConstructorOptions<ReturnType<__svn_Render_cbdc5f31<T>['props']>>): import('svelte').SvelteComponent<ReturnType<__svn_Render_cbdc5f31<T>['props']>, ReturnType<__svn_Render_cbdc5f31<T>['events']>, ReturnType<__svn_Render_cbdc5f31<T>['slots']>> & { $$bindings?: ReturnType<__svn_Render_cbdc5f31<T>['bindings']> } & ReturnType<__svn_Render_cbdc5f31<T>['exports']>;
-    <T extends boolean>(internal: unknown, props: ReturnType<__svn_Render_cbdc5f31<T>['props']>): ReturnType<__svn_Render_cbdc5f31<T>['exports']>;
+    <T extends boolean>(internal: unknown, props: ReturnType<__svn_Render_cbdc5f31<T>['props']>): ReturnType<__svn_Render_cbdc5f31<T>['exports']> & { $set?: any; $on?: any };
     z_$$bindings?: ReturnType<__svn_Render_cbdc5f31<any>['bindings']>;
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

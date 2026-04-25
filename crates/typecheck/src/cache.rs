@@ -81,7 +81,7 @@ impl CacheLayout {
         solution_root_tsconfig: Option<PathBuf>,
     ) -> Self {
         let workspace = workspace.into();
-        let node_modules = workspace.join("node_modules");
+        let node_modules = workspace.join(svn_core::NODE_MODULES_DIR);
         let root = if node_modules.is_dir() {
             node_modules.join(".cache").join("svelte-check-native")
         } else {

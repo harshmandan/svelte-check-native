@@ -688,7 +688,7 @@ fn split_package_entry(entry: &str) -> (&str, &str) {
 fn package_types_entry_resolves(name: &str, declaring_dir: &Path) -> bool {
     let mut cur: Option<&Path> = Some(declaring_dir);
     while let Some(dir) = cur {
-        let nm = dir.join("node_modules");
+        let nm = dir.join(svn_core::NODE_MODULES_DIR);
         if nm.is_dir() {
             // Conventional types package: node_modules/@types/<name>.
             if nm.join("@types").join(name).join("package.json").is_file() {
@@ -699,7 +699,7 @@ fn package_types_entry_resolves(name: &str, declaring_dir: &Path) -> bool {
                 return true;
             }
             // pnpm hoisted: node_modules/.pnpm/node_modules/@types/<name>.
-            let pnpm_root = nm.join(".pnpm").join("node_modules");
+            let pnpm_root = nm.join(".pnpm").join(svn_core::NODE_MODULES_DIR);
             if pnpm_root.is_dir() {
                 if pnpm_root
                     .join("@types")

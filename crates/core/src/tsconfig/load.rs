@@ -283,7 +283,7 @@ fn resolve_package_extends(reference: &str, start_dir: &Path) -> Result<PathBuf,
 
     let mut cur: Option<&Path> = Some(start_dir);
     while let Some(dir) = cur {
-        let pkg_root = dir.join("node_modules").join(pkg);
+        let pkg_root = dir.join(crate::NODE_MODULES_DIR).join(pkg);
         if pkg_root.is_dir() {
             let resolved = if let Some(sp) = subpath {
                 pkg_root.join(sp)

@@ -143,7 +143,10 @@ pub fn detect_for_workspace(workspace: &Path) -> CompatFeatures {
 pub fn locate_svelte_version(start: &Path) -> Option<SvelteVersion> {
     let mut cur: Option<&Path> = Some(start);
     while let Some(dir) = cur {
-        let pkg = dir.join("node_modules").join("svelte").join("package.json");
+        let pkg = dir
+            .join(svn_core::NODE_MODULES_DIR)
+            .join("svelte")
+            .join("package.json");
         if pkg.is_file()
             && let Some(v) = read_package_version(&pkg)
         {

@@ -391,7 +391,7 @@ fn which_in(path_var: &std::ffi::OsStr, pathext: &std::ffi::OsStr, name: &str) -
 fn locate_svelte(start: &Path) -> Option<PathBuf> {
     let mut cur: Option<&Path> = Some(start);
     while let Some(dir) = cur {
-        let pkg = dir.join("node_modules").join("svelte");
+        let pkg = dir.join(svn_core::NODE_MODULES_DIR).join("svelte");
         if pkg.is_dir() && pkg.join("package.json").is_file() {
             return Some(pkg);
         }
@@ -418,7 +418,7 @@ fn locate_svelte_config(start: &Path) -> Option<PathBuf> {
         // Don't recurse past the workspace into a parent project's
         // node_modules — that path would point at a dep's vendored
         // config, never the user's intent.
-        if dir.file_name() == Some(std::ffi::OsStr::new("node_modules")) {
+        if dir.file_name() == Some(std::ffi::OsStr::new(svn_core::NODE_MODULES_DIR)) {
             return None;
         }
         cur = dir.parent();

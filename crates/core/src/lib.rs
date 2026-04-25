@@ -32,6 +32,13 @@ pub mod range;
 pub mod symbol;
 pub mod tsconfig;
 
+/// The literal `node_modules` directory name. Crates that walk up the
+/// directory tree looking for installed packages or that filter out
+/// `node_modules` paths reference this rather than re-spelling the
+/// string. Centralising here keeps `is_excluded_dir` filters,
+/// package-discovery routines, and overlay path handling in lockstep.
+pub const NODE_MODULES_DIR: &str = "node_modules";
+
 // Re-exports so consumers can write `svn_core::Range` etc.
 pub use diagnostic::{Diagnostic, DiagnosticSource, Severity};
 pub use position::{Position, PositionMap};

@@ -122,8 +122,8 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
 /// bun uses the same layout under `.bun/`.
 fn find_in_package_store(dir: &Path, native_relative: Option<&Path>) -> Option<TsgoBinary> {
     for manager_root in [
-        dir.join("node_modules").join(".pnpm"),
-        dir.join("node_modules").join(".bun"),
+        dir.join(svn_core::NODE_MODULES_DIR).join(".pnpm"),
+        dir.join(svn_core::NODE_MODULES_DIR).join(".bun"),
     ] {
         let Ok(entries) = std::fs::read_dir(&manager_root) else {
             continue;
@@ -167,7 +167,7 @@ fn find_in_package_store(dir: &Path, native_relative: Option<&Path>) -> Option<T
                 // need the tail after `node_modules/` to attach under
                 // the store's own `node_modules/`.
                 if let Ok(tail) = rel.strip_prefix("node_modules/") {
-                    let native_candidate = pkg_root.join("node_modules").join(tail);
+                    let native_candidate = pkg_root.join(svn_core::NODE_MODULES_DIR).join(tail);
                     if native_candidate.is_file() {
                         return Some(TsgoBinary {
                             path: native_candidate,

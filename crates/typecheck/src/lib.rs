@@ -135,7 +135,7 @@ fn has_real_svelte(workspace: &Path) -> bool {
     let mut cur: Option<&Path> = Some(workspace);
     while let Some(dir) = cur {
         if dir
-            .join("node_modules")
+            .join(svn_core::NODE_MODULES_DIR)
             .join("svelte")
             .join("package.json")
             .is_file()

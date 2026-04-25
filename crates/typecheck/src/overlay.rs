@@ -251,21 +251,15 @@ pub fn build(
     let mut compiler_options = serde_json::Map::new();
     compiler_options.insert("noEmit".into(), json!(true));
     compiler_options.insert("allowArbitraryExtensions".into(), json!(true));
-    // Disable case-consistency enforcement in the overlay. The user's
-    // own tsconfig typically turns it on, and for pure .ts/.tsx code
-    // that's the right default — but our overlay pipeline writes
-    // generated files to a cache dir mirrored from user paths. On
-    // case-insensitive filesystems (default macOS), resolving
-    // `./Code.svelte` (user import) via bundler auto-extension can
-    // case-insensitively hit a sibling `code.svelte.ts` runes module,
-    // and tsgo then logs a TS1149 "file name differs only in casing"
-    // against the user. Upstream svelte-check uses an in-memory
-    // compiler host and sidesteps this entirely. We don't have that
-    // luxury, so we relax the check project-wide in the overlay.
-    // User's actual case-inconsistency bugs still get caught by
-    // running tsc directly on their source; this only affects the
-    // overlay pass.
-    compiler_options.insert("forceConsistentCasingInFileNames".into(), json!(false));
+    // `forceConsistentCasingInFileNames` is INHERITED, not forced.
+    // Per CLAUDE.md ("not stricter or lax-er than upstream"), the
+    // user's tsconfig setting wins. Earlier we forced this to `false`
+    // to dodge a TS1149 our cache-mirror layout could trigger on
+    // macOS case-insensitive filesystems (auto-extension resolution
+    // case-collapses `./Code.svelte` onto a sibling `code.svelte.ts`
+    // runes module). If that case actually surfaces in real benches,
+    // fix the cache-mirror at its source rather than silently
+    // disabling a strict check the user opted into.
     // `allowImportingTsExtensions` is INHERITED, not forced. Whatever
     // the user sets in their tsconfig carries through. Setting it to
     // `true` unconditionally here silently widened user-authored
@@ -280,7 +274,16 @@ pub fn build(
         "tsBuildInfoFile".into(),
         json!(layout.tsbuildinfo.to_string_lossy()),
     );
-    compiler_options.insert("skipLibCheck".into(), json!(true));
+    // `skipLibCheck` is INHERITED, not forced. Per CLAUDE.md ("not
+    // stricter or lax-er than upstream"), the user's tsconfig setting
+    // wins — when unset, tsgo defaults to `false` and type-checks
+    // node_modules `.d.ts` files. Forcing `true` here silently dropped
+    // real third-party type-incompatibility errors that upstream
+    // svelte-check surfaces (cryptgeon's `Invalidator` removed from
+    // `svelte/store` in @zerodevx/svelte-toast was the canary —
+    // upstream caught it, we silently passed). Users who want the
+    // skip behaviour can set `"skipLibCheck": true` in their own
+    // tsconfig.
     // tsgo has removed the legacy `node`/`node10` moduleResolution
     // values. Only force `bundler` in the overlay when the user's
     // effective moduleResolution is the unsupported legacy — for

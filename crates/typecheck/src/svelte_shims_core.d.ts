@@ -1077,11 +1077,13 @@ declare module '*.styl' {}
 declare module '*.stylus' {}
 declare module '*.pcss' {}
 declare module '*.postcss' {}
-// Package-subpath CSS (swiper/css, swiper/css/navigation, etc.).
-// Conservative: matches any `<pkg>/css` import exactly and any
-// `<pkg>/css/<variant>` subpath.
+// Package-subpath CSS imports (swiper/css, etc.). TS module patterns
+// allow at most ONE `*` character per declaration, so the previous
+// `'*/css/*'` form fired TS2696 against tsgo when `skipLibCheck` is
+// off. Single-wildcard `'*/css'` covers the common `import 'pkg/css'`
+// shape; deeper subpaths (`pkg/css/variant`) need real types from the
+// publishing package or a project-specific declaration.
 declare module '*/css' {}
-declare module '*/css/*' {}
 
 //
 // We declare only what's needed to make type-checking succeed for code

@@ -105,7 +105,6 @@ fn run_on_section(
     for stmt in &parsed.program.body {
         walker.visit_stmt(stmt);
     }
-    let _ = lang;
 }
 
 /// Matches upstream's `regex_bidirectional_control_characters`.

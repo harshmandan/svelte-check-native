@@ -67,7 +67,6 @@ pub fn visit(
                 }
             }
         }
-        let _ = parent_check_fired;
     }
 
     // slot_element_deprecated: `<slot>` in runes mode (non-custom-element).

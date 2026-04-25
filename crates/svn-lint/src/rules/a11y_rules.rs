@@ -126,8 +126,6 @@ fn check_element(
             }
         }
     }
-    let _ = &handlers;
-    let _ = has_spread;
 
     // a11y_distracting_elements is emitted below the per-attribute
     // loop so role/interactivity fires come first in the warnings

@@ -519,7 +519,6 @@ fn drop_rules_from_drop_cond<'a>(expr: &'a Expression<'a>, param: &str) -> Optio
         Expression::LogicalExpression(le) if le.operator == LogicalOperator::And => {
             // `A && B` as drop-cond — would require intersection. We
             // can't collapse to a single rule reliably; give up.
-            let _ = le;
             None
         }
         Expression::BinaryExpression(be)

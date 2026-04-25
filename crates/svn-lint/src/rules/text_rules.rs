@@ -22,10 +22,8 @@ pub fn visit_text(t: &Text, ctx: &mut LintContext<'_>) {
     // once per match (each match is a run of 1+ of these chars).
     let start_byte = t.range.start as usize;
     let content = &t.content;
-    let mut byte_offset = 0usize;
     let mut chars = content.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
-        let _ = byte_offset;
         if is_bidi_control(c) {
             // Expand to contiguous run.
             let run_start = i;
@@ -45,7 +43,6 @@ pub fn visit_text(t: &Text, ctx: &mut LintContext<'_>) {
                 msg,
                 Range::new(abs_start, abs_end),
             );
-            byte_offset = run_end;
         }
     }
 }

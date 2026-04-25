@@ -391,10 +391,9 @@ pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
     let mut summary = TemplateSummary::default();
     summary.void_refs.register("__svn_tpl_check");
     let mut counters = Counters::default();
-    let mut ctx = WalkCtx { source };
+    let ctx = WalkCtx { source };
     let mut shadow = ShadowStack::default();
     walk_fragment(fragment, &mut summary, &mut counters, &ctx, &mut shadow);
-    let _ = &mut ctx;
     let mut seen_at_const = std::collections::HashSet::<SmolStr>::new();
     collect_at_const_names_from_fragment(
         fragment,

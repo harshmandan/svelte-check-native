@@ -221,10 +221,8 @@ fn parse_named_attribute(
 
     // Plain-style named attribute.
     let name_sym: SmolStr = name.into();
-    let mut value_range = None;
     let value = if scanner.peek_byte() == Some(b'=') {
         scanner.advance_byte();
-        value_range = Some(scanner.pos());
         match parse_attr_value(scanner, errors) {
             Some(v) => Some(v),
             None => return None,
@@ -260,7 +258,6 @@ fn parse_named_attribute(
         .as_ref()
         .map(|v| v.range.end)
         .unwrap_or_else(|| scanner.pos());
-    let _ = value_range;
     Some(Attribute::Plain(PlainAttr {
         name: name_sym,
         value,

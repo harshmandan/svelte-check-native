@@ -2286,26 +2286,19 @@ fn emit_default_export_declarations(
     // fields. Adding them at the iso-interface preserves the
     // structural compat without affecting any other code path
     // (the fields are optional + phantom, not consumed by emit).
+    // Generic and non-generic interface arms differ only in whether
+    // each call/new signature carries `<G>`. Render once with the
+    // generics-prefix substituted in.
+    let g_prefix: String = generics.map(|g| format!("<{g}>")).unwrap_or_default();
     let _ = writeln!(buf, "interface $$IsomorphicComponent {{");
-    if let Some(g) = generics {
-        let _ = writeln!(
-            buf,
-            "    new <{g}>(options: import('svelte').ComponentConstructorOptions<{props_wrapped}{children_intersection}>): import('svelte').SvelteComponent<{props_wrapped}, {events_src}, {slots_src}> & {{ $$bindings?: {bindings_src} }} & {exports_src};"
-        );
-        let _ = writeln!(
-            buf,
-            "    <{g}>(internal: unknown, props: {props_wrapped}{children_intersection}): {exports_src} & {{ $set?: any; $on?: any }};"
-        );
-    } else {
-        let _ = writeln!(
-            buf,
-            "    new (options: import('svelte').ComponentConstructorOptions<{props_wrapped}{children_intersection}>): import('svelte').SvelteComponent<{props_wrapped}, {events_src}, {slots_src}> & {{ $$bindings?: {bindings_src} }} & {exports_src};"
-        );
-        let _ = writeln!(
-            buf,
-            "    (internal: unknown, props: {props_wrapped}{children_intersection}): {exports_src} & {{ $set?: any; $on?: any }};"
-        );
-    }
+    let _ = writeln!(
+        buf,
+        "    new {g_prefix}(options: import('svelte').ComponentConstructorOptions<{props_wrapped}{children_intersection}>): import('svelte').SvelteComponent<{props_wrapped}, {events_src}, {slots_src}> & {{ $$bindings?: {bindings_src} }} & {exports_src};"
+    );
+    let _ = writeln!(
+        buf,
+        "    {g_prefix}(internal: unknown, props: {props_wrapped}{children_intersection}): {exports_src} & {{ $set?: any; $on?: any }};"
+    );
     let _ = writeln!(buf, "    z_$$bindings?: {bindings_any_src};");
     let _ = writeln!(buf, "}}");
     // The `__svn_events` marker intersected onto the value's type

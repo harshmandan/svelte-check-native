@@ -1553,6 +1553,7 @@ fn inject_component_props_annotation(content: &str, lang: svn_parser::ScriptLang
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_render_body_return(
     buf: &mut EmitBuffer,
     doc: &svn_parser::Document<'_>,
@@ -2207,27 +2208,26 @@ fn emit_default_export_declarations(
     // callable props. Upstream applies similar widening via factory
     // wrappers (`__sveltets_2_with_any_event`, `_with_any`, `_partial`).
     let class_name = render_class_name(render_name);
-    let (props_src, events_src, slots_src, bindings_src, exports_src) = if use_class_wrapper
-        && let Some(g) = generics
-    {
-        let g_args = generic_arg_names(g);
-        (
-            format!("ReturnType<{class_name}<{g_args}>['props']>"),
-            format!("ReturnType<{class_name}<{g_args}>['events']>"),
-            format!("ReturnType<{class_name}<{g_args}>['slots']>"),
-            format!("ReturnType<{class_name}<{g_args}>['bindings']>"),
-            format!("ReturnType<{class_name}<{g_args}>['exports']>"),
-        )
-    } else {
-        let awaited = format!("Awaited<ReturnType<typeof {render_name}>>");
-        (
-            format!("{awaited}['props']"),
-            format!("{awaited}['events']"),
-            format!("{awaited}['slots']"),
-            format!("{awaited}['bindings']"),
-            format!("{awaited}['exports']"),
-        )
-    };
+    let (props_src, events_src, slots_src, bindings_src, exports_src) =
+        if use_class_wrapper && let Some(g) = generics {
+            let g_args = generic_arg_names(g);
+            (
+                format!("ReturnType<{class_name}<{g_args}>['props']>"),
+                format!("ReturnType<{class_name}<{g_args}>['events']>"),
+                format!("ReturnType<{class_name}<{g_args}>['slots']>"),
+                format!("ReturnType<{class_name}<{g_args}>['bindings']>"),
+                format!("ReturnType<{class_name}<{g_args}>['exports']>"),
+            )
+        } else {
+            let awaited = format!("Awaited<ReturnType<typeof {render_name}>>");
+            (
+                format!("{awaited}['props']"),
+                format!("{awaited}['events']"),
+                format!("{awaited}['slots']"),
+                format!("{awaited}['bindings']"),
+                format!("{awaited}['exports']"),
+            )
+        };
 
     // Widen base: if the user named a Props type and it's safe at
     // module scope, use the named type for widening (better error
@@ -2272,7 +2272,11 @@ fn emit_default_export_declarations(
     // `__sveltets_2_PropsWithChildren` (svelte-shims-v4.d.ts:258-266):
     // if the component has a default slot, its constructor accepts
     // `children` — either as a snippet prop or via nested fragment.
-    let children_intersection = if has_slot { " & { children?: any }" } else { "" };
+    let children_intersection = if has_slot {
+        " & { children?: any }"
+    } else {
+        ""
+    };
 
     // SvelteComponent's Props generic uses the WRAPPED shape (same as
     // ctor options) so that `ComponentProps<typeof MyComp>` / downstream
@@ -2879,7 +2883,7 @@ fn emit_let_slot_destructure(
 /// DOM elements (`<div slot="X" let:foo>`), and special elements
 /// (`<svelte:fragment slot="X" let:foo>`). Returns `None` for nodes
 /// that aren't elements at all (text, blocks, etc).
-fn slot_let_attrs<'a>(node: &'a Node) -> Option<&'a [svn_parser::Attribute]> {
+fn slot_let_attrs(node: &Node) -> Option<&[svn_parser::Attribute]> {
     match node {
         Node::Component(c) => Some(c.attributes.as_slice()),
         Node::Element(e) => Some(e.attributes.as_slice()),
@@ -5398,11 +5402,7 @@ fn emit_component_node(
     // their own X without colliding (TS2451 redeclare). Caller
     // closes via `emit_component_call_close` after the walk.
     let opened_call_block = inst.is_some();
-    let child_depth = if opened_call_block {
-        depth + 1
-    } else {
-        depth
-    };
+    let child_depth = if opened_call_block { depth + 1 } else { depth };
     if let Some(inst) = inst {
         emit_component_call(
             buf,
@@ -5503,6 +5503,7 @@ fn emit_component_node(
 /// synthesized `$$_CN` local is siloed from sibling instantiations —
 /// avoids shadowing / redeclaration when the same parent fragment
 /// contains multiple components.
+#[allow(clippy::too_many_arguments)]
 fn emit_component_call(
     buf: &mut EmitBuffer,
     source: &str,
@@ -5929,26 +5930,22 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
     }
 }
 
-/// Always-quote variant of `write_object_key` for component prop
-/// keys. Matches upstream svelte2tsx's component-instantiation prop
-/// emit (`new __$$_C({ target, props: { "name": value } })`), so
-/// tsgo's TS2353 ("does not exist in type") echoes the property key
-/// as `'"name"'` (the literal form) rather than `'name'` (bare-ident
-/// form). The quote-style change lets diagnostics with the same
-/// semantics tally as matches against upstream.
-fn write_quoted_prop_key(buf: &mut EmitBuffer, name: &str) {
-    write_js_string_literal(buf, name);
-}
-
-/// Source-anchored variant of [`write_quoted_prop_key`] used for
-/// component-call prop literal emit. Pushes a `TokenMapEntry`
-/// covering the synthesized `"name"` text in the overlay and pointing
-/// to the user's attribute span (`name="value"`, `name={expr}`,
-/// `{name}`, etc.) so tsgo diagnostics on the prop check
+/// Quoted-key emit for component prop literals — matches upstream
+/// svelte2tsx's component-instantiation prop shape
+/// (`new __$$_C({ target, props: { "name": value } })`), so tsgo's
+/// TS2353 ("does not exist in type") echoes the key as `'"name"'`
+/// (literal form) rather than `'name'` (bare-ident form). Pushes a
+/// `TokenMapEntry` covering the synthesized `"name"` text in the
+/// overlay pointing to the user's attribute span (`name="value"`,
+/// `name={expr}`, `{name}`, etc.) so prop-check diagnostics
 /// (TS2353 "does not exist", TS2322 wrong type, etc.) land at the
 /// user's source position rather than the nearest preceding
 /// component-name token.
-fn write_quoted_prop_key_with_source(buf: &mut EmitBuffer, name: &str, attr_range: svn_core::Range) {
+fn write_quoted_prop_key_with_source(
+    buf: &mut EmitBuffer,
+    name: &str,
+    attr_range: svn_core::Range,
+) {
     // Emit just the quoted key as a single source-anchored chunk.
     // The downstream `: value` is unanchored (synthesized punctuation)
     // and falls back to the line_map; the value itself, when an

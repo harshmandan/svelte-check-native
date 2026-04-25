@@ -689,7 +689,7 @@ fn collect_slot_def(
     shadow: &ShadowStack,
     summary: &mut TemplateSummary,
 ) {
-    use svn_parser::{Attribute as A, AttrValuePart};
+    use svn_parser::{AttrValuePart, Attribute as A};
     let mut slot_name = SmolStr::new("default");
     let mut entries: Vec<(SmolStr, String)> = Vec::new();
     for attr in attrs {
@@ -770,11 +770,7 @@ fn collect_let_directive_names_for_shadow(attrs: &[Attribute], source: &str) -> 
                         // Destructure pattern: extract top-level
                         // identifier names so each one shadows.
                         let mut names: Vec<SmolStr> = Vec::new();
-                        collect_pattern_idents(
-                            source,
-                            *expression_range,
-                            &mut names,
-                        );
+                        collect_pattern_idents(source, *expression_range, &mut names);
                         if !names.is_empty() {
                             out.extend(names);
                             continue;
@@ -821,8 +817,7 @@ fn collect_pattern_idents(source: &str, range: svn_core::Range, out: &mut Vec<Sm
     // of an arrow-function parameter list. Wrap in `(` … `) => 0`.
     let alloc = oxc_allocator::Allocator::default();
     let wrapped = format!("({trimmed}) => 0");
-    let parsed =
-        svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
     if parsed.panicked {
         return;
     }

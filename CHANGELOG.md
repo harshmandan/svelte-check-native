@@ -4,6 +4,79 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1]
+
+Patch release. Performance, code-quality, and architecture cleanups
+across the workspace. Parity unchanged — c4 + c5 control benches
+stay at 0 user errors and ahead of upstream `svelte-check --tsgo`
+(which still over-reports by 1 error on each).
+
+### Performance
+
+- **Dropped per-file `dunce::canonicalize` in scope filter
+  (`6a00af61`).** Workspace path was already canonicalized at
+  startup, so the per-walker-entry canonicalize was redundant.
+  Discovery phase: c4 warm 69 → 17ms (-75%), c5 warm 87 → 20ms (-77%).
+- **Module script parsed once per component (`a8592307`).** Was
+  parsed twice — once for `collect_top_level_bindings`, once for
+  `collect_type_only_import_bindings`. Hoisted the allocator and
+  AST so both consumers share a single parse.
+- **Fused `@const` name collection into `walk_template`
+  (`49b53198`).** Eliminates a second recursive fragment walk;
+  collapses 75 LOC of duplicated traversal logic.
+- **`HashSet<SmolStr>` instead of `HashSet<String>` for store/type
+  ref dedup (`dfa9911a`).** Per-template-ref `to_string()` allocs
+  replaced with `SmolStr` clone-bumps.
+- **HashSet replaces O(n²) Vec dedup in overlay paths merge
+  (`88f8d505`).**
+
+### Code quality
+
+- **`main.rs` split into focused modules (`abe9c32c`).** Discovery,
+  output formatting, and `.svelte`-import collision rewriting moved
+  to their own files; main.rs shrinks 2072 → 1446 LOC (-30%).
+- **`core::walk_up_dirs` helper (`df4649f1`).** Six hand-rolled
+  `while let Some(dir) = cur { … cur = dir.parent() }` loops in
+  cli, typecheck, svn-lint, and svelte-compiler collapse onto a
+  single closure-driven helper.
+- **`core::synth_names` module (`e5e7c992`).** Single source of
+  truth for `__svn_C_<hex>`, `__svn_inst_<hex>`, and the
+  `__svn_tpl_check` constant — was scattered across 7 sites in
+  emit and analyze.
+- **`core::NODE_MODULES_DIR` const (`62591967`).** Replaces 10
+  inline `"node_modules"` literals across path-construction sites.
+- **Visibility hygiene across emit + svn-lint (`3f553e16`,
+  `0261472d`).** `pub mod` → `mod` everywhere the items had no
+  external callers; surfaced and removed three dead helpers
+  (`scope::build`, `find_plain_attr`, `plain_attr_text`) plus an
+  empty `analyze::svelte4` placeholder module and three unused
+  `pub use oxc_*` re-exports in parser.
+- **Emit-shape collapses.** Class-wrapper method emission loops
+  five fields (`props` / `events` / `slots` / `bindings` /
+  `exports`) instead of five `writeln!` chains (`ae2e8394`);
+  `$$IsomorphicComponent` generic and non-generic arms collapse
+  via a `g_prefix` substitution (`98bee54b`);
+  `emit_default_export_declarations` splits into `_js` (2 params,
+  pure JSDoc) and `_ts` (9 params, full TS machinery) —
+  eliminates the six `let _ = X;` JS-branch sentinels that
+  signalled the function was two functions stuck together
+  (`c669fdfe`).
+
+### CLI
+
+- **Dropped `--no-tsconfig` and `--ignore` flags (`d001049d`).**
+  `--no-tsconfig` was parsed but errored at runtime; `--ignore`
+  was gated on it. Both unreachable in practice. The plumbing
+  removal also dropped the `ignore: Option<&GlobSet>` parameter
+  threaded through discovery + `run_typecheck`.
+
+### CI
+
+- **Dependabot + `cargo-deny` for supply-chain hygiene
+  (`e889e4e8`, `f0723dd2`).** Cargo, npm, and GitHub Actions
+  ecosystems on a weekly cadence; license/advisory gating via
+  cargo-deny.
+
 ## [0.6.0]
 
 Minor release. Closes the entire previously-tracked parity surface:

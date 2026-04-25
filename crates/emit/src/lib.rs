@@ -5046,6 +5046,19 @@ fn emit_component_node(
     // this node. Components disqualified at analyze time (e.g.
     // multi-part interpolated attribute values) fall back to a plain
     // template-body walk so snippet hoists still emit there.
+    //
+    // The call leaves its `{ … }` block OPEN (emit_component_call no
+    // longer emits the closing `}`). Children walk INSIDE the block
+    // — `{@const X = …}` declarations therefore live in the
+    // component's block scope, so sibling components each have
+    // their own X without colliding (TS2451 redeclare). Caller
+    // closes via `emit_component_call_close` after the walk.
+    let opened_call_block = inst.is_some();
+    let child_depth = if opened_call_block {
+        inner_depth + 1
+    } else {
+        inner_depth
+    };
     if let Some(inst) = inst {
         emit_component_call(
             buf,
@@ -5059,9 +5072,11 @@ fn emit_component_node(
     }
 
     if inst.is_none() || snippet_children.is_empty() {
-        // Walk children at the same let-binding scope depth.
         for node in &c.children.nodes {
-            emit_template_node(buf, source, node, inner_depth, insts, action_counter);
+            emit_template_node(buf, source, node, child_depth, insts, action_counter);
+        }
+        if opened_call_block {
+            emit_component_call_close(buf, inner_depth);
         }
         if !let_names.is_empty() {
             let _ = writeln!(buf, "{indent}}}");
@@ -5073,7 +5088,10 @@ fn emit_component_node(
         if matches!(node, Node::SnippetBlock(_)) {
             continue;
         }
-        emit_template_node(buf, source, node, inner_depth, insts, action_counter);
+        emit_template_node(buf, source, node, child_depth, insts, action_counter);
+    }
+    if opened_call_block {
+        emit_component_call_close(buf, inner_depth);
     }
     if !let_names.is_empty() {
         let _ = writeln!(buf, "{indent}}}");
@@ -5182,7 +5200,16 @@ fn emit_component_call(
         emit_component_bind_widen_trailers(buf, inst, &inner);
         emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
         emit_on_event_calls(buf, source, inst, &inst_local, &inner);
-        let _ = writeln!(buf, "{indent}}}");
+        // Block stays open — caller walks children inside this scope,
+        // then emits `}` via `emit_component_call_close`. Mirrors
+        // upstream svelte2tsx's InlineComponent.ts where the open
+        // tag's bytes are replaced with `{ const $$_C = …;` and the
+        // CLOSE tag's bytes are replaced with `}`, leaving children
+        // verbatim inside. Without this, sibling components each
+        // containing `{@const X = …}` declared X in the same flat
+        // outer scope, firing TS2451 "Cannot redeclare block-scoped
+        // variable" (canary: palacms ComponentNode.svelte's
+        // `<Dialog.Root>{@const field}</Dialog.Root>` pattern).
         return;
     }
 
@@ -5210,7 +5237,6 @@ fn emit_component_call(
         emit_component_bind_widen_trailers(buf, inst, &inner);
         emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
         emit_on_event_calls(buf, source, inst, &inst_local, &inner);
-        let _ = writeln!(buf, "{indent}}}");
         return;
     }
 
@@ -5247,6 +5273,21 @@ fn emit_component_call(
     emit_component_bind_widen_trailers(buf, inst, &inner);
     emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
     emit_on_event_calls(buf, source, inst, &inst_local, &inner);
+    // Block stays open — caller closes via `emit_component_call_close`
+    // after walking children, so `{@const}` declarations inside
+    // sibling components don't collide at the outer scope.
+    let _ = indent;
+}
+
+/// Emit the trailing `}` that closes a component-call block opened
+/// by `emit_component_call`. Called by the template walker AFTER
+/// walking the component's children, so user-side `{@const}` /
+/// `let:`-bound names live inside the component-call's block scope
+/// — sibling components each get a fresh scope. Mirrors upstream
+/// svelte2tsx's InlineComponent.ts split (open-tag transformation
+/// emits `{ const $$_C = …;`, close-tag transformation emits `}`).
+fn emit_component_call_close(buf: &mut EmitBuffer, depth: usize) {
+    let indent = "    ".repeat(depth);
     let _ = writeln!(buf, "{indent}}}");
 }
 

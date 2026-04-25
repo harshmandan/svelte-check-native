@@ -9,33 +9,33 @@ async function $$render_8f62c0c3() {
             {
                 const __svn_C_0 = __svn_ensure_component(Component);
                 new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-            }
-            { svelteHTML.createElement("h1", {});                 (new_var);
-            }
-            { svelteHTML.createElement("div", {});                 (newvar);
-                {
-                    let newvar: any;
-                    void newvar;
-                    { svelteHTML.createElement("h2", {});                         (newvar);
+                { svelteHTML.createElement("h1", {});                     (new_var);
+                }
+                { svelteHTML.createElement("div", {});                     (newvar);
+                    {
+                        let newvar: any;
+                        void newvar;
+                        { svelteHTML.createElement("h2", {});                             (newvar);
+                        }
                     }
                 }
-            }
-            { svelteHTML.createElement("div", {});                 (newvar2);
-                {
-                    let newvar2: any;
-                    void newvar2;
+                { svelteHTML.createElement("div", {});                     (newvar2);
+                    {
+                        let newvar2: any;
+                        void newvar2;
+                    }
                 }
-            }
-            { svelteHTML.createElement("div", {});                 {
-                    let hi1: any;
-                    void hi1;
-                    let hi2: any;
-                    void hi2;
-                    let hi3alias: any;
-                    void hi3alias;
+                { svelteHTML.createElement("div", {});                     {
+                        let hi1: any;
+                        void hi1;
+                        let hi2: any;
+                        void hi2;
+                        let hi3alias: any;
+                        void hi3alias;
+                    }
                 }
+                { svelteHTML.createElement("p", {});                 }
             }
-            { svelteHTML.createElement("p", {});             }
         }
     }
     return { props: /** @type {any} */({}) };

@@ -6,10 +6,10 @@ async function $$render_b9dbbb3b() {
         {
             const __svn_C_0 = __svn_ensure_component(Component);
             new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-        }
-        { svelteHTML.createElement("div", {});             {
-                let a: any;
-                void a;
+            { svelteHTML.createElement("div", {});                 {
+                    let a: any;
+                    void a;
+                }
             }
         }
     }

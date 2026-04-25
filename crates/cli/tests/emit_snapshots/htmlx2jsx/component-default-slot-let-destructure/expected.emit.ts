@@ -9,8 +9,8 @@ async function $$render_544a51a1() {
             {
                 const __svn_C_0 = __svn_ensure_component(Component);
                 new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-            }
-            { svelteHTML.createElement("h1", {});                 (a);
+                { svelteHTML.createElement("h1", {});                     (a);
+                }
             }
         }
     }

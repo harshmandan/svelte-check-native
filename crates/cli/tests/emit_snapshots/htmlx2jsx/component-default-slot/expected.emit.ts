@@ -6,8 +6,8 @@ async function $$render_9164d0bc() {
         {
             const __svn_C_0 = __svn_ensure_component(Component);
             new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+            { svelteHTML.createElement("h1", {});             }
         }
-        { svelteHTML.createElement("h1", {});         }
     }
     return { props: /** @type {any} */({}) };
 }

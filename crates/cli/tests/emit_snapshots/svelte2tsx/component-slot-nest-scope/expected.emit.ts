@@ -15,8 +15,8 @@ async function $$render_ce1c3a62() {
             {
                 const __svn_C_89 = __svn_ensure_component(Component);
                 new __svn_C_89({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                (c);
             }
-            (c);
         }
         ;(async () => {
             const $$_await = await (promise); const d = $$_await;

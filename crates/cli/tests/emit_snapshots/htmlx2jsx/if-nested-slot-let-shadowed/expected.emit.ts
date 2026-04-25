@@ -11,88 +11,88 @@ async function $$render_ddf2ba9e() {
                 {
                     const __svn_C_1a = __svn_ensure_component(Comp);
                     new __svn_C_1a({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-                }
-                (hello);
-                {
-                    let hello: any;
-                    void hello;
-                    {
-                        const __svn_C_43 = __svn_ensure_component(Comp);
-                        new __svn_C_43({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-                    }
-                    if ((hello)) {
-                        void [hello];
-                        (hello);
-                    }
-                }
-                {
-                    let hello: any;
-                    void hello;
-                    {
-                        const __svn_C_ae = __svn_ensure_component(Comp);
-                        new __svn_C_ae({ target: __svn_any(), props: {hello, children: () => __svn_snippet_return()} });
-                    }
-                    if ((hello)) {
-                        void [hello];
-                        (hello);
-                    }
-                }
-                { svelteHTML.createElement("svelte:fragment", {});                     {
-                        let hello: any;
-                        void hello;
-                        if ((hello)) {
-                            void [hello];
-                            (hello);
-                        }
-                    }
-                }
-                { svelteHTML.createElement("p", {});                     {
-                        let hello: any;
-                        void hello;
-                        if ((hello)) {
-                            void [hello];
-                            (hello);
-                        }
-                    }
-                }
-                {
-                    let hello: any;
-                    void hello;
-                    {
-                        const __svn_C_223 = __svn_ensure_component(Comp);
-                        new __svn_C_223({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-                    }
-                    if ((hello)) {
-                        void [hello];
-                        (hello);
-                    }
-                }
-                if ((hello)) {
-                    void [hello];
+                    (hello);
                     {
                         let hello: any;
                         void hello;
                         {
-                            const __svn_C_2b4 = __svn_ensure_component(Comp);
-                            new __svn_C_2b4({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-                        }
-                        if ((hello)) {
-                            void [hello];
-                            (hello);
+                            const __svn_C_43 = __svn_ensure_component(Comp);
+                            new __svn_C_43({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                            if ((hello)) {
+                                void [hello];
+                                (hello);
+                            }
                         }
                     }
                     {
-                        let foo: any;
-                        void foo;
-                        {
-                            const __svn_C_333 = __svn_ensure_component(Comp);
-                            new __svn_C_333({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-                        }
-                        const hello = foo;
+                        let hello: any;
                         void hello;
-                        if ((hello)) {
-                            void [hello];
-                            (hello);
+                        {
+                            const __svn_C_ae = __svn_ensure_component(Comp);
+                            new __svn_C_ae({ target: __svn_any(), props: {hello, children: () => __svn_snippet_return()} });
+                            if ((hello)) {
+                                void [hello];
+                                (hello);
+                            }
+                        }
+                    }
+                    { svelteHTML.createElement("svelte:fragment", {});                         {
+                            let hello: any;
+                            void hello;
+                            if ((hello)) {
+                                void [hello];
+                                (hello);
+                            }
+                        }
+                    }
+                    { svelteHTML.createElement("p", {});                         {
+                            let hello: any;
+                            void hello;
+                            if ((hello)) {
+                                void [hello];
+                                (hello);
+                            }
+                        }
+                    }
+                    {
+                        let hello: any;
+                        void hello;
+                        {
+                            const __svn_C_223 = __svn_ensure_component(Comp);
+                            new __svn_C_223({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                            if ((hello)) {
+                                void [hello];
+                                (hello);
+                            }
+                        }
+                    }
+                    if ((hello)) {
+                        void [hello];
+                        {
+                            let hello: any;
+                            void hello;
+                            {
+                                const __svn_C_2b4 = __svn_ensure_component(Comp);
+                                new __svn_C_2b4({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                                if ((hello)) {
+                                    void [hello];
+                                    (hello);
+                                }
+                            }
+                        }
+                        {
+                            let foo: any;
+                            void foo;
+                            {
+                                const __svn_C_333 = __svn_ensure_component(Comp);
+                                new __svn_C_333({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                                const hello = foo;
+                                void hello;
+                                if ((hello)) {
+                                    void [hello];
+                                    (hello);
+                                }
+                            }
                         }
                     }
                 }
@@ -105,34 +105,34 @@ async function $$render_ddf2ba9e() {
                     {
                         const __svn_C_3ff = __svn_ensure_component(Comp);
                         new __svn_C_3ff({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                        (bye);
                     }
-                    (bye);
                 }
             } else if ((cool)) {
                 void [cool];
                 {
                     const __svn_C_452 = __svn_ensure_component(Comp);
                     new __svn_C_452({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-                }
-                { svelteHTML.createElement("div", {});                     {
-                        let cool: any;
-                        void cool;
-                        let hello: any;
-                        void hello;
-                        (hello);
+                    { svelteHTML.createElement("div", {});                         {
+                            let cool: any;
+                            void cool;
+                            let hello: any;
+                            void hello;
+                            (hello);
+                        }
                     }
                 }
             } else {
                 {
                     const __svn_C_4da = __svn_ensure_component(Comp);
                     new __svn_C_4da({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-                }
-                { svelteHTML.createElement("div", {});                     {
-                        let hello: any;
-                        void hello;
-                        let other: any;
-                        void other;
-                        (hello);
+                    { svelteHTML.createElement("div", {});                         {
+                            let hello: any;
+                            void hello;
+                            let other: any;
+                            void other;
+                            (hello);
+                        }
                     }
                 }
             }
@@ -143,69 +143,69 @@ async function $$render_ddf2ba9e() {
             {
                 const __svn_C_56f = __svn_ensure_component(Comp);
                 new __svn_C_56f({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-            }
-            if ((hello && bye)) {
-                void [hello, bye];
-                (hello);
-                (bye);
-            } else if ((hello && bye)) {
-                void [hello, bye];
-                (hello);
-                (bye);
-            } else {
-                (hello);
-                (bye);
-            }
-            { svelteHTML.createElement("svelte:fragment", {});                 {
-                    let hello: any;
-                    void hello;
-                    if ((hello && bye)) {
-                        void [hello, bye];
-                        (hello);
-                        (bye);
-                    } else if ((hello && bye)) {
-                        void [hello, bye];
-                        (hello);
-                        (bye);
-                    } else {
-                        (hello);
-                        (bye);
+                if ((hello && bye)) {
+                    void [hello, bye];
+                    (hello);
+                    (bye);
+                } else if ((hello && bye)) {
+                    void [hello, bye];
+                    (hello);
+                    (bye);
+                } else {
+                    (hello);
+                    (bye);
+                }
+                { svelteHTML.createElement("svelte:fragment", {});                     {
+                        let hello: any;
+                        void hello;
+                        if ((hello && bye)) {
+                            void [hello, bye];
+                            (hello);
+                            (bye);
+                        } else if ((hello && bye)) {
+                            void [hello, bye];
+                            (hello);
+                            (bye);
+                        } else {
+                            (hello);
+                            (bye);
+                        }
                     }
                 }
-            }
-            { svelteHTML.createElement("p", {});                 {
-                    let hello: any;
-                    void hello;
-                    if ((hello && bye)) {
-                        void [hello, bye];
-                        (hello);
-                        (bye);
-                    } else if ((hello && bye)) {
-                        void [hello, bye];
-                        (hello);
-                        (bye);
-                    } else {
-                        (hello);
-                        (bye);
+                { svelteHTML.createElement("p", {});                     {
+                        let hello: any;
+                        void hello;
+                        if ((hello && bye)) {
+                            void [hello, bye];
+                            (hello);
+                            (bye);
+                        } else if ((hello && bye)) {
+                            void [hello, bye];
+                            (hello);
+                            (bye);
+                        } else {
+                            (hello);
+                            (bye);
+                        }
                     }
                 }
-            }
-            { svelteHTML.createElement("p", {});                 {
-                    let foo: any;
-                    void foo;
-                    const hello = foo;
-                    void hello;
-                    if ((hello && bye)) {
-                        void [hello, bye];
-                        (hello);
-                        (bye);
-                    } else if ((hello && bye)) {
-                        void [hello, bye];
-                        (hello);
-                        (bye);
-                    } else {
-                        (hello);
-                        (bye);
+                { svelteHTML.createElement("p", {});                     {
+                        let foo: any;
+                        void foo;
+                        const hello = foo;
+                        void hello;
+                        if ((hello && bye)) {
+                            void [hello, bye];
+                            (hello);
+                            (bye);
+                        } else if ((hello && bye)) {
+                            void [hello, bye];
+                            (hello);
+                            (bye);
+                        } else {
+                            (hello);
+                            (bye);
+                        }
                     }
                 }
             }

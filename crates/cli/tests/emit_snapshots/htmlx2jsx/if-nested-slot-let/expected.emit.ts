@@ -11,8 +11,8 @@ async function $$render_dc3d7c74() {
                 {
                     const __svn_C_10 = __svn_ensure_component(Comp);
                     new __svn_C_10({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                    (foo);
                 }
-                (foo);
             }
             if ((hi && bye)) {
                 void [hi, bye];
@@ -22,32 +22,32 @@ async function $$render_dc3d7c74() {
                     {
                         const __svn_C_55 = __svn_ensure_component(Comp);
                         new __svn_C_55({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                        (bar);
                     }
-                    (bar);
                 }
             } else if ((cool)) {
                 void [cool];
                 {
                     const __svn_C_a8 = __svn_ensure_component(Comp);
                     new __svn_C_a8({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-                }
-                { svelteHTML.createElement("div", {});                     {
-                        let foo: any;
-                        void foo;
-                        let foo1: any;
-                        void foo1;
-                        (foo);
+                    { svelteHTML.createElement("div", {});                         {
+                            let foo: any;
+                            void foo;
+                            let foo1: any;
+                            void foo1;
+                            (foo);
+                        }
                     }
                 }
             } else {
                 {
                     const __svn_C_12c = __svn_ensure_component(Comp);
                     new __svn_C_12c({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-                }
-                { svelteHTML.createElement("div", {});                     {
-                        let bar: any;
-                        void bar;
-                        (bar);
+                    { svelteHTML.createElement("div", {});                         {
+                            let bar: any;
+                            void bar;
+                            (bar);
+                        }
                     }
                 }
             }

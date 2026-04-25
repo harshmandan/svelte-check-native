@@ -48,8 +48,8 @@ async function $$render_0bc1cb85() {
                         children: () => __svn_snippet_return(),
                     },
                 });
-            }
-            { svelteHTML.createElement("div", {});                 (asd);
+                { svelteHTML.createElement("div", {});                     (asd);
+                }
             }
             {
                 const __svn_C_181 = __svn_ensure_component(List);
@@ -96,8 +96,8 @@ async function $$render_0bc1cb85() {
                         children: () => __svn_snippet_return(),
                     },
                 });
+                { svelteHTML.createElement("p", {});                 }
             }
-            { svelteHTML.createElement("p", {});             }
             {
                 void ((/**@type {number}*/a: any) => {
                     (a);

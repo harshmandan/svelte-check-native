@@ -133,31 +133,57 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                 }
             }
             Some(Declaration::VariableDeclaration(var_decl)) => {
-                let KitFileKind::Route { .. } = kind else {
+                let KitFileKind::Route {
+                    is_layout,
+                    is_server,
+                } = &kind
+                else {
                     continue;
                 };
                 for declarator in &var_decl.declarations {
-                    // Only annotate simple identifier declarators with
-                    // no existing type. `let { a, b } = …` patterns,
-                    // already-typed declarations, and bindings without
-                    // initializers are left alone.
-                    if declarator.id.type_annotation.is_some() {
-                        continue;
-                    }
                     if declarator.init.is_none() {
                         continue;
                     }
                     let BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind else {
                         continue;
                     };
-                    let Some(annot) = page_option_type(id.name.as_str()) else {
+
+                    // Page-option export (`prerender`, `ssr`, etc.):
+                    // splice `: type` after the identifier.
+                    if let Some(annot) = page_option_type(id.name.as_str()) {
+                        if declarator.id.type_annotation.is_some() {
+                            continue;
+                        }
+                        let insert_at = id.span.end as usize;
+                        insertions.push((insert_at, format!(": {annot}")));
                         continue;
-                    };
-                    // Insert after the identifier's span. The declarator
-                    // shape is `NAME (= INIT)?` — we splice `: T` between
-                    // NAME and `=`.
-                    let insert_at = id.span.end as usize;
-                    insertions.push((insert_at, format!(": {annot}")));
+                    }
+
+                    // Arrow-form `load` (`export const load = async (event) => …`):
+                    // mirror the function-form path — find the lone
+                    // arrow parameter and splice the load-event
+                    // annotation onto it. Without this, users writing
+                    // arrow-form `load` lose the SvelteKit-injected
+                    // event type and `({ url })` becomes implicit
+                    // `any`, firing TS7031 on every parameter
+                    // destructure. Upstream's
+                    // language-tools/packages/svelte2tsx applies the
+                    // same param annotation regardless of declaration
+                    // form (function vs const arrow) — see
+                    // `getKitTypePath` callers in `incremental.ts`.
+                    if id.name.as_str() == "load"
+                        && let Some(init) = declarator.init.as_ref()
+                    {
+                        // Unwrap `async`/`await`/parenthesized wrappers
+                        // around the arrow expression. Most users write
+                        // `async ({…}) => {…}` directly, but the parser
+                        // exposes that as ArrowFunctionExpression with
+                        // `async: true` — no unwrap needed.
+                        if let oxc_ast::ast::Expression::ArrowFunctionExpression(arrow) = init {
+                            let event_type = load_event_type(*is_layout, *is_server);
+                            collect_arrow_handler_insert(arrow, &event_type, &mut insertions);
+                        }
+                    }
                 }
             }
             _ => {}
@@ -213,6 +239,27 @@ fn collect_handler_insert(
         return;
     }
     let param = &func.params.items[0];
+    if param.pattern.type_annotation.is_some() {
+        return;
+    }
+    let insert_at = param.pattern.span().end as usize;
+    insertions.push((insert_at, format!(": {event_type}")));
+}
+
+/// Arrow-function twin of [`collect_handler_insert`]. Used for
+/// `export const load = async ({…}) => {…}` form on `+page.ts` /
+/// `+page.server.ts` / `+layout.ts` / `+layout.server.ts`. Same
+/// "lone untyped param" heuristic as the function form — multi-arg
+/// or already-typed arrows are left alone.
+fn collect_arrow_handler_insert(
+    arrow: &oxc_ast::ast::ArrowFunctionExpression<'_>,
+    event_type: &str,
+    insertions: &mut Vec<(usize, String)>,
+) {
+    if arrow.params.items.len() != 1 {
+        return;
+    }
+    let param = &arrow.params.items[0];
     if param.pattern.type_annotation.is_some() {
         return;
     }

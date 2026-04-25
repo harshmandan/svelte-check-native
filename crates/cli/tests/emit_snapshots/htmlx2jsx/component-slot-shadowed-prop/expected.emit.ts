@@ -27,9 +27,9 @@ async function $$render_03b58764() {
                 {
                     const __svn_C_169 = __svn_ensure_component(Sub);
                     new __svn_C_169({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} });
+                    (thing);
+                    (subthing);
                 }
-                (thing);
-                (subthing);
             }
             {
                 let subthing: any;
@@ -39,9 +39,9 @@ async function $$render_03b58764() {
                 {
                     const __svn_C_205 = __svn_ensure_component(Sub);
                     new __svn_C_205({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} });
+                    (thing);
+                    (subthing);
                 }
-                (thing);
-                (subthing);
             }
         }
     }

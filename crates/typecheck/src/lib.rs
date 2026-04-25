@@ -723,6 +723,49 @@ fn is_in_ignore_region(regions: &[(u32, u32)], offset: u32) -> bool {
         .any(|&(start, end)| offset >= start && offset < end)
 }
 
+/// Resolve `.` and `..` components of `p` lexically — without touching
+/// the filesystem. Used to normalise tsgo's relative-with-`..` paths
+/// after they've been joined onto a workspace root.
+///
+/// `dunce::canonicalize` would also resolve symlinks, but requires the
+/// file to exist. Lexical normalisation works on virtual paths (the
+/// cache may be written but tsgo's `..`-formed path may not literally
+/// exist as that string). Mirrors the path-clean crate's algorithm.
+fn lexical_normalise(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    let mut has_root = false;
+    for component in p.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                has_root = true;
+                out.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let last = out.components().next_back();
+                match last {
+                    Some(Component::Normal(_)) => {
+                        out.pop();
+                    }
+                    Some(Component::ParentDir) | None => {
+                        // Leading `..` chain on a relative path is
+                        // preserved — there's nothing to pop against.
+                        out.push(component.as_os_str());
+                    }
+                    _ if has_root => {
+                        // `..` past the root collapses to the root
+                        // (Unix `cd /..` stays at `/`).
+                    }
+                    _ => out.push(component.as_os_str()),
+                }
+            }
+            Component::Normal(_) => out.push(component.as_os_str()),
+        }
+    }
+    out
+}
+
 fn map_diagnostic(
     raw: RawDiagnostic,
     layout: &CacheLayout,
@@ -731,11 +774,21 @@ fn map_diagnostic(
     // tsgo emits paths relative to the working directory when the input
     // tsconfig path is itself relative (which it usually is). Absolutize
     // against the workspace root so cache-layout lookups work uniformly.
+    //
+    // tsgo's relative paths can include `..` segments — e.g. when the
+    // overlay tsconfig lives below the workspace, tsgo reports
+    // `../../node_modules/.cache/svelte-check-native/svelte/Foo.svelte.svn.ts`.
+    // After `workspace.join(raw.file)`, the resulting path is
+    // syntactically `/ws/../../node_modules/.cache/.../Foo.svelte.svn.ts`
+    // — the `map_data` HashMap key (registered as the canonical cache
+    // path) won't lex-match the unnormalised join. Lexically resolve
+    // `..` and `.` components so both sides converge.
     let absolute_file = if raw.file.is_absolute() {
         raw.file.clone()
     } else {
         layout.workspace.join(&raw.file)
     };
+    let absolute_file = lexical_normalise(&absolute_file);
     let (source_path, line, column) = match layout.original_from_generated(&absolute_file) {
         Some(orig) => {
             // For overlay files, require the position to resolve to a
@@ -956,6 +1009,37 @@ fn byte_to_position(line_starts: &[u32], byte: u32) -> (u32, u32) {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn lexical_normalise_resolves_dot_dot_segments() {
+        // Common case: workspace.join(rel_with_dotdot) lands a path that
+        // syntactically contains `..` and `.` segments — normalise pops
+        // them off without touching the filesystem.
+        assert_eq!(
+            lexical_normalise(Path::new("/ws/foo/../bar/Baz.ts")),
+            PathBuf::from("/ws/bar/Baz.ts")
+        );
+        assert_eq!(
+            lexical_normalise(Path::new("/ws/./foo/Bar.ts")),
+            PathBuf::from("/ws/foo/Bar.ts")
+        );
+        // Pop chain shouldn't go past the root.
+        assert_eq!(
+            lexical_normalise(Path::new("/foo/../../bar/Baz.ts")),
+            PathBuf::from("/bar/Baz.ts")
+        );
+        // Leading `..` chain on a relative path is preserved (no
+        // anchor to pop against).
+        assert_eq!(
+            lexical_normalise(Path::new("../../foo/Bar.ts")),
+            PathBuf::from("../../foo/Bar.ts")
+        );
+        // No-op on already-clean paths.
+        assert_eq!(
+            lexical_normalise(Path::new("/ws/foo/Bar.ts")),
+            PathBuf::from("/ws/foo/Bar.ts")
+        );
+    }
 
     #[test]
     fn shim_keeps_fallback_when_asked() {

@@ -86,11 +86,11 @@ function runFixture(name, fixtureDir) {
 
     if (isEmitMode) {
         // Grey-box: run with --emit-ts, capture stdout as generated TS.
+        // --emit-ts exits before tsconfig resolution, so the flag is
+        // a no-op when present and harmless when absent.
         const args = ['--emit-ts', '--workspace', fixtureDir];
         if (tsconfigExists) {
             args.push('--tsconfig', tsconfig);
-        } else {
-            args.push('--no-tsconfig');
         }
 
         let emit = '';
@@ -116,11 +116,13 @@ function runFixture(name, fixtureDir) {
         }
     } else {
         // Black-box: run normally, parse machine-verbose diagnostics.
+        // Black-box mode requires a tsconfig; fixtures lacking one are
+        // expected to be `--emit-ts`-only and should also lack
+        // expected.json (which would route them through the SKIP branch
+        // at the top of this function).
         const args = ['--workspace', fixtureDir, '--output', 'machine-verbose'];
         if (tsconfigExists) {
             args.push('--tsconfig', tsconfig);
-        } else {
-            args.push('--no-tsconfig');
         }
 
         let stdout = '';

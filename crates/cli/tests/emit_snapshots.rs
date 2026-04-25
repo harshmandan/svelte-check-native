@@ -278,7 +278,6 @@ fn run_emit(bin: &str, input_dir: &Path) -> Result<String, String> {
             "--emit-ts",
             "--workspace",
             input_dir.to_str().ok_or("non-utf8 workspace path")?,
-            "--no-tsconfig",
         ])
         .output()
         .map_err(|e| e.to_string())?;

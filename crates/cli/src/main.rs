@@ -42,10 +42,6 @@ struct Cli {
     #[arg(long)]
     tsconfig: Option<PathBuf>,
 
-    /// Disable tsconfig discovery; only Svelte-only diagnostics.
-    #[arg(long = "no-tsconfig", default_value_t = false)]
-    no_tsconfig: bool,
-
     /// Output format. Accepted values match upstream svelte-check.
     #[arg(long, default_value = "human-verbose")]
     output: String,
@@ -76,10 +72,6 @@ struct Cli {
     /// scope anyway.
     #[arg(long = "ignore-node-modules-warnings", default_value_t = false)]
     ignore_node_modules_warnings: bool,
-
-    /// Comma-separated globs to ignore. Only valid with `--no-tsconfig`.
-    #[arg(long)]
-    ignore: Option<String>,
 
     /// Enable disk caching. No-op for us — caching is always on; accepted
     /// for upstream-compat.
@@ -197,16 +189,15 @@ fn main() -> ExitCode {
     }
 
     if cli.list_relevant {
-        let (svelte, kit, _runes, _user_ts) = discover_relevant_files(&workspace, None);
+        let (svelte, kit, _runes, _user_ts) = discover_relevant_files(&workspace);
         for p in svelte.iter().chain(kit.iter()) {
             println!("{}", p.display());
         }
         return ExitCode::from(0);
     }
 
-    let tsconfig = match resolve_tsconfig(&workspace, cli.tsconfig.as_deref(), cli.no_tsconfig) {
-        Ok(Some(p)) => Some(p),
-        Ok(None) => None,
+    let tsconfig = match resolve_tsconfig(&workspace, cli.tsconfig.as_deref()) {
+        Ok(p) => p,
         Err(msg) => {
             eprintln!("svelte-check-native: {msg}");
             return ExitCode::from(2);
@@ -219,42 +210,32 @@ fn main() -> ExitCode {
     // (`@org/types`, workspace-scoped deps) fails from the wrong
     // directory. The overlay cache, kit-file discovery, and diagnostic
     // path-relativization all follow workspace.
-    let (workspace, solution_root_tsconfig) = match tsconfig.as_deref() {
-        Some(tc) => match tc.parent() {
-            Some(dir) if dir != workspace && dir.starts_with(&workspace) => {
-                eprintln!(
-                    "svelte-check-native: redirected workspace to {} (parent of {}) — original looked like a TS project-references solution",
-                    dir.display(),
-                    tc.display(),
-                );
-                // Record the ORIGINAL solution root's tsconfig. Overlay
-                // builder consults it to flatten sibling-project
-                // references into the overlay's include/exclude/paths,
-                // so transitive imports across projects remain visible
-                // to tsgo (see svn_core::tsconfig::flatten_references).
-                let solution_root = workspace.join("tsconfig.json");
-                let solution = if solution_root.is_file() {
-                    Some(solution_root)
-                } else {
-                    None
-                };
-                (dir.to_path_buf(), solution)
-            }
-            _ => (workspace, None),
-        },
-        None => (workspace, None),
+    let (workspace, solution_root_tsconfig) = match tsconfig.parent() {
+        Some(dir) if dir != workspace && dir.starts_with(&workspace) => {
+            eprintln!(
+                "svelte-check-native: redirected workspace to {} (parent of {}) — original looked like a TS project-references solution",
+                dir.display(),
+                tsconfig.display(),
+            );
+            // Record the ORIGINAL solution root's tsconfig. Overlay
+            // builder consults it to flatten sibling-project
+            // references into the overlay's include/exclude/paths,
+            // so transitive imports across projects remain visible
+            // to tsgo (see svn_core::tsconfig::flatten_references).
+            let solution_root = workspace.join("tsconfig.json");
+            let solution = if solution_root.is_file() {
+                Some(solution_root)
+            } else {
+                None
+            };
+            (dir.to_path_buf(), solution)
+        }
+        _ => (workspace, None),
     };
 
     if cli.debug_paths {
-        return run_debug_paths(&workspace, tsconfig.as_deref());
+        return run_debug_paths(&workspace, Some(&tsconfig));
     }
-
-    let Some(tsconfig) = tsconfig else {
-        eprintln!(
-            "svelte-check-native: --no-tsconfig mode is not yet implemented; pass --tsconfig <path> or run inside a project with a tsconfig.json"
-        );
-        return ExitCode::from(2);
-    };
 
     let diagnostic_sources = match parse_diagnostic_sources(cli.diagnostic_sources.as_deref()) {
         Ok(s) => s,
@@ -264,7 +245,6 @@ fn main() -> ExitCode {
         }
     };
     let compiler_warnings = parse_compiler_warnings(cli.compiler_warnings.as_deref());
-    let ignore_set = build_ignore_set(cli.ignore.as_deref());
     let color = resolve_color_mode(cli.color, cli.no_color);
 
     // Tier 2: static analysis of svelte.config.js `warningFilter`.
@@ -306,7 +286,6 @@ fn main() -> ExitCode {
         cli.fail_on_warnings,
         diagnostic_sources,
         &compiler_warnings,
-        ignore_set.as_ref(),
         color,
         cli.timings,
         cli.tsgo_diagnostics,
@@ -678,14 +657,7 @@ fn parse_compiler_warnings(
 /// our overlay can't inherit useful `paths` / `baseUrl` / resolution
 /// settings from one, so extending it leaves every `$lib/*` import
 /// unresolved. Common root-of-monorepo case in SvelteKit apps.
-fn resolve_tsconfig(
-    workspace: &Path,
-    explicit: Option<&Path>,
-    no_tsconfig: bool,
-) -> Result<Option<PathBuf>, String> {
-    if no_tsconfig {
-        return Ok(None);
-    }
+fn resolve_tsconfig(workspace: &Path, explicit: Option<&Path>) -> Result<PathBuf, String> {
     let candidate: PathBuf = if let Some(p) = explicit {
         let resolved = if p.is_absolute() {
             p.to_path_buf()
@@ -721,9 +693,7 @@ fn resolve_tsconfig(
             )
         })?
     };
-    Ok(Some(
-        escape_solution_tsconfig(&candidate).unwrap_or(candidate),
-    ))
+    Ok(escape_solution_tsconfig(&candidate).unwrap_or(candidate))
 }
 
 /// If `candidate` is a solution-style tsconfig, try to redirect to a
@@ -811,7 +781,6 @@ fn run_typecheck(
     fail_on_warnings: bool,
     sources: DiagnosticSources,
     compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
-    ignore: Option<&globset::GlobSet>,
     color: ColorMode,
     timings: bool,
     tsgo_diagnostics: bool,
@@ -878,7 +847,7 @@ fn run_typecheck(
         included && !excluded
     };
     let (svelte_files_raw, kit_files_raw, runes_modules_raw, user_ts_raw) =
-        discover_relevant_files(workspace, ignore);
+        discover_relevant_files(workspace);
     // Svelte-file emit: we walk ALL discovered `.svelte` files, not
     // just the in-scope subset. An out-of-scope file might be
     // imported by an in-scope one — upstream's LanguageService
@@ -1579,7 +1548,7 @@ fn render_code_frame(source: &str, line: u32, column: u32, span_length: Option<u
 /// `--emit-ts` flow: discover `.svelte` files, parse, emit, print to stdout
 /// with file separators. Exits 0 unconditionally — debug-mode is best-effort.
 fn run_emit_ts(workspace: &Path) -> ExitCode {
-    let files = discover_svelte_files(workspace, None);
+    let files = discover_svelte_files(workspace);
     if files.is_empty() {
         eprintln!(
             "svelte-check-native: no .svelte files found under {}",
@@ -1623,8 +1592,8 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
     ExitCode::from(0)
 }
 
-fn discover_svelte_files(workspace: &Path, ignore: Option<&globset::GlobSet>) -> Vec<PathBuf> {
-    discover_relevant_files(workspace, ignore).0
+fn discover_svelte_files(workspace: &Path) -> Vec<PathBuf> {
+    discover_relevant_files(workspace).0
 }
 
 /// Walk the workspace once and return both `.svelte` files and Kit
@@ -1733,7 +1702,6 @@ fn rewrite_svelte_imports_for_collisions(
 
 fn discover_relevant_files(
     workspace: &Path,
-    ignore: Option<&globset::GlobSet>,
 ) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
     let kit_settings = KitFilesSettings::default();
     let mut svelte_files = Vec::new();
@@ -1750,36 +1718,11 @@ fn discover_relevant_files(
     let mut user_ts = Vec::new();
     for e in WalkDir::new(workspace)
         .into_iter()
-        .filter_entry(|e| {
-            // Hard-coded exclusions for directories that are NEVER worth
-            // walking (node_modules, .git, build outputs).
-            if is_excluded_dir(e.path()) {
-                return false;
-            }
-            // User --ignore patterns. Match against the workspace-relative
-            // path so patterns like "dist" / "**/*.spec.svelte" /
-            // "_components/legacy/**" all behave intuitively.
-            if let Some(set) = ignore {
-                if let Ok(rel) = e.path().strip_prefix(workspace) {
-                    if set.is_match(rel) {
-                        return false;
-                    }
-                }
-            }
-            true
-        })
+        .filter_entry(|e| !is_excluded_dir(e.path()))
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
     {
         let path = e.path();
-        // Per-file glob check so `*.spec.svelte`-style patterns exclude
-        // individual files even when their parent dir isn't excluded.
-        if let Some(set) = ignore
-            && let Ok(rel) = path.strip_prefix(workspace)
-            && set.is_match(rel)
-        {
-            continue;
-        }
         let ext = path.extension().and_then(|s| s.to_str());
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         match ext {
@@ -1866,41 +1809,6 @@ fn is_excluded_dir(path: &Path) -> bool {
         name,
         "node_modules" | ".git" | ".svelte-kit" | ".svelte-check" | "target" | "dist"
     ) || name.starts_with('.')
-}
-
-/// Build a [`GlobSet`] from a comma-separated `--ignore` spec.
-///
-/// Patterns are git-style globs (`**/*` for arbitrary depth, `*` for
-/// single segment, `?` for one char, `[abc]` for character classes).
-/// Matched against workspace-relative paths.
-///
-/// Empty / whitespace-only patterns are skipped. Invalid patterns
-/// produce a stderr warning and are silently dropped — the run
-/// continues with the patterns that DID parse, mirroring upstream
-/// svelte-check's lenient behavior.
-fn build_ignore_set(spec: Option<&str>) -> Option<globset::GlobSet> {
-    let spec = spec?;
-    let mut builder = globset::GlobSetBuilder::new();
-    let mut any = false;
-    for entry in spec.split(',') {
-        let entry = entry.trim();
-        if entry.is_empty() {
-            continue;
-        }
-        match globset::Glob::new(entry) {
-            Ok(g) => {
-                builder.add(g);
-                any = true;
-            }
-            Err(e) => {
-                eprintln!("svelte-check-native: invalid --ignore pattern {entry:?}: {e}");
-            }
-        }
-    }
-    if !any {
-        return None;
-    }
-    builder.build().ok()
 }
 
 #[cfg(test)]

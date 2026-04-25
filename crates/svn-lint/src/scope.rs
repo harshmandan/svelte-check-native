@@ -358,15 +358,6 @@ impl ScopeTree {
     }
 }
 
-/// Build a scope tree for the whole document.
-///
-/// Module script sits at `function_depth = 0`; instance script has
-/// the module scope as its parent, giving `function_depth = 1` for
-/// the instance root — matching upstream exactly.
-pub fn build(doc: &Document<'_>) -> ScopeTree {
-    build_with_template(doc, None, "")
-}
-
 /// Should the file be treated as runes mode for post-walk bookkeeping?
 /// Caller controls this so it matches `ctx.runes` at the rules layer.
 ///

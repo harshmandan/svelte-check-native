@@ -552,7 +552,7 @@ fn emit_native_svelte_warnings(
     seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
     workspace: &Path,
 ) {
-    let compat = svn_lint::compat::detect_for_workspace(workspace);
+    let compat = svn_lint::detect_for_workspace(workspace);
     let per_file = svn_lint::lint_batch(svelte_sources.iter().cloned(), compat);
 
     for (path, warnings) in per_file {

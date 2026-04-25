@@ -1,7 +1,5 @@
 //! Shared helpers for rule modules.
 
-use svn_parser::ast::{AttrValuePart, Attribute};
-
 /// Void HTML elements (no closing tag needed).
 ///
 /// Reference: https://html.spec.whatwg.org/multipage/syntax.html#void-elements
@@ -172,34 +170,4 @@ pub fn is_mathml_element(tag: &str) -> bool {
             | "semantics"
             | "square"
     )
-}
-
-/// Find a plain (name="value") attribute by name on an element.
-pub fn find_plain_attr<'a>(attrs: &'a [Attribute], name: &str) -> Option<&'a Attribute> {
-    attrs.iter().find(|a| match a {
-        Attribute::Plain(p) => p.name.as_str() == name,
-        Attribute::Expression(e) => e.name.as_str() == name,
-        Attribute::Shorthand(s) => s.name.as_str() == name,
-        _ => false,
-    })
-}
-
-/// Get the literal-string value of a `name="value"` attribute, when
-/// the value has exactly one text part and no interpolation.
-pub fn plain_attr_text<'a>(attrs: &'a [Attribute], name: &str) -> Option<&'a str> {
-    for a in attrs {
-        if let Attribute::Plain(p) = a
-            && p.name.as_str() == name
-        {
-            let Some(v) = &p.value else {
-                return None;
-            };
-            if v.parts.len() == 1
-                && let AttrValuePart::Text { content, .. } = &v.parts[0]
-            {
-                return Some(content.as_str());
-            }
-        }
-    }
-    None
 }

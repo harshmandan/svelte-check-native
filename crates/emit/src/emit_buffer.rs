@@ -42,7 +42,7 @@ use svn_core::Range;
 use crate::{LineMapEntry, TokenMapEntry};
 
 /// Position-tracking emit buffer. See module docs.
-pub struct EmitBuffer {
+pub(crate) struct EmitBuffer {
     out: String,
     /// Current overlay line (1-based). Incremented by
     /// `append_*` calls based on newline count in the appended text.

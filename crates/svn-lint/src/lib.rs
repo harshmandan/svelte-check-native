@@ -31,22 +31,22 @@
 //! - [`lint_file`] — run the full warning pass on one file.
 //! - [`lint_batch`] — parallel over many files (rayon).
 
-pub mod a11y_constants;
-pub mod aria_data;
-pub mod codes;
-pub mod compat;
-pub mod context;
-pub mod html5;
-pub mod ignore;
-pub mod messages;
-pub mod rules;
-pub mod scope;
-pub mod walk;
+mod a11y_constants;
+mod aria_data;
+mod codes;
+mod compat;
+mod context;
+mod html5;
+mod ignore;
+mod messages;
+mod rules;
+mod scope;
+mod walk;
 
 use std::path::{Path, PathBuf};
 
 pub use codes::{CODES, Code};
-pub use compat::{CompatFeatures, SvelteVersion};
+pub use compat::{CompatFeatures, SvelteVersion, detect_for_workspace};
 pub use context::{LintContext, Warning};
 
 /// Run the compile-warning pass on one source file.

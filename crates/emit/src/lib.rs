@@ -2861,7 +2861,7 @@ fn emit_let_slot_destructure(
     if let_destructures.is_empty() {
         return;
     }
-    let inst_local = format!("__svn_inst_{:x}", inst.node_start);
+    let inst_local = svn_core::synth_names::instance_local(inst.node_start);
     let indent = "    ".repeat(depth);
     let mut entries = String::new();
     // Upstream's `$$_$$` dummy keeps TS6133 quiet on unused
@@ -5528,8 +5528,8 @@ fn emit_component_call(
     //   - `x = $inst;` for `bind:this={x}` on the component
     //   - `const { foo } = $inst.$$slot_def.default;` for `let:foo`
     //     consumer-side destructure (the slot-let port).
-    let local = format!("__svn_C_{:x}", inst.node_start);
-    let inst_local = format!("__svn_inst_{:x}", inst.node_start);
+    let local = svn_core::synth_names::component_local(inst.node_start);
+    let inst_local = svn_core::synth_names::instance_local(inst.node_start);
     let hoist_instance =
         !inst.on_events.is_empty() || inst.bind_this_target.is_some() || needs_inst_for_let;
     let ctor_lhs = if hoist_instance {
@@ -6254,7 +6254,7 @@ fn emit_void_block(
         // JS overlays skip `emit_template_check_fn` (TS-only casts), so
         // the `__svn_tpl_check` name never materializes — voiding it
         // would fire TS2304. Every other synthesized name still applies.
-        if !is_ts && name == "__svn_tpl_check" {
+        if !is_ts && name == svn_core::synth_names::TPL_CHECK_FN {
             continue;
         }
         emit(out, name);

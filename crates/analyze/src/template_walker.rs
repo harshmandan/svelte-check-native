@@ -389,7 +389,9 @@ pub enum DomBindingExpression {
 /// text from byte ranges (e.g. for `bind:this={x}`).
 pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
     let mut summary = TemplateSummary::default();
-    summary.void_refs.register("__svn_tpl_check");
+    summary
+        .void_refs
+        .register(svn_core::synth_names::TPL_CHECK_FN);
     let mut counters = Counters::default();
     let ctx = WalkCtx { source };
     let mut shadow = ShadowStack::default();

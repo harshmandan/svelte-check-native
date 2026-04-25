@@ -30,6 +30,7 @@ pub mod diagnostic;
 pub mod position;
 pub mod range;
 pub mod symbol;
+pub mod synth_names;
 pub mod tsconfig;
 
 /// The literal `node_modules` directory name. Crates that walk up the

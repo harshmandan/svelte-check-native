@@ -41,7 +41,7 @@ smol_str = "0.3"
 camino = "1"
 memchr = "2"
 # Tolerant JSON for tsconfig.json (comments + trailing commas).
-json5 = "0.4"
+json5 = "1"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -72,11 +72,11 @@ semver = "1"
 # JS/TS parser. Architecture rule: embedded JS/TS is parsed once into
 # a real AST and walked structurally — never scanned character-by-
 # character. oxc is the only parser in the workspace for this reason.
-oxc_allocator = "0.45"
-oxc_ast = "0.45"
-oxc_diagnostics = "0.45"
-oxc_parser = "0.45"
-oxc_span = "0.45"
+oxc_allocator = "0.54"
+oxc_ast = "0.54"
+oxc_diagnostics = "0.54"
+oxc_parser = "0.54"
+oxc_span = "0.54"
 
 # Testing
 insta = { version = "1", features = ["yaml", "filters"] }

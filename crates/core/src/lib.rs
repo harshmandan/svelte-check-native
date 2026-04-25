@@ -39,6 +39,32 @@ pub mod tsconfig;
 /// package-discovery routines, and overlay path handling in lockstep.
 pub const NODE_MODULES_DIR: &str = "node_modules";
 
+/// Walk up the directory tree starting at `start`, calling `probe` on
+/// each ancestor. Returns the first `Some(_)` the probe yields, or
+/// `None` if the chain reaches the filesystem root without a hit.
+///
+/// Used for the "find a package, config, or marker file in this
+/// project's resolution chain" pattern that recurs across crates
+/// (`locate_svelte`, `has_real_svelte`, tsgo discovery, tsconfig
+/// search, runtime types resolution).
+///
+/// `probe` is called on `start` first, then on each ancestor in order
+/// — same behaviour as the hand-rolled `cur = dir.parent()` loops it
+/// replaces.
+pub fn walk_up_dirs<F, T>(start: &std::path::Path, mut probe: F) -> Option<T>
+where
+    F: FnMut(&std::path::Path) -> Option<T>,
+{
+    let mut cur: Option<&std::path::Path> = Some(start);
+    while let Some(dir) = cur {
+        if let Some(found) = probe(dir) {
+            return Some(found);
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
 // Re-exports so consumers can write `svn_core::Range` etc.
 pub use diagnostic::{Diagnostic, DiagnosticSource, Severity};
 pub use position::{Position, PositionMap};

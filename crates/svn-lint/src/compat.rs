@@ -141,20 +141,13 @@ pub fn detect_for_workspace(workspace: &Path) -> CompatFeatures {
 /// [`detect_for_workspace`] which folds detection + gating into one
 /// call.
 pub fn locate_svelte_version(start: &Path) -> Option<SvelteVersion> {
-    let mut cur: Option<&Path> = Some(start);
-    while let Some(dir) = cur {
+    svn_core::walk_up_dirs(start, |dir| {
         let pkg = dir
             .join(svn_core::NODE_MODULES_DIR)
             .join("svelte")
             .join("package.json");
-        if pkg.is_file()
-            && let Some(v) = read_package_version(&pkg)
-        {
-            return Some(v);
-        }
-        cur = dir.parent();
-    }
-    None
+        pkg.is_file().then(|| read_package_version(&pkg)).flatten()
+    })
 }
 
 /// Extract the `version` field from a `package.json`. Stringly

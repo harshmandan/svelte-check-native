@@ -698,37 +698,34 @@ fn split_package_entry(entry: &str) -> (&str, &str) {
 /// to spurious TS1192 errors on `<Component>.svelte` imports that
 /// sit beside a `<Component>.svelte.ts` mountpoint (Svelte 5 pattern).
 fn package_types_entry_resolves(name: &str, declaring_dir: &Path) -> bool {
-    let mut cur: Option<&Path> = Some(declaring_dir);
-    while let Some(dir) = cur {
+    svn_core::walk_up_dirs(declaring_dir, |dir| {
         let nm = dir.join(svn_core::NODE_MODULES_DIR);
-        if nm.is_dir() {
-            // Conventional types package: node_modules/@types/<name>.
-            if nm.join("@types").join(name).join("package.json").is_file() {
-                return true;
-            }
-            // Runtime package shipping its own types: node_modules/<name>.
-            if nm.join(name).join("package.json").is_file() {
-                return true;
-            }
-            // pnpm hoisted: node_modules/.pnpm/node_modules/@types/<name>.
-            let pnpm_root = nm.join(".pnpm").join(svn_core::NODE_MODULES_DIR);
-            if pnpm_root.is_dir() {
-                if pnpm_root
-                    .join("@types")
-                    .join(name)
-                    .join("package.json")
-                    .is_file()
-                {
-                    return true;
-                }
-                if pnpm_root.join(name).join("package.json").is_file() {
-                    return true;
-                }
-            }
+        if !nm.is_dir() {
+            return None;
         }
-        cur = dir.parent();
-    }
-    false
+        // Conventional types package: node_modules/@types/<name>.
+        if nm.join("@types").join(name).join("package.json").is_file() {
+            return Some(());
+        }
+        // Runtime package shipping its own types: node_modules/<name>.
+        if nm.join(name).join("package.json").is_file() {
+            return Some(());
+        }
+        // pnpm hoisted: node_modules/.pnpm/node_modules/@types/<name>.
+        let pnpm_root = nm.join(".pnpm").join(svn_core::NODE_MODULES_DIR);
+        if pnpm_root.is_dir()
+            && (pnpm_root
+                .join("@types")
+                .join(name)
+                .join("package.json")
+                .is_file()
+                || pnpm_root.join(name).join("package.json").is_file())
+        {
+            return Some(());
+        }
+        None
+    })
+    .is_some()
 }
 
 /// Collapse `..` segments without touching the filesystem. Pure path

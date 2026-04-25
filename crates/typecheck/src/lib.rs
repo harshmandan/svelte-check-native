@@ -132,19 +132,14 @@ fn strip_range_blanking(text: &str, begin_marker: &str, end_marker: &str) -> Str
 /// Returns `true` iff the user has the real `svelte` package installed
 /// somewhere in the resolution chain.
 fn has_real_svelte(workspace: &Path) -> bool {
-    let mut cur: Option<&Path> = Some(workspace);
-    while let Some(dir) = cur {
-        if dir
-            .join(svn_core::NODE_MODULES_DIR)
+    svn_core::walk_up_dirs(workspace, |dir| {
+        dir.join(svn_core::NODE_MODULES_DIR)
             .join("svelte")
             .join("package.json")
             .is_file()
-        {
-            return true;
-        }
-        cur = dir.parent();
-    }
-    false
+            .then_some(())
+    })
+    .is_some()
 }
 
 pub use svn_emit::{LineMapEntry, TokenMapEntry};

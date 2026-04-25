@@ -389,15 +389,10 @@ fn which_in(path_var: &std::ffi::OsStr, pathext: &std::ffi::OsStr, name: &str) -
 /// (or `.mjs`). Returns the path to the package directory (containing
 /// `package.json`) on success.
 fn locate_svelte(start: &Path) -> Option<PathBuf> {
-    let mut cur: Option<&Path> = Some(start);
-    while let Some(dir) = cur {
+    svn_core::walk_up_dirs(start, |dir| {
         let pkg = dir.join(svn_core::NODE_MODULES_DIR).join("svelte");
-        if pkg.is_dir() && pkg.join("package.json").is_file() {
-            return Some(pkg);
-        }
-        cur = dir.parent();
-    }
-    None
+        (pkg.is_dir() && pkg.join("package.json").is_file()).then_some(pkg)
+    })
 }
 
 /// Walk up from `start` looking for the user's svelte.config.{js,mjs,cjs}.

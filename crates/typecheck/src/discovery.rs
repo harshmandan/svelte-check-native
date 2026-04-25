@@ -70,13 +70,12 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
     let native_relative = current_platform_native_path();
     let wrapper_relative = Path::new("node_modules/@typescript/native-preview/bin/tsgo.js");
 
-    let mut current: Option<&Path> = Some(workspace);
-    while let Some(dir) = current {
+    svn_core::walk_up_dirs(workspace, |dir| {
         // Native binary is preferred — no Node.js startup overhead.
         if let Some(rel) = &native_relative {
             let candidate = dir.join(rel);
             if candidate.is_file() {
-                return Ok(TsgoBinary {
+                return Some(TsgoBinary {
                     path: candidate,
                     needs_node: false,
                 });
@@ -85,7 +84,7 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
         // Fallback: JS wrapper requires `node`.
         let wrapper = dir.join(wrapper_relative);
         if wrapper.is_file() {
-            return Ok(TsgoBinary {
+            return Some(TsgoBinary {
                 path: wrapper,
                 needs_node: true,
             });
@@ -93,13 +92,9 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
         // pnpm / bun per-package store. Only reached when the
         // canonical hoisted paths above are absent (pnpm
         // `shamefully-hoist=false`, isolated installs, etc.).
-        if let Some(found) = find_in_package_store(dir, native_relative.as_deref()) {
-            return Ok(found);
-        }
-        current = dir.parent();
-    }
-
-    Err(DiscoveryError::NotFound {
+        find_in_package_store(dir, native_relative.as_deref())
+    })
+    .ok_or_else(|| DiscoveryError::NotFound {
         searched_from: workspace.to_path_buf(),
     })
 }

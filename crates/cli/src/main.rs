@@ -671,22 +671,13 @@ fn resolve_tsconfig(workspace: &Path, explicit: Option<&Path>) -> Result<PathBuf
         // proper relative path between two absolute directories.
         dunce::canonicalize(&resolved).unwrap_or(resolved)
     } else {
-        let mut found: Option<PathBuf> = None;
-        let mut cur: Option<&Path> = Some(workspace);
-        while let Some(dir) = cur {
-            for name in ["tsconfig.json", "jsconfig.json"] {
-                let c = dir.join(name);
-                if c.is_file() {
-                    found = Some(c);
-                    break;
-                }
-            }
-            if found.is_some() {
-                break;
-            }
-            cur = dir.parent();
-        }
-        found.ok_or_else(|| {
+        svn_core::walk_up_dirs(workspace, |dir| {
+            ["tsconfig.json", "jsconfig.json"]
+                .iter()
+                .map(|name| dir.join(name))
+                .find(|c| c.is_file())
+        })
+        .ok_or_else(|| {
             format!(
                 "no tsconfig.json or jsconfig.json found at or above {}",
                 workspace.display()

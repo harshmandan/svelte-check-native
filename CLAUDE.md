@@ -1,10 +1,12 @@
 # Working conventions for Claude Code / AI-assisted contributions
 
 This file is loaded into every Claude Code session in this repo. Read
-`README.md` for the public-facing overview, and `ROADMAP.md` (local,
-gitignored) for the current scoreboard, what's next, and documented
-limitations. This file is the shorter "rules of engagement" layer on
-top of both.
+`README.md` for the public-facing overview, and `notes/` (gitignored)
+for the current scoreboard (`notes/ROADMAP.md`), open work
+(`notes/OPEN.md`), bench fleet (`notes/BENCH.md`), deferred items
+(`notes/DEFERRED.md`), and chronological decision log
+(`notes/HISTORY.md`). This file is the shorter "rules of engagement"
+layer on top of all of them.
 
 ## Project at a glance
 
@@ -86,9 +88,10 @@ mechanical — delete the submodule and grep for the marker.
    mutate these during emit. Never register new names during emit.
 
    Analyze outputs today: `PropsInfo` (props.rs), `TemplateSummary`
-   (template walker), `VoidRefRegistry` (see rule #3), plus
-   free-function helpers (`collect_top_level_bindings`,
-   `find_store_refs`, `find_template_refs`, `collect_typed_uninit_lets`).
+   (template walker, includes `SlotDef[]` for the slot-let port),
+   `VoidRefRegistry` (see rule #3), plus free-function helpers
+   (`collect_top_level_bindings`, `find_store_refs`,
+   `find_template_refs`, `collect_typed_uninit_lets`).
    Direction of travel is centralising into a single `SemanticModel`
    as each concern gets its second consumer — don't invent placeholder
    fields with no reader.
@@ -123,27 +126,51 @@ mechanical — delete the submodule and grep for the marker.
    against concrete prop values. Dropped local → `T` resolves to
    `unknown` and snippet arrows fire implicit-any.
 
-   Constructor's `props?` slot is `__SvnPropsPartial<Props>` =
-   `{[K in keyof P]?: P[K] | null}` — required props stay optional
-   (bind:, spreads, implicit `children` don't appear in the literal)
-   and `bind:this`-style `T | null` passes without TS2322.
+   `__svn_inst_N` (the instance local) is hoisted only when needed
+   downstream — any of: an `on:event` directive (`$on(...)`),
+   `bind:this={x}` (assignment to user variable), or a slot-let
+   consumer wrapper that needs the parent's `$$slot_def[name]`.
+   `$on`'s signature (`handler: (...args: any[]) => any`) gives the
+   arrow contextual typing so `({detail}) => …` destructures without
+   implicit-any.
 
-   `__svn_inst_N` is only emitted when the component has at least
-   one `on:event` directive. `$on`'s signature
-   (`handler: (...args: any[]) => any`) gives the arrow contextual
-   typing so `({detail}) => …` destructures without implicit-any.
+   Overlay default exports use the `$$IsomorphicComponent` interface
+   pattern (post-iso-port, since v0.6 — see commit `8de67ec0`):
 
-   Overlay default exports are typed `import('svelte').Component<Props>`
-   — matches `ComponentProps<typeof Foo>`'s built-in constraint and
-   keeps generics expressible.
+   ```ts
+   interface $$IsomorphicComponent {
+     new (options: ComponentConstructorOptions<P>): SvelteComponent<P, E, S> & { $$bindings?: B } & X;
+     (internal: unknown, props: P): X & { $set?: any; $on?: any };
+     z_$$bindings?: B;
+   }
+   const __svn_component_default: $$IsomorphicComponent = null as any;
+   type __svn_component_default = InstanceType<typeof __svn_component_default>;
+   export default __svn_component_default;
+   ```
+
+   Where P/E/S/B/X project from `Awaited<ReturnType<typeof
+   $$render>>['props' | 'events' | 'slots' | 'bindings' | 'exports']`.
+   Mirrors upstream svelte2tsx `addComponentExport.ts:170-179`
+   byte-for-byte. The `& { $set?: any; $on?: any }` on the callable
+   is what makes our return assignable to a user-declared bare
+   `Component<{}>` target.
+
+   `__svn_ensure_component` is a single conditional-return overload
+   (also post-iso-port) that returns `T` directly when T is newable,
+   and synthesises a constructor when T is callable
+   (`Component<P, X, B>`).
 
    For generic components with a Props type source, the render
    function is wrapped in `class __svn_Render_<hash><T> { props()
-   { ... } events() { ... } slots() { ... } }` (gated on
+   { ... } events() { ... } slots() { ... } bindings() { ... }
+   exports() { ... } }` (gated on
    `use_class_wrapper = generics.is_some() && prop_type_source.is_some()`).
    Mirrors upstream's `__sveltets_Render<T>` pattern so body-local
    type refs in the Props type resolve inside the render scope
-   rather than leaking to module scope (TS2304).
+   rather than leaking to module scope (TS2304). When generics are
+   present without the class wrapper, the `$$ComponentProps` type
+   alias emits INSIDE the render fn body so the generic binder is
+   in scope.
 
 8. **New emit shapes are tsgo-validated on a hand-written fixture
    before implementation.** Any change to what the emit crate produces
@@ -168,7 +195,7 @@ independently so a red signal points at exactly one stage.
 output. No tsgo in the loop. Mirrors upstream svelte2tsx's
 `expectedv2.js` pattern against _our_ emit. `UPDATE_SNAPSHOTS=1
 cargo test --test emit_snapshots` accepts deliberate emit changes;
-default mode fails on any mismatch with a contextual diff. ~190
+default mode fails on any mismatch with a contextual diff. ~410
 snapshots across three corpora:
 
 - `svelte2tsx_v5/` — upstream's 63 `.v5` samples (full-component).
@@ -198,8 +225,9 @@ broad type-check surveying is the emit_snapshots job, not these.
 
 **End-to-end — `upstream_sanity`.** Reuses upstream's
 `test-sanity.js` unmodified via a node shim. Submodule bump =
-upstream test update applied for free. Known-failing today on
-SvelteKit-ambient-typing cases (scoped out for v0.1).
+upstream test update applied for free. A handful of known-failing
+SvelteKit-ambient-typing cases remain (tracked in `notes/OPEN.md`
+when actionable); the bulk passes.
 
 **Discovery (not tests).** Real-world repos in `bench/` are _not_
 part of `cargo test`. They're used interactively to find bug classes
@@ -227,8 +255,9 @@ so the scenario is reproducible against any workspace.
   implementation. Snapshot workflow: add `input.svelte`, run
   `UPDATE_SNAPSHOTS=1 cargo test --test emit_snapshots` once the
   emit is right, review `git diff`, commit.
-- **`cargo test` is the scoreboard.** `emit_snapshots` count and
-  `bug_fixtures` count both show in `README.md`.
+- **`cargo test` is the scoreboard.** Bench parity is the user-facing
+  scoreboard — see `notes/BENCH.md` for the full delta vs upstream
+  `svelte-check --tsgo`.
 
 ## Diagnostic method — "diff the real upstream artifact"
 

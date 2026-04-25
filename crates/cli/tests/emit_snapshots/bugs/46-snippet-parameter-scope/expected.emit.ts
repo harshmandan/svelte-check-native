@@ -5,7 +5,7 @@ type $$ComponentProps = { children: Snippet<[isOpen: boolean, toggle: () => void
 async function $$render_e2598f27() {
 
                                           
-    let { children }: { children: Snippet<[isOpen: boolean, toggle: () => void]> } = $props();
+    let { children }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
@@ -28,7 +28,7 @@ export default __svn_component_default;
 type $$ComponentProps = { open: boolean; onToggle: () => void };
 async function $$render_ea3119be() {
 
-    let { open, onToggle }: { open: boolean; onToggle: () => void } = $props();
+    let { open, onToggle }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         { svelteHTML.createElement("button", {

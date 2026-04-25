@@ -3,7 +3,7 @@
 type $$ComponentProps = { label: string; index: number };
 async function $$render_628a5909() {
 
-    let { label, index }: { label: string; index: number } = $props();
+    let { label, index }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         { svelteHTML.createElement("span", {});             (label);

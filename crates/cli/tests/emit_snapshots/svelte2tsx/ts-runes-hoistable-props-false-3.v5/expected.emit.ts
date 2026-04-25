@@ -6,7 +6,7 @@
 type $$ComponentProps = { someProp: SomeType<T>; };
 async function $$render_cbdc5f31<T extends boolean>() {
 
-    let { someProp }: { someProp: SomeType<T>; } = $props();
+    let { someProp }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }

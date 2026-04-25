@@ -5,7 +5,7 @@ type $$ComponentProps = { item: unknown };
 async function $$render_6743ac1f() {
 
                                                         
-  let { item }: { item: unknown } = $props()
+  let { item }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props()
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});             (getDuration(item as AppVideo));

@@ -16,7 +16,7 @@ async function $$render_07606356() {
                         
      
 
-    let { a, b }: { a: Dependency, b: string } = $props();
+    let { a, b }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }

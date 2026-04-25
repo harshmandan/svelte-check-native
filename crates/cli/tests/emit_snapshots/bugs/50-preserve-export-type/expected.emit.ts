@@ -59,9 +59,7 @@ async function $$render_6e910aea() {
 
     let {
         config,
-    }: {
-        config: PanelConfig;
-    } = $props();
+    }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});             (config.section);

@@ -6,7 +6,7 @@ type $$ComponentProps = { someProp: typeof a };
 async function $$render_bf18a5c0() {
 
     let a = true;
-    let { someProp }: { someProp: typeof a } = $props();
+    let { someProp }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }

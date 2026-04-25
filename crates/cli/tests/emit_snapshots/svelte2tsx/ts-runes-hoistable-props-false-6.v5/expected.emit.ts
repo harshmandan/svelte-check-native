@@ -5,7 +5,7 @@ async function $$render_7503ba6a() {
     let $store!: __SvnStoreValue<typeof store>;
 
     let store = null;
-    let { someProp }: { someProp: typeof $store } = $props();
+    let { someProp }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }

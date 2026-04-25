@@ -3,7 +3,7 @@
 type $$ComponentProps = { a: T, b: string };
 async function $$render_6b1a6441<T>() {
 
-    let { a, b }: { a: T, b: string } = $props();
+    let { a, b }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     let x = $state<T>(0);
     let y = $derived(x * 2);
     async function __svn_tpl_check() {

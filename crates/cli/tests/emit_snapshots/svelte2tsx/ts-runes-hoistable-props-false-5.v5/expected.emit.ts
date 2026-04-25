@@ -7,7 +7,7 @@ type $$ComponentProps = { someProp: Shadowed };
 async function $$render_86a0cb14() {
 
                             
-    let { someProp }: { someProp: Shadowed } = $props();
+    let { someProp }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }

@@ -9,10 +9,7 @@ async function $$render_1497f2af() {
     let {
         checked,
         onchange,
-    }: {
-        checked: boolean;
-        onchange: (event: { checked: boolean }) => void;
-    } = $props();
+    }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         { svelteHTML.createElement("button", {

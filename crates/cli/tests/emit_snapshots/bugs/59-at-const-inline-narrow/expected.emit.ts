@@ -10,7 +10,7 @@ async function $$render_c6382cf7() {
                                         
                                       
 
-  let { shape }: { shape: Shape } = $props()
+  let { shape }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props()
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         const k = shape.kind;

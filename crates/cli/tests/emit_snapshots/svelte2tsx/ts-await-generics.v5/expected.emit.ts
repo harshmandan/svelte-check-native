@@ -3,7 +3,7 @@
 type $$ComponentProps = { prop?: T };
 async function $$render_200dbc4a<T>() {
 
-    let { prop }: { prop?: T } = $props();
+    let { prop }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     const foo = await fetch('/foo');
     const promise = fetch('/bar');
     async function __svn_tpl_check() {

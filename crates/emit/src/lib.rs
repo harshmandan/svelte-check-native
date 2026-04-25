@@ -1410,41 +1410,62 @@ fn inject_component_props_annotation(content: &str, lang: svn_parser::ScriptLang
     use oxc_ast::ast::{BindingPatternKind, Expression, Statement, VariableDeclarator};
     let alloc = Allocator::default();
     let parsed = svn_parser::parse_script_body(&alloc, content, lang);
-    let mut insert_at: Option<usize> = None;
+    let mut action: Option<AnnotationAction> = None;
     for stmt in &parsed.program.body {
         let decl = match stmt {
             Statement::VariableDeclaration(d) => d,
             _ => continue,
         };
         for declarator in &decl.declarations {
-            if insertion_site(declarator).is_some() {
+            if let Some(a) = annotation_action(declarator) {
                 // Use the FIRST $props destructure — upstream only
                 // recognises one.
-                insert_at = insertion_site(declarator);
+                action = Some(a);
                 break;
             }
         }
-        if insert_at.is_some() {
+        if action.is_some() {
             break;
         }
     }
-    let Some(pos) = insert_at else {
+    let Some(action) = action else {
         return content.to_string();
     };
-    let mut out = String::with_capacity(content.len() + 20);
-    out.push_str(&content[..pos]);
-    out.push_str(": $$ComponentProps");
-    out.push_str(&content[pos..]);
+    let mut out = String::with_capacity(content.len() + 32);
+    match action {
+        AnnotationAction::Insert(pos) => {
+            out.push_str(&content[..pos]);
+            out.push_str(": $$ComponentProps");
+            out.push_str(&content[pos..]);
+        }
+        AnnotationAction::Replace { start, end } => {
+            // Replace the user's literal annotation with a single
+            // `$$ComponentProps` reference wrapped in ignore markers.
+            // Upstream svelte2tsx does the same swap (see
+            // `ExportedNames.ts`'s `$props` rewrite); the ignore
+            // markers tell svelte-check's diagnostic mapper to drop
+            // any tsgo errors INSIDE the marker span, since the
+            // rewritten alias name has no source-position
+            // correspondence to the user's original literal. This
+            // line-count parity also stops position drift in
+            // downstream errors — the alias name is one token where
+            // a multi-line literal was many.
+            out.push_str(&content[..start]);
+            out.push_str(": /*\u{03A9}ignore_start\u{03A9}*/$$ComponentProps/*\u{03A9}ignore_end\u{03A9}*/");
+            out.push_str(&content[end..]);
+        }
+    }
     return out;
 
-    fn insertion_site(declarator: &VariableDeclarator<'_>) -> Option<usize> {
-        // Destructure pattern, no existing annotation.
+    enum AnnotationAction {
+        Insert(usize),
+        Replace { start: usize, end: usize },
+    }
+
+    fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAction> {
         let BindingPatternKind::ObjectPattern(obj) = &declarator.id.kind else {
             return None;
         };
-        if declarator.id.type_annotation.is_some() {
-            return None;
-        }
         // Initializer must be a bare `$props()` call with NO
         // explicit type argument. When the user wrote `$props<T>()`
         // they already expressed the intended type — upstream's
@@ -1467,8 +1488,28 @@ fn inject_component_props_annotation(content: &str, lang: svn_parser::ScriptLang
         if call.type_parameters.is_some() {
             return None;
         }
-        // Splice after the destructure pattern's closing `}`.
-        Some(obj.span.end as usize)
+        // CASE A — user wrote `let { … }: { lit } = $props()`.
+        // Replace the literal annotation with `$$ComponentProps`
+        // (wrapped in ignore markers to drop tsgo errors inside).
+        // This collapses a multi-line literal to a single token —
+        // matching upstream's line-count parity and eliminating
+        // downstream position drift on the destructure-following
+        // declarations. Without this, every declaration after the
+        // destructure shifts by (literal-line-count - 1) lines vs
+        // upstream, surfacing as positional drift in user-source
+        // diagnostics (palacms FieldItem.svelte was the canary).
+        if let Some(annot) = &declarator.id.type_annotation {
+            // Span of the annotation INCLUDING the leading `:`.
+            // `type_annotation.span.start` is BEFORE the colon
+            // (covers the whole `: T` clause); end covers through
+            // the type's last char. Replace with our own `: ...`.
+            let start = annot.span.start as usize;
+            let end = annot.span.end as usize;
+            return Some(AnnotationAction::Replace { start, end });
+        }
+        // CASE B — no existing annotation. Splice after the
+        // destructure pattern's closing `}`.
+        Some(AnnotationAction::Insert(obj.span.end as usize))
     }
 }
 

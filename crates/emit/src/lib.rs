@@ -806,11 +806,19 @@ fn analyze_script_and_template_refs<'alloc>(
     rewritten_content: Option<&str>,
     props_info: &PropsInfo,
 ) -> ScriptAndTemplateAnalysis {
+    // Parse the module script once up front; both `script_bindings`
+    // collection and the type-only-import scan below consume it.
+    // Allocator lives at function scope so the AST stays valid across
+    // both consumers.
+    let alloc_mod = Allocator::default();
+    let parsed_mod = doc
+        .module_script
+        .as_ref()
+        .map(|ms| parse_script_body(&alloc_mod, ms.content, ms.lang));
+
     let mut script_bindings: HashSet<String> = HashSet::new();
-    if let Some(module_script) = &doc.module_script {
-        let alloc_mod = Allocator::default();
-        let parsed_mod = parse_script_body(&alloc_mod, module_script.content, module_script.lang);
-        collect_top_level_bindings(&parsed_mod.program, &mut script_bindings);
+    if let Some(parsed) = &parsed_mod {
+        collect_top_level_bindings(&parsed.program, &mut script_bindings);
     }
 
     let (prop_names, prop_type_source): (Vec<SmolStr>, Option<String>) =
@@ -885,13 +893,8 @@ fn analyze_script_and_template_refs<'alloc>(
     if let Some(parsed) = parsed_instance {
         svn_analyze::collect_type_only_import_bindings(&parsed.program, &mut type_only_imports);
     }
-    if let Some(module_script) = &doc.module_script {
-        let alloc_mod2 = Allocator::default();
-        let parsed_mod2 = parse_script_body(&alloc_mod2, module_script.content, module_script.lang);
-        svn_analyze::collect_type_only_import_bindings(
-            &parsed_mod2.program,
-            &mut type_only_imports,
-        );
+    if let Some(parsed) = &parsed_mod {
+        svn_analyze::collect_type_only_import_bindings(&parsed.program, &mut type_only_imports);
     }
 
     // Single template walk produces: void-refs (script bindings used

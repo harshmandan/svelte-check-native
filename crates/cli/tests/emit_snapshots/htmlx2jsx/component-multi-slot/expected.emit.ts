@@ -10,27 +10,36 @@ async function $$render_8f62c0c3() {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, var: new_var } = __svn_inst_0.$$slot_def.default; $$_$$;
                 { svelteHTML.createElement("h1", {});                     (new_var);
                 }
-                { svelteHTML.createElement("div", {});                     (newvar);
-                    {
-                        let newvar: any;
-                        void newvar;
-                        { svelteHTML.createElement("h2", {});                             (newvar);
+                {
+                    const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, slotvar: newvar } = __svn_inst_0.$$slot_def["someslot"]; $$_$$;
+                    { svelteHTML.createElement("div", {});                         (newvar);
+                        {
+                            let newvar: any;
+                            void newvar;
+                            { svelteHTML.createElement("h2", {});                                 (newvar);
+                            }
                         }
                     }
                 }
-                { svelteHTML.createElement("div", {});                     (newvar2);
-                    {
-                        let newvar2: any;
-                        void newvar2;
+                {
+                    const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, newvar2 } = __svn_inst_0.$$slot_def["slotwithoutchildren"]; $$_$$;
+                    { svelteHTML.createElement("div", {});                         (newvar2);
+                        {
+                            let newvar2: any;
+                            void newvar2;
+                        }
                     }
                 }
-                { svelteHTML.createElement("div", {});                     {
-                        let hi1: any;
-                        void hi1;
-                        let hi2: any;
-                        void hi2;
-                        let hi3alias: any;
-                        void hi3alias;
+                {
+                    const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, hi1, hi2, hi3: hi3alias } = __svn_inst_0.$$slot_def["slotwithmultiplelets"]; $$_$$;
+                    { svelteHTML.createElement("div", {});                         {
+                            let hi1: any;
+                            void hi1;
+                            let hi2: any;
+                            void hi2;
+                            let hi3alias: any;
+                            void hi3alias;
+                        }
                     }
                 }
                 { svelteHTML.createElement("p", {});                 }

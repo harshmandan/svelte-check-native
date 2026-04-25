@@ -2835,21 +2835,36 @@ fn emit_let_slot_destructure(
     let _ = writeln!(buf, "{indent}const {{ {entries} }} = {access}; $$_$$;");
 }
 
-/// True when `node` is a child component with both `slot="X"` and at
-/// least one `let:` directive — a slot-let consumer of its parent.
-/// Used to pre-flag the parent so its instance gets hoisted to a local
-/// (the wrapper destructure references `parent_inst.$$slot_def["X"]`).
-fn child_is_slot_let_consumer(source: &str, node: &Node) -> bool {
-    let Node::Component(c) = node else {
-        return false;
-    };
-    if svn_analyze::literal_attr_value(&c.attributes, "slot").is_none() {
-        return false;
+/// Pluck the slot-let-consumer attributes off any node shape that can
+/// legally carry both `slot="X"` and `let:Y` — components, regular
+/// DOM elements (`<div slot="X" let:foo>`), and special elements
+/// (`<svelte:fragment slot="X" let:foo>`). Returns `None` for nodes
+/// that aren't elements at all (text, blocks, etc).
+fn slot_let_attrs<'a>(node: &'a Node) -> Option<&'a [svn_parser::Attribute]> {
+    match node {
+        Node::Component(c) => Some(c.attributes.as_slice()),
+        Node::Element(e) => Some(e.attributes.as_slice()),
+        Node::SvelteElement(e) => Some(e.attributes.as_slice()),
+        _ => None,
     }
-    !collect_let_destructures(source, &c.attributes).is_empty()
 }
 
-/// If `node` is a child component carrying both `slot="X"` and one or
+/// True when `node` is a child element carrying both `slot="X"` and at
+/// least one `let:` directive — a slot-let consumer of its parent
+/// component. Used to pre-flag the parent so its instance gets hoisted
+/// to a local (the wrapper destructure references
+/// `parent_inst.$$slot_def["X"]`).
+fn child_is_slot_let_consumer(source: &str, node: &Node) -> bool {
+    let Some(attrs) = slot_let_attrs(node) else {
+        return false;
+    };
+    if svn_analyze::literal_attr_value(attrs, "slot").is_none() {
+        return false;
+    }
+    !collect_let_destructures(source, attrs).is_empty()
+}
+
+/// If `node` is a child element carrying both `slot="X"` and one or
 /// more `let:` directives, open a wrapper block at the parent's
 /// child-walk depth and emit the consumer-side destructure against
 /// `parent_inst.$$slot_def["X"]`. Returns `true` when the wrapper was
@@ -2858,10 +2873,13 @@ fn child_is_slot_let_consumer(source: &str, node: &Node) -> bool {
 ///
 /// Mirrors upstream svelte2tsx's InlineComponent.ts:184-207, where the
 /// destructure for `<Inner slot="X" let:foo>` lives in the OUTER
-/// component's block — so `foo` is in scope across the inner
-/// component-call's own emissions (notably the `$on(...)` handler that
-/// references `foo`, which sits at the inner component-call's outer
-/// block before the inner's own children walk).
+/// component's block — so `foo` is in scope across the inner emit
+/// (notably the inner component-call's `$on(...)` handler that
+/// references `foo`, which sits before the inner's own children walk).
+///
+/// Accepts component, DOM-element, and `<svelte:fragment>` children.
+/// All three carry `slot=` + `let:` legally; the wrap mechanics are
+/// identical regardless of which element kind houses the directives.
 fn try_emit_slot_let_consumer_open(
     buf: &mut EmitBuffer,
     source: &str,
@@ -2869,13 +2887,13 @@ fn try_emit_slot_let_consumer_open(
     parent_inst: &svn_analyze::ComponentInstantiation,
     depth: usize,
 ) -> bool {
-    let Node::Component(c) = node else {
+    let Some(attrs) = slot_let_attrs(node) else {
         return false;
     };
-    let Some(slot_name) = svn_analyze::literal_attr_value(&c.attributes, "slot") else {
+    let Some(slot_name) = svn_analyze::literal_attr_value(attrs, "slot") else {
         return false;
     };
-    let lets = collect_let_destructures(source, &c.attributes);
+    let lets = collect_let_destructures(source, attrs);
     if lets.is_empty() {
         return false;
     }

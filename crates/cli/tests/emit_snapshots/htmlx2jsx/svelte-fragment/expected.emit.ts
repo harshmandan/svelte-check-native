@@ -13,7 +13,7 @@ async function $$render_2403d132() {
         }
         {
             const __svn_C_a6 = __svn_ensure_component(Component);
-            new __svn_C_a6({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+            const __svn_inst_a6 = new __svn_C_a6({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             { svelteHTML.createElement("svelte:fragment", {});                 {
                     let foo: any;
                     void foo;
@@ -24,13 +24,16 @@ async function $$render_2403d132() {
                     }
                 }
             }
-            { svelteHTML.createElement("svelte:fragment", {});                 {
-                    let foo: any;
-                    void foo;
-                    let baz: any;
-                    void baz;
-                    { svelteHTML.createElement("p", {});                         (foo);
-                        (baz);
+            {
+                const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo, bar: baz } = __svn_inst_a6.$$slot_def["named"]; $$_$$;
+                { svelteHTML.createElement("svelte:fragment", {});                     {
+                        let foo: any;
+                        void foo;
+                        let baz: any;
+                        void baz;
+                        { svelteHTML.createElement("p", {});                             (foo);
+                            (baz);
+                        }
                     }
                 }
             }

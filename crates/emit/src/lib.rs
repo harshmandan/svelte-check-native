@@ -859,11 +859,11 @@ fn analyze_script_and_template_refs<'alloc>(
     // resolve to a `properties` declared in `<script module>`.
     let mut store_refs: Vec<SmolStr> = {
         let mut accumulated: Vec<SmolStr> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
+        let mut seen: HashSet<SmolStr> = HashSet::new();
         let push_unique =
-            |found: Vec<SmolStr>, seen: &mut HashSet<String>, out: &mut Vec<SmolStr>| {
+            |found: Vec<SmolStr>, seen: &mut HashSet<SmolStr>, out: &mut Vec<SmolStr>| {
                 for name in found {
-                    if seen.insert(name.to_string()) {
+                    if seen.insert(name.clone()) {
                         out.push(name);
                     }
                 }
@@ -900,38 +900,37 @@ fn analyze_script_and_template_refs<'alloc>(
     // Single template walk produces: void-refs (script bindings used
     // only in markup), template-side store-auto-subscribes, and type-
     // only-import type refs.
-    let (template_void_refs, template_store_refs, template_type_refs) =
-        if script_bindings.is_empty() && type_only_imports.is_empty() {
-            (Vec::new(), Vec::new(), Vec::new())
-        } else {
-            let already: HashSet<&str> = store_refs
-                .iter()
-                .chain(prop_names.iter())
-                .map(|s| s.as_str())
-                .collect();
-            let mut tpl_voids = Vec::new();
-            let mut tpl_stores = Vec::new();
-            let mut tpl_types: Vec<SmolStr> = Vec::new();
-            let mut type_seen: HashSet<String> = HashSet::new();
-            let mut store_seen: HashSet<String> =
-                store_refs.iter().map(|s| s.to_string()).collect();
-            for name in find_template_refs(fragment, doc.source) {
-                if let Some(base) = name.as_str().strip_prefix('$') {
-                    if script_bindings.contains(base) && store_seen.insert(name.to_string()) {
-                        tpl_stores.push(name.clone());
-                        continue;
-                    }
-                }
-                if script_bindings.contains(name.as_str()) && !already.contains(name.as_str()) {
-                    tpl_voids.push(name);
-                } else if type_only_imports.contains(name.as_str())
-                    && type_seen.insert(name.to_string())
-                {
-                    tpl_types.push(name);
+    let (template_void_refs, template_store_refs, template_type_refs) = if script_bindings
+        .is_empty()
+        && type_only_imports.is_empty()
+    {
+        (Vec::new(), Vec::new(), Vec::new())
+    } else {
+        let already: HashSet<&str> = store_refs
+            .iter()
+            .chain(prop_names.iter())
+            .map(|s| s.as_str())
+            .collect();
+        let mut tpl_voids = Vec::new();
+        let mut tpl_stores = Vec::new();
+        let mut tpl_types: Vec<SmolStr> = Vec::new();
+        let mut type_seen: HashSet<SmolStr> = HashSet::new();
+        let mut store_seen: HashSet<SmolStr> = store_refs.iter().cloned().collect();
+        for name in find_template_refs(fragment, doc.source) {
+            if let Some(base) = name.as_str().strip_prefix('$') {
+                if script_bindings.contains(base) && store_seen.insert(name.clone()) {
+                    tpl_stores.push(name.clone());
+                    continue;
                 }
             }
-            (tpl_voids, tpl_stores, tpl_types)
-        };
+            if script_bindings.contains(name.as_str()) && !already.contains(name.as_str()) {
+                tpl_voids.push(name);
+            } else if type_only_imports.contains(name.as_str()) && type_seen.insert(name.clone()) {
+                tpl_types.push(name);
+            }
+        }
+        (tpl_voids, tpl_stores, tpl_types)
+    };
     store_refs.extend(template_store_refs);
 
     ScriptAndTemplateAnalysis {

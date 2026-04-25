@@ -171,7 +171,18 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                     // same param annotation regardless of declaration
                     // form (function vs const arrow) — see
                     // `getKitTypePath` callers in `incremental.ts`.
+                    //
+                    // Skip when the user has annotated the variable
+                    // (`export const load: Load = ...`). Splicing the
+                    // narrower Kit-route event type onto an arrow
+                    // already constrained to the broader `Load`
+                    // signature creates a contravariant-param mismatch
+                    // (TS2322 `({url}: LayoutLoadEvent) => ...` is not
+                    // assignable to `Load`). Honour the user's
+                    // explicit type — they've taken responsibility for
+                    // the param shape themselves.
                     if id.name.as_str() == "load"
+                        && declarator.id.type_annotation.is_none()
                         && let Some(init) = declarator.init.as_ref()
                     {
                         // Unwrap `async`/`await`/parenthesized wrappers

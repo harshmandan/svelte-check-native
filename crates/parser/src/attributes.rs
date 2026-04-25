@@ -104,6 +104,7 @@ fn parse_brace_attribute(
         return Some(Attribute::Spread(SpreadAttr {
             expression_range: Range::new(expr_start, end),
             range: Range::new(start, end + 1),
+            is_attach: false,
         }));
     }
 
@@ -139,6 +140,7 @@ fn parse_brace_attribute(
         return Some(Attribute::Spread(SpreadAttr {
             expression_range: Range::new(expr_start, end),
             range: Range::new(start, end + 1),
+            is_attach: true,
         }));
     }
 

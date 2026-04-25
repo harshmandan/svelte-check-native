@@ -521,8 +521,25 @@ fn emit_document_with_render_name(
                 | svn_analyze::PropsSource::RuneAnnotation
                 | svn_analyze::PropsSource::RuneGeneric
         );
-    if should_alias && let Some(body) = props_info.type_text.as_deref() {
+    // Alias placement matters when the Props literal references generic
+    // params declared via `<script generics="T">`. At module scope, those
+    // generics aren't visible — `type $$ComponentProps = { x: T }` then
+    // fires TS2304 ("Cannot find name 'T'"). Upstream emits the alias
+    // INSIDE the render function body where the generic binder is in
+    // scope; mirror that. For non-generic files, keep the module-scope
+    // emission (line-count parity with upstream's same shape).
+    let alias_body = if should_alias {
+        props_info.type_text.clone()
+    } else {
+        None
+    };
+    let alias_in_render_body = alias_body.is_some() && generics.is_some();
+    if let Some(body) = alias_body.as_deref()
+        && !alias_in_render_body
+    {
         let _ = writeln!(buf, "type $$ComponentProps = {body};");
+    }
+    if alias_body.is_some() {
         props_info.type_text = Some("$$ComponentProps".to_string());
         props_info.type_root_name = Some(SmolStr::new("$$ComponentProps"));
     }
@@ -534,6 +551,14 @@ fn emit_document_with_render_name(
         None => {
             let _ = writeln!(buf, "async function {render_name}() {{");
         }
+    }
+    // Generic-scoped alias emission — see `alias_in_render_body` above.
+    // Lives at the very top of the render body so the destructure
+    // annotation rewrite (`: $$ComponentProps`) downstream can reference
+    // it. The `T` in `<script generics="T">` is the render fn's binder
+    // and is in scope here.
+    if alias_in_render_body && let Some(body) = alias_body.as_deref() {
+        let _ = writeln!(buf, "    type $$ComponentProps = {body};");
     }
     // Synthesised `type $$Events = <T>;` from a typed
     // `createEventDispatcher<T>()` call, when the three-trigger gate
@@ -4665,7 +4690,21 @@ fn emit_dom_element_open(
                 let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
                 let start = s.expression_range.start + leading_ws;
                 let end = start + trimmed.len() as u32;
-                let _ = write!(buf, "{inner}...");
+                if s.is_attach {
+                    // `{@attach EXPR}` (Svelte 5.29+): emit as a
+                    // computed-symbol property so the arrow's parameter
+                    // picks up the element's contextual type via the
+                    // `[key: symbol]: Attachment<T> | …` index signature
+                    // on `HTMLAttributes` in svelte/elements.d.ts. A
+                    // `...EXPR` spread emit (the pre-2026-04-25 shape)
+                    // would leave the arrow's param as implicit-any —
+                    // tsgo then fires TS7006 on common patterns like
+                    // `{@attach el => el.focus()}`. Mirrors upstream
+                    // svelte2tsx's `[Symbol("@attach")]: EXPR,` form.
+                    let _ = write!(buf, "{inner}[Symbol(\"@attach\")]: ");
+                } else {
+                    let _ = write!(buf, "{inner}...");
+                }
                 buf.append_with_source(trimmed, svn_core::Range::new(start, end));
                 let _ = writeln!(buf, ",");
             }

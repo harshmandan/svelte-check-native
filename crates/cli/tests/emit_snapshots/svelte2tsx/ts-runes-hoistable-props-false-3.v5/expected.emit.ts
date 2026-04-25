@@ -3,8 +3,8 @@
 
     type SomeType<T extends boolean> = T;
     type T = unknown;
-type $$ComponentProps = { someProp: SomeType<T>; };
 async function $$render_cbdc5f31<T extends boolean>() {
+    type $$ComponentProps = { someProp: SomeType<T>; };
 
     let { someProp }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {

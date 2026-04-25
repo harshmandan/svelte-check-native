@@ -4,11 +4,11 @@ async function $$render_b55beab5() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {
-            ...x,
+            [Symbol("@attach")]: x,
         });
         }
         { svelteHTML.createElement("div", {
-            ...(node) => {},
+            [Symbol("@attach")]: (node) => {},
         });
         }
         {

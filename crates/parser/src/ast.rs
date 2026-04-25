@@ -258,11 +258,20 @@ pub struct ShorthandAttr {
     pub range: Range,
 }
 
-/// `{...expr}`.
+/// `{...expr}` or `{@attach expr}`. The `is_attach` flag distinguishes
+/// the two: `{...expr}` spreads the object's properties onto the
+/// element, while `{@attach EXPR}` provides an `Attachment<T>` callback
+/// (Svelte 5.29+, `svelte/attachments`). Emit handles them differently
+/// — a real spread emits `...EXPR,` inside the element's prop literal,
+/// while an attach tag emits `[Symbol("@attach")]: EXPR,` so the
+/// arrow's parameter picks up the element's contextual type via the
+/// `[key: symbol]: Attachment<T>` index signature on `HTMLAttributes`.
 #[derive(Debug, Clone)]
 pub struct SpreadAttr {
     pub expression_range: Range,
     pub range: Range,
+    /// True for `{@attach EXPR}`, false for `{...EXPR}`.
+    pub is_attach: bool,
 }
 
 /// `<prefix>:<name>[|<modifier>]*[={value}]`.

@@ -34,7 +34,7 @@ Measured on a SvelteKit + TypeScript monorepo with
 ```
   tool                  cold     warm     dirty   speedup   errors/warnings/problems
 ──────────────────────────────────────────────────────────────────────────────────────
-svelte-check-native      2.5s     1.0s     0.9s      41x           0/49/17
+svelte-check-native      2.4s     1.0s     0.9s      41x           0/49/17
 svelte-check            40.0s    41.0s    41.6s     1.0x           0/49/17
 svelte-check --tsgo     18.3s    18.6s    17.9s     2.9x           1/49/18
 svelte-check-rs         12.2s     5.5      4.4s     7.5x         732/44/261
@@ -89,9 +89,13 @@ crates in one process:
 
 Every flag not listed below behaves the same as `svelte-check`.
 
-### New Flags
+### New flags
 
 ```
+--svelte-warnings <mode>      How to source Svelte compiler warnings:
+                              native | bridge
+                              native: rust port faster
+                              bridge: js bridge same as svelte-check, slower by 1.5-2s
 --timings                     Phase-by-phase wall-clock breakdown
 --debug-paths                 Print resolved binaries, exit
 --tsgo-version                Print tsgo version, exit
@@ -106,7 +110,8 @@ Every flag not listed below behaves the same as `svelte-check`.
 - `--no-tsconfig` — errors out. A tsconfig is required.
 - `--incremental` — always on. tsgo's `tsbuildinfo` handles it.
 - `--tsgo` — always on. Classic `tsc` is not wired up.
-- `--diagnostic-sources css` — not supported.
+- `--diagnostic-sources css` — accepted but no-op (a CSS language
+  service isn't bundled). Roadmap below.
 
 Run `svelte-check-native --help` for the full list.
 
@@ -160,7 +165,7 @@ svelte-check-native --workspace apps/dashboard
 
 ## Roadmap
 
-- [ ] CSS support
+- [ ] **CSS lint diagnostics**
 
 ## Troubleshooting
 

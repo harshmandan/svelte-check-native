@@ -8,7 +8,10 @@ type $$ComponentProps = {
 async function $$render_22446700() {
 
                                           
-    let { row, header }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
+    let { row, header }: /*Ωignore_startΩ*/$$ComponentProps
+
+
+/*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }

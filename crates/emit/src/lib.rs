@@ -1447,12 +1447,26 @@ fn inject_component_props_annotation(content: &str, lang: svn_parser::ScriptLang
             // markers tell svelte-check's diagnostic mapper to drop
             // any tsgo errors INSIDE the marker span, since the
             // rewritten alias name has no source-position
-            // correspondence to the user's original literal. This
-            // line-count parity also stops position drift in
-            // downstream errors — the alias name is one token where
-            // a multi-line literal was many.
+            // correspondence to the user's original literal.
+            //
+            // Preserve the source's line count over the replaced span:
+            // the original annotation may straddle multiple lines (a
+            // multi-line type literal), and the script-body line_map
+            // assumes 1:1 source/overlay line correspondence. Without
+            // padding, every declaration after the rewrite drifts by
+            // (literal-line-count - 1) lines in mapped diagnostics
+            // (palacms Item.svelte was the canary: `let element = $state()`
+            // mapped to source line 92 instead of 99). Pad newlines
+            // INSIDE the ignore-marker span — diagnostics on those
+            // lines are dropped by the mapper, but the line-count
+            // parity restores correct positions downstream.
+            let dropped_newlines = content[start..end].matches('\n').count();
             out.push_str(&content[..start]);
-            out.push_str(": /*\u{03A9}ignore_start\u{03A9}*/$$ComponentProps/*\u{03A9}ignore_end\u{03A9}*/");
+            out.push_str(": /*\u{03A9}ignore_start\u{03A9}*/$$ComponentProps");
+            for _ in 0..dropped_newlines {
+                out.push('\n');
+            }
+            out.push_str("/*\u{03A9}ignore_end\u{03A9}*/");
             out.push_str(&content[end..]);
         }
     }

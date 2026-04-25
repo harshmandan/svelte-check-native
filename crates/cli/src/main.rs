@@ -860,14 +860,16 @@ fn run_typecheck(
         let Some((include, exclude, files)) = &project_scope else {
             return true;
         };
-        // `files` bypasses exclude. Match against both the literal
-        // walker path and its canonical form (the explicit list was
-        // canonicalized where possible above).
-        if files.contains(path)
-            || dunce::canonicalize(path)
-                .ok()
-                .is_some_and(|abs| files.contains(&abs))
-        {
+        // `files` bypasses exclude. Walker paths are already canonical
+        // because `workspace` was canonicalized at startup
+        // (`main.rs:180`), so the lookup matches the canonical form
+        // built into the set above without re-canonicalizing per file.
+        // Limitation: a symlinked directory inside the workspace tree
+        // could yield a walker path whose canonical form is elsewhere;
+        // unobserved in real Svelte projects and not worth the
+        // per-entry stat cost (~1100 calls × ~30µs each on 1k-file
+        // workspaces).
+        if files.contains(path) {
             return true;
         }
         let rel = path.strip_prefix(workspace).unwrap_or(path);
@@ -906,13 +908,16 @@ fn run_typecheck(
         .into_iter()
         .filter(|p| in_project_scope(p))
         .collect();
-    // `.svelte.ts` runes-module set — canonicalised so the
-    // overlay decider can compare absolute paths resolved out of
-    // user `.ts` import specifiers against this set in O(1).
-    let runes_modules_set: std::collections::HashSet<PathBuf> = runes_modules_raw
-        .into_iter()
-        .filter_map(|p| dunce::canonicalize(&p).ok().or(Some(p)))
-        .collect();
+    // `.svelte.ts` runes-module set. Walker paths are canonical
+    // (workspace is canonicalized at startup, `main.rs:180`), so
+    // dropping the per-entry canonicalize here costs nothing as long
+    // as the consumer at `rewrite_svelte_imports_for_collisions`
+    // canonicalizes its probe paths the same way (it does — the
+    // sibling-runes probe still calls `dunce::canonicalize`, which
+    // resolves any `./` / `..` from a relative import specifier into
+    // the same canonical form held in this set).
+    let runes_modules_set: std::collections::HashSet<PathBuf> =
+        runes_modules_raw.into_iter().collect();
     let user_ts_files: Vec<PathBuf> = user_ts_raw
         .into_iter()
         .filter(|p| in_project_scope(p))

@@ -1,251 +1,24 @@
-//! `{expr}` interpolations, `{@const}` declarations, and the
-//! `void [chain, …];` condition-ref marker emitted inside `{#if}` /
-//! `{:else if}` arms (TS2774 pacifier).
+//! `{#if}` / `{:else if}` block support.
 //!
-//! Mirrors upstream svelte2tsx's `htmlxtojsx_v2/nodes/MustacheTag.ts` +
-//! `ConstTag.ts`, with our token-map plumbing layered in.
+//! The actual `if`/`else if`/`else` branch dispatch lives in
+//! `lib.rs::emit_template_node` (it has to interleave with the rest of
+//! the dispatcher, since `{:else if}` is structurally a flat list of
+//! arms rather than a nested tree). This module owns the support
+//! helpers tsgo needs to type-check the condition expressions:
+//!
+//! - [`emit_condition_ref_marker`] — the `void [chain, …];` pacifier
+//!   for TS2774 ("non-nullable function not invoked"), emitted at the
+//!   top of each truthy-narrowed branch body.
+//! - [`extract_property_chains`] — AST walker that collects the
+//!   identifier / member-access chains referenced inside a condition
+//!   expression.
+//!
+//! Mirrors upstream svelte2tsx's
+//! `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/IfElseBlock.ts`.
 
 use std::collections::HashSet;
-use std::fmt::Write;
 
 use crate::emit_buffer::EmitBuffer;
-
-/// Emit a `{expr}` interpolation as a bare-paren-call expression
-/// statement (`(EXPR);`). Routes `{@const}` / `{@html}` / `{@render}` /
-/// `{@debug}` through `emit_at_const_if_any`; only `@const` produces
-/// structured output today.
-pub(crate) fn emit_interpolation(
-    buf: &mut EmitBuffer,
-    source: &str,
-    interp: &svn_parser::Interpolation,
-    depth: usize,
-) {
-    if interp.kind != svn_parser::InterpolationKind::Expression {
-        emit_at_const_if_any(buf, source, interp, depth);
-        return;
-    }
-    let expr_start = interp.expression_range.start as usize;
-    let expr_end = interp.expression_range.end as usize;
-    let Some(expr_raw) = source.get(expr_start..expr_end) else {
-        return;
-    };
-    let trimmed = expr_raw.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-    // Shift the source range to point at the trimmed expression so the
-    // TokenMapEntry's overlay span exactly matches the source bytes
-    // tsgo would blame for a diagnostic.
-    let leading_ws = expr_raw.len() - expr_raw.trim_start().len();
-    let trimmed_source_start = interp.expression_range.start + leading_ws as u32;
-    let trimmed_source_end = trimmed_source_start + trimmed.len() as u32;
-    let indent = "    ".repeat(depth);
-    buf.append_synthetic(&indent);
-    buf.append_synthetic("(");
-    buf.append_with_source(
-        trimmed,
-        svn_core::Range::new(trimmed_source_start, trimmed_source_end),
-    );
-    buf.append_synthetic(");\n");
-}
-
-/// If `interp` is an `{@const <pattern> = <expr>}` tag, emit it inline
-/// as a real `const <pattern> = <expr>;` statement in the current
-/// template-check scope.
-///
-/// Without inline emission, the `@const`-declared name lives only as a
-/// top-of-function `let NAME: any = undefined;` stub. That works for
-/// "does the name resolve?" checks but drops the expression's inferred
-/// type. A pattern like
-///     `{@const featureType = persistentFeature.settings.type}`
-///     `{#if featureType === 'persistent-comment'}`
-/// needs `featureType` to carry the discriminant literal type so TS's
-/// control-flow analysis narrows it inside the `{#if}`. Emitting
-/// inline pins the type. The top-level `let NAME: any` stub stays in
-/// place so forward references (rare but possible) still resolve; the
-/// inline `const` shadows it inside the block.
-fn emit_at_const_if_any(
-    buf: &mut EmitBuffer,
-    source: &str,
-    interp: &svn_parser::Interpolation,
-    depth: usize,
-) {
-    if interp.kind != svn_parser::InterpolationKind::AtConst {
-        return;
-    }
-    let body_start = interp.expression_range.start as usize;
-    let body_end = interp.expression_range.end as usize;
-    let Some(body_raw) = source.get(body_start..body_end) else {
-        return;
-    };
-    let trimmed = body_raw.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-    let indent = "    ".repeat(depth);
-    // The body is emitted via `append_verbatim` so diagnostics
-    // landing inside a multi-line body map back to the source
-    // line tsgo reported. Use the UNTRIMMED body + full
-    // expression_range so count_newlines(text) matches
-    // count_newlines(source_slice) — trim-dropped leading whitespace
-    // would desync the entry's source mapping by one line.
-    buf.push_str(&indent);
-    buf.push_str("const ");
-    buf.append_verbatim(body_raw, source, interp.expression_range);
-    buf.push_str(";\n");
-    let body = trimmed;
-
-    // Void every binding introduced by the pattern. Without this tsgo
-    // fires TS6133 on `@const` tags whose binding isn't referenced
-    // elsewhere in the enclosing block.
-    let lhs = split_lhs(body);
-    for name in collect_pattern_names(&lhs) {
-        let _ = writeln!(buf, "{indent}void {name};");
-    }
-}
-
-/// Extract the binding-pattern prefix of an `{@const}` body, discarding
-/// the type annotation and the initializer.
-///
-/// Examples:
-///   - `foo = 1` → `foo`
-///   - `foo: Record<A, B> = {}` → `foo`
-///   - `[a, { b }] = tuple` → `[a, { b }]`
-///   - `{ a = 1, b } = obj` → `{ a = 1, b }`
-fn split_lhs(body: &str) -> String {
-    let bytes = body.as_bytes();
-    let mut depth = 0i32;
-    let mut end = bytes.len();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'{' | b'[' | b'(' | b'<' => depth += 1,
-            b'}' | b']' | b')' | b'>' if depth > 0 => depth -= 1,
-            b'=' if depth == 0 => {
-                end = i;
-                break;
-            }
-            b':' if depth == 0 => {
-                end = i;
-                break;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    body[..end].trim().to_string()
-}
-
-/// Collect every identifier introduced by a (possibly destructuring)
-/// binding pattern on the LHS of an `{@const}` tag.
-///
-/// Examples:
-///   - `foo` → [foo]
-///   - `{ a, b: c, ...rest }` → [a, c, rest]
-///   - `[a, { b }, ...rest]` → [a, b, rest]
-fn collect_pattern_names(lhs: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let bytes = lhs.as_bytes();
-    let mut i = 0usize;
-    let mut after_colon = false;
-    let mut at_binding_start = true;
-    let mut depth = 0i32;
-
-    while i < bytes.len() {
-        let b = bytes[i];
-        match b {
-            b'{' | b'[' => {
-                depth += 1;
-                i += 1;
-                at_binding_start = true;
-                after_colon = false;
-                continue;
-            }
-            b'}' | b']' => {
-                depth -= 1;
-                i += 1;
-                after_colon = false;
-                at_binding_start = false;
-                continue;
-            }
-            b',' => {
-                i += 1;
-                at_binding_start = true;
-                after_colon = false;
-                continue;
-            }
-            b':' => {
-                i += 1;
-                after_colon = true;
-                at_binding_start = false;
-                continue;
-            }
-            b'=' if depth > 0 => {
-                let mut paren_depth = 0i32;
-                i += 1;
-                while i < bytes.len() {
-                    match bytes[i] {
-                        b'(' | b'[' | b'{' => paren_depth += 1,
-                        b')' | b']' | b'}' if paren_depth > 0 => paren_depth -= 1,
-                        b',' | b'}' | b']' if paren_depth == 0 => break,
-                        _ => {}
-                    }
-                    i += 1;
-                }
-                continue;
-            }
-            b'.' if i + 2 < bytes.len() && &bytes[i..i + 3] == b"..." => {
-                i += 3;
-                at_binding_start = true;
-                after_colon = false;
-                continue;
-            }
-            b if b.is_ascii_whitespace() => {
-                i += 1;
-                continue;
-            }
-            _ => {}
-        }
-        if b.is_ascii_alphabetic() || b == b'_' || b == b'$' {
-            let start = i;
-            while i < bytes.len() {
-                let c = bytes[i];
-                if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' {
-                    i += 1;
-                } else {
-                    break;
-                }
-            }
-            let is_top_level = depth == 0;
-            let is_binding = if is_top_level {
-                true
-            } else {
-                let mut j = i;
-                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                    j += 1;
-                }
-                let next = bytes.get(j).copied();
-                if after_colon {
-                    true
-                } else if at_binding_start {
-                    !matches!(next, Some(b':'))
-                } else {
-                    false
-                }
-            };
-            if is_binding {
-                out.push(lhs[start..i].to_string());
-            }
-            at_binding_start = false;
-            after_colon = false;
-            continue;
-        }
-        at_binding_start = false;
-        after_colon = false;
-        i += 1;
-    }
-    out
-}
 
 /// Emit a `void [<access>, …];` statement listing every identifier /
 /// property-access chain referenced inside the condition expression at
@@ -253,6 +26,20 @@ fn collect_pattern_names(lhs: &str) -> Vec<String> {
 /// TS2774 check, which flags non-nullable-function operands of a
 /// conditional `&&`/`||` chain unless the same symbol appears as a
 /// value reference inside the enclosing block body.
+///
+/// Identifier-chain references are narrowing-neutral and still satisfy
+/// the check: `isSymbolUsedInConditionBody` walks identifiers in the
+/// body and matches on property-access chains with the same symbol.
+/// We extract chains rather than whole logical operands so re-emitting
+/// a comparison like `displayMode !== 'full'` inside a block that
+/// already narrowed `displayMode` to exclude `'full'` doesn't fire
+/// TS2367 ("this comparison appears to be unintentional").
+///
+/// We skip negated (`!(…)`) conditions entirely: TS2774 doesn't fire
+/// reliably when the condition lives behind `!`, and emitting a
+/// property-access marker inside the negated branch can surface type
+/// errors (TS18047 / TS2339) that the user's inverted narrowing would
+/// normally make unreachable.
 pub(crate) fn emit_condition_ref_marker(
     buf: &mut EmitBuffer,
     source: &str,
@@ -291,6 +78,19 @@ pub(crate) fn emit_condition_ref_marker(
 /// template literals, RegExp literals, `?.` after non-identifier, etc.
 /// all needed hand-coded handling. The AST walker gets each of these
 /// for free.
+///
+/// Chain suffixes (`.prop`, `?.prop`) are included so `ctx.GhostButton`
+/// emits as a single ref. Computed-member subscripts (`foo[key]`) and
+/// call-argument lists (`f(x)`) are NOT swallowed: only the callee /
+/// object portion contributes, matching the existing template-refs
+/// pass convention.
+///
+/// Function bodies (arrow parameters, block expressions) are skipped
+/// structurally — the AST walker simply doesn't recurse into them — so
+/// inner-scope bindings never leak into the marker.
+///
+/// Keywords and the Svelte auto-subscribe `$ident` form are filtered
+/// out post-walk.
 pub(crate) fn extract_property_chains(text: &str) -> Vec<String> {
     use oxc_ast::ast::{Expression, Statement};
 

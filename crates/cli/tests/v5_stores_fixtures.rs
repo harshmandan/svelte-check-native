@@ -104,16 +104,10 @@ fn parse_summary(line: &str) -> (usize, usize) {
     (passed, failed)
 }
 
+/// Same delegation pattern as `v5_fixtures::locate_local_tsgo` —
+/// reuse the production discover() so per-fixture workspaces in
+/// /var/folders/ pick up tsgo via the same logic real users hit.
 fn locate_local_tsgo(crate_dir: &Path) -> Option<PathBuf> {
     let repo_root = crate_dir.parent()?.parent()?;
-    [
-        repo_root.join("node_modules/@typescript/native-preview-darwin-arm64/lib/tsgo"),
-        repo_root.join("node_modules/@typescript/native-preview-darwin-x64/lib/tsgo"),
-        repo_root.join("node_modules/@typescript/native-preview-linux-arm64/lib/tsgo"),
-        repo_root.join("node_modules/@typescript/native-preview-linux-x64/lib/tsgo"),
-        repo_root.join("node_modules/@typescript/native-preview-win32-x64/lib/tsgo.exe"),
-        repo_root.join("node_modules/@typescript/native-preview/bin/tsgo.js"),
-    ]
-    .into_iter()
-    .find(|p| p.is_file())
+    svn_typecheck::discover(repo_root).ok().map(|b| b.path)
 }

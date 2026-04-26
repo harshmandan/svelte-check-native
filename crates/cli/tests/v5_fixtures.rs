@@ -133,19 +133,21 @@ fn parse_summary(line: &str) -> (usize, usize) {
     (passed, failed)
 }
 
-/// Find the platform-native tsgo binary or the JS wrapper inside the repo's
-/// local node_modules. Tries the platform package first (faster, no Node
-/// startup), then falls back to the wrapper.
+/// Locate tsgo for these tests by delegating to the production
+/// discovery layer. Per-fixture workspaces live under `/var/folders/`
+/// where there's no enclosing `node_modules` to walk up to, so we run
+/// discovery against the repo root and pass the result through to the
+/// runner via TSGO_BIN.
+///
+/// The previous shape of this helper hard-coded a six-path list that
+/// covered platform-native packages + the JS wrapper but missed
+/// pnpm/bun package-store layouts (`.pnpm/@typescript+native-preview@…`)
+/// — the production runtime supports those via
+/// `svn_typecheck::discovery::find_in_package_store`. Reusing the
+/// real discover() keeps test coverage aligned with shipping
+/// behaviour and prevents tests from passing on a layout users can't
+/// actually use.
 fn locate_local_tsgo(crate_dir: &std::path::Path) -> Option<PathBuf> {
     let repo_root = crate_dir.parent()?.parent()?; // crates/cli → crates → repo
-    [
-        repo_root.join("node_modules/@typescript/native-preview-darwin-arm64/lib/tsgo"),
-        repo_root.join("node_modules/@typescript/native-preview-darwin-x64/lib/tsgo"),
-        repo_root.join("node_modules/@typescript/native-preview-linux-arm64/lib/tsgo"),
-        repo_root.join("node_modules/@typescript/native-preview-linux-x64/lib/tsgo"),
-        repo_root.join("node_modules/@typescript/native-preview-win32-x64/lib/tsgo.exe"),
-        repo_root.join("node_modules/@typescript/native-preview/bin/tsgo.js"),
-    ]
-    .into_iter()
-    .find(|p| p.is_file())
+    svn_typecheck::discover(repo_root).ok().map(|b| b.path)
 }

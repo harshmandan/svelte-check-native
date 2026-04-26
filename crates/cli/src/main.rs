@@ -385,9 +385,24 @@ fn run_tsgo_version(workspace: &Path) -> ExitCode {
         }
     };
     println!("tsgo binary: {}", &bin.path.display());
-    let output = std::process::Command::new(&bin.path)
-        .arg("--version")
-        .output();
+    // The discovery layer flags JS-wrapper installs (`tsgo.js` under
+    // node_modules/@typescript/native-preview/bin/) with
+    // `needs_node = true`. Those can't be exec'd directly — we have
+    // to spawn `node <path>` instead. The main type-check path at
+    // runner.rs honors this; missing it here meant
+    // `--tsgo-version` failed to launch on JS-wrapper-only installs
+    // (rare today since npm pulls a platform-native package, but
+    // still real for environments that opt out of platform packages).
+    let output = if bin.needs_node {
+        std::process::Command::new("node")
+            .arg(&bin.path)
+            .arg("--version")
+            .output()
+    } else {
+        std::process::Command::new(&bin.path)
+            .arg("--version")
+            .output()
+    };
     match output {
         Ok(o) => {
             let stdout = String::from_utf8_lossy(&o.stdout);

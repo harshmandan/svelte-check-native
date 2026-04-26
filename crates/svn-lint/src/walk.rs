@@ -194,7 +194,7 @@ pub fn walk(source: &str, ctx: &mut LintContext<'_>) {
     // `<svelte:options runes={false}>` explicit override beats the
     // substring heuristic. Upstream: phase 2-analyze resolves this
     // from `root.options`.
-    if let Some(explicit) = find_runes_option(&fragment) {
+    if let Some(explicit) = find_runes_option(&fragment, source) {
         ctx.runes = explicit;
     }
 
@@ -332,7 +332,7 @@ fn object_expression_has_props_key(src: &str) -> bool {
 }
 
 /// Scan the top-level fragment for `<svelte:options runes[={expr}]>`.
-fn find_runes_option(fragment: &Fragment) -> Option<bool> {
+fn find_runes_option(fragment: &Fragment, source: &str) -> Option<bool> {
     for node in &fragment.nodes {
         if let Node::SvelteElement(se) = node
             && se.kind == SvelteElementKind::Options
@@ -365,8 +365,21 @@ fn find_runes_option(fragment: &Fragment) -> Option<bool> {
                         return Some(true);
                     }
                     Attribute::Expression(e) if e.name.as_str() == "runes" => {
-                        // `runes={expr}` — we don't evaluate the expression; assume truthy.
-                        return Some(true);
+                        // `runes={expr}` — read the expression's source
+                        // bytes and recognise the literal `true` / `false`
+                        // forms. Anything else (variable refs, function
+                        // calls) → conservative truthy fallback. Without
+                        // the literal-false carve-out, opting out via
+                        // `runes={false}` was silently treated as opt-IN
+                        // and the file got linted under runes-mode rules.
+                        let start = e.expression_range.start as usize;
+                        let end = e.expression_range.end as usize;
+                        let trimmed = source.get(start..end).map(str::trim).unwrap_or("");
+                        return Some(match trimmed {
+                            "false" => false,
+                            "true" => true,
+                            _ => true,
+                        });
                     }
                     _ => {}
                 }
@@ -592,5 +605,50 @@ mod runes_inference_tests {
         // by definition; no scan needed.
         let src = "// no rune calls here";
         assert!(infer_runes_mode(src, &p("foo.svelte.js")));
+    }
+}
+
+#[cfg(test)]
+mod runes_options_tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use super::find_runes_option;
+    use svn_parser::{parse_all_template_runs, parse_sections};
+
+    fn detect(src: &str) -> Option<bool> {
+        let (doc, _) = parse_sections(src);
+        let (fragment, _) = parse_all_template_runs(src, &doc.template.text_runs);
+        find_runes_option(&fragment, src)
+    }
+
+    #[test]
+    fn runes_expr_false_is_false() {
+        // G1 regression: `runes={false}` was being treated as truthy,
+        // so files explicitly opting out of runes mode got linted
+        // under the wrong rule set.
+        assert_eq!(detect("<svelte:options runes={false} />"), Some(false));
+    }
+
+    #[test]
+    fn runes_expr_true_stays_true() {
+        assert_eq!(detect("<svelte:options runes={true} />"), Some(true));
+    }
+
+    #[test]
+    fn runes_expr_unknown_falls_back_to_true() {
+        // A variable reference (`runes={x}`) can't be statically
+        // resolved — fall back to truthy so we don't regress files
+        // that legitimately rely on dynamic config.
+        assert_eq!(detect("<svelte:options runes={x} />"), Some(true));
+    }
+
+    #[test]
+    fn runes_bare_attribute_is_true() {
+        assert_eq!(detect("<svelte:options runes />"), Some(true));
+    }
+
+    #[test]
+    fn runes_attr_string_false_is_false() {
+        assert_eq!(detect(r#"<svelte:options runes="false" />"#), Some(false));
     }
 }

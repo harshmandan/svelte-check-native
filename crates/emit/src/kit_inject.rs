@@ -37,7 +37,8 @@ use oxc_allocator::Allocator;
 use oxc_ast::ast::{BindingPatternKind, Declaration, Statement};
 use oxc_span::GetSpan;
 use std::path::Path;
-use svn_parser::{ScriptLang, parse_script_body};
+use svn_core::sveltekit::{KitFilesSettings, KitRole, ScriptLang, classify};
+use svn_parser::{ScriptLang as ParserScriptLang, parse_script_body};
 
 /// HTTP method names that `+server.ts` may export as handler functions,
 /// per the SvelteKit runtime. Order matches upstream svelte2tsx's
@@ -46,9 +47,10 @@ const SERVER_HANDLER_NAMES: &[&str] = &[
     "GET", "PUT", "POST", "PATCH", "DELETE", "OPTIONS", "HEAD", "fallback",
 ];
 
-/// Classification of which SvelteKit Kit-file shape we're processing.
-/// Drives which export names we inject types for and which
-/// `$types`-scope label to splice in.
+/// Local view onto the centralised classifier — the only shapes
+/// `kit_inject` acts on. Built from `svn_core::sveltekit::classify`'s
+/// richer `KitRole` so the conversion is one place, not threaded
+/// through every match arm.
 enum KitFileKind {
     /// `+server.ts` — HTTP handlers get `RequestEvent`. No config
     /// exports (`ssr`/`csr`/etc. are page-only).
@@ -60,42 +62,32 @@ enum KitFileKind {
     Route { is_layout: bool, is_server: bool },
 }
 
-fn classify_kit_file(basename: &str) -> Option<KitFileKind> {
-    // SvelteKit `(group)` route grouping appears in basenames as
-    // `+page@(auth).ts`, `+layout@admin.ts`, etc. The `@group`
-    // suffix is for organisational nesting and doesn't change which
-    // Kit-file shape the runtime treats it as. Strip it before
-    // matching so grouped routes receive the same `$types`
-    // injection as their non-grouped counterparts. Mirrors
-    // `is_kit_route_file` in `cli::kit_files`.
-    let normalized: String = if let Some(at) = basename.find('@') {
-        // basename = "+page@(group).ts" → "+page.ts"
-        let dot = basename.rfind('.')?;
-        if dot <= at {
-            return None;
-        }
-        format!("{}{}", &basename[..at], &basename[dot..])
-    } else {
-        basename.to_string()
-    };
-    match normalized.as_str() {
-        "+server.ts" => Some(KitFileKind::ServerEndpoint),
-        "+page.ts" => Some(KitFileKind::Route {
-            is_layout: false,
-            is_server: false,
+/// Classify `path` for kit_inject's purposes. Returns `None` for any
+/// shape we don't currently inject into:
+///
+/// - `.js` route scripts (would need JSDoc; separate code path).
+/// - Hooks / params (recognised by discovery but no annotations
+///   injected today).
+/// - Plain user files.
+///
+/// Defaults are used for `KitFilesSettings` because kit_inject
+/// doesn't currently consult per-project overrides — only basename
+/// shape matters here, and the route-classification path inside
+/// `classify` doesn't read any of the settings fields. Centralising
+/// the defaults keeps the call site honest about that fact.
+fn kit_file_kind(path: &Path) -> Option<KitFileKind> {
+    let kit = classify(path, &KitFilesSettings::default())?;
+    if !matches!(kit.lang, ScriptLang::Ts) {
+        return None;
+    }
+    match kit.role {
+        KitRole::ServerEndpoint => Some(KitFileKind::ServerEndpoint),
+        KitRole::RouteScript { flavour } => Some(KitFileKind::Route {
+            is_layout: flavour.is_layout,
+            is_server: flavour.is_server,
         }),
-        "+layout.ts" => Some(KitFileKind::Route {
-            is_layout: true,
-            is_server: false,
-        }),
-        "+page.server.ts" => Some(KitFileKind::Route {
-            is_layout: false,
-            is_server: true,
-        }),
-        "+layout.server.ts" => Some(KitFileKind::Route {
-            is_layout: true,
-            is_server: true,
-        }),
+        // RouteComponent / Hooks / Params don't get annotations from
+        // this pass — return None so the caller skips them.
         _ => None,
     }
 }
@@ -109,11 +101,10 @@ fn classify_kit_file(basename: &str) -> Option<KitFileKind> {
 /// additive, so diagnostic positions at lines unaffected by the
 /// inject still map 1:1 to the source.
 pub fn inject(path: &Path, source: &str) -> Option<String> {
-    let basename = path.file_name().and_then(|s| s.to_str())?;
-    let kind = classify_kit_file(basename)?;
+    let kind = kit_file_kind(path)?;
 
     let alloc = Allocator::default();
-    let parsed = parse_script_body(&alloc, source, ScriptLang::Ts);
+    let parsed = parse_script_body(&alloc, source, ParserScriptLang::Ts);
 
     let mut insertions: Vec<(usize, String)> = Vec::new();
     for stmt in &parsed.program.body {
@@ -314,35 +305,6 @@ mod tests {
     }
     fn layout_server_path() -> PathBuf {
         PathBuf::from("src/routes/+layout.server.ts")
-    }
-
-    #[test]
-    fn classify_strips_group_suffix() {
-        // SvelteKit `(group)` routing puts the group label in the
-        // basename: `+page@(auth).ts`. Classification must strip the
-        // `@…` segment before matching so grouped routes get the
-        // same Kit-file kind as ungrouped ones.
-        assert!(matches!(
-            classify_kit_file("+page@(auth).ts"),
-            Some(KitFileKind::Route {
-                is_layout: false,
-                is_server: false
-            })
-        ));
-        assert!(matches!(
-            classify_kit_file("+layout@admin.ts"),
-            Some(KitFileKind::Route {
-                is_layout: true,
-                is_server: false
-            })
-        ));
-        assert!(matches!(
-            classify_kit_file("+page.server@(authed).ts"),
-            Some(KitFileKind::Route {
-                is_layout: false,
-                is_server: true
-            })
-        ));
     }
 
     #[test]

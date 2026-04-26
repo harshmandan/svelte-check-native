@@ -168,6 +168,8 @@ function runFixture(name, fixtureDir) {
         fs.writeFileSync(tsconfigPath, JSON.stringify(tsconfig, null, 2));
 
         let stdout = '';
+        let crashed = false;
+        let crashErr = null;
         try {
             stdout = execFileSync(
                 BIN,
@@ -176,6 +178,25 @@ function runFixture(name, fixtureDir) {
             );
         } catch (err) {
             stdout = err.stdout || '';
+            if (!stdout) {
+                crashed = true;
+                crashErr = err;
+            }
+        }
+
+        if (crashed) {
+            // No stdout means the binary crashed — surface it instead
+            // of letting an empty errors[] falsely register as 'pass'.
+            // `return` here triggers the surrounding try/finally
+            // workspace cleanup before bubbling out of runFixture().
+            failed++;
+            failures.push({
+                name,
+                count: 0,
+                first: null,
+                crash: `signal=${crashErr?.signal} status=${crashErr?.status} msg=${crashErr?.message}`,
+            });
+            return;
         }
 
         const errors = [];

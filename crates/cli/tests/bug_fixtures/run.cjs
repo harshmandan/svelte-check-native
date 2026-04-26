@@ -94,25 +94,42 @@ function runFixture(name, fixtureDir) {
         }
 
         let emit = '';
+        let crashed = false;
+        let crashErr = null;
         try {
             emit = execFileSync(BIN, args, { encoding: 'utf-8', timeout: 60_000, env: CHILD_ENV });
         } catch (err) {
+            // The binary exits non-zero on diagnostic errors but still
+            // produces valid stdout; that's expected. A genuine crash
+            // (signal, timeout, missing tsgo, etc.) leaves stdout empty
+            // — fail the fixture rather than letting `_not_contains`
+            // checks against an empty string falsely pass.
             emit = err.stdout || '';
-        }
-
-        for (const needle of expected.emit_contains || []) {
-            if (!emit.includes(needle)) {
-                issues.push(`expected emit to contain ${JSON.stringify(needle)}`);
-            }
-        }
-        for (const needle of expected.emit_not_contains || []) {
-            if (emit.includes(needle)) {
-                issues.push(`expected emit to NOT contain ${JSON.stringify(needle)}`);
+            if (!emit) {
+                crashed = true;
+                crashErr = err;
             }
         }
 
-        if (issues.length && process.env.DEBUG_EMIT) {
-            issues.push(`captured emit (first 4000 chars):\n${emit.slice(0, 4000)}`);
+        if (crashed) {
+            issues.push(
+                `binary crashed with no stdout (signal=${crashErr?.signal}, status=${crashErr?.status}, msg=${crashErr?.message})`
+            );
+        } else {
+            for (const needle of expected.emit_contains || []) {
+                if (!emit.includes(needle)) {
+                    issues.push(`expected emit to contain ${JSON.stringify(needle)}`);
+                }
+            }
+            for (const needle of expected.emit_not_contains || []) {
+                if (emit.includes(needle)) {
+                    issues.push(`expected emit to NOT contain ${JSON.stringify(needle)}`);
+                }
+            }
+
+            if (issues.length && process.env.DEBUG_EMIT) {
+                issues.push(`captured emit (first 4000 chars):\n${emit.slice(0, 4000)}`);
+            }
         }
     } else {
         // Black-box: run normally, parse machine-verbose diagnostics.
@@ -126,10 +143,32 @@ function runFixture(name, fixtureDir) {
         }
 
         let stdout = '';
+        let crashed = false;
+        let crashErr = null;
         try {
             stdout = execFileSync(BIN, args, { encoding: 'utf-8', timeout: 60_000, env: CHILD_ENV });
         } catch (err) {
+            // Errors-with-stdout = expected (the binary exits non-zero
+            // on diagnostic errors). Empty-stdout = crashed; surface it
+            // instead of letting an empty actualErrors list falsely
+            // claim 'clean'.
             stdout = err.stdout || '';
+            if (!stdout) {
+                crashed = true;
+                crashErr = err;
+            }
+        }
+
+        if (crashed) {
+            issues.push(
+                `binary crashed with no stdout (signal=${crashErr?.signal}, status=${crashErr?.status}, msg=${crashErr?.message})`
+            );
+            failed++;
+            console.log(`  FAIL: ${name}`);
+            for (const issue of issues) {
+                console.log(`    ${issue}`);
+            }
+            return;
         }
 
         const actualErrors = [];

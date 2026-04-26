@@ -387,59 +387,25 @@ pub enum DomBindingExpression {
 ///
 /// `source` is the original component source — needed to extract identifier
 /// text from byte ranges (e.g. for `bind:this={x}`).
+///
+/// Drives an internal [`AnalyzeVisitor`] over the unified
+/// [`crate::template_scope::walk_with_visitor`] walker. The visitor
+/// owns `TemplateSummary`, `Counters`, and the analyze-side
+/// `ShadowStack`; the walker handles recursion + scope bracketing.
 pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
     let mut summary = TemplateSummary::default();
     summary
         .void_refs
         .register(svn_core::synth_names::TPL_CHECK_FN);
-    let mut counters = Counters::default();
-    let ctx = WalkCtx { source };
-    let mut shadow = ShadowStack::default();
-    walk_fragment(fragment, &mut summary, &mut counters, &ctx, &mut shadow);
-    summary
-}
-
-/// Extract the binding name from a `{@const NAME = EXPR}` interpolation
-/// body. Returns None for destructured patterns (body starts with `{`)
-/// or malformed input — both match upstream's behaviour of emitting
-/// nothing for those cases.
-fn extract_at_const_name(interp: &svn_parser::Interpolation, source: &str) -> Option<SmolStr> {
-    let start = interp.expression_range.start as usize;
-    let end = interp.expression_range.end as usize;
-    let body = source.get(start..end)?;
-    let bytes = body.as_bytes();
-    let mut p = 0usize;
-    while p < bytes.len()
-        && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_' || bytes[p] == b'$')
-    {
-        p += 1;
-    }
-    if p == 0 {
-        return None; // destructure or malformed
-    }
-    Some(SmolStr::from(&body[..p]))
-}
-
-/// Append a `{@const}` name to the dedup-tracked summary list.
-///
-/// Multiple `{@const}` declarations with the same name across the
-/// template are deduped via `seen` so emit doesn't generate
-/// `let NAME: any;` twice (TS2451 redeclaration). The shadow-stack
-/// push at the call site is independent of dedup — it must run on
-/// every encounter so the name is in scope for any subsequent
-/// slot-attr / let-directive site.
-fn record_at_const_name(
-    name: &SmolStr,
-    seen: &mut std::collections::HashSet<SmolStr>,
-    out: &mut Vec<SmolStr>,
-) {
-    if seen.insert(name.clone()) {
-        out.push(name.clone());
-    }
-}
-
-struct WalkCtx<'src> {
-    source: &'src str,
+    let mut visitor = AnalyzeVisitor {
+        summary,
+        counters: Counters::default(),
+        source,
+        shadow: ShadowStack::default(),
+        scope_marks: Vec::new(),
+    };
+    crate::template_scope::walk_with_visitor(fragment, source, &mut visitor);
+    visitor.summary
 }
 
 #[derive(Default)]
@@ -470,11 +436,6 @@ struct ShadowStack {
 }
 
 impl ShadowStack {
-    fn push_many(&mut self, names: impl IntoIterator<Item = SmolStr>) -> usize {
-        let mark = self.names.len();
-        self.names.extend(names);
-        mark
-    }
     fn truncate(&mut self, mark: usize) {
         self.names.truncate(mark);
     }
@@ -483,169 +444,130 @@ impl ShadowStack {
     }
 }
 
-fn walk_fragment(
-    fragment: &Fragment,
-    summary: &mut TemplateSummary,
-    counters: &mut Counters,
-    ctx: &WalkCtx<'_>,
-    shadow: &mut ShadowStack,
-) {
-    // Bracket the fragment's own shadow scope. Sibling-arm constructs
-    // (`{:else}` / `{:catch}` of an `{#if}` or `{#await}`) walk
-    // separate fragments — without this bracket, a `{@const NAME = ...}`
-    // declared in one arm would leak into the next. Per-arm walk_node
-    // arms already bracket their CHILDREN, but `{@const}` pushes
-    // happen at fragment-LEVEL (it's a tag, not a block), so the
-    // fragment-level mark is the right anchor.
-    let mark = shadow.names.len();
-    for node in &fragment.nodes {
-        walk_node(node, summary, counters, ctx, shadow);
-    }
-    shadow.truncate(mark);
+/// Per-walk visitor mapping `TemplateScopeVisitor` calls into
+/// analyze-side mutations. Domain-level work (attribute collection,
+/// bind-this targets, component instantiations, slot-def capture)
+/// happens inside the `visit_*` methods; the unified walker drives
+/// recursion and scope bracketing.
+struct AnalyzeVisitor<'src> {
+    summary: TemplateSummary,
+    counters: Counters,
+    source: &'src str,
+    shadow: ShadowStack,
+    /// Stack of entry marks pushed by `enter_scope` / `enter_fragment`.
+    /// `leave_scope` / `leave_fragment` pop the matching mark and
+    /// truncate the shadow back to it.
+    scope_marks: Vec<usize>,
 }
 
-fn walk_node(
-    node: &Node,
-    summary: &mut TemplateSummary,
-    counters: &mut Counters,
-    ctx: &WalkCtx<'_>,
-    shadow: &mut ShadowStack,
-) {
-    match node {
-        Node::Element(e) => {
-            walk_attributes(&e.attributes, summary, counters, ctx, Some(e.name.as_str()));
-            collect_bind_this_checks(&e.attributes, summary);
-            collect_bind_value_bindings(&e.attributes, e.name.as_str(), summary);
-            // `<slot [name="X"] [attr=…]>`: capture for emit's `slots:`
-            // literal. Walks the attrs and skips any whose
-            // expression references a name in the active shadow stack.
-            if e.name.as_str() == "slot" {
-                collect_slot_def(&e.attributes, ctx.source, shadow, summary);
-            }
-            // `let:` directives on an element add their bindings into
-            // scope for the element's children. `<svelte:fragment
-            // slot="x" let:foo>` is the typical case.
-            let let_names = collect_let_directive_names_for_shadow(&e.attributes, ctx.source);
-            let mark = shadow.push_many(let_names);
-            walk_fragment(&e.children, summary, counters, ctx, shadow);
-            shadow.truncate(mark);
-        }
-        Node::Component(c) => {
-            // `use:` on a component is nonsensical at the Svelte level
-            // (actions attach to DOM elements, not to component
-            // instances), but we pass the component name along anyway —
-            // emit's shim-side `__svn_map_element_tag(tag: string)`
-            // overload resolves unknown tags to `HTMLElement` so the
-            // pattern doesn't break the program.
-            walk_attributes(&c.attributes, summary, counters, ctx, None);
-            collect_component_instantiation(c, ctx.source, summary);
-            // `<Comp let:foo>` adds `foo` into scope for the children.
-            let let_names = collect_let_directive_names_for_shadow(&c.attributes, ctx.source);
-            let mark = shadow.push_many(let_names);
-            walk_fragment(&c.children, summary, counters, ctx, shadow);
-            shadow.truncate(mark);
-        }
-        Node::SvelteElement(s) => {
-            // `<svelte:element this={dynamic}>` — tag is only known at
-            // runtime. Pass None so emit picks the generic HTMLElement
-            // overload of __svn_map_element_tag; actions that declare a
-            // specific element type will TS2345 against HTMLElement if
-            // they require a narrower base, which matches user intent
-            // (action narrowness flags dynamic-tag misuse).
-            walk_attributes(&s.attributes, summary, counters, ctx, None);
-            collect_bind_this_checks(&s.attributes, summary);
-            let let_names = collect_let_directive_names_for_shadow(&s.attributes, ctx.source);
-            let mark = shadow.push_many(let_names);
-            walk_fragment(&s.children, summary, counters, ctx, shadow);
-            shadow.truncate(mark);
-        }
-        Node::IfBlock(b) => {
-            walk_fragment(&b.consequent, summary, counters, ctx, shadow);
-            for arm in &b.elseif_arms {
-                walk_fragment(&arm.body, summary, counters, ctx, shadow);
-            }
-            if let Some(alt) = &b.alternate {
-                walk_fragment(alt, summary, counters, ctx, shadow);
-            }
-        }
-        Node::EachBlock(b) => {
-            summary.each_block_count += 1;
-            // `{#each items as item, i (key)}` — `item` and `i` enter
-            // scope for the body. The pattern in `context_range` may
-            // be a destructure (`as { a, b }`); we collect the
-            // top-level identifier names via a simple identifier-
-            // extraction pass over the source slice.
-            let mut binding_names: Vec<SmolStr> = Vec::new();
-            if let Some(as_clause) = &b.as_clause {
-                collect_pattern_idents(ctx.source, as_clause.context_range, &mut binding_names);
-                if let Some(idx) = &as_clause.index_range {
-                    collect_pattern_idents(ctx.source, *idx, &mut binding_names);
-                }
-            }
-            let mark = shadow.push_many(binding_names);
-            walk_fragment(&b.body, summary, counters, ctx, shadow);
-            shadow.truncate(mark);
-            if let Some(alt) = &b.alternate {
-                // `{:else}` branch — empty-list body. No bindings in
-                // scope (the `as` binding doesn't apply here).
-                walk_fragment(alt, summary, counters, ctx, shadow);
-            }
-        }
-        Node::AwaitBlock(b) => {
-            if let Some(p) = &b.pending {
-                walk_fragment(p, summary, counters, ctx, shadow);
-            }
-            if let Some(t) = &b.then_branch {
-                let mut names: Vec<SmolStr> = Vec::new();
-                if let Some(ctx_range) = &t.context_range {
-                    collect_pattern_idents(ctx.source, *ctx_range, &mut names);
-                }
-                let mark = shadow.push_many(names);
-                walk_fragment(&t.body, summary, counters, ctx, shadow);
-                shadow.truncate(mark);
-            }
-            if let Some(c) = &b.catch_branch {
-                let mut names: Vec<SmolStr> = Vec::new();
-                if let Some(ctx_range) = &c.context_range {
-                    collect_pattern_idents(ctx.source, *ctx_range, &mut names);
-                }
-                let mark = shadow.push_many(names);
-                walk_fragment(&c.body, summary, counters, ctx, shadow);
-                shadow.truncate(mark);
-            }
-        }
-        Node::KeyBlock(b) => walk_fragment(&b.body, summary, counters, ctx, shadow),
-        Node::SnippetBlock(b) => {
-            // `{#snippet name(p1, p2)}` — params enter scope for the
-            // snippet body.
-            let mut names: Vec<SmolStr> = Vec::new();
-            collect_pattern_idents(ctx.source, b.parameters_range, &mut names);
-            let mark = shadow.push_many(names);
-            walk_fragment(&b.body, summary, counters, ctx, shadow);
-            shadow.truncate(mark);
-        }
-        Node::Interpolation(i) if i.kind == svn_parser::InterpolationKind::AtConst => {
-            // Push the binding name onto the shadow so any subsequent
-            // slot-attr / let-directive sites in the same fragment
-            // treat the name as scope-local. The push has no per-tag
-            // pop — `{@const}` scope runs to the end of the enclosing
-            // fragment, which is what `walk_fragment`'s entry/exit
-            // bracket anchors against. Push happens even when the
-            // name is already in `at_const_seen` (a duplicate
-            // declaration's scope still applies), independent of the
-            // dedup that drives the emit's `let NAME: any;` list.
-            if let Some(name) = extract_at_const_name(i, ctx.source) {
-                record_at_const_name(
-                    &name,
-                    &mut counters.at_const_seen,
-                    &mut summary.at_const_names,
-                );
-                shadow.names.push(name);
-            }
-        }
-        // Leaf nodes — no children to descend into, no attributes.
-        Node::Text(_) | Node::Interpolation(_) | Node::Comment(_) => {}
+impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
+    fn enter_fragment(&mut self) {
+        self.scope_marks.push(self.shadow.names.len());
     }
+
+    fn leave_fragment(&mut self) {
+        if let Some(mark) = self.scope_marks.pop() {
+            self.shadow.truncate(mark);
+        }
+    }
+
+    fn enter_scope(
+        &mut self,
+        _kind: crate::template_scope::ScopeKind,
+        bindings: &[crate::template_scope::BoundIdent],
+    ) {
+        let mark = self.shadow.names.len();
+        for b in bindings {
+            self.shadow.names.push(b.name.clone());
+        }
+        self.scope_marks.push(mark);
+    }
+
+    fn leave_scope(&mut self, _kind: crate::template_scope::ScopeKind) {
+        if let Some(mark) = self.scope_marks.pop() {
+            self.shadow.truncate(mark);
+        }
+    }
+
+    fn visit_element(&mut self, e: &svn_parser::Element) {
+        let ctx = WalkCtx {
+            source: self.source,
+        };
+        walk_attributes(
+            &e.attributes,
+            &mut self.summary,
+            &mut self.counters,
+            &ctx,
+            Some(e.name.as_str()),
+        );
+        collect_bind_this_checks(&e.attributes, &mut self.summary);
+        collect_bind_value_bindings(&e.attributes, e.name.as_str(), &mut self.summary);
+        // `<slot [name="X"] [attr=…]>`: capture for emit's `slots:`
+        // literal. Walks the attrs and skips any whose expression
+        // references a name in the active shadow stack.
+        if e.name.as_str() == "slot" {
+            collect_slot_def(&e.attributes, self.source, &self.shadow, &mut self.summary);
+        }
+    }
+
+    fn visit_component(&mut self, c: &svn_parser::Component) {
+        let ctx = WalkCtx {
+            source: self.source,
+        };
+        // `use:` on a component is nonsensical at the Svelte level
+        // (actions attach to DOM elements, not to component instances),
+        // but we pass it along — emit's shim-side
+        // `__svn_map_element_tag(tag: string)` overload resolves
+        // unknown tags to `HTMLElement` so the pattern doesn't break
+        // the program.
+        walk_attributes(
+            &c.attributes,
+            &mut self.summary,
+            &mut self.counters,
+            &ctx,
+            None,
+        );
+        collect_component_instantiation(c, self.source, &mut self.summary);
+    }
+
+    fn visit_svelte_element(&mut self, s: &svn_parser::SvelteElement) {
+        let ctx = WalkCtx {
+            source: self.source,
+        };
+        // `<svelte:element this={dynamic}>` — tag only known at
+        // runtime. Pass None so emit picks the generic HTMLElement
+        // overload; actions that require a narrower base will
+        // TS2345 against HTMLElement, matching user intent.
+        walk_attributes(
+            &s.attributes,
+            &mut self.summary,
+            &mut self.counters,
+            &ctx,
+            None,
+        );
+        collect_bind_this_checks(&s.attributes, &mut self.summary);
+    }
+
+    fn visit_each_block(&mut self, _b: &svn_parser::EachBlock) {
+        self.summary.each_block_count += 1;
+    }
+
+    fn visit_at_const(&mut self, name: SmolStr, _expr_range: svn_core::Range) {
+        // Record for the emit's `let NAME: any;` list (deduped) AND
+        // push onto the shadow so subsequent slot-attr / let-directive
+        // sites in the same fragment treat the name as scope-local.
+        // The push happens on every encounter independent of dedup —
+        // a duplicate declaration's scope still applies. The
+        // walker's fragment-level bracket truncates it at exit.
+        if self.counters.at_const_seen.insert(name.clone()) {
+            self.summary.at_const_names.push(name.clone());
+        }
+        self.shadow.names.push(name);
+    }
+}
+
+struct WalkCtx<'src> {
+    source: &'src str,
 }
 
 /// Capture a `<slot [name="X"] [attr=…]>` site into
@@ -714,15 +636,6 @@ fn collect_slot_def(
     });
 }
 
-fn is_simple_identifier(s: &str) -> bool {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$' => {}
-        _ => return false,
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
-}
-
 /// Return the leading identifier of an expression source slice — the
 /// run of identifier-valid bytes from the start, before any `.`,
 /// `[`, `?.`, `(`, whitespace, or operator. For `item.id` returns
@@ -750,105 +663,6 @@ fn leading_identifier(s: &str) -> Option<&str> {
         }
     }
     Some(&s[..end])
-}
-
-/// Extract every let:NAME / let:NAME={alias} binding name from a set
-/// of attributes — twin of emit's `collect_let_directive_names`,
-/// scoped here for the shadow stack. Identifiers ONLY (no
-/// destructure shapes); the bare directive `name` is used as a
-/// fallback when the alias isn't a simple identifier.
-fn collect_let_directive_names_for_shadow(attrs: &[Attribute], source: &str) -> Vec<SmolStr> {
-    use svn_parser::{Directive, DirectiveKind, DirectiveValue};
-    let mut out: Vec<SmolStr> = Vec::new();
-    for attr in attrs {
-        if let Attribute::Directive(Directive {
-            kind: DirectiveKind::Let,
-            name,
-            value,
-            ..
-        }) = attr
-        {
-            let bound = match value {
-                Some(DirectiveValue::Expression {
-                    expression_range, ..
-                }) => {
-                    let start = expression_range.start as usize;
-                    let end = expression_range.end as usize;
-                    let slice = source.get(start..end).unwrap_or("").trim();
-                    if is_simple_identifier(slice) {
-                        SmolStr::from(slice)
-                    } else {
-                        // Destructure pattern: extract top-level
-                        // identifier names so each one shadows.
-                        let mut names: Vec<SmolStr> = Vec::new();
-                        collect_pattern_idents(source, *expression_range, &mut names);
-                        if !names.is_empty() {
-                            out.extend(names);
-                            continue;
-                        }
-                        name.clone()
-                    }
-                }
-                _ => name.clone(),
-            };
-            if !out.iter().any(|n| n == &bound) {
-                out.push(bound);
-            }
-        }
-    }
-    out
-}
-
-/// Extract every simple-identifier name from a binding-pattern byte
-/// range. Handles `as item`, `as item, i`, `as { a, b }`, `as [x,
-/// y]`, and the snippet param list `(a, b: T, { c })`. Used by the
-/// shadow stack to know which names are scope-bound at any point in
-/// the walk.
-///
-/// Implementation: oxc parse of the slice as an arrow-function
-/// pattern (the closest parse shape that accepts both destructures
-/// and identifiers), then delegates the AST walk to
-/// `template_scope::collect_pattern_bindings`. Names-only output —
-/// analyze doesn't need ranges or `inside_rest` flags.
-fn collect_pattern_idents(source: &str, range: svn_core::Range, out: &mut Vec<SmolStr>) {
-    let start = range.start as usize;
-    let end = range.end as usize;
-    let Some(slice) = source.get(start..end) else {
-        return;
-    };
-    let trimmed = slice.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-    // Fast path: bare identifier.
-    if is_simple_identifier(trimmed) {
-        out.push(SmolStr::from(trimmed));
-        return;
-    }
-    // Wrap as `(slice) => 0` so oxc accepts both destructures and
-    // identifiers as parameters. Then delegate the pattern walk to
-    // the shared primitive — names-only.
-    let alloc = oxc_allocator::Allocator::default();
-    let wrapped = format!("({trimmed}) => 0");
-    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
-    if parsed.panicked {
-        return;
-    }
-    use oxc_ast::ast::{Expression, Statement};
-    let Some(stmt) = parsed.program.body.first() else {
-        return;
-    };
-    let Statement::ExpressionStatement(es) = stmt else {
-        return;
-    };
-    let Expression::ArrowFunctionExpression(arrow) = &es.expression else {
-        return;
-    };
-    for param in &arrow.params.items {
-        // Offset is irrelevant — analyze ignores `range`.
-        let pb = crate::template_scope::collect_pattern_bindings(&param.pattern, 0);
-        out.extend(pb.bindings.into_iter().map(|b| b.name));
-    }
 }
 
 fn walk_attributes(

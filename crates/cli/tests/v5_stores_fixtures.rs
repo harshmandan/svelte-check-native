@@ -67,7 +67,7 @@ fn v5_stores_fixtures_suite() {
         .unwrap_or("v5 fixtures: <no summary>");
     eprintln!("\n{summary_line}");
 
-    let (passed, failed) = parse_summary(summary_line);
+    let (passed, failed, skipped) = parse_summary(summary_line);
     const MIN_PASSED: usize = 18;
     const MAX_FAILED: usize = 6;
     assert!(
@@ -81,12 +81,17 @@ fn v5_stores_fixtures_suite() {
          {MAX_FAILED}.\n\
          summary: {summary_line}"
     );
+    assert_eq!(
+        skipped, 0,
+        "v5-stores: {skipped} fixture(s) silently skipped — input-file heuristic \
+         drift. summary: {summary_line}"
+    );
 }
 
-fn parse_summary(line: &str) -> (usize, usize) {
+fn parse_summary(line: &str) -> (usize, usize, usize) {
     let after_colon = match line.split_once(':') {
         Some((_, rest)) => rest.trim(),
-        None => return (0, usize::MAX),
+        None => return (0, usize::MAX, usize::MAX),
     };
     let passed = after_colon
         .split('/')
@@ -94,14 +99,22 @@ fn parse_summary(line: &str) -> (usize, usize) {
         .and_then(|s| s.trim().parse::<usize>().ok())
         .unwrap_or(0);
     let failed = after_colon
-        .rsplit_once(',')
-        .and_then(|(_, tail)| {
-            tail.split_whitespace()
-                .next()
-                .and_then(|s| s.parse::<usize>().ok())
+        .split(',')
+        .find_map(|seg| {
+            seg.trim()
+                .strip_suffix(" failed")
+                .and_then(|n| n.trim().parse::<usize>().ok())
         })
         .unwrap_or(usize::MAX);
-    (passed, failed)
+    let skipped = after_colon
+        .split(',')
+        .find_map(|seg| {
+            seg.trim()
+                .strip_suffix(" skipped")
+                .and_then(|n| n.trim().parse::<usize>().ok())
+        })
+        .unwrap_or(0);
+    (passed, failed, skipped)
 }
 
 /// Same delegation pattern as `v5_fixtures::locate_local_tsgo` —

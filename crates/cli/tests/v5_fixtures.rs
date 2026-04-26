@@ -86,7 +86,7 @@ fn v5_fixtures_suite() {
     //
     // Subprocess-failure path (no summary line) → 0/0 → MIN_PASSED
     // assertion fires immediately.
-    let (passed, failed) = parse_summary(summary_line);
+    let (passed, failed, skipped) = parse_summary(summary_line);
     const MIN_PASSED: usize = 47;
     const MAX_FAILED: usize = 16;
     assert!(
@@ -103,34 +103,56 @@ fn v5_fixtures_suite() {
          summary: {summary_line}\n\
          Investigate the new failures or, if expected, raise MAX_FAILED in this test."
     );
+    // Skipped fixtures fail closed: the runner skips when the
+    // input-file heuristic doesn't match, so a fixture rename or a
+    // newly-required entry-file shape (e.g. `+layout.ts`) silently
+    // drops coverage. If a skip is intentional, route the fixture
+    // through `_shared/` or rename to underscore-prefixed.
+    assert_eq!(
+        skipped, 0,
+        "v5 fixtures: {skipped} fixture(s) silently skipped — likely an input.svelte / \
+         +page.svelte / +layout.svelte rename or a new entry-file shape the runner \
+         doesn't recognise. summary: {summary_line}"
+    );
 }
 
-/// Parse the runner's summary line into `(passed, failed)`.
+/// Parse the runner's summary line into `(passed, failed, skipped)`.
 ///
-/// Format: `v5 fixtures: <PASS>/<TOTAL> (..., ...), <FAIL> failed`.
-/// Robust to extra whitespace; returns `(0, usize::MAX)` on any parse
-/// failure so a malformed/missing summary triggers the floor/ceiling
-/// assertions above.
-fn parse_summary(line: &str) -> (usize, usize) {
-    // " 47/63" → split on "/" gets passed; "16 failed" → leading int.
+/// Format: `v5 fixtures: <PASS>/<TOTAL> (..., ...), <FAIL> failed[, <SKIP> skipped]`.
+/// The skip suffix is only present when at least one fixture skipped
+/// — runner produces `..., 16 failed` without it. Returns `(0,
+/// usize::MAX, usize::MAX)` on any parse failure so a
+/// malformed/missing summary trips every gate.
+fn parse_summary(line: &str) -> (usize, usize, usize) {
     let after_colon = match line.split_once(':') {
         Some((_, rest)) => rest.trim(),
-        None => return (0, usize::MAX),
+        None => return (0, usize::MAX, usize::MAX),
     };
     let passed = after_colon
         .split('/')
         .next()
         .and_then(|s| s.trim().parse::<usize>().ok())
         .unwrap_or(0);
+    // `<n> failed` — find the segment containing the literal " failed".
     let failed = after_colon
-        .rsplit_once(',')
-        .and_then(|(_, tail)| {
-            tail.split_whitespace()
-                .next()
-                .and_then(|s| s.parse::<usize>().ok())
+        .split(',')
+        .find_map(|seg| {
+            let s = seg.trim();
+            s.strip_suffix(" failed")
+                .and_then(|n| n.trim().parse::<usize>().ok())
         })
         .unwrap_or(usize::MAX);
-    (passed, failed)
+    // `<n> skipped` — same shape; absent ⇒ 0 (runner only emits the
+    // suffix when skipped > 0).
+    let skipped = after_colon
+        .split(',')
+        .find_map(|seg| {
+            let s = seg.trim();
+            s.strip_suffix(" skipped")
+                .and_then(|n| n.trim().parse::<usize>().ok())
+        })
+        .unwrap_or(0);
+    (passed, failed, skipped)
 }
 
 /// Locate tsgo for these tests by delegating to the production

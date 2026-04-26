@@ -116,10 +116,16 @@ fn rewrite_user_source_chain(text: &str) -> String {
     out
 }
 
-/// Find the next byte offset in `text` of a user-source segment that
-/// is preceded by `../` (and thus part of a SvelteKit chain). The
-/// returned index is the START of the user-source segment; the caller
-/// inserts `svelte/` at that position.
+/// Find the EARLIEST byte offset in `text` of a user-source segment
+/// preceded by `../` (the SvelteKit chain signature). Returns the
+/// START of that segment; the caller inserts `svelte/` at that
+/// position.
+///
+/// Earlier scans returned the first hit of the FIRST needle in
+/// catalog order, even if a different needle had a match earlier in
+/// the text — leaving an earlier hooks/params chain behind a later
+/// routes match permanently un-rewritten. Scanning every needle and
+/// keeping the smallest position fixes that.
 fn find_user_source_segment(text: &str) -> Option<usize> {
     const NEEDLES: &[&str] = &[
         "src/routes/",
@@ -130,20 +136,23 @@ fn find_user_source_segment(text: &str) -> Option<usize> {
         "src/app.html",
     ];
     let bytes = text.as_bytes();
+    let mut best: Option<usize> = None;
     for needle in NEEDLES {
         let nb = needle.as_bytes();
         let mut i = 0usize;
         while let Some(rel) = bytes[i..].windows(nb.len()).position(|w| w == nb) {
             let pos = i + rel;
-            // Require `../` immediately before — the SvelteKit chain
-            // signature.
             if pos >= 3 && &bytes[pos - 3..pos] == b"../" {
-                return Some(pos);
+                best = match best {
+                    Some(prev) if prev <= pos => Some(prev),
+                    _ => Some(pos),
+                };
+                break; // earliest hit FOR THIS NEEDLE; later ones can't beat it
             }
             i = pos + nb.len();
         }
     }
-    None
+    best
 }
 
 #[cfg(test)]
@@ -202,6 +211,19 @@ mod tests {
         let once = rewrite_user_source_chain(input);
         let twice = rewrite_user_source_chain(&once);
         assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn rewrites_earliest_needle_match_first() {
+        // G8 regression: when multiple user-source chain kinds appear
+        // in the same file, the previous scan returned the first hit
+        // of the FIRST needle in catalog order (src/routes/), even if
+        // a different needle (src/hooks.server.) had an earlier match.
+        // The hooks chain at byte ~17 must get rewritten alongside
+        // the routes chain at byte ~70 — both, not just the latter.
+        let input = "x: import('../../src/hooks.server.js'); y: import('../../src/routes/a/+page.js');";
+        let want = "x: import('../../svelte/src/hooks.server.js'); y: import('../../svelte/src/routes/a/+page.js');";
+        assert_eq!(rewrite_user_source_chain(input), want);
     }
 }
 

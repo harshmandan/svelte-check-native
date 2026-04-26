@@ -11,9 +11,8 @@
 
 use std::path::{Path, PathBuf};
 
+use svn_core::sveltekit::{KitFilesSettings, classify};
 use walkdir::WalkDir;
-
-use crate::kit_files::{KitFilesSettings, is_kit_file};
 
 /// Does `path` contain a `node_modules` segment? Uses path components
 /// (not string-contains) so a directory named `my_node_modules_dir`
@@ -91,7 +90,10 @@ pub(crate) fn discover_relevant_files_with_settings(
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         match ext {
             Some("svelte") => svelte_files.push(path.to_path_buf()),
-            Some("ts" | "js") if is_kit_file(path, kit_settings) => {
+            // Any classify hit on a `.ts`/`.js` is a kit file — route
+            // components are `.svelte` and never reach this branch.
+            // See `svn_core::sveltekit::classify`.
+            Some("ts" | "js") if classify(path, kit_settings).is_some() => {
                 kit_files.push(path.to_path_buf());
             }
             Some("ts" | "js")

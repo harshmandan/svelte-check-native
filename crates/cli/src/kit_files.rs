@@ -32,26 +32,12 @@
 
 use std::path::Path;
 
-/// Resolved SvelteKit file-location settings. Defaults match
-/// `defaultKitFilesSettings` in upstream svelte-check.
-#[derive(Debug, Clone)]
-pub struct KitFilesSettings {
-    pub params_path: String,
-    pub server_hooks_path: String,
-    pub client_hooks_path: String,
-    pub universal_hooks_path: String,
-}
-
-impl Default for KitFilesSettings {
-    fn default() -> Self {
-        Self {
-            params_path: "src/params".into(),
-            server_hooks_path: "src/hooks.server".into(),
-            client_hooks_path: "src/hooks.client".into(),
-            universal_hooks_path: "src/hooks".into(),
-        }
-    }
-}
+// Re-export so existing `use crate::kit_files::KitFilesSettings;`
+// imports keep compiling while phases 2-6 of
+// `notes/PLAN-sveltekit-path-centralization.md` migrate consumers
+// onto `svn_core::sveltekit` directly. Once every site is migrated,
+// this whole file folds into the call chain in `cli::discovery`.
+pub use svn_core::sveltekit::KitFilesSettings;
 
 /// Return true iff `path` is a SvelteKit file under any of the four
 /// recognized categories (route / server-hooks / client-hooks /

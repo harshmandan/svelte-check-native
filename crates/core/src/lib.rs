@@ -16,6 +16,8 @@
 //! - [`symbol`] — `Symbol`, a string interning type (currently re-exports
 //!   `smol_str::SmolStr`).
 //! - [`diagnostic`] — `Diagnostic`, `Severity`, `DiagnosticSource`.
+//! - [`sveltekit`] — single source of truth for SvelteKit path
+//!   classification (route components, route scripts, hooks, params).
 //!
 //! ### Design notes
 //!
@@ -29,6 +31,7 @@
 pub mod diagnostic;
 pub mod position;
 pub mod range;
+pub mod sveltekit;
 pub mod symbol;
 pub mod synth_names;
 pub mod tsconfig;

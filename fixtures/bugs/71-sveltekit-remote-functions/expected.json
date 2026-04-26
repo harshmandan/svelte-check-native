@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "SvelteKit experimental remote functions live in `*.remote.ts` files (opt-in via `kit.experimental.remoteFunctions` in svelte.config.js). svelte-check-native has no special handling for these — they're plain TypeScript modules that flow through tsgo's regular `include` glob. This fixture locks that path: a `.remote.ts` exporter + a `.svelte` consumer should type-check end-to-end with cross-file type narrowing intact."
+}

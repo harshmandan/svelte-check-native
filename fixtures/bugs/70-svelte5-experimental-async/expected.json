@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Svelte 5.36+ experimental.async lets users use the `await` keyword in three places: top-level <script>, inside `$derived(...)`, and inline `{await ...}` in markup. Our pipeline emits both `async function $$render_<hash>` (the render fn) and `async function __svn_tpl_check` (the template-check wrapper), so `await` is syntactically valid in all three sites with no pipeline changes — tsgo type-checks the awaited expressions against the user's imports. This fixture locks that — a regression that made either fn non-async would fire a parse error here."
+}

@@ -1236,8 +1236,9 @@ mod tests {
     #[test]
     fn overlay_byte_offset_one_based_lines_and_columns() {
         let data = MapData {
-            // line 1 starts at 0, line 2 starts at 6 (`line1\n` = 6 bytes).
-            overlay_line_starts: vec![0, 6],
+            // line 1 = "line1" (5 bytes + newline = 6), line 2 = "line2".
+            overlay_line_starts: vec![0, 6, 11],
+            overlay_text: "line1\nline2".to_string(),
             ..Default::default()
         };
         // (1, 1) == byte 0 (start of line 1).
@@ -1585,22 +1586,25 @@ mod tests {
 
     #[test]
     fn position_to_byte_handles_utf16_columns() {
-        // Multi-byte char `é` is 2 UTF-8 bytes but 1 UTF-16 unit. A
-        // tsgo diagnostic at column 4 (1-based UTF-16) on `café xx`
-        // points at the space after café, which is byte offset 5
-        // (c=1+a=1+f=1+é=2 bytes = 5).
+        // `é` is 2 UTF-8 bytes but 1 UTF-16 unit. The 1-based UTF-16
+        // column N points at the N-th *char* in the line; conversion
+        // returns its starting byte offset.
+        // text bytes: c(1) a(1) f(1) é(2) ' '(1) x(1) x(1) = 7 bytes
         let text = "café xx";
         let starts = svn_emit::compute_line_starts(text);
-        assert_eq!(position_to_byte(&starts, text, 1, 1), Some(0)); // 'c'
-        assert_eq!(position_to_byte(&starts, text, 1, 4), Some(5)); // ' ' after é
-        assert_eq!(position_to_byte(&starts, text, 1, 5), Some(6)); // 'x'
-        assert_eq!(position_to_byte(&starts, text, 1, 6), Some(7)); // 'x'
+        assert_eq!(position_to_byte(&starts, text, 1, 1), Some(0)); // 'c' — byte 0
+        assert_eq!(position_to_byte(&starts, text, 1, 4), Some(3)); // 'é' — byte 3 (after caf)
+        assert_eq!(position_to_byte(&starts, text, 1, 5), Some(5)); // ' ' — byte 5 (after é)
+        assert_eq!(position_to_byte(&starts, text, 1, 6), Some(6)); // 'x'
+        assert_eq!(position_to_byte(&starts, text, 1, 7), Some(7)); // last 'x'
 
         // Astral char (4-byte UTF-8, 2 UTF-16 units) — `🎉` U+1F389.
-        let astral = "🎉end"; // 🎉=4 bytes/2 UTF-16 units, then 'end'.
+        // bytes: 🎉(4) e(1) n(1) d(1) = 7 bytes
+        // UTF-16 cols: cols 1-2 cover 🎉, col 3 = 'e', etc.
+        let astral = "🎉end";
         let starts = svn_emit::compute_line_starts(astral);
         assert_eq!(position_to_byte(&starts, astral, 1, 1), Some(0)); // 🎉 start
-        assert_eq!(position_to_byte(&starts, astral, 1, 3), Some(4)); // 'e' (after 2 UTF-16 units)
+        assert_eq!(position_to_byte(&starts, astral, 1, 3), Some(4)); // 'e' — after 2 UTF-16 units = 4 bytes in
     }
 
     #[test]
@@ -1633,12 +1637,15 @@ mod tests {
         // Inverse of the position_to_byte UTF-16 test: a byte offset
         // inside / after a multi-byte char must produce a UTF-16
         // column count, not a byte column.
+        // text bytes: c(0) a(1) f(2) é=2 bytes (3,4) ' '(5) x(6) x(7)
         let text = "café xx";
         let starts = svn_emit::compute_line_starts(text);
-        // Byte 5 (' ' after é) is at UTF-16 col 4.
-        assert_eq!(byte_to_position(&starts, text, 5), (1, 4));
-        // Byte 7 ('x' end-of-line) is at UTF-16 col 6.
-        assert_eq!(byte_to_position(&starts, text, 7), (1, 6));
+        // Byte 0 = 'c' → col 1 (1-based).
+        assert_eq!(byte_to_position(&starts, text, 0), (1, 1));
+        // Byte 5 = ' ' → 4 chars consumed (c, a, f, é) → col 5.
+        assert_eq!(byte_to_position(&starts, text, 5), (1, 5));
+        // Byte 7 = second 'x' (last char start) → 6 chars consumed → col 7.
+        assert_eq!(byte_to_position(&starts, text, 7), (1, 7));
     }
 
     #[test]
@@ -1702,9 +1709,13 @@ mod tests {
             }],
             // Overlay: "aa\nBBBBBB\ncc" → starts [0, 3, 10, 12].
             overlay_line_starts: vec![0, 3, 10, 12],
+            overlay_text: "aa\nBBBBBB\ncc".to_string(),
             // Source: line 5 starts at byte 40. Byte 44 is line 5 col
-            // 5 (0-offset 4 from line start → 1-based col 5).
+            // 5 (0-offset 4 from line start → 1-based col 5). Provide
+            // a 60-byte filler text so byte_to_position can count
+            // chars between line start and target byte.
             source_line_starts: vec![0, 10, 20, 30, 40, 50, 60],
+            source_text: "0123456789".repeat(6),
             ..Default::default()
         };
         // Overlay (line=2, col=3) corresponds to overlay byte 3+2=5.
@@ -1779,7 +1790,9 @@ mod tests {
                     source_byte_end: 48,
                 }],
                 overlay_line_starts: vec![0, 3, 10, 12],
+                overlay_text: "aa\nBBBBBB\ncc".to_string(),
                 source_line_starts: vec![0, 10, 20, 30, 40, 50, 60],
+                source_text: "0123456789".repeat(6),
                 ..Default::default()
             },
         );

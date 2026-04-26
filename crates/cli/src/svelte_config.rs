@@ -140,6 +140,165 @@ pub fn find_svelte_config(workspace: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Read `svelte.config.js` and extract `kit.files` overrides into a
+/// [`KitFilesSettings`]. Returns defaults when the config is absent,
+/// unparseable, or doesn't mention `kit.files`. Each path field
+/// (params / hooks.{server,client,universal}) is resolved
+/// independently — a partial override falls back to defaults for the
+/// fields it doesn't set.
+///
+/// Recognised shapes:
+///
+/// ```js
+/// export default {
+///     kit: {
+///         files: {
+///             params: 'src/myparams',
+///             hooks: 'src/myhooks',                     // legacy: universal-only
+///             // or
+///             hooks: { server: '…', client: '…', universal: '…' },
+///         },
+///     },
+/// };
+/// ```
+///
+/// Anything else (computed expressions, dynamic imports, spread)
+/// falls back to defaults for the fields we couldn't resolve.
+pub fn parse_kit_files_settings(config_path: &Path) -> crate::kit_files::KitFilesSettings {
+    let mut settings = crate::kit_files::KitFilesSettings::default();
+    let Ok(source) = std::fs::read_to_string(config_path) else {
+        return settings;
+    };
+    let source_type = SourceType::from_path(config_path).unwrap_or_default();
+    let alloc = Allocator::default();
+    let parser = Parser::new(&alloc, &source, source_type);
+    let parsed = parser.parse();
+    let Some(files_obj) = extract_kit_files_object(&parsed.program) else {
+        return settings;
+    };
+    apply_kit_files_overrides(files_obj, &mut settings);
+    settings
+}
+
+/// Walk the program AST looking for `kit.files` inside the default
+/// export. Mirrors [`extract_warning_filter`]'s shape for
+/// `compilerOptions.warningFilter`.
+fn extract_kit_files_object<'a>(
+    program: &'a oxc_ast::ast::Program<'a>,
+) -> Option<&'a ObjectExpression<'a>> {
+    let mut named: std::collections::HashMap<String, &Expression<'_>> =
+        std::collections::HashMap::new();
+    for stmt in &program.body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                let oxc_ast::ast::BindingPatternKind::BindingIdentifier(id) = &d.id.kind else {
+                    continue;
+                };
+                if let Some(init) = &d.init {
+                    named.insert(id.name.to_string(), init);
+                }
+            }
+        }
+    }
+    for stmt in &program.body {
+        let Statement::ExportDefaultDeclaration(decl) = stmt else {
+            continue;
+        };
+        let expr = match &decl.declaration {
+            ExportDefaultDeclarationKind::Identifier(id) => named.get(id.name.as_str()).copied()?,
+            ExportDefaultDeclarationKind::ObjectExpression(obj) => {
+                return kit_files_from_root(obj);
+            }
+            other => match other.as_expression() {
+                Some(e) => e,
+                None => continue,
+            },
+        };
+        if let Expression::ObjectExpression(obj) = expr {
+            return kit_files_from_root(obj);
+        }
+    }
+    None
+}
+
+/// Given the root config object, return its `kit.files` if present.
+fn kit_files_from_root<'a>(root: &'a ObjectExpression<'a>) -> Option<&'a ObjectExpression<'a>> {
+    let kit = lookup_object_property(root, "kit")?;
+    let Expression::ObjectExpression(kit_obj) = kit else {
+        return None;
+    };
+    let files = lookup_object_property(kit_obj, "files")?;
+    if let Expression::ObjectExpression(files_obj) = files {
+        Some(files_obj)
+    } else {
+        None
+    }
+}
+
+/// Apply each recognised key in `files: { … }` onto `settings`.
+fn apply_kit_files_overrides(
+    files_obj: &ObjectExpression<'_>,
+    settings: &mut crate::kit_files::KitFilesSettings,
+) {
+    if let Some(p) = lookup_string_property(files_obj, "params") {
+        settings.params_path = p;
+    }
+    if let Some(hooks_expr) = lookup_object_property(files_obj, "hooks") {
+        match hooks_expr {
+            // Legacy form: `hooks: 'src/myhooks'` → universal only.
+            Expression::StringLiteral(s) => {
+                settings.universal_hooks_path = s.value.to_string();
+            }
+            // Modern form: `hooks: { server, client, universal }`.
+            Expression::ObjectExpression(hobj) => {
+                if let Some(p) = lookup_string_property(hobj, "server") {
+                    settings.server_hooks_path = p;
+                }
+                if let Some(p) = lookup_string_property(hobj, "client") {
+                    settings.client_hooks_path = p;
+                }
+                if let Some(p) = lookup_string_property(hobj, "universal") {
+                    settings.universal_hooks_path = p;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Look up a string-keyed property on an ObjectExpression and return
+/// the value expression. Skips computed keys, methods, getters,
+/// setters, and shorthand-without-init.
+fn lookup_object_property<'a>(
+    obj: &'a ObjectExpression<'a>,
+    key: &str,
+) -> Option<&'a Expression<'a>> {
+    for prop in &obj.properties {
+        let ObjectPropertyKind::ObjectProperty(p) = prop else {
+            continue;
+        };
+        let prop_key = match &p.key {
+            PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+            PropertyKey::StringLiteral(s) => s.value.as_str(),
+            _ => continue,
+        };
+        if prop_key == key {
+            return Some(&p.value);
+        }
+    }
+    None
+}
+
+/// Convenience: look up `key` and return its value if it's a string
+/// literal; otherwise None.
+fn lookup_string_property(obj: &ObjectExpression<'_>, key: &str) -> Option<String> {
+    if let Expression::StringLiteral(s) = lookup_object_property(obj, key)? {
+        Some(s.value.to_string())
+    } else {
+        None
+    }
+}
+
 /// Read `svelte.config.js` and build a filter plan. Any read/parse
 /// failure → empty plan (equivalent to no filter).
 pub fn analyse_config(config_path: &Path) -> WarningFilterPlan {

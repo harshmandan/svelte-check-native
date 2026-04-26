@@ -253,13 +253,18 @@ fn main() -> ExitCode {
     let compiler_warnings = parse_compiler_warnings(cli.compiler_warnings.as_deref());
     let color = resolve_color_mode(cli.color, cli.no_color);
 
-    // Tier 2: static analysis of svelte.config.js `warningFilter`.
-    // When found and parseable, its rules augment --compiler-warnings
-    // at the filter stage. Unrecognised callbacks → stderr note so
-    // users know to supplement with --compiler-warnings.
-    let warning_filter_plan = match svelte_config::find_svelte_config(&workspace) {
+    // Tier 2: static analysis of svelte.config.js `warningFilter`
+    // and `kit.files` overrides. When found and parseable, both feed
+    // downstream — warningFilter augments --compiler-warnings at the
+    // filter stage; kit.files paths drive the discovery walker's
+    // hooks/params recognition. Unrecognised callbacks → stderr note
+    // so users know to supplement with --compiler-warnings; missing
+    // or unparseable `kit.files` falls back to upstream defaults
+    // silently (matches upstream svelte-check's behaviour).
+    let svelte_config_path = svelte_config::find_svelte_config(&workspace);
+    let warning_filter_plan = match &svelte_config_path {
         Some(cfg) => {
-            let plan = svelte_config::analyse_config(&cfg);
+            let plan = svelte_config::analyse_config(cfg);
             if plan.partial {
                 eprintln!(
                     "svelte-check-native: partial `warningFilter` in {} — one or more branches couldn't be translated. Unrecognised: `{}`. Add `--compiler-warnings code:ignore,…` to cover the rest.",
@@ -270,6 +275,10 @@ fn main() -> ExitCode {
             plan
         }
         None => svelte_config::WarningFilterPlan::default(),
+    };
+    let kit_files_settings = match &svelte_config_path {
+        Some(cfg) => svelte_config::parse_kit_files_settings(cfg),
+        None => kit_files::KitFilesSettings::default(),
     };
 
     let svelte_warnings_mode = match cli.svelte_warnings.as_str() {
@@ -298,6 +307,7 @@ fn main() -> ExitCode {
         svelte_warnings_mode,
         cli.ignore_node_modules_warnings,
         &warning_filter_plan,
+        &kit_files_settings,
     )
 }
 
@@ -791,6 +801,7 @@ fn run_typecheck(
     svelte_warnings_mode: SvelteWarningsMode,
     ignore_node_modules_warnings: bool,
     warning_filter_plan: &svelte_config::WarningFilterPlan,
+    kit_files_settings: &kit_files::KitFilesSettings,
 ) -> ExitCode {
     let phase_start = std::time::Instant::now();
 
@@ -860,7 +871,7 @@ fn run_typecheck(
         included && !excluded
     };
     let (svelte_files_raw, kit_files_raw, runes_modules_raw, user_scripts_raw) =
-        discover_relevant_files(workspace);
+        discovery::discover_relevant_files_with_settings(workspace, kit_files_settings);
     // Svelte-file emit: we walk ALL discovered `.svelte` files, not
     // just the in-scope subset. An out-of-scope file might be
     // imported by an in-scope one — upstream's LanguageService

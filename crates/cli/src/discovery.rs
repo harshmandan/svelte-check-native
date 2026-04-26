@@ -25,9 +25,20 @@ pub(crate) fn path_is_under_node_modules(path: &Path) -> bool {
 }
 
 /// Convenience wrapper for callers that only need the `.svelte` file
-/// list (e.g. `--emit-ts`, `--list-relevant`).
+/// list (e.g. `--emit-ts`, `--list-relevant`). Uses default Kit-file
+/// settings — fine for these debug flows since `.svelte` discovery
+/// doesn't consult them.
 pub(crate) fn discover_svelte_files(workspace: &Path) -> Vec<PathBuf> {
-    discover_relevant_files(workspace).0
+    discover_relevant_files_with_settings(workspace, &KitFilesSettings::default()).0
+}
+
+/// Wrapper accepting default Kit-file settings — kept for callers
+/// (notably the `--list-relevant` debug flow) that don't have the
+/// user's `svelte.config.js` parsed yet.
+pub(crate) fn discover_relevant_files(
+    workspace: &Path,
+) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
+    discover_relevant_files_with_settings(workspace, &KitFilesSettings::default())
 }
 
 /// Walk the workspace once and return all four file categories the
@@ -49,10 +60,10 @@ pub(crate) fn discover_svelte_files(workspace: &Path) -> Vec<PathBuf> {
 /// would require evaluating JS). Not a correctness issue for the
 /// denominator; files processed by tsgo via `include` globs are the
 /// same either way.
-pub(crate) fn discover_relevant_files(
+pub(crate) fn discover_relevant_files_with_settings(
     workspace: &Path,
+    kit_settings: &KitFilesSettings,
 ) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
-    let kit_settings = KitFilesSettings::default();
     let mut svelte_files = Vec::new();
     let mut kit_files = Vec::new();
     // `.svelte.ts` and `.svelte.js` runes modules — siblings of a
@@ -80,7 +91,7 @@ pub(crate) fn discover_relevant_files(
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         match ext {
             Some("svelte") => svelte_files.push(path.to_path_buf()),
-            Some("ts" | "js") if is_kit_file(path, &kit_settings) => {
+            Some("ts" | "js") if is_kit_file(path, kit_settings) => {
                 kit_files.push(path.to_path_buf());
             }
             Some("ts" | "js")

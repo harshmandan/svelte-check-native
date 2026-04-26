@@ -12,7 +12,6 @@
 
 mod collisions;
 mod discovery;
-mod kit_files;
 mod output;
 mod svelte_config;
 
@@ -800,7 +799,7 @@ fn run_typecheck(
     svelte_warnings_mode: SvelteWarningsMode,
     ignore_node_modules_warnings: bool,
     warning_filter_plan: &svelte_config::WarningFilterPlan,
-    kit_files_settings: &kit_files::KitFilesSettings,
+    kit_files_settings: &svn_core::sveltekit::KitFilesSettings,
 ) -> ExitCode {
     let phase_start = std::time::Instant::now();
 

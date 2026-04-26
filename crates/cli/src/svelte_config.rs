@@ -45,6 +45,7 @@ use oxc_ast::ast::{
 };
 use oxc_parser::Parser;
 use oxc_span::SourceType;
+use svn_core::sveltekit::{KitFilesSettings, normalise_path as normalise_kit_path};
 
 /// Recognised filter operations. Each entry is a "drop this warning
 /// if" predicate; the CLI ORs them together.
@@ -154,7 +155,7 @@ pub fn find_svelte_config(workspace: &Path) -> Option<PathBuf> {
 #[derive(Debug, Default, Clone)]
 pub struct SvelteConfigSummary {
     pub warning_filter_plan: WarningFilterPlan,
-    pub kit_files_settings: crate::kit_files::KitFilesSettings,
+    pub kit_files_settings: KitFilesSettings,
 }
 
 /// Read `svelte.config.js`, parse once, and return every recognised
@@ -290,12 +291,9 @@ fn kit_files_from_root<'a>(root: &'a ObjectExpression<'a>) -> Option<&'a ObjectE
 
 /// Apply each recognised key in `files: { … }` onto `settings`.
 /// String values get normalised — leading `./` and trailing `/` are
-/// stripped so the suffix-match in `is_kit_file` lines up regardless
-/// of how the user spelled the path.
-fn apply_kit_files_overrides(
-    files_obj: &ObjectExpression<'_>,
-    settings: &mut crate::kit_files::KitFilesSettings,
-) {
+/// stripped so the suffix-match in `classify` lines up regardless of
+/// how the user spelled the path.
+fn apply_kit_files_overrides(files_obj: &ObjectExpression<'_>, settings: &mut KitFilesSettings) {
     if let Some(p) = lookup_string_property(files_obj, "params") {
         settings.params_path = normalise_kit_path(&p);
     }
@@ -320,17 +318,6 @@ fn apply_kit_files_overrides(
             _ => {}
         }
     }
-}
-
-/// Normalise a kit.files path string into the same shape
-/// `is_kit_file`'s suffix matcher expects: drop a leading `./`
-/// (project-relative shorthand SvelteKit accepts) and a trailing
-/// `/` (directory style). Without this, a user-written
-/// `./src/myparams` would never match an absolute walker path
-/// because the `./` prefix has no analogue in the absolute path.
-fn normalise_kit_path(s: &str) -> String {
-    let trimmed = s.trim_start_matches("./").trim_end_matches('/');
-    trimmed.to_string()
 }
 
 /// Look up a string-keyed property on an ObjectExpression and return

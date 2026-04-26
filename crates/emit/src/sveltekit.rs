@@ -38,45 +38,27 @@
 
 use std::path::Path;
 
-/// The kind of SvelteKit route file a basename matches.
-///
-/// Pattern matching mirrors upstream's `isKitRouteFile`:
-/// `+page`, `+layout`, `+page.server`, `+layout.server`, `+server`, `+error`.
-/// `@<layout-name>` suffixes are stripped before matching so
-/// `+page@foo.svelte` still resolves to `Page`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RouteKind {
-    /// `+page.svelte` — page component. `data: PageData`, `form: ActionData`.
-    Page,
-    /// `+layout.svelte` — layout component. `data: LayoutData`,
-    /// `children: Snippet` implicitly present.
-    Layout,
-    /// `+error.svelte` — error boundary. No auto-typed props today.
-    Error,
-}
+use svn_core::sveltekit::{KitFilesSettings, KitRole, classify};
 
-/// Inspect the basename and return a `RouteKind` when it matches a
-/// SvelteKit route pattern, or `None` otherwise.
+/// The kind of SvelteKit `.svelte` route component a basename matches.
 ///
-/// We intentionally recognize only `.svelte` route files here:
-/// `+page.ts`, `+server.ts`, and their friends reach tsgo as raw
-/// user-authored TypeScript and aren't transformed through emit.
+/// Re-exported from the centralised `svn_core::sveltekit::RouteShape`
+/// — emit/lib.rs has many `RouteKind::Page` / `Layout` / `Error`
+/// callsites that keep working through the alias without a churning
+/// rename. See `notes/PLAN-sveltekit-path-centralization.md` (Phase 4).
+pub type RouteKind = svn_core::sveltekit::RouteShape;
+
+/// Inspect `path` and return a `RouteKind` when its basename matches
+/// a SvelteKit `.svelte` route component (`+page` / `+layout` /
+/// `+error`, with optional `@group` suffix), or `None` otherwise.
+///
+/// `.ts` / `.js` route shapes are out of scope here — they go through
+/// `kit_inject` instead. Filtering on `KitRole::RouteComponent` at
+/// the centralised classifier picks exactly the `.svelte` set.
 pub fn route_kind(path: &Path) -> Option<RouteKind> {
-    let basename = path.file_name()?.to_str()?;
-    if !basename.ends_with(".svelte") {
-        return None;
-    }
-    // Strip `.svelte` and any `@layout-ref` suffix on the stem
-    // (`+page@(foo).svelte` → `+page`).
-    let stem = basename.strip_suffix(".svelte")?;
-    let core = match stem.find('@') {
-        Some(at) => &stem[..at],
-        None => stem,
-    };
-    match core {
-        "+page" => Some(RouteKind::Page),
-        "+layout" => Some(RouteKind::Layout),
-        "+error" => Some(RouteKind::Error),
+    let kit = classify(path, &KitFilesSettings::default())?;
+    match kit.role {
+        KitRole::RouteComponent { shape } => Some(shape),
         _ => None,
     }
 }
@@ -215,46 +197,11 @@ pub fn synthesize_route_props_type(kind: RouteKind, prop_names: &[&str]) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
-    fn kind_of(basename: &str) -> Option<RouteKind> {
-        route_kind(&PathBuf::from(basename))
-    }
-
-    #[test]
-    fn detects_page_svelte() {
-        assert_eq!(kind_of("+page.svelte"), Some(RouteKind::Page));
-    }
-
-    #[test]
-    fn detects_layout_svelte() {
-        assert_eq!(kind_of("+layout.svelte"), Some(RouteKind::Layout));
-    }
-
-    #[test]
-    fn detects_error_svelte() {
-        assert_eq!(kind_of("+error.svelte"), Some(RouteKind::Error));
-    }
-
-    #[test]
-    fn strips_at_suffix_on_stem() {
-        assert_eq!(kind_of("+page@(auth).svelte"), Some(RouteKind::Page));
-        assert_eq!(kind_of("+layout@foo.svelte"), Some(RouteKind::Layout));
-    }
-
-    #[test]
-    fn rejects_ts_route_files() {
-        // .ts files go to tsgo directly — they're not our overlay concern.
-        assert_eq!(kind_of("+page.ts"), None);
-        assert_eq!(kind_of("+server.ts"), None);
-        assert_eq!(kind_of("+page.server.ts"), None);
-    }
-
-    #[test]
-    fn rejects_non_route_svelte() {
-        assert_eq!(kind_of("Component.svelte"), None);
-        assert_eq!(kind_of("page.svelte"), None); // no leading '+'
-    }
+    // Direct `route_kind` tests (basename matrix, `@group` stripping,
+    // `.ts`/`.js` rejection) live in `svn_core::sveltekit::tests` —
+    // the centralised classifier exercises every shape there. Tests
+    // below cover the emit-specific surface that reads `RouteKind`.
 
     #[test]
     fn kit_prop_decl_page_data_required() {

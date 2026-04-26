@@ -178,6 +178,16 @@ pub struct MapData {
     pub token_map: Vec<TokenMapEntry>,
     pub overlay_line_starts: Vec<u32>,
     pub source_line_starts: Vec<u32>,
+    /// Overlay text. Required because tsgo emits 1-based UTF-16
+    /// column counts (LSP convention) and we need the actual line
+    /// contents to convert UTF-16 column → byte offset. Pure ASCII
+    /// lines treat both as equivalent; non-ASCII lines diverge.
+    pub overlay_text: String,
+    /// Source `.svelte` text. Same UTF-16-vs-byte conversion need on
+    /// the source side: we map a matched token-map's source byte
+    /// range back to a (line, UTF-16-column) for the user-facing
+    /// diagnostic.
+    pub source_text: String,
     /// When true, overlay positions that don't match any `token_map` /
     /// `line_map` entry pass through unchanged (identity map) instead
     /// of being dropped. Set for kit-file inputs where the overlay is
@@ -431,7 +441,7 @@ pub fn check(
         std::collections::HashSet::with_capacity(inputs.len() * 2);
     // `inputs` is consumed here — `generated_ts` and `line_map` move out
     // of each `CheckInput` and the string drops at end of iteration.
-    for input in inputs {
+    for mut input in inputs {
         let gen_path = match input.kind {
             InputKind::Svelte | InputKind::SvelteAuxiliary => {
                 layout.generated_path_with_lang(&input.source_path, input.is_ts_overlay)
@@ -512,6 +522,21 @@ pub fn check(
         }
 
         let ignore_regions = scan_ignore_regions(&input.generated_ts);
+        // Source text for the position mapper. For Svelte / Aux
+        // overlays the source is the user's `.svelte` file; for kit /
+        // user-ts overlays the original layout is preserved through
+        // the inject and rewrite paths so we can reuse the overlay
+        // text as the source view (identity_map=true on those kinds
+        // already handles the line/col pass-through, but having the
+        // text on hand keeps position_to_byte / byte_to_position's
+        // UTF-16 conversion correct on non-ASCII content).
+        let source_text = match input.kind {
+            InputKind::Svelte | InputKind::SvelteAuxiliary => {
+                std::fs::read_to_string(&input.source_path).unwrap_or_default()
+            }
+            InputKind::KitFile | InputKind::UserTsOverlay => input.generated_ts.clone(),
+        };
+        let overlay_text = std::mem::take(&mut input.generated_ts);
         map_data.insert(
             gen_path.clone(),
             MapData {
@@ -519,6 +544,8 @@ pub fn check(
                 token_map: input.token_map,
                 overlay_line_starts: input.overlay_line_starts,
                 source_line_starts: input.source_line_starts,
+                overlay_text,
+                source_text,
                 identity_map: matches!(input.kind, InputKind::KitFile | InputKind::UserTsOverlay),
                 ignore_regions,
             },
@@ -750,10 +777,13 @@ fn overlay_byte_offset(data: &MapData, line: u32, column: u32) -> Option<u32> {
     if data.overlay_line_starts.is_empty() || line == 0 {
         return None;
     }
-    let idx = (line - 1) as usize;
-    let line_start = *data.overlay_line_starts.get(idx)?;
-    // `column` is 1-based. Column 1 == the first byte of the line.
-    Some(line_start + column.saturating_sub(1))
+    // tsgo's `column` is 1-based UTF-16 code units; convert via
+    // `position_to_byte` so non-ASCII overlay content is handled
+    // correctly (the ignore-region filter that consumes this offset
+    // would otherwise miss markers when emit-synthesised scaffolding
+    // contains multi-byte chars — rare today, but the conversion
+    // costs nothing on ASCII-only lines).
+    position_to_byte(&data.overlay_line_starts, &data.overlay_text, line, column)
 }
 
 /// Check whether `offset` falls inside any `(start, end)` range in
@@ -940,7 +970,12 @@ fn translate_position(data: &MapData, overlay_line: u32, overlay_col: u32) -> Op
     // Try the token map first — tightest-span wins. Requires a
     // line-starts index to resolve (line, col) → byte offset.
     if !data.token_map.is_empty() && !data.overlay_line_starts.is_empty() {
-        if let Some(byte) = position_to_byte(&data.overlay_line_starts, overlay_line, overlay_col) {
+        if let Some(byte) = position_to_byte(
+            &data.overlay_line_starts,
+            &data.overlay_text,
+            overlay_line,
+            overlay_col,
+        ) {
             if let Some(entry) = find_tightest_token(&data.token_map, byte) {
                 // Preserve the column offset within the span so a
                 // diagnostic pointing at the middle of the spliced
@@ -952,7 +987,8 @@ fn translate_position(data: &MapData, overlay_line: u32, overlay_col: u32) -> Op
                     .source_byte_start
                     .saturating_add(overlay_offset)
                     .min(entry.source_byte_end.saturating_sub(1));
-                let (sl, sc) = byte_to_position(&data.source_line_starts, source_byte);
+                let (sl, sc) =
+                    byte_to_position(&data.source_line_starts, &data.source_text, source_byte);
                 return Some((sl, sc));
             }
         }
@@ -1001,14 +1037,19 @@ fn find_tightest_token(map: &[TokenMapEntry], byte: u32) -> Option<TokenMapEntry
     best
 }
 
-/// Convert a 1-based `(line, col)` into a byte offset via a
-/// `line_starts` index. Returns `None` when the line is past EOF.
-/// Columns past the end of the line clamp to the line's final byte.
+/// Convert a 1-based `(line, UTF-16 col)` into a byte offset.
 ///
-/// tsgo (and upstream svelte-check) emit 1-based columns; the
-/// line-starts index is 0-based array-of-byte-offsets, so
-/// `line_starts[line - 1]` is the byte where line `line` begins.
-fn position_to_byte(line_starts: &[u32], line: u32, col: u32) -> Option<u32> {
+/// tsgo (and upstream svelte-check / TypeScript / LSP) emit
+/// **UTF-16 code-unit columns**, NOT byte columns. For pure-ASCII
+/// lines the two coincide; for lines containing non-ASCII characters
+/// (UTF-8 bytes ≥ 0x80) they diverge — `é` is 1 UTF-16 unit but 2
+/// UTF-8 bytes. Walk the line text counting UTF-16 units to land
+/// on the correct byte.
+///
+/// Returns `None` when the line is past EOF. Columns past the end of
+/// the line clamp to the line's final byte (matches LSP server
+/// behaviour for over-shoots).
+fn position_to_byte(line_starts: &[u32], text: &str, line: u32, col: u32) -> Option<u32> {
     if line == 0 {
         return None;
     }
@@ -1017,19 +1058,46 @@ fn position_to_byte(line_starts: &[u32], line: u32, col: u32) -> Option<u32> {
         return None;
     }
     let line_start = line_starts[line_idx];
-    // Clamp to next line's start - 1 (i.e. don't step onto the next
-    // line's first byte). The sentinel at the end of line_starts
-    // handles the last-line case uniformly.
     let next = line_starts[line_idx + 1];
-    let col_zero_based = col.saturating_sub(1);
-    Some(line_start.saturating_add(col_zero_based).min(next))
+    if col <= 1 {
+        return Some(line_start);
+    }
+    let target_units = (col - 1) as usize;
+    // Walk the line text byte-by-char, counting UTF-16 code units
+    // per char (2 for surrogate pairs / supplementary plane, 1
+    // otherwise). Stop when we've consumed `target_units` worth.
+    let line_bytes_end = next as usize;
+    let line_text = match text.get(line_start as usize..line_bytes_end) {
+        Some(s) => s,
+        // Source bytes don't form a valid UTF-8 slice (shouldn't
+        // happen — line_starts is built from str::char_indices via
+        // memchr on '\n') — clamp to line end so we still produce a
+        // diagnostic at the line, just at column 1.
+        None => return Some(line_start),
+    };
+    let mut units = 0usize;
+    for (offset, ch) in line_text.char_indices() {
+        if units >= target_units {
+            return Some(line_start.saturating_add(offset as u32));
+        }
+        units = units.saturating_add(ch.len_utf16());
+    }
+    // Column overshoots the line's end — clamp to the last byte on
+    // this line (the newline, if any).
+    Some(next.saturating_sub(1).max(line_start))
 }
 
-/// Convert a byte offset to a 1-based `(line, col)` via a
-/// `line_starts` index. Clamps to the last line when `byte` is past
-/// EOF. Used to render a matched TokenMapEntry's source byte back
-/// into a user-facing position.
-fn byte_to_position(line_starts: &[u32], byte: u32) -> (u32, u32) {
+/// Convert a byte offset to a 1-based `(line, UTF-16 col)`.
+///
+/// Counts UTF-16 code units between the line start and the target
+/// byte, mirroring the LSP convention tsgo emits. Pure-ASCII lines
+/// pay no extra cost beyond a slice; non-ASCII lines walk char-by-
+/// char accumulating `char::len_utf16()`.
+///
+/// Used to render a matched TokenMapEntry's source byte back into a
+/// user-facing position. Clamps to the last line when `byte` is past
+/// EOF.
+fn byte_to_position(line_starts: &[u32], text: &str, byte: u32) -> (u32, u32) {
     if line_starts.is_empty() {
         return (1, 1);
     }
@@ -1038,12 +1106,20 @@ fn byte_to_position(line_starts: &[u32], byte: u32) -> (u32, u32) {
         Ok(i) => i,
         Err(i) => i.saturating_sub(1),
     };
-    // Final entry is the sentinel (== buffer length). Never treat it
-    // as its own line — clamp to the preceding line.
     let line_idx = idx.min(line_starts.len().saturating_sub(2));
+    let line_start = line_starts[line_idx];
     let line = (line_idx + 1) as u32;
-    let col = byte.saturating_sub(line_starts[line_idx]) + 1;
-    (line, col)
+    let line_text = match text.get(line_start as usize..byte as usize) {
+        Some(s) => s,
+        // Byte didn't land on a UTF-8 boundary, or is past EOF —
+        // clamp to column 1.
+        None => return (line, 1),
+    };
+    let mut units = 0u32;
+    for ch in line_text.chars() {
+        units = units.saturating_add(ch.len_utf16() as u32);
+    }
+    (line, units + 1)
 }
 
 #[cfg(test)]
@@ -1490,24 +1566,41 @@ mod tests {
     fn position_to_byte_handles_line_and_column_correctly() {
         // Overlay buffer: "ab\ncd\nef" (lines 1-3). Line starts:
         //   line 1 @ 0, line 2 @ 3, line 3 @ 6, sentinel @ 8.
-        let starts = svn_emit::compute_line_starts("ab\ncd\nef");
+        let text = "ab\ncd\nef";
+        let starts = svn_emit::compute_line_starts(text);
         assert_eq!(starts, vec![0, 3, 6, 8]);
         // (1,1) → byte 0 (line 1 col 1 = first char).
-        assert_eq!(position_to_byte(&starts, 1, 1), Some(0));
+        assert_eq!(position_to_byte(&starts, text, 1, 1), Some(0));
         // (2,1) → byte 3 (first char of line 2).
-        assert_eq!(position_to_byte(&starts, 2, 1), Some(3));
+        assert_eq!(position_to_byte(&starts, text, 2, 1), Some(3));
         // (2,2) → byte 4.
-        assert_eq!(position_to_byte(&starts, 2, 2), Some(4));
-        // Column past end of line clamps to next line start - 0
-        // (which IS the \n position for non-final lines, or the
-        // sentinel for the final line). Acceptable either way for a
-        // diagnostic byte lookup — just needs to stay within the
-        // buffer.
-        assert!(position_to_byte(&starts, 2, 99).unwrap() <= 8);
+        assert_eq!(position_to_byte(&starts, text, 2, 2), Some(4));
+        // Column past end of line clamps within the buffer.
+        assert!(position_to_byte(&starts, text, 2, 99).unwrap() <= 8);
         // Line past EOF returns None.
-        assert_eq!(position_to_byte(&starts, 99, 1), None);
+        assert_eq!(position_to_byte(&starts, text, 99, 1), None);
         // Line 0 is invalid (we're 1-based).
-        assert_eq!(position_to_byte(&starts, 0, 1), None);
+        assert_eq!(position_to_byte(&starts, text, 0, 1), None);
+    }
+
+    #[test]
+    fn position_to_byte_handles_utf16_columns() {
+        // Multi-byte char `é` is 2 UTF-8 bytes but 1 UTF-16 unit. A
+        // tsgo diagnostic at column 4 (1-based UTF-16) on `café xx`
+        // points at the space after café, which is byte offset 5
+        // (c=1+a=1+f=1+é=2 bytes = 5).
+        let text = "café xx";
+        let starts = svn_emit::compute_line_starts(text);
+        assert_eq!(position_to_byte(&starts, text, 1, 1), Some(0)); // 'c'
+        assert_eq!(position_to_byte(&starts, text, 1, 4), Some(5)); // ' ' after é
+        assert_eq!(position_to_byte(&starts, text, 1, 5), Some(6)); // 'x'
+        assert_eq!(position_to_byte(&starts, text, 1, 6), Some(7)); // 'x'
+
+        // Astral char (4-byte UTF-8, 2 UTF-16 units) — `🎉` U+1F389.
+        let astral = "🎉end"; // 🎉=4 bytes/2 UTF-16 units, then 'end'.
+        let starts = svn_emit::compute_line_starts(astral);
+        assert_eq!(position_to_byte(&starts, astral, 1, 1), Some(0)); // 🎉 start
+        assert_eq!(position_to_byte(&starts, astral, 1, 3), Some(4)); // 'e' (after 2 UTF-16 units)
     }
 
     #[test]
@@ -1515,11 +1608,12 @@ mod tests {
         // Round-trip: (line, col) → byte → (line, col). Every position
         // inside a line must round-trip exactly. Tests the buffer
         // "abc\ndef\nghi" (3 lines of 3 chars each).
-        let starts = svn_emit::compute_line_starts("abc\ndef\nghi");
+        let text = "abc\ndef\nghi";
+        let starts = svn_emit::compute_line_starts(text);
         for line in 1..=3 {
             for col in 1..=3 {
-                let byte = position_to_byte(&starts, line, col).unwrap();
-                let (l, c) = byte_to_position(&starts, byte);
+                let byte = position_to_byte(&starts, text, line, col).unwrap();
+                let (l, c) = byte_to_position(&starts, text, byte);
                 assert_eq!(
                     (l, c),
                     (line, col),
@@ -1532,6 +1626,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn byte_to_position_emits_utf16_columns() {
+        // Inverse of the position_to_byte UTF-16 test: a byte offset
+        // inside / after a multi-byte char must produce a UTF-16
+        // column count, not a byte column.
+        let text = "café xx";
+        let starts = svn_emit::compute_line_starts(text);
+        // Byte 5 (' ' after é) is at UTF-16 col 4.
+        assert_eq!(byte_to_position(&starts, text, 5), (1, 4));
+        // Byte 7 ('x' end-of-line) is at UTF-16 col 6.
+        assert_eq!(byte_to_position(&starts, text, 7), (1, 6));
     }
 
     #[test]
@@ -1644,8 +1751,7 @@ mod tests {
             }],
             overlay_line_starts: vec![0, 20, 40, 60],
             source_line_starts: vec![0, 20, 40, 60],
-            identity_map: false,
-            ignore_regions: Vec::new(),
+            ..Default::default()
         };
         // Line 3 (overlay byte ~40) — outside the token span [0, 10)
         // AND outside the line-map range [5, 15).

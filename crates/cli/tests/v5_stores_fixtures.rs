@@ -66,6 +66,42 @@ fn v5_stores_fixtures_suite() {
         .find(|l| l.starts_with("v5 fixtures:"))
         .unwrap_or("v5 fixtures: <no summary>");
     eprintln!("\n{summary_line}");
+
+    let (passed, failed) = parse_summary(summary_line);
+    const MIN_PASSED: usize = 18;
+    const MAX_FAILED: usize = 6;
+    assert!(
+        passed >= MIN_PASSED,
+        "v5-stores pass count regressed: got {passed}, baseline is {MIN_PASSED}.\n\
+         summary: {summary_line}"
+    );
+    assert!(
+        failed <= MAX_FAILED,
+        "v5-stores failure count regressed: got {failed}, baseline ceiling is \
+         {MAX_FAILED}.\n\
+         summary: {summary_line}"
+    );
+}
+
+fn parse_summary(line: &str) -> (usize, usize) {
+    let after_colon = match line.split_once(':') {
+        Some((_, rest)) => rest.trim(),
+        None => return (0, usize::MAX),
+    };
+    let passed = after_colon
+        .split('/')
+        .next()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    let failed = after_colon
+        .rsplit_once(',')
+        .and_then(|(_, tail)| {
+            tail.split_whitespace()
+                .next()
+                .and_then(|s| s.parse::<usize>().ok())
+        })
+        .unwrap_or(usize::MAX);
+    (passed, failed)
 }
 
 fn locate_local_tsgo(crate_dir: &Path) -> Option<PathBuf> {

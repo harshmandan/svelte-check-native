@@ -73,14 +73,64 @@ fn v5_fixtures_suite() {
     eprintln!("----- node stdout -----\n{stdout}");
     eprintln!("----- node stderr -----\n{stderr}");
 
-    // Don't gate the build on the count yet — we report it as informational
-    // so the test passes even when the score is still climbing toward 63/63.
-    // Once we're stable at 63/63 we'll flip this to assert success.
     let summary_line = stdout
         .lines()
         .find(|l| l.starts_with("v5 fixtures:"))
         .unwrap_or("v5 fixtures: <no summary>");
     eprintln!("\n{summary_line}");
+
+    // Gate on the parity-pass count. Format:
+    //   "v5 fixtures: 47/63 (40 clean, 7 within-baseline), 16 failed"
+    // Lock the floor at the current baseline so regressions fail CI;
+    // bump MIN_PASSED upward whenever we land more parity wins.
+    //
+    // Subprocess-failure path (no summary line) → 0/0 → MIN_PASSED
+    // assertion fires immediately.
+    let (passed, failed) = parse_summary(summary_line);
+    const MIN_PASSED: usize = 47;
+    const MAX_FAILED: usize = 16;
+    assert!(
+        passed >= MIN_PASSED,
+        "v5 fixture pass count regressed: got {passed}, baseline is {MIN_PASSED}.\n\
+         summary: {summary_line}\n\
+         Either fix the regression or, if intentionally accepting a lower count, \
+         lower MIN_PASSED in this test to match."
+    );
+    assert!(
+        failed <= MAX_FAILED,
+        "v5 fixture failure count regressed: got {failed}, baseline ceiling is \
+         {MAX_FAILED}.\n\
+         summary: {summary_line}\n\
+         Investigate the new failures or, if expected, raise MAX_FAILED in this test."
+    );
+}
+
+/// Parse the runner's summary line into `(passed, failed)`.
+///
+/// Format: `v5 fixtures: <PASS>/<TOTAL> (..., ...), <FAIL> failed`.
+/// Robust to extra whitespace; returns `(0, usize::MAX)` on any parse
+/// failure so a malformed/missing summary triggers the floor/ceiling
+/// assertions above.
+fn parse_summary(line: &str) -> (usize, usize) {
+    // " 47/63" → split on "/" gets passed; "16 failed" → leading int.
+    let after_colon = match line.split_once(':') {
+        Some((_, rest)) => rest.trim(),
+        None => return (0, usize::MAX),
+    };
+    let passed = after_colon
+        .split('/')
+        .next()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    let failed = after_colon
+        .rsplit_once(',')
+        .and_then(|(_, tail)| {
+            tail.split_whitespace()
+                .next()
+                .and_then(|s| s.parse::<usize>().ok())
+        })
+        .unwrap_or(usize::MAX);
+    (passed, failed)
 }
 
 /// Find the platform-native tsgo binary or the JS wrapper inside the repo's

@@ -4,6 +4,77 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5]
+
+Patch release. Two architectural consolidations + four review-driven
+bug-fix rounds. Bench parity unchanged — all 15 control benches keep
+their byte-perfect counts against `svelte-check --tsgo`; c4 + c5
+control rigs stay at 0 user errors and 1 ahead of upstream (which
+still reports a synthetic tsconfig diagnostic on its own injected
+`incremental: false` + `tsBuildInfoFile` combination).
+
+### Architecture
+
+- **SvelteKit path classification centralised
+  (`269c1305`..`083c11bb`).** Five sites in this repo previously
+  reimplemented overlapping subsets of "is this a kit file? what
+  kind?" rules: `cli/kit_files`, `cli/svelte_config`,
+  `emit/kit_inject`, `emit/sveltekit`, `typecheck/kit_types_mirror`.
+  Round 3 F4 + Round 4 G4-G5 each fixed one site without touching
+  the others. Six phases consolidate every site behind
+  `svn_core::sveltekit::classify` / `normalise_path` /
+  `user_source_needles`. Future SvelteKit-convention additions
+  land in one place instead of five.
+- **Template-scope walker unified (`478d6928`..`740780e5`).**
+  Both `analyze::template_walker` and `svn-lint::scope` walked the
+  same Fragment/Node tree and tracked the same scope-introducing
+  constructs (`{#each}`, `{#snippet}`, await branches, let
+  directives, `{@const}`) independently. Five phases collapse the
+  recursion into `svn_analyze::template_scope::walk_with_visitor`,
+  driven by a `TemplateScopeVisitor` trait that both crates
+  implement. ~250 LOC of duplicated walker arms retire; future
+  scope-related fixes land in one place.
+
+### Correctness
+
+- **Round 3 (F1-F16, `f0d8e93e`..`835d5925`).** Sixteen targeted
+  fixes spanning parser bugs, scope drift, cache GC, UTF-16
+  diagnostic mapping, and `kit.files` parsing. Notable: void HTML
+  elements no longer push template-tag depth; files-only tsconfigs
+  treat as closed-world; cache GC handles deleted/renamed sources;
+  diagnostic mapping converts UTF-16 columns to byte offsets.
+- **Round 4 (G1-G10, `4f9562fe`..`e272104c`).** Ten cleanups:
+  `runes={false}` honours literal value; array-rest captured in
+  template shadow; `{@const}` retag scoped to its own bindings;
+  slot-attr shadow check on member/index expressions;
+  `kit_types_mirror` GC + earliest-needle match; v5 fixture
+  suites assert `skipped == 0`; bench parity gates on file-count
+  drift; svelte.config parsed once and shared across extractors.
+- **Round 5 (`2e281d99`, `232d9791`).** Seven findings: Windows
+  path normalisation in `kit_files`; JS overlays now void
+  `__svn_tpl_check`; emit_snapshots harness fails loud on missing
+  corpora and discovers `+page.svelte` / `+layout.svelte`; bench
+  parity forwards `--tsconfig` to upstream; types-mirror stops
+  rewriting hooks/params chains (kit_inject doesn't materialise
+  cache copies for them); runes scanner skips strings/comments
+  inside template-literal interpolations; documented `kit.files.routes`
+  parity with upstream.
+- **Round 6 (`3438e72a`).** Four findings inside the new
+  abstractions: await-branch context bindings declare as
+  `Template` (not `Each`) so `bind_invalid_each_rest` doesn't
+  misfire on `{:then {...rest}}`; destructure `{@const}` forms
+  participate in analyze's shadow tracking; let-directive default-
+  value expressions walk in parent scope; `classify` tolerates
+  non-UTF-8 path components.
+
+### Bug fixtures
+
+Seven new locked fixtures in `fixtures/bugs/`:
+`55-sveltekit-route-autotyping`, `56-sveltekit-layout-route-autotyping`,
+`69-at-const-shadows-slot-attr`, plus the six existing fixtures the
+emit-snapshots harness picked up after gaining `+page.svelte` /
+`+layout.svelte` discovery. Snapshot count grows ~9.
+
 ## [0.6.1]
 
 Patch release. Performance, code-quality, and architecture cleanups

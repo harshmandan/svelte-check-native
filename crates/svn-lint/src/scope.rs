@@ -822,11 +822,20 @@ impl TreeBuilder {
                     }
                     let saved = std::mem::replace(&mut ctx.in_control_flow, true);
                     self.walk_template_fragment(&b.body, ctx);
+                    // Restore parent scope BEFORE walking the {:else}
+                    // branch — `{#each items as item}…{:else}…{/each}`
+                    // fires {:else} when items is empty, so `item` is
+                    // not in scope for the alternate body. Walking the
+                    // alternate inside child_scope (the previous shape)
+                    // let the each-bindings leak into {:else} and
+                    // produced wrong-scope rule fires (e.g.
+                    // non_reactive_update treating an outer same-named
+                    // binding as the each binding).
+                    ctx.scope = parent_scope;
                     if let Some(alternate) = &b.alternate {
                         self.walk_template_fragment(alternate, ctx);
                     }
                     ctx.in_control_flow = saved;
-                    ctx.scope = parent_scope;
                 }
                 Node::AwaitBlock(b) => {
                     self.walk_expr_range(b.expression_range, ctx, RefFlags::default());
@@ -834,11 +843,39 @@ impl TreeBuilder {
                     if let Some(pending) = &b.pending {
                         self.walk_template_fragment(pending, ctx);
                     }
+                    // {:then x} and {:catch err} each introduce a
+                    // template-scope binding visible only inside that
+                    // branch's body. Push a child scope per branch and
+                    // declare the context pattern's identifiers in it
+                    // so subsequent rule queries (`non_reactive_update`,
+                    // `state_referenced_locally`, etc.) resolve `x`
+                    // and `err` to the correct binding instead of
+                    // falling through to the outer scope.
                     if let Some(then) = &b.then_branch {
+                        let then_scope = self.new_scope(Some(ctx.scope));
+                        let parent = std::mem::replace(&mut ctx.scope, then_scope);
+                        if let Some(ctx_range) = then.context_range {
+                            self.declare_each_context(
+                                ctx_range, then_scope, parent, ctx.source, ctx.lang,
+                            );
+                        }
                         self.walk_template_fragment(&then.body, ctx);
+                        ctx.scope = parent;
                     }
                     if let Some(catch) = &b.catch_branch {
+                        let catch_scope = self.new_scope(Some(ctx.scope));
+                        let parent = std::mem::replace(&mut ctx.scope, catch_scope);
+                        if let Some(ctx_range) = catch.context_range {
+                            self.declare_each_context(
+                                ctx_range,
+                                catch_scope,
+                                parent,
+                                ctx.source,
+                                ctx.lang,
+                            );
+                        }
                         self.walk_template_fragment(&catch.body, ctx);
+                        ctx.scope = parent;
                     }
                     ctx.in_control_flow = saved;
                 }

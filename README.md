@@ -29,7 +29,7 @@ Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-ch
 Measured on a SvelteKit + TypeScript monorepo with
 1359 `.svelte` files (Svelte 5 runes), M1 Pro 8C, mean of 2 runs each:
 
-`svelte-check-native --tsconfig tsconfig.json --diagnostic-sources 'js,svelte'`
+`svelte-check-native --tsconfig tsconfig.json --diagnostic-sources 'ts,svelte'`
 
 ```
   tool                  cold     warm     dirty   speedup   errors/warnings/problems

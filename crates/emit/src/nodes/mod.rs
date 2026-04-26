@@ -7,5 +7,6 @@
 
 pub(crate) mod blocks;
 pub(crate) mod component;
+pub(crate) mod directives;
 pub(crate) mod element;
 pub(crate) mod interpolation;

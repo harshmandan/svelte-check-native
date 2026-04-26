@@ -35,11 +35,14 @@
 //! - [`extract_at_const_name`] — pulls the binding name out of a
 //!   `{@const NAME = EXPR}` interpolation body.
 //!
-//! ### What does NOT live here yet
+//! ### Consumers
 //!
-//! Phase 4 (the lint migration) brings `svn-lint::scope::TreeBuilder`
-//! onto `walk_with_visitor` via a `LintScopeVisitor`. Until then lint
-//! still drives its own template walker.
+//! - `analyze::template_walker::AnalyzeVisitor` — populates
+//!   `TemplateSummary` (component instantiations, slot-defs, action
+//!   attrs, bind-this, `{@const}` shadow).
+//! - `svn-lint::scope::LintScopeVisitor` (Phase 4) — drives
+//!   `TreeBuilder`'s declarations + reference-recording + control-
+//!   flow tracking.
 
 use oxc_ast::ast::{BindingPattern, BindingPatternKind};
 use oxc_span::GetSpan;
@@ -150,22 +153,25 @@ fn walk(pat: &BindingPattern<'_>, offset: i32, inside_rest: bool, out: &mut Patt
 //
 // `walk_with_visitor` drives the recursion through Fragment/Node and
 // hands per-node + per-scope work to a `TemplateScopeVisitor` impl.
-// Today only `analyze::template_walker::AnalyzeVisitor` consumes it;
-// Phase 4 of `notes/PLAN-template-scope-unification.md` adds a
-// `LintScopeVisitor` for `svn-lint::scope`'s `TreeBuilder`.
+// Both `analyze::template_walker::AnalyzeVisitor` and
+// `svn-lint::scope::LintScopeVisitor` (Phase 4) consume it.
 // =====================================================================
 
 /// What kind of scope a `enter_scope` / `leave_scope` pair is
 /// bracketing. Drives the visitor's per-kind binding-tagging
-/// (lint maps Each/Snippet/LetDirective/AtConstScope to different
-/// `BindingKind`s; analyze ignores the discriminator).
+/// (lint maps Each/Snippet/LetDirective to different `BindingKind`s;
+/// analyze ignores the discriminator).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeKind {
     /// `walk_fragment` entry/exit. Used to bracket fragment-scoped
     /// constructs whose own scope has no per-tag closer (`{@const}`).
     Fragment,
-    /// `{#each X as PAT}` body.
-    Each,
+    /// `{#each X as PAT [, INDEX] [(KEY)]}` body. Carries the
+    /// `is_keyed` flag (for the index binding's `Static` vs
+    /// `Template` kind in lint) and `has_index` (which tells the
+    /// visitor whether the LAST entry in the bindings array passed
+    /// to `enter_scope` is the index).
+    Each { is_keyed: bool, has_index: bool },
     /// `{:then PAT}` branch of `{#await}`.
     AwaitThen,
     /// `{:catch PAT}` branch of `{#await}`.
@@ -213,12 +219,47 @@ pub trait TemplateScopeVisitor {
     /// Analyze increments `summary.each_block_count` here.
     fn visit_each_block(&mut self, block: &svn_parser::EachBlock) {}
 
-    /// `{@const NAME = EXPR}` interpolation. The walker has already
-    /// extracted the binding name; the visitor records the name in
-    /// its summary AND pushes onto its scope stack so subsequent
-    /// sibling sites in the same fragment see it. (No matching
-    /// leave-call — fragment-level bracket handles cleanup.)
-    fn visit_at_const(&mut self, name: SmolStr, expr_range: Range) {}
+    /// Visited at if-block entry, BEFORE control-flow / expression
+    /// walks. Lint walks branches' condition expressions at the
+    /// walker-emitted `visit_expr` calls; this hook is reserved for
+    /// future per-block work.
+    fn visit_if_block(&mut self, block: &svn_parser::IfBlock) {}
+
+    /// Visited at await-block entry, BEFORE control-flow / expression
+    /// walks.
+    fn visit_await_block(&mut self, block: &svn_parser::AwaitBlock) {}
+
+    /// Visited at key-block entry, BEFORE control-flow / expression
+    /// walks.
+    fn visit_key_block(&mut self, block: &svn_parser::KeyBlock) {}
+
+    /// Visited at snippet-block entry, BEFORE the snippet scope is
+    /// entered.
+    fn visit_snippet_block(&mut self, block: &svn_parser::SnippetBlock) {}
+
+    /// Walk an expression at `range` in the CURRENT scope context
+    /// (the visitor decides which scope from its own state — for
+    /// lint, that's `ctx.scope`). Default no-op; lint implements via
+    /// `walk_expr_range`. Walker calls this for: `{#if}` and elseif
+    /// condition ranges, `{#each}` outer expression + key, `{#await}`
+    /// expression, `{#key}` expression, and any `{EXPR}`
+    /// interpolation that's not `{@const …}`.
+    fn visit_expr(&mut self, range: Range) {}
+
+    /// Bracket entry into a control-flow block (`{#if}` / `{#each}` /
+    /// `{#await}` / `{#key}`). Lint's `TemplateCtx.in_control_flow`
+    /// flips `true` between these calls; analyze ignores them.
+    fn enter_control_flow(&mut self) {}
+    fn leave_control_flow(&mut self) {}
+
+    /// `{@const NAME = EXPR}` interpolation. Walker passes the full
+    /// expression range (the body slice between `{@const ` and `}`)
+    /// for visitors that re-parse the body themselves (lint re-parses
+    /// as `let X = EXPR;` to handle destructure patterns + initialiser
+    /// walking). `name` is the leading-identifier extraction for
+    /// visitors that just need the bare name (analyze's slot-attr
+    /// shadow).
+    fn visit_at_const(&mut self, name: Option<SmolStr>, expr_range: Range) {}
 }
 
 /// Drive the visitor over a template fragment. Handles all
@@ -252,142 +293,261 @@ fn walk_node_inner<V: TemplateScopeVisitor>(node: &Node, source: &str, visitor: 
     match node {
         Node::Element(e) => {
             visitor.visit_element(e);
-            let let_bindings = collect_let_directive_bindings(&e.attributes, source);
-            visitor.enter_scope(ScopeKind::LetDirective, &let_bindings);
-            walk_fragment_inner(&e.children, source, visitor);
-            visitor.leave_scope(ScopeKind::LetDirective);
+            walk_element_children(&e.attributes, &e.children, source, visitor);
         }
         Node::Component(c) => {
             visitor.visit_component(c);
-            let let_bindings = collect_let_directive_bindings(&c.attributes, source);
-            visitor.enter_scope(ScopeKind::LetDirective, &let_bindings);
-            walk_fragment_inner(&c.children, source, visitor);
-            visitor.leave_scope(ScopeKind::LetDirective);
+            walk_element_children(&c.attributes, &c.children, source, visitor);
         }
         Node::SvelteElement(s) => {
             visitor.visit_svelte_element(s);
-            let let_bindings = collect_let_directive_bindings(&s.attributes, source);
-            visitor.enter_scope(ScopeKind::LetDirective, &let_bindings);
-            walk_fragment_inner(&s.children, source, visitor);
-            visitor.leave_scope(ScopeKind::LetDirective);
+            walk_element_children(&s.attributes, &s.children, source, visitor);
         }
         Node::IfBlock(b) => {
+            visitor.visit_if_block(b);
+            // Outer condition walks in the parent's `in_control_flow`
+            // (it's the discriminator deciding control flow, not yet
+            // inside it). Mirrors existing lint walker:
+            //   walk_expr(condition_range)   <- parent control-flow
+            //   in_control_flow = true
+            //   walk consequent / arms / alternate
+            //   in_control_flow = saved
+            visitor.visit_expr(b.condition_range);
+            visitor.enter_control_flow();
             walk_fragment_inner(&b.consequent, source, visitor);
             for arm in &b.elseif_arms {
+                // Elseif conditions walk INSIDE the in_control_flow
+                // bracket (matches existing lint behaviour).
+                visitor.visit_expr(arm.condition_range);
                 walk_fragment_inner(&arm.body, source, visitor);
             }
             if let Some(alt) = &b.alternate {
                 walk_fragment_inner(alt, source, visitor);
             }
+            visitor.leave_control_flow();
         }
         Node::EachBlock(b) => {
             visitor.visit_each_block(b);
-            // `{#each X as item, i (key)}`. `item` and `i` enter scope
-            // for the body. The pattern in `context_range` may be a
-            // destructure (`as { a, b }`); the index is always a bare
-            // identifier.
+            // Outer expression walks in the PARENT scope, in the
+            // parent's `in_control_flow` (it's the iterable, outside
+            // the each-block's body).
+            visitor.visit_expr(b.expression_range);
+            // `{#each X as item, i (key)}`. `item` and `i` enter
+            // scope for the body. Pattern in `context_range` may be a
+            // destructure; index is always a bare identifier.
+            // Bindings convention: context entries first, index last
+            // when present (consumers gate on `has_index`).
             let mut bindings: Vec<BoundIdent> = Vec::new();
+            let mut defaults: Vec<Range> = Vec::new();
+            let mut has_index = false;
+            let mut is_keyed = false;
+            let mut key_range: Option<Range> = None;
             if let Some(as_clause) = &b.as_clause {
-                bindings.extend(collect_pattern_bindings_from_slice(
-                    source,
-                    as_clause.context_range,
-                ));
+                let context = collect_pattern_bindings_from_slice(source, as_clause.context_range);
+                bindings.extend(context.bindings);
+                defaults.extend(context.default_value_ranges);
                 if let Some(idx) = &as_clause.index_range {
-                    bindings.extend(collect_pattern_bindings_from_slice(source, *idx));
+                    let i = collect_pattern_bindings_from_slice(source, *idx);
+                    bindings.extend(i.bindings);
+                    defaults.extend(i.default_value_ranges);
+                    has_index = true;
+                }
+                if let Some(k) = as_clause.key_range {
+                    key_range = Some(k);
+                    is_keyed = true;
                 }
             }
-            visitor.enter_scope(ScopeKind::Each, &bindings);
+            // Default-value expressions walk in the PARENT scope,
+            // BEFORE entering the each-block's child scope — matches
+            // upstream's `{ a = b }` semantics where `b` resolves to
+            // a parent binding, not the just-declared `a`.
+            for default in &defaults {
+                visitor.visit_expr(*default);
+            }
+            visitor.enter_scope(
+                ScopeKind::Each {
+                    is_keyed,
+                    has_index,
+                },
+                &bindings,
+            );
+            // Key expression walks in the CHILD scope (key may
+            // reference the each binding) but in the PARENT's
+            // `in_control_flow` — same as the outer expression.
+            if let Some(k) = key_range {
+                visitor.visit_expr(k);
+            }
+            // Body recursion is the first site that sees
+            // `in_control_flow = true`.
+            visitor.enter_control_flow();
             walk_fragment_inner(&b.body, source, visitor);
-            visitor.leave_scope(ScopeKind::Each);
+            visitor.leave_scope(ScopeKind::Each {
+                is_keyed,
+                has_index,
+            });
             if let Some(alt) = &b.alternate {
-                // `{:else}` branch — empty-list body. No bindings in
-                // scope (the `as` binding doesn't apply here).
+                // `{:else}` walks in the parent scope but stays
+                // INSIDE the `in_control_flow` bracket — matches
+                // existing lint behaviour where `saved` restores
+                // only after the alternate.
                 walk_fragment_inner(alt, source, visitor);
             }
+            visitor.leave_control_flow();
         }
         Node::AwaitBlock(b) => {
+            visitor.visit_await_block(b);
+            // Awaited expression walks in the parent's
+            // `in_control_flow` (the promise is resolved outside
+            // the body).
+            visitor.visit_expr(b.expression_range);
+            visitor.enter_control_flow();
             if let Some(p) = &b.pending {
                 walk_fragment_inner(p, source, visitor);
             }
             if let Some(t) = &b.then_branch {
-                let bindings = match &t.context_range {
+                let pb = match &t.context_range {
                     Some(r) => collect_pattern_bindings_from_slice(source, *r),
-                    None => Vec::new(),
+                    None => PatternBindings::default(),
                 };
-                visitor.enter_scope(ScopeKind::AwaitThen, &bindings);
+                for default in &pb.default_value_ranges {
+                    visitor.visit_expr(*default);
+                }
+                visitor.enter_scope(ScopeKind::AwaitThen, &pb.bindings);
                 walk_fragment_inner(&t.body, source, visitor);
                 visitor.leave_scope(ScopeKind::AwaitThen);
             }
             if let Some(c) = &b.catch_branch {
-                let bindings = match &c.context_range {
+                let pb = match &c.context_range {
                     Some(r) => collect_pattern_bindings_from_slice(source, *r),
-                    None => Vec::new(),
+                    None => PatternBindings::default(),
                 };
-                visitor.enter_scope(ScopeKind::AwaitCatch, &bindings);
+                for default in &pb.default_value_ranges {
+                    visitor.visit_expr(*default);
+                }
+                visitor.enter_scope(ScopeKind::AwaitCatch, &pb.bindings);
                 walk_fragment_inner(&c.body, source, visitor);
                 visitor.leave_scope(ScopeKind::AwaitCatch);
             }
+            visitor.leave_control_flow();
         }
-        Node::KeyBlock(b) => walk_fragment_inner(&b.body, source, visitor),
+        Node::KeyBlock(b) => {
+            visitor.visit_key_block(b);
+            // Key expression walks in the parent's `in_control_flow`.
+            visitor.visit_expr(b.expression_range);
+            visitor.enter_control_flow();
+            walk_fragment_inner(&b.body, source, visitor);
+            visitor.leave_control_flow();
+        }
         Node::SnippetBlock(b) => {
-            let bindings = collect_pattern_bindings_from_slice(source, b.parameters_range);
-            visitor.enter_scope(ScopeKind::Snippet, &bindings);
+            visitor.visit_snippet_block(b);
+            let pb = if b.parameters_range.start < b.parameters_range.end {
+                collect_pattern_bindings_from_slice(source, b.parameters_range)
+            } else {
+                PatternBindings::default()
+            };
+            for default in &pb.default_value_ranges {
+                visitor.visit_expr(*default);
+            }
+            visitor.enter_scope(ScopeKind::Snippet, &pb.bindings);
             walk_fragment_inner(&b.body, source, visitor);
             visitor.leave_scope(ScopeKind::Snippet);
         }
         Node::Interpolation(i) if i.kind == svn_parser::InterpolationKind::AtConst => {
-            if let Some(name) = extract_at_const_name(i, source) {
-                visitor.visit_at_const(name, i.expression_range);
-            }
+            // Walker emits the leading-identifier extraction (used by
+            // analyze's shadow tracking) AND the full expression
+            // range (used by lint to re-parse for destructure
+            // patterns and initialiser walking).
+            visitor.visit_at_const(extract_at_const_name(i, source), i.expression_range);
+        }
+        Node::Interpolation(i) => {
+            // Plain `{EXPR}` — walk the body as an expression in the
+            // current scope.
+            visitor.visit_expr(i.expression_range);
         }
         // Leaf nodes — no children, no scope, nothing for the visitor.
-        Node::Text(_) | Node::Interpolation(_) | Node::Comment(_) => {}
+        Node::Text(_) | Node::Comment(_) => {}
+    }
+}
+
+/// Drive an element-like node's body: visitor handles attributes
+/// inside its `visit_element` / `visit_component` /
+/// `visit_svelte_element` (called by the caller before this); walker
+/// brackets the let-directive scope around the children.
+///
+/// Skips `enter_scope` entirely when the element has no let-directives
+/// — preserves byte-equivalent behaviour against the pre-Phase-3 lint
+/// walker, which only created a child scope when `has_let` was true.
+fn walk_element_children<V: TemplateScopeVisitor>(
+    attrs: &[svn_parser::Attribute],
+    children: &Fragment,
+    source: &str,
+    visitor: &mut V,
+) {
+    let let_bindings = collect_let_directive_bindings(attrs, source);
+    if let_bindings.is_empty() {
+        walk_fragment_inner(children, source, visitor);
+    } else {
+        visitor.enter_scope(ScopeKind::LetDirective, &let_bindings);
+        walk_fragment_inner(children, source, visitor);
+        visitor.leave_scope(ScopeKind::LetDirective);
     }
 }
 
 /// Parse a binding-pattern source slice (the `as` clause of
 /// `{#each}`, an await branch's `{value}`, or a snippet's
-/// `(p1, p2)` list) and return the bindings it declares.
+/// `(p1, p2)` list) and return the bindings it declares plus any
+/// default-value expression ranges, all in ORIGINAL source
+/// coordinates.
 ///
-/// Used by the walker to feed `enter_scope`. The slice form means
-/// the parser-wrapper picks `(slice) => 0` (works for both bare
-/// identifiers and destructures) — matches what
-/// `analyze::template_walker::collect_pattern_idents` was doing
-/// before Phase 1's primitive extraction.
-fn collect_pattern_bindings_from_slice(source: &str, range: Range) -> Vec<BoundIdent> {
+/// Default-value ranges (e.g. the `expr` in `{ a = expr }`) are
+/// emitted alongside the bindings so the caller — typically the
+/// walker — can hand them to `visit_expr` in the PARENT scope
+/// before entering the each/snippet/let-directive child scope. That
+/// matches what the pre-Phase-4 lint walker did inline inside
+/// `declare_each_pattern`'s `AssignmentPattern` arm.
+///
+/// Wrapper: `({trimmed}) => 0`. The `(` adds 1 byte of prefix in
+/// the wrapped string, so the offset that translates oxc spans
+/// back to original source = `range.start + trim_offset - 1`,
+/// where `trim_offset` is the byte distance between `slice.start`
+/// and `trimmed.start` (handles leading whitespace inside the
+/// pattern slice).
+fn collect_pattern_bindings_from_slice(source: &str, range: Range) -> PatternBindings {
     let start = range.start as usize;
     let end = range.end as usize;
     let Some(slice) = source.get(start..end) else {
-        return Vec::new();
+        return PatternBindings::default();
     };
-    let trimmed = slice.trim();
+    let trimmed = slice.trim_start();
+    let trim_byte_offset = slice.len() - trimmed.len();
+    let trimmed = trimmed.trim_end();
     if trimmed.is_empty() {
-        return Vec::new();
+        return PatternBindings::default();
     }
     let alloc = oxc_allocator::Allocator::default();
     let wrapped = format!("({trimmed}) => 0");
     let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
     if parsed.panicked {
-        return Vec::new();
+        return PatternBindings::default();
     }
     use oxc_ast::ast::{Expression, Statement};
     let Some(stmt) = parsed.program.body.first() else {
-        return Vec::new();
+        return PatternBindings::default();
     };
     let Statement::ExpressionStatement(es) = stmt else {
-        return Vec::new();
+        return PatternBindings::default();
     };
     let Expression::ArrowFunctionExpression(arrow) = &es.expression else {
-        return Vec::new();
+        return PatternBindings::default();
     };
-    let mut out = Vec::new();
+    // Wrapper-relative oxc span at byte N → original source byte
+    // `(range.start + trim_byte_offset) + (N - 1)` (1 = the `(` prefix).
+    let offset = range.start as i32 + trim_byte_offset as i32 - 1;
+    let mut out = PatternBindings::default();
     for param in &arrow.params.items {
-        // Offset is irrelevant here — the walker uses bindings only
-        // to feed `enter_scope`; the visitor's scope-stack stores
-        // names, not source ranges. (Lint's Phase-4 visitor will
-        // need real ranges; that's tracked there.)
-        let pb = collect_pattern_bindings(&param.pattern, 0);
-        out.extend(pb.bindings);
+        let pb = collect_pattern_bindings(&param.pattern, offset);
+        out.bindings.extend(pb.bindings);
+        out.default_value_ranges.extend(pb.default_value_ranges);
     }
     out
 }
@@ -419,6 +579,7 @@ fn collect_let_directive_bindings(
             kind: DirectiveKind::Let,
             name,
             value,
+            range,
             ..
         }) = attr
         else {
@@ -428,29 +589,35 @@ fn collect_let_directive_bindings(
             Some(DirectiveValue::Expression {
                 expression_range, ..
             }) => {
-                let bindings = collect_pattern_bindings_from_slice(source, *expression_range);
-                if bindings.is_empty() {
+                let pb = collect_pattern_bindings_from_slice(source, *expression_range);
+                if pb.bindings.is_empty() {
                     // Empty expression — fall back to the directive name itself.
                     push(
                         BoundIdent {
                             name: name.clone(),
-                            range: Range::new(0, 0),
+                            range: *range,
                             inside_rest: false,
                         },
                         &mut out,
                         &mut seen,
                     );
                 } else {
-                    for b in bindings {
+                    for b in pb.bindings {
                         push(b, &mut out, &mut seen);
                     }
+                    // NOTE: default-value expressions inside let-
+                    // directive patterns are NOT walked here — the
+                    // walker's element-children path doesn't expose
+                    // the visitor at this point. Default values
+                    // referencing parent bindings inside let:foo={…}
+                    // are rare; tracked as a follow-up if observed.
                 }
             }
             // Shorthand: `let:foo` declares `foo`.
             _ => push(
                 BoundIdent {
                     name: name.clone(),
-                    range: Range::new(0, 0),
+                    range: *range,
                     inside_rest: false,
                 },
                 &mut out,

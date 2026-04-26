@@ -639,6 +639,7 @@ struct RefFlags {
     is_bind_this: bool,
 }
 
+#[derive(Clone, Copy)]
 struct TemplateCtx<'src> {
     source: &'src str,
     scope: ScopeId,
@@ -726,6 +727,13 @@ impl TreeBuilder {
     /// walker. Reference flags (`in_template`, `in_control_flow`,
     /// `is_bind_this`) are threaded through so
     /// `non_reactive_update` can decide which references to trust.
+    ///
+    /// Drives an internal [`LintScopeVisitor`] over the unified
+    /// [`svn_analyze::template_scope::walk_with_visitor`] walker.
+    /// Per-block scope creation, binding declarations, and
+    /// expression walking happen inside the visitor's `visit_*`
+    /// methods; the walker handles structural recursion and
+    /// scope/control-flow bracketing.
     fn walk_template(
         &mut self,
         fragment: &svn_parser::ast::Fragment,
@@ -733,296 +741,18 @@ impl TreeBuilder {
         instance_root: ScopeId,
         lang: svn_parser::document::ScriptLang,
     ) {
-        let mut ctx = TemplateCtx {
-            source,
-            scope: instance_root,
-            lang,
-            in_control_flow: false,
+        let mut visitor = LintScopeVisitor {
+            builder: self,
+            ctx: TemplateCtx {
+                source,
+                scope: instance_root,
+                lang,
+                in_control_flow: false,
+            },
+            scope_stack: Vec::new(),
+            control_flow_stack: Vec::new(),
         };
-        self.walk_template_fragment(fragment, &mut ctx);
-    }
-
-    fn walk_template_fragment(
-        &mut self,
-        fragment: &svn_parser::ast::Fragment,
-        ctx: &mut TemplateCtx<'_>,
-    ) {
-        use svn_parser::ast::Node;
-        for node in &fragment.nodes {
-            match node {
-                Node::Element(el) => {
-                    self.walk_element_like(&el.attributes, &el.children, None, ctx);
-                }
-                Node::Component(comp) => {
-                    let first_seg = comp.name.split('.').next().unwrap_or("");
-                    self.walk_element_like(
-                        &comp.attributes,
-                        &comp.children,
-                        Some((first_seg, comp.range)),
-                        ctx,
-                    );
-                }
-                Node::SvelteElement(se) => {
-                    self.walk_element_like(&se.attributes, &se.children, None, ctx);
-                }
-                Node::IfBlock(b) => {
-                    self.walk_expr_range(b.condition_range, ctx, RefFlags::default());
-                    let saved = std::mem::replace(&mut ctx.in_control_flow, true);
-                    self.walk_template_fragment(&b.consequent, ctx);
-                    for arm in &b.elseif_arms {
-                        self.walk_expr_range(arm.condition_range, ctx, RefFlags::default());
-                        self.walk_template_fragment(&arm.body, ctx);
-                    }
-                    if let Some(else_body) = &b.alternate {
-                        self.walk_template_fragment(else_body, ctx);
-                    }
-                    ctx.in_control_flow = saved;
-                }
-                Node::EachBlock(b) => {
-                    self.walk_expr_range(b.expression_range, ctx, RefFlags::default());
-                    // Create a child scope for the each-block body
-                    // and declare the context pattern identifiers in
-                    // it. Upstream models these as `BindingKind::Each`
-                    // (context) and `Static`/`Template` (index).
-                    let child_scope = self.new_scope(Some(ctx.scope));
-                    let parent_scope = std::mem::replace(&mut ctx.scope, child_scope);
-                    if let Some(as_clause) = &b.as_clause {
-                        self.declare_each_context(
-                            as_clause.context_range,
-                            child_scope,
-                            parent_scope,
-                            ctx.source,
-                            ctx.lang,
-                        );
-                        if let Some(index) = as_clause.index_range {
-                            let kind = if as_clause.key_range.is_some() {
-                                BindingKind::Template
-                            } else {
-                                BindingKind::Static
-                            };
-                            let name = ctx
-                                .source
-                                .get(index.start as usize..index.end as usize)
-                                .unwrap_or("")
-                                .trim();
-                            if !name.is_empty() {
-                                self.declare(
-                                    child_scope,
-                                    SmolStr::from(name),
-                                    index,
-                                    kind,
-                                    DeclarationKind::Const,
-                                    InitialKind::EachBlock,
-                                );
-                            }
-                        }
-                        if let Some(key) = as_clause.key_range {
-                            self.walk_expr_range(key, ctx, RefFlags::default());
-                        }
-                    }
-                    let saved = std::mem::replace(&mut ctx.in_control_flow, true);
-                    self.walk_template_fragment(&b.body, ctx);
-                    // Restore parent scope BEFORE walking the {:else}
-                    // branch — `{#each items as item}…{:else}…{/each}`
-                    // fires {:else} when items is empty, so `item` is
-                    // not in scope for the alternate body. Walking the
-                    // alternate inside child_scope (the previous shape)
-                    // let the each-bindings leak into {:else} and
-                    // produced wrong-scope rule fires (e.g.
-                    // non_reactive_update treating an outer same-named
-                    // binding as the each binding).
-                    ctx.scope = parent_scope;
-                    if let Some(alternate) = &b.alternate {
-                        self.walk_template_fragment(alternate, ctx);
-                    }
-                    ctx.in_control_flow = saved;
-                }
-                Node::AwaitBlock(b) => {
-                    self.walk_expr_range(b.expression_range, ctx, RefFlags::default());
-                    let saved = std::mem::replace(&mut ctx.in_control_flow, true);
-                    if let Some(pending) = &b.pending {
-                        self.walk_template_fragment(pending, ctx);
-                    }
-                    // {:then x} and {:catch err} each introduce a
-                    // template-scope binding visible only inside that
-                    // branch's body. Push a child scope per branch and
-                    // declare the context pattern's identifiers in it
-                    // so subsequent rule queries (`non_reactive_update`,
-                    // `state_referenced_locally`, etc.) resolve `x`
-                    // and `err` to the correct binding instead of
-                    // falling through to the outer scope.
-                    if let Some(then) = &b.then_branch {
-                        let then_scope = self.new_scope(Some(ctx.scope));
-                        let parent = std::mem::replace(&mut ctx.scope, then_scope);
-                        if let Some(ctx_range) = then.context_range {
-                            self.declare_each_context(
-                                ctx_range, then_scope, parent, ctx.source, ctx.lang,
-                            );
-                        }
-                        self.walk_template_fragment(&then.body, ctx);
-                        ctx.scope = parent;
-                    }
-                    if let Some(catch) = &b.catch_branch {
-                        let catch_scope = self.new_scope(Some(ctx.scope));
-                        let parent = std::mem::replace(&mut ctx.scope, catch_scope);
-                        if let Some(ctx_range) = catch.context_range {
-                            self.declare_each_context(
-                                ctx_range,
-                                catch_scope,
-                                parent,
-                                ctx.source,
-                                ctx.lang,
-                            );
-                        }
-                        self.walk_template_fragment(&catch.body, ctx);
-                        ctx.scope = parent;
-                    }
-                    ctx.in_control_flow = saved;
-                }
-                Node::KeyBlock(b) => {
-                    self.walk_expr_range(b.expression_range, ctx, RefFlags::default());
-                    let saved = std::mem::replace(&mut ctx.in_control_flow, true);
-                    self.walk_template_fragment(&b.body, ctx);
-                    ctx.in_control_flow = saved;
-                }
-                Node::SnippetBlock(b) => {
-                    // `{#snippet name(p1, p2)}…{/snippet}` — each
-                    // parameter is an implicit template-scope
-                    // binding visible inside the body. Without
-                    // declaring them, rules like
-                    // `attribute_global_event_reference` consulting
-                    // `is_declared_anywhere(name)` miss them, and
-                    // references (`{p1}`) resolve against the outer
-                    // scope (likely unresolved).
-                    let snippet_scope = self.new_scope(Some(ctx.scope));
-                    if b.parameters_range.start < b.parameters_range.end {
-                        self.declare_snippet_params(
-                            b.parameters_range,
-                            snippet_scope,
-                            ctx.source,
-                            ctx.lang,
-                        );
-                    }
-                    let saved = std::mem::replace(&mut ctx.scope, snippet_scope);
-                    self.walk_template_fragment(&b.body, ctx);
-                    ctx.scope = saved;
-                }
-                Node::Interpolation(intr) => {
-                    // `{@const NAME = EXPR}` is a declaration, not an
-                    // assignment — svn-parser strips the `@const `
-                    // keyword before setting `expression_range`, so
-                    // the naive walk parses it as `NAME = EXPR`
-                    // (AssignmentExpression) and marks the outer
-                    // `NAME` binding as reassigned. Detect the
-                    // `{@const …}` form at the full-range source and
-                    // re-parse as `let NAME = EXPR` so the binding
-                    // lives in the current (template) scope.
-                    let full = ctx
-                        .source
-                        .get(intr.range.start as usize..intr.range.end as usize)
-                        .unwrap_or("");
-                    if full.starts_with("{@const") {
-                        self.walk_const_tag(intr.expression_range, ctx);
-                    } else {
-                        self.walk_expr_range(intr.expression_range, ctx, RefFlags::default());
-                    }
-                }
-                Node::Text(_) | Node::Comment(_) => {}
-            }
-        }
-    }
-
-    fn walk_element_like(
-        &mut self,
-        attrs: &[svn_parser::ast::Attribute],
-        children: &svn_parser::ast::Fragment,
-        component_ref: Option<(&str, Range)>,
-        ctx: &mut TemplateCtx<'_>,
-    ) {
-        use svn_parser::ast::{Attribute, DirectiveKind};
-        // Record a reference for component tags like <Foo> /
-        // <Foo.Bar> / <svelte:self> (caller supplies the first
-        // identifier segment). Lets `export_let_unused` correctly
-        // see the binding as referenced.
-        if let Some((name, range)) = component_ref
-            && !name.is_empty()
-        {
-            self.record_template_ref(name, range, ctx, RefFlags::default());
-        }
-        // Split attrs into let:directives (scoped to children) vs
-        // everything else (scoped to current scope).
-        let has_let = attrs
-            .iter()
-            .any(|a| matches!(a, Attribute::Directive(d) if d.kind == DirectiveKind::Let));
-        for attr in attrs {
-            if matches!(attr, Attribute::Directive(d) if d.kind == DirectiveKind::Let) {
-                continue;
-            }
-            self.walk_template_attr(attr, ctx);
-        }
-        if has_let {
-            let child_scope = self.new_scope(Some(ctx.scope));
-            let parent_scope = std::mem::replace(&mut ctx.scope, child_scope);
-            for attr in attrs {
-                if let Attribute::Directive(d) = attr
-                    && d.kind == DirectiveKind::Let
-                {
-                    self.declare_let_directive(d, child_scope, parent_scope, ctx.source, ctx.lang);
-                }
-            }
-            self.walk_template_fragment(children, ctx);
-            ctx.scope = parent_scope;
-        } else {
-            self.walk_template_fragment(children, ctx);
-        }
-    }
-
-    /// `let:a` / `let:a={PATTERN}` on a component/svelte-fragment.
-    /// Shorthand form (no `={…}`) declares a binding with the
-    /// directive NAME. Expression form declares identifiers from
-    /// PATTERN.
-    fn declare_let_directive(
-        &mut self,
-        d: &svn_parser::ast::Directive,
-        child_scope: ScopeId,
-        parent_scope: ScopeId,
-        source: &str,
-        lang: svn_parser::document::ScriptLang,
-    ) {
-        use svn_parser::ast::DirectiveValue;
-        match &d.value {
-            None => {
-                // `let:a` — shorthand, declares a binding named `a`.
-                self.declare(
-                    child_scope,
-                    SmolStr::from(d.name.as_str()),
-                    d.range,
-                    BindingKind::Template,
-                    DeclarationKind::Const,
-                    InitialKind::None,
-                );
-            }
-            Some(DirectiveValue::Expression {
-                expression_range, ..
-            }) => {
-                // Reuse the each-context parser — same pattern shape
-                // semantics (patterns with possible destructures and
-                // defaults).
-                self.declare_each_context(
-                    *expression_range,
-                    child_scope,
-                    parent_scope,
-                    source,
-                    lang,
-                );
-                // Re-tag declared bindings as Template (they were
-                // declared as Each by declare_each_context).
-                for bid in self.bindings_in(child_scope) {
-                    self.bindings[bid.0 as usize].kind = BindingKind::Template;
-                }
-            }
-            Some(_) => {}
-        }
+        svn_analyze::template_scope::walk_with_visitor(fragment, source, &mut visitor);
     }
 
     fn bindings_in(&self, scope: ScopeId) -> Vec<BindingId> {
@@ -1260,88 +990,17 @@ impl TreeBuilder {
         drop(alloc);
     }
 
-    /// Parse an `{#each ... as PATTERN}` context pattern (byte range
-    /// relative to the source) and declare each identifier in
-    /// `each_scope` with `BindingKind::Each`. Rest-element-nested
-    /// identifiers get `inside_rest = true`. Default-value
-    /// expressions (`{ a = expr }`) are walked in `parent_scope` so
-    /// their references resolve to outer bindings — matches upstream
-    /// scope.js:1244-1295.
-    /// Declare each identifier in a snippet's `(param1, param2, …)`
-    /// list into `snippet_scope` with kind `Template` — visible to
-    /// the snippet body's template walk and to
-    /// `ScopeTree::is_declared_anywhere` lookups. The slice passed
-    /// in is the bytes INSIDE the parens (mirrors
-    /// `SnippetBlock.parameters_range`). Handles destructures and
-    /// rest-params — same pattern as each-blocks.
-    fn declare_snippet_params(
-        &mut self,
-        range: Range,
-        snippet_scope: ScopeId,
-        source: &str,
-        lang: svn_parser::document::ScriptLang,
-    ) {
-        let Some(slice) = source.get(range.start as usize..range.end as usize) else {
-            return;
-        };
-        let wrapped = format!("function _({slice}) {{}}");
-        let alloc = oxc_allocator::Allocator::default();
-        let parsed = parse_script_body(&alloc, &wrapped, lang);
-        if let Some(Statement::FunctionDeclaration(f)) = parsed.program.body.first() {
-            // Prefix `function _(` is 11 bytes before params start.
-            let offset: i32 = range.start as i32 - 11;
-            for p in &f.params.items {
-                self.declare_each_pattern(
-                    &p.pattern,
-                    snippet_scope,
-                    snippet_scope,
-                    offset,
-                    false,
-                    source,
-                    lang,
-                );
-            }
-            // Re-tag from `Each` to `Template` so the kind matches
-            // the snippet semantics.
-            for bid in self.bindings_in(snippet_scope) {
-                self.bindings[bid.0 as usize].kind = BindingKind::Template;
-            }
-        }
-        drop(parsed);
-        drop(alloc);
-    }
-
-    fn declare_each_context(
-        &mut self,
-        range: Range,
-        each_scope: ScopeId,
-        parent_scope: ScopeId,
-        source: &str,
-        lang: svn_parser::document::ScriptLang,
-    ) {
-        let Some(slice) = source.get(range.start as usize..range.end as usize) else {
-            return;
-        };
-        // Wrap the pattern so oxc can parse it as a destructuring
-        // left-hand side. We use the shortest valid wrapper: a
-        // VariableDeclaration with a dummy init.
-        let wrapped = format!("let {slice} = 0;");
-        let alloc = oxc_allocator::Allocator::default();
-        let parsed = parse_script_body(&alloc, &wrapped, lang);
-        // Extract the declarator's id.
-        if let Some(Statement::VariableDeclaration(vd)) = parsed.program.body.first()
-            && let Some(d) = vd.declarations.first()
-        {
-            // The pattern was parsed with offsets relative to
-            // `wrapped` (prefix "let " = 4 bytes). Translate back to
-            // the original source.
-            let offset: i32 = range.start as i32 - 4;
-            self.declare_each_pattern(&d.id, each_scope, parent_scope, offset, false, source, lang);
-        }
-        drop(parsed);
-        drop(alloc);
-    }
-
+    /// Declare each identifier in a binding pattern (e.g. the body of
+    /// a `{@const NAME = EXPR}` left-hand side) into `each_scope`
+    /// with `BindingKind::Each`. Rest-element-nested identifiers get
+    /// `inside_rest = true`. Default-value expressions are walked in
+    /// `parent_scope` so their references resolve to outer bindings.
+    ///
+    /// Only `walk_const_tag` calls this directly today —
+    /// `declare_each_context` / `declare_snippet_params` /
+    /// `declare_let_directive` retired in Phase 4 of
+    /// `notes/PLAN-template-scope-unification.md` (the unified
+    /// walker emits bindings via `enter_scope` instead).
     #[allow(clippy::too_many_arguments)]
     fn declare_each_pattern(
         &mut self,
@@ -1453,7 +1112,197 @@ impl TreeBuilder {
     fn build_script(&mut self, script: &ScriptSection<'_>, root_scope: ScopeId) {
         self.build_script_inner(script, root_scope, false, &[]);
     }
+}
 
+/// Visitor mapping `TemplateScopeVisitor` calls into lint-side
+/// `TreeBuilder` mutations. Mirrors what the pre-Phase-4
+/// `walk_template_fragment` match arms did, broken out per node-kind:
+/// the unified walker drives recursion + scope/control-flow
+/// bracketing, the visitor does per-block expression walks and
+/// binding declarations.
+struct LintScopeVisitor<'a, 'src> {
+    builder: &'a mut TreeBuilder,
+    ctx: TemplateCtx<'src>,
+    /// Parent scope ids saved by `enter_scope`, restored on
+    /// `leave_scope`. Stack depth equals the number of currently-open
+    /// child scopes the visitor is INSIDE (let-directive, each,
+    /// snippet, await branches).
+    scope_stack: Vec<ScopeId>,
+    /// Saved `in_control_flow` flags pushed by `enter_control_flow`.
+    /// `leave_control_flow` pops and restores so that nested control-
+    /// flow blocks return to their outer state correctly (an outer
+    /// `{#if}` with an inner `{#each}` should still see
+    /// `in_control_flow=true` after the each closes).
+    control_flow_stack: Vec<bool>,
+}
+
+impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisitor<'_, 'src> {
+    fn enter_scope(
+        &mut self,
+        kind: svn_analyze::template_scope::ScopeKind,
+        bindings: &[svn_analyze::template_scope::BoundIdent],
+    ) {
+        use svn_analyze::template_scope::ScopeKind;
+        let parent = self.ctx.scope;
+        let child = self.builder.new_scope(Some(parent));
+        self.scope_stack.push(parent);
+        self.ctx.scope = child;
+
+        // Per-kind binding declaration. Convention for `Each`:
+        // bindings[..] = context entries, bindings[last] = index when
+        // `has_index` is true. Index kind is `Static` (no key) or
+        // `Template` (keyed) per upstream `scope.js`.
+        let (declare_kind, retag_to_template) = match kind {
+            ScopeKind::Each { .. } => (BindingKind::Each, false),
+            ScopeKind::AwaitThen | ScopeKind::AwaitCatch => (BindingKind::Each, false),
+            ScopeKind::Snippet => (BindingKind::Each, true),
+            ScopeKind::LetDirective => (BindingKind::Each, true),
+            ScopeKind::Fragment => unreachable!("walker doesn't call enter_scope for Fragment"),
+        };
+
+        let context_count = match kind {
+            ScopeKind::Each { has_index, .. } if has_index => bindings.len().saturating_sub(1),
+            _ => bindings.len(),
+        };
+        let context_bindings = &bindings[..context_count];
+        for b in context_bindings {
+            let bid = self.builder.declare(
+                child,
+                b.name.clone(),
+                b.range,
+                declare_kind,
+                DeclarationKind::Const,
+                InitialKind::EachBlock,
+            );
+            self.builder.bindings[bid.0 as usize].inside_rest = b.inside_rest;
+        }
+        if let ScopeKind::Each {
+            has_index,
+            is_keyed,
+        } = kind
+            && has_index
+        {
+            // Index binding: last entry. Kind is `Template` when
+            // keyed, `Static` otherwise (matches upstream scope.js
+            // and the pre-Phase-4 lint walker).
+            let index = &bindings[bindings.len() - 1];
+            let index_kind = if is_keyed {
+                BindingKind::Template
+            } else {
+                BindingKind::Static
+            };
+            self.builder.declare(
+                child,
+                index.name.clone(),
+                index.range,
+                index_kind,
+                DeclarationKind::Const,
+                InitialKind::EachBlock,
+            );
+        }
+
+        if retag_to_template {
+            // Snippet params and let-directive bindings are declared
+            // with `BindingKind::Each` above (so the shared declarer
+            // path stays uniform), then retagged to `Template` to
+            // match upstream's per-kind classification. Mirrors what
+            // the pre-Phase-4 `declare_snippet_params` /
+            // `declare_let_directive` did.
+            for bid in self.builder.bindings_in(child) {
+                if matches!(
+                    self.builder.bindings[bid.0 as usize].kind,
+                    BindingKind::Each
+                ) {
+                    self.builder.bindings[bid.0 as usize].kind = BindingKind::Template;
+                }
+            }
+        }
+    }
+
+    fn leave_scope(&mut self, _kind: svn_analyze::template_scope::ScopeKind) {
+        if let Some(parent) = self.scope_stack.pop() {
+            self.ctx.scope = parent;
+        }
+    }
+
+    fn enter_control_flow(&mut self) {
+        self.control_flow_stack.push(self.ctx.in_control_flow);
+        self.ctx.in_control_flow = true;
+    }
+
+    fn leave_control_flow(&mut self) {
+        if let Some(saved) = self.control_flow_stack.pop() {
+            self.ctx.in_control_flow = saved;
+        }
+    }
+
+    fn visit_expr(&mut self, range: svn_core::Range) {
+        self.builder
+            .walk_expr_range(range, &mut self.ctx, RefFlags::default());
+    }
+
+    fn visit_element(&mut self, e: &svn_parser::Element) {
+        // Plain DOM element: no component-name reference; just walk
+        // attributes (skipping let:directives, which the walker's
+        // enter_scope handles separately).
+        self.walk_attrs_skipping_let(&e.attributes);
+    }
+
+    fn visit_component(&mut self, c: &svn_parser::Component) {
+        // Record a reference for the component tag's first segment
+        // so `export_let_unused` correctly sees the binding as
+        // referenced (matches pre-Phase-4 `walk_element_like`).
+        let first_seg = c.name.split('.').next().unwrap_or("");
+        if !first_seg.is_empty() {
+            self.builder.record_template_ref(
+                first_seg,
+                c.range,
+                &mut self.ctx,
+                RefFlags::default(),
+            );
+        }
+        self.walk_attrs_skipping_let(&c.attributes);
+    }
+
+    fn visit_svelte_element(&mut self, s: &svn_parser::SvelteElement) {
+        // `<svelte:self>` and friends record a reference under their
+        // first identifier — but pre-Phase-4 `walk_element_like`
+        // only records when `component_ref` is `Some(_)`, which
+        // SvelteElement never passes. Preserve that — no ref here.
+        self.walk_attrs_skipping_let(&s.attributes);
+    }
+
+    fn visit_at_const(&mut self, _name: Option<smol_str::SmolStr>, expr_range: svn_core::Range) {
+        // Lint re-parses the `{@const}` body as `let NAME = EXPR;`
+        // (handles destructure forms like `{@const {a, b} = x}` that
+        // the leading-identifier extractor would skip). The full
+        // expression range is what `walk_const_tag` consumes.
+        let mut ctx = self.ctx;
+        self.builder.walk_const_tag(expr_range, &mut ctx);
+        // walk_const_tag may declare bindings in current scope but
+        // doesn't modify scope/in_control_flow — sync back any
+        // changes (none expected, but keep symmetric).
+        self.ctx.scope = ctx.scope;
+        self.ctx.in_control_flow = ctx.in_control_flow;
+    }
+}
+
+impl<'src> LintScopeVisitor<'_, 'src> {
+    /// Walk every attribute except `let:` directives (which the
+    /// walker's `enter_scope(LetDirective, …)` handles) and bind:foo
+    /// pseudo-writes (which `walk_template_attr` records).
+    fn walk_attrs_skipping_let(&mut self, attrs: &[svn_parser::ast::Attribute]) {
+        use svn_parser::ast::{Attribute, DirectiveKind};
+        for attr in attrs {
+            if matches!(attr, Attribute::Directive(d) if d.kind == DirectiveKind::Let) {
+                continue;
+            }
+            self.builder.walk_template_attr(attr, &mut self.ctx);
+        }
+    }
+}
+
+impl TreeBuilder {
     /// Instance-script variant — marks the walker so `$:` labels at
     /// the program top level flip `in_reactive_statement` on descent.
     /// Upstream guards the `reactive_declaration_module_script_dependency`

@@ -552,7 +552,12 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
         self.summary.each_block_count += 1;
     }
 
-    fn visit_at_const(&mut self, name: SmolStr, _expr_range: svn_core::Range) {
+    fn visit_at_const(&mut self, name: Option<SmolStr>, _expr_range: svn_core::Range) {
+        // Analyze only consumes the leading-identifier name (used
+        // for slot-attr shadow tracking). Destructure `{@const}`
+        // forms (`{@const { a } = …}`) yield `None` here — not yet
+        // tracked for shadow purposes; matches pre-Phase-4 behaviour.
+        let Some(name) = name else { return };
         // Record for the emit's `let NAME: any;` list (deduped) AND
         // push onto the shadow so subsequent slot-attr / let-directive
         // sites in the same fragment treat the name as scope-local.

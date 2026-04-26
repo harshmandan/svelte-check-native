@@ -37,6 +37,8 @@
 
 use std::path::PathBuf;
 
+use svn_core::sveltekit::{KitFilesSettings, user_source_needles};
+
 use crate::cache::{CacheLayout, write_if_changed};
 
 /// Walk the user's `.svelte-kit/types/` tree, write a path-rewritten
@@ -54,6 +56,16 @@ pub fn sync_mirror(layout: &CacheLayout) -> std::io::Result<Option<PathBuf>> {
         return Ok(None);
     }
     let mirror_root = layout.kit_types_mirror_dir();
+    // Pull the user-source needle list from the centralised primitive
+    // so the rewriter stays in lockstep with discovery's classifier.
+    // Defaults are used here because `sync_mirror`'s call chain
+    // (`typecheck::check`) doesn't currently thread the parsed
+    // svelte.config.js settings down — fine today since today's
+    // `user_source_needles` doesn't read any settings field. When
+    // hooks/params get added (and the cache copies catch up), the
+    // settings need to be plumbed through this call site.
+    let settings = KitFilesSettings::default();
+    let needles = user_source_needles(&settings);
     let mut wrote_any = false;
     let mut written: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for entry in walkdir::WalkDir::new(&user_types_root)
@@ -79,7 +91,7 @@ pub fn sync_mirror(layout: &CacheLayout) -> std::io::Result<Option<PathBuf>> {
             Err(_) => continue,
         };
         let content = std::fs::read_to_string(path)?;
-        let rewritten = rewrite_user_source_chain(&content);
+        let rewritten = rewrite_user_source_chain(&content, &needles);
         let out = mirror_root.join(rel);
         write_if_changed(&out, &rewritten)?;
         written.insert(out);
@@ -129,19 +141,14 @@ pub fn sync_mirror(layout: &CacheLayout) -> std::io::Result<Option<PathBuf>> {
 /// by `../` (i.e. inside an existing relative-walk chain). A literal
 /// `src/routes/` in a comment won't false-match because it lacks the
 /// leading `../` that the SvelteKit-generated chains always have.
-fn rewrite_user_source_chain(text: &str) -> String {
+///
+/// `needles` comes from `svn_core::sveltekit::user_source_needles` so
+/// the rewriter's recognition list tracks the centralised classifier
+/// rather than being hardcoded.
+fn rewrite_user_source_chain(text: &str, needles: &[String]) -> String {
     let mut out = String::with_capacity(text.len() + 32);
-    // For each occurrence of `../`, check if the next segment is one
-    // of the user-source roots (`src/routes/`, `src/hooks.*`,
-    // `src/params/`, `src/app.html`). If so, insert `svelte/` after
-    // the LAST `../` in the chain. The chain may be many `../`s
-    // long; we want to preserve them all and only rewrite the segment
-    // immediately following.
-    // Walk the text inserting `svelte/` immediately before each
-    // `src/routes/` occurrence preceded by `../`. The `../` chain
-    // length is preserved — only the segment NAME shifts.
     let mut rest = text;
-    while let Some(idx) = find_user_source_segment(rest) {
+    while let Some(idx) = find_user_source_segment(rest, needles) {
         out.push_str(&rest[..idx]);
         out.push_str("svelte/");
         rest = &rest[idx..];
@@ -150,15 +157,14 @@ fn rewrite_user_source_chain(text: &str) -> String {
     out
 }
 
-/// Find the byte offset of the earliest `src/routes/` substring in
+/// Find the byte offset of the earliest user-source substring in
 /// `text` preceded by `../` (the SvelteKit chain signature). Returns
 /// the START of that segment; the caller inserts `svelte/` at that
 /// position.
-fn find_user_source_segment(text: &str) -> Option<usize> {
-    const NEEDLES: &[&str] = &["src/routes/"];
+fn find_user_source_segment(text: &str, needles: &[String]) -> Option<usize> {
     let bytes = text.as_bytes();
     let mut best: Option<usize> = None;
-    for needle in NEEDLES {
+    for needle in needles {
         let nb = needle.as_bytes();
         let mut i = 0usize;
         while let Some(rel) = bytes[i..].windows(nb.len()).position(|w| w == nb) {
@@ -180,18 +186,24 @@ fn find_user_source_segment(text: &str) -> Option<usize> {
 mod tests {
     use super::*;
 
+    /// Default needle list — what callers get from
+    /// `user_source_needles(&KitFilesSettings::default())` today.
+    fn needles() -> Vec<String> {
+        user_source_needles(&KitFilesSettings::default())
+    }
+
     #[test]
     fn rewrites_simple_routes_chain() {
         let input = "typeof import('../../../../../../../src/routes/foo/+page.js').load";
         let want = "typeof import('../../../../../../../svelte/src/routes/foo/+page.js').load";
-        assert_eq!(rewrite_user_source_chain(input), want);
+        assert_eq!(rewrite_user_source_chain(input, &needles()), want);
     }
 
     #[test]
     fn rewrites_layout_parent_data_chain() {
         let input = "type PageParentData = EnsureDefined<import('../../../../../src/routes/+page.js').load>;";
         let want = "type PageParentData = EnsureDefined<import('../../../../../svelte/src/routes/+page.js').load>;";
-        assert_eq!(rewrite_user_source_chain(input), want);
+        assert_eq!(rewrite_user_source_chain(input, &needles()), want);
     }
 
     #[test]
@@ -200,7 +212,7 @@ mod tests {
         // must not be rewritten, otherwise it'd land in svelte/$types
         // which doesn't exist.
         let input = "type X = import('../$types.js').LayoutData;";
-        assert_eq!(rewrite_user_source_chain(input), input);
+        assert_eq!(rewrite_user_source_chain(input, &needles()), input);
     }
 
     #[test]
@@ -208,7 +220,7 @@ mod tests {
         let input =
             "import('../../../src/routes/a/+page.js'); import('../../../src/routes/b/+page.js');";
         let want = "import('../../../svelte/src/routes/a/+page.js'); import('../../../svelte/src/routes/b/+page.js');";
-        assert_eq!(rewrite_user_source_chain(input), want);
+        assert_eq!(rewrite_user_source_chain(input, &needles()), want);
     }
 
     #[test]
@@ -218,13 +230,13 @@ mod tests {
         // the chain there would dangle. See `rewrite_user_source_chain`
         // doc comment for the future-extension note.
         let input = "typeof import('../../src/hooks.server.js').handle";
-        assert_eq!(rewrite_user_source_chain(input), input);
+        assert_eq!(rewrite_user_source_chain(input, &needles()), input);
     }
 
     #[test]
     fn leaves_params_chain_alone() {
         let input = "import('../../src/params/videoId.js').match";
-        assert_eq!(rewrite_user_source_chain(input), input);
+        assert_eq!(rewrite_user_source_chain(input, &needles()), input);
     }
 
     #[test]
@@ -232,14 +244,14 @@ mod tests {
         // A literal occurrence not preceded by `../` is not a chain
         // segment we should touch.
         let input = "// in src/routes/ we keep things tidy";
-        assert_eq!(rewrite_user_source_chain(input), input);
+        assert_eq!(rewrite_user_source_chain(input, &needles()), input);
     }
 
     #[test]
     fn idempotent_after_one_pass() {
         let input = "import('../../../src/routes/foo/+page.js');";
-        let once = rewrite_user_source_chain(input);
-        let twice = rewrite_user_source_chain(&once);
+        let once = rewrite_user_source_chain(input, &needles());
+        let twice = rewrite_user_source_chain(&once, &needles());
         assert_eq!(once, twice);
     }
 
@@ -252,7 +264,20 @@ mod tests {
         let input =
             "x: import('../../src/hooks.server.js'); y: import('../../src/routes/a/+page.js');";
         let want = "x: import('../../src/hooks.server.js'); y: import('../../svelte/src/routes/a/+page.js');";
-        assert_eq!(rewrite_user_source_chain(input), want);
+        assert_eq!(rewrite_user_source_chain(input, &needles()), want);
+    }
+
+    #[test]
+    fn parametric_custom_needles_are_honoured() {
+        // Sanity check that the rewriter consumes the needles slice
+        // (rather than a hardcoded list). When the centralised
+        // `user_source_needles` grows hooks/params support, this same
+        // slice plumbing carries the new needles through with no
+        // additional rewriter changes.
+        let input = "import('../../src/myroutes/foo/+page.js');";
+        let want = "import('../../svelte/src/myroutes/foo/+page.js');";
+        let custom = vec!["src/myroutes/".to_string()];
+        assert_eq!(rewrite_user_source_chain(input, &custom), want);
     }
 }
 

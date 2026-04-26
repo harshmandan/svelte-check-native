@@ -55,16 +55,20 @@ pub(crate) fn discover_relevant_files(
     let kit_settings = KitFilesSettings::default();
     let mut svelte_files = Vec::new();
     let mut kit_files = Vec::new();
-    // `.svelte.ts` runes modules — sibling of a `.svelte` component,
-    // the pattern that creates the rootDirs resolution collision fixed
-    // by user-ts overlays. Collected here once so the overlay decider
-    // can membership-test without rewalking disk.
+    // `.svelte.ts` and `.svelte.js` runes modules — siblings of a
+    // `.svelte` component, the pattern that creates the rootDirs
+    // resolution collision fixed by user-script overlays. Collected
+    // here once so the overlay decider can membership-test without
+    // rewalking disk. Both lang variants live in the same set
+    // because the collision is identical and the rewrite output
+    // (`.svelte.svn.js`) is the same regardless of source lang.
     let mut runes_modules = Vec::new();
-    // User `.ts` files that aren't Kit files and aren't runes modules.
-    // Candidates for the `.svelte`-import-rewrite overlay — final
-    // filter (does the file actually import a sibling-collision
-    // `.svelte`?) happens later after all runes modules are known.
-    let mut user_ts = Vec::new();
+    // User `.ts` and `.js` files that aren't Kit files and aren't
+    // runes modules. Candidates for the `.svelte`-import-rewrite
+    // overlay — final filter (does the file actually import a
+    // sibling-collision `.svelte`?) happens later after all runes
+    // modules are known.
+    let mut user_scripts = Vec::new();
     for e in WalkDir::new(workspace)
         .into_iter()
         .filter_entry(|e| !is_excluded_dir(e.path()))
@@ -79,17 +83,16 @@ pub(crate) fn discover_relevant_files(
             Some("ts" | "js") if is_kit_file(path, &kit_settings) => {
                 kit_files.push(path.to_path_buf());
             }
-            Some("ts") if file_name.ends_with(".svelte.ts") => {
-                // A `.svelte.ts` runes module. Tracked separately so the
-                // user-ts-overlay path knows which `.svelte` imports
-                // resolve through the conflict case.
+            Some("ts" | "js")
+                if file_name.ends_with(".svelte.ts") || file_name.ends_with(".svelte.js") =>
+            {
                 runes_modules.push(path.to_path_buf());
             }
-            Some("ts") => user_ts.push(path.to_path_buf()),
+            Some("ts" | "js") => user_scripts.push(path.to_path_buf()),
             _ => {}
         }
     }
-    (svelte_files, kit_files, runes_modules, user_ts)
+    (svelte_files, kit_files, runes_modules, user_scripts)
 }
 
 /// Build a [`globset::GlobSet`] from tsconfig `include`/`exclude`

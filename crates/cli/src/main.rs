@@ -859,7 +859,7 @@ fn run_typecheck(
         let excluded = exclude.as_ref().is_some_and(|set| set.is_match(rel));
         included && !excluded
     };
-    let (svelte_files_raw, kit_files_raw, runes_modules_raw, user_ts_raw) =
+    let (svelte_files_raw, kit_files_raw, runes_modules_raw, user_scripts_raw) =
         discover_relevant_files(workspace);
     // Svelte-file emit: we walk ALL discovered `.svelte` files, not
     // just the in-scope subset. An out-of-scope file might be
@@ -900,7 +900,7 @@ fn run_typecheck(
     // the same canonical form held in this set).
     let runes_modules_set: std::collections::HashSet<PathBuf> =
         runes_modules_raw.into_iter().collect();
-    let user_ts_files: Vec<PathBuf> = user_ts_raw
+    let user_script_files: Vec<PathBuf> = user_scripts_raw
         .into_iter()
         .filter(|p| in_project_scope(p))
         .collect();
@@ -1021,7 +1021,7 @@ fn run_typecheck(
     // overlay; others pass through tsgo's regular include. Fast-path
     // skip when no runes modules were discovered.
     if !runes_modules_set.is_empty() {
-        let rewrite_candidates = user_ts_files.iter().chain(runes_modules_set.iter());
+        let rewrite_candidates = user_script_files.iter().chain(runes_modules_set.iter());
         inputs.extend(rewrite_candidates.filter_map(|file| {
             let source = std::fs::read_to_string(file).ok()?;
             let rewritten =

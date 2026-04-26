@@ -830,6 +830,15 @@ fn run_typecheck(
         if files.contains(path) {
             return true;
         }
+        // TS spec: when `files` is non-empty AND `include` is absent,
+        // ONLY entries listed in `files` are in the project (closed-
+        // world). Without this guard we'd default `include = match all`
+        // and pull every walked file into scope — wrong for the
+        // explicit-allowlist tsconfig pattern. Mirrors upstream
+        // svelte-check + tsc's project-membership rules.
+        if include.is_none() && !files.is_empty() {
+            return false;
+        }
         let rel = path.strip_prefix(workspace).unwrap_or(path);
         let included = include.as_ref().is_none_or(|set| set.is_match(rel));
         let excluded = exclude.as_ref().is_some_and(|set| set.is_match(rel));

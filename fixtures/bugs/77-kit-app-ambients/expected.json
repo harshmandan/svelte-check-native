@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Round 2 #6: SvelteKit `$app/*` virtual-module ambient declarations. Pre-2026-04-26 monorepo layouts where `@sveltejs/kit` is at the workspace root (not the per-app `node_modules`) hit TS2307 'Cannot find module' on every `import { dev } from '$app/environment'` site. Now `crates/typecheck/src/kit_app_ambients.rs` writes a fallback declarations file into the cache and includes it in the overlay tsconfig — fires only when `.svelte-kit/types/` exists (the project IS Kit) AND `@sveltejs/kit` types aren't reachable via Node module resolution (real types win when present). This fixture stages that scenario by creating an empty `.svelte-kit/types/` dir; the imports below would fail TS2307 without the fallback ambient."
+}

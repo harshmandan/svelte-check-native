@@ -33,6 +33,7 @@
 
 pub mod cache;
 pub mod discovery;
+pub mod kit_app_ambients;
 pub mod kit_types_mirror;
 pub mod output;
 pub mod overlay;
@@ -587,6 +588,15 @@ pub fn check(
     // the overlay degrades cleanly to today's behavior.
     let kit_types_mirror = kit_types_mirror::sync_mirror(&layout)?;
 
+    // Step 1c: write fallback `$app/*` ambient-module declarations
+    // when this is a Kit project (`.svelte-kit/types/` exists) but
+    // `@sveltejs/kit` types aren't reachable from the workspace's
+    // node_modules. Closes TS2307 on `import { dev } from
+    // '$app/environment'` for monorepos that have Kit at the root
+    // but not in per-app node_modules. Returns None when the
+    // fallback isn't needed (real types win, or non-Kit project).
+    let kit_app_ambients = kit_app_ambients::write_ambients(&layout)?;
+
     // Step 2: write overlay tsconfig.
     let overlay = overlay::build(
         &layout,
@@ -594,6 +604,7 @@ pub fn check(
         &generated_paths,
         &kit_overlay_sources,
         kit_types_mirror.as_deref(),
+        kit_app_ambients.as_deref(),
     );
     let overlay_text = serde_json::to_string_pretty(&overlay)?;
     write_if_changed(&layout.overlay_tsconfig, &overlay_text)?;

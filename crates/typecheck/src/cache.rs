@@ -209,6 +209,17 @@ impl CacheLayout {
             .join(format!("{bare}.d.svelte.ts"))
     }
 
+    /// Path to the synthetic `$app/*` ambient-module declarations
+    /// file. Emitted only for SvelteKit projects whose user tree
+    /// doesn't have `@sveltejs/kit` installed (the common monorepo
+    /// case where Kit is depended-on at the root but workers consume
+    /// the synced types directly). Without this fallback, every
+    /// `import { dev } from '$app/environment'` site fires TS2307
+    /// "Cannot find module".
+    pub fn kit_app_ambients(&self) -> PathBuf {
+        self.root.join("kit-app-ambients.d.ts")
+    }
+
     /// Reverse the [`generated_path`] / [`ambient_path`] mapping —
     /// given a path inside the cache, return the corresponding
     /// original `.svelte` source path (or `None` if the input doesn't

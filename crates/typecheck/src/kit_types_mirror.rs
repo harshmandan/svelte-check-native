@@ -40,7 +40,9 @@ use std::path::PathBuf;
 use crate::cache::{CacheLayout, write_if_changed};
 
 /// Walk the user's `.svelte-kit/types/` tree, write a path-rewritten
-/// copy of every `$types.d.ts` into the cache mirror.
+/// copy of every `$types.d.ts` into the cache mirror, and GC any
+/// previously-mirrored files whose source has been deleted or
+/// renamed.
 ///
 /// Returns the mirror dir if at least one file was written (so the
 /// overlay builder knows to enable the rootDirs priority + include-
@@ -53,6 +55,7 @@ pub fn sync_mirror(layout: &CacheLayout) -> std::io::Result<Option<PathBuf>> {
     }
     let mirror_root = layout.kit_types_mirror_dir();
     let mut wrote_any = false;
+    let mut written: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for entry in walkdir::WalkDir::new(&user_types_root)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -79,7 +82,26 @@ pub fn sync_mirror(layout: &CacheLayout) -> std::io::Result<Option<PathBuf>> {
         let rewritten = rewrite_user_source_chain(&content);
         let out = mirror_root.join(rel);
         write_if_changed(&out, &rewritten)?;
+        written.insert(out);
         wrote_any = true;
+    }
+    // GC orphans. A deleted/renamed route leaves its `$types.d.ts`
+    // in the cache mirror forever otherwise; tsgo's overlay program
+    // then keeps consulting the stale typing instead of firing
+    // 'cannot find module' / picking up the user's intended renames.
+    // Best-effort: errors during traversal or deletion don't fail
+    // the type-check (a stale orphan is recoverable next run).
+    if mirror_root.is_dir() {
+        for entry in walkdir::WalkDir::new(&mirror_root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+        {
+            let path = entry.path();
+            if !written.contains(path) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
     }
     Ok(if wrote_any { Some(mirror_root) } else { None })
 }

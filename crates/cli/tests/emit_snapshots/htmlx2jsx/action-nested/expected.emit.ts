@@ -29,6 +29,7 @@ async function $$render_a3a3d9ca() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_a3a3d9ca;

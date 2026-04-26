@@ -8,6 +8,7 @@ const array = [1, 2, 3, [4]];
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     void a;
     void b;
     void c;

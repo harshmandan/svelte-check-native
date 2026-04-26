@@ -28,6 +28,7 @@ async function $$render_19e9402e() {
         { svelteHTML.createElement("p", {});             ($store4);
         }
     }
+    void __svn_tpl_check;
     void $store;
     void store;
     void $store1;

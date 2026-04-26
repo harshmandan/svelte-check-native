@@ -25,6 +25,7 @@ async function $$render_677076f2() {
         });
         }
     }
+    void __svn_tpl_check;
     void name1;
     void name2;
     void name3;

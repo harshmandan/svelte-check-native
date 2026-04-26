@@ -8,6 +8,7 @@ async function $$render_68adadcb() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     void name;
     void world;
     return { props: /** @type {{ name?: typeof name; world?: typeof world; }} */({}) };

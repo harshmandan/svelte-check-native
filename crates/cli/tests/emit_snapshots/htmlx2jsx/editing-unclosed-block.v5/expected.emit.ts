@@ -19,6 +19,7 @@ async function $$render_b5e30ee7() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_b5e30ee7;

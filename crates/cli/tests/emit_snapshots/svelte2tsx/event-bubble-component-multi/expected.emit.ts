@@ -12,6 +12,7 @@ async function $$render_a210f71d() {
             new __svn_C_1b({ target: __svn_any(), props: {} });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_a210f71d;

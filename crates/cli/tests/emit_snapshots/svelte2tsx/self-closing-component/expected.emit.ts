@@ -12,6 +12,7 @@ let a = 'b';
             new __svn_C_0({ target: __svn_any(), props: {"b": "6"} });
         }
     }
+    void __svn_tpl_check;
     void Test;
     return { props: /** @type {any} */({}) };
 }

@@ -11,6 +11,7 @@ async function $$render_28214ef8() {
         { svelteHTML.createElement("h1", {});             (world);
         }
     }
+    void __svn_tpl_check;
     void world;
     return { props: /** @type {{ world?: typeof world; }} */({}) };
 }

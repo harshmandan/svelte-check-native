@@ -277,6 +277,13 @@ function runUpstream(bin, { tsgo, cwd }) {
         '--workspace', cwd ?? targetAbs,
         '--output', 'machine',
         '--diagnostic-sources', 'js,svelte',
+        // Forward the same --tsconfig the user passed for ours so the
+        // comparison is apples-to-apples. Without this, ours runs
+        // against a specific sub-app tsconfig while upstream runs
+        // against whatever it auto-discovers from the workspace root
+        // — counts diverge for mechanical reasons (different file
+        // sets) rather than semantic ones.
+        ...extraArgs,
     ];
     if (tsgo) runArgs.unshift('--tsgo');
     try {

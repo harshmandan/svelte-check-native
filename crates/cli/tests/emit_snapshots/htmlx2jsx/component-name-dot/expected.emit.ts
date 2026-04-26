@@ -12,6 +12,7 @@ async function $$render_ba148a9e() {
             new __svn_C_19({ target: __svn_any(), props: {} });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_ba148a9e;

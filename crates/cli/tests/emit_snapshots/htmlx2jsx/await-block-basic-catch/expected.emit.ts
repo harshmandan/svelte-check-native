@@ -10,6 +10,7 @@ async function $$render_bedc65d7() {
         });
         { svelteHTML.createElement("h2", {});         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_bedc65d7;

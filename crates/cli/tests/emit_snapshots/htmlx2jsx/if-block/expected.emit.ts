@@ -9,6 +9,7 @@ async function $$render_31770ada() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_31770ada;

@@ -13,6 +13,7 @@ async function $$render_386ab038() {
         ($store1);
         ($store2);
     }
+    void __svn_tpl_check;
     void $store1;
     void store1;
     void $store2;

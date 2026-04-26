@@ -6,6 +6,7 @@ async function $$render_a7c511e3() {
         { svelteHTML.createElement("h1", {});             (active);
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_a7c511e3;

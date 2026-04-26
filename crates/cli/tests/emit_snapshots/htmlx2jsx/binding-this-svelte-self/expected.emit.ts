@@ -9,6 +9,7 @@ async function $$render_4dbcdbe9() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_4dbcdbe9;

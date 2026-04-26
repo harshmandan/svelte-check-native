@@ -17,6 +17,7 @@ async function $$render_88f50e2b() {
             void error;
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_88f50e2b;

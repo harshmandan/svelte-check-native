@@ -12,6 +12,7 @@ async function $$render_cf56d9b2<A, B extends keyof A, C extends boolean>() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     void a;
     void b;
     void c;

@@ -52,6 +52,14 @@ impl Default for KitFilesSettings {
 ///
 /// Path is the full absolute/relative path including extension; the
 /// function slices basename and extension as upstream does.
+///
+/// Path separators are normalised to `/` before suffix matching so
+/// the Windows `C:\repo\src\hooks.server.ts` form matches against
+/// the slash-formed `src/hooks.server` in `KitFilesSettings`. Without
+/// this every Kit-file detection on Windows fell through to
+/// `is_kit_route_file`'s basename check — `hooks.server.ts` /
+/// `videoId.ts` aren't route basenames, so they were silently
+/// excluded from the `<N> FILES` denominator and from `kit_inject`.
 pub fn is_kit_file(path: &Path, settings: &KitFilesSettings) -> bool {
     let Some(basename) = path.file_name().and_then(|s| s.to_str()) else {
         return false;
@@ -59,11 +67,26 @@ pub fn is_kit_file(path: &Path, settings: &KitFilesSettings) -> bool {
     let Some(path_str) = path.to_str() else {
         return false;
     };
+    let normalised = normalise_path_seps(path_str);
     is_kit_route_file(basename)
-        || is_hooks_file(path_str, basename, &settings.server_hooks_path)
-        || is_hooks_file(path_str, basename, &settings.client_hooks_path)
-        || is_hooks_file(path_str, basename, &settings.universal_hooks_path)
-        || is_params_file(path_str, basename, &settings.params_path)
+        || is_hooks_file(&normalised, basename, &settings.server_hooks_path)
+        || is_hooks_file(&normalised, basename, &settings.client_hooks_path)
+        || is_hooks_file(&normalised, basename, &settings.universal_hooks_path)
+        || is_params_file(&normalised, basename, &settings.params_path)
+}
+
+/// Normalise path separators to `/` so suffix-matchers stay portable
+/// across platforms. `KitFilesSettings` carries `src/hooks.server`
+/// etc. with forward slashes (svelte.config.js never uses backslashes
+/// regardless of host OS) — without normalisation, Windows paths
+/// (`C:\…\src\hooks.server.ts`) would never end_with the configured
+/// suffix.
+fn normalise_path_seps(path: &str) -> std::borrow::Cow<'_, str> {
+    if path.contains('\\') {
+        std::borrow::Cow::Owned(path.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(path)
+    }
 }
 
 /// Route files: `+page`, `+layout`, `+page.server`, `+layout.server`,
@@ -194,6 +217,46 @@ mod tests {
         let s = settings();
         assert!(!is_kit_file(&p("src/params/videoId.test.ts"), &s));
         assert!(!is_kit_file(&p("src/params/videoId.spec.ts"), &s));
+    }
+
+    // Windows-style backslash regression: the suffix matchers
+    // (`is_hooks_file`, `is_params_file`) need to operate on a
+    // forward-slash-normalised path string. We can't construct a
+    // PathBuf with backslashes on Unix (PathBuf treats `\` as a
+    // regular character there, so the basename stays the whole
+    // string) — exercise the helpers directly with a pre-formed
+    // backslash path string instead. This proves the Windows path
+    // shape (`C:\repo\src\hooks.server.ts`) gets recognised once
+    // the normalise step runs.
+    #[test]
+    fn windows_style_paths_normalise_for_hooks_match() {
+        let s = settings();
+        let raw = r"C:\repo\src\hooks.server.ts";
+        let basename = "hooks.server.ts";
+        let n = normalise_path_seps(raw);
+        assert!(is_hooks_file(&n, basename, &s.server_hooks_path));
+
+        let raw_dir = r"C:\repo\src\hooks.server\index.ts";
+        let n = normalise_path_seps(raw_dir);
+        assert!(is_hooks_file(&n, "index.ts", &s.server_hooks_path));
+    }
+
+    #[test]
+    fn windows_style_paths_normalise_for_params_match() {
+        let s = settings();
+        let raw = r"C:\repo\src\params\videoId.ts";
+        let basename = "videoId.ts";
+        let n = normalise_path_seps(raw);
+        assert!(is_params_file(&n, basename, &s.params_path));
+    }
+
+    #[test]
+    fn normalise_path_seps_borrows_when_already_clean() {
+        let raw = "/abs/src/hooks.server.ts";
+        match normalise_path_seps(raw) {
+            std::borrow::Cow::Borrowed(_) => {}
+            std::borrow::Cow::Owned(_) => panic!("clean path should borrow"),
+        }
     }
 
     #[test]

@@ -35,6 +35,7 @@ async function $$render_f39ccf3a() {
             void height;
         }
     }
+    void __svn_tpl_check;
     void boxes;
     void calculate;
     void constant;

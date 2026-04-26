@@ -10,6 +10,7 @@ async function $$render_941ec73b() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     return { props: /** @type {Foo} */({}) };
 }
 $$render_941ec73b;

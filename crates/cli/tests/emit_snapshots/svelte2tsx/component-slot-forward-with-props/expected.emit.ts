@@ -6,6 +6,7 @@ async function $$render_19f891e5() {
         {
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_19f891e5;

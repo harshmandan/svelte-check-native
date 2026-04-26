@@ -5,6 +5,7 @@ async function $$render_6105d053() {
         // template type-check body (incremental)
         { svelteHTML.createElement("main", {});         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_6105d053;

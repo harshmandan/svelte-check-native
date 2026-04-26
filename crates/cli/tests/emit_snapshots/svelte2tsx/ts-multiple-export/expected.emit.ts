@@ -11,6 +11,7 @@ async function $$render_bbc70e42() {
             (number1 + number2);
         }
     }
+    void __svn_tpl_check;
     void number1;
     void number2;
     return { props: /** @type {any} */({}) };

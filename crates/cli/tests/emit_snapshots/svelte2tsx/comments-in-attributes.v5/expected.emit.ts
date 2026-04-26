@@ -13,6 +13,7 @@ async function $$render_29958c69() {
         (bound_prop);
         (...spread_props);
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_29958c69;

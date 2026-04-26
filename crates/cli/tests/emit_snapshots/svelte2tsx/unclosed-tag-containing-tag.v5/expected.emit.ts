@@ -7,6 +7,7 @@ async function $$render_cc48f86c() {
             { svelteHTML.createElement("div", {});             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_cc48f86c;

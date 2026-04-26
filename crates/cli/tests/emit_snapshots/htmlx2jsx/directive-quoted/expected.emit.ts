@@ -19,6 +19,7 @@ async function $$render_a390b0ad() {
         { svelteHTML.createElement("img", {});         }
         { svelteHTML.createElement("img", {});         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_a390b0ad;

@@ -31,6 +31,7 @@ async function $$render_43f719a8() {
         });
         }
     }
+    void __svn_tpl_check;
     void mhm;
     void f;
     return { props: /** @type {any} */({}) };

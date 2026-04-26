@@ -29,6 +29,7 @@ const test4 = ({a,  b: { $top1: $top2 }}) => $top2 && $top1
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     void $top1;
     void top1;
     void $top2;

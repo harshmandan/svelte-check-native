@@ -10,6 +10,7 @@ async function $$render_5be9bf92() {
             new __svn_C_2b({ target: __svn_any(), props: {} });
         }
     }
+    void __svn_tpl_check;
     void Script;
     return { props: /** @type {any} */({}) };
 }

@@ -6,6 +6,7 @@ async function $$render_4a1879bf() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     void a;
     return { props: /** @type {{ a?: typeof a; }} */({}) };
 }

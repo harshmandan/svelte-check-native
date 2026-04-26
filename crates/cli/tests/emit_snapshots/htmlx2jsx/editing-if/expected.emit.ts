@@ -7,6 +7,7 @@ async function $$render_97dfe1c3() {
         } else if ((''.)) {
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_97dfe1c3;

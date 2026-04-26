@@ -39,6 +39,7 @@ async function $$render_387932bf() {
         ($store9);
         ($store10);
     }
+    void __svn_tpl_check;
     void $store1;
     void store1;
     void $store2;

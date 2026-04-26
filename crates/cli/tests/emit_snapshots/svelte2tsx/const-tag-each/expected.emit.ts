@@ -34,6 +34,7 @@ async function $$render_48a7b4ac() {
             void box;
         }
     }
+    void __svn_tpl_check;
     void boxes;
     void calculate;
     void constant;

@@ -7,6 +7,7 @@ async function $$render_929c7759() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     void a;
     void b;
     void c;

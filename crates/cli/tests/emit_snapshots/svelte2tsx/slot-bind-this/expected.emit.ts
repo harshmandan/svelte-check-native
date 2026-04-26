@@ -5,6 +5,7 @@ async function $$render_0dda80aa() {
         // template type-check body (incremental)
         s = /** @type {HTMLElementTagNameMap['slot']} */ (null);
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_0dda80aa;

@@ -17,6 +17,7 @@ async function $$render_4160f2ef() {
         });
         }
     }
+    void __svn_tpl_check;
     void tag;
     return { props: /** @type {any} */({}) };
 }

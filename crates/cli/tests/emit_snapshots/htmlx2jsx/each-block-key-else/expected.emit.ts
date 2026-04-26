@@ -13,6 +13,7 @@ async function $$render_45703bf4() {
         }
         { svelteHTML.createElement("div", {});         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_45703bf4;

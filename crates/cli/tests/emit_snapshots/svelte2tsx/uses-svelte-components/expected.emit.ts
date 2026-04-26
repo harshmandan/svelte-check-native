@@ -21,6 +21,7 @@ async function $$render_9bb80247() {
         });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_9bb80247;

@@ -10,6 +10,7 @@ async function $$render_c301cf0c() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_c301cf0c;

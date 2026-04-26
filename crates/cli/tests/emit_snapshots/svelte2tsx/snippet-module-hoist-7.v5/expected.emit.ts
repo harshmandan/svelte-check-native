@@ -21,6 +21,7 @@ async function $$render_6c5b63d4() {
             ($store2);
         }
     }
+    void __svn_tpl_check;
     void $store;
     void store;
     void $store2;

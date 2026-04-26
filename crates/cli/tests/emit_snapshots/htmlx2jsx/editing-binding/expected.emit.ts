@@ -11,6 +11,7 @@ async function $$render_b80130f4() {
             new __svn_C_34({ target: __svn_any(), props: {"value": (obj.)} });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_b80130f4;

@@ -8,6 +8,7 @@ async function $$render_e34b808e() {
             void error;
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_e34b808e;

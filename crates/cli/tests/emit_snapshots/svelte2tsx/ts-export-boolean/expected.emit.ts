@@ -10,6 +10,7 @@ async function $$render_6affb005() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     void bla;
     void blubb;
     void bla1;

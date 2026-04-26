@@ -10,6 +10,7 @@ async function $$render_7803dd27() {
             void a;
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_7803dd27;

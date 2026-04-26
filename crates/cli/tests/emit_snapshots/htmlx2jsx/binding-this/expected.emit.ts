@@ -10,6 +10,7 @@ async function $$render_d2ad7865() {
             element = /** @type {HTMLElementTagNameMap['input']} */ (null);
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_d2ad7865;

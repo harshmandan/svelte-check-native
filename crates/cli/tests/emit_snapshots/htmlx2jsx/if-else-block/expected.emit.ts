@@ -12,6 +12,7 @@ async function $$render_e8d64080() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_e8d64080;

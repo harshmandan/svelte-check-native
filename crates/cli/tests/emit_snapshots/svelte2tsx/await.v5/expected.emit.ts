@@ -55,6 +55,7 @@ async function $$render_de15df1d() {
             }
         }
     }
+    void __svn_tpl_check;
     void prop;
     void foo;
     void promise;

@@ -16,6 +16,7 @@ async function $$render_53b84942() {
             void data;
         });
     }
+    void __svn_tpl_check;
     void $store;
     void store;
     return { props: /** @type {any} */({}) };

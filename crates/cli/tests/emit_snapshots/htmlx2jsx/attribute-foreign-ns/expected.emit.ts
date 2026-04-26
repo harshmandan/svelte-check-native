@@ -13,6 +13,7 @@ async function $$render_2d42b761() {
         });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_2d42b761;

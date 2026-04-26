@@ -5,6 +5,7 @@ async function $$render_72dbb43a() {
         // template type-check body (incremental)
         (someRecord[anotherRecord.]);
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_72dbb43a;

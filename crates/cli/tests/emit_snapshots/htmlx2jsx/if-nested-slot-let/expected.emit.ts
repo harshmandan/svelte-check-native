@@ -57,6 +57,7 @@ async function $$render_dc3d7c74() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_dc3d7c74;

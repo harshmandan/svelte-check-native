@@ -12,6 +12,7 @@ async function $$render_a41317e5() {
             void error;
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_a41317e5;

@@ -7,6 +7,7 @@ async function $$render_71583bab() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     void name;
     void SOME;
     void CONSTANT;

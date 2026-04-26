@@ -14,6 +14,7 @@ async function $$render_55fa86f5() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_55fa86f5;

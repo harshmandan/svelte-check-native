@@ -24,6 +24,7 @@ async function $$render_c159a31e() {
             new __svn_C_7a({ target: __svn_any(), props: {} });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_c159a31e;

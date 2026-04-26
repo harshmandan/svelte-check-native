@@ -52,6 +52,7 @@ async function $$render_e1dcebf1() {
             void box;
         }
     }
+    void __svn_tpl_check;
     void promise1;
     void calculate;
     void constant;

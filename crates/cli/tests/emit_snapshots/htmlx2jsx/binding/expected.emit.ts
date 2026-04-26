@@ -35,6 +35,7 @@ async function $$render_d9f25341() {
             /*svn:ignore_start*/void (() => { test = __svn_any(null); });/*svn:ignore_end*/
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_d9f25341;

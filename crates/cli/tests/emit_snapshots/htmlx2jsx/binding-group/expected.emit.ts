@@ -9,6 +9,7 @@ async function $$render_0d8a17fd() {
         });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_0d8a17fd;

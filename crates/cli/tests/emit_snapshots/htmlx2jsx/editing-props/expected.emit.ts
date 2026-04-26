@@ -12,6 +12,7 @@ async function $$render_fdf7f947() {
             new __svn_C_1a({ target: __svn_any(), props: {"hi": (''?.)} });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_fdf7f947;

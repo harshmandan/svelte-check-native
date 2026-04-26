@@ -21,6 +21,7 @@ async function $$render_e5ad478b() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_e5ad478b;

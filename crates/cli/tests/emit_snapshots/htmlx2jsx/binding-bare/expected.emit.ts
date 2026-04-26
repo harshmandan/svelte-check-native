@@ -24,6 +24,7 @@ async function $$render_6ce80dfb() {
             /*svn:ignore_start*/void (() => { checked = __svn_any(null); });/*svn:ignore_end*/
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_6ce80dfb;

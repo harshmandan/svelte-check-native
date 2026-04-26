@@ -8,6 +8,7 @@ async function $$render_30739603() {
             new __svn_C_0({ target: __svn_any(), props: {} });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_30739603;

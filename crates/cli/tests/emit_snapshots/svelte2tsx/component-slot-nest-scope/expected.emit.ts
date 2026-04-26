@@ -23,6 +23,7 @@ async function $$render_ce1c3a62() {
             void d;
         });
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_ce1c3a62;

@@ -689,7 +689,6 @@ fn emit_document_with_render_name(
         &prop_names,
         &template_void_refs,
         &exported_locals,
-        is_ts,
     );
 
     emit_render_body_return(
@@ -6181,7 +6180,6 @@ fn emit_void_block(
     prop_names: &[SmolStr],
     template_refs: &[SmolStr],
     exported_locals: &[SmolStr],
-    is_ts: bool,
 ) {
     // One `void <name>;` statement per synthesized name — NOT a single
     // `void (a, b, c);` block. The block form uses comma operators which
@@ -6210,12 +6208,6 @@ fn emit_void_block(
     };
     for name in summary.void_refs.names() {
         if name.starts_with("__svn_action_attrs_") || name.starts_with("__svn_bind_pair_") {
-            continue;
-        }
-        // JS overlays skip `emit_template_check_fn` (TS-only casts), so
-        // the `__svn_tpl_check` name never materializes — voiding it
-        // would fire TS2304. Every other synthesized name still applies.
-        if !is_ts && name == svn_core::synth_names::TPL_CHECK_FN {
             continue;
         }
         emit(out, name);

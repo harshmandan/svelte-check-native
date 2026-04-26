@@ -35,6 +35,7 @@ async function $$render_2acc95ba() {
         { svelteHTML.createElement("button", {});         }
         { svelteHTML.createElement("button", {});         }
     }
+    void __svn_tpl_check;
     void $count;
     void count;
     void myvar;

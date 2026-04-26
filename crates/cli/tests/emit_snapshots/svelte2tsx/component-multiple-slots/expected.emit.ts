@@ -9,6 +9,7 @@ async function $$render_47353b87() {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});         }
     }
+    void __svn_tpl_check;
     void b;
     void d;
     void e;

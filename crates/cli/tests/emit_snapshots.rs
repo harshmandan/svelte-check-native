@@ -152,13 +152,24 @@ fn collect_samples(crate_dir: &Path, snapshots_root: &Path) -> Vec<Sample> {
 
     // Corpus 1: upstream svelte2tsx samples. Both .v5 (Svelte 5) and
     // non-.v5 (Svelte 4) are in scope now that v0.2 shipped Svelte-4
-    // parity. Samples without an `input.svelte` are upstream test-
+    // parity. Samples without an entry-point `.svelte` (`input.svelte`,
+    // `+page.svelte`, or `+layout.svelte`) are upstream test-
     // scaffolding and are skipped.
+    //
+    // The corpus path is REQUIRED — `.canonicalize().ok()` fails open
+    // and would silently skip the entire upstream corpus if the
+    // submodule isn't checked out. Use `expect` so a missing submodule
+    // surfaces as a hard failure pointing the user at
+    // `git submodule update --init --recursive`.
     let v5_root = crate_dir
         .join("../../language-tools/packages/svelte2tsx/test/svelte2tsx/samples")
         .canonicalize()
-        .ok();
-    if let Some(root) = v5_root {
+        .expect(
+            "language-tools svelte2tsx samples corpus missing — run \
+             `git submodule update --init --recursive`",
+        );
+    {
+        let root = v5_root;
         for entry in read_dir_sorted(&root) {
             let name = entry
                 .file_name()
@@ -189,8 +200,12 @@ fn collect_samples(crate_dir: &Path, snapshots_root: &Path) -> Vec<Sample> {
     let htmlx_root = crate_dir
         .join("../../language-tools/packages/svelte2tsx/test/htmlx2jsx/samples")
         .canonicalize()
-        .ok();
-    if let Some(root) = htmlx_root {
+        .expect(
+            "language-tools htmlx2jsx samples corpus missing — run \
+             `git submodule update --init --recursive`",
+        );
+    {
+        let root = htmlx_root;
         for entry in read_dir_sorted(&root) {
             let name = entry
                 .file_name()
@@ -220,9 +235,15 @@ fn collect_samples(crate_dir: &Path, snapshots_root: &Path) -> Vec<Sample> {
         }
     }
 
-    // Corpus 3: our own bug fixtures (any sample with an input.svelte).
-    let bugs_root = crate_dir.join("../../fixtures/bugs").canonicalize().ok();
-    if let Some(root) = bugs_root {
+    // Corpus 3: our own bug fixtures (any sample with an entry-point
+    // `.svelte` file). The fixtures dir always exists in-tree so a
+    // missing path indicates the test is being run from an unexpected
+    // working directory — surface that as a hard failure.
+    let bugs_root = crate_dir.join("../../fixtures/bugs").canonicalize().expect(
+        "fixtures/bugs corpus missing — emit_snapshots must be run from the repo's cargo workspace",
+    );
+    {
+        let root = bugs_root;
         for entry in read_dir_sorted(&root) {
             let name = entry
                 .file_name()
@@ -263,8 +284,23 @@ fn read_dir_sorted(dir: &Path) -> Vec<PathBuf> {
     entries
 }
 
+/// A sample dir is an emit-snapshot fixture if it contains one of the
+/// recognised entry-point `.svelte` filenames:
+///
+/// - `input.svelte` — the conventional name for our bug fixtures and
+///   most upstream samples.
+/// - `+page.svelte` / `+layout.svelte` — upstream's SvelteKit-autotypes
+///   samples (`*sveltekit-autotypes*`) put their Svelte source in a
+///   route-shaped basename instead.
+///
+/// Without route-svelte recognition, the seven `*sveltekit-autotypes*`
+/// samples in upstream's svelte2tsx corpus would silently fall through
+/// the `input.svelte`-only check and never gate against our emit —
+/// exactly the regression mode this test is meant to catch.
 fn has_input_svelte(dir: &Path) -> bool {
     dir.join("input.svelte").is_file()
+        || dir.join("+page.svelte").is_file()
+        || dir.join("+layout.svelte").is_file()
 }
 
 /// Run our binary with `--emit-ts` against a sample directory and

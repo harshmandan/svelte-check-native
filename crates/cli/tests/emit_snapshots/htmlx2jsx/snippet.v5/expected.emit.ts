@@ -108,6 +108,7 @@ async function $$render_0bc1cb85() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_0bc1cb85;

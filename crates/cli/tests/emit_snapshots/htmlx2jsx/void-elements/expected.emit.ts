@@ -18,6 +18,7 @@ async function $$render_4c3314e4() {
             { svelteHTML.createElement("wbr", {});             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_4c3314e4;

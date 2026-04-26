@@ -9,6 +9,7 @@ async function $$render_ed2b916f() {
             element = __svn_inst_0;
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_ed2b916f;

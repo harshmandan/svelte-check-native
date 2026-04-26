@@ -21,6 +21,7 @@ async function $$render_edb4eb12<T>() {
             }
         }
     }
+    void __svn_tpl_check;
     void b;
     void rect;
     return { props: /** @type {$$ComponentProps} */({}) };

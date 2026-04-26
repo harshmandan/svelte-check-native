@@ -55,6 +55,7 @@ async function $$render_6a482dcb() {
             void height;
         }
     }
+    void __svn_tpl_check;
     void promise1;
     void calculate;
     void constant;

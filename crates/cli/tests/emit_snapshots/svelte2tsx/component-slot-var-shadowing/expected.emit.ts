@@ -7,6 +7,7 @@ async function $$render_a82beb00() {
             void items;
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_a82beb00;

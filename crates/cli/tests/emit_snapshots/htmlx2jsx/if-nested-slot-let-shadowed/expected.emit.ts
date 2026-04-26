@@ -224,6 +224,7 @@ async function $$render_ddf2ba9e() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_ddf2ba9e;

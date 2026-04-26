@@ -7,6 +7,7 @@ async function $$render_2a8eb9ef() {
             element = /** @type {HTMLElement} */ (null);
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_2a8eb9ef;

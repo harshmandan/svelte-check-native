@@ -184,6 +184,7 @@ async function $$render_8a5774d3() {
             }
         }
     }
+    void __svn_tpl_check;
     void Component;
     void box;
     void calculate;

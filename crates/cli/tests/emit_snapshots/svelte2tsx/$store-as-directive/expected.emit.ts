@@ -25,6 +25,7 @@ async function $$render_b5ddc729() {
         { svelteHTML.createElement("div", __svn_union(__svn_action_0), {});             void __svn_action_0;
         }
     }
+    void __svn_tpl_check;
     void $transitionStore;
     void transitionStore;
     void $actionStore;

@@ -18,6 +18,7 @@ async function $$render_36f25f12() {
         { svelteHTML.createElement("button", {});         }
         { svelteHTML.createElement("button", {});         }
     }
+    void __svn_tpl_check;
     void $count;
     void count;
     return { props: /** @type {any} */({}) };

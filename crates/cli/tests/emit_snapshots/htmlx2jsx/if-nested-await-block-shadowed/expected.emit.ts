@@ -137,6 +137,7 @@ async function $$render_bdea4648() {
             void cool;
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_bdea4648;

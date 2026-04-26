@@ -7,6 +7,7 @@ async function $$render_6ddccdbf() {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});         }
     }
+    void __svn_tpl_check;
     void b;
     return { props: /** @type {any} */({}) };
 }

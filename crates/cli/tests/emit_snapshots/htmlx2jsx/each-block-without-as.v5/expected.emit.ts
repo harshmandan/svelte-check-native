@@ -11,6 +11,7 @@ async function $$render_c7e1c908() {
             void __svn_each_unused;
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_c7e1c908;

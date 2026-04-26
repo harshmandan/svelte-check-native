@@ -7,6 +7,7 @@ async function $$render_6c5fd365() {
         (someObject['$store']);
         (someObject.$store);
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_6c5fd365;

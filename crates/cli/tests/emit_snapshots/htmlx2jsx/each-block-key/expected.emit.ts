@@ -12,6 +12,7 @@ async function $$render_ebd292b2() {
             void i;
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_ebd292b2;

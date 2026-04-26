@@ -10,6 +10,7 @@ async function $$render_57b1c5e2() {
             __svn_inst_22.$on("click", (handlers.));
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_57b1c5e2;

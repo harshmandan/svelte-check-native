@@ -10,6 +10,7 @@ async function $$render_d2d4cb4e() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     void a;
     void b;
     void x;

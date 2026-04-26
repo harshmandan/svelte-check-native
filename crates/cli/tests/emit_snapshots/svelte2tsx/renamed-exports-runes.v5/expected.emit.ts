@@ -12,6 +12,7 @@ async function $$render_ef638edf() {
         });
         }
     }
+    void __svn_tpl_check;
     void name;
     void name2;
     return { props: /** @type {{ name3?: any; name4?: any; }} */({}) };

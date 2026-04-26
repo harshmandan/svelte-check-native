@@ -44,6 +44,7 @@ async function $$render_d92c900a() {
         } else {
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_d92c900a;

@@ -13,6 +13,7 @@ async function $$render_672f27a9() {
         }
         { svelteHTML.createElement("span", {});         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_672f27a9;

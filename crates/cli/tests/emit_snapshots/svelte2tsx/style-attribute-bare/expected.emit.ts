@@ -5,6 +5,7 @@ async function $$render_054f1aa4() {
         // template type-check body (incremental)
         (true === true);
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_054f1aa4;

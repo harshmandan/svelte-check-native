@@ -7,6 +7,7 @@ $b=$b.concat(5)
         { svelteHTML.createElement("h1", {});             ($b);
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_636933a9;

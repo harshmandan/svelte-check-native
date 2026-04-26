@@ -18,6 +18,7 @@ async function $$render_1110d804() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_1110d804;

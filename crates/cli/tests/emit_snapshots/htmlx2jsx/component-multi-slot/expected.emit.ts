@@ -46,6 +46,7 @@ async function $$render_8f62c0c3() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_8f62c0c3;

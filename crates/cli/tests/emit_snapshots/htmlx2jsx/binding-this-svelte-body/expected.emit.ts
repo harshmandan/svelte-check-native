@@ -6,6 +6,7 @@ async function $$render_3cecb40c() {
         { svelteHTML.createElement("svelte:body", {});             element = /** @type {HTMLElement} */ (null);
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_3cecb40c;

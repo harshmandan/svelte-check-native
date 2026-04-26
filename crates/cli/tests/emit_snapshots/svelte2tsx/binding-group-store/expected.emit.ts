@@ -10,6 +10,7 @@ async function $$render_4aa1e856() {
         });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_4aa1e856;

@@ -10,6 +10,7 @@ async function $$render_6d8f9d53() {
         }
         { svelteHTML.createElement("button", {});         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_6d8f9d53;

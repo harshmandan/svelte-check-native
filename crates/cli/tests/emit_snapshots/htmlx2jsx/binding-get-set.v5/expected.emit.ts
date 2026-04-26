@@ -32,6 +32,7 @@ async function $$render_9eb76bb9() {
             new __svn_C_bf({ target: __svn_any(), props: {"value": __svn_get_set_binding(() => v,  new_v => v = new_v)} });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_9eb76bb9;

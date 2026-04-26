@@ -8,6 +8,7 @@ async function $$render_a8746c92() {
         { svelteHTML.createElement("h1", {});             ($$restProps['name']);
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_a8746c92;

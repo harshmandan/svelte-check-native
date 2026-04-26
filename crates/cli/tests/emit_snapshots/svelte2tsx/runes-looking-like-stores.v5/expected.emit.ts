@@ -11,6 +11,7 @@ async function $$render_94f8225d() {
         (state);
         (derived);
     }
+    void __svn_tpl_check;
     void props;
     void state;
     void derived;

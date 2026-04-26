@@ -13,6 +13,7 @@ async function $$render_6d186ca7() {
             new __svn_C_42({ target: __svn_any(), props: {"someAttr": "5", "otherAttr": (6)} });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_6d186ca7;

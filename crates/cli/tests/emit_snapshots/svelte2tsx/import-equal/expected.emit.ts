@@ -7,6 +7,7 @@ async function $$render_edd507a7() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_edd507a7;

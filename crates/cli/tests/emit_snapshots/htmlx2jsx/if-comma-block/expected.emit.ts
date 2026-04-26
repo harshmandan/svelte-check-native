@@ -8,6 +8,7 @@ async function $$render_5c4830b9() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_5c4830b9;

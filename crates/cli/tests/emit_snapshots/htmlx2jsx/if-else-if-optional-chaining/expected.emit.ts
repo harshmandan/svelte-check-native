@@ -13,6 +13,7 @@ async function $$render_c146fe3a() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_c146fe3a;

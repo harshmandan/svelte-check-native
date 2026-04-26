@@ -21,6 +21,7 @@ async function $$render_9d1abbd9() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     void name1;
     void name2;
     void name3;

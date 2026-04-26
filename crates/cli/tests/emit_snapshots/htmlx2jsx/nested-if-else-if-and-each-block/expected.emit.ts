@@ -13,6 +13,7 @@ async function $$render_8768e2e3() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_8768e2e3;

@@ -101,6 +101,7 @@ async function $$render_64a5d390() {
             (bye);
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_64a5d390;

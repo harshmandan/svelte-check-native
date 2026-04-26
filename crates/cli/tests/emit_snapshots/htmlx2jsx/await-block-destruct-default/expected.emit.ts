@@ -40,6 +40,7 @@ async function $$render_7177a532() {
             void c;
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_7177a532;

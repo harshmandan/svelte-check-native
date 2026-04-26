@@ -6,6 +6,7 @@ async function $$render_86beef21() {
         { svelteHTML.createElement("div", {});             { svelteHTML.createElement("div", {});             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_86beef21;

@@ -20,6 +20,7 @@ async function $$render_b55beab5() {
             new __svn_C_56({ target: __svn_any(), props: {...((node) => {})} });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_b55beab5;

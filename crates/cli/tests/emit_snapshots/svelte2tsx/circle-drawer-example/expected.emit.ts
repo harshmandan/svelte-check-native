@@ -99,6 +99,7 @@ async function $$render_f9263703() {
             }
         }
     }
+    void __svn_tpl_check;
     void travel;
     void i;
     void undoStack;

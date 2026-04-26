@@ -9,6 +9,7 @@ async function $$render_386266bc() {
             void item;
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_386266bc;

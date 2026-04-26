@@ -9,6 +9,7 @@ async function $$render_8be4fc9c() {
         }
         { svelteHTML.createElement("div", {});         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_8be4fc9c;

@@ -56,6 +56,7 @@ async function $$render_df3e76f3() {
             }
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_df3e76f3;

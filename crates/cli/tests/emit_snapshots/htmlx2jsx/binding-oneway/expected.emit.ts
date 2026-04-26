@@ -22,6 +22,7 @@ async function $$render_6cdf582f() {
             ended = /** @type {HTMLMediaElement['ended']} */ (null);
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_6cdf582f;

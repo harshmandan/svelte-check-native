@@ -8,6 +8,7 @@ async function $$render_61aafdfb() {
             new __svn_C_0({ target: __svn_any(), props: {shorthand} });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_61aafdfb;

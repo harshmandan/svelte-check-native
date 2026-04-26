@@ -16,6 +16,7 @@ async function $$render_cfb295d3() {
         });
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_cfb295d3;

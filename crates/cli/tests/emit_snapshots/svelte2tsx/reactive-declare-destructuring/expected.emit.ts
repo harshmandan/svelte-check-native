@@ -11,6 +11,7 @@ let { b: g = 1} = __svn_invalidate(() => ({ b: 1 })); void g;
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_2f16c479;

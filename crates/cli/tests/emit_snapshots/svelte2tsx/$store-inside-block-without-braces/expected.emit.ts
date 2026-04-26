@@ -31,6 +31,7 @@ async function $$render_f4f78636() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
     }
+    void __svn_tpl_check;
     void $store1;
     void store1;
     return { props: /** @type {any} */({}) };

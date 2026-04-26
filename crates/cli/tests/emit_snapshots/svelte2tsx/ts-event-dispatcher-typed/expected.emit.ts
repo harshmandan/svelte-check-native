@@ -31,6 +31,7 @@ async function $$render_dc6dc1a5() {
         // template type-check body (incremental)
         { svelteHTML.createElement("button", {});         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_dc6dc1a5;

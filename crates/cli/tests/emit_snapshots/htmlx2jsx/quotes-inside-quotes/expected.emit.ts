@@ -14,6 +14,7 @@ async function $$render_a97dd4dc() {
             __svn_inst_34.$on("keydown", (() => {}));
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_a97dd4dc;

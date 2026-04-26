@@ -8,6 +8,7 @@ async function $$render_214f3ab7() {
 });
         ({ a: '' }['a']);
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_214f3ab7;

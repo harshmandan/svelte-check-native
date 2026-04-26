@@ -10,6 +10,7 @@ async function $$render_26417913() {
         (id);
         (props);
     }
+    void __svn_tpl_check;
     void props;
     void id;
     return { props: /** @type {$$ComponentProps} */({}) };

@@ -10,6 +10,7 @@ async function $$render_73f66a28() {
         { svelteHTML.createElement("h1", {});             ($$slots['dashed-name']);
         }
     }
+    void __svn_tpl_check;
     return { props: /** @type {any} */({}) };
 }
 $$render_73f66a28;

@@ -12,4 +12,5 @@
 //!
 //! See `design/phase_g/DESIGN.md` for the full plan.
 
+pub mod compat;
 pub mod reactive;

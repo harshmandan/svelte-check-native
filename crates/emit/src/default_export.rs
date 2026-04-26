@@ -22,8 +22,10 @@ use svn_parser::{Document, Fragment};
 
 use crate::emit_buffer::EmitBuffer;
 use crate::script_split;
+use crate::svelte4::compat::{
+    contains_export_let, fragment_contains_slot, has_strict_events, is_svelte4_component,
+};
 use crate::util::{generic_arg_names, render_class_name};
-use crate::{contains_export_let, fragment_contains_slot, has_strict_events, is_svelte4_component};
 
 /// JS-overlay default-export shape. Captures Props via
 /// `Awaited<ReturnType<typeof $$render>>['props']` so consumer

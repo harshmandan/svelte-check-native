@@ -61,7 +61,24 @@ enum KitFileKind {
 }
 
 fn classify_kit_file(basename: &str) -> Option<KitFileKind> {
-    match basename {
+    // SvelteKit `(group)` route grouping appears in basenames as
+    // `+page@(auth).ts`, `+layout@admin.ts`, etc. The `@group`
+    // suffix is for organisational nesting and doesn't change which
+    // Kit-file shape the runtime treats it as. Strip it before
+    // matching so grouped routes receive the same `$types`
+    // injection as their non-grouped counterparts. Mirrors
+    // `is_kit_route_file` in `cli::kit_files`.
+    let normalized: String = if let Some(at) = basename.find('@') {
+        // basename = "+page@(group).ts" → "+page.ts"
+        let dot = basename.rfind('.')?;
+        if dot <= at {
+            return None;
+        }
+        format!("{}{}", &basename[..at], &basename[dot..])
+    } else {
+        basename.to_string()
+    };
+    match normalized.as_str() {
         "+server.ts" => Some(KitFileKind::ServerEndpoint),
         "+page.ts" => Some(KitFileKind::Route {
             is_layout: false,
@@ -297,6 +314,43 @@ mod tests {
     }
     fn layout_server_path() -> PathBuf {
         PathBuf::from("src/routes/+layout.server.ts")
+    }
+
+    #[test]
+    fn classify_strips_group_suffix() {
+        // SvelteKit `(group)` routing puts the group label in the
+        // basename: `+page@(auth).ts`. Classification must strip the
+        // `@…` segment before matching so grouped routes get the
+        // same Kit-file kind as ungrouped ones.
+        assert!(matches!(
+            classify_kit_file("+page@(auth).ts"),
+            Some(KitFileKind::Route {
+                is_layout: false,
+                is_server: false
+            })
+        ));
+        assert!(matches!(
+            classify_kit_file("+layout@admin.ts"),
+            Some(KitFileKind::Route {
+                is_layout: true,
+                is_server: false
+            })
+        ));
+        assert!(matches!(
+            classify_kit_file("+page.server@(authed).ts"),
+            Some(KitFileKind::Route {
+                is_layout: false,
+                is_server: true
+            })
+        ));
+    }
+
+    #[test]
+    fn classify_groups_inject_event_annotation() {
+        let path = PathBuf::from("src/routes/(auth)/+page@(auth).ts");
+        let source = "export async function load({ url }) { return {}; }";
+        let got = inject(&path, source).expect("grouped route must inject");
+        assert!(got.contains("PageLoadEvent"));
     }
 
     // +server.ts handler cases — existing coverage.

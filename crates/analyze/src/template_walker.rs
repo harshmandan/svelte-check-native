@@ -657,7 +657,17 @@ fn collect_slot_def(
                     continue;
                 };
                 let trimmed = text.trim();
-                if is_simple_identifier(trimmed) && shadow.contains(trimmed) {
+                // Suppress when the expression's leading identifier
+                // is shadowed by an active template-scope binding.
+                // Bare-identifier check covers `{foo}` / `name={foo}`;
+                // the leading-identifier extraction handles
+                // `{item.id}`, `{rest[0]}`, `{user?.name}`, etc. —
+                // any of those that root in a let/each binding would
+                // otherwise be emitted from module scope and resolve
+                // to the wrong (outer) declaration.
+                if let Some(head) = leading_identifier(trimmed)
+                    && shadow.contains(head)
+                {
                     continue;
                 }
                 entries.push((e.name.clone(), text.to_string()));
@@ -687,6 +697,35 @@ fn is_simple_identifier(s: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+/// Return the leading identifier of an expression source slice — the
+/// run of identifier-valid bytes from the start, before any `.`,
+/// `[`, `?.`, `(`, whitespace, or operator. For `item.id` returns
+/// `"item"`; for `rest[0]` returns `"rest"`; for `user?.name` returns
+/// `"user"`. Returns None when the slice doesn't start with an
+/// identifier (e.g. `1 + foo`, `(x).y`).
+///
+/// Used by `collect_slot_def` to suppress slot-attr expressions whose
+/// root binding is shadowed by an active template-scope let/each
+/// binding — bare-identifier check alone misses member-access /
+/// optional-chain / index-access shapes.
+fn leading_identifier(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    let first = *bytes.first()?;
+    if !(first.is_ascii_alphabetic() || first == b'_' || first == b'$') {
+        return None;
+    }
+    let mut end = 1;
+    while end < bytes.len() {
+        let b = bytes[end];
+        if b.is_ascii_alphanumeric() || b == b'_' || b == b'$' {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    Some(&s[..end])
 }
 
 /// Extract every let:NAME / let:NAME={alias} binding name from a set

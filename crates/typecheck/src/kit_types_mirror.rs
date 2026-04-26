@@ -112,9 +112,18 @@ pub fn sync_mirror(layout: &CacheLayout) -> std::io::Result<Option<PathBuf>> {
 /// becomes `svelte/src/routes/`, redirecting the chain into the
 /// cache's typed Kit-file copies.
 ///
-/// Also rewrites `src/hooks.{server,client}.{js,ts}` and
-/// `src/params/<matcher>.{js,ts}` for the same reason — those
-/// surfaces are typed by `kit_inject` too.
+/// Hooks (`src/hooks.{server,client,…}.{js,ts}`) and param matchers
+/// (`src/params/<matcher>.{js,ts}`) are deliberately NOT rewritten:
+/// `kit_inject` doesn't materialise cache copies for those (it only
+/// classifies `+server` / `+page` / `+layout` shapes today), so a
+/// rewritten chain points at a non-existent `<cache>/svelte/src/hooks…`.
+/// tsgo's rootDirs fallback would still reach the user-tree source
+/// via `<workspace>/src/hooks…`, but only by accident — leaving the
+/// chain as-is keeps resolution direct and avoids the rootDirs round-
+/// trip entirely. When `kit_inject` learns to type hooks/params (the
+/// `Handle` / `HandleFetch` / `HandleServerError` / `ParamMatcher`
+/// surfaces upstream svelte2tsx covers), the cache copy will appear
+/// and we can extend the rewriter at the same time.
 ///
 /// Conservative substring match: only rewrites occurrences preceded
 /// by `../` (i.e. inside an existing relative-walk chain). A literal
@@ -128,6 +137,9 @@ fn rewrite_user_source_chain(text: &str) -> String {
     // the LAST `../` in the chain. The chain may be many `../`s
     // long; we want to preserve them all and only rewrite the segment
     // immediately following.
+    // Walk the text inserting `svelte/` immediately before each
+    // `src/routes/` occurrence preceded by `../`. The `../` chain
+    // length is preserved — only the segment NAME shifts.
     let mut rest = text;
     while let Some(idx) = find_user_source_segment(rest) {
         out.push_str(&rest[..idx]);
@@ -138,25 +150,12 @@ fn rewrite_user_source_chain(text: &str) -> String {
     out
 }
 
-/// Find the EARLIEST byte offset in `text` of a user-source segment
-/// preceded by `../` (the SvelteKit chain signature). Returns the
-/// START of that segment; the caller inserts `svelte/` at that
+/// Find the byte offset of the earliest `src/routes/` substring in
+/// `text` preceded by `../` (the SvelteKit chain signature). Returns
+/// the START of that segment; the caller inserts `svelte/` at that
 /// position.
-///
-/// Earlier scans returned the first hit of the FIRST needle in
-/// catalog order, even if a different needle had a match earlier in
-/// the text — leaving an earlier hooks/params chain behind a later
-/// routes match permanently un-rewritten. Scanning every needle and
-/// keeping the smallest position fixes that.
 fn find_user_source_segment(text: &str) -> Option<usize> {
-    const NEEDLES: &[&str] = &[
-        "src/routes/",
-        "src/hooks.server.",
-        "src/hooks.client.",
-        "src/hooks.",
-        "src/params/",
-        "src/app.html",
-    ];
+    const NEEDLES: &[&str] = &["src/routes/"];
     let bytes = text.as_bytes();
     let mut best: Option<usize> = None;
     for needle in NEEDLES {
@@ -213,10 +212,19 @@ mod tests {
     }
 
     #[test]
-    fn rewrites_hooks_chain() {
+    fn leaves_hooks_chain_alone() {
+        // Hooks are intentionally NOT rewritten — `kit_inject` doesn't
+        // materialise a `<cache>/svelte/src/hooks.*` copy, so redirecting
+        // the chain there would dangle. See `rewrite_user_source_chain`
+        // doc comment for the future-extension note.
         let input = "typeof import('../../src/hooks.server.js').handle";
-        let want = "typeof import('../../svelte/src/hooks.server.js').handle";
-        assert_eq!(rewrite_user_source_chain(input), want);
+        assert_eq!(rewrite_user_source_chain(input), input);
+    }
+
+    #[test]
+    fn leaves_params_chain_alone() {
+        let input = "import('../../src/params/videoId.js').match";
+        assert_eq!(rewrite_user_source_chain(input), input);
     }
 
     #[test]
@@ -236,16 +244,14 @@ mod tests {
     }
 
     #[test]
-    fn rewrites_earliest_needle_match_first() {
-        // G8 regression: when multiple user-source chain kinds appear
-        // in the same file, the previous scan returned the first hit
-        // of the FIRST needle in catalog order (src/routes/), even if
-        // a different needle (src/hooks.server.) had an earlier match.
-        // The hooks chain at byte ~17 must get rewritten alongside
-        // the routes chain at byte ~70 — both, not just the latter.
+    fn rewrites_routes_alongside_unmodified_hooks() {
+        // Mixed input: hooks and params chains appear alongside a
+        // routes chain in the same file. Only the routes chain is
+        // redirected; hooks/params stay pointing at the user tree
+        // because `kit_inject` doesn't produce cache copies for them.
         let input =
             "x: import('../../src/hooks.server.js'); y: import('../../src/routes/a/+page.js');";
-        let want = "x: import('../../svelte/src/hooks.server.js'); y: import('../../svelte/src/routes/a/+page.js');";
+        let want = "x: import('../../src/hooks.server.js'); y: import('../../svelte/src/routes/a/+page.js');";
         assert_eq!(rewrite_user_source_chain(input), want);
     }
 }

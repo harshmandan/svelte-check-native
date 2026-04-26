@@ -20,8 +20,15 @@
 //! universalHooksPath: 'src/hooks'
 //! ```
 //!
-//! Custom overrides in `svelte.config.js`'s `kit.files` are not yet
-//! read — defaults cover the overwhelming majority of projects.
+//! Custom overrides for `kit.files.params` and `kit.files.hooks.{server,
+//! client,universal}` are read from `svelte.config.js` via
+//! `cli::svelte_config`. `kit.files.routes` is intentionally NOT
+//! honoured — upstream `svelte-check`'s `loadKitFilesSettings`
+//! (language-tools/packages/svelte-check/src/incremental.ts) doesn't
+//! read it either, so route detection stays basename-only
+//! (`+page` / `+layout` / `+server`) regardless of where the user
+//! relocated the routes directory. Diverging here would put us out
+//! of parity with upstream's `<N> FILES` denominator.
 
 use std::path::Path;
 

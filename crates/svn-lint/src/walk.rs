@@ -60,6 +60,92 @@ pub fn infer_runes_mode(source: &str, path: &Path) -> bool {
     false
 }
 
+/// Find the byte offset of the `}` that closes a `${…}` interpolation
+/// starting at `start` (the byte AFTER the opening `${`). Skips over
+/// string literals (single, double, template), line/block comments,
+/// and nested braces so the closing `}` is the structurally matching
+/// one — not an unbalanced `}` that happens to appear inside a
+/// string or comment.
+///
+/// Returns `None` when the interpolation is unterminated (truncated
+/// source / parse-error region). Caller treats that as "scan to EOF
+/// and stop." Regex literals are not currently distinguished — a
+/// `/}/` inside an interpolation would slip past the `/` byte
+/// without entering string mode, but the only fallout is a slightly
+/// over-broad scan; rune detection is monotonic-OR so it never
+/// produces a false negative.
+fn find_interpolation_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut j = start;
+    while j < bytes.len() {
+        let c = bytes[j];
+        // Line comment.
+        if c == b'/' && bytes.get(j + 1) == Some(&b'/') {
+            while j < bytes.len() && bytes[j] != b'\n' {
+                j += 1;
+            }
+            continue;
+        }
+        // Block comment.
+        if c == b'/' && bytes.get(j + 1) == Some(&b'*') {
+            j += 2;
+            while j + 1 < bytes.len() && !(bytes[j] == b'*' && bytes[j + 1] == b'/') {
+                j += 1;
+            }
+            j = (j + 2).min(bytes.len());
+            continue;
+        }
+        // Single/double-quoted string — escape-aware.
+        if c == b'\'' || c == b'"' {
+            j += 1;
+            while j < bytes.len() && bytes[j] != c {
+                if bytes[j] == b'\\' {
+                    j = (j + 2).min(bytes.len());
+                } else {
+                    j += 1;
+                }
+            }
+            j = (j + 1).min(bytes.len());
+            continue;
+        }
+        // Nested template literal — recurse into its own interpolations
+        // so a `}` inside a nested template's literal text can't
+        // terminate the outer interpolation prematurely.
+        if c == b'`' {
+            j += 1;
+            while j < bytes.len() && bytes[j] != b'`' {
+                if bytes[j] == b'\\' {
+                    j = (j + 2).min(bytes.len());
+                    continue;
+                }
+                if bytes[j] == b'$' && bytes.get(j + 1) == Some(&b'{') {
+                    let inner_start = j + 2;
+                    j = match find_interpolation_end(bytes, inner_start) {
+                        Some(pos) => (pos + 1).min(bytes.len()),
+                        None => bytes.len(),
+                    };
+                    continue;
+                }
+                j += 1;
+            }
+            j = (j + 1).min(bytes.len());
+            continue;
+        }
+        match c {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(j);
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    None
+}
+
 /// Scan a JS/TS script body for any call-form rune occurrence
 /// (`$state(`, `$derived(`, etc., or `$state.raw(` etc.). Skips line
 /// comments, block comments, single/double-quoted strings, and
@@ -124,25 +210,21 @@ fn scan_script_for_rune_call(source: &str) -> bool {
                 }
                 if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'{') {
                     // Recursively scan the interpolation's contents.
+                    // Walk to the matching `}`, skipping strings,
+                    // comments, regex literals, and nested template
+                    // literals so an unbalanced `}` inside one of those
+                    // can't terminate the interpolation early.
                     let interp_start = i + 2;
-                    let mut depth = 1;
-                    let mut j = interp_start;
-                    while j < bytes.len() && depth > 0 {
-                        match bytes[j] {
-                            b'{' => depth += 1,
-                            b'}' => depth -= 1,
-                            _ => {}
-                        }
-                        if depth == 0 {
-                            break;
-                        }
-                        j += 1;
-                    }
-                    let interp_text = &source[interp_start..j];
+                    let j = find_interpolation_end(bytes, interp_start);
+                    let end = j.unwrap_or(bytes.len());
+                    let interp_text = &source[interp_start..end];
                     if scan_script_for_rune_call(interp_text) {
                         return true;
                     }
-                    i = (j + 1).min(bytes.len());
+                    i = match j {
+                        Some(pos) => (pos + 1).min(bytes.len()),
+                        None => bytes.len(),
+                    };
                     continue;
                 }
                 i += 1;
@@ -572,6 +654,28 @@ mod runes_inference_tests {
     fn rune_call_inside_template_interpolation_enables_runes() {
         // The interpolation IS code — a rune call there is real.
         let src = "<script>const x = `${$state(0)}`;</script>";
+        assert!(infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn brace_inside_string_does_not_terminate_interpolation_early() {
+        // The closing brace inside the string literal must not be
+        // treated as the interpolation terminator. The previous raw
+        // brace counter would have stopped at the `}` inside `"}"`,
+        // missing the `$state(0)` after it.
+        let src = r#"<script>const x = `${"}" + $state(0)}`;</script>"#;
+        assert!(infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn brace_inside_block_comment_does_not_terminate_interpolation_early() {
+        let src = "<script>const x = `${/* } */ $state(0)}`;</script>";
+        assert!(infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn nested_template_interpolation_resolves_correctly() {
+        let src = "<script>const x = `${`${$state(0)}`}`;</script>";
         assert!(infer_runes_mode(src, &p("Foo.svelte")));
     }
 

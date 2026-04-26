@@ -9,7 +9,7 @@ use std::fmt::Write;
 use svn_parser::SnippetBlock;
 
 use crate::emit_buffer::EmitBuffer;
-use crate::nodes::component::annotate_snippet_params;
+use crate::nodes::inline_component::annotate_snippet_params;
 use crate::{all_identifiers, emit_template_body};
 
 /// Emit a lexical-scope block wrapping a `{#snippet name(params)}` body

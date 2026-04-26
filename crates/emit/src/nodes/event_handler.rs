@@ -21,7 +21,7 @@
 //!   converted to an `onNAME` prop key during attribute emission in
 //!   `nodes/element.rs::emit_dom_element_open`.
 //! - Component `on:event` is handled by
-//!   `nodes/component.rs::emit_on_event_calls`, which emits one
+//!   `nodes/inline_component.rs::emit_on_event_calls`, which emits one
 //!   `$inst.$on(...)` line per directive after the component's `new`
 //!   expression.
 //!

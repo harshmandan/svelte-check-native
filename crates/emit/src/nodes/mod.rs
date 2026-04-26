@@ -5,21 +5,28 @@
 //! main dispatcher lives in `lib.rs::emit_template_node` and forwards
 //! per-node-type to the helpers exposed here.
 
+pub(crate) mod action;
 pub(crate) mod animation;
+pub(crate) mod attach_tag;
+pub(crate) mod attribute;
 pub(crate) mod await_pending_catch_block;
+pub(crate) mod binding;
+pub(crate) mod class;
 pub(crate) mod comment;
-pub(crate) mod component;
 pub(crate) mod const_tag;
 pub(crate) mod debug_tag;
-pub(crate) mod directives;
 pub(crate) mod each_block;
 pub(crate) mod element;
 pub(crate) mod event_handler;
 pub(crate) mod if_else_block;
+pub(crate) mod inline_component;
+pub(crate) mod key;
 pub(crate) mod let_directive;
 pub(crate) mod mustache_tag;
 pub(crate) mod raw_mustache_tag;
 pub(crate) mod render_tag;
 pub(crate) mod snippet_block;
+pub(crate) mod spread;
+pub(crate) mod style_directive;
 pub(crate) mod text;
 pub(crate) mod transition;

@@ -7,7 +7,7 @@
 //!
 //! 1. `let:` on the component itself — destructure against
 //!    `inst.$$slot_def.default` inside the component-call's inner
-//!    block. Driven from [`crate::nodes::component::emit_component_node`].
+//!    block. Driven from [`crate::nodes::inline_component::emit_component_node`].
 //! 2. `let:` on a child element/component carrying `slot="X"` — wrap
 //!    the child at the parent's child-walk depth and destructure
 //!    against `parent_inst.$$slot_def["X"]`. Driven from

@@ -59,18 +59,19 @@ mod svelte4;
 mod sveltekit;
 mod util;
 
-use nodes::await_pending_catch_block::{emit_await_then_branch, emit_branch_with_binding};
-use nodes::component::emit_component_node;
-use nodes::directives::{
-    emit_dom_action_decls, emit_dom_action_void_refs, emit_element_bind_checks_inline,
-    emit_legacy_action_attrs, emit_use_directives_inline_legacy,
+use nodes::action::{
+    emit_dom_action_decls, emit_dom_action_void_refs, emit_legacy_action_attrs,
+    emit_use_directives_inline_legacy,
 };
+use nodes::await_pending_catch_block::{emit_await_then_branch, emit_branch_with_binding};
+use nodes::binding::emit_element_bind_checks_inline;
 use nodes::each_block::emit_each_block;
 use nodes::element::{
     emit_dom_directive_checks, emit_dom_element_close, emit_dom_element_open,
     emit_svelte_element_open,
 };
 use nodes::if_else_block::emit_condition_ref_marker;
+use nodes::inline_component::emit_component_node;
 use nodes::let_directive::emit_children_with_let_bindings;
 use nodes::mustache_tag::emit_interpolation;
 use nodes::snippet_block::emit_snippet_block;

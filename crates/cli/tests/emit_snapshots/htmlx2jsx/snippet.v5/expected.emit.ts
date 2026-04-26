@@ -34,6 +34,9 @@ async function $$render_0bc1cb85() {
                     void x;
                 });
             }
+            (foo(1));
+            (bar());
+            (await_inside());
             {
                 const __svn_C_122 = __svn_ensure_component(Component);
                 new __svn_C_122({
@@ -98,6 +101,7 @@ async function $$render_0bc1cb85() {
                 });
                 { svelteHTML.createElement("p", {});                 }
             }
+            (children());
             {
                 void ((/**@type {number}*/a: any) => {
                     (a);

@@ -120,14 +120,6 @@ pub struct Interpolation {
 /// What flavour of `{…}` tag an [`Interpolation`] is. Set by the
 /// template parser at parse time so downstream passes (emit, analyze,
 /// lint) don't have to re-peek at the source bytes to classify.
-///
-/// Only three variants because that's what every downstream consumer
-/// actually branches on today: plain-vs-`@const` for the emit's type-
-/// check body, plain-vs-any-directive for
-/// `collect_plain_interpolation_ranges`. If a rule later needs to
-/// distinguish `@html` from `@debug` from `@render`, split `AtTag` —
-/// consumers that currently fall through to `_` on `AtTag` keep
-/// working because `AtTag` itself stays a catch-all variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterpolationKind {
     /// `{EXPR}` — value interpolation.
@@ -136,11 +128,27 @@ pub enum InterpolationKind {
     /// produces a real `const <pattern> = <expr>;` at the current
     /// template-check block so TS pins the inferred type.
     AtConst,
-    /// Any other `{@*}` directive (`@html`, `@render`, `@debug`,
-    /// `@attach`, or an unknown future tag). Currently treated as
-    /// "side-effect-only" by emit — the expression payload may still
-    /// reference script bindings (→ void-ref pass) but the directive
-    /// itself doesn't produce typed overlay code.
+    /// `{@html EXPR}` — raw-HTML interpolation. Emit produces a bare
+    /// `(EXPR);` expression statement so tsgo type-checks the
+    /// expression against the surrounding scope (catches TS2304 on
+    /// typos, TS2339 on missing-property reads, etc.). Mirrors
+    /// upstream svelte2tsx's `RawMustacheTag.ts`.
+    AtHtml,
+    /// `{@render EXPR}` — snippet-render call (Svelte 5+). Emit
+    /// produces `__svn_ensure_snippet(EXPR);` so tsgo type-checks
+    /// EXPR's call arguments against the snippet's declared
+    /// `Snippet<[…]>` parameter shape, plus validates that EXPR
+    /// resolves to a snippet at all. Mirrors upstream's `RenderTag.ts`.
+    AtRender,
+    /// `{@debug a, b, …}` — debug interpolation. Emit produces one
+    /// bare `(name);` per comma-separated identifier so tsgo
+    /// type-checks each name in scope (catches TS2304 on typos).
+    /// Mirrors upstream's `DebugTag.ts`.
+    AtDebug,
+    /// Any other `{@*}` directive (`@attach`, or an unknown future
+    /// tag). `@attach` actually routes through the Spread shape on
+    /// elements rather than this enum, so this catch-all is mostly
+    /// reserved for forward-compat. Emit treats as side-effect-only.
     AtTag,
 }
 

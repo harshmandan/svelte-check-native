@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 7,
+            "code": 2552
+        }
+    ],
+    "_note": "Round 2 #3: {@html EXPR} now type-checks the expression. Pre-2026-04-26 the directive was a no-op in our emit, so typos like `undefinedTypo` silently passed. Code 2552 (vs the bare 2304) fires here because tsgo recognises `undefined` as a similar global and offers it as a suggestion. Positions are LSP-style 0-based."
+}

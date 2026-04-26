@@ -76,6 +76,7 @@ async function $$render_43de206c() {
                     void baz;
                 });
             }
+            (foo(bar as string));
             { svelteHTML.createElement("button", {
                 "onclick": ((e: Event) => {e as any}),
             });

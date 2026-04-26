@@ -14,6 +14,8 @@ async function $$render_22446700() {
 /*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        (header(['id', 'label']));
+        (row({ id: 1, label: 'a' }));
     }
     void __svn_tpl_check;
     void row;

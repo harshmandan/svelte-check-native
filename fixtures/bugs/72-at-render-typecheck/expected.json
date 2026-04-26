@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 9,
+            "code": 2304
+        }
+    ],
+    "_note": "Round 2 #3: {@render EXPR} now type-checks the snippet call. Pre-2026-04-26 the directive was a no-op in our emit, so typos like `undefinedSnippet` silently passed. Mirrors upstream svelte2tsx's RenderTag.ts. Positions are LSP-style 0-based (machine-verbose format). Upstream wraps the call in __sveltets_2_ensureSnippet to also assert 'is it actually a Snippet<>?'; we emit the bare call for now and may add an __svn_ensure_snippet ambient as a future refinement."
+}

@@ -171,10 +171,12 @@ impl<'src> TemplateParser<'src> {
                             p += 1;
                         }
                         let keyword = &src[keyword_start..p];
-                        let kind = if keyword == "const" {
-                            InterpolationKind::AtConst
-                        } else {
-                            InterpolationKind::AtTag
+                        let kind = match keyword {
+                            "const" => InterpolationKind::AtConst,
+                            "html" => InterpolationKind::AtHtml,
+                            "render" => InterpolationKind::AtRender,
+                            "debug" => InterpolationKind::AtDebug,
+                            _ => InterpolationKind::AtTag,
                         };
                         // Skip whitespace after the keyword.
                         while p < end as usize && bytes[p].is_ascii_whitespace() {

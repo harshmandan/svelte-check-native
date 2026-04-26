@@ -48,6 +48,7 @@ async function $$render_200dbc4a<T>() {
                 "attribute": (await promise),
             });
             }
+            (x(await promise));
             if ((true)) {
                 const x = await promise;
                 void x;

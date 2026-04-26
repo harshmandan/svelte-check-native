@@ -48,6 +48,7 @@ async function $$render_de15df1d() {
                 "attribute": (await promise),
             });
             }
+            (x(await promise));
             if ((true)) {
                 const x = await promise;
                 void x;

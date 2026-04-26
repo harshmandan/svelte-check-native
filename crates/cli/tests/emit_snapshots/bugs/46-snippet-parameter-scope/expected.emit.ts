@@ -8,6 +8,7 @@ async function $$render_e2598f27() {
     let { children }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        (children(true, () => {}));
     }
     void __svn_tpl_check;
     void children;

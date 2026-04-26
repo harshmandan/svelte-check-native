@@ -10,6 +10,7 @@ async function $$render_7035891f() {
     let { children }: $$ComponentProps = $props();
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        (children?.());
     }
     void __svn_tpl_check;
     void children;

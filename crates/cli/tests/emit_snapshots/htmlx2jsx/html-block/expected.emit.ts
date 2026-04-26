@@ -3,6 +3,7 @@
 async function $$render_85f76a10() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
+        (myfile + someOtherFile);
     }
     void __svn_tpl_check;
     return { props: /** @type {any} */({}) };

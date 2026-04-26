@@ -18,6 +18,8 @@ async function $$render_50f1c2a8() {
             void hoistable;
             { svelteHTML.createElement("div", {});                 (foo);
             }
+            (chain());
+            (chain2());
             { svelteHTML.createElement("h1", {});             }
         }
     }

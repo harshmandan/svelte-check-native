@@ -10,36 +10,42 @@ async function $$render_df3e76f3() {
                 {
                     const foo = undefined;
                     void foo;
+                    (foo());
                 }
             }
             for (const item of __svn_each_items(arr)) {
                 {
                     const foo = undefined;
                     void foo;
+                    (foo());
                 }
                 void item;
             }
             {
                 const foo = undefined;
                 void foo;
+                (foo());
             }
             {
                 const foo = undefined;
                 void foo;
                 const foo2 = undefined;
                 void foo2;
+                (foo());
             }
             ;(async () => {
                 const $$_await = await (Promise.resolve()); const bar = $$_await;
                 {
                     const foo = undefined;
                     void foo;
+                    (foo());
                 }
                 void bar;
             });
             { svelteHTML.createElement("div", {});                 {
                     const foo = undefined;
                     void foo;
+                    (foo());
                 }
             }
             {
@@ -53,6 +59,7 @@ async function $$render_df3e76f3() {
                         children: () => __svn_snippet_return(),
                     },
                 });
+                (foo());
             }
         }
     }

@@ -122,13 +122,19 @@ impl WarningFilterPlan {
     }
 }
 
-/// Locate `svelte.config.js` / `svelte.config.mjs` / `svelte.config.ts`
-/// starting from `workspace` and walking up to the filesystem root.
-/// Returns the first match. Skips if it's not a regular file.
+/// Locate the user's svelte config starting from `workspace` and
+/// walking up to the filesystem root. Recognises every extension
+/// upstream svelte-check accepts: `.js`, `.mjs`, `.cjs`, `.ts`.
+/// Returns the first match in the order listed.
 pub fn find_svelte_config(workspace: &Path) -> Option<PathBuf> {
     let mut dir = workspace.to_path_buf();
     loop {
-        for candidate in ["svelte.config.js", "svelte.config.mjs", "svelte.config.ts"] {
+        for candidate in [
+            "svelte.config.js",
+            "svelte.config.mjs",
+            "svelte.config.cjs",
+            "svelte.config.ts",
+        ] {
             let p = dir.join(candidate);
             if p.is_file() {
                 return Some(p);
@@ -214,11 +220,52 @@ fn extract_kit_files_object<'a>(
                 None => continue,
             },
         };
-        if let Expression::ObjectExpression(obj) = expr {
+        // Unwrap common config-wrapper shapes:
+        //   defineConfig({...})   — Vite/SvelteKit ergonomic helper
+        //   config satisfies Config — TS narrowing wrapper
+        //   <ts cast>(<expr>)     — sometimes seen in TS configs
+        let unwrapped = unwrap_config_wrapper(expr);
+        if let Expression::ObjectExpression(obj) = unwrapped {
+            return kit_files_from_root(obj);
+        }
+        // Indirect: `export default config;` where `config` was
+        // declared as `const config = defineConfig({...})`. Recurse
+        // through the named-decl table after wrapper-unwrapping.
+        if let Expression::Identifier(id) = unwrapped
+            && let Some(target) = named.get(id.name.as_str()).copied()
+            && let Expression::ObjectExpression(obj) = unwrap_config_wrapper(target)
+        {
             return kit_files_from_root(obj);
         }
     }
     None
+}
+
+/// Strip common one-level wrappers that don't change the underlying
+/// config object: `defineConfig(X)` → `X`; `X satisfies T` → `X`;
+/// `(X as T)` / `<T>X` → `X`.
+fn unwrap_config_wrapper<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
+    match expr {
+        Expression::CallExpression(call) => {
+            // Only unwrap recognised helpers — a generic call we
+            // can't statically resolve stays opaque.
+            let is_define_config = match &call.callee {
+                Expression::Identifier(id) => id.name.as_str() == "defineConfig",
+                _ => false,
+            };
+            if is_define_config && call.arguments.len() == 1 {
+                if let Some(arg) = call.arguments[0].as_expression() {
+                    return unwrap_config_wrapper(arg);
+                }
+            }
+            expr
+        }
+        Expression::TSSatisfiesExpression(s) => unwrap_config_wrapper(&s.expression),
+        Expression::TSAsExpression(a) => unwrap_config_wrapper(&a.expression),
+        Expression::TSTypeAssertion(t) => unwrap_config_wrapper(&t.expression),
+        Expression::ParenthesizedExpression(p) => unwrap_config_wrapper(&p.expression),
+        _ => expr,
+    }
 }
 
 /// Given the root config object, return its `kit.files` if present.
@@ -236,34 +283,48 @@ fn kit_files_from_root<'a>(root: &'a ObjectExpression<'a>) -> Option<&'a ObjectE
 }
 
 /// Apply each recognised key in `files: { … }` onto `settings`.
+/// String values get normalised — leading `./` and trailing `/` are
+/// stripped so the suffix-match in `is_kit_file` lines up regardless
+/// of how the user spelled the path.
 fn apply_kit_files_overrides(
     files_obj: &ObjectExpression<'_>,
     settings: &mut crate::kit_files::KitFilesSettings,
 ) {
     if let Some(p) = lookup_string_property(files_obj, "params") {
-        settings.params_path = p;
+        settings.params_path = normalise_kit_path(&p);
     }
     if let Some(hooks_expr) = lookup_object_property(files_obj, "hooks") {
         match hooks_expr {
             // Legacy form: `hooks: 'src/myhooks'` → universal only.
             Expression::StringLiteral(s) => {
-                settings.universal_hooks_path = s.value.to_string();
+                settings.universal_hooks_path = normalise_kit_path(s.value.as_str());
             }
             // Modern form: `hooks: { server, client, universal }`.
             Expression::ObjectExpression(hobj) => {
                 if let Some(p) = lookup_string_property(hobj, "server") {
-                    settings.server_hooks_path = p;
+                    settings.server_hooks_path = normalise_kit_path(&p);
                 }
                 if let Some(p) = lookup_string_property(hobj, "client") {
-                    settings.client_hooks_path = p;
+                    settings.client_hooks_path = normalise_kit_path(&p);
                 }
                 if let Some(p) = lookup_string_property(hobj, "universal") {
-                    settings.universal_hooks_path = p;
+                    settings.universal_hooks_path = normalise_kit_path(&p);
                 }
             }
             _ => {}
         }
     }
+}
+
+/// Normalise a kit.files path string into the same shape
+/// `is_kit_file`'s suffix matcher expects: drop a leading `./`
+/// (project-relative shorthand SvelteKit accepts) and a trailing
+/// `/` (directory style). Without this, a user-written
+/// `./src/myparams` would never match an absolute walker path
+/// because the `./` prefix has no analogue in the absolute path.
+fn normalise_kit_path(s: &str) -> String {
+    let trimmed = s.trim_start_matches("./").trim_end_matches('/');
+    trimmed.to_string()
 }
 
 /// Look up a string-keyed property on an ObjectExpression and return

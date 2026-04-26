@@ -243,7 +243,8 @@ mod tests {
         // a different needle (src/hooks.server.) had an earlier match.
         // The hooks chain at byte ~17 must get rewritten alongside
         // the routes chain at byte ~70 — both, not just the latter.
-        let input = "x: import('../../src/hooks.server.js'); y: import('../../src/routes/a/+page.js');";
+        let input =
+            "x: import('../../src/hooks.server.js'); y: import('../../src/routes/a/+page.js');";
         let want = "x: import('../../svelte/src/hooks.server.js'); y: import('../../svelte/src/routes/a/+page.js');";
         assert_eq!(rewrite_user_source_chain(input), want);
     }

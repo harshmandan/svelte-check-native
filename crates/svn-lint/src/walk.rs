@@ -35,57 +35,150 @@ pub fn infer_runes_mode(source: &str, path: &Path) -> bool {
     if name.ends_with(".svelte.js") || name.ends_with(".svelte.ts") {
         return true;
     }
-    let bytes = source.as_bytes();
-    for marker in [
-        "$state",
-        "$derived",
-        "$effect",
-        "$props",
-        "$bindable",
-        "$inspect",
-        "$host",
-    ] {
-        let mbytes = marker.as_bytes();
-        let mut i = 0;
-        while let Some(pos) = find_subslice(bytes, mbytes, i) {
-            // Guard against the `$$props` ambient: require the
-            // character before `$` to not also be `$`.
-            let prev = pos.checked_sub(1).and_then(|p| bytes.get(p)).copied();
-            if prev == Some(b'$') {
-                i = pos + mbytes.len();
-                continue;
-            }
-            // Walk past `.word` chains (`$state.raw`, `$derived.by`).
-            let mut after = pos + mbytes.len();
-            while bytes.get(after) == Some(&b'.') {
-                after += 1;
-                while after < bytes.len()
-                    && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_')
-                {
-                    after += 1;
-                }
-            }
-            // Skip whitespace between name and `(`.
-            while after < bytes.len() && matches!(bytes[after], b' ' | b'\t') {
-                after += 1;
-            }
-            if bytes.get(after) == Some(&b'(') {
-                return true;
-            }
-            i = pos + mbytes.len();
+    // Only the script body content can contain real rune calls — a
+    // commented-out `// $state(0)` example in the SAME script body
+    // would still false-positive a raw byte scan, so we run the scan
+    // inside a state machine that skips comments and string literals
+    // (line, block, single, double, template). HTML content in the
+    // template / comment block can also contain rune-shaped text but
+    // the chance of `$state(` literally appearing there is low; we
+    // still scope the scan to script bodies via parse_sections to
+    // skip the template noise entirely.
+    let (doc, _errors) = parse_sections(source);
+    let mut scripts: Vec<&str> = Vec::new();
+    if let Some(s) = &doc.module_script {
+        scripts.push(s.content);
+    }
+    if let Some(s) = &doc.instance_script {
+        scripts.push(s.content);
+    }
+    for content in scripts {
+        if scan_script_for_rune_call(content) {
+            return true;
         }
     }
     false
 }
 
-fn find_subslice(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
-    if from >= hay.len() || needle.is_empty() {
-        return None;
+/// Scan a JS/TS script body for any call-form rune occurrence
+/// (`$state(`, `$derived(`, etc., or `$state.raw(` etc.). Skips line
+/// comments, block comments, single/double-quoted strings, and
+/// template-literal contents (re-entering when a `${…}` interpolation
+/// opens). Returns true on the first match.
+fn scan_script_for_rune_call(source: &str) -> bool {
+    const MARKERS: &[&[u8]] = &[
+        b"$state",
+        b"$derived",
+        b"$effect",
+        b"$props",
+        b"$bindable",
+        b"$inspect",
+        b"$host",
+    ];
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    // Outer code state. Template-literal nesting depth tracked
+    // separately so a `${…}` interpolation re-enters code-scan with
+    // proper rune visibility.
+    while i < bytes.len() {
+        let b = bytes[i];
+        // Line comment.
+        if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        // Block comment.
+        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+            continue;
+        }
+        // String literals — walk past, honouring `\\` escapes.
+        if b == b'\'' || b == b'"' {
+            let quote = b;
+            i += 1;
+            while i < bytes.len() && bytes[i] != quote {
+                if bytes[i] == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                } else {
+                    i += 1;
+                }
+            }
+            i = (i + 1).min(bytes.len());
+            continue;
+        }
+        // Template literal — skip the literal text but recurse on
+        // each `${…}` interpolation so a rune call inside one still
+        // triggers detection.
+        if b == b'`' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'`' {
+                if bytes[i] == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                    continue;
+                }
+                if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'{') {
+                    // Recursively scan the interpolation's contents.
+                    let interp_start = i + 2;
+                    let mut depth = 1;
+                    let mut j = interp_start;
+                    while j < bytes.len() && depth > 0 {
+                        match bytes[j] {
+                            b'{' => depth += 1,
+                            b'}' => depth -= 1,
+                            _ => {}
+                        }
+                        if depth == 0 {
+                            break;
+                        }
+                        j += 1;
+                    }
+                    let interp_text = &source[interp_start..j];
+                    if scan_script_for_rune_call(interp_text) {
+                        return true;
+                    }
+                    i = (j + 1).min(bytes.len());
+                    continue;
+                }
+                i += 1;
+            }
+            i = (i + 1).min(bytes.len());
+            continue;
+        }
+        // Try matching a rune marker at this code position.
+        for marker in MARKERS {
+            if bytes[i..].starts_with(marker) {
+                // Guard against `$$props` ambient: previous char must
+                // not be `$`.
+                let prev = i.checked_sub(1).and_then(|p| bytes.get(p)).copied();
+                if prev != Some(b'$') {
+                    let mut after = i + marker.len();
+                    // Consume `.word` chains (`$state.raw`, etc.).
+                    while bytes.get(after) == Some(&b'.') {
+                        after += 1;
+                        while after < bytes.len()
+                            && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_')
+                        {
+                            after += 1;
+                        }
+                    }
+                    while after < bytes.len() && matches!(bytes[after], b' ' | b'\t') {
+                        after += 1;
+                    }
+                    if bytes.get(after) == Some(&b'(') {
+                        return true;
+                    }
+                }
+            }
+        }
+        i += 1;
     }
-    hay[from..]
-        .windows(needle.len())
-        .position(|w| w == needle)
-        .map(|p| p + from)
+    false
 }
 
 /// Walk a full `.svelte` source and run every phase-enabled rule.
@@ -418,5 +511,86 @@ fn walk_fragment_impl(
         if pushed {
             ctx.pop_ignore();
         }
+    }
+}
+
+#[cfg(test)]
+mod runes_inference_tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use super::infer_runes_mode;
+    use std::path::PathBuf;
+
+    fn p(name: &str) -> PathBuf {
+        PathBuf::from(name)
+    }
+
+    #[test]
+    fn rune_call_in_instance_script_enables_runes() {
+        let src = "<script>let count = $state(0);</script>";
+        assert!(infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn rune_call_inside_line_comment_does_not_enable_runes() {
+        let src = "<script>\n// example: let x = $state(0);\nlet y = 1;\n</script>";
+        assert!(!infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn rune_call_inside_block_comment_does_not_enable_runes() {
+        let src = "<script>/* let x = $state(1); */ let y = 1;</script>";
+        assert!(!infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn rune_call_inside_string_does_not_enable_runes() {
+        let src = r#"<script>let x = "$state(1)"; let y = '$derived(2)';</script>"#;
+        assert!(!infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn rune_call_inside_template_literal_text_does_not_enable_runes() {
+        let src = "<script>const docs = `use $state(value) here`;</script>";
+        assert!(!infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn rune_call_inside_template_interpolation_enables_runes() {
+        // The interpolation IS code — a rune call there is real.
+        let src = "<script>const x = `${$state(0)}`;</script>";
+        assert!(infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn rune_call_in_template_html_does_not_enable_runes() {
+        // F12: the previous scan ran over the WHOLE Svelte source —
+        // a `$state(` literal in template HTML or comment text could
+        // false-positive. The new scan scopes to script bodies.
+        let src = r#"<!-- example: $state(0) -->
+<div>doc text: $state(0)</div>
+<script>let y = 1;</script>"#;
+        assert!(!infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn dotted_rune_call_enables_runes() {
+        let src = "<script>let x = $state.raw([]);</script>";
+        assert!(infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn ambient_rest_props_does_not_enable_runes() {
+        // `$$props` is the legacy rest-props ambient, not a rune.
+        let src = "<script>const cls = $$props.class;</script>";
+        assert!(!infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn svelte_js_runes_module_enables_runes_unconditionally() {
+        // Filename ending in .svelte.js is a Svelte-5 runes module
+        // by definition; no scan needed.
+        let src = "// no rune calls here";
+        assert!(infer_runes_mode(src, &p("foo.svelte.js")));
     }
 }

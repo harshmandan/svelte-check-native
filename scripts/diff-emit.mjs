@@ -110,35 +110,12 @@ if (forceTs === null) {
     forceTs = /<script[^>]*\blang\s*=\s*["']ts["'][^>]*>/.test(src);
 }
 
-// Find svelte2tsx. Prefer workspace's node_modules, highest version.
+// Find svelte2tsx. Multiple candidates can exist in pnpm/bun stores
+// (different versions per consumer); pick the highest semver so the
+// diff matches what tsgo actually loads at runtime. Each candidate's
+// version comes from the sibling `package.json`; unparseable versions
+// sort to the bottom so a malformed package never beats a real one.
 function findSvelte2tsx(ws) {
-    const candidates = [];
-    function walk(dir, depth = 0) {
-        if (depth > 6) return;
-        try {
-            const ents = readFileSync(join(dir, '.'), 'utf8');
-            void ents;
-        } catch {}
-        try {
-            const { readdirSync, statSync } = require('node:fs');
-            for (const ent of readdirSync(dir)) {
-                const p = join(dir, ent);
-                const st = statSync(p, { throwIfNoEntry: false });
-                if (!st) continue;
-                if (st.isDirectory()) {
-                    if (
-                        ent === 'svelte2tsx' &&
-                        existsSync(join(p, 'index.mjs'))
-                    ) {
-                        candidates.push(join(p, 'index.mjs'));
-                    } else if (depth < 6) {
-                        walk(p, depth + 1);
-                    }
-                }
-            }
-        } catch {}
-    }
-    // Faster approach: spawn find
     const out = spawnSync(
         'find',
         [
@@ -153,8 +130,44 @@ function findSvelte2tsx(ws) {
         ],
         { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
     );
-    const lines = out.stdout.split('\n').filter(Boolean);
-    return lines[0] || null;
+    const candidates = (out.stdout || '').split('\n').filter(Boolean);
+    if (candidates.length === 0) return null;
+
+    // Read each candidate's package.json version. Sort descending.
+    const withVersion = candidates.map((p) => {
+        // package.json is a sibling of index.mjs in svelte2tsx's
+        // package layout: <root>/index.mjs, <root>/package.json.
+        const pkgJson = join(dirname(p), 'package.json');
+        let version = null;
+        try {
+            const raw = JSON.parse(readFileSync(pkgJson, 'utf8'));
+            if (typeof raw.version === 'string') version = raw.version;
+        } catch {
+            /* unparseable / missing → sort last */
+        }
+        return { path: p, version };
+    });
+    withVersion.sort((a, b) => compareVersions(b.version, a.version));
+    return withVersion[0].path;
+}
+
+/// Compare two semver strings. Treats `null` / unparseable as
+/// `0.0.0` so they sort last. Splits on `-` to keep prerelease
+/// suffixes from breaking the numeric compare on the major/minor/
+/// patch tuple.
+function compareVersions(a, b) {
+    const parse = (v) => {
+        if (typeof v !== 'string') return [0, 0, 0];
+        const core = v.split('-')[0];
+        const parts = core.split('.').map((s) => parseInt(s, 10));
+        return [parts[0] || 0, parts[1] || 0, parts[2] || 0];
+    };
+    const av = parse(a);
+    const bv = parse(b);
+    for (let i = 0; i < 3; i++) {
+        if (av[i] !== bv[i]) return av[i] - bv[i];
+    }
+    return 0;
 }
 
 let s2tsxPath = findSvelte2tsx(workspace);
@@ -242,17 +255,59 @@ async function ensureOurOverlay() {
 }
 
 function runTsgo(cfgPath) {
-    const out = spawnSync(
-        'find',
-        [workspace, '-name', 'tsgo', '-path', '*native-preview-darwin-arm64*', '-type', 'f'],
-        { encoding: 'utf8' },
-    );
-    const tsgo = (out.stdout || '').split('\n').filter(Boolean)[0];
+    // Map this host's (platform, arch) to the @typescript/native-preview
+    // platform-package suffix. Mirrors what
+    // svn_typecheck::discovery::current_platform_native_path() picks
+    // at runtime; the fallback paths below also try the JS wrapper
+    // in the order tsgo's npm install resolves.
+    const suffixes = (() => {
+        const p = process.platform;
+        const a = process.arch;
+        if (p === 'darwin' && a === 'arm64') return ['native-preview-darwin-arm64'];
+        if (p === 'darwin' && a === 'x64') return ['native-preview-darwin-x64'];
+        if (p === 'linux' && a === 'arm64') return ['native-preview-linux-arm64'];
+        if (p === 'linux' && a === 'x64') return ['native-preview-linux-x64'];
+        if (p === 'win32' && a === 'x64') return ['native-preview-win32-x64'];
+        return []; // unsupported → fall through to wrapper
+    })();
+    let tsgo = null;
+    let needsNode = false;
+    for (const suffix of suffixes) {
+        const out = spawnSync(
+            'find',
+            [workspace, '-name', 'tsgo', '-path', `*${suffix}*`, '-type', 'f'],
+            { encoding: 'utf8' },
+        );
+        const hit = (out.stdout || '').split('\n').filter(Boolean)[0];
+        if (hit) {
+            tsgo = hit;
+            break;
+        }
+    }
     if (!tsgo) {
-        console.error('tsgo not found in workspace.');
+        // JS-wrapper fallback (`tsgo.js`); requires node to invoke.
+        const out = spawnSync(
+            'find',
+            [workspace, '-path', '*native-preview/bin/tsgo.js', '-type', 'f'],
+            { encoding: 'utf8' },
+        );
+        const hit = (out.stdout || '').split('\n').filter(Boolean)[0];
+        if (hit) {
+            tsgo = hit;
+            needsNode = true;
+        }
+    }
+    if (!tsgo) {
+        console.error(
+            `tsgo not found in ${workspace} for platform ${process.platform}-${process.arch}.`,
+        );
         return '';
     }
-    const r = spawnSync(tsgo, ['--pretty', 'false', '-p', cfgPath], {
+    const args = needsNode
+        ? [tsgo, '--pretty', 'false', '-p', cfgPath]
+        : ['--pretty', 'false', '-p', cfgPath];
+    const cmd = needsNode ? 'node' : tsgo;
+    const r = spawnSync(cmd, args, {
         encoding: 'utf8',
         maxBuffer: 64 * 1024 * 1024,
     });

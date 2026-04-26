@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 4,
+            "column": 24,
+            "code": 2322
+        },
+        {
+            "file": "input.svelte",
+            "line": 5,
+            "column": 13,
+            "code": 2552
+        }
+    ],
+    "_note": "Round 2 #4: animate: / transition: / in: / out: directives now type-check the directive function call. Pre-2026-04-26 these directives were dispatcher no-ops in element.rs::emit_dom_directive_checks; bad params (TS2322) and undefined names (TS2304/2552) silently passed. Mirrors upstream svelte2tsx's Animation.ts and Transition.ts which emit __sveltets_2_ensureAnimation(...) / __sveltets_2_ensureTransition(...). Our emit skips the ensure_* wrappers (future refinement) and emits the bare call; tsgo type-checks the directive's signature against the call shape. Positions are LSP-style 0-based."
+}

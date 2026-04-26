@@ -2,8 +2,33 @@
     "_doc": "Same baseline format as v5_fixtures/baselines.json — exact-shape `expected_errors` list per entry. These are hand-converted Svelte-5 ports of upstream svelte2tsx store fixtures that test verbatim-emit behavior: preserving user code character-for-character even when the user's code references undefined names, unresolved modules, or other things TS would flag. Regenerate with `CAPTURE_BASELINES=1` on the runner when an emit change deliberately shifts the error shape; always `git diff` before committing.",
     "verbatim_emit_fixtures": {
         "$store-as-directive": {
-            "reason": "Tests store-name-as-directive emit shape; user code has TS oddities (unused comma operator side) that svelte2tsx preserves verbatim.",
-            "expected_errors": []
+            "reason": "Tests store-name-as-directive emit shape; user code has TS oddities (unused comma operator side) that svelte2tsx preserves verbatim. Round 2 #4 (2026-04-26) added type-checking for transition: / animate: / in: / out: directive calls — the user's stores in this fixture are declared `null`, so each directive call now correctly fires TS2721 'Cannot invoke an object which is possibly null'. These are real type errors tsgo identifies; we accept them as the new baseline.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 9,
+                    "column": 15,
+                    "code": 2721
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 11,
+                    "column": 7,
+                    "code": 2721
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 12,
+                    "column": 8,
+                    "code": 2721
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 13,
+                    "column": 12,
+                    "code": 2721
+                }
+            ]
         },
         "$store-assign": {
             "reason": "User code references `writable` without importing it. Verbatim emit preserves the unresolved name.",

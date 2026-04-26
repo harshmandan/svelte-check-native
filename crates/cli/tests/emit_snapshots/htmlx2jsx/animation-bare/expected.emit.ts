@@ -3,7 +3,8 @@
 async function $$render_ac9e756f() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        { svelteHTML.createElement("h1", {});         }
+        { svelteHTML.createElement("h1", {});             (blink(__svn_map_element_tag('h1'), __svn_AnimationMove));
+        }
     }
     void __svn_tpl_check;
     return { props: /** @type {any} */({}) };

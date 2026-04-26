@@ -747,6 +747,19 @@ declare function __svn_map_element_tag<K extends keyof SVGElementTagNameMap>(
 declare function __svn_map_element_tag(tag: string): HTMLElement;
 
 /**
+ * Phantom value used as the second argument to animate-directive call
+ * emissions. Svelte's `Animation` typing declares
+ *
+ *     (node: Element, animation: { from: DOMRect; to: DOMRect }, params?: P) => AnimationConfig
+ *
+ * — the middle slot has a fixed structural shape we don't synthesize
+ * at the call site. Mirrors upstream svelte2tsx's
+ * `__sveltets_2_AnimationMove`. See the `animate:` directive emit
+ * (`crates/emit/src/nodes/animation.rs`).
+ */
+declare const __svn_AnimationMove: { from: DOMRect; to: DOMRect };
+
+/**
  * Validate that a style-directive value expression type-checks
  * against the set of legal CSS-value runtime types. Emitted for
  * each `style:prop={value}` as

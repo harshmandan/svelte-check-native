@@ -3,19 +3,32 @@
 async function $$render_8cb9b013() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
+        { svelteHTML.createElement("h1", {});             (blur(__svn_map_element_tag('h1')));
+        }
+        { svelteHTML.createElement("h1", {});             (fade(__svn_map_element_tag('h1')));
+        }
+        { svelteHTML.createElement("h1", {});             (fly(__svn_map_element_tag('h1')));
+        }
+        { svelteHTML.createElement("h1", {});             (slide(__svn_map_element_tag('h1')));
+        }
+        { svelteHTML.createElement("h1", {});             (scale(__svn_map_element_tag('h1')));
+        }
+        { svelteHTML.createElement("h1", {});             (draw(__svn_map_element_tag('h1')));
+        }
+        { svelteHTML.createElement("h1", {});             (blur(__svn_map_element_tag('h1')));
+        }
+        { svelteHTML.createElement("h1", {});             (blur(__svn_map_element_tag('h1')));
+        }
+        { svelteHTML.createElement("h1", {});             (flip(__svn_map_element_tag('h1'), __svn_AnimationMove));
+        }
+        { svelteHTML.createElement("h1", {});             (foo(__svn_map_element_tag('h1')));
+        }
+        { svelteHTML.createElement("h1", {});             (foo(__svn_map_element_tag('h1')));
+        }
+        { svelteHTML.createElement("h1", {});             (foo(__svn_map_element_tag('h1')));
+        }
+        { svelteHTML.createElement("h1", {});             (foo(__svn_map_element_tag('h1'), __svn_AnimationMove));
+        }
     }
     void __svn_tpl_check;
     return { props: /** @type {any} */({}) };

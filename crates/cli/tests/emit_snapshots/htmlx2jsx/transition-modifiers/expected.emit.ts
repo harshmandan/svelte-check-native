@@ -3,7 +3,8 @@
 async function $$render_557cd70e() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        { svelteHTML.createElement("div", {});             (item);
+        { svelteHTML.createElement("div", {});             (slide(__svn_map_element_tag('div')));
+            (item);
         }
     }
     void __svn_tpl_check;

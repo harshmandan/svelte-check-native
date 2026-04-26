@@ -1396,7 +1396,7 @@ pub(crate) fn emit_template_node(
                     depth,
                     &action_indices,
                 );
-                emit_dom_directive_checks(buf, source, &e.attributes, inner_depth);
+                emit_dom_directive_checks(buf, source, e.name.as_str(), &e.attributes, inner_depth);
             }
             emit_element_bind_checks_inline(
                 buf,
@@ -1449,7 +1449,7 @@ pub(crate) fn emit_template_node(
             };
             if dom_emit {
                 emit_svelte_element_open(buf, source, s, depth, &action_indices);
-                emit_dom_directive_checks(buf, source, &s.attributes, inner_depth);
+                emit_dom_directive_checks(buf, source, "", &s.attributes, inner_depth);
             }
             emit_element_bind_checks_inline(buf, source, "", &s.attributes, inner_depth);
             if dom_emit {

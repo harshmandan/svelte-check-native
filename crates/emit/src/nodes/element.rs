@@ -16,14 +16,20 @@
 //! - [`crate::nodes::class`] — `class:foo={…}` directive checks.
 //! - [`crate::nodes::style_directive`] — `style:foo={…}` directive
 //!   checks.
+//! - [`crate::nodes::animation`] — `animate:NAME(…)` directive call
+//!   typing.
+//! - [`crate::nodes::transition`] — `transition:` / `in:` / `out:`
+//!   directive call typing.
 
 use std::fmt::Write;
 
 use crate::emit_buffer::EmitBuffer;
+use crate::nodes::animation::emit_animation_directive;
 use crate::nodes::attribute::{emit_expression, emit_plain, emit_shorthand, should_skip};
 use crate::nodes::class::emit_class_directive;
 use crate::nodes::spread::emit_spread;
 use crate::nodes::style_directive::emit_style_directive;
+use crate::nodes::transition::emit_transition_directive;
 
 /// Emit the upstream-shape `svelteHTML.createElement("tag", { …attrs });`
 /// call for a DOM element. Opens a scoped `{ }` block so element-local
@@ -136,13 +142,21 @@ pub(crate) fn emit_dom_element_open(
     }
 }
 
-/// Post-createElement directive checks for `class:` and `style:`
-/// attributes. Emit each directive's value as a bare statement inside
-/// the element's scoped block. Per-directive-kind emit lives in
-/// [`crate::nodes::class`] and [`crate::nodes::style_directive`].
+/// Post-createElement directive checks for `class:`, `style:`,
+/// `animate:`, `transition:` / `in:` / `out:` attributes. Emit each
+/// directive's check as a bare statement inside the element's scoped
+/// block. Per-directive-kind emit lives in [`crate::nodes::class`],
+/// [`crate::nodes::style_directive`], [`crate::nodes::animation`],
+/// and [`crate::nodes::transition`].
+///
+/// `tag_name` threads through to animation/transition handlers — they
+/// emit `__svn_map_element_tag('TAG')` so the directive function gets
+/// a typed `HTMLElementTagNameMap[TAG]` first argument (ties the
+/// directive's element-type generic to the host tag).
 pub(crate) fn emit_dom_directive_checks(
     buf: &mut EmitBuffer,
     source: &str,
+    tag_name: &str,
     attributes: &[svn_parser::Attribute],
     depth: usize,
 ) {
@@ -154,6 +168,14 @@ pub(crate) fn emit_dom_directive_checks(
         match d.kind {
             svn_parser::DirectiveKind::Class => emit_class_directive(buf, source, d, &indent),
             svn_parser::DirectiveKind::Style => emit_style_directive(buf, source, d, &indent),
+            svn_parser::DirectiveKind::Animate => {
+                emit_animation_directive(buf, source, d, &indent, tag_name)
+            }
+            svn_parser::DirectiveKind::Transition
+            | svn_parser::DirectiveKind::In
+            | svn_parser::DirectiveKind::Out => {
+                emit_transition_directive(buf, source, d, &indent, tag_name)
+            }
             _ => {}
         }
     }

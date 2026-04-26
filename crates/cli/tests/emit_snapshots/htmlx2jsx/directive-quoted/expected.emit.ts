@@ -13,10 +13,12 @@ async function $$render_a390b0ad() {
             const __svn_action_0 = __svn_ensure_action(action(__svn_map_element_tag('img')));
         { svelteHTML.createElement("img", __svn_union(__svn_action_0), {});             void __svn_action_0;
         }
-        { svelteHTML.createElement("img", {});         }
+        { svelteHTML.createElement("img", {});             (fade(__svn_map_element_tag('img')));
+        }
         { svelteHTML.createElement("img", {});             (thing);
         }
-        { svelteHTML.createElement("img", {});         }
+        { svelteHTML.createElement("img", {});             (thing(__svn_map_element_tag('img'), __svn_AnimationMove));
+        }
         { svelteHTML.createElement("img", {});         }
     }
     void __svn_tpl_check;

@@ -3,9 +3,12 @@
 async function $$render_a5cf5790() {
     async function __svn_tpl_check() {
         // template type-check body (incremental)
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
-        { svelteHTML.createElement("h1", {});         }
+        { svelteHTML.createElement("h1", {});             (blink(__svn_map_element_tag('h1'), __svn_AnimationMove, ({y: 50, duration: 500})));
+        }
+        { svelteHTML.createElement("h1", {});             (blink(__svn_map_element_tag('h1'), __svn_AnimationMove));
+        }
+        { svelteHTML.createElement("h1", {});             (blink(__svn_map_element_tag('h1'), __svn_AnimationMove));
+        }
     }
     void __svn_tpl_check;
     return { props: /** @type {any} */({}) };

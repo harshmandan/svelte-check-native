@@ -34,7 +34,7 @@ Measured on a SvelteKit + TypeScript monorepo with
 ```
   tool                  cold     warm     dirty   speedup   errors/warnings/problems
 ──────────────────────────────────────────────────────────────────────────────────────
-svelte-check-native      2.4s     1.0s     0.9s      41x           0/49/17
+svelte-check-native      1.8s     1.0s     0.9s      41x           0/49/17
 svelte-check            40.0s    41.0s    41.6s     1.0x           0/49/17
 svelte-check --tsgo     18.3s    18.6s    17.9s     2.9x           1/49/18
 svelte-check-rs         12.2s     5.5      4.4s     7.5x         732/44/261

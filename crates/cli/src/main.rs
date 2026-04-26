@@ -39,7 +39,9 @@ use output::print_diagnostics;
 )]
 struct Cli {
     /// Workspace root to scan. Defaults to current working directory.
-    #[arg(long)]
+    /// Accepts `--projectRoot` and `--workspace-root` as upstream-compat
+    /// aliases.
+    #[arg(long, visible_aliases = ["projectRoot", "workspace-root"])]
     workspace: Option<PathBuf>,
 
     /// Path to tsconfig.json (or jsconfig.json). When omitted, walks up from
@@ -63,6 +65,22 @@ struct Cli {
     /// Exit non-zero on warnings.
     #[arg(long = "fail-on-warnings", default_value_t = false)]
     fail_on_warnings: bool,
+
+    /// Exit non-zero on errors. Accepted for upstream-compat — errors
+    /// always cause a non-zero exit regardless of this flag, so it's
+    /// effectively a no-op in our binary. Still recognised so CI
+    /// scripts ported from upstream don't reject the flag.
+    #[arg(long = "fail-on-errors", default_value_t = false)]
+    fail_on_errors: bool,
+
+    /// Exit non-zero on hint-severity diagnostics. Accepted for
+    /// upstream-compat. We don't currently emit hint-severity
+    /// diagnostics — Svelte 5's compiler doesn't either; the
+    /// severity exists in upstream's surface for future use. The
+    /// flag is recognised so CI scripts ported from upstream don't
+    /// reject it; it has no behavioural effect today.
+    #[arg(long = "fail-on-hints", default_value_t = false)]
+    fail_on_hints: bool,
 
     /// Compiler-warning severity overrides (`code:severity,code:severity`).
     #[arg(long = "compiler-warnings")]
@@ -496,15 +514,15 @@ fn parse_diagnostic_sources(spec: Option<&str>) -> Result<DiagnosticSources, Str
             "js" | "ts" | "javascript" | "typescript" => sources.js = true,
             "svelte" => sources.svelte = true,
             "css" | "scss" | "sass" | "less" | "postcss" => {
-                // Hard error rather than silent no-op: if the user
-                // explicitly asks for css linting, telling them we'll
-                // do something and then doing nothing is worse than
-                // making them notice the gap.
-                return Err(format!(
-                    "--diagnostic-sources {entry:?} requested but CSS linting is not yet \
-                     implemented. Drop {entry:?} from the list (or omit --diagnostic-sources \
-                     entirely to use the supported defaults: js, svelte)."
-                ));
+                // Accept silently — CSS linting isn't yet implemented,
+                // but rejecting outright blocks monorepo CI scripts
+                // that pass `--diagnostic-sources ts,svelte,css`
+                // template-fashion (a real-world pattern when porting
+                // configs from upstream svelte-check). Match upstream's
+                // user-visible behaviour: the flag is accepted; in our
+                // case it's a no-op until the css source path lands.
+                // Track in notes/ARCH_PARITY.md (Round 2 #1).
+                sources.css = true;
             }
             "" => {}
             other => {
@@ -1321,6 +1339,42 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
 mod tests {
     use super::*;
     use svn_typecheck::Severity;
+
+    // ---- parse_diagnostic_sources ----
+
+    #[test]
+    fn diagnostic_sources_default_no_css() {
+        let s = parse_diagnostic_sources(None).unwrap();
+        assert!(s.js && s.svelte && !s.css);
+    }
+
+    #[test]
+    fn diagnostic_sources_explicit_ts_svelte() {
+        let s = parse_diagnostic_sources(Some("ts,svelte")).unwrap();
+        assert!(s.js && s.svelte && !s.css);
+    }
+
+    #[test]
+    fn diagnostic_sources_css_accepted_no_op() {
+        // Round 2 #1: css/scss/sass/less/postcss accept silently
+        // (was a hard error pre-2026-04-26). Many monorepo CI scripts
+        // pass `ts,svelte,css` template-fashion; rejecting outright
+        // blocked migrations from upstream svelte-check.
+        let s = parse_diagnostic_sources(Some("ts,svelte,css")).unwrap();
+        assert!(s.js && s.svelte && s.css);
+        // scss / sass / less / postcss aliases all route to css.
+        for alias in ["scss", "sass", "less", "postcss"] {
+            let s = parse_diagnostic_sources(Some(alias)).unwrap();
+            assert!(s.css, "{alias} should set css=true");
+        }
+    }
+
+    #[test]
+    fn diagnostic_sources_unknown_entry_warns_not_errors() {
+        // Unknown entries print to stderr and continue (no Err return).
+        let s = parse_diagnostic_sources(Some("ts,frobnicate,svelte")).unwrap();
+        assert!(s.js && s.svelte);
+    }
 
     #[test]
     fn compiler_docs_url_routes_warning_to_compiler_warnings_anchor() {

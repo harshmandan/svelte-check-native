@@ -403,21 +403,10 @@ pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
 /// body. Returns None for destructured patterns (body starts with `{`)
 /// or malformed input — both match upstream's behaviour of emitting
 /// nothing for those cases.
-///
-/// Multiple `{@const}` declarations with the same name across the
-/// template are deduped via the caller's `seen` set so emit doesn't
-/// generate `let X: any;` twice (TS2451 redeclaration).
-fn record_at_const_name(
-    interp: &svn_parser::Interpolation,
-    source: &str,
-    seen: &mut std::collections::HashSet<SmolStr>,
-    out: &mut Vec<SmolStr>,
-) {
+fn extract_at_const_name(interp: &svn_parser::Interpolation, source: &str) -> Option<SmolStr> {
     let start = interp.expression_range.start as usize;
     let end = interp.expression_range.end as usize;
-    let Some(body) = source.get(start..end) else {
-        return;
-    };
+    let body = source.get(start..end)?;
     let bytes = body.as_bytes();
     let mut p = 0usize;
     while p < bytes.len()
@@ -426,11 +415,26 @@ fn record_at_const_name(
         p += 1;
     }
     if p == 0 {
-        return; // destructure or malformed
+        return None; // destructure or malformed
     }
-    let name = SmolStr::from(&body[..p]);
+    Some(SmolStr::from(&body[..p]))
+}
+
+/// Append a `{@const}` name to the dedup-tracked summary list.
+///
+/// Multiple `{@const}` declarations with the same name across the
+/// template are deduped via `seen` so emit doesn't generate
+/// `let NAME: any;` twice (TS2451 redeclaration). The shadow-stack
+/// push at the call site is independent of dedup — it must run on
+/// every encounter so the name is in scope for any subsequent
+/// slot-attr / let-directive site.
+fn record_at_const_name(
+    name: &SmolStr,
+    seen: &mut std::collections::HashSet<SmolStr>,
+    out: &mut Vec<SmolStr>,
+) {
     if seen.insert(name.clone()) {
-        out.push(name);
+        out.push(name.clone());
     }
 }
 
@@ -486,9 +490,18 @@ fn walk_fragment(
     ctx: &WalkCtx<'_>,
     shadow: &mut ShadowStack,
 ) {
+    // Bracket the fragment's own shadow scope. Sibling-arm constructs
+    // (`{:else}` / `{:catch}` of an `{#if}` or `{#await}`) walk
+    // separate fragments — without this bracket, a `{@const NAME = ...}`
+    // declared in one arm would leak into the next. Per-arm walk_node
+    // arms already bracket their CHILDREN, but `{@const}` pushes
+    // happen at fragment-LEVEL (it's a tag, not a block), so the
+    // fragment-level mark is the right anchor.
+    let mark = shadow.names.len();
     for node in &fragment.nodes {
         walk_node(node, summary, counters, ctx, shadow);
     }
+    shadow.truncate(mark);
 }
 
 fn walk_node(
@@ -612,12 +625,23 @@ fn walk_node(
             shadow.truncate(mark);
         }
         Node::Interpolation(i) if i.kind == svn_parser::InterpolationKind::AtConst => {
-            record_at_const_name(
-                i,
-                ctx.source,
-                &mut counters.at_const_seen,
-                &mut summary.at_const_names,
-            );
+            // Push the binding name onto the shadow so any subsequent
+            // slot-attr / let-directive sites in the same fragment
+            // treat the name as scope-local. The push has no per-tag
+            // pop — `{@const}` scope runs to the end of the enclosing
+            // fragment, which is what `walk_fragment`'s entry/exit
+            // bracket anchors against. Push happens even when the
+            // name is already in `at_const_seen` (a duplicate
+            // declaration's scope still applies), independent of the
+            // dedup that drives the emit's `let NAME: any;` list.
+            if let Some(name) = extract_at_const_name(i, ctx.source) {
+                record_at_const_name(
+                    &name,
+                    &mut counters.at_const_seen,
+                    &mut summary.at_const_names,
+                );
+                shadow.names.push(name);
+            }
         }
         // Leaf nodes — no children to descend into, no attributes.
         Node::Text(_) | Node::Interpolation(_) | Node::Comment(_) => {}

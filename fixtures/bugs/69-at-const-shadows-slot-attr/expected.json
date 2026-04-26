@@ -1,0 +1,4 @@
+{
+    "emit_not_contains": ["expanded: (expanded)"],
+    "_note": "{@const NAME = expr} introduces NAME into the enclosing fragment's scope. The shadow stack must include NAME so a subsequent <slot {NAME}> attr capture skips it. Without the shadow push, the slot literal at the render-fn return carries `expanded: (expanded)` referring to a name that only exists inside the inner __svn_tpl_check for-loop body — TS2304 at the return."
+}

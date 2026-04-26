@@ -935,108 +935,118 @@ fn run_typecheck(
     }
 
     let mark = std::time::Instant::now();
-    // Per-file parse → analyze → emit is pure compute with no shared
-    // mutable state (each iteration owns its own oxc Allocator inside
-    // the called functions). rayon distributes across the thread pool
-    // and `collect_into_vec` preserves source order so the resulting
-    // `inputs` matches `svelte_sources` index-for-index.
-    let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::with_capacity(svelte_sources.len());
-    svelte_sources
-        .par_iter()
-        .enumerate()
-        .map(|(idx, (file, source))| {
-            let (doc, _parse_errors) = svn_parser::parse_sections(source);
-            let (fragment, _template_errors) =
-                svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
-            let summary = svn_analyze::walk_template(&fragment, source);
-            // Overlay extension mirrors upstream svelte-check's
-            // `isTsSvelte(text)` per-file dispatch
-            // (`language-tools/packages/svelte-check/src/incremental.ts:213`):
-            // `<script lang="ts">` → `.svelte.svn.ts` with TS-strict
-            // inference; otherwise `.svelte.svn.js`, which flips tsgo
-            // into JS-loose inference (`$state([])` → `any[]`;
-            // `noImplicitAny:false` defaults) and lets tsgo natively
-            // parse user-authored JSDoc `@typedef` / `@type`
-            // annotations on Svelte-4 `export let` props.
-            let is_ts = doc.script_lang() == svn_parser::ScriptLang::Ts;
-            let emitted = svn_emit::emit_document_with_lang(&doc, &fragment, &summary, file, is_ts);
-            let kind = if idx < svelte_sources_in_scope_end {
-                svn_typecheck::InputKind::Svelte
-            } else {
-                svn_typecheck::InputKind::SvelteAuxiliary
-            };
-            svn_typecheck::CheckInput {
-                source_path: file.clone(),
-                generated_ts: emitted.typescript,
-                line_map: emitted.line_map,
-                token_map: emitted.token_map,
-                overlay_line_starts: emitted.overlay_line_starts,
-                source_line_starts: emitted.source_line_starts,
-                kind,
-                is_ts_overlay: is_ts,
-            }
-        })
-        .collect_into_vec(&mut inputs);
+    // The whole parse → analyze → emit + kit-inject + collision-
+    // rewrite pipeline only feeds tsgo. When --diagnostic-sources
+    // excludes `js`, tsgo is skipped entirely, so this work would
+    // be discarded — gate it on `sources.js` to skip it up front.
+    // The svelte/compiler bridge below still runs (it consumes
+    // `svelte_sources`, not `inputs`).
+    let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::new();
+    if sources.js {
+        // Per-file parse → analyze → emit is pure compute with no shared
+        // mutable state (each iteration owns its own oxc Allocator inside
+        // the called functions). rayon distributes across the thread pool
+        // and `collect_into_vec` preserves source order so the resulting
+        // `inputs` matches `svelte_sources` index-for-index.
+        inputs.reserve(svelte_sources.len());
+        svelte_sources
+            .par_iter()
+            .enumerate()
+            .map(|(idx, (file, source))| {
+                let (doc, _parse_errors) = svn_parser::parse_sections(source);
+                let (fragment, _template_errors) =
+                    svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+                let summary = svn_analyze::walk_template(&fragment, source);
+                // Overlay extension mirrors upstream svelte-check's
+                // `isTsSvelte(text)` per-file dispatch
+                // (`language-tools/packages/svelte-check/src/incremental.ts:213`):
+                // `<script lang="ts">` → `.svelte.svn.ts` with TS-strict
+                // inference; otherwise `.svelte.svn.js`, which flips tsgo
+                // into JS-loose inference (`$state([])` → `any[]`;
+                // `noImplicitAny:false` defaults) and lets tsgo natively
+                // parse user-authored JSDoc `@typedef` / `@type`
+                // annotations on Svelte-4 `export let` props.
+                let is_ts = doc.script_lang() == svn_parser::ScriptLang::Ts;
+                let emitted =
+                    svn_emit::emit_document_with_lang(&doc, &fragment, &summary, file, is_ts);
+                let kind = if idx < svelte_sources_in_scope_end {
+                    svn_typecheck::InputKind::Svelte
+                } else {
+                    svn_typecheck::InputKind::SvelteAuxiliary
+                };
+                svn_typecheck::CheckInput {
+                    source_path: file.clone(),
+                    generated_ts: emitted.typescript,
+                    line_map: emitted.line_map,
+                    token_map: emitted.token_map,
+                    overlay_line_starts: emitted.overlay_line_starts,
+                    source_line_starts: emitted.source_line_starts,
+                    kind,
+                    is_ts_overlay: is_ts,
+                }
+            })
+            .collect_into_vec(&mut inputs);
 
-    // Kit files (`+server.ts`, `+page.ts`, hooks, params): run them
-    // through the inject pass to splice in `$types` imports so the
-    // user's handler destructures (`{url}` / `{request}` / …)
-    // type-check against `RequestEvent` / `LoadEvent` / etc. If
-    // `inject` returns `None` (no handlers matched), skip — the
-    // file type-checks as the user wrote it and the original path
-    // stays in tsgo's program via the normal `include` glob.
-    inputs.extend(kit_files.iter().filter_map(|file| {
-        let source = std::fs::read_to_string(file).ok()?;
-        let generated = svn_emit::kit_inject::inject(file, &source)?;
-        Some(svn_typecheck::CheckInput {
-            source_path: file.clone(),
-            generated_ts: generated,
-            line_map: Vec::new(),
-            token_map: Vec::new(),
-            overlay_line_starts: Vec::new(),
-            source_line_starts: Vec::new(),
-            kind: svn_typecheck::InputKind::KitFile,
-            is_ts_overlay: true,
-        })
-    }));
-
-    // User-`.ts`-overlay for the sibling-collision case: when a user
-    // `.ts` file imports `./Foo.svelte` where `Foo.svelte.ts` exists
-    // as sibling, tsgo's `rootDirs` resolution picks the user's source
-    // tree (longest matching prefix), then auto-extends `.svelte` to
-    // `.svelte.ts` and lands on the runes module — which has named
-    // exports but no `default`, firing TS2305. Rewriting the import
-    // specifier to `.svelte.svn.js` in an overlay sidesteps the
-    // auto-extension entirely; tsgo resolves via bundler module
-    // resolution straight to the cache-side `.svelte.svn.ts`.
-    //
-    // Scope: both plain user `.ts` files AND `.svelte.ts` runes
-    // modules themselves — a `Foo.svelte.ts` module can import a
-    // sibling-collision `./Bar.svelte` (where `Bar.svelte.ts` also
-    // exists), and that specifier has the same resolution bug. No
-    // current bench exercises the `.svelte.ts` → collision-sibling
-    // path, but handling it here completes the pattern.
-    //
-    // Only files that actually contain a collision-case import get an
-    // overlay; others pass through tsgo's regular include. Fast-path
-    // skip when no runes modules were discovered.
-    if !runes_modules_set.is_empty() {
-        let rewrite_candidates = user_script_files.iter().chain(runes_modules_set.iter());
-        inputs.extend(rewrite_candidates.filter_map(|file| {
+        // Kit files (`+server.ts`, `+page.ts`, hooks, params): run them
+        // through the inject pass to splice in `$types` imports so the
+        // user's handler destructures (`{url}` / `{request}` / …)
+        // type-check against `RequestEvent` / `LoadEvent` / etc. If
+        // `inject` returns `None` (no handlers matched), skip — the
+        // file type-checks as the user wrote it and the original path
+        // stays in tsgo's program via the normal `include` glob.
+        inputs.extend(kit_files.iter().filter_map(|file| {
             let source = std::fs::read_to_string(file).ok()?;
-            let rewritten =
-                rewrite_svelte_imports_for_collisions(file, &source, &runes_modules_set)?;
+            let generated = svn_emit::kit_inject::inject(file, &source)?;
             Some(svn_typecheck::CheckInput {
                 source_path: file.clone(),
-                generated_ts: rewritten,
+                generated_ts: generated,
                 line_map: Vec::new(),
                 token_map: Vec::new(),
                 overlay_line_starts: Vec::new(),
                 source_line_starts: Vec::new(),
-                kind: svn_typecheck::InputKind::UserTsOverlay,
+                kind: svn_typecheck::InputKind::KitFile,
                 is_ts_overlay: true,
             })
         }));
+
+        // User-`.ts`-overlay for the sibling-collision case: when a user
+        // `.ts` file imports `./Foo.svelte` where `Foo.svelte.ts` exists
+        // as sibling, tsgo's `rootDirs` resolution picks the user's source
+        // tree (longest matching prefix), then auto-extends `.svelte` to
+        // `.svelte.ts` and lands on the runes module — which has named
+        // exports but no `default`, firing TS2305. Rewriting the import
+        // specifier to `.svelte.svn.js` in an overlay sidesteps the
+        // auto-extension entirely; tsgo resolves via bundler module
+        // resolution straight to the cache-side `.svelte.svn.ts`.
+        //
+        // Scope: both plain user `.ts` files AND `.svelte.ts` runes
+        // modules themselves — a `Foo.svelte.ts` module can import a
+        // sibling-collision `./Bar.svelte` (where `Bar.svelte.ts` also
+        // exists), and that specifier has the same resolution bug. No
+        // current bench exercises the `.svelte.ts` → collision-sibling
+        // path, but handling it here completes the pattern.
+        //
+        // Only files that actually contain a collision-case import get an
+        // overlay; others pass through tsgo's regular include. Fast-path
+        // skip when no runes modules were discovered.
+        if !runes_modules_set.is_empty() {
+            let rewrite_candidates = user_script_files.iter().chain(runes_modules_set.iter());
+            inputs.extend(rewrite_candidates.filter_map(|file| {
+                let source = std::fs::read_to_string(file).ok()?;
+                let rewritten =
+                    rewrite_svelte_imports_for_collisions(file, &source, &runes_modules_set)?;
+                Some(svn_typecheck::CheckInput {
+                    source_path: file.clone(),
+                    generated_ts: rewritten,
+                    line_map: Vec::new(),
+                    token_map: Vec::new(),
+                    overlay_line_starts: Vec::new(),
+                    source_line_starts: Vec::new(),
+                    kind: svn_typecheck::InputKind::UserTsOverlay,
+                    is_ts_overlay: true,
+                })
+            }));
+        }
     }
     let t_emit = mark.elapsed();
 

@@ -146,44 +146,50 @@ pub fn find_svelte_config(workspace: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Read `svelte.config.js` and extract `kit.files` overrides into a
-/// [`KitFilesSettings`]. Returns defaults when the config is absent,
-/// unparseable, or doesn't mention `kit.files`. Each path field
-/// (params / hooks.{server,client,universal}) is resolved
-/// independently — a partial override falls back to defaults for the
-/// fields it doesn't set.
+/// Bundle of every static-analysis result we extract from a
+/// `svelte.config.{js,mjs,cjs,ts}`. Single parse → one AST → both
+/// the warning-filter plan and the kit.files overrides run against
+/// the same parsed program, sharing the bumpalo allocator and the
+/// SourceType detection.
+#[derive(Debug, Default, Clone)]
+pub struct SvelteConfigSummary {
+    pub warning_filter_plan: WarningFilterPlan,
+    pub kit_files_settings: crate::kit_files::KitFilesSettings,
+}
+
+/// Read `svelte.config.js`, parse once, and return every recognised
+/// extraction (warning filter + kit.files) as a single
+/// [`SvelteConfigSummary`].
 ///
-/// Recognised shapes:
-///
-/// ```js
-/// export default {
-///     kit: {
-///         files: {
-///             params: 'src/myparams',
-///             hooks: 'src/myhooks',                     // legacy: universal-only
-///             // or
-///             hooks: { server: '…', client: '…', universal: '…' },
-///         },
-///     },
-/// };
-/// ```
-///
-/// Anything else (computed expressions, dynamic imports, spread)
-/// falls back to defaults for the fields we couldn't resolve.
-pub fn parse_kit_files_settings(config_path: &Path) -> crate::kit_files::KitFilesSettings {
-    let mut settings = crate::kit_files::KitFilesSettings::default();
+/// Returns defaults when the config is absent, unreadable, or
+/// unparseable. Each extractor runs independently against the same
+/// parsed program; one extractor failing doesn't affect the other.
+pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
+    let mut summary = SvelteConfigSummary::default();
     let Ok(source) = std::fs::read_to_string(config_path) else {
-        return settings;
+        return summary;
     };
     let source_type = SourceType::from_path(config_path).unwrap_or_default();
     let alloc = Allocator::default();
     let parser = Parser::new(&alloc, &source, source_type);
     let parsed = parser.parse();
-    let Some(files_obj) = extract_kit_files_object(&parsed.program) else {
-        return settings;
-    };
-    apply_kit_files_overrides(files_obj, &mut settings);
-    settings
+
+    // Warning-filter extraction.
+    if let Some(filter_expr) = extract_warning_filter(&parsed.program) {
+        if let Some(param) = filter_param_name(filter_expr).map(str::to_string) {
+            summary.warning_filter_plan = analyse_filter_body(filter_expr, &param, &source);
+        } else {
+            summary.warning_filter_plan =
+                WarningFilterPlan::partial("could not determine filter parameter name");
+        }
+    }
+
+    // Kit-files extraction.
+    if let Some(files_obj) = extract_kit_files_object(&parsed.program) {
+        apply_kit_files_overrides(files_obj, &mut summary.kit_files_settings);
+    }
+
+    summary
 }
 
 /// Walk the program AST looking for `kit.files` inside the default
@@ -358,31 +364,6 @@ fn lookup_string_property(obj: &ObjectExpression<'_>, key: &str) -> Option<Strin
     } else {
         None
     }
-}
-
-/// Read `svelte.config.js` and build a filter plan. Any read/parse
-/// failure → empty plan (equivalent to no filter).
-pub fn analyse_config(config_path: &Path) -> WarningFilterPlan {
-    let Ok(source) = std::fs::read_to_string(config_path) else {
-        return WarningFilterPlan::default();
-    };
-    let source_type = SourceType::from_path(config_path).unwrap_or_default();
-    let alloc = Allocator::default();
-    let parser = Parser::new(&alloc, &source, source_type);
-    let parsed = parser.parse();
-    // Accept programs that have parse errors as long as they carry a
-    // usable program tree — `svelte.config.ts` may use syntax oxc
-    // rejects (decorators etc.) but most real-world configs are
-    // simple JS.
-    let Some(filter_expr) = extract_warning_filter(&parsed.program) else {
-        return WarningFilterPlan::default();
-    };
-    // `filter_expr` is the arrow / function expression; analyse it.
-    let param_name = filter_param_name(filter_expr).map(str::to_string);
-    let Some(param) = param_name else {
-        return WarningFilterPlan::partial("could not determine filter parameter name");
-    };
-    analyse_filter_body(filter_expr, &param, &source)
 }
 
 impl WarningFilterPlan {
@@ -971,7 +952,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(name);
         std::fs::write(&path, src).unwrap();
-        analyse_config(&path)
+        analyse(&path).warning_filter_plan
     }
 
     #[test]

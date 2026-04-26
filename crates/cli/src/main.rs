@@ -253,33 +253,32 @@ fn main() -> ExitCode {
     let compiler_warnings = parse_compiler_warnings(cli.compiler_warnings.as_deref());
     let color = resolve_color_mode(cli.color, cli.no_color);
 
-    // Tier 2: static analysis of svelte.config.js `warningFilter`
-    // and `kit.files` overrides. When found and parseable, both feed
-    // downstream — warningFilter augments --compiler-warnings at the
-    // filter stage; kit.files paths drive the discovery walker's
-    // hooks/params recognition. Unrecognised callbacks → stderr note
-    // so users know to supplement with --compiler-warnings; missing
-    // or unparseable `kit.files` falls back to upstream defaults
-    // silently (matches upstream svelte-check's behaviour).
-    let svelte_config_path = svelte_config::find_svelte_config(&workspace);
-    let warning_filter_plan = match &svelte_config_path {
+    // Tier 2: static analysis of svelte.config.js. Single parse →
+    // single AST → both extractors (warningFilter for compiler-
+    // warning filtering, kit.files for discovery overrides). When
+    // found and parseable, both feed downstream — warningFilter
+    // augments --compiler-warnings at the filter stage; kit.files
+    // paths drive the discovery walker's hooks/params recognition.
+    let svelte_config_summary = match svelte_config::find_svelte_config(&workspace) {
         Some(cfg) => {
-            let plan = svelte_config::analyse_config(cfg);
-            if plan.partial {
+            let summary = svelte_config::analyse(&cfg);
+            if summary.warning_filter_plan.partial {
                 eprintln!(
                     "svelte-check-native: partial `warningFilter` in {} — one or more branches couldn't be translated. Unrecognised: `{}`. Add `--compiler-warnings code:ignore,…` to cover the rest.",
                     cfg.display(),
-                    plan.unrecognised_excerpt.as_deref().unwrap_or("?")
+                    summary
+                        .warning_filter_plan
+                        .unrecognised_excerpt
+                        .as_deref()
+                        .unwrap_or("?")
                 );
             }
-            plan
+            summary
         }
-        None => svelte_config::WarningFilterPlan::default(),
+        None => svelte_config::SvelteConfigSummary::default(),
     };
-    let kit_files_settings = match &svelte_config_path {
-        Some(cfg) => svelte_config::parse_kit_files_settings(cfg),
-        None => kit_files::KitFilesSettings::default(),
-    };
+    let warning_filter_plan = svelte_config_summary.warning_filter_plan;
+    let kit_files_settings = svelte_config_summary.kit_files_settings;
 
     let svelte_warnings_mode = match cli.svelte_warnings.as_str() {
         "bridge" => SvelteWarningsMode::Bridge,

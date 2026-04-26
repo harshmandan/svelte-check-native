@@ -783,8 +783,9 @@ fn collect_let_directive_names_for_shadow(attrs: &[Attribute], source: &str) -> 
 ///
 /// Implementation: oxc parse of the slice as an arrow-function
 /// pattern (the closest parse shape that accepts both destructures
-/// and identifiers). On parse failure, falls back to the SmolStr
-/// of the trimmed source slice IF it's a simple identifier.
+/// and identifiers), then delegates the AST walk to
+/// `template_scope::collect_pattern_bindings`. Names-only output —
+/// analyze doesn't need ranges or `inside_rest` flags.
 fn collect_pattern_idents(source: &str, range: svn_core::Range, out: &mut Vec<SmolStr>) {
     let start = range.start as usize;
     let end = range.end as usize;
@@ -800,15 +801,16 @@ fn collect_pattern_idents(source: &str, range: svn_core::Range, out: &mut Vec<Sm
         out.push(SmolStr::from(trimmed));
         return;
     }
-    // Use oxc to parse the slice as a JS expression in the shape
-    // of an arrow-function parameter list. Wrap in `(` … `) => 0`.
+    // Wrap as `(slice) => 0` so oxc accepts both destructures and
+    // identifiers as parameters. Then delegate the pattern walk to
+    // the shared primitive — names-only.
     let alloc = oxc_allocator::Allocator::default();
     let wrapped = format!("({trimmed}) => 0");
     let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
     if parsed.panicked {
         return;
     }
-    use oxc_ast::ast::{BindingPatternKind, Expression, Statement};
+    use oxc_ast::ast::{Expression, Statement};
     let Some(stmt) = parsed.program.body.first() else {
         return;
     };
@@ -819,40 +821,9 @@ fn collect_pattern_idents(source: &str, range: svn_core::Range, out: &mut Vec<Sm
         return;
     };
     for param in &arrow.params.items {
-        collect_from_pattern(&param.pattern.kind, out);
-    }
-
-    fn collect_from_pattern(pat: &BindingPatternKind<'_>, out: &mut Vec<SmolStr>) {
-        match pat {
-            BindingPatternKind::BindingIdentifier(id) => {
-                out.push(SmolStr::from(id.name.as_str()));
-            }
-            BindingPatternKind::ObjectPattern(obj) => {
-                for p in &obj.properties {
-                    collect_from_pattern(&p.value.kind, out);
-                }
-                if let Some(rest) = &obj.rest {
-                    collect_from_pattern(&rest.argument.kind, out);
-                }
-            }
-            BindingPatternKind::ArrayPattern(arr) => {
-                for el in arr.elements.iter().flatten() {
-                    collect_from_pattern(&el.kind, out);
-                }
-                // Array-rest binding (`as [head, ...rest]`) — must be
-                // captured for shadow tracking too. Without this,
-                // template references to `rest` resolved to whatever
-                // outer-scope `rest` happened to exist, producing
-                // wrong-binding type narrowing in slot attrs / let
-                // directives.
-                if let Some(rest) = &arr.rest {
-                    collect_from_pattern(&rest.argument.kind, out);
-                }
-            }
-            BindingPatternKind::AssignmentPattern(asn) => {
-                collect_from_pattern(&asn.left.kind, out);
-            }
-        }
+        // Offset is irrelevant — analyze ignores `range`.
+        let pb = crate::template_scope::collect_pattern_bindings(&param.pattern, 0);
+        out.extend(pb.bindings.into_iter().map(|b| b.name));
     }
 }
 

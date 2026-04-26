@@ -1353,93 +1353,39 @@ impl TreeBuilder {
         source: &str,
         lang: svn_parser::document::ScriptLang,
     ) {
-        match &pat.kind {
-            BindingPatternKind::BindingIdentifier(id) => {
-                let abs_start = (id.span.start as i32 + offset).max(0) as u32;
-                let abs_end = (id.span.end as i32 + offset).max(0) as u32;
-                let bid = self.declare(
-                    each_scope,
-                    SmolStr::from(id.name.as_str()),
-                    Range::new(abs_start, abs_end),
-                    BindingKind::Each,
-                    DeclarationKind::Const,
-                    InitialKind::EachBlock,
-                );
-                self.bindings[bid.0 as usize].inside_rest = inside_rest;
-            }
-            BindingPatternKind::ObjectPattern(op) => {
-                for prop in &op.properties {
-                    self.declare_each_pattern(
-                        &prop.value,
-                        each_scope,
-                        parent_scope,
-                        offset,
-                        inside_rest,
-                        source,
-                        lang,
-                    );
-                }
-                if let Some(rest) = &op.rest {
-                    self.declare_each_pattern(
-                        &rest.argument,
-                        each_scope,
-                        parent_scope,
-                        offset,
-                        true,
-                        source,
-                        lang,
-                    );
-                }
-            }
-            BindingPatternKind::ArrayPattern(ap) => {
-                for p in ap.elements.iter().flatten() {
-                    self.declare_each_pattern(
-                        p,
-                        each_scope,
-                        parent_scope,
-                        offset,
-                        inside_rest,
-                        source,
-                        lang,
-                    );
-                }
-                if let Some(rest) = &ap.rest {
-                    self.declare_each_pattern(
-                        &rest.argument,
-                        each_scope,
-                        parent_scope,
-                        offset,
-                        true,
-                        source,
-                        lang,
-                    );
-                }
-            }
-            BindingPatternKind::AssignmentPattern(ap) => {
-                self.declare_each_pattern(
-                    &ap.left,
-                    each_scope,
-                    parent_scope,
-                    offset,
-                    inside_rest,
-                    source,
-                    lang,
-                );
-                // Default-value expression — walk in the OUTER scope
-                // so refs resolve to parent bindings, not the just-
-                // declared each-block name.
-                let abs = Range::new(
-                    (ap.right.span().start as i32 + offset).max(0) as u32,
-                    (ap.right.span().end as i32 + offset).max(0) as u32,
-                );
-                let mut ctx = TemplateCtx {
-                    source,
-                    scope: parent_scope,
-                    lang,
-                    in_control_flow: false,
-                };
-                self.walk_expr_range(abs, &mut ctx, RefFlags::default());
-            }
+        // Pattern walking moved to `svn_analyze::template_scope` so
+        // analyze and lint share a single primitive (round-3 F5,
+        // round-4 G6/G9 each landed parallel fixes in both walkers
+        // before unification). The helper returns ordered bindings
+        // plus the source ranges of any `AssignmentPattern` defaults
+        // — defaults walk in the PARENT scope here so a
+        // `{ a = b }` default's `b` resolves to a parent binding,
+        // not the just-declared `a`.
+        let pb = svn_analyze::template_scope::collect_pattern_bindings(pat, offset);
+        for b in &pb.bindings {
+            let bid = self.declare(
+                each_scope,
+                b.name.clone(),
+                b.range,
+                BindingKind::Each,
+                DeclarationKind::Const,
+                InitialKind::EachBlock,
+            );
+            // Apply `inside_rest` as the OR of the caller-passed
+            // baseline and the helper's per-binding flag — preserves
+            // pre-helper behaviour where a caller could force-flag a
+            // sub-tree (used by `declare_each_pattern` recursion's
+            // own rest-element bookkeeping).
+            self.bindings[bid.0 as usize].inside_rest = inside_rest || b.inside_rest;
+        }
+        for default_range in &pb.default_value_ranges {
+            let mut ctx = TemplateCtx {
+                source,
+                scope: parent_scope,
+                lang,
+                in_control_flow: false,
+            };
+            self.walk_expr_range(*default_range, &mut ctx, RefFlags::default());
         }
     }
 

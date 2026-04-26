@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 svn-core = { path = "../core" }
+svn-analyze = { path = "../analyze" }
 svn-parser = { path = "../parser" }
 smol_str.workspace = true
 serde.workspace = true

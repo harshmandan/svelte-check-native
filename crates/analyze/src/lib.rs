@@ -23,6 +23,7 @@ pub mod props;
 pub mod rune;
 pub mod store;
 pub mod template_refs;
+pub mod template_scope;
 pub mod template_walker;
 pub mod void_refs;
 

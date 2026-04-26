@@ -178,6 +178,28 @@ function runParityMode() {
         || ours.warnings !== upstreamRow.warnings
         || ours.files_with_problems !== upstreamRow.files_with_problems;
     if (mismatch) process.exit(1);
+
+    // File-count drift gate. Compare against `upstream --tsgo`
+    // specifically because non-tsgo upstream walks the entire
+    // monorepo (including out-of-scope projects) and reports a
+    // structurally larger count than the user's effective project
+    // — non-comparable to ours. `upstream --tsgo` and ours both
+    // operate on the same project scope; their counts should track
+    // each other within a tolerance (upstream --tsgo includes one
+    // extra synthetic-tsconfig diagnostic file in our control benches,
+    // hence the small allowance).
+    const upstreamTsgoRow = rows.find(r => r.tool === 'upstream --tsgo');
+    if (upstreamTsgoRow) {
+        const filesDelta = Math.abs(ours.files - upstreamTsgoRow.files);
+        const FILES_DELTA_TOLERANCE = 2;
+        if (filesDelta > FILES_DELTA_TOLERANCE) {
+            console.error(
+                `\nfile-count drift: ours=${ours.files} vs upstream --tsgo=${upstreamTsgoRow.files} (delta=${filesDelta}, tolerance=${FILES_DELTA_TOLERANCE})\n`
+                + `Discovery may have regressed — investigate why our enumeration diverges from upstream --tsgo's.`,
+            );
+            process.exit(1);
+        }
+    }
 }
 
 /// Run our binary and return both the parsed COMPLETED counts AND

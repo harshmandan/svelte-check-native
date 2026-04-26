@@ -213,3 +213,26 @@ pub(crate) fn utf8_char_len(b: u8) -> usize {
         4
     }
 }
+
+/// True for CSS-custom-property attribute names (`--foo`, `--some-var`).
+/// Svelte 5 treats `<Comp --css-var={...}>` as a CSS variable on the
+/// component's wrapper element, not as a typed prop — so the emit
+/// routes these through `__svn_css_prop` which returns `{}` and
+/// doesn't contribute to the Props object type.
+pub(crate) fn is_css_custom_prop_name(name: &str) -> bool {
+    name.starts_with("--")
+}
+
+/// True for ASCII identifiers `[A-Za-z_$][A-Za-z0-9_$]*`. We don't try
+/// to enumerate JS reserved words — modern JS (ES5+) allows reserved
+/// words as bare property names anyway.
+pub(crate) fn is_simple_js_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_' || first == '$') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}

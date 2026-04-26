@@ -1156,15 +1156,24 @@ impl TreeBuilder {
         {
             // Declare every pattern identifier in the current
             // template scope, without feeding them through
-            // visit_assignment.
+            // visit_assignment. Capture the binding-id boundary
+            // BEFORE the declaration so the retag below only touches
+            // the names this `{@const}` introduced — without that,
+            // existing each-block bindings already in scope would be
+            // retagged from Each to Template, suppressing every
+            // each-specific lint check after the first `{@const}`.
+            let new_id_start = self.bindings.len() as u32;
             self.declare_each_pattern(
                 &d.id, ctx.scope, ctx.scope, offset, false, ctx.source, ctx.lang,
             );
-            // Re-tag those bindings as Template (declare_each_pattern
-            // uses `BindingKind::Each` internally).
-            for bid in self.bindings_in(ctx.scope) {
-                if matches!(self.bindings[bid.0 as usize].kind, BindingKind::Each) {
-                    self.bindings[bid.0 as usize].kind = BindingKind::Template;
+            let new_id_end = self.bindings.len() as u32;
+            // Re-tag JUST the bindings declare_each_pattern just
+            // appended (it uses `BindingKind::Each` internally as a
+            // generic pattern marker; for `{@const}` the right kind
+            // is Template).
+            for idx in new_id_start..new_id_end {
+                if matches!(self.bindings[idx as usize].kind, BindingKind::Each) {
+                    self.bindings[idx as usize].kind = BindingKind::Template;
                 }
             }
             // Walk the initializer expression so refs inside

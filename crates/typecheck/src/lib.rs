@@ -144,6 +144,28 @@ fn has_real_svelte(workspace: &Path) -> bool {
 
 pub use svn_emit::{LineMapEntry, TokenMapEntry};
 
+/// Walk `svelte_dir` and delete every regular file not present in
+/// `written_paths`. Used as the cache GC step after the per-input
+/// write loop in [`check`]. Errors during traversal or deletion are
+/// swallowed — a stale orphan is recoverable next run, and we
+/// shouldn't fail a type-check over a transient filesystem issue
+/// (Windows file locks, antivirus, NFS lag).
+fn gc_orphaned_overlays(svelte_dir: &Path, written_paths: &std::collections::HashSet<PathBuf>) {
+    if !svelte_dir.is_dir() {
+        return;
+    }
+    for entry in walkdir::WalkDir::new(svelte_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+    {
+        let path = entry.path();
+        if !written_paths.contains(path) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 /// Per-file mapping data the diagnostic mapper needs to translate a
 /// tsgo `(line, column)` back to a source `(line, column)`.
 ///
@@ -400,6 +422,13 @@ pub fn check(
     let mut kit_overlay_sources: Vec<PathBuf> = Vec::new();
     let mut map_data: std::collections::HashMap<PathBuf, MapData> =
         std::collections::HashMap::with_capacity(inputs.len());
+    // Track every cache file we touch this run. Anything in
+    // `svelte_dir` not in this set after the loop is orphaned (the
+    // source `.svelte` was deleted or renamed) and gets garbage-
+    // collected so stale overlays / ambients don't keep masking real
+    // "module not found" errors at later imports.
+    let mut written_paths: std::collections::HashSet<PathBuf> =
+        std::collections::HashSet::with_capacity(inputs.len() * 2);
     // `inputs` is consumed here — `generated_ts` and `line_map` move out
     // of each `CheckInput` and the string drops at end of iteration.
     for input in inputs {
@@ -423,6 +452,7 @@ pub fn check(
             let _ = std::fs::remove_file(&sibling);
         }
         write_if_changed(&gen_path, &input.generated_ts)?;
+        written_paths.insert(gen_path.clone());
 
         match input.kind {
             InputKind::Svelte | InputKind::SvelteAuxiliary => {
@@ -468,6 +498,7 @@ pub fn check(
                      export * from './{overlay_file_name}';\n"
                 );
                 write_if_changed(&ambient_path, &ambient_text)?;
+                written_paths.insert(ambient_path);
             }
             InputKind::KitFile | InputKind::UserTsOverlay => {
                 // Mirror-overlay kinds: original source path goes into
@@ -503,6 +534,21 @@ pub fn check(
             generated_paths.push(gen_path);
         }
     }
+
+    // Step 1a: garbage-collect orphaned overlay files. A `.svelte`
+    // source that was deleted or renamed leaves its stale overlay
+    // (`Foo.svelte.svn.ts`) and ambient sidecar (`Foo.d.svelte.ts`)
+    // behind in the cache; subsequent runs see them resolve as if
+    // the source still existed, masking the user's real "module not
+    // found" error at the import site.
+    //
+    // Walk the cache's `svelte/` subtree and delete any file that
+    // wasn't written this run. `written_paths` accumulated every
+    // gen_path + ambient_path the loop above produced; anything else
+    // under `svelte_dir` is orphaned. Best-effort delete — a held
+    // file (Windows process lock, antivirus scan) leaves the orphan
+    // for next run and doesn't break this one.
+    gc_orphaned_overlays(&layout.svelte_dir, &written_paths);
 
     // Step 1b: write the synthetic `.svelte-kit/types/` mirror so the
     // `$types.d.ts` chain `'../(…/)src/routes/…/+page.js'` resolves

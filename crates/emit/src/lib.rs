@@ -48,6 +48,7 @@
 
 mod default_export;
 mod emit_buffer;
+mod htmlxtojsx_utils;
 pub mod kit_inject;
 mod knownevents;
 mod nodes;
@@ -59,6 +60,7 @@ mod state_nullish_rewrite;
 // SVELTE-4-COMPAT: droppable submodule for Svelte-4 emit rewrites.
 // See design/phase_g/DESIGN.md.
 mod svelte2tsx_nodes;
+mod svelte2tsx_utils;
 mod svelte4;
 mod sveltekit;
 mod util;

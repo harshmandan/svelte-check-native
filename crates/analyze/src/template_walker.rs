@@ -800,6 +800,15 @@ fn collect_pattern_idents(source: &str, range: svn_core::Range, out: &mut Vec<Sm
                 for el in arr.elements.iter().flatten() {
                     collect_from_pattern(&el.kind, out);
                 }
+                // Array-rest binding (`as [head, ...rest]`) — must be
+                // captured for shadow tracking too. Without this,
+                // template references to `rest` resolved to whatever
+                // outer-scope `rest` happened to exist, producing
+                // wrong-binding type narrowing in slot attrs / let
+                // directives.
+                if let Some(rest) = &arr.rest {
+                    collect_from_pattern(&rest.argument.kind, out);
+                }
             }
             BindingPatternKind::AssignmentPattern(asn) => {
                 collect_from_pattern(&asn.left.kind, out);

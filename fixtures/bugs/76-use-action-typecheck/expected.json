@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 10,
+            "code": 2304
+        }
+    ],
+    "_note": "Round 2 #5: use:ACTION action name now diagnostics-map correctly. Pre-2026-04-26 our action emit (nodes/action.rs::emit_dom_action_decls) wrote the action name directly into the synthesized scaffolding without an append_with_source token-map entry; tsgo's TS2304 fired in our overlay but the diagnostic mapper dropped it because the position landed outside any line_map coverage. Mirrors the same fix pattern applied to animate/transition in Round 2 #4. Positions are LSP-style 0-based."
+}

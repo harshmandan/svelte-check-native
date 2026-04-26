@@ -92,6 +92,18 @@ pub(crate) fn emit_dom_action_decls(
         let index = *action_counter;
         *action_counter += 1;
         let action = d.name.as_str();
+        // Source range covering the action name (`enhance` in
+        // `use:enhance={params}`). `d.range.start` is the byte
+        // offset of the `use:` prefix; the name starts after `use:`
+        // (kind str + 1 for the colon). Used to anchor TS2304/TS2552
+        // diagnostics on typo'd action names back to the user's
+        // source position via the token map. Without this, a typo'd
+        // action name lands in synthesized scaffolding (no line_map
+        // coverage) and the diagnostic mapper drops the diagnostic.
+        let prefix_len = (d.kind.as_str().len() + 1) as u32;
+        let name_start = d.range.start + prefix_len;
+        let name_end = name_start + action.len() as u32;
+        let name_range = svn_core::Range::new(name_start, name_end);
         match &d.value {
             Some(svn_parser::DirectiveValue::Expression {
                 expression_range, ..
@@ -110,16 +122,20 @@ pub(crate) fn emit_dom_action_decls(
                 // at emit time.
                 let _ = write!(
                     buf,
-                    "{indent}const __svn_action_{index} = __svn_ensure_action({action}(__svn_map_element_tag({tag_arg}), ("
+                    "{indent}const __svn_action_{index} = __svn_ensure_action("
                 );
+                buf.append_with_source(action, name_range);
+                let _ = write!(buf, "(__svn_map_element_tag({tag_arg}), (",);
                 buf.append_with_source(params, *expression_range);
                 buf.push_str(")));\n");
             }
             _ => {
-                let _ = writeln!(
+                let _ = write!(
                     buf,
-                    "{indent}const __svn_action_{index} = __svn_ensure_action({action}(__svn_map_element_tag({tag_arg})));"
+                    "{indent}const __svn_action_{index} = __svn_ensure_action("
                 );
+                buf.append_with_source(action, name_range);
+                let _ = writeln!(buf, "(__svn_map_element_tag({tag_arg})));");
             }
         }
     }

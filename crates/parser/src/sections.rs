@@ -647,11 +647,21 @@ fn scan_past_mustache(bytes: &[u8], from: u32) -> u32 {
 }
 
 /// Skip past `<NAME … >` or `<NAME … />` starting at `from`. Returns
-/// `(index_past_close, self_closing)`. Respects quoted attribute
-/// values.
+/// `(index_past_close, treat_as_zero_depth)`. The boolean is true
+/// when the tag should not increment template tag-depth: an explicit
+/// `/>` self-close OR an HTML void element (`<img>`, `<br>`, etc.)
+/// which by spec has no closing tag. Respects quoted attribute
+/// values and balanced mustache regions.
 fn scan_past_open_tag(bytes: &[u8], from: usize) -> (usize, bool) {
     let mut i = from + 1;
-    let self_closing = false;
+    // Extract the tag name so we can recognize HTML void elements.
+    // Stops at the first byte that can't be part of a tag name
+    // (whitespace, `/`, `>`, attribute boundary).
+    let name_start = i;
+    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'-' | b':')) {
+        i += 1;
+    }
+    let is_void = is_void_html_tag(&bytes[name_start..i]);
     while i < bytes.len() {
         match bytes[i] {
             b'"' | b'\'' => {
@@ -671,11 +681,40 @@ fn scan_past_open_tag(bytes: &[u8], from: usize) -> (usize, bool) {
             b'/' if bytes.get(i + 1) == Some(&b'>') => {
                 return (i + 2, true);
             }
-            b'>' => return (i + 1, self_closing),
+            b'>' => return (i + 1, is_void),
             _ => i += 1,
         }
     }
-    (bytes.len(), self_closing)
+    (bytes.len(), is_void)
+}
+
+/// HTML5 void elements (https://html.spec.whatwg.org/#void-elements).
+/// These never have a closing tag and so must not push our top-level
+/// section walker into an apparent-nesting state. Without this check
+/// a `<style>` block following a void element gets absorbed into the
+/// preceding template run instead of recognised as a section.
+///
+/// Svelte requires lowercase HTML element names so we match
+/// case-sensitively; tag-name byte slices come straight from source.
+fn is_void_html_tag(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"area"
+            | b"base"
+            | b"br"
+            | b"col"
+            | b"embed"
+            | b"hr"
+            | b"img"
+            | b"input"
+            | b"keygen"
+            | b"link"
+            | b"meta"
+            | b"param"
+            | b"source"
+            | b"track"
+            | b"wbr"
+    )
 }
 
 #[cfg(test)]
@@ -728,6 +767,43 @@ let position: string;
         let s = doc.style.expect("real style");
         assert!(s.content.contains(".a"));
         assert!(!s.content.contains(".b"));
+    }
+
+    #[test]
+    fn void_html_elements_in_template_dont_break_subsequent_style_section() {
+        // Regression: `<img>` and other HTML void elements have no
+        // closing tag, so our top-level walker must not treat them as
+        // pushing tag depth. Without the void-element list, depth
+        // never returns to zero after a void element appears in the
+        // template, and a following `<style>` block gets absorbed
+        // into the preceding template run instead of being parsed as
+        // a section.
+        let src = r#"<script lang="ts">
+let x = 1;
+</script>
+<img src="hero.png" alt="">
+<style>.a { color: red }</style>"#;
+        let doc = parse_ok(src);
+        assert!(doc.instance_script.is_some(), "instance script missing");
+        let style = doc.style.expect("style section must be detected");
+        assert!(style.content.contains(".a"));
+    }
+
+    #[test]
+    fn void_html_elements_dont_swallow_following_script_block() {
+        // Same regression but for a script block following a void
+        // element. Svelte allows scripts at any document position;
+        // the void-element bug also caused later `<script>` blocks to
+        // be absorbed into the template.
+        let src = r#"<input type="text">
+<script lang="ts">
+let y = 2;
+</script>"#;
+        let doc = parse_ok(src);
+        let s = doc
+            .instance_script
+            .expect("instance script must be detected");
+        assert!(s.content.contains("let y"));
     }
 
     #[test]

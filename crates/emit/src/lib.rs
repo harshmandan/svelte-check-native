@@ -49,19 +49,24 @@
 mod default_export;
 mod emit_buffer;
 pub mod kit_inject;
+mod knownevents;
 mod nodes;
+mod process_instance_script_content;
+mod process_module_script_tag;
 mod props_emit;
-mod script_split;
+mod render_function;
 mod state_nullish_rewrite;
 // SVELTE-4-COMPAT: droppable submodule for Svelte-4 emit rewrites.
 // See design/phase_g/DESIGN.md.
+mod svelte2tsx_nodes;
 mod svelte4;
 mod sveltekit;
 mod util;
 
+use render_function::{emit_render_body_return, emit_template_check_fn};
+
 use nodes::action::{
-    emit_dom_action_decls, emit_dom_action_void_refs, emit_legacy_action_attrs,
-    emit_use_directives_inline_legacy,
+    emit_dom_action_decls, emit_dom_action_void_refs, emit_use_directives_inline_legacy,
 };
 use nodes::await_pending_catch_block::{emit_await_then_branch, emit_branch_with_binding};
 use nodes::binding::emit_element_bind_checks_inline;
@@ -78,8 +83,8 @@ use nodes::snippet_block::emit_snippet_block;
 
 use default_export::{emit_default_export_declarations_js, emit_default_export_declarations_ts};
 use props_emit::{
-    build_exports_object, build_slots_field_type, inject_component_props_annotation,
-    scan_jsdoc_typedef_name, should_synthesise_js_props, synthesise_js_props_typedef_body,
+    build_exports_object, inject_component_props_annotation, should_synthesise_js_props,
+    synthesise_js_props_typedef_body,
 };
 use svelte4::compat::{
     denarrow_typed_exported_props_in_place, emit_svelte4_ambients, has_strict_events,
@@ -107,7 +112,7 @@ use svn_parser::Document;
 use svn_parser::{Fragment, Node, SnippetBlock, parse_script_body};
 
 use crate::emit_buffer::EmitBuffer;
-use crate::script_split::split_imports;
+use crate::process_instance_script_content::split_imports;
 
 /// Output of [`emit_document`].
 #[derive(Debug, Clone)]
@@ -277,7 +282,7 @@ fn emit_document_with_render_name(
     }
 
     // `<script generics="T extends ...">` — pulled from the parser's
-    // ScriptSection::generics. Extracted up front so script_split can
+    // ScriptSection::generics. Extracted up front so process_instance_script_content can
     // decide whether to hoist bare `type`/`interface` declarations out
     // of the render body (they'd lose access to the `T` generic if
     // lifted to module scope).
@@ -303,7 +308,7 @@ fn emit_document_with_render_name(
     // locals, and which of the four priority branches produced the
     // result. See PropsInfo in svn-analyze.
     //
-    // script_split consumes `type_root_name` to decide whether a
+    // process_instance_script_content consumes `type_root_name` to decide whether a
     // given `type`/`interface` declaration IS the Props annotation.
     // Props always hoists, even when its body references locals via
     // `typeof`, because consumers need the Props type visible at
@@ -841,7 +846,7 @@ fn analyze_script_and_template_refs<'alloc>(
     source_path: &Path,
     fragment: &svn_parser::Fragment,
     parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
-    split: Option<&script_split::SplitScript>,
+    split: Option<&process_instance_script_content::SplitScript>,
     rewritten_content: Option<&str>,
     props_info: &PropsInfo,
 ) -> ScriptAndTemplateAnalysis {
@@ -981,57 +986,6 @@ fn analyze_script_and_template_refs<'alloc>(
     }
 }
 
-/// Emit the `async function __svn_tpl_check() { … }` wrapper that
-/// carries every template expression as real TypeScript. The walk
-/// produces per-component prop-checks / bind:this assignments / DOM-
-/// binding assignments inline — all pinned to the enclosing block's
-/// scope (`{#each as item, i}`, `{#snippet args}`) so block-local refs
-/// resolve correctly.
-///
-/// Legacy action-attr and bind-pair declarations are emitted BEFORE
-/// the walk (both live at the top of the wrapper). They write directly
-/// via `raw_string_mut`, so the buffer's line counter needs
-/// `resync_current_line()` before the walk starts — any `LineMapEntry`
-/// the walk pushes reads the current overlay line from that counter.
-fn emit_template_check_fn(
-    buf: &mut EmitBuffer,
-    doc: &svn_parser::Document<'_>,
-    fragment: &svn_parser::Fragment,
-    summary: &svn_analyze::TemplateSummary,
-    is_ts: bool,
-) {
-    buf.push_str("    async function __svn_tpl_check() {\n");
-    buf.push_str("        // template type-check body (incremental)\n");
-    emit_legacy_action_attrs(buf.raw_string_mut(), summary, is_ts);
-    emit_bind_pair_declarations(buf.raw_string_mut(), summary, is_ts);
-    // Index component instantiations by source byte offset so the
-    // template walker can emit each prop-check inline at the component
-    // node's position — i.e. inside the enclosing `{#each}` / `{#if}`
-    // / `{#snippet}` scope. Flat-block emission put every check at
-    // the top level of `__svn_tpl_check`, which silently broke any
-    // check whose prop expressions referenced a binding introduced by
-    // a block.
-    let instantiations_by_start: std::collections::HashMap<
-        u32,
-        &svn_analyze::ComponentInstantiation,
-    > = summary
-        .component_instantiations
-        .iter()
-        .map(|i| (i.node_start, i))
-        .collect();
-    let mut action_counter: usize = 0;
-    buf.resync_current_line();
-    emit_template_body(
-        buf,
-        doc.source,
-        fragment,
-        2,
-        &instantiations_by_start,
-        &mut action_counter,
-    );
-    buf.push_str("    }\n");
-}
-
 /// Apply the three post-body in-place rewrites: widen-untyped-exports →
 /// definite-assign → de-narrow-typed-literal-inits. Order is load-
 /// bearing: widen inserts `: any` at the name position, and
@@ -1047,7 +1001,7 @@ fn emit_template_check_fn(
 fn apply_script_body_rewrites<'alloc>(
     buf: &mut EmitBuffer,
     summary: &svn_analyze::TemplateSummary,
-    split: Option<&script_split::SplitScript>,
+    split: Option<&process_instance_script_content::SplitScript>,
     store_refs: &[SmolStr],
     reactive_touched_names: &[SmolStr],
     parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
@@ -1144,198 +1098,6 @@ fn apply_script_body_rewrites<'alloc>(
     }
 }
 
-/// Emit the class-wrapper's `return { props, events, slots, bindings,
-/// exports };` at the tail of `$$render_<hash>`'s body. Only fires when
-/// both generics and a Props type source are present (the gate
-/// `use_class_wrapper`) — a sibling `declare class __svn_Render_<hash>`
-/// later projects each of the five surfaces back out at module scope
-/// via `Awaited<ReturnType<typeof $$render<…>>>['<field>']`.
-///
-/// Using `undefined as any as <T>` (not `null as <T>`) so `<T>` can be
-/// a non-nullable type like `{ foo: string }` without firing TS2352.
-/// Body-local `typeof X` / `$$Props['x']` refs inside `<T>` resolve
-/// inside the render function's scope where X / $$Props live.
-///
-/// `events_field` expands to `$$Events` when user-declared or
-/// synthesised under the three-trigger gate; otherwise stays `{}` to
-/// preserve lax event handling.
-#[allow(clippy::too_many_arguments)]
-fn emit_render_body_return(
-    buf: &mut EmitBuffer,
-    doc: &svn_parser::Document<'_>,
-    generics: Option<&str>,
-    prop_type_source: Option<&str>,
-    synthesized_events_type: Option<&str>,
-    exports_object: Option<&str>,
-    props_info: &svn_analyze::PropsInfo,
-    slot_defs: &[svn_analyze::SlotDef],
-) {
-    // JS overlay: always emit a return so the default-export's
-    // `Awaited<ReturnType<typeof $$render>>['props']` extraction
-    // resolves to a real Props type. When the script has a
-    // `/** @typedef {Object} Props */` block and
-    // `/** @type {Props} */ let {...} = $props()`, PropsInfo captures
-    // the root name ("Props"), and we reference it here via
-    // `/** @type {Props} */({})`. Without a Props name, fall back to
-    // `any` (degrades to no excess-prop check, but no regression).
-    //
-    // `Props` is a function-local JSDoc typedef in the user's script;
-    // referencing it inside $$render's return resolves because the
-    // return expression is in the same lexical scope. The module-level
-    // typedef at the default-export site uses `Awaited<ReturnType<...>>`
-    // to pull the type out (JSDoc typedefs don't leak across function
-    // boundaries).
-    if !emit_is_ts() {
-        // Prefer a TS-annotated Props name if PropsInfo captured one,
-        // else fall back to scanning the instance script for a JSDoc
-        // `@typedef {Object} <Name>` declaration — the standard
-        // Svelte-4/JS-Svelte props shape.
-        let name_from_ts = prop_type_source.and_then(|ty| {
-            let root = ty.trim();
-            if !root.is_empty()
-                && root
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
-                && !root.chars().next().is_some_and(|c| c.is_ascii_digit())
-            {
-                Some(root.to_string())
-            } else {
-                None
-            }
-        });
-        let name_from_jsdoc = doc
-            .instance_script
-            .as_ref()
-            .and_then(|s| scan_jsdoc_typedef_name(s.content));
-        // Svelte-4 `export let` synthesis: PropsInfo captures a
-        // literal `{k: T, …}` type_text (PropsSource::SynthesisedFromExports)
-        // that doesn't match the named-type predicate above. Embed the
-        // literal body directly as the JSDoc `@type` so the default
-        // export's `Awaited<ReturnType<…>>['props']` resolves to the
-        // typed shape (e.g. `{b: any}`) — restoring the required-prop
-        // signal that powers TS2741 on consumers.
-        let literal_from_exports = prop_type_source
-            .filter(|_| {
-                matches!(
-                    props_info.source,
-                    svn_analyze::PropsSource::SynthesisedFromExports
-                )
-            })
-            .map(|ty| ty.trim().to_string());
-        // Selection precedence — mirrors the synthesis decision in
-        // emit_render (must match or `$$ComponentProps` won't be in
-        // scope for this cast):
-        //   1. Synthesised `$$ComponentProps` — fires when the
-        //      destructure introduces non-bindable keys not in
-        //      user Props (or when there's no user Props at all).
-        //      See `should_synthesise_js_props`.
-        //   2. TS-annotated Props name (`/** @type {Props} */ let {...} = $props()`).
-        //   3. User-declared `@typedef {Object} <Name>` block.
-        //   4. Svelte-4 `export let` literal shape from PropsInfo.
-        //   5. `any` cast — when no Props source exists at all.
-        let script = doc
-            .instance_script
-            .as_ref()
-            .map(|s| s.content)
-            .unwrap_or("");
-        let synthesised_name = if should_synthesise_js_props(props_info, script) {
-            synthesise_js_props_typedef_body(props_info).map(|_| "$$ComponentProps".to_string())
-        } else {
-            None
-        };
-        let props_expr = match synthesised_name
-            .or(name_from_ts)
-            .or(name_from_jsdoc)
-            .or(literal_from_exports)
-        {
-            Some(body) => format!("/** @type {{{body}}} */({{}})"),
-            None => "/** @type {any} */({})".to_string(),
-        };
-        let _ = writeln!(buf, "    return {{ props: {props_expr} }};");
-        return;
-    }
-    // TS overlay path. Emit a structured return `{ props, events,
-    // slots, exports, bindings }` whose field types drive the default
-    // export's `Awaited<ReturnType<typeof $$render>>['props']`
-    // extraction at module scope — matches upstream's
-    // `__sveltets_2_isomorphic_component($$render())` pattern.
-    //
-    // Props field source priority:
-    //   1. User-declared Props type (`interface $$Props`, `: Props`
-    //      annotation on destructure, etc.) — always used when present.
-    //   2. For Svelte-4 `export let`, `exports_object` doubles as the
-    //      Props shape (every exported local is a prop) — use it
-    //      when no user Props type is available.
-    //   3. Fall back to `Record<string, any>` when nothing else is
-    //      known.
-    let exports_field = exports_object.unwrap_or("{}");
-    // 2026-04-25: the events field is CustomEvent-wrapped via a mapped
-    // type — `{[K in keyof $$Events]: CustomEvent<$$Events[K]>}` —
-    // so `SvelteComponent<Props, Events, Slots>.$on<K>(cb: (e:
-    // Events[K]) => void)` accepts user handlers written as
-    // `(e: CustomEvent<Payload>) => void`. Users declare
-    // `interface $$Events { myevent: {id: number} }` with the bare
-    // payload; the wrap bridges the handler's CustomEvent<> convention
-    // to Events[K]'s shape. Without this, the old `__SvnInstanceTyped`
-    // path did the wrap inside `$on`'s signature instead, but the
-    // unified shim path (2026-04-25) routes through SvelteComponent's
-    // native `$on` which expects `Events[K]` directly.
-    let events_field: String = if has_strict_events(doc) || synthesized_events_type.is_some() {
-        "{ [K in keyof $$Events]: CustomEvent<$$Events[K]> }".to_string()
-    } else {
-        // Mirrors upstream's `__sveltets_2_with_any_event` lax wrap:
-        // when no `$$Events` interface is declared, every `on:NAME`
-        // handler's payload type defaults to `CustomEvent<any>` so
-        // `(e) => e.detail.x` doesn't fire `Property 'detail' does
-        // not exist on type 'never'` (which it would if Events were
-        // bare `{}` and Events[K] resolved to `never`).
-        "{ [evt: string]: CustomEvent<any> }".to_string()
-    };
-    // Build the `slots:` field type. When the template has any
-    // `<slot [name="X"] [attr=…]>` sites, emit each as a scope-
-    // resolved value literal — the `slots: { 'X': { name1: (expr1)
-    // …}}` value flows through `Awaited<ReturnType<typeof
-    // $$render>>['slots']` into `SvelteComponent<P, E, S>`'s slots
-    // generic. Consumer-side `<Comp let:foo>` reads `foo` from
-    // `inst.$$slot_def.X.foo` typed accordingly. Without this, slot-
-    // let consumers fall back to `any` (the pre-port behavior).
-    //
-    // Identifiers that the analyze-side walker saw as scope-shadowed
-    // (let-bound or each-bound in active scope) were already SKIPPED
-    // from `slot_defs` — emitting them at module scope would
-    // resolve to the wrong (module-scope) declaration. Closing those
-    // properly needs the full SlotHandler scope-rewrite port (see
-    // design/slot_handler/PLAN.md §1.2). For now, they fall through
-    // to `any` (consumer destructure picks up `undefined` from the
-    // missing field).
-    let slots_field: String = build_slots_field_type(slot_defs);
-    // With-generics branch preserves the original behaviour for
-    // class-wrapper emission: the caller already synthesised the
-    // props-ref via the render class, so we emit the typed literal
-    // exactly as before to keep the shape stable.
-    if generics.is_some() {
-        let Some(ty) = prop_type_source else {
-            return;
-        };
-        let _ = writeln!(
-            buf,
-            "    return {{ props: undefined as any as ({ty}), events: undefined as any as {events_field}, slots: {slots_field}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
-        );
-        return;
-    }
-    // No generics. Pick the Props source per priority above.
-    let props_ty: String = match prop_type_source {
-        Some(ty) => ty.to_string(),
-        None => exports_object
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| "Record<string, any>".to_string()),
-    };
-    let _ = writeln!(
-        buf,
-        "    return {{ props: undefined as any as ({props_ty}), events: undefined as any as {events_field}, slots: {slots_field}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
-    );
-}
-
 /// Emit the hoisted-imports region at module scope, followed by a
 /// per-statement LineMapEntry so a diagnostic on a hoisted import line
 /// points at the original `<script>` import line. Each hoisted
@@ -1351,7 +1113,7 @@ fn emit_render_body_return(
 /// line (every entry's source_offset is applied N-stubs too early).
 fn emit_hoisted_imports(
     buf: &mut EmitBuffer,
-    split: Option<&script_split::SplitScript>,
+    split: Option<&process_instance_script_content::SplitScript>,
     doc: &svn_parser::Document<'_>,
     is_ts: bool,
 ) {
@@ -1779,7 +1541,11 @@ fn dom_element_emit_enabled() -> bool {
 
 /// Emit getter/setter tuple placeholders for `bind:foo={getter, setter}`.
 /// Same pattern as action-attrs: declare + void inside `__svn_tpl_check`.
-fn emit_bind_pair_declarations(out: &mut String, summary: &TemplateSummary, is_ts: bool) {
+pub(crate) fn emit_bind_pair_declarations(
+    out: &mut String,
+    summary: &TemplateSummary,
+    is_ts: bool,
+) {
     for name in summary.void_refs.names() {
         if name.starts_with("__svn_bind_pair_") {
             if is_ts {

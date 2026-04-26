@@ -17,11 +17,11 @@ use std::fmt::Write;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{BindingPatternKind, Expression, Statement, VariableDeclarator};
 
-use crate::script_split;
+use crate::process_instance_script_content;
 use crate::util::is_simple_js_identifier;
 
 /// Build the `{ name: sig; ... }` object-type text for each
-/// `export function` / `export const` / `export let` that script_split
+/// `export function` / `export const` / `export let` that process_instance_script_content
 /// surfaced. Consumed in two places:
 ///   - the render body's `return { exports: undefined as any as (…) }`
 ///     where body-local refs (`typeof handler`, `$$Props['x']`) resolve
@@ -30,7 +30,9 @@ use crate::util::is_simple_js_identifier;
 ///     SvelteComponent type directly (may fire TS2304 for body-local
 ///     refs — rare and acceptable; class-wrapper arms take the other
 ///     path and avoid it entirely).
-pub(crate) fn build_exports_object(split: Option<&script_split::SplitScript>) -> Option<String> {
+pub(crate) fn build_exports_object(
+    split: Option<&process_instance_script_content::SplitScript>,
+) -> Option<String> {
     let s = split?;
     if s.export_type_infos.is_empty() {
         return None;

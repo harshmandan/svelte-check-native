@@ -21,7 +21,7 @@ use smol_str::SmolStr;
 use svn_parser::{Document, Fragment};
 
 use crate::emit_buffer::EmitBuffer;
-use crate::script_split;
+use crate::process_instance_script_content;
 use crate::svelte4::compat::{
     contains_export_let, fragment_contains_slot, has_strict_events, is_svelte4_component,
 };
@@ -88,7 +88,7 @@ pub(crate) fn emit_default_export_declarations_ts(
     buf: &mut EmitBuffer,
     doc: &Document<'_>,
     fragment: &Fragment,
-    split: Option<&script_split::SplitScript>,
+    split: Option<&process_instance_script_content::SplitScript>,
     render_name: &SmolStr,
     generics: Option<&str>,
     prop_type_source: Option<&str>,
@@ -143,7 +143,7 @@ pub(crate) fn emit_default_export_declarations_ts(
 
     // The Props source has to be "safe" to reference at module scope:
     // either a literal shape (`{ item: T }`) or a named type whose
-    // declaration was hoisted by script_split. Bare named types that
+    // declaration was hoisted by process_instance_script_content. Bare named types that
     // stay body-scoped (either because they reference the script's
     // generic without re-binding it, or because they reference a
     // body-level const via `typeof`) can't be named from the
@@ -152,7 +152,7 @@ pub(crate) fn emit_default_export_declarations_ts(
         .is_some_and(|t| t.trim().starts_with('{') && !svn_analyze::contains_typeof_ref(t));
     let prop_ty_root_name = prop_type_source.and_then(svn_analyze::root_type_name_of);
     // Consider a named Props type module-scope-visible if either (a)
-    // script_split hoisted it out of the instance script, (b) it's
+    // process_instance_script_content hoisted it out of the instance script, (b) it's
     // declared in the `<script module>` section, or (c) it's imported
     // as a type at the module top level.
     let module_script_text = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");

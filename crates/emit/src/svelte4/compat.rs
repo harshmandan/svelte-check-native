@@ -14,7 +14,7 @@
 
 use smol_str::SmolStr;
 
-use crate::script_split;
+use crate::process_instance_script_content;
 use crate::sveltekit;
 use crate::util::{is_ascii_ws, is_ident_byte, utf8_char_len};
 
@@ -221,7 +221,7 @@ fn try_process_let_statement(
 /// "property does not exist" errors on every consumer.
 pub(crate) fn is_svelte4_component(
     doc: &svn_parser::Document<'_>,
-    split: Option<&script_split::SplitScript>,
+    split: Option<&process_instance_script_content::SplitScript>,
     has_slot: bool,
 ) -> bool {
     let instance_src = doc

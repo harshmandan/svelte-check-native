@@ -171,7 +171,7 @@ fn collect_top_level_var_names(program: &oxc_ast::ast::Program<'_>) -> HashSet<S
             }
             // `export let X = …` / `export const X = …` — Svelte 4
             // prop declarations. Their `X` IS declared at module scope
-            // after our script_split strips the export keyword, so a
+            // after our process_instance_script_content strips the export keyword, so a
             // subsequent `$: X = …` must be treated as re-assignment
             // (drop the label) rather than a fresh declaration.
             Statement::ExportNamedDeclaration(decl) => {

@@ -169,9 +169,19 @@ pub struct KitFile {
 /// assert!(!is_kit_ts_or_js(Path::new("src/routes/+page.svelte")));
 /// ```
 pub fn classify(path: &Path, settings: &KitFilesSettings) -> Option<KitFile> {
+    // Basename must be valid UTF-8 — every recognised SvelteKit
+    // basename is pure ASCII (`+page.ts`, `hooks.server.ts`,
+    // `videoId.ts`), so a non-UTF-8 basename is by definition not a
+    // Kit file. Path components OUTSIDE the basename can contain
+    // arbitrary bytes (a Unix workspace under `/мой-проект/src/…`,
+    // or a path with a non-UTF-8 byte from a foreign filesystem) —
+    // we use `to_string_lossy` for the suffix-match path string so
+    // those still classify correctly. The ASCII-only suffixes
+    // (`src/hooks.server`, `src/params`) match cleanly through any
+    // lossy replacement bytes earlier in the path.
     let basename = path.file_name()?.to_str()?;
-    let path_str = path.to_str()?;
-    let normalised = normalise_path_seps(path_str);
+    let path_str = path.to_string_lossy();
+    let normalised = normalise_path_seps(&path_str);
 
     if let Some(kit) = classify_route(basename) {
         return Some(kit);
@@ -759,6 +769,36 @@ mod tests {
     }
 
     // ----- Cross-cutting non-kit cases --------------------------
+
+    // Non-UTF-8 path tolerance: a Kit file with non-UTF-8 bytes in
+    // a directory component (e.g. a foreign-filesystem path under
+    // `/работа/src/routes/+page.ts`) should still classify, since
+    // the basename + ASCII-only suffix-match against
+    // `src/hooks.server` / `src/params` are insensitive to the
+    // bytes elsewhere. Pre-fix, `path.to_str()` returned None on
+    // non-UTF-8 input and dropped these silently.
+    #[test]
+    fn non_ascii_path_components_still_classify() {
+        let kit = classify(&p("/работа/src/routes/+page.ts"), &settings()).unwrap();
+        assert!(matches!(kit.role, KitRole::RouteScript { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_path_bytes_still_classify_via_lossy_match() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        // Construct a path with a non-UTF-8 byte (0xff) in a
+        // directory component. The basename `+page.ts` is still
+        // valid UTF-8 — that's all classify needs.
+        let mut bytes = b"/repo/".to_vec();
+        bytes.push(0xff);
+        bytes.extend_from_slice(b"/src/routes/+page.ts");
+        let os = OsStr::from_bytes(&bytes);
+        let path = std::path::Path::new(os);
+        let kit = classify(path, &settings()).unwrap();
+        assert!(matches!(kit.role, KitRole::RouteScript { .. }));
+    }
 
     #[test]
     fn plain_user_files_return_none() {

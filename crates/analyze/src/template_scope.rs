@@ -32,8 +32,8 @@
 //!   `enter_scope` / `leave_scope` / per-node `visit_*` calls.
 //! - [`walk_with_visitor`] — drives recursion through the template
 //!   AST and brackets every scope construct.
-//! - [`extract_at_const_name`] — pulls the binding name out of a
-//!   `{@const NAME = EXPR}` interpolation body.
+//! - [`extract_at_const_bindings`] — pulls every identifier introduced
+//!   by a `{@const NAME = EXPR}` (or destructure form) interpolation body.
 //!
 //! ### Consumers
 //!
@@ -256,10 +256,13 @@ pub trait TemplateScopeVisitor {
     /// expression range (the body slice between `{@const ` and `}`)
     /// for visitors that re-parse the body themselves (lint re-parses
     /// as `let X = EXPR;` to handle destructure patterns + initialiser
-    /// walking). `name` is the leading-identifier extraction for
-    /// visitors that just need the bare name (analyze's slot-attr
-    /// shadow).
-    fn visit_at_const(&mut self, name: Option<SmolStr>, expr_range: Range) {}
+    /// walking). `bound_names` is the full identifier list extracted
+    /// from the pattern — bare-identifier form yields one name;
+    /// destructure form (`{@const { a, b } = X}`) yields all
+    /// identifiers in walk order. Analyze's shadow tracking pushes
+    /// every name; lint ignores the list and re-parses for
+    /// declarations.
+    fn visit_at_const(&mut self, bound_names: &[SmolStr], expr_range: Range) {}
 }
 
 /// Drive the visitor over a template fragment. Handles all
@@ -453,11 +456,13 @@ fn walk_node_inner<V: TemplateScopeVisitor>(node: &Node, source: &str, visitor: 
             visitor.leave_scope(ScopeKind::Snippet);
         }
         Node::Interpolation(i) if i.kind == svn_parser::InterpolationKind::AtConst => {
-            // Walker emits the leading-identifier extraction (used by
-            // analyze's shadow tracking) AND the full expression
-            // range (used by lint to re-parse for destructure
-            // patterns and initialiser walking).
-            visitor.visit_at_const(extract_at_const_name(i, source), i.expression_range);
+            // Walker emits the FULL bound-names list (handles both
+            // bare-identifier and destructure forms — see
+            // `extract_at_const_bindings`) AND the full expression
+            // range (used by lint to re-parse for initialiser
+            // walking and binding declarations).
+            let names = extract_at_const_bindings(i, source);
+            visitor.visit_at_const(&names, i.expression_range);
         }
         Node::Interpolation(i) => {
             // Plain `{EXPR}` — walk the body as an expression in the
@@ -483,7 +488,19 @@ fn walk_element_children<V: TemplateScopeVisitor>(
     source: &str,
     visitor: &mut V,
 ) {
-    let let_bindings = collect_let_directive_bindings(attrs, source);
+    let LetDirectiveScope {
+        bindings: let_bindings,
+        defaults: let_defaults,
+    } = collect_let_directive_bindings(attrs, source);
+    // Default-value expressions inside let-directive patterns
+    // (`<Comp let:item={{ x = outer }}>`) walk in the PARENT scope
+    // BEFORE entering the let-directive child scope — refs like
+    // `outer` resolve to a parent binding, not the just-declared
+    // `x`. Mirrors each-block / snippet-param default-value
+    // handling in `walk_node_inner`.
+    for default in &let_defaults {
+        visitor.visit_expr(*default);
+    }
     if let_bindings.is_empty() {
         walk_fragment_inner(children, source, visitor);
     } else {
@@ -491,6 +508,15 @@ fn walk_element_children<V: TemplateScopeVisitor>(
         walk_fragment_inner(children, source, visitor);
         visitor.leave_scope(ScopeKind::LetDirective);
     }
+}
+
+/// Output of [`collect_let_directive_bindings`]: bindings to declare
+/// in the let-directive child scope, plus default-value expression
+/// ranges that the caller walks in PARENT scope before entering the
+/// child scope.
+struct LetDirectiveScope {
+    bindings: Vec<BoundIdent>,
+    defaults: Vec<Range>,
 }
 
 /// Parse a binding-pattern source slice (the `as` clause of
@@ -564,14 +590,17 @@ fn collect_pattern_bindings_from_slice(source: &str, range: Range) -> PatternBin
 fn collect_let_directive_bindings(
     attrs: &[svn_parser::Attribute],
     source: &str,
-) -> Vec<BoundIdent> {
+) -> LetDirectiveScope {
     use svn_parser::{Attribute, Directive, DirectiveKind, DirectiveValue};
-    let mut out: Vec<BoundIdent> = Vec::new();
+    let mut out = LetDirectiveScope {
+        bindings: Vec::new(),
+        defaults: Vec::new(),
+    };
     let mut seen: Vec<SmolStr> = Vec::new();
-    let push = |b: BoundIdent, out: &mut Vec<BoundIdent>, seen: &mut Vec<SmolStr>| {
+    let push = |b: BoundIdent, out: &mut LetDirectiveScope, seen: &mut Vec<SmolStr>| {
         if !seen.iter().any(|n| n == &b.name) {
             seen.push(b.name.clone());
-            out.push(b);
+            out.bindings.push(b);
         }
     };
     for attr in attrs {
@@ -605,12 +634,12 @@ fn collect_let_directive_bindings(
                     for b in pb.bindings {
                         push(b, &mut out, &mut seen);
                     }
-                    // NOTE: default-value expressions inside let-
-                    // directive patterns are NOT walked here — the
-                    // walker's element-children path doesn't expose
-                    // the visitor at this point. Default values
-                    // referencing parent bindings inside let:foo={…}
-                    // are rare; tracked as a follow-up if observed.
+                    // Default-value expressions inside let-directive
+                    // destructure patterns surface here so the walker
+                    // can hand them to `visit_expr` in the PARENT
+                    // scope before entering the let-directive child
+                    // scope — see `walk_element_children`.
+                    out.defaults.extend(pb.default_value_ranges);
                 }
             }
             // Shorthand: `let:foo` declares `foo`.
@@ -628,14 +657,23 @@ fn collect_let_directive_bindings(
     out
 }
 
-/// Pull the binding name out of a `{@const NAME = EXPR}` interpolation
-/// body. Returns `None` for destructure patterns (body starts with `{`)
-/// or malformed input — both match upstream's behaviour of emitting
-/// nothing for those cases.
-pub fn extract_at_const_name(interp: &svn_parser::Interpolation, source: &str) -> Option<SmolStr> {
+/// Pull every identifier introduced by a `{@const NAME = EXPR}` (or
+/// `{@const { a, b } = EXPR}` / `{@const [x, ...rest] = EXPR}`)
+/// interpolation body. Returns the names in walk order.
+///
+/// Fast path: bare-identifier form (`NAME = EXPR`) skips the oxc
+/// parser. Destructure forms re-parse the body as
+/// `let <body>;` and run the unified pattern walker so analyze's
+/// shadow tracking picks them up — without this, a slot-attr after
+/// `{@const { a } = X}` would resolve `a` against the wrong outer
+/// binding.
+pub fn extract_at_const_bindings(interp: &svn_parser::Interpolation, source: &str) -> Vec<SmolStr> {
     let start = interp.expression_range.start as usize;
     let end = interp.expression_range.end as usize;
-    let body = source.get(start..end)?;
+    let Some(body) = source.get(start..end) else {
+        return Vec::new();
+    };
+    // Bare identifier fast path: leading run of identifier chars.
     let bytes = body.as_bytes();
     let mut p = 0usize;
     while p < bytes.len()
@@ -643,10 +681,28 @@ pub fn extract_at_const_name(interp: &svn_parser::Interpolation, source: &str) -
     {
         p += 1;
     }
-    if p == 0 {
-        return None;
+    if p > 0 {
+        return vec![SmolStr::from(&body[..p])];
     }
-    Some(SmolStr::from(&body[..p]))
+    // Destructure form: re-parse as `let <body>;` and walk the
+    // declarator's pattern. Wrapper prefix `let ` is 4 bytes; offset
+    // is irrelevant here (analyze's consumer only reads names, not
+    // ranges).
+    let wrapped = format!("let {body};");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    if parsed.panicked {
+        return Vec::new();
+    }
+    use oxc_ast::ast::Statement;
+    let Some(Statement::VariableDeclaration(vd)) = parsed.program.body.first() else {
+        return Vec::new();
+    };
+    let Some(d) = vd.declarations.first() else {
+        return Vec::new();
+    };
+    let pb = collect_pattern_bindings(&d.id, 0);
+    pb.bindings.into_iter().map(|b| b.name).collect()
 }
 
 #[cfg(test)]

@@ -1152,9 +1152,16 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
         // bindings[..] = context entries, bindings[last] = index when
         // `has_index` is true. Index kind is `Static` (no key) or
         // `Template` (keyed) per upstream `scope.js`.
+        //
+        // Await-branch context bindings are `Template` per the
+        // `BindingKind::Template` doc comment ("`{#await promise then
+        // value}` / `{@const X = …}` / `<Foo let:x>`"). Declaring
+        // them as `Each` lets each-specific rules
+        // (`bind_invalid_each_rest`, etc.) misfire on `{:then
+        // {...rest}}` / `{:catch {...rest}}` destructures.
         let (declare_kind, retag_to_template) = match kind {
             ScopeKind::Each { .. } => (BindingKind::Each, false),
-            ScopeKind::AwaitThen | ScopeKind::AwaitCatch => (BindingKind::Each, false),
+            ScopeKind::AwaitThen | ScopeKind::AwaitCatch => (BindingKind::Template, false),
             ScopeKind::Snippet => (BindingKind::Each, true),
             ScopeKind::LetDirective => (BindingKind::Each, true),
             ScopeKind::Fragment => unreachable!("walker doesn't call enter_scope for Fragment"),
@@ -1272,7 +1279,7 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
         self.walk_attrs_skipping_let(&s.attributes);
     }
 
-    fn visit_at_const(&mut self, _name: Option<smol_str::SmolStr>, expr_range: svn_core::Range) {
+    fn visit_at_const(&mut self, _bound_names: &[smol_str::SmolStr], expr_range: svn_core::Range) {
         // Lint re-parses the `{@const}` body as `let NAME = EXPR;`
         // (handles destructure forms like `{@const {a, b} = x}` that
         // the leading-identifier extractor would skip). The full

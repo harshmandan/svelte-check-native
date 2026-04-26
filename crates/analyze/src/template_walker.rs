@@ -552,23 +552,42 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
         self.summary.each_block_count += 1;
     }
 
-    fn visit_at_const(&mut self, name: Option<SmolStr>, _expr_range: svn_core::Range) {
-        // Analyze only consumes the leading-identifier name (used
-        // for slot-attr shadow tracking). Destructure `{@const}`
-        // forms (`{@const { a } = …}`) yield `None` here — not yet
-        // tracked for shadow purposes; matches pre-Phase-4 behaviour.
-        let Some(name) = name else { return };
-        // Record for the emit's `let NAME: any;` list (deduped) AND
-        // push onto the shadow so subsequent slot-attr / let-directive
-        // sites in the same fragment treat the name as scope-local.
-        // The push happens on every encounter independent of dedup —
-        // a duplicate declaration's scope still applies. The
-        // walker's fragment-level bracket truncates it at exit.
-        if self.counters.at_const_seen.insert(name.clone()) {
-            self.summary.at_const_names.push(name.clone());
+    fn visit_at_const(&mut self, bound_names: &[SmolStr], _expr_range: svn_core::Range) {
+        // Push every bound name onto the shadow so subsequent
+        // slot-attr / let-directive sites in the same fragment treat
+        // them as scope-local. Destructure `{@const}` forms
+        // (`{@const { a, b } = X}`) emit multiple names; bare
+        // `{@const NAME = X}` emits one. The walker's fragment-level
+        // bracket truncates them at exit.
+        //
+        // For the emit's `let NAME: any;` summary list, the legacy
+        // shape is one name per `{@const}` (bare-identifier form
+        // only). Destructure forms aren't currently surfaced in
+        // `at_const_names` because emit doesn't yet declare per-
+        // identifier `let` for them — that's tracked separately as
+        // a follow-up. Until then, only push the FIRST name to the
+        // summary list (matches pre-Phase-4 behaviour where
+        // destructure forms were skipped entirely from the list).
+        if let Some(first) = bound_names.first()
+            && !is_destructure(bound_names)
+            && self.counters.at_const_seen.insert(first.clone())
+        {
+            self.summary.at_const_names.push(first.clone());
         }
-        self.shadow.names.push(name);
+        for name in bound_names {
+            self.shadow.names.push(name.clone());
+        }
     }
+}
+
+/// Heuristic: a destructure `{@const}` produces multiple bound
+/// names. Bare-identifier form produces exactly one. We use this to
+/// gate `at_const_names` summary recording so destructure forms
+/// don't leak partial names into the emit's `let NAME: any;` list
+/// — emit can't currently synthesise multi-binding declarations
+/// from the summary alone.
+fn is_destructure(names: &[SmolStr]) -> bool {
+    names.len() > 1
 }
 
 struct WalkCtx<'src> {

@@ -13,11 +13,12 @@ use svn_parser::{Node, SnippetBlock};
 
 use crate::TokenMapEntry;
 use crate::emit_buffer::EmitBuffer;
-use crate::util::{is_css_custom_prop_name, is_simple_js_identifier};
-use crate::{
-    all_identifiers, child_is_slot_let_consumer, collect_let_destructures,
-    emit_let_slot_destructure, emit_template_body, walk_child_with_slot_let,
+use crate::nodes::let_directive::{
+    child_is_slot_let_consumer, collect_let_destructures, emit_let_slot_destructure,
+    walk_child_with_slot_let,
 };
+use crate::util::{is_css_custom_prop_name, is_simple_js_identifier};
+use crate::{all_identifiers, emit_template_body};
 
 /// Emit a `<Component ...>` node as a call to the component's typed
 /// default export:

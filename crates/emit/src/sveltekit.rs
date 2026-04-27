@@ -84,7 +84,14 @@ pub fn kit_prop_decl(name: &str, kind: RouteKind) -> Option<String> {
         (RouteKind::Page, "data") => Some("data: import('./$types.js').PageData".into()),
         (RouteKind::Page, "form") => Some("form?: import('./$types.js').ActionData".into()),
         (RouteKind::Layout, "data") => Some("data: import('./$types.js').LayoutData".into()),
-        (RouteKind::Layout, "children") => Some("children?: import('svelte').Snippet".into()),
+        // `children` is REQUIRED on layouts — SvelteKit always passes
+        // a children snippet to layout components at runtime, so
+        // `let { children } = $props()` followed by `{@render children()}`
+        // must type-check without an optional-chain. Mirrors upstream
+        // svelte2tsx synthesis: emits `children: import('svelte').Snippet`
+        // (no `?`). With `?:`, tsgo fires TS2722 "Cannot invoke an object
+        // which is possibly 'undefined'" on the bare call.
+        (RouteKind::Layout, "children") => Some("children: import('svelte').Snippet".into()),
         // `+error.svelte` doesn't receive props via $props(); its shape
         // comes from `page.error`. Leave it unannotated for now.
         _ => None,
@@ -188,7 +195,8 @@ pub fn synthesize_route_props_type(kind: RouteKind, prop_names: &[&str]) -> Opti
     }
     if need_implicit_children {
         push_sep(&mut out, &mut first);
-        out.push_str("children?: import('svelte').Snippet;");
+        // Required — see `kit_prop_decl` LayoutChildren branch.
+        out.push_str("children: import('svelte').Snippet;");
     }
     out.push_str(" }");
     Some(out)
@@ -228,10 +236,13 @@ mod tests {
     }
 
     #[test]
-    fn kit_prop_decl_layout_children() {
+    fn kit_prop_decl_layout_children_required() {
+        // Required (no `?`) — Kit always passes a children snippet at
+        // runtime; making it optional fires TS2722 on `{@render
+        // children()}`.
         assert_eq!(
             kit_prop_decl("children", RouteKind::Layout).as_deref(),
-            Some("children?: import('svelte').Snippet")
+            Some("children: import('svelte').Snippet")
         );
     }
 
@@ -265,7 +276,7 @@ mod tests {
         assert_eq!(
             ty,
             "{ data: import('./$types.js').LayoutData; \
-             children?: import('svelte').Snippet; }"
+             children: import('svelte').Snippet; }"
         );
     }
 
@@ -275,7 +286,7 @@ mod tests {
         assert_eq!(
             ty,
             "{ data: import('./$types.js').LayoutData; \
-             children?: import('svelte').Snippet; }"
+             children: import('svelte').Snippet; }"
         );
     }
 

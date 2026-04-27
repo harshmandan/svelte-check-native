@@ -1,9 +1,10 @@
 {
     "emit_contains": [
-        "children?: import('svelte').Snippet"
+        "children: import('svelte').Snippet"
     ],
     "emit_not_contains": [
-        "declare function __svn_component_default(__anchor: any, props: any): any;"
+        "declare function __svn_component_default(__anchor: any, props: any): any;",
+        "children?: import('svelte').Snippet"
     ],
-    "_note": "+layout.svelte with only a children destructure. Emit synthesizes `{ children?: Snippet }` as the Props shape. Layouts implicitly receive a children snippet from SvelteKit, so even a destructure that only spells out `children` should carry the typed default."
+    "_note": "+layout.svelte with only a children destructure. Emit synthesizes `{ children: Snippet }` (REQUIRED, no `?`) as the Props shape — SvelteKit always passes a children snippet to layouts at runtime. The original assertion (Gap F regression, 2026-04-27) used `children?:`, which forced user code to write `{@render children?.()}` instead of `{@render children()}` and fired TS2722 'Cannot invoke an object which is possibly undefined.' on the bare call. Mirrors upstream svelte2tsx synthesis."
 }

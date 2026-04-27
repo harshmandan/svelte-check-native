@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Gap F (2026-04-27 bench discovery on shadcn-svelte/registry-template): the canonical SvelteKit `+layout.svelte` shape `let { children } = $props();` followed by `{@render children()}`. SvelteKit always passes a children snippet to layouts at runtime, so `children` is REQUIRED — typing it as `children?: Snippet` (optional) caused TS2722 'Cannot invoke an object which is possibly undefined.' on the bare `children()` call. Mirrors upstream svelte2tsx synthesis. Fix: in `crates/emit/src/sveltekit.rs` change `kit_prop_decl` and `synthesize_route_props_type` for `(Layout, children)` from optional to required."
+}

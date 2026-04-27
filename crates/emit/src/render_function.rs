@@ -216,7 +216,7 @@ pub(crate) fn emit_render_body_return(
             buf,
             "    return {{ props: undefined as any as ({ty}), events: undefined as any as {events_field}, slots: ",
         );
-        write_slots_field_type(buf.raw_string_mut(), slot_defs);
+        write_slots_field_type(buf.raw_string_mut(), doc.source, slot_defs);
         let _ = writeln!(
             buf,
             ", bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};",
@@ -234,7 +234,7 @@ pub(crate) fn emit_render_body_return(
         buf,
         "    return {{ props: undefined as any as ({props_ty}), events: undefined as any as {events_field}, slots: ",
     );
-    write_slots_field_type(buf.raw_string_mut(), slot_defs);
+    write_slots_field_type(buf.raw_string_mut(), doc.source, slot_defs);
     let _ = writeln!(
         buf,
         ", bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};",

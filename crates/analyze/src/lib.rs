@@ -61,7 +61,7 @@ pub use store::{
 pub use template_refs::find_template_refs;
 pub use template_walker::{
     BindThisCheck, BindThisTarget, ComponentInstantiation, DomBinding, DomBindingExpression,
-    OnEventDirective, PropShape, SlotDef, TemplateSummary, literal_attr_value,
+    OnEventDirective, PropShape, SlotAttrExpr, SlotDef, TemplateSummary, literal_attr_value,
     resolve_bind_value_type, walk_template,
 };
 pub use void_refs::VoidRefRegistry;

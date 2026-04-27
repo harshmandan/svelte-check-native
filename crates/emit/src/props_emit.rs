@@ -276,7 +276,11 @@ fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAc
 ///
 /// Mirrors upstream svelte2tsx's `slotsAsDef` builder in
 /// `createRenderFunction.ts:125-133`.
-pub(crate) fn write_slots_field_type(out: &mut String, slot_defs: &[svn_analyze::SlotDef]) {
+pub(crate) fn write_slots_field_type(
+    out: &mut String,
+    source: &str,
+    slot_defs: &[svn_analyze::SlotDef],
+) {
     if slot_defs.is_empty() {
         out.push_str("undefined as any as {}");
         return;
@@ -299,7 +303,23 @@ pub(crate) fn write_slots_field_type(out: &mut String, slot_defs: &[svn_analyze:
             first_attr = false;
             out.push_str(name.as_str());
             out.push_str(": (");
-            out.push_str(expr);
+            match expr {
+                // Range form — slice the original source. A `get`
+                // miss means the caller passed a source the walker
+                // didn't see; fall through with empty parens to
+                // preserve the output shape.
+                svn_analyze::SlotAttrExpr::Range(range) => {
+                    if let Some(text) =
+                        source.get(range.start as usize..range.end as usize)
+                    {
+                        out.push_str(text);
+                    }
+                }
+                // Shorthand stored the identifier inline.
+                svn_analyze::SlotAttrExpr::Shorthand(ident) => {
+                    out.push_str(ident.as_str());
+                }
+            }
             out.push(')');
         }
         out.push_str(" }");

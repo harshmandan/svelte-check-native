@@ -124,22 +124,32 @@ pub struct TemplateSummary {
     pub slot_defs: Vec<SlotDef>,
 }
 
+/// Expression-text source for one slot attr.
+#[derive(Debug, Clone)]
+pub enum SlotAttrExpr {
+    /// `name={expr}` — emit reads `&source[range]` at splice time
+    /// (saves a per-expression heap copy through the analyze
+    /// summary).
+    Range(Range),
+    /// `{name}` shorthand — the bare identifier IS the expression
+    /// text. Stored inline as `SmolStr` so we don't recompute the
+    /// inner-identifier range from the outer `{name}` range.
+    Shorthand(SmolStr),
+}
+
 /// One `<slot [name="X"] [attr1={expr1}] [attr2]>` site captured for
 /// emit-side `slots:` literal generation.
 #[derive(Debug, Clone)]
 pub struct SlotDef {
     /// Slot name from `name="X"`; `"default"` when omitted.
     pub slot_name: SmolStr,
-    /// `(attribute_name, expression_text)` pairs. Expression text is
-    /// extracted directly from the source for `={expr}` form, or is
-    /// the bare identifier for `{name}` shorthand. `name="literal"`
-    /// form falls into the literal-string variant. Expressions that
-    /// the walker identified as scope-shadowed (referencing a
-    /// let-bound or each-bound name in the active scope) are omitted
-    /// from this list — those need the full SlotHandler resolver to
-    /// emit correctly and would otherwise resolve to the wrong
-    /// module-scope declaration.
-    pub attrs: Vec<(SmolStr, String)>,
+    /// `(attribute_name, expression_source)` pairs. Expressions
+    /// that the walker identified as scope-shadowed (referencing
+    /// a let-bound or each-bound name in the active scope) are
+    /// omitted from this list — those need the full SlotHandler
+    /// resolver to emit correctly and would otherwise resolve to
+    /// the wrong module-scope declaration.
+    pub attrs: Vec<(SmolStr, SlotAttrExpr)>,
 }
 
 /// One `use:NAME={PARAMS}` directive site. Populated by the template
@@ -611,7 +621,7 @@ fn collect_slot_def(
 ) {
     use svn_parser::{AttrValuePart, Attribute as A};
     let mut slot_name = SmolStr::new("default");
-    let mut entries: Vec<(SmolStr, String)> = Vec::new();
+    let mut entries: Vec<(SmolStr, SlotAttrExpr)> = Vec::new();
     for attr in attrs {
         match attr {
             A::Plain(p) if p.name.as_str() == "name" => {
@@ -642,13 +652,13 @@ fn collect_slot_def(
                 {
                     continue;
                 }
-                entries.push((e.name.clone(), text.to_string()));
+                entries.push((e.name.clone(), SlotAttrExpr::Range(e.expression_range)));
             }
             A::Shorthand(s) => {
                 if shadow.contains(s.name.as_str()) {
                     continue;
                 }
-                entries.push((s.name.clone(), s.name.to_string()));
+                entries.push((s.name.clone(), SlotAttrExpr::Shorthand(s.name.clone())));
             }
             // Plain literal attrs on `<slot>` (other than `name=`)
             // are unusual; skip them for now. Spread, directives:

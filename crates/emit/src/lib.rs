@@ -798,7 +798,6 @@ fn emit_document_with_render_name(
             &render_name,
             generics.as_deref(),
             prop_type_effective.as_deref(),
-            exports_object.as_deref(),
             &template_type_refs,
         );
     } else {

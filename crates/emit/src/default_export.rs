@@ -93,7 +93,6 @@ pub(crate) fn emit_default_export_declarations_ts(
     render_name: &SmolStr,
     generics: Option<&str>,
     prop_type_source: Option<&str>,
-    exports_object: Option<&str>,
     template_type_refs: &[SmolStr],
 ) {
     // Upstream's `addComponentExport.ts:343` selects between three
@@ -113,33 +112,6 @@ pub(crate) fn emit_default_export_declarations_ts(
         return;
     }
     let use_class_wrapper = generics.is_some() && prop_type_source.is_some();
-    // Module-scope references to the Exports slot MUST go through
-    // `Awaited<ReturnType<typeof $$render>>['exports']`, NOT through
-    // the `exports_object` string directly. The string contains
-    // `typeof <name>` body-scope references (so initializer-inferred
-    // types like `Writable<{x,y}>` for `let translate = writable(...)`
-    // are preserved through the render function's lexical scope);
-    // those refs would fire TS2304 at module scope. Mirrors upstream
-    // svelte2tsx's `__sveltets_2_isomorphic_component($$render())`
-    // pattern, which threads Exports through the call-site evaluation
-    // rather than naming body-locals from module scope.
-    //
-    // When the component has no `export let`s at all, `exports_object`
-    // is `None` — in that case `Awaited<…>['exports']` still resolves
-    // (to `{}` from the render body's `exports: {} as {}` literal) so
-    // we prefer it unconditionally once a render name is in play.
-    let exports_projection = exports_object
-        .as_ref()
-        .map(|_| format!("Awaited<ReturnType<typeof {render_name}>>['exports']"));
-    let exports_clause = exports_projection
-        .as_deref()
-        .map(|e| format!(" & {e}"))
-        .unwrap_or_default();
-    let component_exports_arg = exports_projection
-        .as_deref()
-        .map(|e| format!(", {e}"))
-        .unwrap_or_default();
-
     // Class-wrapper declaration at module scope. Its `props()` method's
     // return type is resolved THROUGH the render function, which is
     // where body-local `typeof X` refs are in scope. `Awaited<…>`
@@ -185,7 +157,6 @@ pub(crate) fn emit_default_export_declarations_ts(
             || split.is_some_and(|s| imports_name(&s.hoisted, n))
     });
     let ty_safe_in_generic_scope = prop_ty_is_literal || prop_ty_module_visible;
-    let ty_safe_in_module_scope = prop_ty_is_literal || prop_ty_module_visible;
 
     // SVELTE-4-COMPAT detection. Consumers of Svelte-4 components pass
     // `on:event` directives (rewritten to `on<event>` prop keys by us)
@@ -236,15 +207,6 @@ pub(crate) fn emit_default_export_declarations_ts(
         } else {
             inner
         }
-    };
-    let render_class_name_for_props = if use_class_wrapper {
-        generics.map(|g| {
-            let class_name = render_class_name(render_name);
-            let g_args = generic_arg_names(g);
-            format!("ReturnType<{class_name}<{g_args}>['props']>")
-        })
-    } else {
-        None
     };
     // Upstream's `$$IsomorphicComponent` (addComponentExport.ts:170-179):
     // a single interface that types both `new C({props})` (Svelte-4
@@ -353,15 +315,6 @@ pub(crate) fn emit_default_export_declarations_ts(
             "type __svn_component_default = InstanceType<typeof __svn_component_default>;"
         );
     }
-
-    // Drop references to fields that are no longer consulted in the
-    // unified path; keeping them in local scope would trigger
-    // unused-variable warnings in debug builds.
-    let _ = render_class_name_for_props;
-    let _ = exports_clause;
-    let _ = component_exports_arg;
-    let _ = ty_safe_in_module_scope;
-    let _ = exports_object;
 
     // Type-position reference for every type-only import that was
     // consumed only in a template expression. TS considers the type

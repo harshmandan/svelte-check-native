@@ -4,6 +4,52 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1]
+
+Patch release. Pure dependency refresh — every Rust dependency
+bumped to its crates.io latest, including major versions. No
+behavioral changes; bench parity unchanged.
+
+### Dependency bumps
+
+- **`oxc_*` 0.54 → 0.128** (74 minor versions on the JS/TS parser).
+  Ported AST API changes:
+  - `CallExpression.type_parameters` → `type_arguments`.
+  - `BindingPattern` is now an enum directly; the old wrapper
+    struct + `BindingPatternKind` collapsed. Every `pat.kind`
+    match becomes a match on `pat`. The `type_annotation` field
+    moved out of `BindingPattern` up to the parent declarator
+    (`VariableDeclarator`, `FormalParameter`).
+  - `SimpleAssignmentTarget` no longer carries
+    `TSInstantiationExpression` (TS doesn't allow update-target
+    instantiation expressions).
+  - One emit snapshot regenerated:
+    `ts-runes-best-effort-types.v5` — oxc 0.128's improved AST
+    introspection lets `PropsInfo` correctly extract destructured
+    prop types from defaults (`b = true` → `boolean`,
+    `c = 1` → `number`, etc.) where the older oxc fell back to
+    `any`. Net more accurate diagnostics on the same shape.
+- **`smallvec` 1.15 → 2.0.0-alpha.12.** New API uses
+  `SmallVec<T, N>` instead of `SmallVec<[T; N]>`. The four
+  `TemplateSummary` fields updated; behaviour identical.
+- **`smol_str` 0.3.2 → 0.3.6** (patch).
+
+### Toolchain
+
+- **MSRV 1.85 → 1.95.** Required by the dep bumps above.
+  `rust-toolchain.toml` added so the workspace pins to 1.95
+  stable.
+
+### Lints
+
+- **`clippy::collapsible_if` and `collapsible_match` allowed at
+  the workspace level.** Both were promoted to default-warn in
+  Rust 1.95 and flagged ~10 pre-existing nested-if sites across
+  parser / svelte-compiler / template walker. The destructure-
+  then-condition shape we use heavily reads better as nested
+  `if`s than as let-chains, so opt out at the workspace level
+  rather than rewrite swathes of pre-existing-clean code.
+
 ## [0.7.0]
 
 Minor release. New emit type-checking for several Svelte 5 template

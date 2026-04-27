@@ -1,6 +1,11 @@
 # Gap E — Snippet receiver typing: ours more correct than upstream
 
-## Status: INTENTIONAL DIVERGENCE (deferred)
+## Status: WORKING AS EXPECTED — charter exception, won't reopen
+
+Not "deferred" — a deferred item has a future trigger that closes
+it (e.g. waiting on a TypeScript upstream fix). This has none.
+It's a permanent intentional divergence with no path back to
+parity that preserves Gap A's typed-Component extraction.
 
 ## Symptom
 
@@ -76,7 +81,7 @@ This is **strictly more correct** typing than upstream's. The 720
 errors upstream fires are TRUE FALSE POSITIVES on user code that's
 type-safe.
 
-## Decision: defer
+## Decision: charter exception, won't reopen
 
 Per CLAUDE.md: "We are not stricter or lax-er than the upstream.
 Parity means same errors, same warnings and same number of
@@ -88,9 +93,11 @@ which closed real Threlte over-fires. Deliberately re-introducing
 the looseness costs both correctness AND user-experience (users
 would have to fix 720 fake errors).
 
-**Decision: keep our typing as-is.** Document the divergence in
-`notes/DEFERRED.md`. Treat it as a "we are more correct than
-upstream" case rather than a parity gap to close.
+This is a place where strict parity costs the user real value, so
+we **explicitly accept the charter exception**. Not a "we'll fix
+it later" deferral — there's no future trigger that would change
+this calculus. Documented in `notes/DEFERRED.md` §2.1 under the
+"working as expected" section, not the "genuinely deferred" one.
 
 If a user encounters the inverse problem — code that DOES rely on
 the `any`-shaped snippet receiver to silently pass — they have

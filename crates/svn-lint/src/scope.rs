@@ -37,6 +37,17 @@ use svn_core::Range;
 use svn_parser::document::{Document, ScriptSection};
 use svn_parser::parse_script_body;
 
+use crate::scope_rune_detection::{
+    detect_bindable_default, detect_rune_call_from_call, is_primitive_expr, is_primitive_rune_init,
+    state_rune_primitive_arg,
+};
+pub use crate::scope_rune_detection::is_rune_name;
+use crate::scope_util::{
+    base_identifier, expression_from_default, expression_from_for_init,
+    expression_from_property_key, extract_base_ident, idents_in_pattern, statement_span_start,
+    strip_comment_delimiters, unwrap_ts_wrappers,
+};
+
 // Public data types live in `scope_types.rs`. Re-export them so
 // external callers continue to reach `Binding`, `Scope`, etc. via
 // the `crate::scope::` path. ScopeTree itself stays here because
@@ -162,19 +173,6 @@ fn populate_compat_gated_fields(tree: &mut ScopeTree, compat: crate::compat::Com
     }
 }
 
-/// Was this binding declared with a `$state(primitive)`-style init?
-/// The `InitialKind::RuneCall.primitive_arg` flag captures this —
-/// true for `$state(0)`, `$state.raw(0)`, false for `$state({})`.
-fn is_primitive_rune_init(init: &InitialKind) -> bool {
-    matches!(
-        init,
-        InitialKind::RuneCall {
-            primitive_arg: true,
-            ..
-        }
-    )
-}
-
 fn promote_non_runes_exports(tree: &mut ScopeTree, doc: &Document<'_>) {
     let Some(script) = &doc.instance_script else {
         return;
@@ -235,34 +233,6 @@ fn promote_to_bindable_prop(tree: &mut ScopeTree, root: ScopeId, name: &str) {
         let b = &mut tree.bindings[bid.0 as usize];
         b.kind = BindingKind::BindableProp;
     }
-}
-
-fn idents_in_pattern(pat: &BindingPattern<'_>) -> Vec<String> {
-    let mut out = Vec::new();
-    fn go(pat: &BindingPattern<'_>, out: &mut Vec<String>) {
-        match &pat.kind {
-            BindingPatternKind::BindingIdentifier(id) => out.push(id.name.to_string()),
-            BindingPatternKind::ObjectPattern(op) => {
-                for prop in &op.properties {
-                    go(&prop.value, out);
-                }
-                if let Some(rest) = &op.rest {
-                    go(&rest.argument, out);
-                }
-            }
-            BindingPatternKind::ArrayPattern(ap) => {
-                for p in ap.elements.iter().flatten() {
-                    go(p, out);
-                }
-                if let Some(rest) = &ap.rest {
-                    go(&rest.argument, out);
-                }
-            }
-            BindingPatternKind::AssignmentPattern(ap) => go(&ap.left, out),
-        }
-    }
-    go(pat, &mut out);
-    out
 }
 
 /// Scan backward from `script_start` through whitespace-only runs
@@ -1339,51 +1309,6 @@ fn synthesize_store_subs(
     }
 }
 
-/// Pull the leading identifier of a bind-directive expression. For
-/// `foo` returns `Some("foo")`; for `foo[0]` returns `Some("foo")`;
-/// for `foo.bar.baz` returns `Some("foo")`. Anything else returns
-/// `None`.
-fn extract_base_ident(s: &str) -> Option<&str> {
-    let mut end = 0;
-    for (i, c) in s.char_indices() {
-        if i == 0 && !(c.is_ascii_alphabetic() || c == '_' || c == '$') {
-            return None;
-        }
-        if c.is_ascii_alphanumeric() || c == '_' || c == '$' {
-            end = i + c.len_utf8();
-        } else {
-            break;
-        }
-    }
-    if end == 0 { None } else { Some(&s[..end]) }
-}
-
-/// Matches upstream `utils.js::is_rune`. Keep in sync with the
-/// `RUNES` constant there.
-pub fn is_rune_name(name: &str) -> bool {
-    matches!(
-        name,
-        "$state"
-            | "$state.raw"
-            | "$state.eager"
-            | "$state.snapshot"
-            | "$derived"
-            | "$derived.by"
-            | "$props"
-            | "$props.id"
-            | "$bindable"
-            | "$effect"
-            | "$effect.pre"
-            | "$effect.tracking"
-            | "$effect.root"
-            | "$effect.pending"
-            | "$inspect"
-            | "$inspect().with"
-            | "$inspect.trace"
-            | "$host"
-    )
-}
-
 fn resolve_by_name(scopes: &[Scope], from: ScopeId, name: &str) -> Option<BindingId> {
     let mut cur = Some(from);
     while let Some(sid) = cur {
@@ -1457,41 +1382,6 @@ struct IgnoreSpan {
     /// or the `\n` for line comments.
     span_end: u32,
     codes: Vec<SmolStr>,
-}
-
-/// Extract the `span.start` of an arbitrary `Statement` — oxc doesn't
-/// expose a single uniform `span()` method, so we destructure.
-fn statement_span_start(stmt: &Statement<'_>) -> Option<u32> {
-    use oxc_span::GetSpan;
-    Some(stmt.span().start)
-}
-
-/// Peel off TS-only expression wrappers so rune-call detection sees
-/// the `$state(…)` call inside `$state<T>() as unknown as X` etc.
-/// Mirrors upstream's `remove_typescript_nodes` phase.
-fn unwrap_ts_wrappers<'e, 'a>(expr: &'e Expression<'a>) -> &'e Expression<'a> {
-    let mut cur = expr;
-    loop {
-        match cur {
-            Expression::TSAsExpression(t) => cur = &t.expression,
-            Expression::TSSatisfiesExpression(t) => cur = &t.expression,
-            Expression::TSNonNullExpression(t) => cur = &t.expression,
-            Expression::TSTypeAssertion(t) => cur = &t.expression,
-            Expression::TSInstantiationExpression(t) => cur = &t.expression,
-            Expression::ParenthesizedExpression(p) => cur = &p.expression,
-            _ => return cur,
-        }
-    }
-}
-
-fn strip_comment_delimiters(text: &str) -> Option<&str> {
-    if let Some(rest) = text.strip_prefix("//") {
-        Some(rest)
-    } else if let Some(rest) = text.strip_prefix("/*") {
-        Some(rest.trim_end_matches("*/"))
-    } else {
-        None
-    }
 }
 
 impl<'b, 'src> ScriptWalker<'b, 'src> {
@@ -2631,112 +2521,3 @@ fn apply_template_flags_since(
     }
 }
 
-/// For a `$state`/`$state.raw` call init, return whether the first
-/// argument is a primitive-like (matching upstream's `should_proxy`
-/// analog). `true` if no argument.
-fn state_rune_primitive_arg(e: &Expression<'_>) -> bool {
-    if let Expression::CallExpression(c) = e {
-        c.arguments
-            .first()
-            .and_then(|a| a.as_expression())
-            .map(is_primitive_expr)
-            .unwrap_or(true)
-    } else {
-        true
-    }
-}
-
-fn detect_rune_call_from_call(c: &CallExpression<'_>) -> Option<RuneCall> {
-    let callee_name = match &c.callee {
-        Expression::Identifier(id) => id.name.as_str().to_string(),
-        Expression::StaticMemberExpression(m) => {
-            if let Expression::Identifier(o) = &m.object {
-                format!("{}.{}", o.name.as_str(), m.property.name.as_str())
-            } else {
-                return None;
-            }
-        }
-        _ => return None,
-    };
-    Some(match callee_name.as_str() {
-        "$state" => RuneCall::State,
-        "$state.raw" => RuneCall::StateRaw,
-        "$derived" => RuneCall::Derived,
-        "$derived.by" => RuneCall::DerivedBy,
-        "$props" => RuneCall::Props,
-        "$bindable" => RuneCall::Bindable,
-        "$inspect" => RuneCall::Inspect,
-        "$host" => RuneCall::Host,
-        "$effect" => RuneCall::Effect,
-        _ => return None,
-    })
-}
-
-/// Detects `$bindable(default)` inside a $props() destructure default
-/// position. Returns `Some(primitive)` where primitive is whether the
-/// arg is a primitive-literal-ish thing, or `None` if not a $bindable
-/// call.
-fn detect_bindable_default(pat: &BindingPattern<'_>) -> Option<bool> {
-    match &pat.kind {
-        BindingPatternKind::AssignmentPattern(ap) => match &ap.right {
-            Expression::CallExpression(c) => {
-                if detect_rune_call_from_call(c) == Some(RuneCall::Bindable) {
-                    let arg_is_primitive = c
-                        .arguments
-                        .first()
-                        .and_then(|a| a.as_expression())
-                        .map(is_primitive_expr)
-                        .unwrap_or(true);
-                    Some(arg_is_primitive)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Conservative `should_proxy`-analog — upstream
-/// `3-transform/client/utils.js::should_proxy`. Returns `true` if the
-/// expression is one of the primitive-like kinds that should NOT be
-/// proxied.
-fn is_primitive_expr(e: &Expression<'_>) -> bool {
-    matches!(
-        e,
-        Expression::NullLiteral(_)
-            | Expression::NumericLiteral(_)
-            | Expression::StringLiteral(_)
-            | Expression::BooleanLiteral(_)
-            | Expression::BigIntLiteral(_)
-            | Expression::TemplateLiteral(_)
-            | Expression::ArrowFunctionExpression(_)
-            | Expression::FunctionExpression(_)
-            | Expression::UnaryExpression(_)
-            | Expression::BinaryExpression(_)
-    ) || matches!(e, Expression::Identifier(id) if id.name.as_str() == "undefined")
-}
-
-fn base_identifier<'a>(e: &'a Expression<'_>) -> Option<(&'a str, u32, u32)> {
-    match e {
-        Expression::Identifier(id) => Some((id.name.as_str(), id.span.start, id.span.end)),
-        Expression::StaticMemberExpression(m) => base_identifier(&m.object),
-        Expression::ComputedMemberExpression(m) => base_identifier(&m.object),
-        _ => None,
-    }
-}
-
-fn expression_from_for_init<'a>(e: &'a ForStatementInit<'_>) -> Option<&'a Expression<'a>> {
-    e.as_expression()
-}
-
-fn expression_from_default<'a>(
-    e: &'a oxc_ast::ast::ExportDefaultDeclarationKind<'_>,
-) -> Option<&'a Expression<'a>> {
-    e.as_expression()
-}
-
-fn expression_from_property_key<'a>(k: &'a PropertyKey<'_>) -> Option<&'a Expression<'a>> {
-    k.as_expression()
-}

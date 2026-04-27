@@ -41,10 +41,12 @@ mod ignore;
 mod messages;
 mod rules;
 mod scope;
+mod scope_rune_detection;
 // `scope_types` holds the public data types (Binding, Scope, …);
 // `scope` re-exports them, so callers reach them as
 // `crate::scope::Binding` etc. unchanged.
 mod scope_types;
+mod scope_util;
 mod walk;
 
 use std::path::{Path, PathBuf};

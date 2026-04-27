@@ -32,8 +32,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use svn_core::tsconfig::{
-    FlattenedReference, ModuleResolution, TsConfigFile, discover_workspace_member_refs,
-    flatten_references_from_chain, load_chain,
+    FlattenedReference, ModuleResolution, TsConfigFile, flatten_references_from_chain, load_chain,
 };
 
 use crate::cache::CacheLayout;
@@ -92,25 +91,10 @@ pub fn build(
     // whose types I need." Skip a reference pointing at the current
     // workspace — its own tsconfig chain already covers it via
     // `chain`. Empty vec for flat-project runs.
-    let mut sibling_refs: Vec<FlattenedReference> = flatten_references_from_chain(user_tsconfig)
+    let sibling_refs: Vec<FlattenedReference> = flatten_references_from_chain(user_tsconfig)
         .into_iter()
         .filter(|r| r.project_dir != layout.workspace)
         .collect();
-    // Pnpm/npm/yarn workspace fallback: when the entry chain has no
-    // explicit `references[]` (no TS project-references setup), look
-    // for a workspace manifest (pnpm-workspace.yaml or
-    // package.json#workspaces) at the workspace root and treat each
-    // member's tsconfig as an implicit sibling. Closes the
-    // `Cannot find module '$lib/...'` cluster on monorepos that
-    // declare paths only on the per-app level (real-world
-    // workspace-heavy layouts with multiple sites) without
-    // restructuring the user's tsconfig wiring.
-    if sibling_refs.is_empty() {
-        sibling_refs = discover_workspace_member_refs(&layout.workspace)
-            .into_iter()
-            .filter(|r| r.project_dir != layout.workspace)
-            .collect();
-    }
     // Acknowledge but don't consume the solution root — the CLI
     // still passes it down for future expansion (e.g.
     // paths-level aliases from the solution root).
@@ -206,14 +190,11 @@ pub fn build(
             }
         }
     }
-    // Sibling-project paths: COMBINE values across siblings (and the
-    // entry chain) for the same pattern. tsgo tries each value in
-    // order and uses the first that resolves to an existing file —
-    // so multiple sub-apps each contributing their own `$lib` →
-    // `<that-app>/src/lib` works as long as module names don't
-    // collide across sub-apps. Without this combine the first sibling
-    // wins outright and other sub-apps' files fail with TS2307. See
-    // `discover_workspace_member_refs`.
+    // Sibling-project paths: COMBINE values across siblings (from
+    // explicit TS `references[]`) for the same pattern. tsgo tries
+    // each value in order and uses the first that resolves to an
+    // existing file. Empty for flat-project runs; only populated when
+    // the user's tsconfig has a real `references[]` array.
     for sibling in &sibling_refs {
         for (pattern, values) in &sibling.paths {
             if values.is_empty() {

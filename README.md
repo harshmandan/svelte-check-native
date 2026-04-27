@@ -125,33 +125,6 @@ Output defaults to `machine` when run from a coding-agent CLI:
 - `1` — errors detected (or warnings with `--fail-on-warnings`)
 - `2` — invocation error (bad flag, missing tsconfig, tsgo not found)
 
-## Monorepos
-
-Pointed at a pnpm/npm/yarn workspace root with no `paths` of its own
-(`{ "extends": "tsconfig/base.json" }` and a `pnpm-workspace.yaml`
-listing `apps/*` / `packages/*`), this binary auto-discovers each
-member's `tsconfig.json` and unions their `compilerOptions.paths`
-into the overlay. So `import x from '$lib/foo'` from
-`apps/dashboard/src/...` resolves to `apps/dashboard/src/lib/foo`,
-and the same alias from `apps/api/src/...` resolves to
-`apps/api/src/lib/foo` — without restructuring your tsconfig.
-
-Tradeoff: when two members declare the SAME alias targeting
-DIFFERENT directories (`$lib` in `apps/a` vs `apps/b`), tsgo tries
-each in order. As long as module names don't collide across
-sub-apps the right one resolves; cross-app name collisions silently
-misresolve to the first-listed sub-app. Acceptable v0 — real
-monorepos rarely overlap module names across `$lib` trees.
-
-This is an innovation beyond upstream `svelte-check`. Their
-`--tsgo` mode requires `--tsconfig` and refuses to auto-discover.
-For tighter parity (and predictable per-app diagnostics), invoke
-this binary per sub-app instead:
-
-```sh
-svelte-check-native --workspace apps/dashboard
-```
-
 ## Roadmap
 
 - [ ] **CSS lint diagnostics**

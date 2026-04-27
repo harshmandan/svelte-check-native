@@ -21,6 +21,7 @@ oxc_parser.workspace = true
 oxc_span.workspace = true
 rayon.workspace = true
 memchr.workspace = true
+phf.workspace = true
 
 [dev-dependencies]
 serde.workspace = true

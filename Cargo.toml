@@ -45,6 +45,10 @@ memchr = "2"
 # linear-scan Vec<SmolStr> ::any-contains check (O(n²) on N synth
 # names × M components).
 indexmap = "2"
+# Compile-time perfect-hash maps for static lookup tables. Used in
+# svn-lint for ARIA prop / role tables (48 / 127 entries each)
+# called per-element-per-rule on the lint hot path.
+phf = { version = "0.13", features = ["macros"] }
 # Tolerant JSON for tsconfig.json (comments + trailing commas).
 json5 = "1"
 

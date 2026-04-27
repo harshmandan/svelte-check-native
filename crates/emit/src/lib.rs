@@ -317,7 +317,7 @@ fn emit_document_with_render_name(
     // that reference body-locals via `typeof` stay body-scoped so
     // `keyof typeof X` resolves against the real declaration rather
     // than the lossy declare-const stub.
-    let mut props_info: PropsInfo =
+    let raw_props_info: PropsInfo =
         if let (Some(s), Some(parsed)) = (doc.instance_script.as_ref(), parsed_instance.as_ref()) {
             PropsInfo::build(&parsed.program, s.content)
         } else {
@@ -359,10 +359,10 @@ fn emit_document_with_render_name(
     let route_props_synth: Option<String> = if is_route_file
         && is_ts
         && doc.script_lang() == svn_parser::ScriptLang::Ts
-        && props_info.type_text.is_none()
+        && raw_props_info.type_text.is_none()
     {
         sveltekit::route_kind(source_path).and_then(|kind| {
-            let names_borrow: Vec<&str> = props_info
+            let names_borrow: Vec<&str> = raw_props_info
                 .destructures
                 .iter()
                 .map(|p| p.local_name.as_str())
@@ -372,21 +372,32 @@ fn emit_document_with_render_name(
     } else {
         None
     };
-    if let Some(literal) = route_props_synth {
-        props_info.type_text = Some(literal);
-        props_info.type_root_name = None;
-        props_info.source = svn_analyze::PropsSource::SynthesisedFromDestructure;
-    } else if is_ts
-        && !is_route_file
-        && doc.script_lang() == svn_parser::ScriptLang::Ts
-        && props_info.type_text.is_none()
-        && !props_info.destructures.is_empty()
-        && let Some(literal) = synthesise_js_props_typedef_body(&props_info)
-    {
-        props_info.type_text = Some(literal);
-        props_info.type_root_name = None;
-        props_info.source = svn_analyze::PropsSource::SynthesisedFromDestructure;
-    }
+    let synth_override: Option<String> = route_props_synth.or_else(|| {
+        if is_ts
+            && !is_route_file
+            && doc.script_lang() == svn_parser::ScriptLang::Ts
+            && raw_props_info.type_text.is_none()
+            && !raw_props_info.destructures.is_empty()
+        {
+            synthesise_js_props_typedef_body(&raw_props_info)
+        } else {
+            None
+        }
+    });
+    // Two-step construction with no post-build mutation: emit-time
+    // context (route kind, is_ts) decides whether to override the
+    // analyze-derived type text, then PropsInfo is rebuilt via
+    // struct-update with that decision applied. Architecture rule
+    // #2: analyze outputs are read-only in emit.
+    let props_info: PropsInfo = match synth_override {
+        Some(literal) => PropsInfo {
+            type_text: Some(literal),
+            type_root_name: None,
+            source: svn_analyze::PropsSource::SynthesisedFromDestructure,
+            ..raw_props_info
+        },
+        None => raw_props_info,
+    };
 
     // Three-trigger gate for event-type narrowing, matching upstream
     // svelte2tsx (`ComponentEvents.ts:84-86` + `ExportedNames.isRunesMode`).
@@ -582,10 +593,16 @@ fn emit_document_with_render_name(
     {
         let _ = writeln!(buf, "type $$ComponentProps = {body};");
     }
-    if alias_body.is_some() {
-        props_info.type_text = Some("$$ComponentProps".to_string());
-        props_info.type_root_name = Some(SmolStr::new("$$ComponentProps"));
-    }
+    // After the alias decision, downstream code reads the EFFECTIVE
+    // type text — either `$$ComponentProps` (when aliased) or the
+    // original `props_info.type_text`. Carrying these as locals keeps
+    // `props_info` itself immutable for the rest of emit, matching
+    // architecture rule #2's "analyze outputs are read-only".
+    let effective_props_type_text: Option<String> = if alias_body.is_some() {
+        Some("$$ComponentProps".to_string())
+    } else {
+        props_info.type_text.clone()
+    };
 
     match &generics {
         Some(g) => {
@@ -628,6 +645,7 @@ fn emit_document_with_render_name(
         split.as_ref(),
         rewritten_content.as_deref(),
         &props_info,
+        effective_props_type_text.as_deref(),
     );
 
     // Store auto-subscribe aliases: declare a typed `let $store!:
@@ -842,6 +860,7 @@ struct ScriptAndTemplateAnalysis {
 /// (so reactive-destructure-introduced names — `$: ({a, b} = expr)` →
 /// `let {a, b} = …` — participate in subsequent `$a`/`$b` store-alias
 /// detection).
+#[allow(clippy::too_many_arguments)]
 fn analyze_script_and_template_refs<'alloc>(
     doc: &svn_parser::Document<'_>,
     source_path: &Path,
@@ -850,6 +869,7 @@ fn analyze_script_and_template_refs<'alloc>(
     split: Option<&process_instance_script_content::SplitScript>,
     rewritten_content: Option<&str>,
     props_info: &PropsInfo,
+    effective_props_type_text: Option<&str>,
 ) -> ScriptAndTemplateAnalysis {
     // Parse the module script once up front; both `script_bindings`
     // collection and the type-only-import scan below consume it.
@@ -881,7 +901,7 @@ fn analyze_script_and_template_refs<'alloc>(
             // `PageData` / `LayoutData` / `ActionData` from the file
             // path + the list of destructured prop names. Only fires
             // when PropsInfo saw no user-provided source.
-            let ty = props_info.type_text.clone().or_else(|| {
+            let ty = effective_props_type_text.map(|s| s.to_string()).or_else(|| {
                 sveltekit::route_kind(source_path).and_then(|kind| {
                     let names_borrow: Vec<&str> = props.iter().map(|s| s.as_str()).collect();
                     sveltekit::synthesize_route_props_type(kind, &names_borrow)

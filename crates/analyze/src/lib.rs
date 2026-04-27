@@ -1,25 +1,42 @@
 //! Semantic analysis passes over the Svelte AST.
 //!
-//! Populates a `SemanticModel` with: detected runes, prop destructures,
-//! store subscriptions, `bind:` targets, SvelteKit route role, and —
-//! critically — a `VoidRefRegistry` collecting every synthesized name
-//! that the emit crate will need to reference.
+//! Two product-type outputs are bundled into [`SemanticModel`]:
 //!
-//! Centralizing the registry of synthesized names is what stops emit from
-//! having to remember a per-feature `void <name>;` line every time a new
-//! emission landed. Every kind of synthesized name (template-check
-//! wrapper, action attrs, bind pairs, store aliases, prop locals)
-//! registers here; emit reads the registry once and writes a single
-//! consolidated `void (...)` block.
+//! - [`PropsInfo`] — Props-shape decision: type text, root name,
+//!   destructured locals, source kind. Built once per file from the
+//!   parsed instance script.
+//! - [`TemplateSummary`] — output of the structural template walk:
+//!   bind:this targets, `{@const}` names, `<slot>` definitions,
+//!   component instantiations, action directives, and the
+//!   [`VoidRefRegistry`] of synthesized names emit must reference.
 //!
-//! All passes share a single `Visitor` walk of the AST. One pass, many
-//! collectors.
+//! Centralizing the void-ref registry is what stops emit from
+//! having to remember a per-feature `void <name>;` line every time
+//! a new emission landed. Every kind of synthesized name
+//! (template-check wrapper, action attrs, bind pairs, store
+//! aliases, prop locals) registers there; emit reads the registry
+//! once and writes a single consolidated `void (...)` block.
+//!
+//! In addition to the bundled outputs, the crate exports stateful
+//! accumulator helpers — `collect_top_level_bindings`,
+//! `find_store_refs_with_bindings`, `find_template_refs`,
+//! `collect_typed_uninit_lets`, `collect_typed_top_level_lets`.
+//! These are driven by emit at specific points in its flow (e.g.
+//! `collect_top_level_bindings` is called three times to union
+//! identifiers from module + instance + rewritten-instance
+//! programs). They join `SemanticModel` only when a second consumer
+//! needs the same accumulated set up-front — see `CLAUDE.md`'s
+//! "don't invent placeholder fields with no reader" rule.
+//!
+//! All passes share a single `Visitor` walk of the AST. One pass,
+//! many collectors.
 
 // Tests are allowed to panic loudly on setup failures.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 pub mod dom_binding;
 pub mod jsdoc;
+pub mod model;
 pub mod props;
 pub mod rune;
 pub mod store;
@@ -31,6 +48,7 @@ pub mod void_refs;
 pub use jsdoc::{
     scan_jsdoc_props_typedef_keys, scan_jsdoc_typedef_name, should_synthesise_js_props,
 };
+pub use model::SemanticModel;
 pub use props::{
     PropInfo, PropsInfo, PropsSource, contains_typeof_ref, find_dispatcher_event_type_source,
     root_type_name_of,

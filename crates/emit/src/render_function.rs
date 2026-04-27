@@ -24,7 +24,7 @@ use crate::emit_buffer::EmitBuffer;
 use crate::emit_is_ts;
 use crate::emit_template_body;
 use crate::nodes::action::emit_legacy_action_attrs;
-use crate::props_emit::{build_slots_field_type, synthesise_js_props_typedef_body};
+use crate::props_emit::{synthesise_js_props_typedef_body, write_slots_field_type};
 use crate::svelte4::compat::has_strict_events;
 use svn_analyze::{TemplateSummary, scan_jsdoc_typedef_name, should_synthesise_js_props};
 
@@ -204,24 +204,22 @@ pub(crate) fn emit_render_body_return(
         // handler's payload type defaults to `CustomEvent<any>`.
         "{ [evt: string]: CustomEvent<any> }".to_string()
     };
-    // Build the `slots:` field type. When the template has any
-    // `<slot [name="X"] [attr=…]>` sites, emit each as a scope-
-    // resolved value literal — the `slots: { 'X': { name1: (expr1)
-    // …}}` value flows through `Awaited<ReturnType<typeof
-    // $$render>>['slots']` into `SvelteComponent<P, E, S>`'s slots
-    // generic.
-    let slots_field: String = build_slots_field_type(slot_defs);
-    // With-generics branch preserves the original behaviour for
-    // class-wrapper emission: the caller already synthesised the
-    // props-ref via the render class, so we emit the typed literal
-    // exactly as before to keep the shape stable.
+    // The `slots:` field literal is written straight into the emit
+    // buffer at its splice site — see [`write_slots_field_type`] for
+    // shape. Single-line output, so bypassing EmitBuffer's line
+    // tracker via `raw_string_mut()` is safe.
     if generics.is_some() {
         let Some(ty) = prop_type_source else {
             return;
         };
+        let _ = write!(
+            buf,
+            "    return {{ props: undefined as any as ({ty}), events: undefined as any as {events_field}, slots: ",
+        );
+        write_slots_field_type(buf.raw_string_mut(), slot_defs);
         let _ = writeln!(
             buf,
-            "    return {{ props: undefined as any as ({ty}), events: undefined as any as {events_field}, slots: {slots_field}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
+            ", bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};",
         );
         return;
     }
@@ -232,8 +230,13 @@ pub(crate) fn emit_render_body_return(
             .map(|e| e.to_string())
             .unwrap_or_else(|| "Record<string, any>".to_string()),
     };
+    let _ = write!(
+        buf,
+        "    return {{ props: undefined as any as ({props_ty}), events: undefined as any as {events_field}, slots: ",
+    );
+    write_slots_field_type(buf.raw_string_mut(), slot_defs);
     let _ = writeln!(
         buf,
-        "    return {{ props: undefined as any as ({props_ty}), events: undefined as any as {events_field}, slots: {slots_field}, bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};"
+        ", bindings: undefined as any as string, exports: undefined as any as ({exports_field}) }};",
     );
 }

@@ -107,7 +107,10 @@ pub(crate) fn render_class_name(render_fn_name: &str) -> SmolStr {
 ///   inner `U` doesn't get counted as a separator)
 /// - `T = string` → `T`
 pub(crate) fn generic_arg_names(generics: &str) -> String {
-    let mut out = String::new();
+    // Output is a strict subset of `generics` (drops constraints /
+    // defaults, keeps names + commas). Pre-size to input length so
+    // single-shot push_strs don't trigger any growth realloc.
+    let mut out = String::with_capacity(generics.len());
     let mut depth_angle: i32 = 0;
     let mut depth_paren: i32 = 0;
     let mut depth_bracket: i32 = 0;

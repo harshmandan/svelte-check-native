@@ -276,11 +276,12 @@ fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAc
 ///
 /// Mirrors upstream svelte2tsx's `slotsAsDef` builder in
 /// `createRenderFunction.ts:125-133`.
-pub(crate) fn build_slots_field_type(slot_defs: &[svn_analyze::SlotDef]) -> String {
+pub(crate) fn write_slots_field_type(out: &mut String, slot_defs: &[svn_analyze::SlotDef]) {
     if slot_defs.is_empty() {
-        return "undefined as any as {}".to_string();
+        out.push_str("undefined as any as {}");
+        return;
     }
-    let mut out = String::from("{ ");
+    out.push_str("{ ");
     let mut first_slot = true;
     for def in slot_defs {
         if !first_slot {
@@ -304,5 +305,4 @@ pub(crate) fn build_slots_field_type(slot_defs: &[svn_analyze::SlotDef]) -> Stri
         out.push_str(" }");
     }
     out.push_str(" }");
-    out
 }

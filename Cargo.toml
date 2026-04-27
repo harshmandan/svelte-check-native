@@ -89,7 +89,7 @@ semver = "1"
 # character. oxc is the only parser in the workspace for this reason.
 oxc_allocator = "0.54"
 oxc_ast = "0.54"
-oxc_diagnostics = "0.54"
+oxc_diagnostics = "0.75"
 oxc_parser = "0.54"
 oxc_span = "0.54"
 

@@ -1508,11 +1508,29 @@ fn synthesize_store_subs(
         //   carve-out (which preserves e.g. `const foo = $props(); $foo()`
         //   as a conflict).
         if let Some(bid) = backing {
-            if let InitialKind::RuneCall { rune, .. } = tree.bindings[bid.0 as usize].initial {
+            let backing_binding = &tree.bindings[bid.0 as usize];
+            if let InitialKind::RuneCall { rune, .. } = backing_binding.initial {
                 let props_exception = store_name != "props" && rune == RuneCall::Props;
                 if !props_exception {
                     continue;
                 }
+            }
+            // Additional carve-out: `let { props } = $props()` destructures
+            // a field NAMED `props` out of the rune call. Our destructure
+            // handler rewires the field's `initial` to `None` (matching
+            // upstream `VariableDeclarator.js:104-130`), so the
+            // `RuneCall { Props }` check above doesn't catch it. The
+            // destructured `props` field carries `BindingKind::Prop`,
+            // which is unique to fields destructured from `$props()` —
+            // that's the signal we use to skip synthesis here.
+            //
+            // Without this skip, `let { props } = $props()` fires a
+            // false-positive `store_rune_conflict` on every reference to
+            // `$props(...)` in the script — verified against upstream
+            // svelte/compiler 5.53.6 on threlte/theatre, which does NOT
+            // fire the warning for this canonical pattern.
+            if store_name == "props" && backing_binding.kind == BindingKind::Prop {
+                continue;
             }
         }
         buckets.entry(SmolStr::from(n)).or_default().push(i);

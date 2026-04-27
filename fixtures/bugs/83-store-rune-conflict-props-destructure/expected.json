@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Theatre warnings investigation (2026-04-27): svn-lint's `store_rune_conflict` rule was firing a false positive on `let { props, ... } = $props()` — claiming the user's `$props` rune call conflicted with a local binding `props`. But the local `props` IS destructured FROM `$props()`; it's the conventional shape for a component that receives a prop named `props` (e.g., `<Foo props={...} />`). Verified against upstream svelte/compiler 5.53.6: this pattern produces ONLY `state_referenced_locally`, never `store_rune_conflict`. Fix in `crates/svn-lint/src/scope.rs::synthesize_store_subs`: when the backing binding for `$props` resolution is `BindingKind::Prop` (only emitted by destructuring from $props()) AND store_name is `'props'`, skip synthesis. Closes the +2W gap on threlte/theatre (16W → 14W byte-perfect)."
+}

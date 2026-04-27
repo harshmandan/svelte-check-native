@@ -33,18 +33,27 @@
 
 pub mod cache;
 pub mod discovery;
+mod filters;
 pub mod kit_app_ambients;
 pub mod kit_types_mirror;
 pub mod output;
 pub mod overlay;
+mod path_utils;
+mod position;
 pub mod runner;
+mod types;
 
 use std::path::{Path, PathBuf};
 
 pub use cache::{CacheLayout, write_if_changed};
 pub use discovery::{DiscoveryError, TsgoBinary, discover};
+pub use filters::scan_ignore_regions;
 pub use output::{RawDiagnostic, Severity, parse as parse_output};
 pub use runner::{RunError, run as run_tsgo};
+pub use types::{
+    CheckDiagnostic, CheckError, CheckInput, CheckOutput, DiagnosticCode, DiagnosticSource,
+    IGNORE_END_MARKER, IGNORE_START_MARKER, InputKind, MapData,
+};
 
 /// Svelte type shims — single source of truth for everything we ship
 /// into the cache. Structure:
@@ -80,9 +89,6 @@ const STATE_AMBIENTS_END: &str = "// @@STATE_AMBIENTS_END@@";
 /// scaffolding (`$$bindings = '...'` trail, intermediate helper
 /// locals) as "this is our code, not the user's — don't surface
 /// errors here".
-pub const IGNORE_START_MARKER: &str = "/*svn:ignore_start*/";
-pub const IGNORE_END_MARKER: &str = "/*svn:ignore_end*/";
-
 /// Return the shim text with the fallback `declare module 'svelte/*'`
 /// block AND our `$state<T>` ambient overloads stripped when
 /// `keep_fallback` is false (i.e. real svelte is installed). Line
@@ -165,218 +171,6 @@ fn gc_orphaned_overlays(svelte_dir: &Path, written_paths: &std::collections::Has
             let _ = std::fs::remove_file(path);
         }
     }
-}
-
-/// Per-file mapping data the diagnostic mapper needs to translate a
-/// tsgo `(line, column)` back to a source `(line, column)`.
-///
-/// Built from each input's [`CheckInput`] fields (line_map + token_map +
-/// overlay_line_starts + source_line_starts) and keyed by the overlay
-/// path so diagnostic lookup is O(1) on path.
-#[derive(Debug, Clone, Default)]
-pub struct MapData {
-    pub line_map: Vec<LineMapEntry>,
-    pub token_map: Vec<TokenMapEntry>,
-    pub overlay_line_starts: Vec<u32>,
-    pub source_line_starts: Vec<u32>,
-    /// Overlay text. Required because tsgo emits 1-based UTF-16
-    /// column counts (LSP convention) and we need the actual line
-    /// contents to convert UTF-16 column → byte offset. Pure ASCII
-    /// lines treat both as equivalent; non-ASCII lines diverge.
-    pub overlay_text: String,
-    /// Source `.svelte` text. Same UTF-16-vs-byte conversion need on
-    /// the source side: we map a matched token-map's source byte
-    /// range back to a (line, UTF-16-column) for the user-facing
-    /// diagnostic.
-    pub source_text: String,
-    /// When true, overlay positions that don't match any `token_map` /
-    /// `line_map` entry pass through unchanged (identity map) instead
-    /// of being dropped. Set for kit-file inputs where the overlay is
-    /// the original source plus sparse `: T` insertions that never add
-    /// lines — diagnostics against unmodified regions line up 1:1.
-    pub identity_map: bool,
-    /// Byte-offset ranges (start, end) in the overlay where emit has
-    /// marked scaffolding with [`IGNORE_START_MARKER`] /
-    /// [`IGNORE_END_MARKER`]. Diagnostics whose start position falls
-    /// inside any of these ranges are dropped in `map_diagnostic`.
-    /// Ranges are sorted by start and non-overlapping (each
-    /// `ignore_start` pairs with the NEXT `ignore_end`).
-    pub ignore_regions: Vec<(u32, u32)>,
-}
-
-/// One file to type-check.
-#[derive(Debug, Clone)]
-pub struct CheckInput {
-    /// Original source path (absolute). Usually a `.svelte` file; for
-    /// Kit-file inputs (`kind == InputKind::KitFile`) it's a `.ts`
-    /// under `src/routes/` or `src/hooks.*` / `src/params/`.
-    pub source_path: PathBuf,
-    /// Generated TypeScript that should be type-checked.
-    pub generated_ts: String,
-    /// Line mappings from emit — overlay-line ranges back to source-line
-    /// ranges. Empty for non-Svelte inputs (where overlay line == source
-    /// line).
-    pub line_map: Vec<LineMapEntry>,
-    /// Token-level byte-span mappings from emit — synthesized overlay
-    /// spans back to source byte spans. Takes precedence over
-    /// `line_map` during diagnostic translation. Empty for Kit files
-    /// and currently empty for Svelte files too (v0.3 Item 1 is pure
-    /// plumbing; emit sites start pushing in follow-up PRs).
-    pub token_map: Vec<TokenMapEntry>,
-    /// Byte offsets of each line's start in the generated overlay. Used
-    /// to translate a tsgo `(line, column)` into an overlay byte
-    /// offset for token-map lookup. Empty for Kit files (line-col
-    /// pass-through is correct there).
-    pub overlay_line_starts: Vec<u32>,
-    /// Byte offsets of each line's start in the `.svelte` source. Used
-    /// to translate a matched TokenMapEntry's `source_byte_start`
-    /// back into a source `(line, column)`. Empty for Kit files.
-    pub source_line_starts: Vec<u32>,
-    /// What flavor of input this is. Drives the cache-write layout
-    /// (`.svelte.svn.ts` overlay + ambient sidecar for Svelte files;
-    /// mirror `.ts` in the cache-svelte tree for Kit files) and the
-    /// overlay-tsconfig treatment (Svelte files emit an exclusion
-    /// for the original `.svelte`; Kit files add the original `.ts`
-    /// to `exclude` so tsgo only sees our injected-type overlay).
-    pub kind: InputKind,
-    /// Whether the generated overlay is TypeScript (`.svelte.svn.ts`)
-    /// or JavaScript (`.svelte.svn.js`). True for Kit/UserTsOverlay
-    /// kinds (always TS) and for Svelte sources whose
-    /// `Document::script_lang()` resolves to `Ts`. False only when
-    /// the JS-overlay branch is enabled AND the Svelte source has no
-    /// `<script lang="ts">`. The tsgo-applied inference rules differ
-    /// per extension under `checkJs:true + noImplicitAny:false`
-    /// (a common Svelte-5 CMS-style tsconfig shape): `.js` widens
-    /// `let x = $state([])` to `any[]`, `.ts` keeps it `never[]` —
-    /// load-bearing for third-party-integration clusters like the
-    /// CodeMirror.svelte wrapper pattern.
-    pub is_ts_overlay: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InputKind {
-    /// Svelte file that's IN the user's tsconfig scope
-    /// (`files` / `include` minus `exclude`). Written to the cache
-    /// AND listed explicitly in the overlay tsconfig's `files` so
-    /// tsgo loads it unconditionally.
-    Svelte,
-    /// Svelte file discovered on disk but NOT in the user's tsconfig
-    /// scope. Written to the cache + ambient sidecar so tsgo's
-    /// import resolution finds the overlay when an in-scope file
-    /// does `import './Foo.svelte'`, but NOT listed in the overlay
-    /// tsconfig's `files`. Mirrors upstream svelte2tsx's pattern of
-    /// emitting every discovered Svelte file and letting the
-    /// LanguageService follow imports to decide what gets checked.
-    SvelteAuxiliary,
-    /// SvelteKit Kit file (`+server.ts`, `+page.ts`, hooks, params)
-    /// that went through `kit_inject`. Writes a MIRROR overlay at
-    /// the same relative path under the cache svelte dir and pushes
-    /// the original source path into the overlay tsconfig's
-    /// `exclude` list so tsgo reads only the typed version.
-    KitFile,
-    /// User-authored `.ts` file that statically imports at least one
-    /// `.svelte` component whose directory ALSO contains a sibling
-    /// `.svelte.ts` runes module (the collision case that makes
-    /// tsgo's `rootDirs` resolution pick the runes module instead of
-    /// our overlay). We emit a mirror overlay at `kit_overlay_path`
-    /// with every `.svelte` specifier rewritten to `.svelte.svn.js`,
-    /// so the overlay resolves directly to the cache's generated TS.
-    /// Original source path is pushed into `exclude` so tsgo reads
-    /// only the rewritten version.
-    UserTsOverlay,
-}
-
-/// A single mapped-back diagnostic ready for presentation.
-#[derive(Debug, Clone)]
-pub struct CheckDiagnostic {
-    /// Original `.svelte` (or `.ts`/`.js`) source path.
-    pub source_path: PathBuf,
-    /// 1-based line of the diagnostic START in the original source.
-    pub line: u32,
-    /// 1-based column of the diagnostic START in the original source.
-    pub column: u32,
-    /// 1-based line of the diagnostic END. Equal to `line` for
-    /// single-line spans.
-    pub end_line: u32,
-    /// 1-based column of the diagnostic END (exclusive). For zero-width
-    /// spans this equals `column`.
-    pub end_column: u32,
-    pub severity: Severity,
-    /// Code identifier. `Numeric` for TypeScript (TS6133, TS2614, …),
-    /// `Slug` for Svelte compiler warnings (`state_referenced_locally`,
-    /// `element_invalid_self_closing_tag`, …). The output formatter
-    /// emits each form natively (number / quoted string).
-    pub code: DiagnosticCode,
-    pub message: String,
-    /// Where this diagnostic came from. Drives the `source` field in
-    /// machine-output and matches upstream svelte-check's classification.
-    pub source: DiagnosticSource,
-    /// Documentation URL for this diagnostic, if available. Surfaces as
-    /// `codeDescription.href` in machine-verbose output — IDE
-    /// integrations render it as a clickable link in the problems
-    /// panel.
-    pub code_description_url: Option<String>,
-}
-
-/// Polymorphic diagnostic code: TypeScript uses numbers, the Svelte
-/// compiler uses string slugs. Upstream svelte-check emits each
-/// natively in machine output (`"code": 6133` vs
-/// `"code": "state_referenced_locally"`), so editors and CI parsers
-/// can route by type.
-#[derive(Debug, Clone)]
-pub enum DiagnosticCode {
-    Numeric(u32),
-    Slug(String),
-}
-
-impl std::fmt::Display for DiagnosticCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            // TS-style display: `TS6133`. The numeric form is what
-            // user-facing tooling typically expects when prefixed.
-            Self::Numeric(n) => write!(f, "TS{n}"),
-            // Compiler slugs render as-is — matches the way svelte-
-            // check shows `state_referenced_locally`.
-            Self::Slug(s) => f.write_str(s),
-        }
-    }
-}
-
-/// Diagnostic origin. Mirrors the `source` field upstream svelte-check
-/// emits for each diagnostic (`"js"` covers both TS and JS — same
-/// backend; `"svelte"` is compiler diagnostics; `"css"` is CSS-linter
-/// diagnostics, reserved here for when we add a CSS pass).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiagnosticSource {
-    Js,
-    Svelte,
-    Css,
-}
-
-impl DiagnosticSource {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Js => "js",
-            Self::Svelte => "svelte",
-            Self::Css => "css",
-        }
-    }
-}
-
-/// Errors from the full check pipeline.
-#[derive(Debug, thiserror::Error)]
-pub enum CheckError {
-    #[error("io: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("tsgo discovery: {0}")]
-    Discovery(#[from] DiscoveryError),
-
-    #[error("tsgo run: {0}")]
-    Run(#[from] RunError),
-
-    #[error("failed to serialize overlay tsconfig: {0}")]
-    Serialize(#[from] serde_json::Error),
 }
 
 /// Run the full type-check pipeline.
@@ -476,7 +270,7 @@ pub fn check(
         // the specifier string only — line/column counts unchanged
         // so source-map data stays valid.
         if matches!(input.kind, InputKind::Svelte | InputKind::SvelteAuxiliary) {
-            input.generated_ts = rewrite_external_imports(
+            input.generated_ts = path_utils::rewrite_external_imports(
                 &input.generated_ts,
                 &input.source_path,
                 &gen_path,
@@ -648,488 +442,14 @@ pub fn check(
     let diagnostics = run
         .diagnostics
         .into_iter()
-        .filter(|d| !is_overlay_tsconfig_noise(d, &layout))
+        .filter(|d| !filters::is_overlay_tsconfig_noise(d, &layout))
         .filter_map(|d| map_diagnostic(d, &layout, &map_data))
-        .filter(|d| !is_svelte4_reactive_noop_comma(d))
+        .filter(|d| !filters::is_svelte4_reactive_noop_comma(d))
         .collect();
     Ok(CheckOutput {
         diagnostics,
         extended_diagnostics: run.extended_diagnostics,
     })
-}
-
-/// Bundle of what [`check`] returns.
-#[derive(Debug)]
-pub struct CheckOutput {
-    pub diagnostics: Vec<CheckDiagnostic>,
-    /// tsgo's `--extendedDiagnostics` stats block, present iff the
-    /// caller passed `extended_diagnostics = true` AND tsgo emitted a
-    /// recognizable block. The CLI prints this verbatim after the
-    /// normal output so users see tsgo's native perf/memory stats.
-    pub extended_diagnostics: Option<String>,
-}
-
-/// Filter for diagnostics that come from our own overlay tsconfig and
-/// represent intentional choices we've made — they're not user-actionable.
-///
-/// Robust against the path-shape tsgo emits: it formats diagnostic
-/// paths relative to its own cwd. We set tsgo's cwd to the workspace
-/// in [`run_tsgo`], so a relative `raw.file` joins back to the right
-/// absolute path. As defense in depth we also accept a match by
-/// canonicalized absolute path (handles symlinks like `/var` vs
-/// `/private/var` on macOS) and a final ends-with check on the unique
-/// `.svelte-check/tsconfig.json` suffix.
-fn is_overlay_tsconfig_noise(raw: &RawDiagnostic, layout: &CacheLayout) -> bool {
-    let abs = if raw.file.is_absolute() {
-        raw.file.clone()
-    } else {
-        layout.workspace.join(&raw.file)
-    };
-    if abs == layout.overlay_tsconfig {
-        return true;
-    }
-    if let (Ok(a), Ok(b)) = (
-        dunce::canonicalize(&abs),
-        dunce::canonicalize(&layout.overlay_tsconfig),
-    ) {
-        if a == b {
-            return true;
-        }
-    }
-    // Last resort: tsgo on some configurations emits the path as
-    // workspace-relative even when the overlay was passed absolute.
-    // The overlay's basename + parent directory together are unique
-    // enough that any path matching both is ours.
-    let overlay_name = layout
-        .overlay_tsconfig
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    let overlay_parent_name = layout
-        .overlay_tsconfig
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    if !overlay_name.is_empty() && !overlay_parent_name.is_empty() {
-        let raw_name = raw.file.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        let raw_parent_name = raw
-            .file
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-        if raw_name == overlay_name && raw_parent_name == overlay_parent_name {
-            return true;
-        }
-    }
-    false
-}
-
-/// SVELTE-4-COMPAT candidate: suppress TS2695 "Left side of comma
-/// operator is unused and has no side effects" on `.svelte` files
-/// that specifically trigger the Svelte-4 `$: (a, b, c)` dep-tracking
-/// idiom. Upstream svelte-check filters these via
-/// `isInReactiveStatement` in
-/// `language-server/src/plugins/typescript/features/DiagnosticsProvider.ts:512-543`
-/// — only diagnostics whose overlay AST node has a `$:` labeled-
-/// statement ancestor get suppressed.
-///
-/// Historical note: this used to be a blanket drop of ALL TS2695 on
-/// `.svelte` files. Empirical survey across our bench fleet
-/// (Svelte-4 / Svelte-5 controls plus a CMS, a charting-lib, and a
-/// component-lib bench — ~3600 files total) found exactly ZERO
-/// legitimate dep-tracking hits the blanket filter silenced that
-/// weren't already silenced by emit rewrites (destructure
-/// `$: ({a,b} = expr)` becomes a plain `let {a,b} = ...` with no
-/// surviving comma), and ONE upstream-matching fire it wrongly
-/// suppressed (a Svelte-5 `$effect(() => { ;(a, b()) })` site on
-/// the CMS bench where `$effect` doesn't use comma-dep-tracking, so the
-/// comma really is a bug and upstream correctly fires TS2695). The
-/// blanket filter was removed in favour of this narrower, currently
-/// never-fires path. If a future Svelte-4 project surfaces the
-/// dep-tracking idiom, extend this function to walk back from the
-/// overlay line for a `$:` label (our emit preserves the label —
-/// see `crates/emit/src/svelte4/reactive.rs`'s block-form rewrite).
-fn is_svelte4_reactive_noop_comma(diag: &CheckDiagnostic) -> bool {
-    let _ = diag;
-    false
-}
-
-/// Scan `overlay_text` for `IGNORE_START_MARKER` / `IGNORE_END_MARKER`
-/// pairs and return their byte-offset ranges in the overlay.
-///
-/// Each `ignore_start` pairs with the NEXT `ignore_end` (mirrors
-/// upstream's `isInGeneratedCode` pairing semantics). A stray
-/// unmatched `ignore_start` with no subsequent `ignore_end` extends
-/// to `overlay_text.len()` — equivalent to "everything after this
-/// marker is scaffolding". Empty result when the overlay has no
-/// markers.
-pub fn scan_ignore_regions(overlay_text: &str) -> Vec<(u32, u32)> {
-    let bytes = overlay_text.as_bytes();
-    let start_marker = IGNORE_START_MARKER.as_bytes();
-    let end_marker = IGNORE_END_MARKER.as_bytes();
-    let mut regions: Vec<(u32, u32)> = Vec::new();
-    let mut cursor: usize = 0;
-    while let Some(rel) = find_subslice(&bytes[cursor..], start_marker) {
-        let start = cursor + rel;
-        // Region begins AFTER the start marker (so the marker itself
-        // is tolerated — no diagnostic can legitimately originate
-        // inside a comment).
-        let region_start = start + start_marker.len();
-        let after_start = region_start;
-        let end = match find_subslice(&bytes[after_start..], end_marker) {
-            Some(rel_end) => after_start + rel_end,
-            None => bytes.len(),
-        };
-        regions.push((region_start as u32, end as u32));
-        cursor = end + end_marker.len().min(bytes.len() - end);
-    }
-    regions
-}
-
-/// `memmem`-style byte-slice search. Rust stdlib doesn't expose this
-/// for byte slices so we roll a small one. Linear in haystack size,
-/// which is fine for overlay files (~hundreds of KB at most).
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return None;
-    }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-/// Translate an overlay `(line, column)` into a byte offset using
-/// [`MapData::overlay_line_starts`]. Both line and column are
-/// 1-based (matching tsgo's diagnostic output). Returns `None` when
-/// the overlay-line-starts table is empty (non-Svelte input) or the
-/// requested line is out of range.
-fn overlay_byte_offset(data: &MapData, line: u32, column: u32) -> Option<u32> {
-    if data.overlay_line_starts.is_empty() || line == 0 {
-        return None;
-    }
-    // tsgo's `column` is 1-based UTF-16 code units; convert via
-    // `position_to_byte` so non-ASCII overlay content is handled
-    // correctly (the ignore-region filter that consumes this offset
-    // would otherwise miss markers when emit-synthesised scaffolding
-    // contains multi-byte chars — rare today, but the conversion
-    // costs nothing on ASCII-only lines).
-    position_to_byte(&data.overlay_line_starts, &data.overlay_text, line, column)
-}
-
-/// SVELTE-4-COMPAT: does the overlay text at `offset` start a Svelte-4
-/// `$:` reactive-statement label?
-///
-/// tsgo's TS7028 ("Unused label") points at the **identifier** that
-/// names the label — for `$: foo()` that's the `$` character at
-/// `offset`, with `:` immediately after. Both ours and upstream emit
-/// reactive statements as `;() => { $: <expr> }` (preserves the user's
-/// reactive code as a body for type-checking without actually running
-/// it), so the structural `$:` is the source of false-positive TS7028s
-/// when the user's tsconfig has `allowUnusedLabels: false` (default in
-/// strict-mode SvelteKit + threlte tsconfigs).
-///
-/// `overlay_text[offset]` must be `$` and `overlay_text[offset+1]` must
-/// be `:`. The `$` identifier is exactly one byte; tolerate optional
-/// whitespace between `$` and `:` purely defensively (Svelte's compiler
-/// rejects whitespace there, but our future emit might add it).
-fn is_overlay_dollar_reactive_label(overlay: &str, offset: u32) -> bool {
-    let bytes = overlay.as_bytes();
-    let off = offset as usize;
-    if bytes.get(off) != Some(&b'$') {
-        return false;
-    }
-    let mut i = off + 1;
-    while bytes.get(i).is_some_and(|b| b.is_ascii_whitespace()) {
-        i += 1;
-    }
-    bytes.get(i) == Some(&b':')
-}
-
-/// Does the overlay text at `offset` start a quoted attribute key
-/// of the form a `createElement(...)` literal would emit (e.g.
-/// `"on:click"`, `"class"`, `"id"`)?
-///
-/// We can't tell from the byte alone whether we're inside a
-/// `createElement` literal vs some other quoted identifier in user
-/// code; so the scan is heuristic — `"<ident-or-on:>"` followed by
-/// `:`. Used to filter TS1117/TS2300 duplicate-key diagnostics on
-/// element attribute names; mirrors upstream svelte-check's
-/// `isAttributeName(node, 'Element') || isEventHandler(node,
-/// 'Element')` filter at
-/// `language-server/src/plugins/typescript/features/
-/// DiagnosticsProvider.ts:366-371`. Less precise (no AST), but in
-/// practice covers the same patterns: Svelte's parser rejects
-/// duplicate static attributes at compile time, so the only
-/// overlay duplicates that reach the type-checker come from the
-/// `<el on:click={fn} on:click>` (handle + forward) idiom or from
-/// spread-plus-attribute combinations.
-fn is_overlay_attribute_key(overlay: &str, offset: u32) -> bool {
-    let bytes = overlay.as_bytes();
-    let off = offset as usize;
-    // tsgo's TS1117/TS2300 sometimes points at the opening `"`, sometimes
-    // at the first character INSIDE the quotes (the duplicate identifier
-    // itself). Walk backwards through valid attribute-name chars to
-    // find the opening quote.
-    let mut start = off;
-    while start > 0
-        && bytes
-            .get(start)
-            .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'-' | b'_' | b'$'))
-    {
-        if start == 0 {
-            break;
-        }
-        start -= 1;
-    }
-    if bytes.get(start) != Some(&b'"') {
-        return false;
-    }
-    let mut i = start + 1;
-    while let Some(&b) = bytes.get(i) {
-        if b == b'"' {
-            // Closing quote; check that `:` follows (with optional ws).
-            let mut j = i + 1;
-            while bytes.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
-                j += 1;
-            }
-            return bytes.get(j) == Some(&b':');
-        }
-        if !(b.is_ascii_alphanumeric() || matches!(b, b':' | b'-' | b'_' | b'$')) {
-            return false;
-        }
-        i += 1;
-    }
-    false
-}
-
-/// Check whether `offset` falls inside any `(start, end)` range in
-/// `regions`. Linear scan; regions are typically few per file.
-fn is_in_ignore_region(regions: &[(u32, u32)], offset: u32) -> bool {
-    regions
-        .iter()
-        .any(|&(start, end)| offset >= start && offset < end)
-}
-
-/// Resolve `.` and `..` components of `p` lexically — without touching
-/// the filesystem. Used to normalise tsgo's relative-with-`..` paths
-/// after they've been joined onto a workspace root.
-///
-/// Rewrite `../`-starting import specifiers in overlay text so they
-/// resolve correctly from the overlay's location (under
-/// `<workspace>/node_modules/.cache/svelte-check-native/svelte/...`)
-/// instead of from the source's location.
-///
-/// Mirrors upstream svelte2tsx's
-/// `helpers/rewriteExternalImports.ts::getExternalImportRewrite`:
-/// scan each import specifier; if it starts with `../` AND the resolved
-/// target sits OUTSIDE `workspace`, rewrite the specifier to be relative
-/// to the overlay's directory.
-///
-/// In-workspace `../`-imports stay as-is — they pass through TS's
-/// `rootDirs` virtual mapping (the overlay tsconfig lists both the
-/// source and cache directories as rootDirs).
-///
-/// Implementation: pure regex-style scan for `from "..."` /
-/// `from '...'` / `import "..."` / `import('...')` patterns.
-/// Conservative — if we misclassify a non-import string we'd just
-/// change a string-literal value, which doesn't affect type-checking.
-fn rewrite_external_imports(
-    overlay_text: &str,
-    source_path: &Path,
-    overlay_path: &Path,
-    workspace: &Path,
-) -> String {
-    let Some(source_dir) = source_path.parent() else {
-        return overlay_text.to_string();
-    };
-    let Some(overlay_dir) = overlay_path.parent() else {
-        return overlay_text.to_string();
-    };
-
-    let bytes = overlay_text.as_bytes();
-    let mut out = String::with_capacity(overlay_text.len());
-    let mut i = 0;
-    let mut copy_from = 0;
-    while i < bytes.len() {
-        // Only ASCII quote bytes (`'` and `"`) are valid quote
-        // delimiters in JS/TS string literals — multi-byte UTF-8
-        // characters can't BE quote delimiters, so the byte-level
-        // search is sound. The ASCII assumption only governs
-        // quote-detection; the slice-copy below preserves all bytes
-        // verbatim, multi-byte chars included.
-        let quote = bytes[i];
-        if (quote == b'\'' || quote == b'"')
-            && bytes.get(i + 1) == Some(&b'.')
-            && bytes.get(i + 2) == Some(&b'.')
-            && bytes.get(i + 3) == Some(&b'/')
-            && is_in_import_context(bytes, i)
-        {
-            // Find the matching closing quote (no escapes inside import
-            // specifiers — JS/TS forbids them in module specifier strings).
-            let spec_start = i + 1;
-            let mut j = spec_start;
-            while j < bytes.len() && bytes[j] != quote {
-                j += 1;
-            }
-            if j >= bytes.len() {
-                i += 1;
-                continue;
-            }
-            let specifier = &overlay_text[spec_start..j];
-            if let Some(rewritten) = compute_rewrite(specifier, source_dir, overlay_dir, workspace)
-            {
-                // Copy verbatim from `copy_from` up to (and including)
-                // the opening quote.
-                out.push_str(&overlay_text[copy_from..spec_start]);
-                out.push_str(&rewritten);
-                copy_from = j;
-                i = j;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    // Final tail.
-    out.push_str(&overlay_text[copy_from..]);
-    out
-}
-
-/// Check whether the byte position `quote_pos` is inside an
-/// import-style context — preceded by `from `, `import(`, or
-/// `import ` (with optional whitespace). Avoids rewriting plain
-/// string literals like `const x = '../foo';` that aren't imports.
-fn is_in_import_context(bytes: &[u8], quote_pos: usize) -> bool {
-    // Walk backwards past whitespace.
-    let mut i = quote_pos;
-    while i > 0 && bytes[i - 1].is_ascii_whitespace() {
-        i -= 1;
-    }
-    // Match `from`, `import`, or `import(` (with the `(` already past).
-    let preceded_by = |needle: &[u8]| -> bool {
-        i >= needle.len()
-            && &bytes[i - needle.len()..i] == needle
-            && (i == needle.len()
-                || !bytes[i - needle.len() - 1].is_ascii_alphanumeric()
-                    && bytes[i - needle.len() - 1] != b'_'
-                    && bytes[i - needle.len() - 1] != b'$')
-    };
-    if preceded_by(b"from") {
-        return true;
-    }
-    if preceded_by(b"import") {
-        return true;
-    }
-    // `import("...")` — bytes immediately before quote position is `(`,
-    // possibly with whitespace; `import` precedes the `(`.
-    if i > 0 && bytes[i - 1] == b'(' {
-        let mut k = i - 1;
-        while k > 0 && bytes[k - 1].is_ascii_whitespace() {
-            k -= 1;
-        }
-        if k >= b"import".len()
-            && &bytes[k - b"import".len()..k] == b"import"
-            && (k == b"import".len()
-                || !bytes[k - b"import".len() - 1].is_ascii_alphanumeric()
-                    && bytes[k - b"import".len() - 1] != b'_'
-                    && bytes[k - b"import".len() - 1] != b'$')
-        {
-            return true;
-        }
-    }
-    false
-}
-
-/// Compute the rewritten specifier, or `None` if no rewrite is
-/// needed.
-fn compute_rewrite(
-    specifier: &str,
-    source_dir: &Path,
-    overlay_dir: &Path,
-    workspace: &Path,
-) -> Option<String> {
-    if !specifier.starts_with("../") {
-        return None;
-    }
-    let target = lexical_normalise(&source_dir.join(specifier));
-    if is_within(&target, workspace) {
-        return None;
-    }
-    let rewritten_path = path_relative(overlay_dir, &target)?;
-    let rewritten = rewritten_path.to_string_lossy().replace('\\', "/");
-    if rewritten == specifier {
-        return None;
-    }
-    Some(rewritten)
-}
-
-/// Compute a relative path from `from_dir` to `to_path`, mirroring
-/// Node's `path.relative` semantics for our two-absolute-path inputs.
-fn path_relative(from_dir: &Path, to_path: &Path) -> Option<PathBuf> {
-    let from = lexical_normalise(from_dir);
-    let to = lexical_normalise(to_path);
-    let from_components: Vec<_> = from.components().collect();
-    let to_components: Vec<_> = to.components().collect();
-    let common_len = from_components
-        .iter()
-        .zip(to_components.iter())
-        .take_while(|(a, b)| a == b)
-        .count();
-    let mut out = PathBuf::new();
-    for _ in 0..(from_components.len() - common_len) {
-        out.push("..");
-    }
-    for component in &to_components[common_len..] {
-        out.push(component);
-    }
-    Some(out)
-}
-
-/// Is `target` inside `dir` lexically?
-fn is_within(target: &Path, dir: &Path) -> bool {
-    let target_n = lexical_normalise(target);
-    let dir_n = lexical_normalise(dir);
-    target_n.starts_with(&dir_n)
-}
-
-/// `dunce::canonicalize` would also resolve symlinks, but requires the
-/// file to exist. Lexical normalisation works on virtual paths (the
-/// cache may be written but tsgo's `..`-formed path may not literally
-/// exist as that string). Mirrors the path-clean crate's algorithm.
-fn lexical_normalise(p: &Path) -> PathBuf {
-    use std::path::Component;
-    let mut out = PathBuf::new();
-    let mut has_root = false;
-    for component in p.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir => {
-                has_root = true;
-                out.push(component.as_os_str());
-            }
-            Component::CurDir => {}
-            Component::ParentDir => {
-                let last = out.components().next_back();
-                match last {
-                    Some(Component::Normal(_)) => {
-                        out.pop();
-                    }
-                    Some(Component::ParentDir) | None => {
-                        // Leading `..` chain on a relative path is
-                        // preserved — there's nothing to pop against.
-                        out.push(component.as_os_str());
-                    }
-                    _ if has_root => {
-                        // `..` past the root collapses to the root
-                        // (Unix `cd /..` stays at `/`).
-                    }
-                    _ => out.push(component.as_os_str()),
-                }
-            }
-            Component::Normal(_) => out.push(component.as_os_str()),
-        }
-    }
-    out
 }
 
 fn map_diagnostic(
@@ -1154,7 +474,7 @@ fn map_diagnostic(
     } else {
         layout.workspace.join(&raw.file)
     };
-    let absolute_file = lexical_normalise(&absolute_file);
+    let absolute_file = path_utils::lexical_normalise(&absolute_file);
     let (source_path, line, column) = match layout.original_from_generated(&absolute_file) {
         Some(orig) => {
             // For overlay files, require the position to resolve to a
@@ -1177,8 +497,8 @@ fn map_diagnostic(
             // in these markers at emit time lets this filter drop
             // false-positive diagnostics that would otherwise surface
             // on overlay bytes the user never wrote.
-            if let Some(offset) = overlay_byte_offset(data, raw.line, raw.column)
-                && is_in_ignore_region(&data.ignore_regions, offset)
+            if let Some(offset) = position::overlay_byte_offset(data, raw.line, raw.column)
+                && filters::is_in_ignore_region(&data.ignore_regions, offset)
             {
                 return None;
             }
@@ -1194,8 +514,8 @@ fn map_diagnostic(
             // `language-tools/packages/language-server/src/plugins/
             // typescript/features/DiagnosticsProvider.ts:476-495`.
             if raw.code == 7028
-                && let Some(offset) = overlay_byte_offset(data, raw.line, raw.column)
-                && is_overlay_dollar_reactive_label(&data.overlay_text, offset)
+                && let Some(offset) = position::overlay_byte_offset(data, raw.line, raw.column)
+                && filters::is_overlay_dollar_reactive_label(&data.overlay_text, offset)
             {
                 return None;
             }
@@ -1224,12 +544,12 @@ fn map_diagnostic(
             // covers every real-world pattern observed on benches
             // through 2026-04-27.
             if (raw.code == 1117 || raw.code == 2300)
-                && let Some(offset) = overlay_byte_offset(data, raw.line, raw.column)
-                && is_overlay_attribute_key(&data.overlay_text, offset)
+                && let Some(offset) = position::overlay_byte_offset(data, raw.line, raw.column)
+                && filters::is_overlay_attribute_key(&data.overlay_text, offset)
             {
                 return None;
             }
-            match translate_position(data, raw.line, raw.column) {
+            match position::translate_position(data, raw.line, raw.column) {
                 Some((mapped_line, mapped_col)) => (orig, mapped_line, mapped_col),
                 None => return None,
             }
@@ -1260,214 +580,18 @@ fn map_diagnostic(
     })
 }
 
-/// Translate an overlay line into a source line via the line map.
-///
-/// The map is sorted by overlay_start_line. For an overlay line that
-/// falls inside an entry's range, return the corresponding source line
-/// preserving the relative offset. For lines OUTSIDE any entry (header
-/// comment, function wrapper, void block) return the source line of the
-/// nearest preceding entry, or 1 if none exists. This puts synthesized
-/// diagnostics on the first line of the most relevant verbatim region
-/// rather than at meaningless positions.
-fn translate_line(map: &[LineMapEntry], overlay_line: u32) -> Option<u32> {
-    if map.is_empty() {
-        return None;
-    }
-    // Find the entry containing overlay_line.
-    for entry in map {
-        if overlay_line >= entry.overlay_start_line && overlay_line < entry.overlay_end_line {
-            let delta = overlay_line - entry.overlay_start_line;
-            return Some(entry.source_start_line + delta);
-        }
-    }
-    // Outside any verbatim-content range: the diagnostic fired against
-    // synthesized scaffolding (component ctor calls, wrapper function,
-    // void block, default-export type) with no user-source origin.
-    // Signal this by returning None; `map_diagnostic` drops the
-    // diagnostic rather than clamping it to a nearby line — mirrors
-    // upstream svelte-check's source-map-driven filter.
-    None
-}
-
-/// Translate an overlay `(line, column)` into a source `(line, column)`
-/// via [`MapData`]. Both input and output use 1-based line/column.
-///
-/// Prefers a byte-span [`TokenMapEntry`] when one contains the
-/// overlay byte offset corresponding to `(line, column)`. When the
-/// overlay position falls inside multiple entries (nested spans), the
-/// tightest one wins — that's the one most precisely describing where
-/// the user-source content was spliced. Within the matched entry the
-/// column offset is preserved: `source_column = (overlay_byte - span)
-/// + source_byte_start`, converted to `(line, col)` via
-/// `source_line_starts`.
-///
-/// Falls back to [`translate_line`] on the line number alone when no
-/// token-map entry matches; the column is returned unchanged in that
-/// case (the line-map covers verbatim script blocks, where overlay
-/// column == source column because the script content is emitted
-/// verbatim). Returns `None` when neither a token-map nor a line-map
-/// entry covers the position — the diagnostic mapper drops those,
-/// matching upstream svelte-check's source-map-driven filter.
-fn translate_position(data: &MapData, overlay_line: u32, overlay_col: u32) -> Option<(u32, u32)> {
-    // Try the token map first — tightest-span wins. Requires a
-    // line-starts index to resolve (line, col) → byte offset.
-    if !data.token_map.is_empty() && !data.overlay_line_starts.is_empty() {
-        if let Some(byte) = position_to_byte(
-            &data.overlay_line_starts,
-            &data.overlay_text,
-            overlay_line,
-            overlay_col,
-        ) {
-            if let Some(entry) = find_tightest_token(&data.token_map, byte) {
-                // Preserve the column offset within the span so a
-                // diagnostic pointing at the middle of the spliced
-                // token still lands at the corresponding position in
-                // source. Clamp on overflow — a diagnostic past the
-                // source span's end lands at source_byte_end - 1.
-                let overlay_offset = byte.saturating_sub(entry.overlay_byte_start);
-                let source_byte = entry
-                    .source_byte_start
-                    .saturating_add(overlay_offset)
-                    .min(entry.source_byte_end.saturating_sub(1));
-                let (sl, sc) =
-                    byte_to_position(&data.source_line_starts, &data.source_text, source_byte);
-                return Some((sl, sc));
-            }
-        }
-    }
-    // Fall back to the line map. Column is returned unchanged because
-    // verbatim script content emits verbatim — overlay column equals
-    // source column within a line-map range.
-    if let Some(mapped) = translate_line(&data.line_map, overlay_line) {
-        return Some((mapped, overlay_col));
-    }
-    // Identity-map kit files: `kit_inject` splices `: T` annotations on
-    // existing lines — overlay never adds lines. Diagnostics against
-    // unmodified regions (the common case) line up 1:1 on both axes;
-    // on-insertion-line columns may drift but tsgo's diagnostics
-    // against kit files are rare and the approximation is better than
-    // dropping them entirely.
-    if data.identity_map {
-        return Some((overlay_line, overlay_col));
-    }
-    None
-}
-
-/// Find the tightest [`TokenMapEntry`] whose overlay byte span
-/// contains `byte`. "Tightest" = smallest `overlay_byte_end -
-/// overlay_byte_start` span; ties broken by last-wins (later entries
-/// reflect deeper nesting when emit pushes parent spans first and
-/// child splices second). Returns `None` when no entry covers the
-/// byte.
-fn find_tightest_token(map: &[TokenMapEntry], byte: u32) -> Option<TokenMapEntry> {
-    let mut best: Option<TokenMapEntry> = None;
-    for entry in map {
-        if byte < entry.overlay_byte_start || byte >= entry.overlay_byte_end {
-            continue;
-        }
-        let width = entry.overlay_byte_end - entry.overlay_byte_start;
-        match best {
-            None => best = Some(*entry),
-            Some(prev) => {
-                let prev_width = prev.overlay_byte_end - prev.overlay_byte_start;
-                if width <= prev_width {
-                    best = Some(*entry);
-                }
-            }
-        }
-    }
-    best
-}
-
-/// Convert a 1-based `(line, UTF-16 col)` into a byte offset.
-///
-/// tsgo (and upstream svelte-check / TypeScript / LSP) emit
-/// **UTF-16 code-unit columns**, NOT byte columns. For pure-ASCII
-/// lines the two coincide; for lines containing non-ASCII characters
-/// (UTF-8 bytes ≥ 0x80) they diverge — `é` is 1 UTF-16 unit but 2
-/// UTF-8 bytes. Walk the line text counting UTF-16 units to land
-/// on the correct byte.
-///
-/// Returns `None` when the line is past EOF. Columns past the end of
-/// the line clamp to the line's final byte (matches LSP server
-/// behaviour for over-shoots).
-fn position_to_byte(line_starts: &[u32], text: &str, line: u32, col: u32) -> Option<u32> {
-    if line == 0 {
-        return None;
-    }
-    let line_idx = (line - 1) as usize;
-    if line_idx >= line_starts.len().saturating_sub(1) {
-        return None;
-    }
-    let line_start = line_starts[line_idx];
-    let next = line_starts[line_idx + 1];
-    if col <= 1 {
-        return Some(line_start);
-    }
-    let target_units = (col - 1) as usize;
-    // Walk the line text byte-by-char, counting UTF-16 code units
-    // per char (2 for surrogate pairs / supplementary plane, 1
-    // otherwise). Stop when we've consumed `target_units` worth.
-    let line_bytes_end = next as usize;
-    let line_text = match text.get(line_start as usize..line_bytes_end) {
-        Some(s) => s,
-        // Source bytes don't form a valid UTF-8 slice (shouldn't
-        // happen — line_starts is built from str::char_indices via
-        // memchr on '\n') — clamp to line end so we still produce a
-        // diagnostic at the line, just at column 1.
-        None => return Some(line_start),
-    };
-    let mut units = 0usize;
-    for (offset, ch) in line_text.char_indices() {
-        if units >= target_units {
-            return Some(line_start.saturating_add(offset as u32));
-        }
-        units = units.saturating_add(ch.len_utf16());
-    }
-    // Column overshoots the line's end — clamp to the last byte on
-    // this line (the newline, if any).
-    Some(next.saturating_sub(1).max(line_start))
-}
-
-/// Convert a byte offset to a 1-based `(line, UTF-16 col)`.
-///
-/// Counts UTF-16 code units between the line start and the target
-/// byte, mirroring the LSP convention tsgo emits. Pure-ASCII lines
-/// pay no extra cost beyond a slice; non-ASCII lines walk char-by-
-/// char accumulating `char::len_utf16()`.
-///
-/// Used to render a matched TokenMapEntry's source byte back into a
-/// user-facing position. Clamps to the last line when `byte` is past
-/// EOF.
-fn byte_to_position(line_starts: &[u32], text: &str, byte: u32) -> (u32, u32) {
-    if line_starts.is_empty() {
-        return (1, 1);
-    }
-    // Binary search for the last entry with line_start <= byte.
-    let idx = match line_starts.binary_search(&byte) {
-        Ok(i) => i,
-        Err(i) => i.saturating_sub(1),
-    };
-    let line_idx = idx.min(line_starts.len().saturating_sub(2));
-    let line_start = line_starts[line_idx];
-    let line = (line_idx + 1) as u32;
-    let line_text = match text.get(line_start as usize..byte as usize) {
-        Some(s) => s,
-        // Byte didn't land on a UTF-8 boundary, or is past EOF —
-        // clamp to column 1.
-        None => return (line, 1),
-    };
-    let mut units = 0u32;
-    for ch in line_text.chars() {
-        units = units.saturating_add(ch.len_utf16() as u32);
-    }
-    (line, units + 1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    // Tests of moved helpers reference them via their new module
+    // paths. Pulled in here so the test bodies stay verbatim.
+    use crate::filters::{is_in_ignore_region, scan_ignore_regions};
+    use crate::path_utils::lexical_normalise;
+    use crate::position::{
+        byte_to_position, find_tightest_token, overlay_byte_offset, position_to_byte,
+        translate_position,
+    };
 
     #[test]
     fn lexical_normalise_resolves_dot_dot_segments() {

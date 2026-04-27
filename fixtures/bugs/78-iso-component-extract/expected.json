@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Gap A (2026-04-27 bench discovery on threlte/packages/extras): non-generic + runes + no-slots + no-events components must emit as `import('svelte').Component<P, X, B>` (callable-only, no `new` ctor) — NOT `$$IsomorphicComponent` (which forces a `new(...)` signature). User code in the wild does `Parameters<typeof Comp>` and `(typeof Comp)[]` (Threlte InstancedMeshes pattern); the inner-arrow value satisfies the call signature but cannot satisfy a `new` ctor, so the iso shape fired false-positive TS2322 cascades. Mirrors upstream `addComponentExport.ts:343` which selects `__sveltets_2_fn_component` for this profile. Validated in design/gap_a_iso_extraction/ before the Rust port."
+}

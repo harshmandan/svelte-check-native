@@ -3,7 +3,7 @@
         "import('./$types.js').PageData",
         "import('./$types.js').ActionData",
         "type $$ComponentProps = { data: import('./$types.js').PageData; form?: import('./$types.js').ActionData; };",
-        "const __svn_component_default: $$IsomorphicComponent = null as any;",
+        "const __svn_component_default: import('svelte').Component<",
         "let { data, form }: $$ComponentProps = $props()"
     ],
     "emit_not_contains": [

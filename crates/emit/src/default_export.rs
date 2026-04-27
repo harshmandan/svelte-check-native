@@ -23,7 +23,8 @@ use svn_parser::{Document, Fragment};
 use crate::emit_buffer::EmitBuffer;
 use crate::process_instance_script_content;
 use crate::svelte4::compat::{
-    contains_export_let, fragment_contains_slot, has_strict_events, is_svelte4_component,
+    contains_export_let, fragment_contains_slot, has_strict_events, has_strict_events_attr,
+    is_runes_mode, is_svelte4_component,
 };
 use crate::util::{generic_arg_names, render_class_name};
 
@@ -95,6 +96,22 @@ pub(crate) fn emit_default_export_declarations_ts(
     exports_object: Option<&str>,
     template_type_refs: &[SmolStr],
 ) {
+    // Upstream's `addComponentExport.ts:343` selects between three
+    // default-export shapes. For the **non-generic, runes, no-slots,
+    // no-events** profile, upstream emits `__sveltets_2_fn_component`
+    // which returns `Component<P, X, B>` — Svelte's actual `Component`
+    // interface, callable-only (no `new` ctor). User code that does
+    // `Parameters<typeof Comp>` or `(typeof Comp)[]` works cleanly
+    // against this shape but breaks against an iso interface (whose
+    // `new(...)` ctor sig the inner arrow can't satisfy).
+    //
+    // Threlte's instancing pattern (gap-A discovery, 2026-04-27) is
+    // the canonical example. See `design/gap_a_iso_extraction/` for
+    // tsgo-validated repro.
+    if should_emit_fn_component_shape(doc, fragment, split, generics) {
+        emit_fn_component_default_export(buf, render_name);
+        return;
+    }
     let use_class_wrapper = generics.is_some() && prop_type_source.is_some();
     // Module-scope references to the Exports slot MUST go through
     // `Awaited<ReturnType<typeof $$render>>['exports']`, NOT through
@@ -360,6 +377,101 @@ pub(crate) fn emit_default_export_declarations_ts(
         buf.push_str("];\n");
         buf.push_str("void (0 as any as __svn_tpl_type_refs);\n");
     }
+    buf.push_str("export default __svn_component_default;\n");
+}
+
+/// Should the TS-overlay default export use upstream's
+/// `__sveltets_2_fn_component` shape (returns Svelte's `Component<P,
+/// X, B>` interface, callable-only) instead of the per-component
+/// `$$IsomorphicComponent` interface?
+///
+/// Mirrors upstream `addComponentExport.ts:343` — true iff:
+/// - non-generic
+/// - Svelte 5 runes mode
+/// - no `<slot>` or `let:` consumers in the template
+/// - no events: no `$$Events` interface/type, no `strictEvents` attr,
+///   no `createEventDispatcher` calls, no Svelte-4 `export let`,
+///   no `$$props`/`$$restProps`/`$$slots` references, no exported
+///   instance-script locals
+///
+/// The Component<> shape's lack of a `new(...)` ctor is what makes
+/// `Parameters<typeof Comp>` and `(typeof Comp)[]` user patterns work
+/// — the inner arrow type satisfies the call signature but cannot
+/// satisfy a `new` ctor, so the iso interface fires false-positive
+/// TS2322s on those patterns.
+fn should_emit_fn_component_shape(
+    doc: &Document<'_>,
+    fragment: &Fragment,
+    split: Option<&process_instance_script_content::SplitScript>,
+    generics: Option<&str>,
+) -> bool {
+    if generics.is_some() {
+        return false;
+    }
+    if !is_runes_mode(doc) {
+        return false;
+    }
+    if fragment_contains_slot(fragment) {
+        return false;
+    }
+    if has_strict_events(doc) || has_strict_events_attr(doc) {
+        return false;
+    }
+    let instance_src = doc
+        .instance_script
+        .as_ref()
+        .map(|s| s.content)
+        .unwrap_or("");
+    let module_src = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
+    if instance_src.contains("createEventDispatcher")
+        || module_src.contains("createEventDispatcher")
+    {
+        return false;
+    }
+    if doc.source.contains("$$slots")
+        || doc.source.contains("$$restProps")
+        || doc.source.contains("$$props")
+    {
+        return false;
+    }
+    if contains_export_let(instance_src) || contains_export_let(module_src) {
+        return false;
+    }
+    if let Some(s) = split
+        && !s.exported_locals.is_empty()
+    {
+        return false;
+    }
+    true
+}
+
+/// Emit `Component<P, X, B>` default export — the
+/// `__sveltets_2_fn_component`-equivalent shape.
+///
+/// `Bindings` is passed as `''` (empty literal) to satisfy Svelte's
+/// `Bindings extends keyof Props | ''` constraint without requiring
+/// per-binding-name tracking. Loses no information today: our render
+/// fn types `bindings` as `string` regardless of declared binds, so
+/// projecting through wouldn't add detail.
+fn emit_fn_component_default_export(buf: &mut EmitBuffer, render_name: &SmolStr) {
+    let _ = writeln!(
+        buf,
+        "const __svn_component_default: import('svelte').Component<"
+    );
+    let _ = writeln!(
+        buf,
+        "    Awaited<ReturnType<typeof {render_name}>>['props'],"
+    );
+    let _ = writeln!(
+        buf,
+        "    Awaited<ReturnType<typeof {render_name}>>['exports'],"
+    );
+    let _ = writeln!(buf, "    ''");
+    let _ = writeln!(buf, "> = null as any;");
+    let _ = writeln!(
+        buf,
+        "type __svn_component_default = ReturnType<typeof __svn_component_default>;"
+    );
     buf.push_str("export default __svn_component_default;\n");
 }
 

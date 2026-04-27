@@ -4,6 +4,180 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0]
+
+Minor release. New emit type-checking for several Svelte 5 template
+constructs that previously emitted as opaque, plus structural
+decomposition of the emit crate's main file (`lib.rs`: 8028 → 1504
+lines across the v0.6.x → v0.7.0 arc, ~600 lines this release).
+Bench parity unchanged — 10/15 control benches stay byte-perfect on
+errors+warnings+problems vs upstream `svelte-check --tsgo`; the 5
+non-perfect benches are all wontfix-class (user-side type-unsoundness,
+upstream-side synthetic tsconfig bug, CSS opt-in, removed
+`moduleResolution: node10`).
+
+### Type-checking — new emit shapes
+
+- **`{#key EXPR}` expression checked (`5cb1b338`).** `{#key foo}…
+  {/key}` now emits as `;(foo);` ahead of the body walk so a typo /
+  out-of-scope reference fires TS2304 / TS2552 like any other
+  `{expr}` interpolation.
+- **`{@html}` / `{@render}` / `{@debug}` (`1f59a952`).** All three
+  now type-check their expressions: `{@html foo}` types `foo` as
+  `string | null | undefined`, `{@render snippet(args)}` checks the
+  call against the snippet's declared params, `{@debug a, b, c}`
+  references each identifier so wrong names surface as TS2304.
+- **`animate:` / `transition:` / `in:` / `out:` directives
+  (`b6aa0060`).** The directive's function gets a real call against
+  its declared parameter type, so a wrong-shape options object
+  fires TS2353 / TS2322. Mirrors upstream svelte2tsx's
+  `__sveltets_2_ensureAnimation` / `_ensureTransition` pattern.
+- **Action name source-mapping (`18c288de`).** `use:foo={params}`
+  diagnostics now point at `foo`'s source bytes rather than the
+  emit's synthetic call site.
+- **Default-export shape branches for runes-no-slots-no-events
+  (`7275fbd4`, `89f6f430`).** Components in this profile now emit
+  through the `Component<P, X, B>` callable (Threlte's instancing
+  pattern) instead of the iso-interface; consumer-side
+  `Parameters<typeof Comp>` and `(typeof Comp)[]` work cleanly.
+- **Arrow-form template-check + DOM `on:event` emission
+  (`b804789b`).** `__svn_tpl_check` is an arrow expression
+  statement now (vs a function declaration), letting TS's
+  control-flow narrowing carry assignment-narrowed types into the
+  template walk; `on:click={handler}` on DOM elements emits the
+  real listener call so wrong-payload handlers fire TS2322.
+
+### SvelteKit
+
+- **Fallback ambients for `$app/*` virtual modules (`17217877`).**
+  Projects without `@sveltejs/kit` types installed (or with a
+  stale install) now pick up minimal `$app/state` / `$app/stores`
+  / `$app/navigation` types from our overlay; closes the spurious
+  TS2307 wave on fresh kit projects before `svelte-kit sync` has
+  run.
+- **Cross-workspace `../` import rewriting (`004d4d3a`).**
+  Overlay-side `import x from '../sibling-pkg/...'` resolves to
+  the sibling's source rather than its `dist/`, so monorepo
+  layouts type-check against authoring sources.
+- **Drop monorepo auto-discovery (`7c1218c9`).** Strict parity
+  with upstream: users point at sub-apps explicitly. The
+  auto-discovery shipped in v0.6.x was an innovation upstream
+  doesn't have; removing it closes a divergence class.
+- **Layout `children` is REQUIRED in synthesized props (`d8d4d97e`).**
+  `+layout.svelte` route synth now includes `children:
+  import('./$types.js').LayoutData['children']` as a required
+  prop, matching what kit emits.
+
+### Architecture — emit crate decomposed
+
+The pre-existing `emit/lib.rs` (~8000 LOC at peak) gets aggressively
+factored across this release. `emit_template_node` is now a pure
+dispatch table with each per-node arm <10 lines:
+
+- **Per-node modules (`b2572f4c`, `0c042c99`, `042cef32`,
+  `37c22e5d`, `72096f99`, `36d2a428`).** Six rounds of `nodes/`
+  factoring align our file layout with upstream's
+  `htmlxtojsx_v2/nodes/` 1:1 — `each_block.rs`, `if_else_block.rs`,
+  `await_pending_catch_block.rs`, `inline_component.rs`,
+  `element.rs`, `attribute.rs`, `binding.rs`, `class.rs`,
+  `style_directive.rs`, `transition.rs`, `animation.rs`,
+  `action.rs`, `attach_tag.rs`, `let_directive.rs`,
+  `mustache_tag.rs`, `raw_mustache_tag.rs`, `render_tag.rs`,
+  `const_tag.rs`, `debug_tag.rs`, `key.rs`, `snippet_block.rs`,
+  `event_handler.rs`, `spread.rs`, `text.rs`, `comment.rs`.
+- **Top-level orchestration moves out (`fb622400`, `34f157ce`,
+  `761942cb`, `579a1b62`, `b316937d`).**
+  `hoisted_imports.rs`, `script_body_rewrites.rs`,
+  `script_template_analysis.rs`, `void_block.rs`, `is_ts.rs`,
+  `destructure_idents.rs` — five concerns each get their own
+  module instead of sitting near each other in lib.rs.
+- **`default_export.rs` + `props_emit.rs` + `render_function.rs`
+  + `util.rs` + `htmlxtojsx_utils/` + `svelte2tsx_utils/`
+  (`9df9dd13`, `fae3b232`, `72d69463`, `68c8bc32`).** Each carries
+  a self-contained slice of the emit pipeline.
+- **`svelte4/compat.rs` (`4c543c20`).** All Svelte-4 compat helpers
+  collapse into one droppable module — when Svelte 4 retires the
+  removal is mechanical.
+
+`crates/typecheck/src/lib.rs` similarly split (2176 → 1300 LOC) into
+`types.rs` / `position.rs` / `path_utils.rs` / `filters.rs`
+(`c657f077`).
+
+### Architecture — analyze + lint
+
+- **`SemanticModel` bundle (`63ff986a`).** Aggregated analyze
+  output for one component (PropsInfo + TemplateSummary) instead
+  of consumers reaching for individual outputs by name. The
+  previous "populates a SemanticModel" doc comment now matches
+  reality.
+- **JSDoc scanners lifted to analyze (`18796d66`).** `scan_jsdoc_typedef_name`,
+  `scan_jsdoc_props_typedef_keys`, `should_synthesise_js_props`
+  moved out of emit — emit now reads pre-computed answers.
+- **PropsInfo is construction-once (`9571842d`).** Two post-build
+  mutation sites in `lib.rs` eliminated; PropsInfo is read-only
+  through the rest of emit, satisfying architecture rule #2.
+- **`scope.rs` split (`1478c4f1`, `f9da2cae`).** Free helpers
+  extracted into `scope_rune_detection.rs` (rune-call recognition)
+  and `scope_util.rs` (AST/identifier helpers); public data types
+  earlier moved into `scope_types.rs`. ~270 lines off `scope.rs`.
+
+### Performance
+
+- **`VoidRefRegistry` Vec → IndexSet (`80e188a8`).** Per-register
+  linear-scan dedup was O(n²) on the void-ref hot path
+  (~10⁴–10⁵ inserts per 1000-component bench). IndexSet is O(1)
+  insert + iter-in-insertion-order.
+- **`phf::Map` for ARIA tables (`ab75b8a4`).** ROLE_PROPS (127
+  roles) + ARIA_PROP_BITS (51 props) — both lookups feed every
+  aria-* lint rule, so the linear scan was per-element-per-rule
+  waste. `phf::phf_map!` bakes the perfect-hash into the binary.
+- **SmallVec for TemplateSummary (`6dbb7b0d`).** `bind_this_targets`
+  / `at_const_names` / `action_directives` / `component_instantiations`
+  are 0–2 elements per file in the typical case; SmallVec inline
+  storage skips the heap alloc.
+- **Zero-copy slot-attr ranges (`1f751364`).** `SlotDef.attrs`
+  records an expression `Range` instead of a heap-cloned `String`;
+  emit slices `&source[range]` at write time.
+- **Emit helpers write into the buffer (`767e8c96`).**
+  `build_slots_field_type` becomes `write_slots_field_type(&mut
+  String, …)` — single call site splices directly into the emit
+  buffer rather than allocating a temp; `generic_arg_names` keeps
+  its String API but pre-sizes capacity to kill grow-reallocs.
+
+### Bug fixes
+
+- **`store_rune_conflict` skip on `let { props } = $props()`
+  (`3cc48672`).** The destructure introduces a local named
+  `props`, not a store named `$props`; was firing a false positive.
+- **`TS7028` 'Unused label' on Svelte-4 `$:` reactive labels
+  dropped (`2d4342f4`).** Reactive labels are syntactically labels
+  but semantically reactive declarations; suppressing the
+  diagnostic mirrors what upstream does.
+- **Duplicate-key filter on synthesized destructure
+  (`b804789b`).** Layout/page route synth no longer duplicates the
+  same key when the user already has it in their `$props()`
+  destructure.
+
+### CLI
+
+- **`--diagnostic-sources css,scss,sass,less,postcss` accepted as
+  no-op (`93f92b49`).** Lets users pass upstream's CSS-source
+  selectors without a flag-rejection error; we don't emit CSS
+  diagnostics by default (out of scope per project charter), but
+  the surface is now compatible.
+
+### Testing
+
+- **Source-map invariant test harness (`b0bea759`).** Generated
+  overlays pass property-based invariants on line/column → byte
+  offset round-trips, catching diagnostic-mapping regressions
+  before they reach a real bench.
+- **Slim test debug-info to `line-tables-only` (`5cb1b338`).**
+  Linker-time across ~13 integration test binaries dropped ~50s
+  — full debuginfo per binary was the bottleneck on
+  `cargo test --workspace`. Backtraces in panics still work
+  (line tables are sufficient).
+
 ## [0.6.5]
 
 Patch release. Two architectural consolidations + four review-driven

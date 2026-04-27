@@ -50,6 +50,7 @@ mod default_export;
 mod emit_buffer;
 mod hoisted_imports;
 mod htmlxtojsx_utils;
+mod is_ts;
 pub mod kit_inject;
 mod knownevents;
 mod nodes;
@@ -60,6 +61,7 @@ mod render_function;
 mod script_body_rewrites;
 mod script_template_analysis;
 mod state_nullish_rewrite;
+mod void_block;
 // SVELTE-4-COMPAT: droppable submodule for Svelte-4 emit rewrites.
 // See design/phase_g/DESIGN.md.
 mod svelte2tsx_nodes;
@@ -90,7 +92,6 @@ use util::{extract_generics_attr, render_function_name};
 use std::fmt::Write;
 use std::path::Path;
 
-use std::collections::HashSet;
 
 use oxc_allocator::Allocator;
 use smol_str::SmolStr;
@@ -937,131 +938,8 @@ pub(crate) fn emit_template_node(
     }
 }
 
-// Thread-local holding the current emit's `is_ts` flag. Set at the
-// top of `emit_document_with_render_name` via `IsTsGuard::enter`,
-// read by deep emit sites (bind:this casts, each-block `let i`,
-// branch bindings, snippet params) without threading the flag
-// through 9+ function signatures. Per-thread because rayon parallelises
-// emission — each file runs on whatever rayon worker picks it up, so
-// the guard must set+reset per-invocation.
-thread_local! {
-    static EMIT_IS_TS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
-}
-
-struct IsTsGuard {
-    prev: bool,
-}
-
-impl IsTsGuard {
-    fn enter(is_ts: bool) -> Self {
-        let prev = EMIT_IS_TS.with(|c| c.replace(is_ts));
-        Self { prev }
-    }
-}
-
-impl Drop for IsTsGuard {
-    fn drop(&mut self) {
-        EMIT_IS_TS.with(|c| c.set(self.prev));
-    }
-}
-
-pub(crate) fn emit_is_ts() -> bool {
-    EMIT_IS_TS.with(|c| c.get())
-}
-
-/// Default-ON as of 2026-04-24 after A/B validation across our
-/// bench fleet (Svelte-4 control, Svelte-5 control, a CMS bench,
-/// a charting-lib bench, a component-lib bench, a reader bench,
-/// an ML-playground bench — all at or below prior error counts,
-/// Emit getter/setter tuple placeholders for `bind:foo={getter, setter}`.
-/// Same pattern as action-attrs: declare + void inside `__svn_tpl_check`.
-pub(crate) fn emit_bind_pair_declarations(
-    out: &mut String,
-    summary: &TemplateSummary,
-    is_ts: bool,
-) {
-    for name in summary.void_refs.names() {
-        if name.starts_with("__svn_bind_pair_") {
-            if is_ts {
-                let _ = writeln!(
-                    out,
-                    "        let {name}: [() => any, (v: any) => void] = [() => undefined as any, () => {{}}];"
-                );
-            } else {
-                let _ = writeln!(
-                    out,
-                    "        /** @type {{[() => any, (v: any) => void]}} */ let {name} = [() => undefined, () => {{}}];"
-                );
-            }
-            let _ = writeln!(out, "        void {name};");
-        }
-    }
-}
-
-fn emit_void_block(
-    out: &mut String,
-    summary: &TemplateSummary,
-    store_refs: &[SmolStr],
-    prop_names: &[SmolStr],
-    template_refs: &[SmolStr],
-    exported_locals: &[SmolStr],
-) {
-    // One `void <name>;` statement per synthesized name — NOT a single
-    // `void (a, b, c);` block. The block form uses comma operators which
-    // TypeScript flags with TS2695 ("Left side of comma operator is
-    // unused and has no side effects"). Per-statement form has no such
-    // problem and matches what upstream svelte-check does.
-    //
-    // Names covered:
-    //   - the template-check wrapper (`__svn_tpl_check`)
-    //   - store auto-subscribe aliases
-    //   - destructured props (the component's public API; treat as used
-    //     even if the body doesn't reference them directly)
-    //   - script-declared bindings that are referenced from the template
-    //     (component imports, locals only used in markup)
-    //
-    // NOT covered here (intentionally): `__svn_action_attrs_N` and
-    // `__svn_bind_pair_N`. Those names are declared *inside* the inner
-    // `__svn_tpl_check` function and self-voided there. Voiding them in
-    // the outer scope as well would fire TS2304 (cannot find name) since
-    // the inner declarations aren't visible from the outer function.
-    let mut emitted: HashSet<String> = HashSet::new();
-    let mut emit = |out: &mut String, name: &str| {
-        if emitted.insert(name.to_string()) {
-            let _ = writeln!(out, "    void {name};");
-        }
-    };
-    for name in summary.void_refs.names() {
-        if name.starts_with("__svn_action_attrs_") || name.starts_with("__svn_bind_pair_") {
-            continue;
-        }
-        emit(out, name);
-    }
-    for name in store_refs {
-        emit(out, name);
-        // The auto-subscribe alias `$store` references the store, but the
-        // underlying `store` const is itself only used in template
-        // expressions like `$store` (which the alias receives). Void the
-        // base name so TS6133 doesn't fire on the original declaration.
-        if let Some(base) = name.strip_prefix('$') {
-            emit(out, base);
-        }
-    }
-    for name in prop_names {
-        emit(out, name);
-    }
-    for name in template_refs {
-        emit(out, name);
-    }
-    // Names declared `export const|let|var|function|class` (or
-    // `export { x }`) by the user. Stripping the `export` keyword leaves
-    // them as plain locals — without voiding, TS6133 fires on the
-    // declaration. The user explicitly marked them as public surface so
-    // counting them as "used" is the right call.
-    for name in exported_locals {
-        emit(out, name);
-    }
-}
+pub(crate) use is_ts::{IsTsGuard, emit_is_ts};
+pub(crate) use void_block::{emit_bind_pair_declarations, emit_void_block};
 
 /// Pull every identifier-like token out of a destructuring pattern.
 ///

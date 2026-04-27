@@ -797,6 +797,35 @@ fn overlay_byte_offset(data: &MapData, line: u32, column: u32) -> Option<u32> {
     position_to_byte(&data.overlay_line_starts, &data.overlay_text, line, column)
 }
 
+/// SVELTE-4-COMPAT: does the overlay text at `offset` start a Svelte-4
+/// `$:` reactive-statement label?
+///
+/// tsgo's TS7028 ("Unused label") points at the **identifier** that
+/// names the label — for `$: foo()` that's the `$` character at
+/// `offset`, with `:` immediately after. Both ours and upstream emit
+/// reactive statements as `;() => { $: <expr> }` (preserves the user's
+/// reactive code as a body for type-checking without actually running
+/// it), so the structural `$:` is the source of false-positive TS7028s
+/// when the user's tsconfig has `allowUnusedLabels: false` (default in
+/// strict-mode SvelteKit + threlte tsconfigs).
+///
+/// `overlay_text[offset]` must be `$` and `overlay_text[offset+1]` must
+/// be `:`. The `$` identifier is exactly one byte; tolerate optional
+/// whitespace between `$` and `:` purely defensively (Svelte's compiler
+/// rejects whitespace there, but our future emit might add it).
+fn is_overlay_dollar_reactive_label(overlay: &str, offset: u32) -> bool {
+    let bytes = overlay.as_bytes();
+    let off = offset as usize;
+    if bytes.get(off) != Some(&b'$') {
+        return false;
+    }
+    let mut i = off + 1;
+    while bytes.get(i).is_some_and(|b| b.is_ascii_whitespace()) {
+        i += 1;
+    }
+    bytes.get(i) == Some(&b':')
+}
+
 /// Check whether `offset` falls inside any `(start, end)` range in
 /// `regions`. Linear scan; regions are typically few per file.
 fn is_in_ignore_region(regions: &[(u32, u32)], offset: u32) -> bool {
@@ -895,6 +924,23 @@ fn map_diagnostic(
             // on overlay bytes the user never wrote.
             if let Some(offset) = overlay_byte_offset(data, raw.line, raw.column)
                 && is_in_ignore_region(&data.ignore_regions, offset)
+            {
+                return None;
+            }
+            // SVELTE-4-COMPAT: drop TS7028 ("Unused label") on the `$`
+            // identifier that prefixes a Svelte-4 reactive `$:`
+            // statement. Both we and upstream wrap unhandled reactive
+            // expressions in `;() => { $: <expr> }` so tsgo type-checks
+            // the body; the inner `$:` label is structural — not a
+            // real label the user wrote — but tsgo flags it under
+            // `allowUnusedLabels: false` (set in many real tsconfigs,
+            // including all of threlte's packages). Mirrors upstream
+            // svelte-check's `isUnusedReactiveStatementLabel` filter at
+            // `language-tools/packages/language-server/src/plugins/
+            // typescript/features/DiagnosticsProvider.ts:476-495`.
+            if raw.code == 7028
+                && let Some(offset) = overlay_byte_offset(data, raw.line, raw.column)
+                && is_overlay_dollar_reactive_label(&data.overlay_text, offset)
             {
                 return None;
             }

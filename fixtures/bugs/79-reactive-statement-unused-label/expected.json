@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Gap B (2026-04-27 bench discovery on threlte/{flex,theatre}): under tsconfig `allowUnusedLabels: false`, both ours and upstream's overlay shape `;() => { $: <expr> }` for Svelte-4 reactive statements would fire TS7028 on the `$` label identifier. Upstream's svelte-check filters these in DiagnosticsProvider.ts:476-495 (`isUnusedReactiveStatementLabel`); ours now mirrors the filter in `map_diagnostic`. Without the filter, threlte/flex was at +1E and threlte/theatre at +3E vs upstream — closed by this filter."
+}

@@ -1,24 +1,82 @@
-//! `{#if}` / `{:else if}` block support.
+//! `{#if}` / `{:else if}` / `{:else}` block emission.
 //!
-//! The actual `if`/`else if`/`else` branch dispatch lives in
-//! `lib.rs::emit_template_node` (it has to interleave with the rest of
-//! the dispatcher, since `{:else if}` is structurally a flat list of
-//! arms rather than a nested tree). This module owns the support
-//! helpers tsgo needs to type-check the condition expressions:
+//! Mirrors upstream svelte2tsx's
+//! `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/IfElseBlock.ts`.
 //!
+//! Three concerns live here:
+//!
+//! - [`emit_if_block`] — the `if`/`else if`/`else` chain dispatch.
+//!   Has to drive the whole chain itself (rather than recursing
+//!   through `emit_template_node`) because `{:else if}` arms are a
+//!   structurally flat list, not a nested tree.
 //! - [`emit_condition_ref_marker`] — the `void [chain, …];` pacifier
 //!   for TS2774 ("non-nullable function not invoked"), emitted at the
 //!   top of each truthy-narrowed branch body.
 //! - [`extract_property_chains`] — AST walker that collects the
 //!   identifier / member-access chains referenced inside a condition
 //!   expression.
-//!
-//! Mirrors upstream svelte2tsx's
-//! `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/IfElseBlock.ts`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 
 use crate::emit_buffer::EmitBuffer;
+use crate::emit_template_body;
+
+/// Emit a `{#if cond}…{:else if c2}…{:else}…{/if}` block as a real
+/// `if (cond) {} else if (c2) {} else {}` chain so tsgo's
+/// control-flow analysis narrows union / nullable / type-guard
+/// references inside each arm. Without this, `{#if shape.kind ===
+/// 'circle'}` leaves `shape.radius` reading as TS2339 inside the
+/// nested component-prop check, and `{#if maybe}{...maybe...}{/if}`
+/// reads as "`maybe` is possibly undefined".
+///
+/// Conditions are wrapped in an extra pair of parens to stay robust
+/// against operator-precedence oddities in the raw source text.
+///
+/// Immediately inside each branch we emit a `void [<ident>, …]`
+/// statement listing every root identifier from the condition.
+/// tsgo fires TS2774 ("this condition will always return true since
+/// this function is always defined") on `&&` operands of
+/// non-nullable function type — but the check is suppressed if the
+/// same identifier symbol appears in the block body. Svelte
+/// templates that poll a context object for component references
+/// (`{#if editable && ctx.GhostButton}<ctx.GhostButton/>`) tend to
+/// USE those references inside the block; the synthesized list
+/// mirrors that usage when the user's body doesn't otherwise
+/// reference every condition operand by value. Wrapping as a plain
+/// array literal avoids re-introducing the `&&` chain that
+/// triggered the check in the first place.
+pub(crate) fn emit_if_block(
+    buf: &mut EmitBuffer,
+    source: &str,
+    b: &svn_parser::IfBlock,
+    depth: usize,
+    insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
+) {
+    let indent = "    ".repeat(depth);
+    let main_cond = source
+        .get(b.condition_range.start as usize..b.condition_range.end as usize)
+        .unwrap_or("true")
+        .trim();
+    let _ = writeln!(buf, "{indent}if (({main_cond})) {{");
+    emit_condition_ref_marker(buf, source, b.condition_range, depth + 1);
+    emit_template_body(buf, source, &b.consequent, depth + 1, insts, action_counter);
+    for arm in &b.elseif_arms {
+        let arm_cond = source
+            .get(arm.condition_range.start as usize..arm.condition_range.end as usize)
+            .unwrap_or("true")
+            .trim();
+        let _ = writeln!(buf, "{indent}}} else if (({arm_cond})) {{");
+        emit_condition_ref_marker(buf, source, arm.condition_range, depth + 1);
+        emit_template_body(buf, source, &arm.body, depth + 1, insts, action_counter);
+    }
+    if let Some(alt) = &b.alternate {
+        let _ = writeln!(buf, "{indent}}} else {{");
+        emit_template_body(buf, source, alt, depth + 1, insts, action_counter);
+    }
+    let _ = writeln!(buf, "{indent}}}");
+}
 
 /// Emit a `void [<access>, …];` statement listing every identifier /
 /// property-access chain referenced inside the condition expression at

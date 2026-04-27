@@ -21,15 +21,173 @@
 //! - [`crate::nodes::transition`] — `transition:` / `in:` / `out:`
 //!   directive call typing.
 
+use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::emit_buffer::EmitBuffer;
+use crate::nodes::action::{
+    emit_dom_action_decls, emit_dom_action_void_refs, emit_use_directives_inline_legacy,
+};
 use crate::nodes::animation::emit_animation_directive;
 use crate::nodes::attribute::{emit_expression, emit_plain, emit_shorthand, should_skip};
+use crate::nodes::binding::emit_element_bind_checks_inline;
 use crate::nodes::class::emit_class_directive;
+use crate::nodes::let_directive::emit_children_with_let_bindings;
 use crate::nodes::spread::emit_spread;
 use crate::nodes::style_directive::emit_style_directive;
 use crate::nodes::transition::emit_transition_directive;
+
+/// Feature gate for the upstream-shape DOM-element emit pipeline.
+/// On by default; opt OUT via `SVN_DOM_ELEMENT_EMIT=0` / `=false` /
+/// `=off` if a user reports a regression while the shape is being
+/// tuned. Opt-out path retained for a release or two; delete when
+/// the directives + svelte:* namespaces phase also lands.
+pub(crate) fn dom_element_emit_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        !matches!(
+            std::env::var("SVN_DOM_ELEMENT_EMIT")
+                .ok()
+                .as_deref()
+                .map(str::trim)
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("0" | "false" | "no" | "off")
+        )
+    })
+}
+
+/// Drive the full DOM-element emit pipeline for a static-tag element
+/// (`<div ...>`, `<button ...>`, `<slot>`, etc.):
+///
+///   action decls → element open → directive checks → bind checks
+///     → action void refs → children walk → element close
+///
+/// `<slot>` is the Svelte-4 named-slot mechanism — its attrs are
+/// slot props passed to the consumer via `let:propName`, NOT HTML
+/// attributes. Upstream svelte2tsx emits these via
+/// `__sveltets_createSlot("name", {...})` against the synthesized
+/// component slot type; we don't model that yet, so skip the
+/// createElement emit entirely (which would otherwise fire TS2353
+/// for every slot prop against the real HTMLSlotElement attribute
+/// shape).
+pub(crate) fn emit_element_node(
+    buf: &mut EmitBuffer,
+    source: &str,
+    e: &svn_parser::Element,
+    depth: usize,
+    insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
+) {
+    let dom_emit = dom_element_emit_enabled() && e.name.as_str() != "slot";
+    let inner_depth = if dom_emit { depth + 1 } else { depth };
+    // Action declarations emitted BEFORE createElement so the
+    // 3-arg overload can reference them in its second arg.
+    let action_indices = if dom_emit {
+        emit_dom_action_decls(
+            buf,
+            source,
+            e.name.as_str(),
+            &e.attributes,
+            inner_depth,
+            action_counter,
+        )
+    } else {
+        let first = *action_counter;
+        first..first
+    };
+    if dom_emit {
+        emit_dom_element_open(
+            buf,
+            source,
+            e.name.as_str(),
+            true,
+            &e.attributes,
+            depth,
+            &action_indices,
+        );
+        emit_dom_directive_checks(buf, source, e.name.as_str(), &e.attributes, inner_depth);
+    }
+    emit_element_bind_checks_inline(buf, source, e.name.as_str(), &e.attributes, inner_depth);
+    if dom_emit {
+        emit_dom_action_void_refs(buf, &action_indices, inner_depth);
+    } else {
+        // Non-dom-emit path retains pre-Phase-2 behavior.
+        emit_use_directives_inline_legacy(
+            buf,
+            source,
+            e.name.as_str(),
+            &e.attributes,
+            inner_depth,
+            action_counter,
+        );
+    }
+    emit_children_with_let_bindings(
+        buf,
+        source,
+        &e.attributes,
+        &e.children,
+        inner_depth,
+        insts,
+        action_counter,
+    );
+    if dom_emit {
+        emit_dom_element_close(buf, depth);
+    }
+}
+
+/// Drive the DOM-element emit pipeline for `<svelte:element
+/// this={tagExpr}>`. The tag is runtime-dynamic, so the emission
+/// falls back to `HTMLElement` for bind:this and skips bind:value
+/// dispatch (empty tag_name → resolve_bind_value_type returns
+/// None). Otherwise the same shape as [`emit_element_node`].
+pub(crate) fn emit_svelte_element_node(
+    buf: &mut EmitBuffer,
+    source: &str,
+    s: &svn_parser::SvelteElement,
+    depth: usize,
+    insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
+) {
+    let dom_emit = dom_element_emit_enabled();
+    let inner_depth = if dom_emit { depth + 1 } else { depth };
+    let action_indices = if dom_emit {
+        emit_dom_action_decls(buf, source, "", &s.attributes, inner_depth, action_counter)
+    } else {
+        let first = *action_counter;
+        first..first
+    };
+    if dom_emit {
+        emit_svelte_element_open(buf, source, s, depth, &action_indices);
+        emit_dom_directive_checks(buf, source, "", &s.attributes, inner_depth);
+    }
+    emit_element_bind_checks_inline(buf, source, "", &s.attributes, inner_depth);
+    if dom_emit {
+        emit_dom_action_void_refs(buf, &action_indices, inner_depth);
+    } else {
+        emit_use_directives_inline_legacy(
+            buf,
+            source,
+            "",
+            &s.attributes,
+            inner_depth,
+            action_counter,
+        );
+    }
+    emit_children_with_let_bindings(
+        buf,
+        source,
+        &s.attributes,
+        &s.children,
+        inner_depth,
+        insts,
+        action_counter,
+    );
+    if dom_emit {
+        emit_dom_element_close(buf, depth);
+    }
+}
 
 /// Emit the upstream-shape `svelteHTML.createElement("tag", { …attrs });`
 /// call for a DOM element. Opens a scoped `{ }` block so element-local

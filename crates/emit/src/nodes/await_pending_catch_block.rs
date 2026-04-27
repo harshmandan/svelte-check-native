@@ -134,3 +134,47 @@ pub(crate) fn emit_await_then_branch(
     }
     let _ = writeln!(buf, "{indent}}});");
 }
+
+/// Dispatch a full `{#await PROMISE}…{:then v}…{:catch e}…{/await}`
+/// block: walk the pending body inline (no binding), then the
+/// `{:then}` branch with the await-binding shape, then `{:catch}`
+/// with the plain branch-binding helper.
+///
+/// Errors don't carry shape info in JS, so the catch's binding is
+/// typed via the plain `const e: any = undefined;` shape rather
+/// than the `await`-resolved-value shape used for `{:then}`.
+pub(crate) fn emit_await_block(
+    buf: &mut EmitBuffer,
+    source: &str,
+    b: &svn_parser::AwaitBlock,
+    depth: usize,
+    insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
+) {
+    if let Some(p) = &b.pending {
+        emit_template_body(buf, source, p, depth, insts, action_counter);
+    }
+    if let Some(t) = &b.then_branch {
+        emit_await_then_branch(
+            buf,
+            source,
+            b.expression_range,
+            t.context_range.as_ref(),
+            &t.body,
+            depth,
+            insts,
+            action_counter,
+        );
+    }
+    if let Some(c) = &b.catch_branch {
+        emit_branch_with_binding(
+            buf,
+            source,
+            c.context_range.as_ref(),
+            &c.body,
+            depth,
+            insts,
+            action_counter,
+        );
+    }
+}

@@ -57,6 +57,7 @@ mod process_instance_script_content;
 mod process_module_script_tag;
 mod props_emit;
 mod render_function;
+mod script_body_rewrites;
 mod state_nullish_rewrite;
 // SVELTE-4-COMPAT: droppable submodule for Svelte-4 emit rewrites.
 // See design/phase_g/DESIGN.md.
@@ -68,19 +69,8 @@ mod util;
 
 use render_function::{emit_render_body_return, emit_template_check_fn};
 
-use nodes::action::{
-    emit_dom_action_decls, emit_dom_action_void_refs, emit_use_directives_inline_legacy,
-};
-use nodes::await_pending_catch_block::{emit_await_then_branch, emit_branch_with_binding};
-use nodes::binding::emit_element_bind_checks_inline;
 use nodes::each_block::emit_each_block;
-use nodes::element::{
-    emit_dom_directive_checks, emit_dom_element_close, emit_dom_element_open,
-    emit_svelte_element_open,
-};
-use nodes::if_else_block::emit_condition_ref_marker;
 use nodes::inline_component::emit_component_node;
-use nodes::let_directive::emit_children_with_let_bindings;
 use nodes::mustache_tag::emit_interpolation;
 use nodes::snippet_block::emit_snippet_block;
 
@@ -90,9 +80,7 @@ use props_emit::{
 };
 use svn_analyze::should_synthesise_js_props;
 use svelte4::compat::{
-    denarrow_typed_exported_props_in_place, emit_svelte4_ambients, has_strict_events,
-    has_strict_events_attr, is_runes_mode, rewrite_definite_assignment_in_place,
-    widen_untyped_exported_props_in_place, widen_untyped_exports_jsdoc_in_place,
+    emit_svelte4_ambients, has_strict_events, has_strict_events_attr, is_runes_mode,
 };
 
 pub use util::compute_line_starts;
@@ -106,8 +94,8 @@ use std::collections::HashSet;
 use oxc_allocator::Allocator;
 use smol_str::SmolStr;
 use svn_analyze::{
-    PropsInfo, TemplateSummary, collect_top_level_bindings, collect_typed_top_level_lets,
-    collect_typed_uninit_lets, find_store_refs_with_bindings, find_template_refs,
+    PropsInfo, TemplateSummary, collect_top_level_bindings, find_store_refs_with_bindings,
+    find_template_refs,
 };
 use svn_parser::Document;
 use svn_parser::{Fragment, Node, SnippetBlock, parse_script_body};
@@ -721,7 +709,7 @@ fn emit_document_with_render_name(
         }
     }
 
-    apply_script_body_rewrites(
+    script_body_rewrites::apply_script_body_rewrites(
         &mut buf,
         summary,
         split.as_ref(),
@@ -1006,118 +994,6 @@ fn analyze_script_and_template_refs<'alloc>(
     }
 }
 
-/// Apply the three post-body in-place rewrites: widen-untyped-exports →
-/// definite-assign → de-narrow-typed-literal-inits. Order is load-
-/// bearing: widen inserts `: any` at the name position, and
-/// definite-assign looks for a `:` annotation to decide whether to add
-/// `!`. Running the passes in the other order means `!` lands first and
-/// hides the original `:` annotation from widen's scanner.
-///
-/// Also builds the `def_assign_names` set from five sources (bind:this
-/// targets, export-stripped locals, store-auto-subscribe bases,
-/// reactive-rewrite-touched names, typed uninitialized top-level
-/// `let`s) — all of which produce declarations that Svelte treats as
-/// definitely-assigned at runtime but TS flow analysis can't prove.
-fn apply_script_body_rewrites<'alloc>(
-    buf: &mut EmitBuffer,
-    summary: &svn_analyze::TemplateSummary,
-    split: Option<&process_instance_script_content::SplitScript>,
-    store_refs: &[SmolStr],
-    reactive_touched_names: &[SmolStr],
-    parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
-    source_path: &Path,
-) {
-    let mut def_assign_names: Vec<SmolStr> = summary
-        .bind_this_targets
-        .iter()
-        .map(|t| t.name.clone())
-        .collect();
-    if let Some(s) = split {
-        for name in &s.exported_locals {
-            if !def_assign_names.iter().any(|n| n == name) {
-                def_assign_names.push(name.clone());
-            }
-        }
-    }
-    // `$store` auto-subscribe aliases: definite-assign the underlying
-    // `store` local. Body-declared `let store: Writable<T>` without
-    // initializer fires TS2454 at every `typeof store` read; the
-    // rewrite is a no-op for imports / `const` / initialized `let`.
-    for name in store_refs {
-        let base = SmolStr::from(name.strip_prefix('$').unwrap_or(name));
-        if !def_assign_names.iter().any(|n| n == &base) {
-            def_assign_names.push(base);
-        }
-    }
-    // SVELTE-4-COMPAT: names touched by reactive destructure /
-    // re-assignment. The reactive rewrite wraps block/expr-form `$:`
-    // in an uncalled arrow so TS flow analysis misses the assignment.
-    for name in reactive_touched_names {
-        if !def_assign_names.iter().any(|n| n == name) {
-            def_assign_names.push(name.clone());
-        }
-    }
-    // Every top-level `let NAME: Type;` (typed, no init) in the
-    // instance script — the Svelte "declare now, assign later from a
-    // handler" pattern. Upstream's TS version doesn't observe the
-    // uninitialised state across its transform pipeline; a `!` gives
-    // us the same behavior.
-    if let Some(parsed_orig) = parsed_instance {
-        let mut uninit_lets: Vec<SmolStr> = Vec::new();
-        collect_typed_uninit_lets(&parsed_orig.program, &mut uninit_lets);
-        for name in uninit_lets {
-            if !def_assign_names.iter().any(|n| n == &name) {
-                def_assign_names.push(name);
-            }
-        }
-    }
-    let route_kind = sveltekit::route_kind(source_path);
-    if emit_is_ts() {
-        if let Some(s) = split {
-            widen_untyped_exported_props_in_place(
-                buf.raw_string_mut(),
-                &s.exported_locals,
-                route_kind,
-            );
-        }
-        rewrite_definite_assignment_in_place(buf.raw_string_mut(), &def_assign_names);
-    } else {
-        // JS overlay: a single inline-initializer rewrite replaces
-        // both TS-mode passes. `let NAME;` → `let NAME = /** @type
-        // {any} */ (null);` carries both the type-widen (no TS7034/7005)
-        // and definite-assign (no TS2454) semantics in a JSDoc-only
-        // form — tsgo parses it cleanly under `.svelte.svn.js` without
-        // firing TS8010.
-        widen_untyped_exports_jsdoc_in_place(buf.raw_string_mut(), &def_assign_names, route_kind);
-    }
-    // SVELTE-4-COMPAT de-narrow: typed exported props with literal
-    // initializers (`export let size: Size = 'medium'`) AND body-local
-    // `let X: T = lit;` both narrow to the literal; inserting
-    // `NAME = undefined as any;` after the declaration widens back to
-    // the declared annotation, so later comparisons don't fire TS2367
-    // "no overlap".
-    //
-    // TS-only: the inserted trailer uses `as any` which is TS syntax.
-    // JS-overlay paths go through `widen_untyped_exports_jsdoc_in_place`
-    // above, which emits the equivalent JSDoc-cast form that survives
-    // `.svelte.svn.js` parsing without firing TS8010.
-    if emit_is_ts()
-        && let Some(s) = split
-    {
-        let mut denarrow_targets: Vec<SmolStr> = s.exported_locals.clone();
-        if let Some(parsed_orig) = parsed_instance {
-            let mut typed_lets: Vec<SmolStr> = Vec::new();
-            collect_typed_top_level_lets(&parsed_orig.program, &mut typed_lets);
-            for name in typed_lets {
-                if !denarrow_targets.iter().any(|n| n == &name) {
-                    denarrow_targets.push(name);
-                }
-            }
-        }
-        denarrow_typed_exported_props_in_place(buf.raw_string_mut(), &denarrow_targets);
-    }
-}
-
 /// Walk the fragment tree and emit per-construct scaffolding.
 ///
 /// Currently emits a `for`-of loop for each `{#each}` block and recurses
@@ -1182,213 +1058,49 @@ pub(crate) fn emit_template_node(
     match node {
         Node::EachBlock(b) => emit_each_block(buf, source, b, depth, insts, action_counter),
         Node::IfBlock(b) => {
-            // Emit as a real `if/else if/else` chain so TS's control-flow
-            // analysis narrows union / nullable / type-guard references
-            // inside each arm. Without this, `{#if shape.kind === 'circle'}`
-            // leaves `shape.radius` reading as "Property 'radius' does not
-            // exist on type 'Shape'" inside the nested component-prop
-            // check, and `{#if maybe}{...maybe...}{/if}` reads as "`maybe`
-            // is possibly undefined". Conditions are wrapped in an extra
-            // pair of parens to stay robust against operator-precedence
-            // oddities in the raw source text.
-            //
-            // Immediately inside each branch we emit a `void [<ident>, …]`
-            // statement listing every root identifier from the condition.
-            // tsgo fires TS2774 ("this condition will always return true
-            // since this function is always defined") on `&&` operands of
-            // non-nullable function type — but the check is suppressed if
-            // the same identifier symbol appears in the block body.
-            // Svelte templates that poll a context object for component
-            // references (`{#if editable && ctx.GhostButton}<ctx.GhostButton/>`)
-            // tend to USE those references inside the block; the synthesized
-            // list mirrors that usage when the user's body doesn't otherwise
-            // reference every condition operand by value. Wrapping as a
-            // plain array literal avoids re-introducing the `&&` chain that
-            // triggered the check in the first place.
-            let indent = "    ".repeat(depth);
-            let main_cond = source
-                .get(b.condition_range.start as usize..b.condition_range.end as usize)
-                .unwrap_or("true")
-                .trim();
-            let _ = writeln!(buf, "{indent}if (({main_cond})) {{");
-            emit_condition_ref_marker(buf, source, b.condition_range, depth + 1);
-            emit_template_body(buf, source, &b.consequent, depth + 1, insts, action_counter);
-            for arm in &b.elseif_arms {
-                let arm_cond = source
-                    .get(arm.condition_range.start as usize..arm.condition_range.end as usize)
-                    .unwrap_or("true")
-                    .trim();
-                let _ = writeln!(buf, "{indent}}} else if (({arm_cond})) {{");
-                emit_condition_ref_marker(buf, source, arm.condition_range, depth + 1);
-                emit_template_body(buf, source, &arm.body, depth + 1, insts, action_counter);
-            }
-            if let Some(alt) = &b.alternate {
-                let _ = writeln!(buf, "{indent}}} else {{");
-                emit_template_body(buf, source, alt, depth + 1, insts, action_counter);
-            }
-            let _ = writeln!(buf, "{indent}}}");
+            crate::nodes::if_else_block::emit_if_block(
+                buf,
+                source,
+                b,
+                depth,
+                insts,
+                action_counter,
+            )
         }
         Node::AwaitBlock(b) => {
-            if let Some(p) = &b.pending {
-                emit_template_body(buf, source, p, depth, insts, action_counter);
-            }
-            if let Some(t) = &b.then_branch {
-                // `{:then v}` — upstream svelte2tsx emits
-                //   `const $$_value = await (PROMISE); { const v = $$_value; ... }`
-                // so `v` is typed as the resolved promise value (e.g.
-                // `Promise<T[] | undefined>` → `v: T[] | undefined`).
-                // Without the `await` binding, naive `const v: any = …`
-                // loses downstream narrowing — descendants like
-                // `{#each v as d}` read `d` as `any`, letting bugs
-                // like `vizColorsCssVarMap[d.color]` pass without a
-                // TS7053 when upstream tsgo is silent.
-                emit_await_then_branch(
-                    buf,
-                    source,
-                    b.expression_range,
-                    t.context_range.as_ref(),
-                    &t.body,
-                    depth,
-                    insts,
-                    action_counter,
-                );
-            }
-            if let Some(c) = &b.catch_branch {
-                // `{:catch e}` — upstream types `e` as `any` (errors
-                // don't carry shape info in JS). Keep the existing
-                // `const e: any = undefined;` pattern.
-                emit_branch_with_binding(
-                    buf,
-                    source,
-                    c.context_range.as_ref(),
-                    &c.body,
-                    depth,
-                    insts,
-                    action_counter,
-                );
-            }
+            crate::nodes::await_pending_catch_block::emit_await_block(
+                buf,
+                source,
+                b,
+                depth,
+                insts,
+                action_counter,
+            )
         }
         Node::KeyBlock(b) => {
             crate::nodes::key::emit_key_block(buf, source, b, depth, insts, action_counter)
         }
         Node::SnippetBlock(b) => emit_snippet_block(buf, source, b, depth, insts, action_counter),
         Node::Element(e) => {
-            // `<slot>` is the Svelte-4 named-slot mechanism — its attrs are
-            // slot props passed to the consumer via `let:propName`, NOT
-            // HTML attributes. Upstream svelte2tsx emits these via
-            // `__sveltets_createSlot("name", {...})` against the
-            // synthesized component slot type; we don't model that yet,
-            // so skip the createElement emit entirely (which would
-            // otherwise fire TS2353 for every slot prop against the real
-            // HTMLSlotElement attribute shape).
-            let dom_emit = dom_element_emit_enabled() && e.name.as_str() != "slot";
-            let inner_depth = if dom_emit { depth + 1 } else { depth };
-            // Action declarations emitted BEFORE createElement so the
-            // 3-arg overload can reference them in its second arg. See
-            // emit_dom_action_decls / emit_dom_element_open.
-            let action_indices = if dom_emit {
-                emit_dom_action_decls(
-                    buf,
-                    source,
-                    e.name.as_str(),
-                    &e.attributes,
-                    inner_depth,
-                    action_counter,
-                )
-            } else {
-                let first = *action_counter;
-                first..first
-            };
-            if dom_emit {
-                emit_dom_element_open(
-                    buf,
-                    source,
-                    e.name.as_str(),
-                    true,
-                    &e.attributes,
-                    depth,
-                    &action_indices,
-                );
-                emit_dom_directive_checks(buf, source, e.name.as_str(), &e.attributes, inner_depth);
-            }
-            emit_element_bind_checks_inline(
+            crate::nodes::element::emit_element_node(
                 buf,
                 source,
-                e.name.as_str(),
-                &e.attributes,
-                inner_depth,
-            );
-            if dom_emit {
-                emit_dom_action_void_refs(buf, &action_indices, inner_depth);
-            } else {
-                // Emit action decls + void refs in a non-dom-emit path
-                // (retains pre-Phase-2 behavior when the feature was
-                // gated off).
-                emit_use_directives_inline_legacy(
-                    buf,
-                    source,
-                    e.name.as_str(),
-                    &e.attributes,
-                    inner_depth,
-                    action_counter,
-                );
-            }
-            emit_children_with_let_bindings(
-                buf,
-                source,
-                &e.attributes,
-                &e.children,
-                inner_depth,
+                e,
+                depth,
                 insts,
                 action_counter,
-            );
-            if dom_emit {
-                emit_dom_element_close(buf, depth);
-            }
+            )
         }
         Node::Component(c) => emit_component_node(buf, source, c, depth, insts, action_counter),
         Node::SvelteElement(s) => {
-            // `<svelte:element this={tagExpr}>` is dynamic — fall back
-            // to `HTMLElement` for bind:this and skip bind:value
-            // dispatch (empty tag_name → resolve_bind_value_type
-            // returns None).
-            let dom_emit = dom_element_emit_enabled();
-            let inner_depth = if dom_emit { depth + 1 } else { depth };
-            let action_indices = if dom_emit {
-                emit_dom_action_decls(buf, source, "", &s.attributes, inner_depth, action_counter)
-            } else {
-                let first = *action_counter;
-                first..first
-            };
-            if dom_emit {
-                emit_svelte_element_open(buf, source, s, depth, &action_indices);
-                emit_dom_directive_checks(buf, source, "", &s.attributes, inner_depth);
-            }
-            emit_element_bind_checks_inline(buf, source, "", &s.attributes, inner_depth);
-            if dom_emit {
-                emit_dom_action_void_refs(buf, &action_indices, inner_depth);
-            } else {
-                emit_use_directives_inline_legacy(
-                    buf,
-                    source,
-                    "",
-                    &s.attributes,
-                    inner_depth,
-                    action_counter,
-                );
-            }
-            emit_children_with_let_bindings(
+            crate::nodes::element::emit_svelte_element_node(
                 buf,
                 source,
-                &s.attributes,
-                &s.children,
-                inner_depth,
+                s,
+                depth,
                 insts,
                 action_counter,
-            );
-            if dom_emit {
-                emit_dom_element_close(buf, depth);
-            }
+            )
         }
         Node::Interpolation(i) => emit_interpolation(buf, source, i, depth),
         Node::Text(_) | Node::Comment(_) => {}
@@ -1431,27 +1143,6 @@ pub(crate) fn emit_is_ts() -> bool {
 /// bench fleet (Svelte-4 control, Svelte-5 control, a CMS bench,
 /// a charting-lib bench, a component-lib bench, a reader bench,
 /// an ML-playground bench — all at or below prior error counts,
-/// with the CMS bench closing +7 upstream-parity diagnostics).
-/// Opt OUT via `SVN_DOM_ELEMENT_EMIT=0` / `=false` /
-/// `=off` if a user reports a regression while the shape is being
-/// tuned. Opt-out path retained for a release or two; delete when
-/// Phase 2 (directives + svelte:* namespaces) also lands.
-fn dom_element_emit_enabled() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        !matches!(
-            std::env::var("SVN_DOM_ELEMENT_EMIT")
-                .ok()
-                .as_deref()
-                .map(str::trim)
-                .map(str::to_ascii_lowercase)
-                .as_deref(),
-            Some("0" | "false" | "no" | "off")
-        )
-    })
-}
-
 /// Emit getter/setter tuple placeholders for `bind:foo={getter, setter}`.
 /// Same pattern as action-attrs: declare + void inside `__svn_tpl_check`.
 pub(crate) fn emit_bind_pair_declarations(
@@ -1660,6 +1351,9 @@ pub(crate) fn all_identifiers(binding: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::nodes::if_else_block::extract_property_chains;
+    use crate::svelte4::compat::{
+        rewrite_definite_assignment_in_place, widen_untyped_exported_props_in_place,
+    };
     use std::path::PathBuf;
     use svn_analyze::walk_template;
     use svn_parser::{parse_all_template_runs, parse_sections};

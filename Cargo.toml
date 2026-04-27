@@ -49,6 +49,12 @@ indexmap = "2"
 # svn-lint for ARIA prop / role tables (48 / 127 entries each)
 # called per-element-per-rule on the lint hot path.
 phf = { version = "0.13", features = ["macros"] }
+# Stack-inline storage for collections that are usually small. Used
+# in svn-analyze for TemplateSummary fields (bind:this targets,
+# {@const} names, use: directives, component instantiations) — in
+# typical components these have 0-2 elements, so the heap alloc was
+# wasted on the common case.
+smallvec = "1"
 # Tolerant JSON for tsconfig.json (comments + trailing commas).
 json5 = "1"
 

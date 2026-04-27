@@ -34,7 +34,7 @@
 //!   separate code path).
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{BindingPatternKind, Declaration, Statement};
+use oxc_ast::ast::{BindingPattern, Declaration, Statement};
 use oxc_span::GetSpan;
 use std::path::Path;
 use svn_core::sveltekit::{KitFilesSettings, KitRole, ScriptLang, classify};
@@ -152,14 +152,14 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                     if declarator.init.is_none() {
                         continue;
                     }
-                    let BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind else {
+                    let BindingPattern::BindingIdentifier(id) = &declarator.id else {
                         continue;
                     };
 
                     // Page-option export (`prerender`, `ssr`, etc.):
                     // splice `: type` after the identifier.
                     if let Some(annot) = page_option_type(id.name.as_str()) {
-                        if declarator.id.type_annotation.is_some() {
+                        if declarator.type_annotation.is_some() {
                             continue;
                         }
                         let insert_at = id.span.end as usize;
@@ -190,7 +190,7 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                     // explicit type — they've taken responsibility for
                     // the param shape themselves.
                     if id.name.as_str() == "load"
-                        && declarator.id.type_annotation.is_none()
+                        && declarator.type_annotation.is_none()
                         && let Some(init) = declarator.init.as_ref()
                     {
                         // Unwrap `async`/`await`/parenthesized wrappers
@@ -258,7 +258,7 @@ fn collect_handler_insert(
         return;
     }
     let param = &func.params.items[0];
-    if param.pattern.type_annotation.is_some() {
+    if param.type_annotation.is_some() {
         return;
     }
     let insert_at = param.pattern.span().end as usize;
@@ -279,7 +279,7 @@ fn collect_arrow_handler_insert(
         return;
     }
     let param = &arrow.params.items[0];
-    if param.pattern.type_annotation.is_some() {
+    if param.type_annotation.is_some() {
         return;
     }
     let insert_at = param.pattern.span().end as usize;

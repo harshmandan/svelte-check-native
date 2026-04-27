@@ -89,7 +89,7 @@ pub fn rewrite(content: &str, lang: ScriptLang) -> String {
 fn detect_site(declarator: &VariableDeclarator<'_>, source: &str) -> Option<(usize, String)> {
     // Binding must carry a type annotation — that's where we pull the
     // explicit generic from.
-    let type_anno = declarator.id.type_annotation.as_ref()?;
+    let type_anno = declarator.type_annotation.as_ref()?;
     let type_span = type_anno.type_annotation.span();
     let type_text = source.get(type_span.start as usize..type_span.end as usize)?;
 
@@ -108,7 +108,7 @@ fn detect_site(declarator: &VariableDeclarator<'_>, source: &str) -> Option<(usi
     // Don't double-specify: if the call already has explicit type
     // parameters, leave it alone. User wrote `$state<Foo>(...)` on
     // purpose.
-    if call.type_parameters.is_some() {
+    if call.type_arguments.is_some() {
         return None;
     }
 

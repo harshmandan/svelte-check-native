@@ -204,7 +204,7 @@ fn extract_kit_files_object<'a>(
     for stmt in &program.body {
         if let Statement::VariableDeclaration(vd) = stmt {
             for d in &vd.declarations {
-                let oxc_ast::ast::BindingPatternKind::BindingIdentifier(id) = &d.id.kind else {
+                let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &d.id else {
                     continue;
                 };
                 if let Some(init) = &d.init {
@@ -377,7 +377,7 @@ fn extract_warning_filter<'a>(
     for stmt in &program.body {
         if let Statement::VariableDeclaration(vd) = stmt {
             for d in &vd.declarations {
-                let oxc_ast::ast::BindingPatternKind::BindingIdentifier(id) = &d.id.kind else {
+                let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &d.id else {
                     continue;
                 };
                 if let Some(init) = &d.init {
@@ -456,8 +456,8 @@ fn filter_param_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
 
 fn first_param_name<'a>(params: &'a [FormalParameter<'a>]) -> Option<&'a str> {
     let p = params.first()?;
-    match &p.pattern.kind {
-        oxc_ast::ast::BindingPatternKind::BindingIdentifier(id) => Some(id.name.as_str()),
+    match &p.pattern {
+        oxc_ast::ast::BindingPattern::BindingIdentifier(id) => Some(id.name.as_str()),
         _ => None,
     }
 }
@@ -855,7 +855,7 @@ fn extract_string_array_const<'a>(
     vd: &'a VariableDeclaration<'a>,
 ) -> Option<(String, Vec<String>)> {
     let d = vd.declarations.first()?;
-    let oxc_ast::ast::BindingPatternKind::BindingIdentifier(id) = &d.id.kind else {
+    let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &d.id else {
         return None;
     };
     let init = d.init.as_ref()?;

@@ -220,10 +220,8 @@ fn walk_raw(map: &mut Map<String, Value>, dir: &str) {
 
 fn walk_value(v: &mut Value, dir: &str) {
     match v {
-        Value::String(s) => {
-            if s.contains("${configDir}") {
-                *s = s.replace("${configDir}", dir);
-            }
+        Value::String(s) if s.contains("${configDir}") => {
+            *s = s.replace("${configDir}", dir);
         }
         Value::Array(arr) => {
             for x in arr {

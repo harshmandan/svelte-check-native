@@ -4,9 +4,7 @@
 //! `scope.rs` so the main scope walker reads as visitor logic
 //! rather than visitor logic + a bag of micro-helpers.
 
-use oxc_ast::ast::{
-    BindingPattern, BindingPatternKind, Expression, ForStatementInit, PropertyKey, Statement,
-};
+use oxc_ast::ast::{BindingPattern, Expression, ForStatementInit, PropertyKey, Statement};
 use oxc_span::GetSpan;
 
 /// Flatten every binding identifier introduced by a destructure
@@ -16,9 +14,9 @@ use oxc_span::GetSpan;
 pub(crate) fn idents_in_pattern(pat: &BindingPattern<'_>) -> Vec<String> {
     let mut out = Vec::new();
     fn go(pat: &BindingPattern<'_>, out: &mut Vec<String>) {
-        match &pat.kind {
-            BindingPatternKind::BindingIdentifier(id) => out.push(id.name.to_string()),
-            BindingPatternKind::ObjectPattern(op) => {
+        match pat {
+            BindingPattern::BindingIdentifier(id) => out.push(id.name.to_string()),
+            BindingPattern::ObjectPattern(op) => {
                 for prop in &op.properties {
                     go(&prop.value, out);
                 }
@@ -26,7 +24,7 @@ pub(crate) fn idents_in_pattern(pat: &BindingPattern<'_>) -> Vec<String> {
                     go(&rest.argument, out);
                 }
             }
-            BindingPatternKind::ArrayPattern(ap) => {
+            BindingPattern::ArrayPattern(ap) => {
                 for p in ap.elements.iter().flatten() {
                     go(p, out);
                 }
@@ -34,7 +32,7 @@ pub(crate) fn idents_in_pattern(pat: &BindingPattern<'_>) -> Vec<String> {
                     go(&rest.argument, out);
                 }
             }
-            BindingPatternKind::AssignmentPattern(ap) => go(&ap.left, out),
+            BindingPattern::AssignmentPattern(ap) => go(&ap.left, out),
         }
     }
     go(pat, &mut out);

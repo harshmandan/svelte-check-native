@@ -35,7 +35,7 @@ pub struct TemplateSummary {
     pub void_refs: VoidRefRegistry,
     /// `bind:this={x}` targets where `x` is a simple identifier — eligible
     /// for the definite-assignment rewrite.
-    pub bind_this_targets: SmallVec<[BindThisTarget; 2]>,
+    pub bind_this_targets: SmallVec<BindThisTarget, 2>,
     /// DOM-element `bind:NAME={x}` directives on a narrow allowlist of
     /// one-way-not-on-element bindings (`bind:contentRect`,
     /// `bind:contentBoxSize`, etc. — see `dom_binding::type_for`).
@@ -61,7 +61,7 @@ pub struct TemplateSummary {
     /// declares each as `let NAME: any;` inside `__svn_tpl_check` so
     /// downstream `{#if NAME.x}` / `{#each NAME as ...}` references
     /// don't fire TS2304.
-    pub at_const_names: SmallVec<[SmolStr; 4]>,
+    pub at_const_names: SmallVec<SmolStr, 4>,
     /// Each `<Component prop1=... prop2=... />` instantiation we found,
     /// with enough info for emit to generate a `satisfies
     /// ComponentProps<typeof Component>` type-check that catches
@@ -72,7 +72,7 @@ pub struct TemplateSummary {
     /// those, the satisfies object would be incomplete in a way that
     /// would itself cause false positives. Component-prop checking for
     /// those shapes is a future expansion.
-    pub component_instantiations: SmallVec<[ComponentInstantiation; 4]>,
+    pub component_instantiations: SmallVec<ComponentInstantiation, 4>,
     /// One entry per `use:ACTION={PARAMS}` directive encountered. Emit
     /// uses this to generate `__svn_ensure_action(ACTION(__svn_map_element_tag('TAG'), (PARAMS)))`
     /// — a real call that forces TypeScript to contextually type the
@@ -81,7 +81,7 @@ pub struct TemplateSummary {
     /// destructure we want type-checked, e.g. `use:enhance={({formData}) => …}`)
     /// emits unanchored and every destructure silently passes as
     /// implicit `any`.
-    pub action_directives: SmallVec<[ActionDirective; 2]>,
+    pub action_directives: SmallVec<ActionDirective, 2>,
     /// True when any `<ChildComponent on:EVENT />` bare re-dispatch
     /// directive was seen (the `on:EVENT` form with no `={…}` value —
     /// event bubbling). Drives the default-export Props-widen path

@@ -20,7 +20,7 @@
 use std::collections::HashSet;
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{BindingPatternKind, Declaration, ImportOrExportKind, Statement};
+use oxc_ast::ast::{BindingPattern, Declaration, ImportOrExportKind, Statement};
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
 use svn_parser::{ScriptLang, parse_script_body};
@@ -254,7 +254,7 @@ pub fn split_imports(
                 // Body-level `const/let/var` — stays in body. Record its
                 // names for the `declare const` stub pass.
                 for d in &decl.declarations {
-                    collect_binding_pattern_names(&d.id.kind, &mut body_decl_names);
+                    collect_binding_pattern_names(&d.id, &mut body_decl_names);
                 }
             }
             Statement::FunctionDeclaration(decl) => {
@@ -812,11 +812,11 @@ fn collect_export_type_infos(
             for d in &v.declarations {
                 // Only simple `name: T = ...` patterns — destructures
                 // and anonymous-binding cases we surface as `any`.
-                let BindingPatternKind::BindingIdentifier(id) = &d.id.kind else {
+                let BindingPattern::BindingIdentifier(id) = &d.id else {
                     continue;
                 };
                 let name = SmolStr::from(id.name.as_str());
-                let type_source = d.id.type_annotation.as_deref().map(|ta| {
+                let type_source = d.type_annotation.as_deref().map(|ta| {
                     let span = GetSpan::span(&ta.type_annotation);
                     content[span.start as usize..span.end as usize].to_string()
                 });
@@ -843,7 +843,7 @@ fn collect_declaration_names(decl: &Declaration<'_>, out: &mut Vec<SmolStr>) {
     match decl {
         Declaration::VariableDeclaration(v) => {
             for d in &v.declarations {
-                collect_binding_pattern_names(&d.id.kind, out);
+                collect_binding_pattern_names(&d.id, out);
             }
         }
         Declaration::FunctionDeclaration(f) => {
@@ -1166,29 +1166,29 @@ fn is_ref_scan_keyword(s: &str) -> bool {
     )
 }
 
-fn collect_binding_pattern_names(pat: &BindingPatternKind<'_>, out: &mut Vec<SmolStr>) {
+fn collect_binding_pattern_names(pat: &BindingPattern<'_>, out: &mut Vec<SmolStr>) {
     match pat {
-        BindingPatternKind::BindingIdentifier(id) => {
+        BindingPattern::BindingIdentifier(id) => {
             out.push(SmolStr::from(id.name.as_str()));
         }
-        BindingPatternKind::ObjectPattern(o) => {
+        BindingPattern::ObjectPattern(o) => {
             for prop in &o.properties {
-                collect_binding_pattern_names(&prop.value.kind, out);
+                collect_binding_pattern_names(&prop.value, out);
             }
             if let Some(rest) = &o.rest {
-                collect_binding_pattern_names(&rest.argument.kind, out);
+                collect_binding_pattern_names(&rest.argument, out);
             }
         }
-        BindingPatternKind::ArrayPattern(a) => {
+        BindingPattern::ArrayPattern(a) => {
             for el in a.elements.iter().flatten() {
-                collect_binding_pattern_names(&el.kind, out);
+                collect_binding_pattern_names(el, out);
             }
             if let Some(rest) = &a.rest {
-                collect_binding_pattern_names(&rest.argument.kind, out);
+                collect_binding_pattern_names(&rest.argument, out);
             }
         }
-        BindingPatternKind::AssignmentPattern(a) => {
-            collect_binding_pattern_names(&a.left.kind, out);
+        BindingPattern::AssignmentPattern(a) => {
+            collect_binding_pattern_names(&a.left, out);
         }
     }
 }

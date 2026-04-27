@@ -36,7 +36,7 @@
 use std::collections::HashSet;
 
 use oxc_ast::ast::{
-    BindingPatternKind, Declaration, ImportDeclarationSpecifier, ImportOrExportKind, Statement,
+    BindingPattern, Declaration, ImportDeclarationSpecifier, ImportOrExportKind, Statement,
 };
 use smol_str::SmolStr;
 
@@ -376,11 +376,10 @@ fn collect_typed_lets_impl(
                 }
             }
             // Only top-level simple identifier with a type annotation.
-            let oxc_ast::ast::BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind
-            else {
+            let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &declarator.id else {
                 continue;
             };
-            if declarator.id.type_annotation.is_none() {
+            if declarator.type_annotation.is_none() {
                 continue;
             }
             let name = smol_str::SmolStr::from(id.name.as_str());
@@ -408,7 +407,7 @@ fn collect_from_statement(stmt: &Statement<'_>, out: &mut HashSet<String>) {
     match stmt {
         Statement::VariableDeclaration(decl) => {
             for declarator in &decl.declarations {
-                collect_from_binding_pattern(&declarator.id.kind, out);
+                collect_from_binding_pattern(&declarator.id, out);
             }
         }
         Statement::FunctionDeclaration(decl) => {
@@ -465,7 +464,7 @@ fn collect_from_declaration(decl: &Declaration<'_>, out: &mut HashSet<String>) {
     match decl {
         Declaration::VariableDeclaration(decl) => {
             for declarator in &decl.declarations {
-                collect_from_binding_pattern(&declarator.id.kind, out);
+                collect_from_binding_pattern(&declarator.id, out);
             }
         }
         Declaration::FunctionDeclaration(decl) => {
@@ -482,29 +481,29 @@ fn collect_from_declaration(decl: &Declaration<'_>, out: &mut HashSet<String>) {
     }
 }
 
-fn collect_from_binding_pattern(pat: &BindingPatternKind<'_>, out: &mut HashSet<String>) {
+fn collect_from_binding_pattern(pat: &BindingPattern<'_>, out: &mut HashSet<String>) {
     match pat {
-        BindingPatternKind::BindingIdentifier(id) => {
+        BindingPattern::BindingIdentifier(id) => {
             out.insert(id.name.to_string());
         }
-        BindingPatternKind::ObjectPattern(obj) => {
+        BindingPattern::ObjectPattern(obj) => {
             for prop in &obj.properties {
-                collect_from_binding_pattern(&prop.value.kind, out);
+                collect_from_binding_pattern(&prop.value, out);
             }
             if let Some(rest) = &obj.rest {
-                collect_from_binding_pattern(&rest.argument.kind, out);
+                collect_from_binding_pattern(&rest.argument, out);
             }
         }
-        BindingPatternKind::ArrayPattern(arr) => {
+        BindingPattern::ArrayPattern(arr) => {
             for el in arr.elements.iter().flatten() {
-                collect_from_binding_pattern(&el.kind, out);
+                collect_from_binding_pattern(el, out);
             }
             if let Some(rest) = &arr.rest {
-                collect_from_binding_pattern(&rest.argument.kind, out);
+                collect_from_binding_pattern(&rest.argument, out);
             }
         }
-        BindingPatternKind::AssignmentPattern(asn) => {
-            collect_from_binding_pattern(&asn.left.kind, out);
+        BindingPattern::AssignmentPattern(asn) => {
+            collect_from_binding_pattern(&asn.left, out);
         }
     }
 }

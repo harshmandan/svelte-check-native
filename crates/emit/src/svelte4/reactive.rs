@@ -50,7 +50,7 @@ use std::collections::HashSet;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    BindingPatternKind, Expression, LabeledStatement, Statement, VariableDeclarator,
+    BindingPattern, Expression, LabeledStatement, Statement, VariableDeclarator,
 };
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
@@ -189,29 +189,29 @@ fn collect_top_level_var_names(program: &oxc_ast::ast::Program<'_>) -> HashSet<S
 }
 
 fn collect_binding_names(declarator: &VariableDeclarator<'_>, out: &mut HashSet<SmolStr>) {
-    collect_from_pattern(&declarator.id.kind, out);
+    collect_from_pattern(&declarator.id, out);
 }
 
-fn collect_from_pattern(pat: &BindingPatternKind<'_>, out: &mut HashSet<SmolStr>) {
+fn collect_from_pattern(pat: &BindingPattern<'_>, out: &mut HashSet<SmolStr>) {
     match pat {
-        BindingPatternKind::BindingIdentifier(id) => {
+        BindingPattern::BindingIdentifier(id) => {
             out.insert(SmolStr::from(id.name.as_str()));
         }
-        BindingPatternKind::ObjectPattern(obj) => {
+        BindingPattern::ObjectPattern(obj) => {
             for p in &obj.properties {
-                collect_from_pattern(&p.value.kind, out);
+                collect_from_pattern(&p.value, out);
             }
             if let Some(rest) = &obj.rest {
-                collect_from_pattern(&rest.argument.kind, out);
+                collect_from_pattern(&rest.argument, out);
             }
         }
-        BindingPatternKind::ArrayPattern(arr) => {
+        BindingPattern::ArrayPattern(arr) => {
             for el in arr.elements.iter().flatten() {
-                collect_from_pattern(&el.kind, out);
+                collect_from_pattern(el, out);
             }
         }
-        BindingPatternKind::AssignmentPattern(asn) => {
-            collect_from_pattern(&asn.left.kind, out);
+        BindingPattern::AssignmentPattern(asn) => {
+            collect_from_pattern(&asn.left, out);
         }
     }
 }

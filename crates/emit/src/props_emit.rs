@@ -15,7 +15,7 @@
 use std::fmt::Write;
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{BindingPatternKind, Expression, Statement, VariableDeclarator};
+use oxc_ast::ast::{BindingPattern, Expression, Statement, VariableDeclarator};
 
 use crate::process_instance_script_content;
 use crate::util::is_simple_js_identifier;
@@ -225,7 +225,7 @@ enum AnnotationAction {
 }
 
 fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAction> {
-    let BindingPatternKind::ObjectPattern(obj) = &declarator.id.kind else {
+    let BindingPattern::ObjectPattern(obj) = &declarator.id else {
         return None;
     };
     // Initializer must be a bare `$props()` call with NO explicit
@@ -246,7 +246,7 @@ fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAc
     if callee_id.name != "$props" {
         return None;
     }
-    if call.type_parameters.is_some() {
+    if call.type_arguments.is_some() {
         return None;
     }
     // CASE A — user wrote `let { … }: { lit } = $props()`. Replace
@@ -255,7 +255,7 @@ fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAc
     // multi-line literal to a single token — matching upstream's
     // line-count parity and eliminating downstream position drift on
     // the destructure-following declarations.
-    if let Some(annot) = &declarator.id.type_annotation {
+    if let Some(annot) = &declarator.type_annotation {
         let start = annot.span.start as usize;
         let end = annot.span.end as usize;
         return Some(AnnotationAction::Replace { start, end });

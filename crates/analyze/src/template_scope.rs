@@ -44,7 +44,7 @@
 //!   `TreeBuilder`'s declarations + reference-recording + control-
 //!   flow tracking.
 
-use oxc_ast::ast::{BindingPattern, BindingPatternKind};
+use oxc_ast::ast::BindingPattern;
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
 use svn_core::Range;
@@ -100,8 +100,8 @@ pub fn collect_pattern_bindings(pat: &BindingPattern<'_>, offset: i32) -> Patter
 }
 
 fn walk(pat: &BindingPattern<'_>, offset: i32, inside_rest: bool, out: &mut PatternBindings) {
-    match &pat.kind {
-        BindingPatternKind::BindingIdentifier(id) => {
+    match pat {
+        BindingPattern::BindingIdentifier(id) => {
             let start = (id.span.start as i32 + offset).max(0) as u32;
             let end = (id.span.end as i32 + offset).max(0) as u32;
             out.bindings.push(BoundIdent {
@@ -110,7 +110,7 @@ fn walk(pat: &BindingPattern<'_>, offset: i32, inside_rest: bool, out: &mut Patt
                 inside_rest,
             });
         }
-        BindingPatternKind::ObjectPattern(op) => {
+        BindingPattern::ObjectPattern(op) => {
             for prop in &op.properties {
                 walk(&prop.value, offset, inside_rest, out);
             }
@@ -122,7 +122,7 @@ fn walk(pat: &BindingPattern<'_>, offset: i32, inside_rest: bool, out: &mut Patt
                 walk(&rest.argument, offset, true, out);
             }
         }
-        BindingPatternKind::ArrayPattern(ap) => {
+        BindingPattern::ArrayPattern(ap) => {
             for elem in ap.elements.iter().flatten() {
                 walk(elem, offset, inside_rest, out);
             }
@@ -133,7 +133,7 @@ fn walk(pat: &BindingPattern<'_>, offset: i32, inside_rest: bool, out: &mut Patt
                 walk(&rest.argument, offset, true, out);
             }
         }
-        BindingPatternKind::AssignmentPattern(asn) => {
+        BindingPattern::AssignmentPattern(asn) => {
             // The pattern's left side is the binding(s); the right
             // side is the default-value expression. Lint walks the
             // default in PARENT scope (refs resolve to outer

@@ -6,7 +6,7 @@
 //! single small module instead of being scattered between two
 //! impl blocks.
 
-use oxc_ast::ast::{BindingPattern, BindingPatternKind, CallExpression, Expression};
+use oxc_ast::ast::{BindingPattern, CallExpression, Expression};
 
 use crate::scope_types::{InitialKind, RuneCall};
 
@@ -95,8 +95,8 @@ pub(crate) fn detect_rune_call_from_call(c: &CallExpression<'_>) -> Option<RuneC
 /// arg is a primitive-literal-ish thing, or `None` if not a $bindable
 /// call.
 pub(crate) fn detect_bindable_default(pat: &BindingPattern<'_>) -> Option<bool> {
-    match &pat.kind {
-        BindingPatternKind::AssignmentPattern(ap) => match &ap.right {
+    match pat {
+        BindingPattern::AssignmentPattern(ap) => match &ap.right {
             Expression::CallExpression(c) => {
                 if detect_rune_call_from_call(c) == Some(RuneCall::Bindable) {
                     let arg_is_primitive = c

@@ -51,7 +51,7 @@
 //!    `any`.
 
 use oxc_ast::ast::{
-    BindingPatternKind, BindingProperty, Declaration, Expression, ModuleExportName, PropertyKey,
+    BindingPattern, BindingProperty, Declaration, Expression, ModuleExportName, PropertyKey,
     Statement, VariableDeclaration,
 };
 use oxc_span::GetSpan;
@@ -192,11 +192,11 @@ impl PropsInfo {
                 if !is_props_call_like(init) {
                     continue;
                 }
-                collect_from_binding(&declarator.id.kind, &mut destructures);
+                collect_from_binding(&declarator.id, &mut destructures);
                 if type_text.is_some() {
                     continue;
                 }
-                if let Some(ty) = declarator.id.type_annotation.as_ref() {
+                if let Some(ty) = declarator.type_annotation.as_ref() {
                     let span = ty.type_annotation.span();
                     if let Some(slice) = source.get(span.start as usize..span.end as usize) {
                         type_text = Some(slice.to_string());
@@ -205,7 +205,7 @@ impl PropsInfo {
                     }
                 }
                 if let Expression::CallExpression(call) = init
-                    && let Some(tp) = call.type_parameters.as_ref()
+                    && let Some(tp) = call.type_arguments.as_ref()
                     && let Some(arg) = tp.params.first()
                 {
                     let span = arg.span();
@@ -388,14 +388,13 @@ fn find_local_type_and_init<'s>(
             continue;
         };
         for declarator in &decl.declarations {
-            let BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind else {
+            let BindingPattern::BindingIdentifier(id) = &declarator.id else {
                 continue;
             };
             if id.name.as_str() != name {
                 continue;
             }
             let ty_text = declarator
-                .id
                 .type_annotation
                 .as_ref()
                 .map(|ty| ty.type_annotation.span())
@@ -412,7 +411,7 @@ fn append_props_from_var_decl(
     out: &mut Vec<String>,
 ) {
     for declarator in &var_decl.declarations {
-        let BindingPatternKind::BindingIdentifier(id) = &declarator.id.kind else {
+        let BindingPattern::BindingIdentifier(id) = &declarator.id else {
             // Destructured exports aren't valid Svelte prop declarations;
             // skip them rather than invent a synthetic name.
             continue;
@@ -420,7 +419,6 @@ fn append_props_from_var_decl(
         let name = id.name.as_str();
         let has_init = declarator.init.is_some();
         let ty_text: Option<&str> = declarator
-            .id
             .type_annotation
             .as_ref()
             .map(|ty| ty.type_annotation.span())
@@ -502,7 +500,7 @@ fn arrow_signature_from_init(init: &Expression<'_>, source: &str) -> Option<Stri
     };
     let mut parts: Vec<String> = Vec::new();
     for param in &arrow.params.items {
-        let BindingPatternKind::BindingIdentifier(id) = &param.pattern.kind else {
+        let BindingPattern::BindingIdentifier(id) = &param.pattern else {
             // Destructure / rest / assignment patterns — give up and
             // let the caller fall back to `any`. Writing these as
             // prop-type-position types needs the full TS
@@ -511,7 +509,6 @@ fn arrow_signature_from_init(init: &Expression<'_>, source: &str) -> Option<Stri
         };
         let name = id.name.as_str();
         let ty = param
-            .pattern
             .type_annotation
             .as_ref()
             .map(|ty| ty.type_annotation.span())
@@ -592,7 +589,7 @@ fn dispatcher_type_arg_slice(expr: &Expression<'_>, source: &str) -> Option<Stri
         Expression::Identifier(id) if id.name == "createEventDispatcher" => {}
         _ => return None,
     }
-    let tp = call.type_parameters.as_ref()?;
+    let tp = call.type_arguments.as_ref()?;
     let arg = tp.params.first()?;
     let span = arg.span();
     source
@@ -600,24 +597,24 @@ fn dispatcher_type_arg_slice(expr: &Expression<'_>, source: &str) -> Option<Stri
         .map(str::to_string)
 }
 
-fn collect_from_binding(pat: &BindingPatternKind<'_>, out: &mut Vec<PropInfo>) {
+fn collect_from_binding(pat: &BindingPattern<'_>, out: &mut Vec<PropInfo>) {
     match pat {
-        BindingPatternKind::ObjectPattern(obj) => {
+        BindingPattern::ObjectPattern(obj) => {
             for prop in &obj.properties {
                 collect_from_object_property(prop, out);
             }
             if let Some(rest) = &obj.rest {
-                collect_rest(&rest.argument.kind, out, true);
+                collect_rest(&rest.argument, out, true);
             }
         }
         // `let [a, b, c] = $props()` isn't a valid Svelte pattern ($props
         // returns an object), but be defensive.
-        BindingPatternKind::ArrayPattern(arr) => {
+        BindingPattern::ArrayPattern(arr) => {
             for el in arr.elements.iter().flatten() {
-                collect_from_binding(&el.kind, out);
+                collect_from_binding(el, out);
             }
         }
-        BindingPatternKind::BindingIdentifier(id) => {
+        BindingPattern::BindingIdentifier(id) => {
             let name = SmolStr::from(id.name.as_str());
             out.push(PropInfo {
                 local_name: name.clone(),
@@ -629,14 +626,14 @@ fn collect_from_binding(pat: &BindingPatternKind<'_>, out: &mut Vec<PropInfo>) {
                 default_type_text: None,
             });
         }
-        BindingPatternKind::AssignmentPattern(asn) => {
+        BindingPattern::AssignmentPattern(asn) => {
             // `name = default` at the top level (no surrounding object
             // pattern key) — the local name is the LHS identifier and
             // `has_default` is true. Mostly hit through nested patterns;
             // top-level entries flow through `collect_from_object_property`
             // which sets has_default itself.
             let before = out.len();
-            collect_from_binding(&asn.left.kind, out);
+            collect_from_binding(&asn.left, out);
             let inferred = infer_default_type(&asn.right);
             let bindable = is_bindable_call(&asn.right);
             for entry in &mut out[before..] {
@@ -663,15 +660,15 @@ fn collect_from_object_property(prop: &BindingProperty<'_>, out: &mut Vec<PropIn
         _ => None,
     };
     let before = out.len();
-    let (has_default, inferred_default, bindable) = match &prop.value.kind {
-        BindingPatternKind::AssignmentPattern(asn) => (
+    let (has_default, inferred_default, bindable) = match &prop.value {
+        BindingPattern::AssignmentPattern(asn) => (
             true,
             infer_default_type(&asn.right),
             is_bindable_call(&asn.right),
         ),
         _ => (false, None, false),
     };
-    collect_from_binding(&prop.value.kind, out);
+    collect_from_binding(&prop.value, out);
     // Patch the entries this property added: their prop_key should
     // reflect the source property key (not the local name) for renames,
     // and `has_default` should propagate when this property carried the
@@ -700,9 +697,9 @@ fn collect_from_object_property(prop: &BindingProperty<'_>, out: &mut Vec<PropIn
     }
 }
 
-fn collect_rest(pat: &BindingPatternKind<'_>, out: &mut Vec<PropInfo>, is_rest: bool) {
+fn collect_rest(pat: &BindingPattern<'_>, out: &mut Vec<PropInfo>, is_rest: bool) {
     match pat {
-        BindingPatternKind::BindingIdentifier(id) => {
+        BindingPattern::BindingIdentifier(id) => {
             let name = SmolStr::from(id.name.as_str());
             out.push(PropInfo {
                 local_name: name.clone(),

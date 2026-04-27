@@ -14,7 +14,7 @@ members = [
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.95"
 license = "MIT"
 repository = "https://github.com/harshmandan/svelte-check-native"
 authors = ["Harsh Mandan <harshsinghmandan@gmail.com>"]
@@ -30,6 +30,13 @@ unwrap_used = "warn"
 expect_used = "warn"
 dbg_macro = "warn"
 todo = "warn"
+# Promoted to default-warn in 1.95; flags pre-existing nested `if` /
+# `if let` / `match` arms throughout the codebase. The collapsed
+# forms read worse for the destructure-then-condition pattern we
+# use heavily, so opt out at the workspace level rather than
+# rewrite swathes of pre-existing-clean code.
+collapsible_if = "allow"
+collapsible_match = "allow"
 
 [workspace.dependencies]
 # Shared across crates — pin centrally, inherit per-crate.
@@ -37,7 +44,7 @@ anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-smol_str = "0.3"
+smol_str = "0.3.6"
 camino = "1"
 memchr = "2"
 # Order-preserving set/map with O(1) contains. Used by analyze for
@@ -54,7 +61,7 @@ phf = { version = "0.13", features = ["macros"] }
 # {@const} names, use: directives, component instantiations) — in
 # typical components these have 0-2 elements, so the heap alloc was
 # wasted on the common case.
-smallvec = "1"
+smallvec = "2.0.0-alpha.12"
 # Tolerant JSON for tsconfig.json (comments + trailing commas).
 json5 = "1"
 
@@ -87,11 +94,11 @@ semver = "1"
 # JS/TS parser. Architecture rule: embedded JS/TS is parsed once into
 # a real AST and walked structurally — never scanned character-by-
 # character. oxc is the only parser in the workspace for this reason.
-oxc_allocator = "0.54"
-oxc_ast = "0.54"
-oxc_diagnostics = "0.54"
-oxc_parser = "0.54"
-oxc_span = "0.54"
+oxc_allocator = "0.128"
+oxc_ast = "0.128"
+oxc_diagnostics = "0.128"
+oxc_parser = "0.128"
+oxc_span = "0.128"
 
 # Testing
 insta = { version = "1", features = ["yaml", "filters"] }

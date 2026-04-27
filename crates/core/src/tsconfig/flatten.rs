@@ -230,10 +230,10 @@ where
     F: Fn(&TsConfigFile) -> Option<&[String]>,
 {
     for file in chain {
-        if let Some(values) = get(file) {
-            if !values.is_empty() {
-                return Some(values.to_vec());
-            }
+        if let Some(values) = get(file)
+            && !values.is_empty()
+        {
+            return Some(values.to_vec());
         }
     }
     None

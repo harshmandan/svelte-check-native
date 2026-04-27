@@ -24,8 +24,8 @@
 //! `state_referenced_locally` to light up with upstream-byte parity.
 
 use oxc_ast::ast::{
-    ArrayPattern, AssignmentExpression, AssignmentTarget, BindingPattern, BindingPatternKind,
-    CallExpression, ChainElement, Class, ClassBody, ClassElement, Expression, ForStatementInit,
+    ArrayPattern, AssignmentExpression, AssignmentTarget, BindingPattern, CallExpression,
+    ChainElement, Class, ClassBody, ClassElement, Expression, ForStatementInit,
     IdentifierReference, LabeledStatement, ObjectExpression, ObjectPattern, ObjectPropertyKind,
     PropertyKey, SimpleAssignmentTarget, Statement, UpdateExpression, VariableDeclaration,
     VariableDeclarator,
@@ -1845,7 +1845,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // `$bindable(default)` fallbacks flip to BindableProp.
         let is_props = matches!(rune, Some(RuneCall::Props));
         let is_props_identifier =
-            is_props && matches!(&d.id.kind, BindingPatternKind::BindingIdentifier(_));
+            is_props && matches!(&d.id, BindingPattern::BindingIdentifier(_));
 
         // custom_element_props_identifier candidate. Upstream
         // `VariableDeclarator.js:72-83` fires on Identifier form
@@ -1855,11 +1855,11 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // presence of `<svelte:options customElement={…}>` and the
         // absence of an explicit `props` option on it.
         if is_props {
-            let warn_range = match &d.id.kind {
-                BindingPatternKind::BindingIdentifier(id) => {
+            let warn_range = match &d.id {
+                BindingPattern::BindingIdentifier(id) => {
                     Some(self.abs(id.span.start, id.span.end))
                 }
-                BindingPatternKind::ObjectPattern(op) => {
+                BindingPattern::ObjectPattern(op) => {
                     op.rest.as_ref().map(|r| self.abs(r.span.start, r.span.end))
                 }
                 _ => None,
@@ -1877,7 +1877,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // `let { … } = $props()` bare identifier → RestProp (ambient-
         // style). Fix up the binding we just created.
         if is_props_identifier
-            && let BindingPatternKind::BindingIdentifier(id) = &d.id.kind
+            && let BindingPattern::BindingIdentifier(id) = &d.id
             && let Some(bid) = self
                 .tree
                 .scopes
@@ -1920,8 +1920,8 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         initial: &InitialKind,
         is_props: bool,
     ) {
-        match &pat.kind {
-            BindingPatternKind::BindingIdentifier(id) => {
+        match pat {
+            BindingPattern::BindingIdentifier(id) => {
                 self.tree.declare(
                     self.cur_scope(),
                     SmolStr::from(id.name.as_str()),
@@ -1931,13 +1931,13 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     initial.clone(),
                 );
             }
-            BindingPatternKind::ObjectPattern(op) => {
+            BindingPattern::ObjectPattern(op) => {
                 self.declare_object_pattern(op, decl_kind, kind, initial, is_props);
             }
-            BindingPatternKind::ArrayPattern(ap) => {
+            BindingPattern::ArrayPattern(ap) => {
                 self.declare_array_pattern(ap, decl_kind, kind, initial, is_props);
             }
-            BindingPatternKind::AssignmentPattern(ap) => {
+            BindingPattern::AssignmentPattern(ap) => {
                 // `let foo = default` — treat like the inner pattern.
                 self.declare_pattern_with(&ap.left, decl_kind, kind, initial, is_props);
                 // Walk the default-value expression so refs inside get
@@ -1982,7 +1982,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     // Unwrap an AssignmentPattern to see if there's a
                     // default expression.
                     let default =
-                        if let BindingPatternKind::AssignmentPattern(ap) = &prop.value.kind {
+                        if let BindingPattern::AssignmentPattern(ap) = &prop.value {
                             InitialKind::Expression {
                                 primitive: is_primitive_expr(&ap.right),
                             }
@@ -2045,12 +2045,12 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     /// subtree. Callers drive this after bumping `rune_bump` so the
     /// references inside capture the elevated `function_depth_at_use`.
     fn walk_pattern_defaults(&mut self, pat: &BindingPattern<'_>) {
-        match &pat.kind {
-            BindingPatternKind::AssignmentPattern(ap) => {
+        match pat {
+            BindingPattern::AssignmentPattern(ap) => {
                 self.visit_expr(&ap.right);
                 self.walk_pattern_defaults(&ap.left);
             }
-            BindingPatternKind::ObjectPattern(op) => {
+            BindingPattern::ObjectPattern(op) => {
                 for prop in &op.properties {
                     self.walk_pattern_defaults(&prop.value);
                 }
@@ -2058,7 +2058,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     self.walk_pattern_defaults(&rest.argument);
                 }
             }
-            BindingPatternKind::ArrayPattern(ap) => {
+            BindingPattern::ArrayPattern(ap) => {
                 for p in ap.elements.iter().flatten() {
                     self.walk_pattern_defaults(p);
                 }
@@ -2066,7 +2066,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     self.walk_pattern_defaults(&rest.argument);
                 }
             }
-            BindingPatternKind::BindingIdentifier(_) => {}
+            BindingPattern::BindingIdentifier(_) => {}
         }
     }
 

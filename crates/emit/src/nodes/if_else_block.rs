@@ -263,8 +263,7 @@ pub(crate) fn extract_property_chains(text: &str) -> Vec<String> {
                 | oxc_ast::ast::SimpleAssignmentTarget::TSAsExpression(_)
                 | oxc_ast::ast::SimpleAssignmentTarget::TSSatisfiesExpression(_)
                 | oxc_ast::ast::SimpleAssignmentTarget::TSNonNullExpression(_)
-                | oxc_ast::ast::SimpleAssignmentTarget::TSTypeAssertion(_)
-                | oxc_ast::ast::SimpleAssignmentTarget::TSInstantiationExpression(_) => {}
+                | oxc_ast::ast::SimpleAssignmentTarget::TSTypeAssertion(_) => {}
             },
             ParenthesizedExpression(p) => {
                 walk(&p.expression, src, out, seen);

@@ -86,9 +86,9 @@ use nodes::snippet_block::emit_snippet_block;
 
 use default_export::{emit_default_export_declarations_js, emit_default_export_declarations_ts};
 use props_emit::{
-    build_exports_object, inject_component_props_annotation, should_synthesise_js_props,
-    synthesise_js_props_typedef_body,
+    build_exports_object, inject_component_props_annotation, synthesise_js_props_typedef_body,
 };
+use svn_analyze::should_synthesise_js_props;
 use svelte4::compat::{
     denarrow_typed_exported_props_in_place, emit_svelte4_ambients, has_strict_events,
     has_strict_events_attr, is_runes_mode, rewrite_definite_assignment_in_place,

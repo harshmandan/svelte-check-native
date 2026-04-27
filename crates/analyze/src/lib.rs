@@ -19,6 +19,7 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 pub mod dom_binding;
+pub mod jsdoc;
 pub mod props;
 pub mod rune;
 pub mod store;
@@ -27,6 +28,9 @@ pub mod template_scope;
 pub mod template_walker;
 pub mod void_refs;
 
+pub use jsdoc::{
+    scan_jsdoc_props_typedef_keys, scan_jsdoc_typedef_name, should_synthesise_js_props,
+};
 pub use props::{
     PropInfo, PropsInfo, PropsSource, contains_typeof_ref, find_dispatcher_event_type_source,
     root_type_name_of,

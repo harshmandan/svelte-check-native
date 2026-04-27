@@ -24,12 +24,9 @@ use crate::emit_buffer::EmitBuffer;
 use crate::emit_is_ts;
 use crate::emit_template_body;
 use crate::nodes::action::emit_legacy_action_attrs;
-use crate::props_emit::{
-    build_slots_field_type, scan_jsdoc_typedef_name, should_synthesise_js_props,
-    synthesise_js_props_typedef_body,
-};
+use crate::props_emit::{build_slots_field_type, synthesise_js_props_typedef_body};
 use crate::svelte4::compat::has_strict_events;
-use svn_analyze::TemplateSummary;
+use svn_analyze::{TemplateSummary, scan_jsdoc_typedef_name, should_synthesise_js_props};
 
 /// Emit the `async function __svn_tpl_check() { … }` wrapper that
 /// carries every template expression as real TypeScript. The walk

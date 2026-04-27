@@ -9,20 +9,9 @@
 
 </div>
 
-Blazing fast CLI type-checker for **Svelte** projects.
-Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check) — compatible flags, byte-identical output, same exit codes. Powered by Rust + [tsgo](https://github.com/microsoft/typescript-go). Made for:
+Blazing fast CLI type-checker for **Svelte** projects. Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check) — compatible flags, byte-identical diagnostics, same exit codes. Single Rust binary, powered by [tsgo](https://github.com/microsoft/typescript-go), incremental via `tsbuildinfo`. Built for AI agents, CI/CD, and pre-commit hooks that actually stay enabled.
 
-- AI agents that need tight feedback loops
-- Fast CI/CD pipelines
-- Git pre-commit hooks that actually stay enabled
-
-| What it is                                  | What it isn't               |
-| ------------------------------------------- | --------------------------- |
-| CLI type-checker for Svelte 4 and 5         | An LSP / editor integration |
-| Drop-in for `svelte-check` (flags + output) | A CSS linter                |
-| Single Rust binary, tsgo-powered            | A formatter                 |
-| Byte-identical diagnostics upstream         |                             |
-| Incremental via tsgo's `tsbuildinfo`        |                             |
+Not an LSP, CSS linter, or formatter.
 
 ## Speed
 

@@ -47,6 +47,7 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 mod default_export;
+mod destructure_idents;
 mod emit_buffer;
 mod hoisted_imports;
 mod htmlxtojsx_utils;
@@ -941,119 +942,7 @@ pub(crate) fn emit_template_node(
 pub(crate) use is_ts::{IsTsGuard, emit_is_ts};
 pub(crate) use void_block::{emit_bind_pair_declarations, emit_void_block};
 
-/// Pull every identifier-like token out of a destructuring pattern.
-///
-/// For `id`             → `["id"]`
-/// For `[id, label]`    → `["id", "label"]`
-/// For `[id, { label }]` → `["id", "label"]`
-/// For `{ a: x, b }`    → `["x", "b"]` (only the local-name side of `key:value`)
-///
-/// Best-effort byte scan — the analyze crate has a real oxc-backed
-/// destructuring walk for the *script* path; this helper handles the
-/// far smaller set of shapes that appear inside `{#each ... as <pat>}`
-/// without the cost of an oxc invocation per each-block.
-///
-/// Falls back to a single `__svn_each_unused` token when nothing
-/// identifier-shaped is found, so the emitted `void` line stays valid.
-pub(crate) fn all_identifiers(binding: &str) -> Vec<String> {
-    let bytes = binding.as_bytes();
-    let mut out: Vec<String> = Vec::new();
-    let mut i = 0;
-    let mut depth_brace = 0usize; // tracks `{ ... }` for object key:value
-    while i < bytes.len() {
-        let b = bytes[i];
-        match b {
-            b'{' => {
-                depth_brace += 1;
-                i += 1;
-            }
-            b'}' => {
-                depth_brace = depth_brace.saturating_sub(1);
-                i += 1;
-            }
-            b'?' if depth_brace == 0 => {
-                // Optional-parameter marker in TS snippet params: `name?:
-                // Type`. No-op; the following `:` handles the type skip.
-                // Each-block `as` clauses don't use `?`, so this branch
-                // is inert for that caller.
-                i += 1;
-            }
-            b':' if depth_brace == 0 => {
-                // Top-level `:` on a snippet parameter introduces a TS
-                // type annotation (`name: Foo<Bar>`). Skip until the
-                // next top-level `,` — tracking paren/bracket/brace/
-                // angle nesting so commas inside `Array<A, B>` or
-                // `(a: X) => Y` don't terminate the annotation early.
-                // Each-block `as` clauses never hit this (Svelte grammar
-                // forbids type annotations on destructure targets).
-                i += 1;
-                let mut depth = 0usize;
-                while i < bytes.len() {
-                    match bytes[i] {
-                        b'(' | b'[' | b'{' | b'<' => depth += 1,
-                        b')' | b']' | b'}' | b'>' if depth > 0 => depth -= 1,
-                        b',' if depth == 0 => break,
-                        _ => {}
-                    }
-                    i += 1;
-                }
-            }
-            b'=' => {
-                // Skip default value `name = expr` — advance past expr to
-                // the next comma/closer at the same depth. Conservative:
-                // just stop collecting until we see `,` `]` `}`.
-                i += 1;
-                let mut paren = 0usize;
-                while i < bytes.len() {
-                    match bytes[i] {
-                        b'(' | b'[' | b'{' => paren += 1,
-                        b')' | b']' | b'}' if paren > 0 => paren -= 1,
-                        b',' | b']' | b'}' if paren == 0 => break,
-                        _ => {}
-                    }
-                    i += 1;
-                }
-            }
-            _ if b.is_ascii_alphabetic() || b == b'_' || b == b'$' => {
-                let start = i;
-                while i < bytes.len() {
-                    let c = bytes[i];
-                    if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' {
-                        i += 1;
-                    } else {
-                        break;
-                    }
-                }
-                let name = &binding[start..i];
-                let take = if depth_brace > 0 {
-                    // Inside an object pattern: `key: local` — only collect
-                    // the local. `{ a }` shorthand has no colon so `a`
-                    // counts. Look ahead: if the next non-ws byte is `:`,
-                    // this identifier is a key and must be skipped;
-                    // otherwise it is a binding (either the local after
-                    // a colon, or a shorthand entry).
-                    let mut j = i;
-                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                        j += 1;
-                    }
-                    bytes.get(j) != Some(&b':')
-                } else {
-                    true
-                };
-                if take {
-                    out.push(name.to_string());
-                }
-            }
-            _ => {
-                i += 1;
-            }
-        }
-    }
-    if out.is_empty() {
-        out.push("__svn_each_unused".to_string());
-    }
-    out
-}
+pub(crate) use destructure_idents::all_identifiers;
 
 #[cfg(test)]
 mod tests {

@@ -1020,6 +1020,7 @@ dependencies = [
 name = "svn-analyze"
 version = "0.6.5"
 dependencies = [
+ "indexmap",
  "oxc_allocator",
  "oxc_ast",
  "oxc_span",

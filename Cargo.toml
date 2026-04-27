@@ -40,6 +40,11 @@ serde_json = { version = "1", features = ["preserve_order"] }
 smol_str = "0.3"
 camino = "1"
 memchr = "2"
+# Order-preserving set/map with O(1) contains. Used by analyze for
+# the void-refs registry that emit reads at end-of-render — was a
+# linear-scan Vec<SmolStr> ::any-contains check (O(n²) on N synth
+# names × M components).
+indexmap = "2"
 # Tolerant JSON for tsconfig.json (comments + trailing commas).
 json5 = "1"
 

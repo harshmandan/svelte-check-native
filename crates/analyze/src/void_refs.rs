@@ -13,16 +13,23 @@
 //! synthesized name is a single `.register()` call.
 //!
 //! Insertion is order-preserving and deduplicating. The order matters only
-//! for stable test-snapshot comparisons; runtime semantics don't depend on it.
+//! for stable test-snapshot comparisons; runtime semantics don't depend on
+//! it. We use `IndexSet` rather than `Vec` because deduplication is the
+//! hot path — a 1124-file SvelteKit bench registers ~10–30 names per
+//! component × ~1000 components = 10⁴–10⁵ inserts; the previous
+//! `Vec::iter().any(|n| n == &name)` linear scan was O(n²) per file.
+//! `IndexSet` keeps the insertion-ordered iteration we need but answers
+//! "already inserted?" in O(1).
 
+use indexmap::IndexSet;
 use smol_str::SmolStr;
 
 /// Collector for names that need a `void <name>;` reference somewhere in
 /// the generated TS.
 #[derive(Debug, Clone, Default)]
 pub struct VoidRefRegistry {
-    /// Insertion-ordered, deduplicated list of names.
-    names: Vec<SmolStr>,
+    /// Insertion-ordered, deduplicated set of names.
+    names: IndexSet<SmolStr>,
 }
 
 impl VoidRefRegistry {
@@ -32,15 +39,17 @@ impl VoidRefRegistry {
 
     /// Register a name. Idempotent — duplicate inserts are no-ops.
     pub fn register(&mut self, name: impl Into<SmolStr>) {
-        let name = name.into();
-        if !self.names.iter().any(|n| n == &name) {
-            self.names.push(name);
-        }
+        self.names.insert(name.into());
     }
 
-    /// All registered names in insertion order.
-    pub fn names(&self) -> &[SmolStr] {
-        &self.names
+    /// Iterate registered names in insertion order.
+    pub fn names(&self) -> impl Iterator<Item = &SmolStr> {
+        self.names.iter()
+    }
+
+    /// O(1) membership check.
+    pub fn contains(&self, name: &str) -> bool {
+        self.names.contains(name)
     }
 
     /// Number of registered names.
@@ -63,9 +72,14 @@ mod tests {
         r.register("a");
         r.register("b");
         r.register("c");
+        let collected: Vec<&SmolStr> = r.names().collect();
         assert_eq!(
-            r.names(),
-            &[SmolStr::from("a"), SmolStr::from("b"), SmolStr::from("c")]
+            collected,
+            vec![
+                &SmolStr::from("a"),
+                &SmolStr::from("b"),
+                &SmolStr::from("c")
+            ]
         );
         assert_eq!(r.len(), 3);
     }
@@ -78,7 +92,8 @@ mod tests {
         r.register("b");
         r.register("a");
         assert_eq!(r.len(), 2);
-        assert_eq!(r.names(), &[SmolStr::from("a"), SmolStr::from("b")]);
+        let collected: Vec<&SmolStr> = r.names().collect();
+        assert_eq!(collected, vec![&SmolStr::from("a"), &SmolStr::from("b")]);
     }
 
     #[test]
@@ -86,6 +101,6 @@ mod tests {
         let r = VoidRefRegistry::new();
         assert!(r.is_empty());
         assert_eq!(r.len(), 0);
-        assert!(r.names().is_empty());
+        assert_eq!(r.names().count(), 0);
     }
 }

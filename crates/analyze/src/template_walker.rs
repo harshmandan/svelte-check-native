@@ -1291,11 +1291,7 @@ mod tests {
         // (no name to forward-reference), so the analyze walker no
         // longer pre-registers `__svn_tpl_check` in void_refs.
         let s = walk_str("<p>hi</p>");
-        assert!(
-            !s.void_refs
-                .names()
-                .contains(&SmolStr::from("__svn_tpl_check"))
-        );
+        assert!(!s.void_refs.contains("__svn_tpl_check"));
     }
 
     #[test]
@@ -1304,31 +1300,15 @@ mod tests {
         // declared in the template-check function so its inferred attribute
         // type doesn't go unused.
         let s = walk_str(r#"<div use:tooltip={{ text: 'hi' }}>x</div>"#);
-        assert!(
-            s.void_refs
-                .names()
-                .contains(&SmolStr::from("__svn_action_attrs_0"))
-        );
+        assert!(s.void_refs.contains("__svn_action_attrs_0"));
     }
 
     #[test]
     fn multiple_use_directives_get_unique_indices() {
         let s = walk_str(r#"<div use:a use:b><span use:c /></div>"#);
-        assert!(
-            s.void_refs
-                .names()
-                .contains(&SmolStr::from("__svn_action_attrs_0"))
-        );
-        assert!(
-            s.void_refs
-                .names()
-                .contains(&SmolStr::from("__svn_action_attrs_1"))
-        );
-        assert!(
-            s.void_refs
-                .names()
-                .contains(&SmolStr::from("__svn_action_attrs_2"))
-        );
+        assert!(s.void_refs.contains("__svn_action_attrs_0"));
+        assert!(s.void_refs.contains("__svn_action_attrs_1"));
+        assert!(s.void_refs.contains("__svn_action_attrs_2"));
     }
 
     #[test]
@@ -1336,11 +1316,7 @@ mod tests {
         // `bind:foo={getter, setter}` declares a tuple holder; without a
         // void-reference, TypeScript flags it as unused.
         let s = walk_str("<input bind:value={() => g(), (v) => s(v)} />");
-        assert!(
-            s.void_refs
-                .names()
-                .contains(&SmolStr::from("__svn_bind_pair_0"))
-        );
+        assert!(s.void_refs.contains("__svn_bind_pair_0"));
     }
 
     #[test]
@@ -1349,7 +1325,6 @@ mod tests {
         assert!(
             !s.void_refs
                 .names()
-                .iter()
                 .any(|n| n.starts_with("__svn_bind_pair"))
         );
     }
@@ -1369,30 +1344,18 @@ mod tests {
     #[test]
     fn directives_in_nested_elements_are_walked() {
         let s = walk_str("<div><span use:tooltip /></div>");
-        assert!(
-            s.void_refs
-                .names()
-                .contains(&SmolStr::from("__svn_action_attrs_0"))
-        );
+        assert!(s.void_refs.contains("__svn_action_attrs_0"));
     }
 
     #[test]
     fn directives_in_block_body_are_walked() {
         let s = walk_str("{#if cond}<div use:focus />{/if}");
-        assert!(
-            s.void_refs
-                .names()
-                .contains(&SmolStr::from("__svn_action_attrs_0"))
-        );
+        assert!(s.void_refs.contains("__svn_action_attrs_0"));
     }
 
     #[test]
     fn each_alternate_branch_walked() {
         let s = walk_str("{#each items as i}<x />{:else}<div use:focus />{/each}");
-        assert!(
-            s.void_refs
-                .names()
-                .contains(&SmolStr::from("__svn_action_attrs_0"))
-        );
+        assert!(s.void_refs.contains("__svn_action_attrs_0"));
     }
 }

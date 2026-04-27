@@ -3,6 +3,7 @@
 async function $$render_81de568f() {
     ;(async () => {
         // template type-check body (incremental)
+        ;(''.);
     });
     return { props: /** @type {any} */({}) };
 }

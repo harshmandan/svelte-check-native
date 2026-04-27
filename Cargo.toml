@@ -95,5 +95,14 @@ strip = "none"
 [profile.dev]
 # keep default
 
+[profile.test]
+# Slim debug-info to "line-tables-only" so test-binary linking is
+# ~2× faster across the workspace. We have ~13 integration test
+# binaries; full debuginfo on each was ~3-5s of link time per binary
+# (~50s of pure linking on `cargo test --workspace`). Line tables
+# alone are enough for backtraces in panics, which is what tests
+# actually need.
+debug = "line-tables-only"
+
 [profile.bench]
 lto = "thin"

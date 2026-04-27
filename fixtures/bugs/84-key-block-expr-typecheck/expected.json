@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 13,
+            "column": 6,
+            "code": 2552
+        }
+    ],
+    "_note": "{#key EXPR} expression must be type-checked like any other interpolation. Pre-fix the lib.rs Node::KeyBlock arm walked the body but never emitted EXPR — a typo like `{#key undefinedFoo}` silently passed instead of firing TS2304/TS2552. Now nodes::key::emit_key_block prefixes the body walk with `;(EXPR);` (mirroring mustache_tag::emit_plain_expression). Verified against tsgo in design/gap_key_block_expr/ before the Rust port. Positions are LSP-style 0-based (machine-verbose format)."
+}

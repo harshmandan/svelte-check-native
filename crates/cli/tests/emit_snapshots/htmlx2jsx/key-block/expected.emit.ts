@@ -3,8 +3,11 @@
 async function $$render_52a00b3a() {
     ;(async () => {
         // template type-check body (incremental)
+        ;(value);
         { svelteHTML.createElement("p", {});         }
+        ;($store);
         { svelteHTML.createElement("p", {});         }
+        ;(expr.obj);
         { svelteHTML.createElement("p", {});         }
     });
     return { props: /** @type {any} */({}) };

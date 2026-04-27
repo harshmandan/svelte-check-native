@@ -1249,7 +1249,9 @@ pub(crate) fn emit_template_node(
                 );
             }
         }
-        Node::KeyBlock(b) => emit_template_body(buf, source, &b.body, depth, insts, action_counter),
+        Node::KeyBlock(b) => {
+            crate::nodes::key::emit_key_block(buf, source, b, depth, insts, action_counter)
+        }
         Node::SnippetBlock(b) => emit_snippet_block(buf, source, b, depth, insts, action_counter),
         Node::Element(e) => {
             // `<slot>` is the Svelte-4 named-slot mechanism — its attrs are

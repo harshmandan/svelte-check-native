@@ -21,6 +21,7 @@ async function $$render_df3e76f3() {
                 }
                 void item;
             }
+            ;(key);
             {
                 const foo = undefined;
                 void foo;

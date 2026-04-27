@@ -39,6 +39,7 @@ async function $$render_43de206c() {
                 const error: any = undefined;
                 void error;
             }
+            ;(item as string);
             {
                 void ((bar: string) => {
                     void bar;

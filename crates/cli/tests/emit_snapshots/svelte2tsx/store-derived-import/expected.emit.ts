@@ -6,10 +6,9 @@ async function $$render_fa110619() {
                                            
 
     let a = $derived(1);
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_fa110619;

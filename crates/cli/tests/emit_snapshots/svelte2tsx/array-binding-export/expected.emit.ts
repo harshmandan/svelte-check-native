@@ -3,10 +3,9 @@
 async function $$render_758fb137() {
 
            let [a,b,c] = [1,2,3];
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void a;
     void b;
     void c;

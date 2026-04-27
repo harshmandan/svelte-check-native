@@ -8,10 +8,9 @@ async function $$render_6d46058b() {
 	const cssString = `<style>:root {--primary-color: ${
 		branding?.primaryColor ?? '#ABCDEF'
 	};}</style>`;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_6d46058b;

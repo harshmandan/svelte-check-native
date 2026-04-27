@@ -826,6 +826,50 @@ fn is_overlay_dollar_reactive_label(overlay: &str, offset: u32) -> bool {
     bytes.get(i) == Some(&b':')
 }
 
+/// Does the overlay text at `offset` start a quoted attribute key
+/// of the form a `createElement(...)` literal would emit (e.g.
+/// `"on:click"`, `"class"`, `"id"`)?
+///
+/// We can't tell from the byte alone whether we're inside a
+/// `createElement` literal vs some other quoted identifier in user
+/// code; so the scan is heuristic — `"<ident-or-on:>"` followed by
+/// `:`. Used to filter TS1117/TS2300 duplicate-key diagnostics on
+/// element attribute names; mirrors upstream svelte-check's
+/// `isAttributeName(node, 'Element') || isEventHandler(node,
+/// 'Element')` filter at
+/// `language-server/src/plugins/typescript/features/
+/// DiagnosticsProvider.ts:366-371`. Less precise (no AST), but in
+/// practice covers the same patterns: Svelte's parser rejects
+/// duplicate static attributes at compile time, so the only
+/// overlay duplicates that reach the type-checker come from the
+/// `<el on:click={fn} on:click>` (handle + forward) idiom or from
+/// spread-plus-attribute combinations.
+fn is_overlay_attribute_key(overlay: &str, offset: u32) -> bool {
+    let bytes = overlay.as_bytes();
+    let off = offset as usize;
+    if bytes.get(off) != Some(&b'"') {
+        return false;
+    }
+    let mut i = off + 1;
+    while let Some(&b) = bytes.get(i) {
+        if b == b'"' {
+            // Closing quote; check that `:` follows (with optional ws).
+            let mut j = i + 1;
+            while bytes.get(j).is_some_and(|c| c.is_ascii_whitespace()) {
+                j += 1;
+            }
+            return bytes.get(j) == Some(&b':');
+        }
+        // Allow ident chars + `:` (for `on:click`, `bind:value`, etc.) +
+        // `-` (for `aria-*`, `data-*`).
+        if !(b.is_ascii_alphanumeric() || matches!(b, b':' | b'-' | b'_' | b'$')) {
+            return false;
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Check whether `offset` falls inside any `(start, end)` range in
 /// `regions`. Linear scan; regions are typically few per file.
 fn is_in_ignore_region(regions: &[(u32, u32)], offset: u32) -> bool {
@@ -941,6 +985,36 @@ fn map_diagnostic(
             if raw.code == 7028
                 && let Some(offset) = overlay_byte_offset(data, raw.line, raw.column)
                 && is_overlay_dollar_reactive_label(&data.overlay_text, offset)
+            {
+                return None;
+            }
+            // Drop TS1117 ("multiple properties same name") and
+            // TS2300 ("Duplicate identifier") when the overlay byte
+            // position is on an Element attribute name. Upstream's
+            // equivalent filter at
+            // `language-server/src/plugins/typescript/features/
+            // DiagnosticsProvider.ts:360-374` checks the Svelte AST
+            // node — `isAttributeName(node, 'Element') ||
+            // isEventHandler(node, 'Element')`. We don't carry the
+            // Svelte AST through to the diagnostic mapper, so the
+            // check here is a structural overlay scan: the user
+            // idiom `<el on:click={fn} on:click>` (handle + forward)
+            // produces duplicate `"on:NAME"` keys, and the spread-
+            // plus-attribute idiom `<el {...spread} class={x}>` can
+            // produce other duplicate keys when the spread also
+            // contains `class`. Both manifest in the overlay as a
+            // quoted-string property name in a `createElement` arg
+            // literal. The `"` prefix narrows the false-positive
+            // surface — script-side identifier collisions keep
+            // firing TS2300 because their identifiers aren't quoted.
+            //
+            // Less general than upstream's AST check (we don't catch
+            // unquoted shorthand keys in element literals), but
+            // covers every real-world pattern observed on benches
+            // through 2026-04-27.
+            if (raw.code == 1117 || raw.code == 2300)
+                && let Some(offset) = overlay_byte_offset(data, raw.line, raw.column)
+                && is_overlay_attribute_key(&data.overlay_text, offset)
             {
                 return None;
             }

@@ -8,11 +8,10 @@ async function $$render_7035891f() {
     // spell `children` explicitly (common pattern) and omit `data` to
     // exercise the path where a layout takes ONLY children.
     let { children }: $$ComponentProps = $props();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         (children?.());
-    }
-    void __svn_tpl_check;
+    });
     void children;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

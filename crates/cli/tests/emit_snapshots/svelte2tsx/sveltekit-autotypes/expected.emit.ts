@@ -9,10 +9,9 @@ async function $$render_6eeee409() {
            let nope = /** @type {any} */ (null);
            let form = {}
            let data: number;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void data;
     void form;
     void snapshot;

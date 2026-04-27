@@ -5,10 +5,9 @@ async function $$render_6a73bb59() {
            let a = /** @type {any} */ (null);
            let b = /** @type {any} */ (null);
            let c = 123;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void a;
     void b;
     void c;

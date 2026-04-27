@@ -6,10 +6,9 @@ async function $$render_7503ba6a() {
 
     let store = null;
     let { someProp }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void $store;
     void store;
     void someProp;

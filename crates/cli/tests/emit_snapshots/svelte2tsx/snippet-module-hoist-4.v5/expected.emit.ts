@@ -5,7 +5,7 @@
 async function $$render_50f1c2a8() {
 
     let foo = true;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const chain = undefined;
@@ -22,8 +22,7 @@ async function $$render_50f1c2a8() {
             (chain2());
             { svelteHTML.createElement("h1", {});             }
         }
-    }
-    void __svn_tpl_check;
+    });
     void foo;
     return { props: /** @type {any} */({}) };
 }

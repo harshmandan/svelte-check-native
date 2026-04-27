@@ -58,25 +58,32 @@ async function $$render_f9263703() {
 	function clone(circles) {
 		return circles.map(({ cx, cy, r }) => ({ cx, cy, r }));
 	}
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {
             "class": `controls`,
         });
             { svelteHTML.createElement("button", {
+                "on:click": undefined,
                 "disabled": (i === 0),
             });
             }
             { svelteHTML.createElement("button", {
+                "on:click": undefined,
                 "disabled": (i === undoStack.length -1),
             });
             }
         }
-        { svelteHTML.createElement("svg", {});             for (const circle of __svn_each_items(circles)) {
+        { svelteHTML.createElement("svg", {
+            "on:click": (handleClick),
+        });
+            for (const circle of __svn_each_items(circles)) {
                 { svelteHTML.createElement("circle", {
                     "cx": (circle.cx),
                     "cy": (circle.cy),
                     "r": (circle.r),
+                    "on:click": undefined,
+                    "on:contextmenu": undefined,
                     "fill": (circle === selected ? '#ccc': 'white'),
                 });
                 }
@@ -94,12 +101,12 @@ async function $$render_f9263703() {
                 { svelteHTML.createElement("input", {
                     "type": `range`,
                     "value": (selected.r),
+                    "on:input": (adjust),
                 });
                 }
             }
         }
-    }
-    void __svn_tpl_check;
+    });
     void travel;
     void i;
     void undoStack;

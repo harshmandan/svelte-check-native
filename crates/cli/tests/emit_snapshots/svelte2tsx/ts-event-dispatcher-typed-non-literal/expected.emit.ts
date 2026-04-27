@@ -25,11 +25,13 @@ async function $$render_6194130b() {
         const bla = 'bye';
         dispatch(bla, false);
     }
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("button", {});         }
-    }
-    void __svn_tpl_check;
+        { svelteHTML.createElement("button", {
+            "on:click": (() => dispatch('btn', '')),
+        });
+        }
+    });
     void dispatch;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

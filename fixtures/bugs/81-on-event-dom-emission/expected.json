@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Gap C cascade fix (2026-04-27): emit Svelte-4 `on:event={handler}` on DOM elements as `\"on:NAME\": (handler)` keys in the createElement attribute literal. Without this, user reassignments inside the handler were invisible to TS's flow narrowing — Gap C's tighter narrowing exposed the gap on cobalt/web (`processor` got pinned to its initial literal). Also covers the forward-event idiom (`on:click={fn} on:click`) — duplicate keys in the literal — by filtering TS1117/TS2300 on `\"on:`-prefixed overlay positions, mirroring upstream svelte-check's `isAttributeName(node, 'Element') || isEventHandler(node, 'Element')` check."
+}

@@ -5,11 +5,10 @@ async function $$render_47353b87() {
     let b = 7;
     let d = 5;
     let e = 5;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});         }
-    }
-    void __svn_tpl_check;
+    });
     void b;
     void d;
     void e;

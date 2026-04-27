@@ -4,14 +4,13 @@
 async function $$render_84285497() {
 
                                              
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});             (fade(__svn_map_element_tag('div'), ({ duration: 'not-a-number' })));
         }
         { svelteHTML.createElement("div", {});             (undefinedAnim(__svn_map_element_tag('div'), __svn_AnimationMove));
         }
-    }
-    void __svn_tpl_check;
+    });
     void fade;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

@@ -7,10 +7,9 @@ async function $$render_d2d4cb4e() {
     let { a, b } = $props();
     let x = $state(0);
     let y = $derived(x * 2);
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void a;
     void b;
     void x;

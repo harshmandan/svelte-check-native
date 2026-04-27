@@ -6,7 +6,7 @@ async function $$render_edb4eb12<T>() {
   /** @type {{ b: T }}*/
   let { b } = $props();
   let rect = /** @type {any} */ (null);
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const foo = undefined;
@@ -20,8 +20,7 @@ async function $$render_edb4eb12<T>() {
             { svelteHTML.createElement("div", {});                 rect = /** @type {DOMRectReadOnly} */ (null);
             }
         }
-    }
-    void __svn_tpl_check;
+    });
     void b;
     void rect;
     return { props: /** @type {$$ComponentProps} */({}) };

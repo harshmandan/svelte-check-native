@@ -3,14 +3,13 @@
 async function $$render_b690e7bd() {
 
     const items: number[] = [1, 2, 3];
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         for (const __svn_each_unused of __svn_each_items(items)) {
             { svelteHTML.createElement("span", {});             }
             void __svn_each_unused;
         }
-    }
-    void __svn_tpl_check;
+    });
     void items;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

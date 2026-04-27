@@ -6,7 +6,7 @@ async function $$render_200dbc4a<T>() {
     let { prop }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     const foo = await fetch('/foo');
     const promise = fetch('/bar');
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const x: any = undefined;
@@ -55,8 +55,7 @@ async function $$render_200dbc4a<T>() {
                 (x);
             }
         }
-    }
-    void __svn_tpl_check;
+    });
     void prop;
     void foo;
     void promise;

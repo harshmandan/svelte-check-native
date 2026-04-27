@@ -9,13 +9,12 @@ async function $$render_5a7d1551<T extends { id: string }>() {
     // "Cannot find name 'T'" against every property that referenced it.
     type Props = { item: T; label: string };
     let { item, label }: Props = $props();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});             (label);
             (item.id);
         }
-    }
-    void __svn_tpl_check;
+    });
     void item;
     void label;
     return { props: undefined as any as (Props), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

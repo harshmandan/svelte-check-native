@@ -4,10 +4,9 @@ async function $$render_c822d0d2() {
 
            const snapshot: any = {};
     let { form, data }: {form: boolean, data: true } = $props();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void snapshot;
     return { props: /** @type {any} */({}) };
 }

@@ -3,12 +3,11 @@
 let b = 5;
 async function $$render_409449b8() {
        let world = "name"
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("h1", {});             (world);
         }
-    }
-    void __svn_tpl_check;
+    });
     void world;
     return { props: /** @type {{ world?: typeof world; }} */({}) };
 }

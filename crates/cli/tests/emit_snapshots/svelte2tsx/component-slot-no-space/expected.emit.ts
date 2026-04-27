@@ -4,7 +4,7 @@
 async function $$render_4e520e33() {
 
                                      
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});             {
                 const __svn_C_3f = __svn_ensure_component(Test);
@@ -14,8 +14,7 @@ async function $$render_4e520e33() {
                 }
             }
         }
-    }
-    void __svn_tpl_check;
+    });
     void Test;
     return { props: /** @type {any} */({}) };
 }

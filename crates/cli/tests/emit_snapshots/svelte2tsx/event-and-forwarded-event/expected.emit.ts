@@ -7,11 +7,13 @@ async function $$render_4a528901() {
 
     const dispatch = createEventDispatcher();
     dispatch("mount", { input });
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("input", {});         }
-    }
-    void __svn_tpl_check;
+        { svelteHTML.createElement("input", {
+            "on:focus": undefined,
+        });
+        }
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_4a528901;

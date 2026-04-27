@@ -11,10 +11,9 @@ async function $$render_1d4edb02() {
      * @typedef {'ABC'} ABC
      */
            let a = /** @type {any} */ (null);
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void a;
     return { props: /** @type {FOO} */({}) };
 }

@@ -5,12 +5,11 @@ async function $$render_08555e51() {
     void $$restProps;
 
     let name = $$restProps['name'];
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("h1", {});             (name);
         }
-    }
-    void __svn_tpl_check;
+    });
     void name;
     return { props: /** @type {any} */({}) };
 }

@@ -6,10 +6,9 @@ async function $$render_a8c1b0a7() {
     let { a, b }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     let x = $state(0);
     let y = $derived(x * 2);
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void a;
     void b;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

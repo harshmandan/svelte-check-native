@@ -11,7 +11,7 @@ async function $$render_06b566ea() {
     let store = __svn_invalidate(() => (fromSomewhere())); void store;
     let { store1, noStore } = __svn_invalidate(() => (fromSomewhere())); void store1; void noStore;
     let [ store2, noStore ] = __svn_invalidate(() => (fromSomewhere())); void store2; void noStore;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});             ($store);
         }
@@ -19,8 +19,7 @@ async function $$render_06b566ea() {
         }
         { svelteHTML.createElement("p", {});             ($store2);
         }
-    }
-    void __svn_tpl_check;
+    });
     void $store;
     void store;
     void $store1;

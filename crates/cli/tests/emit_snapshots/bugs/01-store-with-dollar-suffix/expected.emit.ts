@@ -6,12 +6,11 @@ async function $$render_ec2f74ae() {
 
                                             
     const parent$ = writable(0);
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});             ($parent$);
         }
-    }
-    void __svn_tpl_check;
+    });
     void $parent$;
     void parent$;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

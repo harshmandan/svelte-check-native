@@ -12,12 +12,11 @@ async function $$render_22446700() {
 
 
 /*Ωignore_endΩ*/ = $props();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         (header(['id', 'label']));
         (row({ id: 1, label: 'a' }));
-    }
-    void __svn_tpl_check;
+    });
     void row;
     void header;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -44,7 +43,7 @@ async function $$render_8568e182() {
     function joinLabels(labels: readonly string[]): string {
         return labels.join(', ');
     }
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const __svn_C_f9 = __svn_ensure_component(Wrapper);
@@ -68,8 +67,7 @@ async function $$render_8568e182() {
                 },
             });
         }
-    }
-    void __svn_tpl_check;
+    });
     void Wrapper;
     void formatId;
     void joinLabels;

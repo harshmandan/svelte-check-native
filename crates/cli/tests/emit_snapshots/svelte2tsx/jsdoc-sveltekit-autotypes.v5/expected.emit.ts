@@ -5,10 +5,9 @@ async function $$render_f7f0c7ab() {
            let data = /** @type {import('./$types.js').PageData} */ (/** @type {any} */ (null));
            let form = /** @type {import('./$types.js').ActionData | undefined} */ (/** @type {any} */ (null));
            const snapshot = {};
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void data;
     void form;
     void snapshot;

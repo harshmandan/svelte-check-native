@@ -7,7 +7,7 @@ async function $$render_53b84942() {
 
 	                                        
 	const store = readable(Promise.resolve('test'), () => {});
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});         }
         ;(async () => {
@@ -15,8 +15,7 @@ async function $$render_53b84942() {
             (data);
             void data;
         });
-    }
-    void __svn_tpl_check;
+    });
     void $store;
     void store;
     return { props: /** @type {any} */({}) };

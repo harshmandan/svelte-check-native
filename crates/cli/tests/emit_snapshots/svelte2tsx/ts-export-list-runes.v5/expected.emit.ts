@@ -18,14 +18,13 @@ async function $$render_677076f2() {
     const renamebaz: string = '';
 
                                                                                                                                                                               
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("svelte:options", {
             "runes": true,
         });
         }
-    }
-    void __svn_tpl_check;
+    });
     void name1;
     void name2;
     void name3;

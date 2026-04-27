@@ -5,10 +5,9 @@ async function $$render_e800a6a5<T extends { a: string }>() {
 	interface Props extends T {
 	};
 	let { a }: Props = $props();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void a;
     return { props: undefined as any as (Props), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

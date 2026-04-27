@@ -11,14 +11,25 @@ async function $$render_36f25f12() {
   const handler2 = () => +$count
   const handler3 = () => -$count
   const handler4 = () => ~$count
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-    }
-    void __svn_tpl_check;
+        { svelteHTML.createElement("button", {
+            "on:click": (() => !$count),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => +$count),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => -$count),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => ~$count),
+        });
+        }
+    });
     void $count;
     void count;
     return { props: /** @type {any} */({}) };

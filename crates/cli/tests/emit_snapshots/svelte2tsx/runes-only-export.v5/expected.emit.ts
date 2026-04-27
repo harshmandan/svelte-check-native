@@ -4,11 +4,10 @@ async function $$render_39845b3c() {
 
     let x = $state();
            function foo() { return true; }
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         (x);
-    }
-    void __svn_tpl_check;
+    });
     void x;
     void foo;
     return { props: undefined as any as ({ foo: () => void; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: () => void; }) };

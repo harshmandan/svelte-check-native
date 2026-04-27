@@ -3,12 +3,11 @@
 async function $$render_71b5302a() {
     let $$props = /** @type {Record<string, any>} */ ({});
     void $$props;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("h1", {});             ($$props['name']);
         }
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_71b5302a;

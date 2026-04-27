@@ -26,7 +26,7 @@ async function $$render_387932bf() {
     const { store3, store4 } = '', [ store5, store6 ] = '';
     let {store7, store8} = __svn_invalidate(() => ('')); void store7; void store8;
     let [store9, store10] = __svn_invalidate(() => ('')); void store9; void store10;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         ($store1);
         ($store2);
@@ -38,8 +38,7 @@ async function $$render_387932bf() {
         ($store8);
         ($store9);
         ($store10);
-    }
-    void __svn_tpl_check;
+    });
     void $store1;
     void store1;
     void $store2;

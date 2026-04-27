@@ -14,7 +14,7 @@ async function $$render_a20fee98() {
     $store['prop']['anotherProp'];
     $store?.prop.anotherProp;
     $store?.prop?.anotherProp;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});             ($store);
         }
@@ -34,8 +34,7 @@ async function $$render_a20fee98() {
         }
         { svelteHTML.createElement("p", {});             ($store?.prop?.anotherProp);
         }
-    }
-    void __svn_tpl_check;
+    });
     void $store;
     void store;
     return { props: /** @type {any} */({}) };

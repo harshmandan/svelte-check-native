@@ -17,7 +17,7 @@ async function $$render_b5ddc729() {
 	const inStore = null;
 	const outStore = null;
 	const actionStore = null;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         /** @type {any} */ let __svn_action_attrs_0 = {};
         void __svn_action_attrs_0;
@@ -28,8 +28,7 @@ async function $$render_b5ddc729() {
             ($animateStore(__svn_map_element_tag('div'), __svn_AnimationMove));
             void __svn_action_0;
         }
-    }
-    void __svn_tpl_check;
+    });
     void $transitionStore;
     void transitionStore;
     void $actionStore;

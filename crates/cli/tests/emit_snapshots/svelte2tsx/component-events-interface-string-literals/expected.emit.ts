@@ -18,10 +18,9 @@ async function $$render_6ada794f() {
                     
             
      
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [K in keyof $$Events]: CustomEvent<$$Events[K]> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_6ada794f;

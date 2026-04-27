@@ -11,7 +11,7 @@ async function $$render_ceba0c24() {
     const intersection: Action<HTMLElement, { cb: (n: number) => void }> = () => ({})
     const items = ['a', 'b', 'c']
     let active = 0
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         let __svn_action_attrs_0: any = {};
         void __svn_action_attrs_0;
@@ -31,8 +31,7 @@ async function $$render_ceba0c24() {
             void item;
             void index;
         }
-    }
-    void __svn_tpl_check;
+    });
     void items;
     void intersection;
     void active;

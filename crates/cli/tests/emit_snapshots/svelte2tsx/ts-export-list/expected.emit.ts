@@ -18,10 +18,9 @@ async function $$render_9d1abbd9() {
     const renamebaz: string = '';
 
                                                                                                                                                                               
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void name1;
     void name2;
     void name3;

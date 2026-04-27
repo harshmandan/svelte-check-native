@@ -9,7 +9,7 @@ async function $$render_6a482dcb() {
 	function calculate(width, height, constant) {
 		return { area: width * height, volume: width * height * constant };
 	}
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         ;(async () => {
             const $$_await = await (promise1); const { width, height } = $$_await;
@@ -54,8 +54,7 @@ async function $$render_6a482dcb() {
             void width;
             void height;
         }
-    }
-    void __svn_tpl_check;
+    });
     void promise1;
     void calculate;
     void constant;

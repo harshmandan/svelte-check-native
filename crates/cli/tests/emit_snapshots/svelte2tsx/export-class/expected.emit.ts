@@ -3,10 +3,9 @@
 async function $$render_47fd19aa() {
 
            class Foo {};
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void Foo;
     return { props: /** @type {any} */({}) };
 }

@@ -27,11 +27,13 @@ async function $$render_dc6dc1a5() {
     function bye() {
         dispatch(bla, false);
     }
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("button", {});         }
-    }
-    void __svn_tpl_check;
+        { svelteHTML.createElement("button", {
+            "on:click": (() => dispatch('btn', '')),
+        });
+        }
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_dc6dc1a5;

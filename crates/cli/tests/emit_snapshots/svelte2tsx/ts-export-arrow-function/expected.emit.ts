@@ -6,10 +6,9 @@ async function $$render_36541f4e() {
       let c = a + b;
       return c;
     }
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void f;
     return { props: /** @type {any} */({}) };
 }

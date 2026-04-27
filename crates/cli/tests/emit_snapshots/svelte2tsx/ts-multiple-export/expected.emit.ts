@@ -4,14 +4,13 @@ async function $$render_bbc70e42() {
 
            let number1: number
            let number2: number
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("h1", {});             (number1);
             (number2);
             (number1 + number2);
         }
-    }
-    void __svn_tpl_check;
+    });
     void number1;
     void number2;
     return { props: /** @type {any} */({}) };

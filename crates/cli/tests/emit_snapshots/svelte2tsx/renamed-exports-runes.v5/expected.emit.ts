@@ -5,14 +5,13 @@ async function $$render_ef638edf() {
     let name = "world"
     let name2 = "world"
                                              
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("svelte:options", {
             "runes": true,
         });
         }
-    }
-    void __svn_tpl_check;
+    });
     void name;
     void name2;
     return { props: /** @type {{ name3?: any; name4?: any; }} */({}) };

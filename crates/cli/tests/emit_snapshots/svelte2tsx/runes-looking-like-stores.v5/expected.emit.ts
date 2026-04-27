@@ -6,12 +6,11 @@ async function $$render_94f8225d() {
     let { props } = $props();
     let state = $state(0);
     let derived = $derived(state * 2);
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         (state);
         (derived);
-    }
-    void __svn_tpl_check;
+    });
     void props;
     void state;
     void derived;

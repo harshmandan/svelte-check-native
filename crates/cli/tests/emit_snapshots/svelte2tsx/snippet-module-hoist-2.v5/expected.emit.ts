@@ -5,7 +5,7 @@ async function $$render_5559350c() {
 
                                    
     let foo = true;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const hoistable: any = undefined;
@@ -16,8 +16,7 @@ async function $$render_5559350c() {
             { svelteHTML.createElement("div", {});                 (foo);
             }
         }
-    }
-    void __svn_tpl_check;
+    });
     void foo;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

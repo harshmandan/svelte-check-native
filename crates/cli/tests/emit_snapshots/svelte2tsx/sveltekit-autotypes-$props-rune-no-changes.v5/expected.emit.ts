@@ -7,10 +7,9 @@ async function $$render_4e51ac11() {
     let { form, data } = $props();
     /** @type {any} */
            const snapshot = {};
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void form;
     void data;
     void snapshot;

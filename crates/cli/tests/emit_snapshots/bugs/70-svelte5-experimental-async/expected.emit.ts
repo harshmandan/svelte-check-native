@@ -20,7 +20,7 @@ async function $$render_1c01d715() {
 
     // (2) await inside $derived (Svelte 5 rune)
     const upper = $derived(await Promise.resolve(title.toUpperCase()));
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("h1", {});             (title);
         }
@@ -28,8 +28,7 @@ async function $$render_1c01d715() {
         }
         { svelteHTML.createElement("p", {});             (await fetchCount());
         }
-    }
-    void __svn_tpl_check;
+    });
     void title;
     void upper;
     void fetchCount;

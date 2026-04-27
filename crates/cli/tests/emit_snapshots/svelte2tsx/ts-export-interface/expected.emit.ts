@@ -3,10 +3,9 @@
 
     export interface A {}
 async function $$render_be5f56cf() {
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_be5f56cf;

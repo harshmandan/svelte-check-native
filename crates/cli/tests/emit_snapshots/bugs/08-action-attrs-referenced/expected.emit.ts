@@ -8,15 +8,17 @@ async function $$render_a1303664() {
     const myAction: Action<HTMLElement, undefined, { 'on:custom': (e: CustomEvent) => void }> = (node) => {
         return {};
     };
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         let __svn_action_attrs_0: any = {};
         void __svn_action_attrs_0;
             const __svn_action_0 = __svn_ensure_action(myAction(__svn_map_element_tag('div')));
-        { svelteHTML.createElement("div", __svn_union(__svn_action_0), {});             void __svn_action_0;
+        { svelteHTML.createElement("div", __svn_union(__svn_action_0), {
+            "on:custom": ((e) => console.log(e.detail)),
+        });
+            void __svn_action_0;
         }
-    }
-    void __svn_tpl_check;
+    });
     void myAction;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

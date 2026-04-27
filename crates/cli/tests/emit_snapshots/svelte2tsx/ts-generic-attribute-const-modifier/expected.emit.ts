@@ -3,10 +3,9 @@
 async function $$render_063ede7a<const T extends readonly string[]>() {
 
        let items!: T;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void items;
     return { props: undefined as any as ({ items: T; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ items: T; }) };
 }

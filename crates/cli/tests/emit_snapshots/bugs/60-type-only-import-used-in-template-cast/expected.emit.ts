@@ -6,12 +6,11 @@ async function $$render_6743ac1f() {
 
                                                         
   let { item }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props()
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});             (getDuration(item as AppVideo));
         }
-    }
-    void __svn_tpl_check;
+    });
     void item;
     void getDuration;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

@@ -129,16 +129,91 @@ pub(crate) fn emit_dom_element_open(
                 }
                 emit_spread(buf, source, s, depth);
             }
-            // Directives (bind:, use:, class:, style:, transition:, …)
-            // are handled outside createElement — by the bind/use
-            // passes and by emit_dom_directive_checks.
-            svn_parser::Attribute::Directive(_) => {}
+            // Directives mostly handled outside createElement (bind/use
+            // passes + emit_dom_directive_checks). Exception:
+            // `on:event={handler}` is emitted INLINE as an `"on:NAME":
+            // handler` attribute key — matches upstream svelte2tsx's
+            // `htmlxtojsx_v2/nodes/EventHandler.ts` for the DOM-element
+            // branch. Without this, tsgo never sees the user's handler
+            // body and any reassignments inside it never narrow the
+            // captured variables — e.g. `<button on:click={() => x =
+            // "a"}>` with later `x === "b"` falsely fires TS2367
+            // because flow-narrowing collapses x to its initial literal.
+            svn_parser::Attribute::Directive(d) => {
+                if d.kind == svn_parser::DirectiveKind::On {
+                    if !any {
+                        buf.push_str("\n");
+                        any = true;
+                    }
+                    emit_dom_event_handler(buf, source, d, depth + 1);
+                }
+            }
         }
     }
     if any {
         let _ = writeln!(buf, "{indent}}});");
     } else {
         buf.push_str("}); ");
+    }
+}
+
+/// Emit a `"on:NAME": handler` entry into the open `createElement`
+/// attribute literal for a Svelte-4 `on:event={…}` directive on a
+/// DOM element. Mirrors upstream `EventHandler.ts:24-32`.
+///
+/// - `on:click={fn}` → `"on:click": (fn),`
+/// - `on:click` (event bubbling, no expression) → `"on:click": undefined,`
+/// - Modifier suffixes (`on:click|once|preventDefault`) are stripped
+///   at the parser level — `d.name` already excludes them.
+fn emit_dom_event_handler(
+    buf: &mut EmitBuffer,
+    source: &str,
+    d: &svn_parser::Directive,
+    depth: usize,
+) {
+    let indent = "    ".repeat(depth);
+    buf.push_str(&indent);
+    let name = d.name.as_str();
+    // The name range starts after the `on:` prefix in the source.
+    // d.range covers the whole `on:click[|...][={expr}]` span; the
+    // identifier we want to map for source-map purposes is just the
+    // event name itself, which sits at `range.start + 3` (length of
+    // "on:") for `len(name)` bytes.
+    let name_start = d.range.start + 3;
+    let name_end = name_start + name.len() as u32;
+    buf.append_with_source(
+        &format!("\"on:{name}\""),
+        svn_core::Range::new(name_start, name_end),
+    );
+    buf.push_str(": ");
+    match &d.value {
+        Some(svn_parser::DirectiveValue::Expression {
+            expression_range, ..
+        }) => {
+            let Some(expr) =
+                source.get(expression_range.start as usize..expression_range.end as usize)
+            else {
+                buf.push_str("undefined,\n");
+                return;
+            };
+            let trimmed = expr.trim();
+            if trimmed.is_empty() {
+                buf.push_str("undefined,\n");
+                return;
+            }
+            let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
+            let start = expression_range.start + leading_ws;
+            let end = start + trimmed.len() as u32;
+            buf.push_str("(");
+            buf.append_with_source(trimmed, svn_core::Range::new(start, end));
+            let _ = writeln!(buf, "),");
+        }
+        _ => {
+            // Bare `on:click` (event bubbling) or quoted form: no real
+            // expression to type-check; emit `undefined` so the prop
+            // key still references a valid value.
+            buf.push_str("undefined,\n");
+        }
     }
 }
 

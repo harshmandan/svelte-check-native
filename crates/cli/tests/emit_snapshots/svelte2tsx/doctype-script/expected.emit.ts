@@ -3,10 +3,9 @@
 async function $$render_c4887f9a() {
 
     const regex = /<!DOCTYPE html>/i;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_c4887f9a;

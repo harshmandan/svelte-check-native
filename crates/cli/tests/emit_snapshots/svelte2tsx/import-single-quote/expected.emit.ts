@@ -4,14 +4,13 @@
 async function $$render_460d82f0() {
 
                                       
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(Test);
             new __svn_C_0({ target: __svn_any(), props: {"b": "6"} });
         }
-    }
-    void __svn_tpl_check;
+    });
     void Test;
     return { props: /** @type {any} */({}) };
 }

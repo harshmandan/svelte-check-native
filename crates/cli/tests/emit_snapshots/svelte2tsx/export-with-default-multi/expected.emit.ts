@@ -5,10 +5,9 @@ async function $$render_68adadcb() {
     /**@type { string | number }*/
            let name = "world",
         world = '';
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void name;
     void world;
     return { props: /** @type {{ name?: typeof name; world?: typeof world; }} */({}) };

@@ -11,7 +11,7 @@ async function $$render_4e494ca9() {
     // `ComponentProps<typeof Page>` then resolve to the real shape
     // instead of `any`.
     let { data, form }: $$ComponentProps = $props();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("h1", {});             (data.title);
         }
@@ -21,8 +21,7 @@ async function $$render_4e494ca9() {
             void [form];
             { svelteHTML.createElement("span", {});             }
         }
-    }
-    void __svn_tpl_check;
+    });
     void data;
     void form;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

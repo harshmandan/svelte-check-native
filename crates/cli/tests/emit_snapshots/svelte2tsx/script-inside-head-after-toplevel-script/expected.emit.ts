@@ -3,7 +3,7 @@
 async function $$render_b4aa4430() {
 
   let b = 'top level';
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});             { svelteHTML.createElement("script", {});             }
         }
@@ -17,8 +17,7 @@ async function $$render_b4aa4430() {
             });
             }
         }
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_b4aa4430;

@@ -10,7 +10,7 @@ async function $$render_6c5b63d4() {
     let $store2 = /** @type {any} */ (/** @type {any} */ (null));
 
                                   
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const _foo = undefined;
@@ -20,8 +20,7 @@ async function $$render_6c5b63d4() {
             ($store);
             ($store2);
         }
-    }
-    void __svn_tpl_check;
+    });
     void $store;
     void store;
     void $store2;

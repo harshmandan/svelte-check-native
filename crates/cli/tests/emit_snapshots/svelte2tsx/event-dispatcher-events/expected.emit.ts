@@ -14,11 +14,13 @@ async function $$render_2d33a3a6() {
         const bla = 'bye';
         dispatch(bla, false);
     }
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("button", {});         }
-    }
-    void __svn_tpl_check;
+        { svelteHTML.createElement("button", {
+            "on:click": (() => dispatch('btn', '')),
+        });
+        }
+    });
     void dispatch;
     return { props: /** @type {any} */({}) };
 }

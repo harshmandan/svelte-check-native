@@ -3,14 +3,13 @@
 async function $$render_73f66a28() {
     let $$slots = /** @type {Record<string, boolean | undefined>} */ ({});
     void $$slots;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("h1", {});             ($$slots.foo);
         }
         { svelteHTML.createElement("h1", {});             ($$slots['dashed-name']);
         }
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_73f66a28;

@@ -5,11 +5,10 @@ async function $$render_08571d44() {
     const schema = {
         key: "value"
     };
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         (`<script type="application/ld+json">${JSON.stringify(schema)}</script>`);
-    }
-    void __svn_tpl_check;
+    });
     void schema;
     return { props: /** @type {any} */({}) };
 }

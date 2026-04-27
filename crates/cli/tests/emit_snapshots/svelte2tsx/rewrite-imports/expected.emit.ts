@@ -18,7 +18,7 @@ async function $$render_43f719a8() {
 
     /** @param {import('../../mhm'.mhm)} mhm */
     function f(mhm) {}
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("button", {
             "onclick": (() => {
@@ -30,8 +30,7 @@ async function $$render_43f719a8() {
     }),
         });
         }
-    }
-    void __svn_tpl_check;
+    });
     void mhm;
     void f;
     return { props: /** @type {any} */({}) };

@@ -3,10 +3,9 @@
 async function $$render_d90fc472() {
 
            let name = "world"
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void name;
     return { props: /** @type {{ name?: typeof name; }} */({}) };
 }

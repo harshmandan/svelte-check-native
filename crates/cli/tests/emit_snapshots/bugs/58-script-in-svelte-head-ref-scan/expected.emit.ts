@@ -10,7 +10,7 @@ async function $$render_a02e67d1() {
   // attributes for identifier references so `useThing` doesn't read as
   // TS6133 "declared but never read".
                                         
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("svelte:head", {});             { svelteHTML.createElement("script", {
                 "src": `https://example.com/script.js`,
@@ -20,8 +20,7 @@ async function $$render_a02e67d1() {
             });
             }
         }
-    }
-    void __svn_tpl_check;
+    });
     void useThing;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

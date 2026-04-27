@@ -4,15 +4,14 @@ async function $$render_253c43cc() {
 
     let foo = true;
     bar;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const bar = undefined;
             void bar;
             (foo);
         }
-    }
-    void __svn_tpl_check;
+    });
     void foo;
     return { props: /** @type {any} */({}) };
 }

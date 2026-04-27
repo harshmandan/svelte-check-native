@@ -3,10 +3,9 @@
 async function $$render_3b13925b() {
 
     ;() => { $: { break $; } };
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_3b13925b;

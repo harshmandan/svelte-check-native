@@ -8,12 +8,11 @@ async function $$render_f1e333d8() {
     $state;
     const derived = null;
     $derived;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         (state);
         (derived);
-    }
-    void __svn_tpl_check;
+    });
     void state;
     void derived;
     return { props: /** @type {any} */({}) };

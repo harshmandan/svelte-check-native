@@ -13,11 +13,13 @@ async function $$render_39dbed3c() {
          let foobar = ''; foobar = undefined as any;
 
   const dispatch = createEventDispatcher<{swipe: string}>();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("button", {});         }
-    }
-    void __svn_tpl_check;
+        { svelteHTML.createElement("button", {
+            "on:click": undefined,
+        });
+        }
+    });
     void bar;
     void foobar;
     return { props: undefined as any as ({ bar: Bar; foobar?: typeof foobar; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': { bar: (bar) } }, bindings: undefined as any as string, exports: undefined as any as ({ bar: Bar; foobar: typeof foobar; }) };

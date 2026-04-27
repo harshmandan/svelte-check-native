@@ -8,12 +8,11 @@ async function $$render_386ab038() {
     let $store1 = /** @type {any} */ (/** @type {any} */ (null));
     /** @type {__SvnStoreValue<typeof store2>} */
     let $store2 = /** @type {any} */ (/** @type {any} */ (null));
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         ($store1);
         ($store2);
-    }
-    void __svn_tpl_check;
+    });
     void $store1;
     void store1;
     void $store2;

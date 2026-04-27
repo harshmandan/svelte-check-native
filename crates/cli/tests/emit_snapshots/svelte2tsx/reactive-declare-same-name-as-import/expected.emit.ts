@@ -8,10 +8,9 @@ let b = __svn_invalidate(() => (7)); void b;
 
 let a = /** @type {any} */ (null);
 a = 5;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_c3f76d3e;

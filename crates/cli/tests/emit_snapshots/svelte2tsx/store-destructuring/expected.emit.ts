@@ -15,7 +15,7 @@ async function $$render_19e9402e() {
     const store = fromSomewhere();
     const { store1, store2, noStore } = fromSomewhere();
     const [ store3, store4, noStore ] = fromSomewhere();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});             ($store);
         }
@@ -27,8 +27,7 @@ async function $$render_19e9402e() {
         }
         { svelteHTML.createElement("p", {});             ($store4);
         }
-    }
-    void __svn_tpl_check;
+    });
     void $store;
     void store;
     void $store1;

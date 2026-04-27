@@ -3,14 +3,13 @@
 
     import {} from 'svelte'
 async function $$render_3a14f9f8() {
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const foo = undefined;
             void foo;
         }
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_3a14f9f8;

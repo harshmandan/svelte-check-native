@@ -11,7 +11,7 @@ async function $$render_c6382cf7() {
                                       
 
   let { shape }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props()
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         const k = shape.kind;
         void k;
@@ -34,8 +34,7 @@ async function $$render_c6382cf7() {
             (k2);
             (rest.length);
         }
-    }
-    void __svn_tpl_check;
+    });
     void shape;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

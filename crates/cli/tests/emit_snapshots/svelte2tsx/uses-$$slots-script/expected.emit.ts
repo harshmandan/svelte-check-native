@@ -6,12 +6,11 @@ async function $$render_6270ac78() {
 
     let name = $$slots.foo;
     let dashedName = $$slots['dashed-name'];
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("h1", {});             (name);
         }
-    }
-    void __svn_tpl_check;
+    });
     void name;
     return { props: /** @type {any} */({}) };
 }

@@ -9,7 +9,7 @@ async function $$render_e1dcebf1() {
 	function calculate(width, height, constant) {
 		return { area: width * height, volume: width * height * constant };
 	}
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         ;(async () => {
             const $$_await = await (promise1); const box = $$_await;
@@ -51,8 +51,7 @@ async function $$render_e1dcebf1() {
             }
             void box;
         }
-    }
-    void __svn_tpl_check;
+    });
     void promise1;
     void calculate;
     void constant;

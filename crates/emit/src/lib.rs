@@ -2045,10 +2045,11 @@ mod tests {
     fn empty_source_still_emits_scaffold() {
         let out = emit_str("");
         assert!(out.contains("function $$render_"));
-        assert!(out.contains("__svn_tpl_check"));
+        // Template-check body is now `;(async () => { ... });` — see
+        // render_function.rs for why (arrow preserves TS narrowing).
         assert!(
-            out.contains("void __svn_tpl_check;"),
-            "expected per-statement void of __svn_tpl_check:\n{out}"
+            out.contains(";(async () => {"),
+            "expected arrow-expression template check body:\n{out}"
         );
     }
 
@@ -2142,9 +2143,11 @@ mod tests {
     }
 
     #[test]
-    fn template_check_wrapper_in_void_block() {
+    fn template_check_wrapper_emits_as_arrow() {
         let out = emit_str("<p>hi</p>");
-        assert!(out.contains("void __svn_tpl_check;"));
+        // Arrow-expression form (no name to void) — see Gap C.
+        assert!(out.contains(";(async () => {"));
+        assert!(!out.contains("async function __svn_tpl_check"));
     }
 
     #[test]

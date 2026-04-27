@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Gap C (2026-04-27 bench discovery on threlte/theatre): a script-body assignment that narrows an optional prop must carry through into the template-check closure. Our template-check used to be `async function __svn_tpl_check() {}` (named function declaration — hoisted, collapses narrowing back to the declared union). Now it's `;(async () => {...});` — arrow-expression statement that preserves TS's control-flow analysis of the outer `let` binding. Validated in design/gap_c_assignment_narrowing/ before the Rust port."
+}

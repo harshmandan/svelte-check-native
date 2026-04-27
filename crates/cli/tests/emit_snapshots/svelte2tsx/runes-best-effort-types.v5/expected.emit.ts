@@ -4,10 +4,9 @@
 async function $$render_929c7759() {
 
     let { a, b = true, c = 1, d = '', e = null, f = {}, g = foo, h = [], i = undefined, j = $bindable(), k = $bindable(1), l = () => {} } = $props(); 
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void a;
     void b;
     void c;

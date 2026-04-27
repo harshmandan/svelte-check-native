@@ -7,10 +7,9 @@ async function $$render_6affb005() {
            let bla1: boolean = false;
            let blubb1: boolean = true;
            let a1 = true, a2 = false, b1: boolean = true, b2: boolean = false;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void bla;
     void blubb;
     void bla1;

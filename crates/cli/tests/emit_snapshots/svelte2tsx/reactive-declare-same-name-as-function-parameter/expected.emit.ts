@@ -11,10 +11,9 @@ let shadowed1 = __svn_invalidate(() => (1)); void shadowed1;
 let shadowed2 = __svn_invalidate(() => (1)); void shadowed2;
 let shadowed3 = __svn_invalidate(() => (1)); void shadowed3;
 let shadowed4 = __svn_invalidate(() => (1)); void shadowed4;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_0fa34704;

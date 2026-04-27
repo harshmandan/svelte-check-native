@@ -1,4 +1,4 @@
 {
-    "emit_contains": ["__svn_tpl_check", "void"],
-    "_note": "bug #7: __svelte_template_check__ was declared but never referenced → TS6133 under noUnusedLocals. Our emit must register __svn_tpl_check in VoidRefRegistry and emit it in the consolidated void block."
+    "emit_contains": [";(async () => {"],
+    "_note": "bug #7 (originally TS6133 on a named __svelte_template_check__ wrapper): we now emit the template-check body as `;(async () => { ... });` — an arrow expression statement, not a named function declaration. The arrow form preserves TS's control-flow narrowing of outer-scope `let` bindings (assignments before the closure declaration narrow inside it), which closes the Gap C class of `IProject | undefined` over-fires on threlte/theatre. There's no name to forward-reference, so the original bug-7 root cause (declared-but-not-referenced) is structurally absent. Asserting the new shape lets future emit changes still gate on this fixture."
 }

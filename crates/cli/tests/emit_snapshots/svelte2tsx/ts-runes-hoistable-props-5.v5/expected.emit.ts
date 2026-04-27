@@ -19,11 +19,10 @@ async function $$render_b09ebc4f() {
                      
      
     let { foo }: Props = $props()
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         ($store);
-    }
-    void __svn_tpl_check;
+    });
     void $store;
     void store;
     void foo;

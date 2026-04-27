@@ -19,10 +19,9 @@ async function $$render_a3a5914d() {
     
     let {foo4} = __svn_invalidate(() => (getFoo4($uid))); void foo4;
     ;() => { $: console.log({ foo4: $foo4 }) };
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void $uid;
     void uid;
     void $foo1;

@@ -20,22 +20,57 @@ async function $$render_2acc95ba() {
   const handler10 = () => $count &= myvar
   const handler11 = () => $count ^= myvar
   const handler12 = () => $count |= myvar
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-    }
-    void __svn_tpl_check;
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count += myvar),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count -= myvar),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count *= myvar),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count /= myvar),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count **= myvar),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count %= myvar),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count <<= myvar),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count >>= myvar),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count >>>= myvar),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count &= myvar),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count ^= myvar),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count |= myvar),
+        });
+        }
+    });
     void $count;
     void count;
     void myvar;

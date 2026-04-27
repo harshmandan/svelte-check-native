@@ -9,15 +9,14 @@ async function $$render_34e632ee() {
     const dispatch = createEventDispatcher<{
         foo: string
     }>();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         for (const item of __svn_each_items(a)) {
             {
             }
             void item;
         }
-    }
-    void __svn_tpl_check;
+    });
     void a;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

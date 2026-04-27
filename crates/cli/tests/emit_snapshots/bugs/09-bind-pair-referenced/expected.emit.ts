@@ -9,14 +9,13 @@ async function $$render_62bedf5a() {
     function setValue(v: string) {
         internal = v;
     }
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         let __svn_bind_pair_0: [() => any, (v: any) => void] = [() => undefined as any, () => {}];
         void __svn_bind_pair_0;
         { svelteHTML.createElement("input", {});             void (__svn_get_set_binding(() => getValue(),  (v: string) => setValue(v)) satisfies string);
         }
-    }
-    void __svn_tpl_check;
+    });
     void getValue;
     void setValue;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

@@ -42,10 +42,9 @@ async function $$render_a154bb54() {
     const renamebaz: string = '';
 
                                                                                                                                                                 
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void exported1;
     void exported2;
     void name1;

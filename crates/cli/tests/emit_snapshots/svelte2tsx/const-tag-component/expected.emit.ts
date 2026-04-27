@@ -10,7 +10,7 @@ async function $$render_8a5774d3() {
 	function calculate(width, height, constant) {
 		return { area: width * height, volume: width * height * constant };
 	}
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const __svn_C_fe = __svn_ensure_component(Component);
@@ -183,8 +183,7 @@ async function $$render_8a5774d3() {
                 }
             }
         }
-    }
-    void __svn_tpl_check;
+    });
     void Component;
     void box;
     void calculate;

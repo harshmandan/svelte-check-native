@@ -393,10 +393,11 @@ pub enum DomBindingExpression {
 /// owns `TemplateSummary`, `Counters`, and the analyze-side
 /// `ShadowStack`; the walker handles recursion + scope bracketing.
 pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
-    let mut summary = TemplateSummary::default();
-    summary
-        .void_refs
-        .register(svn_core::synth_names::TPL_CHECK_FN);
+    let summary = TemplateSummary::default();
+    // Note: the template-check wrapper is now an arrow-expression
+    // statement (`;(async () => {...});`) rather than a named
+    // function declaration, so there's no identifier to void.
+    // Kept for narrowing reasons — see emit's render_function.rs.
     let mut visitor = AnalyzeVisitor {
         summary,
         counters: Counters::default(),
@@ -1285,10 +1286,13 @@ mod tests {
     }
 
     #[test]
-    fn always_registers_template_check() {
+    fn no_template_check_void_registration() {
+        // Post-Gap-C: template-check is an arrow-expression statement
+        // (no name to forward-reference), so the analyze walker no
+        // longer pre-registers `__svn_tpl_check` in void_refs.
         let s = walk_str("<p>hi</p>");
         assert!(
-            s.void_refs
+            !s.void_refs
                 .names()
                 .contains(&SmolStr::from("__svn_tpl_check"))
         );

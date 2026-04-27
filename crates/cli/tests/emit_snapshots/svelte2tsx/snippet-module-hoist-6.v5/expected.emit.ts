@@ -3,14 +3,13 @@
 
     export const foo = _foo;
 async function $$render_665a52b9() {
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const _foo = undefined;
             void _foo;
         }
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_665a52b9;

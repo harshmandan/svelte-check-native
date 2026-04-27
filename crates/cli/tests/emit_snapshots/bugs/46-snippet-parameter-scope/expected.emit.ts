@@ -6,11 +6,10 @@ async function $$render_e2598f27() {
 
                                           
     let { children }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         (children(true, () => {}));
-    }
-    void __svn_tpl_check;
+    });
     void children;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
@@ -29,15 +28,14 @@ type $$ComponentProps = { open: boolean; onToggle: () => void };
 async function $$render_ea3119be() {
 
     let { open, onToggle }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("button", {
             "onclick": (onToggle),
         });
             (open ? 'close' : 'open');
         }
-    }
-    void __svn_tpl_check;
+    });
     void open;
     void onToggle;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -59,7 +57,7 @@ async function $$render_7cc45a4f() {
 
                                            
                                        
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const __svn_C_72 = __svn_ensure_component(Wrapper);
@@ -78,8 +76,7 @@ async function $$render_7cc45a4f() {
                 },
             });
         }
-    }
-    void __svn_tpl_check;
+    });
     void Wrapper;
     void Inner;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

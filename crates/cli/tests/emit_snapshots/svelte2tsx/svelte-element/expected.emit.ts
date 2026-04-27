@@ -3,7 +3,7 @@
 async function $$render_4160f2ef() {
 
   let tag = 'div';
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement((tag), {});         }
         {
@@ -11,13 +11,15 @@ async function $$render_4160f2ef() {
         { svelteHTML.createElement((tag ? 'a' : 'b'), {});         }
         { svelteHTML.createElement((tag), {});             (tag);
         }
-        { svelteHTML.createElement((tag), {});         }
+        { svelteHTML.createElement((tag), {
+            "on:click": (() => tag),
+        });
+        }
         { svelteHTML.createElement(('a'), {
             "href": `https://kit.svelte.dev`,
         });
         }
-    }
-    void __svn_tpl_check;
+    });
     void tag;
     return { props: /** @type {any} */({}) };
 }

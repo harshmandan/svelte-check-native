@@ -14,7 +14,7 @@ async function $$render_7c15f1e0() {
                                  
                                      
                                                
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});             ($storeA);
         }
@@ -22,8 +22,7 @@ async function $$render_7c15f1e0() {
         }
         { svelteHTML.createElement("p", {});             ($storeC);
         }
-    }
-    void __svn_tpl_check;
+    });
     void $storeA;
     void storeA;
     void $storeB;

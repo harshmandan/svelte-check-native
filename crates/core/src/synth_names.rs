@@ -10,11 +10,6 @@
 //! which is stable across re-runs and collision-free as long as the
 //! template parses unchanged.
 
-/// Name of the synthetic template-check function the render body
-/// wraps every template usage in. Registered once by `walk_template`,
-/// consumed by emit and the JS-overlay branch's diagnostic muting.
-pub const TPL_CHECK_FN: &str = "__svn_tpl_check";
-
 /// `__svn_C_<hex>` — the locally-scoped component class returned by
 /// `__svn_ensure_component(Comp)` at a `<Comp ...>` instantiation
 /// site. Bytes-of-the-component-node-start act as the unique tag.

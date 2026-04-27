@@ -4,13 +4,12 @@ type $$ComponentProps = { label: string; index: number };
 async function $$render_628a5909() {
 
     let { label, index }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("span", {});             (label);
             (index);
         }
-    }
-    void __svn_tpl_check;
+    });
     void label;
     void index;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -31,7 +30,7 @@ async function $$render_45e0d54d() {
 
                                        
     const items: { text: string }[] = [{ text: 'a' }, { text: 'b' }];
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         for (const item of __svn_each_items(items)) {
             const i: number = 0;
@@ -42,8 +41,7 @@ async function $$render_45e0d54d() {
             void item;
             void i;
         }
-    }
-    void __svn_tpl_check;
+    });
     void items;
     void Inner;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

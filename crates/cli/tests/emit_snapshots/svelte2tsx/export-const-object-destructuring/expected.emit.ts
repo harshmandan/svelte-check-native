@@ -14,10 +14,9 @@ const obj = {
        const {
     a, b, nested: { c, d: g }
 } = obj;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void a;
     void b;
     void c;

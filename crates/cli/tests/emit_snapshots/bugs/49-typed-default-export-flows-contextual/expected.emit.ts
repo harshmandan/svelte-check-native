@@ -13,15 +13,14 @@ async function $$render_1497f2af() {
 
 
 /*Ωignore_endΩ*/ = $props();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("button", {
             "onclick": (() => onchange({ checked: !checked })),
         });
             (checked ? 'on' : 'off');
         }
-    }
-    void __svn_tpl_check;
+    });
     void checked;
     void onchange;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -43,14 +42,13 @@ async function $$render_026729db() {
                                          
 
     let isOn = $state(false);
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const __svn_C_1a4 = __svn_ensure_component(Switch);
             new __svn_C_1a4({ target: __svn_any(), props: {"checked": (isOn), "onchange": (({ checked }) => (isOn = checked))} });
         }
-    }
-    void __svn_tpl_check;
+    });
     void Switch;
     void isOn;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

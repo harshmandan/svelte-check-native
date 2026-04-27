@@ -9,13 +9,21 @@ async function $$render_744b8022() {
   const count = writable(0);
   const handler1 = () => ++$count
   const handler2 = () => $count--
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-        { svelteHTML.createElement("button", {});         }
-    }
-    void __svn_tpl_check;
+        { svelteHTML.createElement("button", {
+            "on:click": (() => ++$count),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count--),
+        });
+        }
+        { svelteHTML.createElement("button", {
+            "on:click": (() => $count++),
+        });
+        }
+    });
     void $count;
     void count;
     return { props: /** @type {any} */({}) };

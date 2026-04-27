@@ -4,10 +4,9 @@ type $$ComponentProps = {a: any, b?: any, c?: any};
 async function $$render_cae62ddc() {
 
     let { a, b = $bindable(), c = $bindable(0) as number }: $$ComponentProps = $props();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void a;
     void b;
     void c;

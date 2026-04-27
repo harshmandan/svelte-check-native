@@ -22,10 +22,9 @@ async function $$render_0e0b7d84() {
      * e
      */
      e;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void a;
     void b;
     void c;

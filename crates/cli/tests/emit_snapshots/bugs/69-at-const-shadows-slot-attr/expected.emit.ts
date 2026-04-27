@@ -3,15 +3,14 @@
 async function $$render_ca1b293f() {
 
     let item = { id: 1 };
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         for (const one of __svn_each_items([item])) {
             const expanded = one.id;
             void expanded;
             void one;
         }
-    }
-    void __svn_tpl_check;
+    });
     void item;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': {  } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

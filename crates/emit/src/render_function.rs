@@ -50,7 +50,15 @@ pub(crate) fn emit_template_check_fn(
     summary: &TemplateSummary,
     is_ts: bool,
 ) {
-    buf.push_str("    async function __svn_tpl_check() {\n");
+    // Arrow expression statement (NOT a function declaration) — TS's
+    // control-flow narrowing carries assignment-narrowed types from
+    // the enclosing render scope INTO the closure body. A named
+    // `async function __svn_tpl_check() {}` declaration is hoisted
+    // and TS treats it as if callable before the user's reassignment,
+    // which collapses any `let project = ... ; project = X ?? Y;`
+    // narrowing back to the declared union type. The arrow-expression
+    // form preserves narrowing — see design/gap_c_assignment_narrowing/.
+    buf.push_str("    ;(async () => {\n");
     buf.push_str("        // template type-check body (incremental)\n");
     emit_legacy_action_attrs(buf.raw_string_mut(), summary, is_ts);
     emit_bind_pair_declarations(buf.raw_string_mut(), summary, is_ts);
@@ -79,7 +87,7 @@ pub(crate) fn emit_template_check_fn(
         &instantiations_by_start,
         &mut action_counter,
     );
-    buf.push_str("    }\n");
+    buf.push_str("    });\n");
 }
 
 /// Emit the class-wrapper's `return { props, events, slots, bindings,

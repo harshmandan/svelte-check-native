@@ -8,10 +8,9 @@ let { c: { length } } = __svn_invalidate(() => ({ c: '' })); void length;
 let { ...e } = __svn_invalidate(() => ({ f: ''})); void e;
 let { f } = __svn_invalidate(() => ({ f: ''})); void f;
 let { b: g = 1} = __svn_invalidate(() => ({ b: 1 })); void g;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_2f16c479;

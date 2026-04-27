@@ -7,10 +7,9 @@ async function $$render_89e4dbc4() {
     let { a, b } = $props();
     let x = $state(0);
     let y = $derived(x * 2);
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void a;
     void b;
     return { props: /** @type {$$ComponentProps} */({}) };

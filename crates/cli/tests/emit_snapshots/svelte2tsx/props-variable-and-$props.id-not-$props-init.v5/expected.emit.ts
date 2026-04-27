@@ -4,12 +4,11 @@ async function $$render_c8d6d8f6() {
 
 	let props = {};
 	let id = $props.id();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         (id);
         (props);
-    }
-    void __svn_tpl_check;
+    });
     void id;
     void props;
     return { props: /** @type {any} */({}) };

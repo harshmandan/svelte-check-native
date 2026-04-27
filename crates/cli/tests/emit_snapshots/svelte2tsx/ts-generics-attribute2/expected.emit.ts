@@ -3,10 +3,9 @@
 async function $$render_4d42b625<T>() {
 
            let a!: T;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void a;
     return { props: undefined as any as ({ a: T; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: T; }) };
 }

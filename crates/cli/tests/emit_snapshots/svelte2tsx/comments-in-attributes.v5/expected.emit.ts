@@ -3,7 +3,7 @@
 async function $$render_29958c69() {
 
     let x = $state();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         (handler);
         (params);
@@ -12,8 +12,7 @@ async function $$render_29958c69() {
         (handler);
         (bound_prop);
         (...spread_props);
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_29958c69;

@@ -5,10 +5,9 @@
 async function $$render_7bc4cac2() {
 
     let a = <HTMLInputElement>document.querySelector('#id');
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_7bc4cac2;

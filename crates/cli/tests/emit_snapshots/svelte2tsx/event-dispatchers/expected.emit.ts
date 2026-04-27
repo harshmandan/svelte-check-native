@@ -11,11 +11,13 @@ async function $$render_7551b519() {
 
     dispatch1('hi', true);
     dispatch2('bye', true);
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("button", {});         }
-    }
-    void __svn_tpl_check;
+        { svelteHTML.createElement("button", {
+            "on:click": undefined,
+        });
+        }
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_7551b519;

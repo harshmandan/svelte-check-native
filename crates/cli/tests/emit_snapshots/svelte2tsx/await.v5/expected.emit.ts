@@ -6,7 +6,7 @@ async function $$render_de15df1d() {
     let { prop = true } = $props();
     const foo = await fetch('/foo');
     const promise = fetch('/bar');
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const x = undefined;
@@ -55,8 +55,7 @@ async function $$render_de15df1d() {
                 (x);
             }
         }
-    }
-    void __svn_tpl_check;
+    });
     void prop;
     void foo;
     void promise;

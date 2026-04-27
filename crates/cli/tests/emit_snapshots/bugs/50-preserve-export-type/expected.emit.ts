@@ -13,14 +13,13 @@ async function $$render_a4d674e0() {
     // to type-check (Section becomes undefined).
     const current: Section = 'a';
     const cfg: PanelConfig = { section: current, count: 3 };
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const __svn_C_1e3 = __svn_ensure_component(Panel);
             new __svn_C_1e3({ target: __svn_any(), props: {"config": (cfg)} });
         }
-    }
-    void __svn_tpl_check;
+    });
     void Panel;
     void cfg;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -62,13 +61,12 @@ async function $$render_6e910aea() {
     }: /*Ωignore_startΩ*/$$ComponentProps
 
 /*Ωignore_endΩ*/ = $props();
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});             (config.section);
             (config.count);
         }
-    }
-    void __svn_tpl_check;
+    });
     void config;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }

@@ -16,14 +16,13 @@ async function $$render_2b74b188() {
 
     $store1;
     $store3;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});             ($store2);
         }
         { svelteHTML.createElement("p", {});             ($store4);
         }
-    }
-    void __svn_tpl_check;
+    });
     void $store1;
     void store1;
     void $store3;

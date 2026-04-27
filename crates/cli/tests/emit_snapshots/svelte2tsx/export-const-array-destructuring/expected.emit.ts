@@ -5,10 +5,9 @@ async function $$render_e50f2117() {
 const array = [1, 2, 3, [4]];
 
        const [a, b, c, [d]] = array;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void a;
     void b;
     void c;

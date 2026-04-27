@@ -7,14 +7,13 @@ async function $$render_9672a3be() {
 	let clazz!: string
 	                         
 	       const bar: string = ''
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("svelte:options", {
             "accessors": true,
         });
         }
-    }
-    void __svn_tpl_check;
+    });
     void foo;
     void foo2;
     void clazz;

@@ -18,14 +18,13 @@ async function $$render_2b83395c() {
     // be a TS2339 error — this asserts the cross-file types flow.
     const greeting: string = `Hello, ${user.name}!`;
     const total: number = count + 1;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});             (greeting);
         }
         { svelteHTML.createElement("p", {});             (total);
         }
-    }
-    void __svn_tpl_check;
+    });
     void greeting;
     void total;
     return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

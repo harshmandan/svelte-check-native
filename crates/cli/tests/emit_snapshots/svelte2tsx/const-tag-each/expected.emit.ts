@@ -12,7 +12,7 @@ async function $$render_48a7b4ac() {
 	function calculate(width, height, constant) {
 		return { area: width * height, volume: width * height * constant };
 	}
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         for (const box of __svn_each_items(boxes)) {
             const {area, volume} = calculate(box.width, box.height, constant);
@@ -33,8 +33,7 @@ async function $$render_48a7b4ac() {
             }
             void box;
         }
-    }
-    void __svn_tpl_check;
+    });
     void boxes;
     void calculate;
     void constant;

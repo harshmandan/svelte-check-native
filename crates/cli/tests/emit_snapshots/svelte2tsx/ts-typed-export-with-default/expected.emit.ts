@@ -3,10 +3,9 @@
 async function $$render_8ef383be() {
 
            let name: string | number = "world"
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     void name;
     return { props: /** @type {any} */({}) };
 }

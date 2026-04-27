@@ -8,10 +8,9 @@ let c = __svn_invalidate(() => ({ a: { b: 1} }['a']['b'])); void c;
 let d = __svn_invalidate(() => ({ a: { b: 1} }['a']['b']?.['c'])); void d;
 let e = __svn_invalidate(() => ({a: 1} ?? { a: 1 })); void e;
 let f = __svn_invalidate(() => ({a: 1}[c] ? '' : '1')); void f;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
-    }
-    void __svn_tpl_check;
+    });
     return { props: /** @type {any} */({}) };
 }
 $$render_03ce1d4e;

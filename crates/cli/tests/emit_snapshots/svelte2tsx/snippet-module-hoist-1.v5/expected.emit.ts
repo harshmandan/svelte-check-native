@@ -7,7 +7,7 @@ async function $$render_3d709d05() {
 
                                    
     let foo = true;
-    async function __svn_tpl_check() {
+    ;(async () => {
         // template type-check body (incremental)
         {
             const hoistable1: any = undefined;
@@ -80,8 +80,7 @@ async function $$render_3d709d05() {
             { svelteHTML.createElement("div", {});                 (foo);
             }
         }
-    }
-    void __svn_tpl_check;
+    });
     void foo;
     void module;
     void imported;

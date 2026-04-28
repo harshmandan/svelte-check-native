@@ -3,7 +3,9 @@
 async function $$render_e5ad478b() {
     ;(async () => {
         // template type-check body (incremental)
-        {
+        { svelteHTML.createElement("svelte:boundary", {
+            "onerror": (e => e),
+        });
             {
                 const failed = undefined;
                 void failed;

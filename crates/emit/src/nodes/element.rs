@@ -441,7 +441,16 @@ pub(crate) fn emit_svelte_element_open(
     use svn_parser::SvelteElementKind::*;
     let indent = "    ".repeat(depth);
     match s.kind {
-        Body | Head | Window | Document | Options | Fragment => {
+        Body | Head | Window | Document | Options | Fragment | Boundary => {
+            // `<svelte:boundary onerror={…}>` joins the createElement
+            // group: upstream svelte2tsx emits
+            // `svelteHTML.createElement("svelte:boundary", { onerror,
+            // failed })` so the boundary's `onerror` callback signature
+            // type-checks against svelte/elements'
+            // `'svelte:boundary': { onerror?, failed?, pending? }`
+            // shape. Pre-fix it fell through to the bare-scope branch
+            // below alongside SelfRef/Component, losing every
+            // boundary-prop check.
             let tag = format!("svelte:{}", s.kind.as_str());
             emit_dom_element_open(
                 buf,
@@ -486,8 +495,12 @@ pub(crate) fn emit_svelte_element_open(
                 }
             }
         }
-        SelfRef | Component | Boundary => {
-            // Not a DOM element — bare scope for children.
+        SelfRef | Component => {
+            // Not a DOM element — bare scope for children. The full
+            // component-instantiation port (item #1b) replaces this
+            // with `__svn_ensure_component(this)` / any-component
+            // routing; until then, props go un-checked and only the
+            // child template type-checks.
             let _ = writeln!(buf, "{indent}{{");
         }
     }

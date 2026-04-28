@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 17,
+            "column": 17,
+            "code": 2322
+        }
+    ],
+    "_note": "Reviewer item #6: `<svelte:boundary onerror={…} />` now goes through `svelteHTML.createElement(\"svelte:boundary\", {…})`, type-checking the callback against svelte/elements' boundary shape (`(error: unknown, reset: () => void) => void`). The wrong-shape handler `(error: number) => void` fires TS2322 at the directive's value position. Pre-fix `Boundary` fell through with `Component`/`SelfRef` to a bare `{` scope, losing every prop check on the boundary."
+}

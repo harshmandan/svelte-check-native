@@ -1034,6 +1034,14 @@ declare namespace svelteHTML {
         'svelte:fragment': { slot?: string };
         'svelte:options': { [name: string]: any };
         'svelte:head': { [name: string]: any };
+        // `<svelte:boundary onerror={…} />` (Svelte 5.3+). Mirrors
+        // svelte/elements' `'svelte:boundary'` shape so the boundary's
+        // callback signatures and snippet shapes type-check at use.
+        'svelte:boundary': {
+            onerror?: (error: unknown, reset: () => void) => void;
+            failed?: import('svelte').Snippet<[error: unknown, reset: () => void]>;
+            pending?: import('svelte').Snippet;
+        };
 
         [name: string]: { [name: string]: any };
     }

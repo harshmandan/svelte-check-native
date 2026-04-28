@@ -11,8 +11,9 @@ async function $$render_e1dcebf1() {
 	}
     ;(async () => {
         // template type-check body (incremental)
+        { const $$_promise = (promise1);
         ;(async () => {
-            const $$_await = await (promise1); const box = $$_await;
+            const $$_await = await $$_promise; const box = $$_await;
             const {area, volume} = calculate(box.width, box.height, constant);
             void area;
             void volume;
@@ -30,7 +31,7 @@ async function $$render_e1dcebf1() {
                 (sum);
             }
             void box;
-        });
+        }); }
         {
             const box = undefined;
             const {area, volume} = calculate(box.width, box.height, constant);

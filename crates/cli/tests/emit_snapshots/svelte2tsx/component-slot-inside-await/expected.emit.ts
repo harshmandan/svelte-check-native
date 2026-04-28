@@ -3,18 +3,20 @@
 async function $$render_9500b63a() {
     ;(async () => {
         // template type-check body (incremental)
+        { const $$_promise = (promise);
         ;(async () => {
-            const $$_await = await (promise); const value = $$_await;
+            const $$_await = await $$_promise; const value = $$_await;
             void value;
-        });
+        }); }
         {
             const err = undefined;
             void err;
         }
+        { const $$_promise = (promise2);
         ;(async () => {
-            const $$_await = await (promise2); const { b } = $$_await;
+            const $$_await = await $$_promise; const { b } = $$_await;
             void b;
-        });
+        }); }
     });
     return { props: /** @type {any} */({}) };
 }

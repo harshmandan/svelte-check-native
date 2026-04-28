@@ -563,19 +563,30 @@ fn emit_document_with_render_name(
                 | svn_analyze::PropsSource::RuneAnnotation
                 | svn_analyze::PropsSource::RuneGeneric
         );
-    // Alias placement matters when the Props literal references generic
-    // params declared via `<script generics="T">`. At module scope, those
-    // generics aren't visible — `type $$ComponentProps = { x: T }` then
-    // fires TS2304 ("Cannot find name 'T'"). Upstream emits the alias
-    // INSIDE the render function body where the generic binder is in
-    // scope; mirror that. For non-generic files, keep the module-scope
-    // emission (line-count parity with upstream's same shape).
+    // Alias placement: ALWAYS body-local when emitting `type
+    // $$ComponentProps = …`. Two reasons body-scope is the right home:
+    //
+    //   1. Generics. `<script generics="T">` declares `T` as the
+    //      render fn's binder — at module scope `type $$ComponentProps
+    //      = { x: T }` fires TS2304.
+    //   2. Body-local type aliases. A user-declared `type Foo = …`
+    //      stays body-scoped; if the props annotation references
+    //      `Foo` (e.g. `state: Foo | undefined`), a module-scope
+    //      `$$ComponentProps` referencing `Foo` either fires TS2304
+    //      or — worse — silently resolves to `unknown` and TS6133
+    //      fires on the body-local `Foo` for being "unused".
+    //
+    // Body-local placement keeps the alias in scope of every name the
+    // user might reference. The destructure annotation
+    // `: $$ComponentProps` is INSIDE the body too, so it resolves
+    // cleanly. Mirrors upstream svelte2tsx's `ts-runes-bindable.v5` /
+    // `ts-runes-best-effort-types.v5` shape (always body-scoped).
     let alias_body = if should_alias {
         props_info.type_text.clone()
     } else {
         None
     };
-    let alias_in_render_body = alias_body.is_some() && generics.is_some();
+    let alias_in_render_body = alias_body.is_some();
     if let Some(body) = alias_body.as_deref()
         && !alias_in_render_body
     {
@@ -866,8 +877,27 @@ pub(crate) fn emit_template_body(
     let _ = writeln!(buf, "{indent}{{");
     let is_ts = emit_is_ts();
     for s in &snippets {
+        // Typed placeholder so `{@render foo(arg)}` callers receive
+        // contextual typing on their callback args. With a bare `: any`
+        // declaration, an arrow callback like `(color) => …` falls
+        // through to TS7006 (implicit-any) under strict mode. Mirror
+        // upstream svelte2tsx's `const foo = (params) => …;` shape so
+        // user-declared param annotations on the snippet flow into the
+        // call site.
         if is_ts {
-            let _ = writeln!(buf, "{inner}const {}: any = undefined;", s.name);
+            let params = source
+                .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
+                .unwrap_or("")
+                .trim();
+            if params.is_empty() {
+                let _ = writeln!(buf, "{inner}const {} = (): any => null as any;", s.name);
+            } else {
+                let _ = writeln!(
+                    buf,
+                    "{inner}const {} = ({params}): any => null as any;",
+                    s.name,
+                );
+            }
         } else {
             let _ = writeln!(buf, "{inner}const {} = undefined;", s.name);
         }

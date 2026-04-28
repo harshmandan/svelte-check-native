@@ -7,11 +7,12 @@ async function $$render_a41f16c2() {
             "on:click": undefined,
         });
         }
+        { const $$_promise = (Promise.resolve(0));
         ;(async () => {
-            const $$_await = await (Promise.resolve(0)); const n = $$_await;
+            const $$_await = await $$_promise; const n = $$_await;
             (n);
             void n;
-        });
+        }); }
     });
     return { props: /** @type {any} */({}) };
 }

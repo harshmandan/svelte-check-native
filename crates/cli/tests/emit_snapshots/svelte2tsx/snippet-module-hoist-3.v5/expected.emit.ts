@@ -6,9 +6,9 @@ async function $$render_9abb519b() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const hoistable1: any = undefined;
+            const hoistable1 = (): any => null as any;
             void hoistable1;
-            const hoistable2: any = undefined;
+            const hoistable2 = (): any => null as any;
             void hoistable2;
             { svelteHTML.createElement("div", {});             }
             { svelteHTML.createElement("div", {});                 (foo);
@@ -16,7 +16,7 @@ async function $$render_9abb519b() {
         }
     });
     void foo;
-    return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_9abb519b;
 interface $$IsomorphicComponent {

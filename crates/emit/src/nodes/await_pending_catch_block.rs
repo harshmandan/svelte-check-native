@@ -111,13 +111,24 @@ pub(crate) fn emit_await_then_branch(
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
+    // Capture the promise expression BEFORE entering the async
+    // arrow. TS resets control-flow narrowing at function-expression
+    // boundaries — `{#await currentActiveSlide.videoUrl then v}`
+    // inside `{#if currentActiveSlide.videoUrl}` would otherwise see
+    // the property re-widened inside the arrow, and `await` would
+    // resolve to `Awaited<T | undefined>` instead of `T`. Pre-
+    // capturing as `$$_promise` keeps the narrowed type alive across
+    // the arrow boundary. The arrow itself is necessary because
+    // `{#await}` may appear inside a sync snippet/slot callback
+    // where bare `await` would fire TS1308.
+    let _ = writeln!(buf, "{indent}{{ const $$_promise = ({promise_text});");
     let _ = writeln!(buf, "{indent};(async () => {{");
     match binding_text {
         Some(bind) => {
             let idents = all_identifiers(bind);
             let _ = writeln!(
                 buf,
-                "{inner}const $$_await = await ({promise_text}); const {bind} = $$_await;"
+                "{inner}const $$_await = await $$_promise; const {bind} = $$_await;"
             );
             emit_template_body(buf, source, body, depth + 1, insts, action_counter);
             for ident in &idents {
@@ -127,12 +138,12 @@ pub(crate) fn emit_await_then_branch(
         None => {
             let _ = writeln!(
                 buf,
-                "{inner}const $$_await = await ({promise_text}); void $$_await;"
+                "{inner}const $$_await = await $$_promise; void $$_await;"
             );
             emit_template_body(buf, source, body, depth + 1, insts, action_counter);
         }
     }
-    let _ = writeln!(buf, "{indent}}});");
+    let _ = writeln!(buf, "{indent}}}); }}");
 }
 
 /// Dispatch a full `{#await PROMISE}…{:then v}…{:catch e}…{/await}`

@@ -3,31 +3,35 @@
 async function $$render_8b99b80f() {
     ;(async () => {
         // template type-check body (incremental)
+        { const $$_promise = (object);
         ;(async () => {
-            const $$_await = await (object); const { a, ...rest } = $$_await;
+            const $$_await = await $$_promise; const { a, ...rest } = $$_await;
             void a;
             void rest;
-        });
+        }); }
+        { const $$_promise = (array);
         ;(async () => {
-            const $$_await = await (array); const [a, b, ...rest] = $$_await;
+            const $$_await = await $$_promise; const [a, b, ...rest] = $$_await;
             void a;
             void b;
             void rest;
-        });
+        }); }
+        { const $$_promise = (objectReject);
         ;(async () => {
-            const $$_await = await (objectReject); const value = $$_await;
+            const $$_await = await $$_promise; const value = $$_await;
             void value;
-        });
+        }); }
         {
             const a = undefined;
             const rest = undefined;
             void a;
             void rest;
         }
+        { const $$_promise = (arrayReject);
         ;(async () => {
-            const $$_await = await (arrayReject); const value = $$_await;
+            const $$_await = await $$_promise; const value = $$_await;
             void value;
-        });
+        }); }
         {
             const a = undefined;
             const b = undefined;

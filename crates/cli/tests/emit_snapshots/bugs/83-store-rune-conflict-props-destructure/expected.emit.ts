@@ -4,8 +4,8 @@ declare const title: { [key: string]: any } & ((...args: any[]) => any);
     interface InnerProps {
         title: string;
     }
-type $$ComponentProps = { props: InnerProps; title: string };
 async function $$render_3a475a7e() {
+    type $$ComponentProps = { props: InnerProps; title: string };
 
     // Threlte/theatre Declare.svelte pattern: the parent component
     // passes a prop literally named `props`, so `$props()` destructure

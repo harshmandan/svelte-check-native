@@ -9,10 +9,11 @@ async function $$render_03f92358() {
         for (const y of __svn_each_items(x)) {
             void y;
         }
+        { const $$_promise = (x);
         ;(async () => {
-            const $$_await = await (x); const y = $$_await;
+            const $$_await = await $$_promise; const y = $$_await;
             void y;
-        });
+        }); }
         if ((bla)) {
             void [bla];
         }

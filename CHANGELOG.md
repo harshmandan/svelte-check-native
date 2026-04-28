@@ -4,6 +4,82 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2]
+
+Patch release. Five emit fixes that land on real-world SvelteKit
+workspaces. The headline fix is parser support for Tailwind/UnoCSS
+arbitrary-value class names like `class:mr-[1px]={cond}` —
+previously these produced malformed TS output that triggered a
+TS1109 parse error, which **aborts tsgo's program-wide
+type-check**. A single such file in a workspace silenced every
+TS error across the project; restoring the parse fix surfaces the
+real diagnostics tsgo would otherwise report.
+
+### Emit fixes
+
+- **`class:` directive names with `[...]` arbitrary values.**
+  `attributes.rs`'s name scanner now allows `[` / `]` plus the
+  full Tailwind/UnoCSS payload set (parens, commas, `&`,
+  underscores, `:`-chained variants, `var(--prop)`, etc.). Test
+  coverage: `mr-[1px]`, `saturate-[.25]`, `w-1.5`, `[&_p]:mt-4`,
+  `grid-cols-[1fr_500px_2fr]`, `grid-cols-[1fr_min-content_minmax(0,1fr)_auto]`,
+  `dark:hover:focus:active:group-hover:md:lg:xl:bg-blue-500`,
+  `bg-[var(--my-very-long-custom-property-name-from-somewhere)]`.
+  `>` / quotes inside brackets stay rejected — upstream
+  `svelte-check` rejects them too, so silently accepting them
+  would diverge from parity.
+- **Empty-Props default → `Record<string, never>`** (matches
+  upstream svelte2tsx). `render_function.rs` previously fell back
+  to using the `exports` object as the props type when no
+  `$props()` declaration existed, which surfaced every
+  `export function foo()` as a missing-required-prop at every
+  consumer site (`<Comp bind:this={x} />` → "Property 'foo' is
+  missing"). The fallback is now `Record<string, never>`,
+  matching upstream's `runes-only-export.v5` expected output
+  byte-for-byte. 53 emit snapshots regenerated.
+- **`type $$ComponentProps = …` always body-local.** When the
+  user-declared Props type references a body-local type alias
+  (e.g. `state: TypeFilter | undefined` where
+  `type TypeFilter = (typeof TYPE_FILTER)[number]`), a
+  module-scope `$$ComponentProps` alias would silently resolve
+  the reference to `unknown` and fire TS6133 on the body-local
+  type for being "unused". Body-local placement keeps every
+  reference in scope. Mirrors upstream's
+  `ts-runes-bindable.v5` / `ts-runes-best-effort-types.v5` shape.
+- **Snippet placeholder type signature.** Top-level
+  `{#snippet foo(typedParams)}` declarations were emitted as
+  `const foo: any = undefined`, losing the user's parameter
+  annotations and forcing every callback at `{@render foo(cb)}`
+  call sites through implicit-any. Now emitted as
+  `const foo = (typedParams): any => null as any` so contextual
+  typing flows through to caller arrows. Mirrors upstream
+  svelte2tsx's `const foo = (params) => …` shape.
+- **Template-only type-cast imports.** `{value as AppVideo}` in
+  the template now reaches the `__svn_tpl_type_refs` emit even
+  when the component uses the `__sveltets_2_fn_component`
+  default-export shape. Previously the type-refs emission only
+  ran on the iso-component path, so these imports fired TS6133
+  on the `fn_component` shape (most pure-runes components).
+- **`{#await} then v` narrowing across the async-arrow boundary.**
+  The promise expression is now captured into a `$$_promise`
+  local OUTSIDE the `(async () => { … })` template-check arrow.
+  TS resets control-flow narrowing at function-expression
+  boundaries; without the pre-capture, `{#await x.y then v}`
+  inside `{#if x.y}` would re-widen `x.y` to its declared type
+  and `await` would resolve to `Awaited<T | undefined>` instead
+  of `T`.
+
+### Real-world impact
+
+On a 1360-file mid-migration SvelteKit workspace, `bun check:fast`
+now reports the same 4 errors `bun check` (upstream tsc) reports
+plus 1 additional real bug upstream missed (`disablePictureInPicture`
+camelCase typo on `<video>`), with **zero false positives**.
+Pre-fix the same workspace reported 0 errors — every diagnostic
+was silenced by a single `class:mr-[1px]` directive in
+`Track.svelte` whose broken emit aborted tsgo's whole-program
+type-check.
+
 ## [0.7.1]
 
 Patch release. Pure dependency refresh — every Rust dependency

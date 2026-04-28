@@ -3,8 +3,8 @@
   type Shape =
     | { kind: 'circle'; radius: number }
     | { kind: 'square'; side: number }
-type $$ComponentProps = { shape: Shape };
 async function $$render_c6382cf7() {
+    type $$ComponentProps = { shape: Shape };
 
               
                                         

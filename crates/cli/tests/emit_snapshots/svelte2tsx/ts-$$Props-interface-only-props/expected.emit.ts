@@ -21,7 +21,7 @@ async function $$render_c1c0235b() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_c1c0235b;
 interface $$IsomorphicComponent {

@@ -17,11 +17,12 @@ async function $$render_ce1c3a62() {
                 (c);
             }
         }
+        { const $$_promise = (promise);
         ;(async () => {
-            const $$_await = await (promise); const d = $$_await;
+            const $$_await = await $$_promise; const d = $$_await;
             (d);
             void d;
-        });
+        }); }
     });
     return { props: /** @type {any} */({}) };
 }

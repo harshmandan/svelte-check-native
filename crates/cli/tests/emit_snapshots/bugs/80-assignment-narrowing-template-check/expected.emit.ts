@@ -47,10 +47,11 @@ async function $$render_5c0d1bcb() {
     project = pool_get(name) ?? create_project(name);
     ;(async () => {
         // template type-check body (incremental)
+        { const $$_promise = (project.ready);
         ;(async () => {
-            const $$_await = await (project.ready); void $$_await;
+            const $$_await = await $$_promise; void $$_await;
             (children?.({ project }));
-        });
+        }); }
     });
     void name;
     void project;

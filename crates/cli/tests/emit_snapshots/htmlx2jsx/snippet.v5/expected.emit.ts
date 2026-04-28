@@ -22,11 +22,12 @@ async function $$render_0bc1cb85() {
                 });
             }
             { svelteHTML.createElement("div", {});             }
+            { const $$_promise = (foo);
             ;(async () => {
-                const $$_await = await (foo); const bar = $$_await;
+                const $$_await = await $$_promise; const bar = $$_await;
                 (bar);
                 void bar;
-            });
+            }); }
             {
                 void ((x: any = '') => {
                     { svelteHTML.createElement("div", {});                         (x);
@@ -66,11 +67,12 @@ async function $$render_0bc1cb85() {
                             return __svn_snippet_return();
                         },
                         await_inside: () => {
+                            { const $$_promise = (foo);
                             ;(async () => {
-                                const $$_await = await (foo); const bar = $$_await;
+                                const $$_await = await $$_promise; const bar = $$_await;
                                 (bar);
                                 void bar;
-                            });
+                            }); }
                             return __svn_snippet_return();
                         },
                     },

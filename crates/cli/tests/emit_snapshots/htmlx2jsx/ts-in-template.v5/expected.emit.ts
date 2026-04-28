@@ -5,19 +5,19 @@ async function $$render_43de206c() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const foo: any = undefined;
+            const foo = (bar: string): any => null as any;
             void foo;
-            const foo2: any = undefined;
+            const foo2 = (bar : string): any => null as any;
             void foo2;
-            const foo3: any = undefined;
+            const foo3 = (bar    : string | number): any => null as any;
             void foo3;
-            const foo4: any = undefined;
+            const foo4 = (bar    : string | number, baz     : (str: string)=>void): any => null as any;
             void foo4;
-            const foo5: any = undefined;
+            const foo5 = (bar: {baz: string}): any => null as any;
             void foo5;
-            const foo6: any = undefined;
+            const foo6 = (bar?: string): any => null as any;
             void foo6;
-            const foo7: any = undefined;
+            const foo7 = (bar, baz = ''): any => null as any;
             void foo7;
             if ((foo as true)) {
                 void [foo];
@@ -31,10 +31,11 @@ async function $$render_43de206c() {
                 void item;
                 void i;
             }
+            { const $$_promise = (foo as Promise<void>);
             ;(async () => {
-                const $$_await = await (foo as Promise<void>); const result: any = $$_await;
+                const $$_await = await $$_promise; const result: any = $$_await;
                 void result;
-            });
+            }); }
             {
                 const error: any = undefined;
                 void error;
@@ -99,7 +100,7 @@ async function $$render_43de206c() {
             }
         }
     });
-    return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_43de206c;
 interface $$IsomorphicComponent {

@@ -5,32 +5,36 @@ async function $$render_bdea4648() {
         // template type-check body (incremental)
         if ((hello)) {
             void [hello];
+            { const $$_promise = (aPromise);
             ;(async () => {
-                const $$_await = await (aPromise); const hello = $$_await;
+                const $$_await = await $$_promise; const hello = $$_await;
                 (hello);
                 void hello;
-            });
+            }); }
             (hello);
+            { const $$_promise = (aPromise);
             ;(async () => {
-                const $$_await = await (aPromise); const foo = $$_await;
+                const $$_await = await $$_promise; const foo = $$_await;
                 const hello = foo;
                 void hello;
                 (hello);
                 void foo;
-            });
+            }); }
             (hello);
+            { const $$_promise = (aPromise);
             ;(async () => {
-                const $$_await = await (aPromise); const hi = $$_await;
+                const $$_await = await $$_promise; const hi = $$_await;
                 (hello);
                 void hi;
-            });
+            }); }
             {
                 const hello = undefined;
                 (hello);
                 void hello;
             }
+            { const $$_promise = (hello);
             ;(async () => {
-                const $$_await = await (hello); const hello = $$_await;
+                const $$_await = await $$_promise; const hello = $$_await;
                 (hello);
                 if ((hello)) {
                     void [hello];
@@ -41,16 +45,18 @@ async function $$render_bdea4648() {
                         (hello);
                         void hello;
                     }
+                    { const $$_promise = (x);
                     ;(async () => {
-                        const $$_await = await (x); const hello = $$_await;
+                        const $$_await = await $$_promise; const hello = $$_await;
                         if ((hello)) {
                             void [hello];
                             (hello);
                         }
                         void hello;
-                    });
+                    }); }
+                    { const $$_promise = (x);
                     ;(async () => {
-                        const $$_await = await (x); const foo = $$_await;
+                        const $$_await = await $$_promise; const foo = $$_await;
                         const hello = foo;
                         void hello;
                         if ((hello)) {
@@ -58,17 +64,18 @@ async function $$render_bdea4648() {
                             (hello);
                         }
                         void foo;
-                    });
+                    }); }
                 }
                 void hello;
-            });
+            }); }
             if ((hi && bye)) {
                 void [hi, bye];
+                { const $$_promise = (x);
                 ;(async () => {
-                    const $$_await = await (x); const bye = $$_await;
+                    const $$_await = await $$_promise; const bye = $$_await;
                     (bye);
                     void bye;
-                });
+                }); }
                 {
                     const hello = undefined;
                     if ((hello)) {
@@ -79,32 +86,35 @@ async function $$render_bdea4648() {
                 }
             } else if ((cool)) {
                 void [cool];
+                { const $$_promise = (cool);
                 ;(async () => {
-                    const $$_await = await (cool); const cool = $$_await;
+                    const $$_await = await $$_promise; const cool = $$_await;
                     if ((cool)) {
                         void [cool];
                         (cool);
                     }
                     void cool;
-                });
+                }); }
                 {
                     const cool = undefined;
                     void cool;
                 }
+                { const $$_promise = (aPromise);
                 ;(async () => {
-                    const $$_await = await (aPromise); const cool = $$_await;
+                    const $$_await = await $$_promise; const cool = $$_await;
                     (cool);
                     void cool;
-                });
+                }); }
             } else {
+                { const $$_promise = (x);
                 ;(async () => {
-                    const $$_await = await (x); const hello = $$_await;
+                    const $$_await = await $$_promise; const hello = $$_await;
                     if ((hello)) {
                         void [hello];
                         (hello);
                     }
                     void hello;
-                });
+                }); }
             }
         }
         if ((cool)) {
@@ -114,8 +124,9 @@ async function $$render_bdea4648() {
             void [hello];
             (hello);
         }
+        { const $$_promise = (cool);
         ;(async () => {
-            const $$_await = await (cool); const cool = $$_await;
+            const $$_await = await $$_promise; const cool = $$_await;
             if ((cool)) {
                 void [cool];
                 (cool);
@@ -124,7 +135,7 @@ async function $$render_bdea4648() {
                 (hello);
             }
             void cool;
-        });
+        }); }
         {
             const cool = undefined;
             if ((cool)) {

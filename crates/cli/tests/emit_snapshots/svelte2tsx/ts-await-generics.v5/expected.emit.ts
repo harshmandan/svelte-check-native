@@ -9,7 +9,7 @@ async function $$render_200dbc4a<T>() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const x: any = undefined;
+            const x = (): any => null as any;
             void x;
             (foo);
             (await promise);

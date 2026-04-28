@@ -223,13 +223,21 @@ pub(crate) fn emit_render_body_return(
         );
         return;
     }
-    // No generics. Pick the Props source per priority above.
-    let props_ty: String = match prop_type_source {
-        Some(ty) => ty.to_string(),
-        None => exports_object
-            .map(|e| e.to_string())
-            .unwrap_or_else(|| "Record<string, any>".to_string()),
-    };
+    // No generics. Pick the Props source per priority above. When no
+    // Props type was discovered (no `let { x } = $props()`, no
+    // SvelteKit-route synthesis, no Svelte-4 `export let` synthesis),
+    // fall back to `Record<string, never>` — matches upstream
+    // svelte2tsx (`runes-only-export.v5` expectedv2: `props: /** @type
+    // {Record<string, never>} */ ({})`). NEVER fall back to the
+    // exports object: in Svelte 5 a component can have `export
+    // function foo()` (a method exposed via `bind:this`) without
+    // exposing any props, and conflating the two surfaces those
+    // methods as required props at every consumer site (`Property
+    // 'foo' is missing in type '{}' but required in type '{ foo:
+    // …; }'`).
+    let props_ty: String = prop_type_source
+        .map(|ty| ty.to_string())
+        .unwrap_or_else(|| "Record<string, never>".to_string());
     let _ = write!(
         buf,
         "    return {{ props: undefined as any as ({props_ty}), events: undefined as any as {events_field}, slots: ",

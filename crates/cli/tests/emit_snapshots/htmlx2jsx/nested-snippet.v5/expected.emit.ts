@@ -34,15 +34,16 @@ async function $$render_df3e76f3() {
                 void foo2;
                 (foo());
             }
+            { const $$_promise = (Promise.resolve());
             ;(async () => {
-                const $$_await = await (Promise.resolve()); const bar = $$_await;
+                const $$_await = await $$_promise; const bar = $$_await;
                 {
                     const foo = undefined;
                     void foo;
                     (foo());
                 }
                 void bar;
-            });
+            }); }
             { svelteHTML.createElement("div", {});                 {
                     const foo = undefined;
                     void foo;

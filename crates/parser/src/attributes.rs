@@ -192,14 +192,59 @@ fn parse_named_attribute(
 ) -> Option<Attribute> {
     let start = scanner.pos();
 
-    // Read the attribute name. Directive names include `:`; HTML attrs can
-    // include hyphens, digits, underscores, and (rarely) `$`. `|` is part
-    // of directive-modifier syntax (`on:click|once`) — valid only after a
-    // `:` but harmless to allow generally since plain HTML attrs don't use
-    // pipes.
+    // Read the attribute name. Directive names include `:`; HTML attrs
+    // can include hyphens, digits, underscores, and (rarely) `$`. `|`
+    // is part of directive-modifier syntax (`on:click|once`) — valid
+    // only after a `:` but harmless to allow generally since plain
+    // HTML attrs don't use pipes.
+    //
+    // Tailwind/UnoCSS arbitrary-value class names need broader support:
+    //   `class:aspect-16/9={cond}`              — `/` in the bare name
+    //   `class:grid-cols-[1fr_500px]={cond}`     — bracketed value
+    //   `class:bg-[var(--my-prop)]={cond}`       — parens inside brackets
+    //   `class:grid-cols-[minmax(0,1fr)]={cond}` — commas inside brackets
+    // Truncating at the first unsupported byte would split the directive
+    // into a malformed shorthand whose emit is invalid TS and aborts
+    // tsgo's program-wide type-check (TS1109 → no diagnostics for any
+    // file in the program).
+    //
+    // Outside brackets: alphanumerics, `-_:.$|/`. Inside `[...]`:
+    // anything except the HTML attribute-name terminators
+    // (whitespace, `=`, `>`, `<`, `"`, `'`). Bracket depth is tracked
+    // so nested `[[...]]` round-trips, but Tailwind doesn't actually
+    // nest brackets in practice.
     let name_start = scanner.pos();
+    let mut bracket_depth: u32 = 0;
     while let Some(b) = scanner.peek_byte() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.' | b'$' | b'|') {
+        if bracket_depth > 0 {
+            // Inside brackets: terminate only on the chars that are
+            // also illegal in HTML attribute names (whitespace, `=`,
+            // `>`, `<`, `"`, `'`). Everything else (parens, commas,
+            // hashes, percents, slashes, etc.) is legitimate
+            // arbitrary-value content. We DON'T try to accept `>` or
+            // quotes for things like `[&>li]:before:content-['•']`
+            // — upstream svelte-check rejects those too, so emitting
+            // a malformed directive there is the correct surface.
+            if matches!(b, b' ' | b'\t' | b'\n' | b'\r' | b'=' | b'>' | b'<' | b'"' | b'\'') {
+                break;
+            }
+            if b == b'[' {
+                bracket_depth += 1;
+            } else if b == b']' {
+                bracket_depth -= 1;
+            }
+            scanner.advance_byte();
+        } else if b.is_ascii_alphanumeric()
+            || matches!(b, b'-' | b'_' | b':' | b'.' | b'$' | b'|')
+        {
+            // Note: `/` is NOT accepted outside brackets — it would
+            // swallow the self-closing `/>` terminator (`<input
+            // bind:value/>`). Tailwind's `aspect-16/9` shape doesn't
+            // appear in `class:` directives in practice; users put
+            // it in the quoted `class="…"` attr where `/` is fine.
+            scanner.advance_byte();
+        } else if b == b'[' {
+            bracket_depth += 1;
             scanner.advance_byte();
         } else {
             break;
@@ -811,6 +856,34 @@ mod tests {
         };
         assert_eq!(d.kind, DirectiveKind::Class);
         assert_eq!(d.name, "active");
+    }
+
+    #[test]
+    fn class_directive_with_tailwind_names() {
+        // Tailwind/UnoCSS class names cover several shapes that all need
+        // to round-trip as a single directive name. Truncating at the
+        // first unsupported byte would produce a malformed shorthand
+        // whose emit is invalid TS and aborts tsgo's program-wide
+        // type-check (one parse error → no diagnostics for any file).
+        for case in [
+            "mr-[1px]",
+            "saturate-[.25]",
+            "w-1.5",
+            "[&_p]:mt-4",
+            "grid-cols-[1fr_500px_2fr]",
+            "grid-cols-[1fr_min-content_minmax(0,1fr)_auto]",
+            "dark:hover:focus:active:group-hover:md:lg:xl:bg-blue-500",
+            "bg-[var(--my-very-long-custom-property-name-from-somewhere)]",
+        ] {
+            let src = format!("class:{case}={{!last}}");
+            let attrs = parse_ok(&src);
+            let Attribute::Directive(d) = &attrs[0] else {
+                panic!("expected directive for {case}, got {:?}", attrs[0]);
+            };
+            assert_eq!(d.kind, DirectiveKind::Class, "kind for {case}");
+            assert_eq!(d.name, case, "name for {case}");
+            assert!(d.value.is_some(), "value for {case}");
+        }
     }
 
     #[test]

@@ -3,11 +3,12 @@
 async function $$render_bedc65d7() {
     ;(async () => {
         // template type-check body (incremental)
+        { const $$_promise = (somePromise);
         ;(async () => {
-            const $$_await = await (somePromise); const value = $$_await;
+            const $$_await = await $$_promise; const value = $$_await;
             { svelteHTML.createElement("h1", {});             }
             void value;
-        });
+        }); }
         { svelteHTML.createElement("h2", {});         }
     });
     return { props: /** @type {any} */({}) };

@@ -10,7 +10,7 @@ async function $$render_7c1243c9() {
         { svelteHTML.createElement("form", __svn_union(__svn_action_0), {});             void __svn_action_0;
         }
     });
-    return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_7c1243c9;
 interface $$IsomorphicComponent {

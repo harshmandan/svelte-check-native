@@ -10,11 +10,12 @@ async function $$render_53b84942() {
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});         }
+        { const $$_promise = ($store);
         ;(async () => {
-            const $$_await = await ($store); const data = $$_await;
+            const $$_await = await $$_promise; const data = $$_await;
             (data);
             void data;
-        });
+        }); }
     });
     void $store;
     void store;

@@ -107,6 +107,24 @@ pub(crate) fn emit_default_export_declarations_ts(
     // Threlte's instancing pattern (gap-A discovery, 2026-04-27) is
     // the canonical example. See `design/gap_a_iso_extraction/` for
     // tsgo-validated repro.
+    // Type-position reference for every type-only import that was
+    // consumed only inside a template expression (`{foo(item as
+    // AppVideo)}`). Emitted BEFORE the default-export selection so
+    // both the `__sveltets_2_fn_component` path and the
+    // `$$IsomorphicComponent` path keep these imports visibly used —
+    // without it, the fn_component path early-returns and the import
+    // fires TS6133.
+    if !template_type_refs.is_empty() {
+        buf.push_str("type __svn_tpl_type_refs = [");
+        for (i, name) in template_type_refs.iter().enumerate() {
+            if i > 0 {
+                buf.push_str(", ");
+            }
+            buf.push_str(name.as_str());
+        }
+        buf.push_str("];\n");
+        buf.push_str("void (0 as any as __svn_tpl_type_refs);\n");
+    }
     if should_emit_fn_component_shape(doc, fragment, split, generics) {
         emit_fn_component_default_export(buf, render_name);
         return;
@@ -316,20 +334,8 @@ pub(crate) fn emit_default_export_declarations_ts(
         );
     }
 
-    // Type-position reference for every type-only import that was
-    // consumed only in a template expression. TS considers the type
-    // used, so the import isn't flagged TS6133.
-    if !template_type_refs.is_empty() {
-        buf.push_str("type __svn_tpl_type_refs = [");
-        for (i, name) in template_type_refs.iter().enumerate() {
-            if i > 0 {
-                buf.push_str(", ");
-            }
-            buf.push_str(name.as_str());
-        }
-        buf.push_str("];\n");
-        buf.push_str("void (0 as any as __svn_tpl_type_refs);\n");
-    }
+    // (template_type_refs emitted above, before the default-export
+    // selection — see the top of this function.)
     buf.push_str("export default __svn_component_default;\n");
 }
 

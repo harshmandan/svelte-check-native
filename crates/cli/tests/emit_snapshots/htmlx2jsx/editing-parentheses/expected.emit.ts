@@ -4,10 +4,11 @@ async function $$render_aa07c32b() {
     ;(async () => {
         // template type-check body (incremental)
         (console.log(''.));
+        { const $$_promise = (Promise.resolve(''.));
         ;(async () => {
-            const $$_await = await (Promise.resolve(''.)); const value = $$_await;
+            const $$_await = await $$_promise; const value = $$_await;
             void value;
-        });
+        }); }
     });
     return { props: /** @type {any} */({}) };
 }

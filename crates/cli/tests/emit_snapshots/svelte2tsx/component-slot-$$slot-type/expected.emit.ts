@@ -25,7 +25,7 @@ async function $$render_ea0f0d34() {
         { svelteHTML.createElement("div", {});         }
     });
     void b;
-    return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': { a: (b) }, 'foo': { b: (b) } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': { a: (b) }, 'foo': { b: (b) } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_ea0f0d34;
 interface $$IsomorphicComponent {

@@ -3,11 +3,12 @@
 async function $$render_406d5f3a() {
     ;(async () => {
         // template type-check body (incremental)
+        { const $$_promise = (thePromise);
         ;(async () => {
-            const $$_await = await (thePromise); const [ a, b ] = $$_await;
+            const $$_await = await $$_promise; const [ a, b ] = $$_await;
             void a;
             void b;
-        });
+        }); }
         {
             const c = undefined;
             const d = undefined;

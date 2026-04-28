@@ -3,10 +3,11 @@
 async function $$render_0ae9a766() {
     ;(async () => {
         // template type-check body (incremental)
+        { const $$_promise = (Promise.);
         ;(async () => {
-            const $$_await = await (Promise.); const value = $$_await;
+            const $$_await = await $$_promise; const value = $$_await;
             void value;
-        });
+        }); }
     });
     return { props: /** @type {any} */({}) };
 }

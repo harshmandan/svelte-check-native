@@ -11,8 +11,9 @@ async function $$render_6a482dcb() {
 	}
     ;(async () => {
         // template type-check body (incremental)
+        { const $$_promise = (promise1);
         ;(async () => {
-            const $$_await = await (promise1); const { width, height } = $$_await;
+            const $$_await = await $$_promise; const { width, height } = $$_await;
             const {area, volume} = calculate(width, height, constant);
             void area;
             void volume;
@@ -31,7 +32,7 @@ async function $$render_6a482dcb() {
             }
             void width;
             void height;
-        });
+        }); }
         {
             const width = undefined;
             const height = undefined;

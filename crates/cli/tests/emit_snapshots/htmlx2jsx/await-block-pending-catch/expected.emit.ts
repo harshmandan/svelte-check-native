@@ -4,12 +4,13 @@ async function $$render_88f50e2b() {
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("h1", {});         }
+        { const $$_promise = (somePromise);
         ;(async () => {
-            const $$_await = await (somePromise); const value = $$_await;
+            const $$_await = await $$_promise; const value = $$_await;
             { svelteHTML.createElement("h1", {});                 (value);
             }
             void value;
-        });
+        }); }
         {
             const error = undefined;
             { svelteHTML.createElement("h1", {});                 (error);

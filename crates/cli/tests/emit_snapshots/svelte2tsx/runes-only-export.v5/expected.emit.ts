@@ -10,7 +10,7 @@ async function $$render_39845b3c() {
     });
     void x;
     void foo;
-    return { props: undefined as any as ({ foo: () => void; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: () => void; }) };
+    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: () => void; }) };
 }
 $$render_39845b3c;
 interface $$IsomorphicComponent {

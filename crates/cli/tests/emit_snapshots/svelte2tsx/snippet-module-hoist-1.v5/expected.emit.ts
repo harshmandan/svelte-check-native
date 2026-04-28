@@ -10,27 +10,27 @@ async function $$render_3d709d05() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const hoistable1: any = undefined;
+            const hoistable1 = (): any => null as any;
             void hoistable1;
-            const hoistable2: any = undefined;
+            const hoistable2 = (bar): any => null as any;
             void hoistable2;
-            const hoistable3: any = undefined;
+            const hoistable3 = (bar: string): any => null as any;
             void hoistable3;
-            const hoistable4: any = undefined;
+            const hoistable4 = (foo): any => null as any;
             void hoistable4;
-            const hoistable5: any = undefined;
+            const hoistable5 = (): any => null as any;
             void hoistable5;
-            const hoistable6: any = undefined;
+            const hoistable6 = (): any => null as any;
             void hoistable6;
-            const hoistable7: any = undefined;
+            const hoistable7 = (): any => null as any;
             void hoistable7;
-            const hoistable8: any = undefined;
+            const hoistable8 = (): any => null as any;
             void hoistable8;
-            const hoistable9: any = undefined;
+            const hoistable9 = (props: HTMLAttributes<HTMLDivElement>): any => null as any;
             void hoistable9;
-            const hoistable10: any = undefined;
+            const hoistable10 = (foo): any => null as any;
             void hoistable10;
-            const not_hoistable: any = undefined;
+            const not_hoistable = (): any => null as any;
             void not_hoistable;
             { svelteHTML.createElement("div", {});             }
             {
@@ -84,7 +84,7 @@ async function $$render_3d709d05() {
     void foo;
     void module;
     void imported;
-    return { props: undefined as any as (Record<string, any>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_3d709d05;
 interface $$IsomorphicComponent {

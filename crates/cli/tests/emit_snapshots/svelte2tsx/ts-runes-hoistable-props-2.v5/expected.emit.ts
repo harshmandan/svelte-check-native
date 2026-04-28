@@ -8,8 +8,8 @@ declare const b: { [key: string]: any } & ((...args: any[]) => any);
         a: number;
         b: typeof value;
     }
-type $$ComponentProps = { a: Dependency, b: string };
 async function $$render_07606356() {
+    type $$ComponentProps = { a: Dependency, b: string };
 
                           
                   

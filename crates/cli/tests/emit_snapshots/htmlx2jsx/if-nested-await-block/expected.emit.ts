@@ -5,37 +5,42 @@ async function $$render_b67cf125() {
         // template type-check body (incremental)
         if ((hello)) {
             void [hello];
+            { const $$_promise = (hello.foo);
             ;(async () => {
-                const $$_await = await (hello.foo); const y = $$_await;
+                const $$_await = await $$_promise; const y = $$_await;
                 (y);
                 void y;
-            });
+            }); }
+            { const $$_promise = (x);
             ;(async () => {
-                const $$_await = await (x); const y = $$_await;
+                const $$_await = await $$_promise; const y = $$_await;
                 (y);
                 void y;
-            });
+            }); }
             (hello);
             if ((hi && bye)) {
                 void [hi, bye];
+                { const $$_promise = (x);
                 ;(async () => {
-                    const $$_await = await (x); const y = $$_await;
+                    const $$_await = await $$_promise; const y = $$_await;
                     (y);
                     void y;
-                });
+                }); }
             } else if ((cool)) {
                 void [cool];
+                { const $$_promise = (x);
                 ;(async () => {
-                    const $$_await = await (x); const y = $$_await;
+                    const $$_await = await $$_promise; const y = $$_await;
                     (y);
                     void y;
-                });
+                }); }
             } else {
+                { const $$_promise = (x);
                 ;(async () => {
-                    const $$_await = await (x); const y = $$_await;
+                    const $$_await = await $$_promise; const y = $$_await;
                     (y);
                     void y;
-                });
+                }); }
             }
         }
     });

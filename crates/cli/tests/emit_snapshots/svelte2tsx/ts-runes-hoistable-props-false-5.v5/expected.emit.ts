@@ -3,8 +3,8 @@
 
     type Shadowed = string;
     type Shadowed = boolean;
-type $$ComponentProps = { someProp: Shadowed };
 async function $$render_86a0cb14() {
+    type $$ComponentProps = { someProp: Shadowed };
 
                             
     let { someProp }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();

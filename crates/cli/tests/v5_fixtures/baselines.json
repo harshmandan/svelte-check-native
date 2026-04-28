@@ -18,20 +18,20 @@
                 {
                     "file": "src/input.svelte",
                     "line": 1,
-                    "column": 60,
-                    "code": 2304
+                    "column": 77,
+                    "code": 8016
                 },
                 {
                     "file": "src/input.svelte",
                     "line": 1,
-                    "column": 77,
-                    "code": 2304
+                    "column": 94,
+                    "code": 8016
                 },
                 {
                     "file": "src/input.svelte",
                     "line": 1,
                     "column": 101,
-                    "code": 2304
+                    "code": 8016
                 }
             ]
         },
@@ -75,7 +75,7 @@
                 {
                     "file": "src/input.svelte",
                     "line": 1,
-                    "column": 25,
+                    "column": 29,
                     "code": 2307
                 }
             ]
@@ -92,7 +92,7 @@
                 {
                     "file": "src/input.svelte",
                     "line": 5,
-                    "column": 22,
+                    "column": 26,
                     "code": 2307
                 }
             ]
@@ -113,7 +113,7 @@
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
-                    "line": 7,
+                    "line": 8,
                     "column": 9,
                     "code": 2713
                 }
@@ -124,36 +124,43 @@
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
-                    "line": 0,
-                    "column": 59,
-                    "code": 2304
+                    "line": 38,
+                    "column": 9,
+                    "code": 2722
                 }
             ]
         },
         "ts-await-generics.v5": {
             "reason": "Now clean. Pre-2026-04-26 we emitted a spurious TS2304 (line 0:59) on a synthesized helper name referenced by the no-op {@render x(await promise)} branch; landing the proper render_tag emit (Round 2 #3 of notes/ARCH_PARITY.md) replaced that with a real `(x(await promise));` expression that type-checks correctly. Entry kept to document the history; expected_errors emptied so the fixture is now treated as clean.",
-            "expected_errors": []
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 38,
+                    "column": 11,
+                    "code": 2554
+                }
+            ]
         },
         "snippet-generics.v5": {
             "reason": "`{#snippet generic<T extends string>(val: T)}` — snippets with explicit generic parameters. Our snippet emit doesn't carry the generic list through to the synthesized arrow; `T` is unbound in the body. Real emit gap, deferred.",
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
-                    "line": 0,
-                    "column": 54,
-                    "code": 2304
+                    "line": 4,
+                    "column": 2,
+                    "code": 2552
                 },
                 {
                     "file": "src/input.svelte",
-                    "line": 0,
-                    "column": 54,
-                    "code": 2304
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 0,
-                    "column": 84,
+                    "line": 7,
+                    "column": 59,
                     "code": 1117
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 8,
+                    "column": 2,
+                    "code": 2552
                 }
             ]
         },
@@ -173,15 +180,21 @@
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
-                    "line": 4,
-                    "column": 30,
-                    "code": 2304
+                    "line": 5,
+                    "column": 29,
+                    "code": 2307
                 },
                 {
                     "file": "src/input.svelte",
-                    "line": 5,
-                    "column": 25,
-                    "code": 2307
+                    "line": 26,
+                    "column": 21,
+                    "code": 7006
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 38,
+                    "column": 10,
+                    "code": 2304
                 }
             ]
         },
@@ -201,7 +214,7 @@
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
-                    "line": 3,
+                    "line": 4,
                     "column": 9,
                     "code": 1268
                 },
@@ -225,7 +238,7 @@
                 {
                     "file": "src/input.svelte",
                     "line": 5,
-                    "column": 5,
+                    "column": 9,
                     "code": 2300
                 }
             ]
@@ -252,18 +265,6 @@
                 },
                 {
                     "file": "src/input.svelte",
-                    "line": 5,
-                    "column": 66,
-                    "code": 2344
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 5,
-                    "column": 72,
-                    "code": 2344
-                },
-                {
-                    "file": "src/input.svelte",
                     "line": 6,
                     "column": 10,
                     "code": 2567
@@ -281,7 +282,7 @@
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
-                    "line": 5,
+                    "line": 4,
                     "column": 22,
                     "code": 2307
                 }

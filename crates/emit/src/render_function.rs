@@ -193,15 +193,25 @@ pub(crate) fn emit_render_body_return(
     // extraction at module scope — matches upstream's
     // `__sveltets_2_isomorphic_component($$render())` pattern.
     let exports_field = exports_object.unwrap_or("{}");
-    // 2026-04-25: events field is CustomEvent-wrapped via a mapped
-    // type so `SvelteComponent<…>.$on<K>(cb: (e: Events[K]) => void)`
-    // accepts user handlers written as `(e: CustomEvent<Payload>) => void`.
+    // The events field carries the FINAL `$on` event-object map.
+    // Matches upstream svelte2tsx's
+    // `ComponentEvents.toDefString()` = `'{} as unknown as $$Events'`:
+    // `$$Events` is the consumer-facing map, NOT a detail-shape map.
+    // Users who want `CustomEvent<…>` wrapping write it explicitly in
+    // their `interface $$Events`. The synthesized typed-dispatcher
+    // case (`createEventDispatcher<T>()`) is wrapped ONCE at
+    // synthesis time (see `synthesized_events_type` in
+    // emit/lib.rs's render emission) so the same contract holds
+    // regardless of source. `__svn_ensure_component`'s marker
+    // branch then uses E directly (no extra wrap), keeping every
+    // consumer path consistent at one wrap level.
     let events_field: String = if has_strict_events(doc) || synthesized_events_type.is_some() {
-        "{ [K in keyof $$Events]: CustomEvent<$$Events[K]> }".to_string()
+        "$$Events".to_string()
     } else {
-        // Mirrors upstream's `__sveltets_2_with_any_event` lax wrap:
-        // when no `$$Events` interface is declared, every `on:NAME`
-        // handler's payload type defaults to `CustomEvent<any>`.
+        // Lax shape: when no `$$Events` interface is declared, every
+        // `on:NAME` handler's payload type defaults to
+        // `CustomEvent<any>`. Mirrors upstream's
+        // `__sveltets_2_with_any_event` fallback.
         "{ [evt: string]: CustomEvent<any> }".to_string()
     };
     // The `slots:` field literal is written straight into the emit

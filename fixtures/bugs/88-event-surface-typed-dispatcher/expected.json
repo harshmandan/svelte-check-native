@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "ParentMismatch.svelte",
+            "line": 11,
+            "column": 17,
+            "code": 2345
+        }
+    ],
+    "_note": "Reviewer item #2: typed `createEventDispatcher<T>()` wraps `T` ONCE at synthesis (`type $$Events = { [K]: CustomEvent<T[K]> }`). Render-fn return / `__svn_events` marker / `__svn_ensure_component` all treat `$$Events` as the final $on map and never wrap again. ParentClean's handler `(e: CustomEvent<{id:number}>) => void` matches; ParentMismatch's wrong-payload handler fires TS2345 at the directive position."
+}

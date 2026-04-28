@@ -26,7 +26,7 @@ async function $$render_d1f99cf5() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [K in keyof $$Events]: CustomEvent<$$Events[K]> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, never>), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_d1f99cf5;
 interface $$IsomorphicComponent {

@@ -522,7 +522,7 @@ declare function __svn_ensure_component<
     >
         ? new (options: { target?: any; props?: P }) => import('svelte').SvelteComponent<
               P,
-              { [K in keyof E]: CustomEvent<E[K]> },
+              E,
               Record<string, any>
           > &
               X & { $$bindings?: B }
@@ -600,10 +600,14 @@ type __SvnInstance<P> = {
  */
 type __SvnInstanceTyped<P, E> = {
     $$prop_def: P;
-    $on<K extends keyof E>(
-        event: K,
-        handler: (e: CustomEvent<E[K]>) => any,
-    ): () => void;
+    // E carries the FINAL `$on` event-object map (matches upstream
+    // convention: user's `interface $$Events { click: MouseEvent }`
+    // means `$on('click', cb)`'s cb is `(e: MouseEvent)`. If user
+    // wants `CustomEvent<…>`, they wrap explicitly in their
+    // interface). The synthesized typed-dispatcher case is wrapped
+    // ONCE at synthesis (`type $$Events = { [K]: CustomEvent<T[K]> }`)
+    // so this type is final regardless of source.
+    $on<K extends keyof E>(event: K, handler: (e: E[K]) => any): () => void;
 };
 
 /**

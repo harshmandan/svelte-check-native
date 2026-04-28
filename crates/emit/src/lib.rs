@@ -637,16 +637,28 @@ fn emit_document_with_render_name(
     if alias_in_render_body && let Some(body) = alias_body.as_deref() {
         let _ = writeln!(buf, "    type $$ComponentProps = {body};");
     }
-    // Synthesised `type $$Events = <T>;` from a typed
-    // `createEventDispatcher<T>()` call, when the three-trigger gate
-    // fires and the user didn't already declare the interface.
+    // Synthesised `type $$Events = { [K in keyof <T>]:
+    // CustomEvent<<T>[K]> };` from a typed
+    // `createEventDispatcher<T>()` call. The dispatcher's `T` is the
+    // DETAIL map (`dispatch('foo', detail)` => `CustomEvent<detail>`),
+    // so we wrap once HERE to produce the FINAL `$on` event-object
+    // map. Downstream emit (render-fn return, `__svn_events`
+    // marker, `__svn_ensure_component`) all treat `$$Events` as
+    // final and never wrap again — keeping every consumer path at
+    // exactly one wrap level. Mirrors upstream's
+    // `__sveltets_2_CustomEvents<$$Events>` cast applied at the
+    // dispatcher site.
+    //
     // Placed INSIDE the render body so `T` can reference body-local
     // generics (`<script generics="A"> … createEventDispatcher<{a: A}>()`)
     // — at module scope `A` would fire TS2304. The class-wrapper's
     // `events()` method projects this back out to consumers via
     // `Awaited<ReturnType<typeof $$render<…>>>['events']`.
     if let Some(t) = synthesized_events_type.as_deref() {
-        let _ = writeln!(buf, "    type $$Events = {t};");
+        let _ = writeln!(
+            buf,
+            "    type $$Events = {{ [__svn_K in keyof ({t})]: CustomEvent<({t})[__svn_K]> }};"
+        );
     }
     let ScriptAndTemplateAnalysis {
         prop_names,

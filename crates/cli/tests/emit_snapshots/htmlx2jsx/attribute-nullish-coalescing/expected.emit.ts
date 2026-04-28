@@ -5,7 +5,7 @@ async function $$render_c1ba3c89() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(SomeComponent);
-            new __svn_C_0({ target: __svn_any(), props: {"attr": __svn_any()} });
+            new __svn_C_0({ target: __svn_any(), props: {"attr": `${obj ?? 'shorthand'}`} });
         }
     });
     return { props: /** @type {any} */({}) };

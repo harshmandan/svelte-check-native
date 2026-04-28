@@ -392,14 +392,21 @@ pub enum PropShape {
     /// Opaque value — emit `name: __svn_any()` so TS sees the prop
     /// is present without trying to model its type. Used today for
     /// multi-part interpolated quoted attrs like
-    /// `class="a {b} c"`: emitting a precise template literal is
-    /// the upstream port (deferred), but the de-risk is to keep
-    /// the prop in the satisfies object so missing-required-prop
-    /// doesn't fire AND the rest of the component's props /
-    /// events / bindings stay checkable. Pre-fix the whole
-    /// component instantiation was dropped on the first multi-part
-    /// attr it saw.
-    Opaque { name: SmolStr, attr_range: Range },
+    /// `class="a {b} c"`: a quoted attribute value with one or more
+    /// interpolations. Emit assembles a TS template literal —
+    /// `\`a ${b} c\`` — so the prop's value carries a real string
+    /// type (with the embedded expressions type-checked through
+    /// contextual typing inside `${…}`). Mirrors upstream
+    /// svelte2tsx's `Attribute.ts:233` template-literal branch.
+    ///
+    /// `parts` is the parser's per-chunk decomposition (text vs
+    /// expression). Walk-order preserved so emit's reassembly
+    /// matches the source layout.
+    TemplateLiteral {
+        name: SmolStr,
+        parts: Vec<AttrValuePart>,
+        attr_range: Range,
+    },
 }
 
 impl PropShape {
@@ -415,7 +422,7 @@ impl PropShape {
             | PropShape::BoolShorthand { attr_range, .. }
             | PropShape::Spread { attr_range, .. }
             | PropShape::GetSetBinding { attr_range, .. }
-            | PropShape::Opaque { attr_range, .. } => *attr_range,
+            | PropShape::TemplateLiteral { attr_range, .. } => *attr_range,
         }
     }
 }
@@ -1318,16 +1325,14 @@ fn collect_instantiation_inner(
                     }
                 }
                 // Multi-part interpolated attribute value
-                // (`class="a {b} c"`) — emit as an opaque
-                // `__svn_any()` so the prop is still present in the
-                // satisfies object. Avoids the pre-fix behavior
-                // where seeing ANY multi-part attr dropped the
-                // whole component instantiation, losing checking
-                // for every OTHER prop / event / binding on the
-                // component. The precise template-literal emit is
-                // deferred to a follow-up.
-                props.push(PropShape::Opaque {
+                // (`class="a {b} c"`) — emit as a TS template
+                // literal `\`a ${b} c\`` so the embedded
+                // expressions get type-checked AND the prop's
+                // value carries a real string type. Mirrors upstream
+                // svelte2tsx's `Attribute.ts:233`.
+                props.push(PropShape::TemplateLiteral {
                     name: p.name.clone(),
+                    parts: v.parts.clone(),
                     attr_range: p.range,
                 });
                 continue;
@@ -1460,7 +1465,7 @@ fn collect_instantiation_inner(
                         | PropShape::Expression { name, .. }
                         | PropShape::Shorthand { name, .. }
                         | PropShape::GetSetBinding { name, .. }
-                        | PropShape::Opaque { name, .. } => name != &target,
+                        | PropShape::TemplateLiteral { name, .. } => name != &target,
                         PropShape::Spread { .. } => true, // spreads pass through
                     });
                     props.push(PropShape::Expression {
@@ -1497,7 +1502,7 @@ fn collect_instantiation_inner(
                         | PropShape::Expression { name, .. }
                         | PropShape::Shorthand { name, .. }
                         | PropShape::GetSetBinding { name, .. }
-                        | PropShape::Opaque { name, .. } => name != &target,
+                        | PropShape::TemplateLiteral { name, .. } => name != &target,
                         PropShape::Spread { .. } => true,
                     });
                     // Bare `bind:NAME` is `bind:NAME={NAME}` — same
@@ -1539,7 +1544,7 @@ fn collect_instantiation_inner(
                         | PropShape::Expression { name, .. }
                         | PropShape::Shorthand { name, .. }
                         | PropShape::GetSetBinding { name, .. }
-                        | PropShape::Opaque { name, .. } => name != &target,
+                        | PropShape::TemplateLiteral { name, .. } => name != &target,
                         PropShape::Spread { .. } => true,
                     });
                     props.push(PropShape::GetSetBinding {

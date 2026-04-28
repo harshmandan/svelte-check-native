@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Parent.svelte",
+            "line": 31,
+            "column": 20,
+            "code": 2731
+        }
+    ],
+    "_note": "Reviewer follow-up #9: multi-part component attrs (a quoted attribute value with one or more `{…}` interpolations) used to emit as `name: __svn_any()` — the prop key was present in the satisfies object so the rest of the component's checks stayed alive, but the embedded expressions were never type-checked and the prop's value carried `any` instead of a real string. Post-fix: emit as a TS template literal `\\`a ${b} c\\`` matching upstream svelte2tsx's `Attribute.ts:233`. Embedded expressions get contextual typing — `Symbol(…)` interpolated into a string template fires TS2731 (`Implicit conversion of a 'symbol' to a 'string' will fail at runtime`). The `prefix-{obj.foo}-suffix` clean case stays clean (numbers stringify implicitly). Source-position mapping flows through `append_with_source` so the diagnostic lands on the user's `{sym}` interpolation."
+}

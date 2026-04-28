@@ -393,7 +393,7 @@ fn prop_shape_name(p: &svn_analyze::PropShape) -> Option<&str> {
         | svn_analyze::PropShape::Shorthand { name, .. }
         | svn_analyze::PropShape::BoolShorthand { name, .. }
         | svn_analyze::PropShape::GetSetBinding { name, .. }
-        | svn_analyze::PropShape::Opaque { name, .. } => Some(name),
+        | svn_analyze::PropShape::TemplateLiteral { name, .. } => Some(name),
         svn_analyze::PropShape::Spread { .. } => None,
     }
 }
@@ -542,18 +542,49 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             buf.append_with_source(setter, *setter_range);
             buf.push_str(")");
         }
-        svn_analyze::PropShape::Opaque { name, .. } => {
-            // Multi-part interpolated quoted attr like
-            // `name="lit {expr} more"` — emit `name: __svn_any()`
-            // so the prop is present in the satisfies object
-            // without committing to a precise type. Keeps the
-            // remaining props / events / bindings on the component
-            // checkable. The precise template-literal port
-            // (matching upstream Attribute.ts:233) is deferred —
-            // re-attempting it surfaced unrelated v5_stores
-            // regressions that need investigation first.
+        svn_analyze::PropShape::TemplateLiteral { name, parts, .. } => {
+            // Reviewer follow-up #9: multi-part interpolated quoted
+            // attr (`name="lit {expr} more"`) emits as a TS
+            // template literal so the embedded expressions are
+            // type-checked through contextual typing AND the
+            // prop's value carries a real `string` type. Mirrors
+            // upstream svelte2tsx's `Attribute.ts:233`.
+            //
+            // Each Text part appends verbatim with backtick /
+            // backslash / `${` escape sequences, and each
+            // Expression part splices `${EXPR}` from the source
+            // range so tsgo diagnostics on the inner expression
+            // map back to the user's source position.
             write_quoted_prop_key_with_source(buf, name, attr_range);
-            buf.push_str(": __svn_any()");
+            buf.push_str(": `");
+            for part in parts {
+                match part {
+                    svn_parser::AttrValuePart::Text { content, .. } => {
+                        for ch in content.chars() {
+                            match ch {
+                                '`' => buf.push_str("\\`"),
+                                '\\' => buf.push_str("\\\\"),
+                                '$' => buf.push_str("\\$"),
+                                _ => buf.push(ch),
+                            }
+                        }
+                    }
+                    svn_parser::AttrValuePart::Expression {
+                        expression_range, ..
+                    } => {
+                        let Some(expr) = source.get(
+                            expression_range.start as usize..expression_range.end as usize,
+                        ) else {
+                            buf.push_str("${undefined}");
+                            continue;
+                        };
+                        buf.push_str("${");
+                        buf.append_with_source(expr, *expression_range);
+                        buf.push('}');
+                    }
+                }
+            }
+            buf.push('`');
         }
     }
 }

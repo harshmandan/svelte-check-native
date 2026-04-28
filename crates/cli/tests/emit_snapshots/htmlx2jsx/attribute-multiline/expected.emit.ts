@@ -13,7 +13,9 @@ async function $$render_04fb2c94() {
         }
         {
             const __svn_C_4b = __svn_ensure_component(Comp);
-            new __svn_C_4b({ target: __svn_any(), props: {"multilineattr": __svn_any()} });
+            new __svn_C_4b({ target: __svn_any(), props: {"multilineattr": `
+color: ${color}
+display: block`} });
         }
         { svelteHTML.createElement("div", {
             "multilineattr": `hello

@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "Reviewer item #7: substring `createEventDispatcher` in a COMMENT must not disqualify the `__sveltets_2_fn_component` default-export shape. Pre-fix our scan matched comment text; AST-based check fires only on real call expressions. Clean — zero errors expected."
+}

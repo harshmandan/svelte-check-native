@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "Reviewer item #7: a real `createEventDispatcher()` call DOES disqualify the fn_component shape. Component should still type-check cleanly — the iso-component shape is more verbose but correct. Verifies the AST check fires on real calls (the inverse of #85/#86)."
+}

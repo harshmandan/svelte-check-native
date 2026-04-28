@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "Reviewer item #7: importing `createEventDispatcher` (without calling it) must not disqualify the fn_component shape — the import alone produces no events. AST-based check only counts real CallExpressions. Clean — zero errors expected."
+}

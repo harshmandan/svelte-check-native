@@ -579,6 +579,79 @@ pub fn find_dispatcher_event_type_source(
     None
 }
 
+/// AST-based check: does `program` contain at least one call to
+/// `createEventDispatcher(...)` (typed or untyped, top-level or
+/// nested in an initializer / function body)? Used by the default-
+/// export shape decision to choose between the
+/// `__sveltets_2_fn_component`-equivalent `Component<P, X, B>`
+/// shape (no events) and the iso-component interface (events
+/// present).
+///
+/// Substring detection on raw source text false-positives on
+/// comments (`// uses createEventDispatcher`), string literals, and
+/// unused imports — none of which actually emit events. The AST
+/// walk only fires on real call expressions.
+///
+/// Aliased imports (`import { createEventDispatcher as d }`) aren't
+/// resolved here — falling through to the iso shape is safe (one
+/// extra indirection, no correctness loss). Future #3b slice will
+/// thread the import alias map through.
+pub fn has_event_dispatcher_call(program: &oxc_ast::ast::Program<'_>) -> bool {
+    program.body.iter().any(statement_has_dispatcher_call)
+}
+
+fn statement_has_dispatcher_call(stmt: &Statement<'_>) -> bool {
+    match stmt {
+        Statement::VariableDeclaration(decl) => decl
+            .declarations
+            .iter()
+            .filter_map(|d| d.init.as_ref())
+            .any(expression_has_dispatcher_call),
+        Statement::ExpressionStatement(es) => expression_has_dispatcher_call(&es.expression),
+        Statement::FunctionDeclaration(fd) => fd
+            .body
+            .as_ref()
+            .is_some_and(|body| body.statements.iter().any(statement_has_dispatcher_call)),
+        Statement::IfStatement(s) => {
+            statement_has_dispatcher_call(&s.consequent)
+                || s.alternate
+                    .as_ref()
+                    .is_some_and(statement_has_dispatcher_call)
+        }
+        Statement::BlockStatement(b) => b.body.iter().any(statement_has_dispatcher_call),
+        _ => false,
+    }
+}
+
+fn expression_has_dispatcher_call(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::CallExpression(call) => {
+            if let Expression::Identifier(id) = &call.callee
+                && id.name == "createEventDispatcher"
+            {
+                return true;
+            }
+            if expression_has_dispatcher_call(&call.callee) {
+                return true;
+            }
+            call.arguments.iter().any(|a| {
+                a.as_expression()
+                    .is_some_and(expression_has_dispatcher_call)
+            })
+        }
+        Expression::ArrowFunctionExpression(arrow) => arrow
+            .body
+            .statements
+            .iter()
+            .any(statement_has_dispatcher_call),
+        Expression::FunctionExpression(fe) => fe
+            .body
+            .as_ref()
+            .is_some_and(|body| body.statements.iter().any(statement_has_dispatcher_call)),
+        _ => false,
+    }
+}
+
 /// If `expr` is a `createEventDispatcher<T>(...)` call with an explicit
 /// type argument, return `T`'s source text. Otherwise `None`.
 fn dispatcher_type_arg_slice(expr: &Expression<'_>, source: &str) -> Option<String> {

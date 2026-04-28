@@ -291,6 +291,24 @@ fn emit_document_with_render_name(
         .instance_script
         .as_ref()
         .map(|s| parse_script_body(&alloc_instance, s.content, s.lang));
+    let alloc_module = Allocator::default();
+    let parsed_module = doc
+        .module_script
+        .as_ref()
+        .map(|s| parse_script_body(&alloc_module, s.content, s.lang));
+    // AST-based event-dispatcher presence check — feeds the
+    // default-export shape selection in `should_emit_fn_component_shape`.
+    // Computing it here (where the parsed ASTs already exist) keeps
+    // the decision off raw source-text scanning, which would
+    // false-fire on comments / unused imports / string literals
+    // containing the name. Mirrors upstream's `events.hasEvents()`
+    // gate. See `has_event_dispatcher_call` in svn-analyze.
+    let has_dispatcher_call = parsed_instance
+        .as_ref()
+        .is_some_and(|p| svn_analyze::has_event_dispatcher_call(&p.program))
+        || parsed_module
+            .as_ref()
+            .is_some_and(|p| svn_analyze::has_event_dispatcher_call(&p.program));
 
     // Single analyze-time resolution of every Props decision emit
     // makes downstream — type text, type root name, destructure
@@ -798,6 +816,7 @@ fn emit_document_with_render_name(
             generics.as_deref(),
             prop_type_effective.as_deref(),
             &template_type_refs,
+            has_dispatcher_call,
         );
     } else {
         emit_default_export_declarations_js(&mut buf, &render_name);

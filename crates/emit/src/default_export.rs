@@ -94,6 +94,7 @@ pub(crate) fn emit_default_export_declarations_ts(
     generics: Option<&str>,
     prop_type_source: Option<&str>,
     template_type_refs: &[SmolStr],
+    has_dispatcher_call: bool,
 ) {
     // Upstream's `addComponentExport.ts:343` selects between three
     // default-export shapes. For the **non-generic, runes, no-slots,
@@ -125,7 +126,7 @@ pub(crate) fn emit_default_export_declarations_ts(
         buf.push_str("];\n");
         buf.push_str("void (0 as any as __svn_tpl_type_refs);\n");
     }
-    if should_emit_fn_component_shape(doc, fragment, split, generics) {
+    if should_emit_fn_component_shape(doc, fragment, split, generics, has_dispatcher_call) {
         emit_fn_component_default_export(buf, render_name);
         return;
     }
@@ -363,6 +364,7 @@ fn should_emit_fn_component_shape(
     fragment: &Fragment,
     split: Option<&process_instance_script_content::SplitScript>,
     generics: Option<&str>,
+    has_dispatcher_call: bool,
 ) -> bool {
     if generics.is_some() {
         return false;
@@ -376,15 +378,12 @@ fn should_emit_fn_component_shape(
     if has_strict_events(doc) || has_strict_events_attr(doc) {
         return false;
     }
-    let instance_src = doc
-        .instance_script
-        .as_ref()
-        .map(|s| s.content)
-        .unwrap_or("");
-    let module_src = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
-    if instance_src.contains("createEventDispatcher")
-        || module_src.contains("createEventDispatcher")
-    {
+    // AST-based dispatcher presence check, computed by the caller in
+    // lib.rs where the parsed instance/module ASTs already exist.
+    // Substring detection (the previous gate) false-fired on
+    // comments / unused imports / string literals containing the
+    // name. Mirrors upstream's `events.hasEvents()`.
+    if has_dispatcher_call {
         return false;
     }
     if doc.source.contains("$$slots")
@@ -393,6 +392,12 @@ fn should_emit_fn_component_shape(
     {
         return false;
     }
+    let instance_src = doc
+        .instance_script
+        .as_ref()
+        .map(|s| s.content)
+        .unwrap_or("");
+    let module_src = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
     if contains_export_let(instance_src) || contains_export_let(module_src) {
         return false;
     }

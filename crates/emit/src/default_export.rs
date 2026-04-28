@@ -95,6 +95,7 @@ pub(crate) fn emit_default_export_declarations_ts(
     prop_type_source: Option<&str>,
     template_type_refs: &[SmolStr],
     has_dispatcher_call: bool,
+    has_synth_events_alias: bool,
 ) {
     // Upstream's `addComponentExport.ts:343` selects between three
     // default-export shapes. For the **non-generic, runes, no-slots,
@@ -127,7 +128,7 @@ pub(crate) fn emit_default_export_declarations_ts(
         buf.push_str("void (0 as any as __svn_tpl_type_refs);\n");
     }
     if should_emit_fn_component_shape(doc, fragment, split, generics, has_dispatcher_call) {
-        emit_fn_component_default_export(buf, render_name);
+        emit_fn_component_default_export(buf, render_name, has_synth_events_alias);
         return;
     }
     let use_class_wrapper = generics.is_some() && prop_type_source.is_some();
@@ -210,7 +211,14 @@ pub(crate) fn emit_default_export_declarations_ts(
     //       — same indirection used for props / exports.
     let typed_events_intersection: String = if has_strict_events(doc) {
         " & { readonly __svn_events: $$Events }".to_string()
-    } else if has_dispatcher_call {
+    } else if has_dispatcher_call || has_synth_events_alias {
+        // `has_synth_events_alias` covers the bubbled-DOM-only path
+        // (reviewer item #3c part 2): a Child with `<button on:click>`
+        // and no dispatcher synthesises `$$Events = { "click":
+        // HTMLElementEventMap["click"] }` for which the consumer must
+        // see the marker so `__svn_ensure_component`'s typed branch
+        // fires. `has_dispatcher_call` keeps the marker firing on
+        // dispatcher-only / dispatcher+bubbled mixed cases.
         format!(
             " & {{ readonly __svn_events: Awaited<ReturnType<typeof {render_name}>>['events'] }}"
         )
@@ -433,7 +441,22 @@ fn should_emit_fn_component_shape(
 /// per-binding-name tracking. Loses no information today: our render
 /// fn types `bindings` as `string` regardless of declared binds, so
 /// projecting through wouldn't add detail.
-fn emit_fn_component_default_export(buf: &mut EmitBuffer, render_name: &SmolStr) {
+///
+/// When `has_synth_events_alias` is true, intersect the typed-events
+/// marker (`& { readonly __svn_events: … }`) onto the value so
+/// `__svn_ensure_component`'s typed-events branch fires at consumer
+/// sites. Used today for the bubbled-DOM-event narrow-path
+/// (reviewer item #3c part 2): `<button on:click>` in the Child
+/// emits a synth alias even without a dispatcher, and the consumer's
+/// `<Child on:click={cb})` expects narrowed `MouseEvent` typing.
+/// Without the marker the consumer falls through `__svn_ensure_component`'s
+/// untyped Component branch, where `$on` is the lax `(event: string,
+/// handler: (...args: any[]) => any)` overload.
+fn emit_fn_component_default_export(
+    buf: &mut EmitBuffer,
+    render_name: &SmolStr,
+    has_synth_events_alias: bool,
+) {
     let _ = writeln!(
         buf,
         "const __svn_component_default: import('svelte').Component<"
@@ -447,7 +470,14 @@ fn emit_fn_component_default_export(buf: &mut EmitBuffer, render_name: &SmolStr)
         "    Awaited<ReturnType<typeof {render_name}>>['exports'],"
     );
     let _ = writeln!(buf, "    ''");
-    let _ = writeln!(buf, "> = null as any;");
+    if has_synth_events_alias {
+        let _ = writeln!(
+            buf,
+            "> & {{ readonly __svn_events: Awaited<ReturnType<typeof {render_name}>>['events'] }} = null as any;"
+        );
+    } else {
+        let _ = writeln!(buf, "> = null as any;");
+    }
     let _ = writeln!(
         buf,
         "type __svn_component_default = ReturnType<typeof __svn_component_default>;"

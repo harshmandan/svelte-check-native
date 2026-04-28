@@ -108,7 +108,7 @@ pub(crate) fn emit_render_body_return(
     doc: &svn_parser::Document<'_>,
     generics: Option<&str>,
     prop_type_source: Option<&str>,
-    synthesized_events_type: Option<&str>,
+    synth_events_alias_body: Option<&str>,
     exports_object: Option<&str>,
     props_info: &svn_analyze::PropsInfo,
     slot_defs: &[svn_analyze::SlotDef],
@@ -200,12 +200,15 @@ pub(crate) fn emit_render_body_return(
     // Users who want `CustomEvent<…>` wrapping write it explicitly in
     // their `interface $$Events`. The synthesized typed-dispatcher
     // case (`createEventDispatcher<T>()`) is wrapped ONCE at
-    // synthesis time (see `synthesized_events_type` in
-    // emit/lib.rs's render emission) so the same contract holds
-    // regardless of source. `__svn_ensure_component`'s marker
-    // branch then uses E directly (no extra wrap), keeping every
-    // consumer path consistent at one wrap level.
-    let events_field: String = if has_strict_events(doc) || synthesized_events_type.is_some() {
+    // synthesis time, then intersected with any bare-DOM-event
+    // bubble projection (`<button on:click>` → `{ "click":
+    // HTMLElementEventMap["click"] }`) — see emit/lib.rs's
+    // render emission. `synth_events_alias_body` is non-None when
+    // EITHER half fired, so the gate covers the full synthesised
+    // surface. `__svn_ensure_component`'s marker branch then uses E
+    // directly (no extra wrap), keeping every consumer path
+    // consistent at one wrap level.
+    let events_field: String = if has_strict_events(doc) || synth_events_alias_body.is_some() {
         "$$Events".to_string()
     } else {
         // Lax shape: when no `$$Events` interface is declared, every

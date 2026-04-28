@@ -122,6 +122,31 @@ pub struct TemplateSummary {
     /// targets the Sankey-style case where slot attrs reference
     /// module-scope locals only.
     pub slot_defs: Vec<SlotDef>,
+    /// Bare `on:NAME` directives (no `={…}` value) seen on real DOM
+    /// elements (`Element` kind only). At runtime these forward the
+    /// native DOM event up to a parent listener; at type-check time
+    /// the consumer's `<Child on:NAME={cb}>` should see the DOM
+    /// event type (`MouseEvent`, `KeyboardEvent`, …) rather than
+    /// `CustomEvent<any>`.
+    ///
+    /// Emit consumes this list to project a raw DOM-event map
+    /// (`{ "click": HTMLElementEventMap["click"], … }`) and
+    /// intersects it with the wrapped dispatcher-detail map to form
+    /// the FINAL `$$Events` alias. Mirrors upstream svelte2tsx's
+    /// `__sveltets_2_mapElementEvent('click')` projection in
+    /// `EventHandler.bubbledEvents`.
+    ///
+    /// Bare `on:NAME` on a `<Component>` does NOT land here — that
+    /// path goes through `has_bubbled_component_event` (different
+    /// upstream emit, different consumer effect). Bare `on:NAME` on
+    /// `<svelte:body>` / `<svelte:window>` / `<svelte:document>`
+    /// also stays out for now (different event maps;
+    /// `HTMLBodyElementEventMap` / `WindowEventMap`).
+    ///
+    /// Names appear in walk order with no dedup — the caller
+    /// dedupes when projecting (a duplicate key in a TS object type
+    /// is fine but noisy).
+    pub bubbled_dom_events: SmallVec<SmolStr, 2>,
 }
 
 /// Expression-text source for one slot attr.
@@ -530,6 +555,7 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
         );
         collect_bind_this_checks(&e.attributes, &mut self.summary);
         collect_bind_value_bindings(&e.attributes, e.name.as_str(), &mut self.summary);
+        collect_bubbled_dom_events(&e.attributes, &mut self.summary);
         // `<slot [name="X"] [attr=…]>`: capture for emit's `slots:`
         // literal. Walks the attrs and skips any whose expression
         // references a name in the active shadow stack.
@@ -753,10 +779,7 @@ fn collect_slot_def(
                     && v.parts.len() == 1
                     && let AttrValuePart::Text { content, .. } = &v.parts[0]
                 {
-                    entries.push((
-                        p.name.clone(),
-                        SlotAttrExpr::Literal(content.to_string()),
-                    ));
+                    entries.push((p.name.clone(), SlotAttrExpr::Literal(content.to_string())));
                 }
             }
             A::Expression(e) => {
@@ -954,6 +977,40 @@ fn collect_bind_this_checks(attrs: &[Attribute], summary: &mut TemplateSummary) 
         summary.bind_this_checks.push(BindThisCheck {
             expression_range: *expression_range,
         });
+    }
+}
+
+/// SVELTE-4-COMPAT: collect bare `on:NAME` directives on a real DOM
+/// element (`Element` kind only). The bare form (no `={handler}`
+/// value) is event-bubble shorthand — Svelte forwards the native DOM
+/// event up to whichever ancestor listener fires for the same name.
+///
+/// Emit projects each name into `HTMLElementEventMap[NAME]` so that
+/// consumers' `<Child on:click={cb}>` see the DOM event type
+/// (`MouseEvent`, `KeyboardEvent`, …) rather than the lax
+/// `CustomEvent<any>` fallback. Mirrors upstream svelte2tsx's
+/// `__sveltets_2_mapElementEvent('NAME')` runtime-value projection
+/// (see `EventHandler.bubbledEvents` in
+/// `language-tools/packages/svelte2tsx/src/svelte2tsx/nodes/event-handler.ts`).
+///
+/// Out of scope here: `<svelte:body>` / `<svelte:window>` /
+/// `<svelte:document>` use their own event maps
+/// (`HTMLBodyElementEventMap`, `WindowEventMap`,
+/// `DocumentEventMap`); those callsites need a different projection
+/// and are deferred. Component-bubbled events (`<Child on:foo>` no
+/// value) are handled via `TemplateSummary.has_bubbled_component_event`.
+fn collect_bubbled_dom_events(attrs: &[Attribute], summary: &mut TemplateSummary) {
+    for attr in attrs {
+        let Attribute::Directive(d) = attr else {
+            continue;
+        };
+        if d.kind != DirectiveKind::On {
+            continue;
+        }
+        if d.value.is_some() {
+            continue;
+        }
+        summary.bubbled_dom_events.push(d.name.clone());
     }
 }
 

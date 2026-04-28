@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Parent.svelte",
+            "line": 22,
+            "column": 17,
+            "code": 2345
+        }
+    ],
+    "_note": "Reviewer item #3c part 2: bare `<button on:click>` directives on a DOM element forward the native DOM event up to a parent listener. Walker collects bare `on:NAME` directives on Element-kind nodes; emit projects them into `{ \"click\": HTMLElementEventMap[\"click\"] }` and intersects with the wrapped dispatcher detail map (empty here — no dispatcher) to form the FINAL `$$Events` alias. The default-export's `__svn_events: $$Events` marker now also fires on bubbled-only synth so `__svn_ensure_component`'s typed branch resolves narrowed event handler typings. Pre-fix the consumer's `(e: number) => void` was silently passing because no narrowing flowed through; post-fix it fails the `(e: HTMLElementEventMap['click']) => any` constraint and fires TS2345 at the directive's value position."
+}

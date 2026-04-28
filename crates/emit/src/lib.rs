@@ -82,17 +82,16 @@ use default_export::{emit_default_export_declarations_js, emit_default_export_de
 use props_emit::{
     build_exports_object, inject_component_props_annotation, synthesise_js_props_typedef_body,
 };
-use svn_analyze::should_synthesise_js_props;
 use svelte4::compat::{
     emit_svelte4_ambients, has_strict_events, has_strict_events_attr, is_runes_mode,
 };
+use svn_analyze::should_synthesise_js_props;
 
 pub use util::compute_line_starts;
 use util::{extract_generics_attr, render_function_name};
 
 use std::fmt::Write;
 use std::path::Path;
-
 
 use oxc_allocator::Allocator;
 use smol_str::SmolStr;
@@ -460,6 +459,43 @@ fn emit_document_with_render_name(
             Some(format!("{{ {body} }}"))
         })
     };
+    // Reviewer item #3c part 2: bare `<button on:click>` directives on
+    // a DOM element forward the native DOM event to a parent listener.
+    // At type-check time, the consumer's `<Child on:click={cb}>` should
+    // see the DOM event shape (`MouseEvent`) rather than the lax
+    // `CustomEvent<any>` fallback. Project each captured name into
+    // `HTMLElementEventMap[NAME]` and intersect into the final
+    // `$$Events` alias below.
+    //
+    // Gated on the same `narrow_events && !has_strict_events(doc)`
+    // window as the dispatcher synth: when the user already declared
+    // `interface $$Events`, their declaration is authoritative and we
+    // don't synthesise. When neither runes / strictEvents / interface
+    // is in play, we stay lax (matches upstream's behavior for
+    // unopted-in components).
+    //
+    // Dedup names — `<button on:click><img on:click />` would
+    // otherwise emit two `"click"` keys in the projection. Keys in a
+    // TS object type are unique; duplicates compile but produce noisy
+    // diagnostics. Walk-order preserved for stable emit (snapshots).
+    let bubbled_dom_event_map: Option<String> =
+        if !narrow_events || has_strict_events(doc) || summary.bubbled_dom_events.is_empty() {
+            None
+        } else {
+            let mut seen: Vec<&str> = Vec::with_capacity(summary.bubbled_dom_events.len());
+            let mut body = String::new();
+            for name in &summary.bubbled_dom_events {
+                if seen.iter().any(|s| *s == name.as_str()) {
+                    continue;
+                }
+                seen.push(name.as_str());
+                if !body.is_empty() {
+                    body.push_str(", ");
+                }
+                let _ = write!(body, "{n:?}: HTMLElementEventMap[{n:?}]", n = name.as_str());
+            }
+            Some(format!("{{ {body} }}"))
+        };
 
     // SVELTE-4-COMPAT: rewrite `$: ...` reactive statements before
     // the Svelte-5-shaped passes run, so downstream code sees the
@@ -680,11 +716,41 @@ fn emit_document_with_render_name(
     // — at module scope `A` would fire TS2304. The class-wrapper's
     // `events()` method projects this back out to consumers via
     // `Awaited<ReturnType<typeof $$render<…>>>['events']`.
-    if let Some(t) = synthesized_events_type.as_deref() {
-        let _ = writeln!(
-            buf,
-            "    type $$Events = {{ [__svn_K in keyof ({t})]: CustomEvent<({t})[__svn_K]> }};"
-        );
+    // Final `$$Events` body. Two synthesised halves intersect:
+    //   1. `synthesized_events_type` is the dispatcher DETAIL map (`T`
+    //      from `createEventDispatcher<T>()`, or `{ name: any, … }`
+    //      from an untyped dispatcher's `dispatch('name', …)` calls).
+    //      Wrapped once HERE into the FINAL `$on` event-object map:
+    //      `{ [K in keyof T]: CustomEvent<T[K]> }`.
+    //   2. `bubbled_dom_event_map` is already the FINAL form
+    //      (`{ "click": HTMLElementEventMap["click"], … }`) projected
+    //      from bare `<button on:click>` directives on DOM elements.
+    //      DOM events are NOT wrapped in `CustomEvent` — they're the
+    //      native event shape. Intersection gives a single map where
+    //      dispatcher keys carry `CustomEvent<…>` and bubbled-DOM
+    //      keys carry the DOM event type.
+    // Pathological case: same name in BOTH halves (user dispatched
+    // 'click' AND has `<button on:click>`) → intersection produces
+    // `CustomEvent<any> & MouseEvent` — neither shape is a usual
+    // user-handler-arg type and TS will reject most consumer
+    // handlers. That's fine (and arguably correct) — the user
+    // conflated two different event sources, surfacing the conflict
+    // is the right outcome.
+    let events_alias_body: Option<String> = match (
+        synthesized_events_type.as_deref(),
+        bubbled_dom_event_map.as_deref(),
+    ) {
+        (Some(t), Some(b)) => Some(format!(
+            "({{ [__svn_K in keyof ({t})]: CustomEvent<({t})[__svn_K]> }}) & ({b})"
+        )),
+        (Some(t), None) => Some(format!(
+            "{{ [__svn_K in keyof ({t})]: CustomEvent<({t})[__svn_K]> }}"
+        )),
+        (None, Some(b)) => Some(b.to_string()),
+        (None, None) => None,
+    };
+    if let Some(body) = events_alias_body.as_deref() {
+        let _ = writeln!(buf, "    type $$Events = {body};");
     }
     let ScriptAndTemplateAnalysis {
         prop_names,
@@ -812,7 +878,7 @@ fn emit_document_with_render_name(
         doc,
         generics.as_deref(),
         prop_type_source.as_deref(),
-        synthesized_events_type.as_deref(),
+        events_alias_body.as_deref(),
         exports_object.as_deref(),
         &props_info,
         &summary.slot_defs,
@@ -855,6 +921,7 @@ fn emit_document_with_render_name(
             prop_type_effective.as_deref(),
             &template_type_refs,
             has_dispatcher_call,
+            events_alias_body.is_some(),
         );
     } else {
         emit_default_export_declarations_js(&mut buf, &render_name);
@@ -977,50 +1044,32 @@ pub(crate) fn emit_template_node(
     match node {
         Node::EachBlock(b) => emit_each_block(buf, source, b, depth, insts, action_counter),
         Node::IfBlock(b) => {
-            crate::nodes::if_else_block::emit_if_block(
-                buf,
-                source,
-                b,
-                depth,
-                insts,
-                action_counter,
-            )
+            crate::nodes::if_else_block::emit_if_block(buf, source, b, depth, insts, action_counter)
         }
-        Node::AwaitBlock(b) => {
-            crate::nodes::await_pending_catch_block::emit_await_block(
-                buf,
-                source,
-                b,
-                depth,
-                insts,
-                action_counter,
-            )
-        }
+        Node::AwaitBlock(b) => crate::nodes::await_pending_catch_block::emit_await_block(
+            buf,
+            source,
+            b,
+            depth,
+            insts,
+            action_counter,
+        ),
         Node::KeyBlock(b) => {
             crate::nodes::key::emit_key_block(buf, source, b, depth, insts, action_counter)
         }
         Node::SnippetBlock(b) => emit_snippet_block(buf, source, b, depth, insts, action_counter),
         Node::Element(e) => {
-            crate::nodes::element::emit_element_node(
-                buf,
-                source,
-                e,
-                depth,
-                insts,
-                action_counter,
-            )
+            crate::nodes::element::emit_element_node(buf, source, e, depth, insts, action_counter)
         }
         Node::Component(c) => emit_component_node(buf, source, c, depth, insts, action_counter),
-        Node::SvelteElement(s) => {
-            crate::nodes::element::emit_svelte_element_node(
-                buf,
-                source,
-                s,
-                depth,
-                insts,
-                action_counter,
-            )
-        }
+        Node::SvelteElement(s) => crate::nodes::element::emit_svelte_element_node(
+            buf,
+            source,
+            s,
+            depth,
+            insts,
+            action_counter,
+        ),
         Node::Interpolation(i) => emit_interpolation(buf, source, i, depth),
         Node::Text(_) | Node::Comment(_) => {}
     }

@@ -7,6 +7,7 @@
         a: string;
     }
 async function $$render_f97f6f3e() {
+    type $$Events = {};
 
                  
                      
@@ -19,7 +20,7 @@ async function $$render_f97f6f3e() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    return { props: undefined as any as (Props), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_f97f6f3e;
 const __svn_component_default: import('svelte').Component<

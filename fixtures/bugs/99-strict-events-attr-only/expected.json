@@ -1,0 +1,10 @@
+{
+    "emit_contains": [
+        "type $$Events = {};",
+        "events: undefined as any as $$Events"
+    ],
+    "emit_not_contains": [
+        "events: undefined as any as { [evt: string]: CustomEvent<any> }"
+    ],
+    "_note": "Reviewer follow-up #2: `<script strictEvents>` is the second of the three event-narrowing triggers. Pre-fix the trigger only controlled `narrow_events` (which gates dispatcher detail-map synthesis), but `events_field` in the render-fn return only resolved to `$$Events` when an interface was declared OR a synth alias was emitted. Result: a Child with strictEvents but no dispatcher, no bubbled DOM events, no interface fell back to `{ [evt: string]: CustomEvent<any> }` and consumers' `on:NAME` typed as `(...args: any[]) => any`. Post-fix the events_alias_body computation emits `type $$Events = {};` whenever narrow_events is true and no other half of the synth fired. Mirrors upstream `_events(strictEvents, …)` in `addComponentExport.ts:416-418`. Asserted via emit-mode (`--emit-ts`): the `on:NAME` token-map for unknown event names that would surface a diagnostic at the directive position is a separate concern under reviewer #1. This fix produces the correct emit shape; consumer-side diagnostic visibility lands when the on-event name token-map entry is added."
+}

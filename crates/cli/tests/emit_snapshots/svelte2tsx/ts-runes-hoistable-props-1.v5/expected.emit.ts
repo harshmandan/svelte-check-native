@@ -15,6 +15,7 @@ declare const b: { [key: string]: any } & ((...args: any[]) => any);
         b: T;
     }
 async function $$render_0d174cf5() {
+    type $$Events = {};
 
                        
                        
@@ -35,7 +36,7 @@ async function $$render_0d174cf5() {
     });
     void a;
     void b;
-    return { props: undefined as any as (Props<boolean>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Props<boolean>), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_0d174cf5;
 const __svn_component_default: import('svelte').Component<

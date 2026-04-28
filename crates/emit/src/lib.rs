@@ -747,6 +747,22 @@ fn emit_document_with_render_name(
             "{{ [__svn_K in keyof ({t})]: CustomEvent<({t})[__svn_K]> }}"
         )),
         (None, Some(b)) => Some(b.to_string()),
+        // Reviewer follow-up #2: when a strict trigger is in play
+        // (`<script strictEvents>` attr or runes mode) but neither
+        // synth half fired, fall through with the empty surface
+        // `type $$Events = {}`. Mirrors upstream
+        // `_events(strictEvents=true, …)` in
+        // `addComponentExport.ts:416-418`: drops the
+        // `with_any_event` wrapper unconditionally on strict mode
+        // — even with no declared events — so consumers' `on:NAME`
+        // for any unknown name fails the empty `keyof $$Events`
+        // constraint. Pre-fix this case fell back to lax `{ [evt:
+        // string]: CustomEvent<any> }`, masking unknown-event typos.
+        //
+        // `has_strict_events(doc)` is the interface case: handled
+        // separately downstream — `$$Events` resolves to the user's
+        // declaration at module scope, no body-local synth needed.
+        (None, None) if narrow_events && !has_strict_events(doc) => Some("{}".to_string()),
         (None, None) => None,
     };
     if let Some(body) = events_alias_body.as_deref() {
@@ -910,6 +926,21 @@ fn emit_document_with_render_name(
     } else {
         prop_type_source.clone()
     };
+    // `has_synth_events_content` distinguishes "alias emitted with
+    // actual events" (dispatcher OR bubbled DOM events) from "alias
+    // emitted as the empty `{}` because narrow_events is on but
+    // nothing was synthesised". Drives the fn-component-shape
+    // marker decision below: empty `$$Events` on the
+    // `Component<P, X, ''>` value would intersect a phantom
+    // `__svn_events: {}` field that breaks the Threlte instancing
+    // pattern (`Parameters<typeof Producer>` /
+    // `(typeof Producer)[]` — see fixtures/bugs/78-iso-component-extract).
+    // For that pattern to keep working under runes-mode components
+    // without events, the fn shape stays unmarked. Iso shape still
+    // gets the marker on any non-None alias because the typed
+    // branch of `__svn_ensure_component` keys on it.
+    let has_synth_events_content =
+        synthesized_events_type.is_some() || bubbled_dom_event_map.is_some();
     if is_ts {
         emit_default_export_declarations_ts(
             &mut buf,
@@ -922,6 +953,7 @@ fn emit_document_with_render_name(
             &template_type_refs,
             has_dispatcher_call,
             events_alias_body.is_some(),
+            has_synth_events_content,
         );
     } else {
         emit_default_export_declarations_js(&mut buf, &render_name);

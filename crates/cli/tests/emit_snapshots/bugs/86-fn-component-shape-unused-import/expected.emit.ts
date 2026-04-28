@@ -3,6 +3,7 @@
 import { createEventDispatcher } from 'svelte'
 async function $$render_f80460e6() {
     type $$ComponentProps = { value: number };
+    type $$Events = {};
 
 // `createEventDispatcher` imported but never CALLED — leaving the
 // default-export shape selection to honour the AST. Substring
@@ -19,7 +20,7 @@ let { value }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props()
         }
     });
     void value;
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_f80460e6;
 const __svn_component_default: import('svelte').Component<

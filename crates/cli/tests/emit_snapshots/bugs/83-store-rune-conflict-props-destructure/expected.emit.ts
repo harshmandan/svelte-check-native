@@ -6,6 +6,7 @@ declare const title: { [key: string]: any } & ((...args: any[]) => any);
     }
 async function $$render_3a475a7e() {
     type $$ComponentProps = { props: InnerProps; title: string };
+    type $$Events = {};
 
     // Threlte/theatre Declare.svelte pattern: the parent component
     // passes a prop literally named `props`, so `$props()` destructure
@@ -32,7 +33,7 @@ async function $$render_3a475a7e() {
     });
     void props;
     void title;
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_3a475a7e;
 const __svn_component_default: import('svelte').Component<

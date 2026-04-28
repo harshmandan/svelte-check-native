@@ -6,6 +6,7 @@ declare const prop: { [key: string]: any } & ((...args: any[]) => any);
 		prop: typeof destructured;
 	};
 async function $$render_94c42fc9() {
+    type $$Events = {};
 
 	let { destructured } = {};
 	              
@@ -16,7 +17,7 @@ async function $$render_94c42fc9() {
         // template type-check body (incremental)
     });
     void prop;
-    return { props: undefined as any as (Props), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_94c42fc9;
 const __svn_component_default: import('svelte').Component<

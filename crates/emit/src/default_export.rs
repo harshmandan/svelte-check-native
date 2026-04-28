@@ -96,6 +96,7 @@ pub(crate) fn emit_default_export_declarations_ts(
     template_type_refs: &[SmolStr],
     has_dispatcher_call: bool,
     has_synth_events_alias: bool,
+    has_synth_events_content: bool,
 ) {
     // Upstream's `addComponentExport.ts:343` selects between three
     // default-export shapes. For the **non-generic, runes, no-slots,
@@ -128,7 +129,16 @@ pub(crate) fn emit_default_export_declarations_ts(
         buf.push_str("void (0 as any as __svn_tpl_type_refs);\n");
     }
     if should_emit_fn_component_shape(doc, fragment, split, generics, has_dispatcher_call) {
-        emit_fn_component_default_export(buf, render_name, has_synth_events_alias);
+        // Fn-shape marker gates on CONTENT, not alias-existence: a
+        // runes-mode component with no dispatcher and no bubbled events
+        // emits `type $$Events = {}` (the empty surface that mirrors
+        // upstream's `_events(strictEvents=true, ...)` behavior under
+        // runes mode), but the marker `& { __svn_events: {} }` would
+        // intersect a phantom field onto the `Component<P, X, B>`
+        // value that breaks `Parameters<typeof Producer>` /
+        // `(typeof Producer)[]` consumers (Threlte instancing —
+        // bugs/78-iso-component-extract).
+        emit_fn_component_default_export(buf, render_name, has_synth_events_content);
         return;
     }
     let use_class_wrapper = generics.is_some() && prop_type_source.is_some();

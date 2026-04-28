@@ -6,6 +6,7 @@ async function $$render_22446700() {
         row: Snippet<[{ id: number; label: string }]>;
         header: Snippet<[columns: readonly string[]]>;
     };
+    type $$Events = {};
 
                                           
     let { row, header }: /*Ωignore_startΩ*/$$ComponentProps
@@ -19,7 +20,7 @@ async function $$render_22446700() {
     });
     void row;
     void header;
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_22446700;
 const __svn_component_default: import('svelte').Component<

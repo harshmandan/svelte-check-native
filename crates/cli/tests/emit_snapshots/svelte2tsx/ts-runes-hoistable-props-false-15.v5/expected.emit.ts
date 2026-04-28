@@ -7,6 +7,7 @@ interface A {
     Abc: typeof store
 }
 async function $$render_486a4e14() {
+    type $$Events = {};
 
                               
              
@@ -18,7 +19,7 @@ let {Abc}: A = $props()
         // template type-check body (incremental)
     });
     void Abc;
-    return { props: undefined as any as (A), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (A), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_486a4e14;
 const __svn_component_default: import('svelte').Component<

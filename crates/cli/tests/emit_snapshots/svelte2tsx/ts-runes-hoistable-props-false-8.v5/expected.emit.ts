@@ -4,6 +4,7 @@
         items: T[];
     }
 async function $$render_f45a6d7c<T extends { a: string }>() {
+    type $$Events = {};
 
                             
                    
@@ -17,7 +18,7 @@ async function $$render_f45a6d7c<T extends { a: string }>() {
         // template type-check body (incremental)
     });
     void prop;
-    return { props: undefined as any as (Props), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_f45a6d7c;
 declare class __svn_Render_f45a6d7c<T extends { a: string }> {
@@ -32,7 +33,7 @@ interface $$IsomorphicComponent {
     <T extends { a: string }>(internal: unknown, props: ReturnType<__svn_Render_f45a6d7c<T>['props']>): ReturnType<__svn_Render_f45a6d7c<T>['exports']> & { $set?: any; $on?: any };
     z_$$bindings?: ReturnType<__svn_Render_f45a6d7c<any>['bindings']>;
 }
-const __svn_component_default: $$IsomorphicComponent = null as any;
+const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: Awaited<ReturnType<typeof $$render_f45a6d7c>>['events'] } = null as any;
 type __svn_component_default<T extends { a: string }> = InstanceType<typeof __svn_component_default<T>>;
 export default __svn_component_default;
 

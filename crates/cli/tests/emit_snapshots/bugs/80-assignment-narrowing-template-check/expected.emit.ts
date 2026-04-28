@@ -13,6 +13,7 @@ declare const children: { [key: string]: any } & ((...args: any[]) => any);
         children?: import('svelte').Snippet<[{ project: IProject }]>;
     }
 async function $$render_5c0d1bcb() {
+    type $$Events = {};
 
     // Threlte/theatre Project.svelte pattern: prop is optional, then
     // reassigned in the script body to a non-undefined value, then
@@ -56,7 +57,7 @@ async function $$render_5c0d1bcb() {
     void name;
     void project;
     void children;
-    return { props: undefined as any as (Props), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_5c0d1bcb;
 const __svn_component_default: import('svelte').Component<

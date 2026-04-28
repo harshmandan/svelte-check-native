@@ -323,6 +323,17 @@ pub enum PropShape {
         setter_range: Range,
         attr_range: Range,
     },
+    /// Opaque value — emit `name: __svn_any()` so TS sees the prop
+    /// is present without trying to model its type. Used today for
+    /// multi-part interpolated quoted attrs like
+    /// `class="a {b} c"`: emitting a precise template literal is
+    /// the upstream port (deferred), but the de-risk is to keep
+    /// the prop in the satisfies object so missing-required-prop
+    /// doesn't fire AND the rest of the component's props /
+    /// events / bindings stay checkable. Pre-fix the whole
+    /// component instantiation was dropped on the first multi-part
+    /// attr it saw.
+    Opaque { name: SmolStr, attr_range: Range },
 }
 
 impl PropShape {
@@ -337,7 +348,8 @@ impl PropShape {
             | PropShape::Shorthand { attr_range, .. }
             | PropShape::BoolShorthand { attr_range, .. }
             | PropShape::Spread { attr_range, .. }
-            | PropShape::GetSetBinding { attr_range, .. } => *attr_range,
+            | PropShape::GetSetBinding { attr_range, .. }
+            | PropShape::Opaque { attr_range, .. } => *attr_range,
         }
     }
 }
@@ -1032,9 +1044,20 @@ fn collect_component_instantiation(
                         continue;
                     }
                 }
-                // Multi-part interpolated attribute value — disqualify the
-                // whole component for this pass.
-                return;
+                // Multi-part interpolated attribute value
+                // (`class="a {b} c"`) — emit as an opaque
+                // `__svn_any()` so the prop is still present in the
+                // satisfies object. Avoids the pre-fix behavior
+                // where seeing ANY multi-part attr dropped the
+                // whole component instantiation, losing checking
+                // for every OTHER prop / event / binding on the
+                // component. The precise template-literal emit is
+                // deferred to a follow-up.
+                props.push(PropShape::Opaque {
+                    name: p.name.clone(),
+                    attr_range: p.range,
+                });
+                continue;
             }
             Attribute::Expression(e) => {
                 props.push(PropShape::Expression {
@@ -1137,7 +1160,8 @@ fn collect_component_instantiation(
                         | PropShape::Literal { name, .. }
                         | PropShape::Expression { name, .. }
                         | PropShape::Shorthand { name, .. }
-                        | PropShape::GetSetBinding { name, .. } => name != &target,
+                        | PropShape::GetSetBinding { name, .. }
+                        | PropShape::Opaque { name, .. } => name != &target,
                         PropShape::Spread { .. } => true, // spreads pass through
                     });
                     props.push(PropShape::Expression {
@@ -1173,7 +1197,8 @@ fn collect_component_instantiation(
                         | PropShape::Literal { name, .. }
                         | PropShape::Expression { name, .. }
                         | PropShape::Shorthand { name, .. }
-                        | PropShape::GetSetBinding { name, .. } => name != &target,
+                        | PropShape::GetSetBinding { name, .. }
+                        | PropShape::Opaque { name, .. } => name != &target,
                         PropShape::Spread { .. } => true,
                     });
                     // Bare `bind:NAME` is `bind:NAME={NAME}` — same
@@ -1214,7 +1239,8 @@ fn collect_component_instantiation(
                         | PropShape::Literal { name, .. }
                         | PropShape::Expression { name, .. }
                         | PropShape::Shorthand { name, .. }
-                        | PropShape::GetSetBinding { name, .. } => name != &target,
+                        | PropShape::GetSetBinding { name, .. }
+                        | PropShape::Opaque { name, .. } => name != &target,
                         PropShape::Spread { .. } => true,
                     });
                     props.push(PropShape::GetSetBinding {

@@ -4,13 +4,21 @@ async function $$render_55fa86f5() {
     ;(async () => {
         // template type-check body (incremental)
         {
+            const __svn_C_0 = __svn_ensure_component(Parent);
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {"bare": true, shorthand, "text1": "val1", "text2": "val2", "text3": __svn_any(), "textEmpty": __svn_any(), "literal": (true), "strLiteral": ('foo'), "complex": ({a}), "a-dashed-complex": ({a}), ...__svn_css_prop({"--custom-cssprop": "foo"}), children: () => __svn_snippet_return()} });
             {
-                const __svn_C_ba = __svn_ensure_component(Component);
-                new __svn_C_ba({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
-                (foo);
-                (bar);
-            }
-            { svelteHTML.createElement("div", {});                 (foo);
+                const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo } = __svn_inst_0.$$slot_def.default; $$_$$;
+                {
+                    const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, bar } = __svn_inst_0.$$slot_def["named"]; $$_$$;
+                    {
+                        const __svn_C_ba = __svn_ensure_component(Component);
+                        new __svn_C_ba({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
+                        (foo);
+                        (bar);
+                    }
+                }
+                { svelteHTML.createElement("div", {});                     (foo);
+                }
             }
         }
     });

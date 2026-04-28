@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Parent.svelte",
+            "line": 20,
+            "column": 25,
+            "code": 2322
+        }
+    ],
+    "_note": "Reviewer item #5: pre-fix, a multi-part interpolated quoted attr (`class=\"a {cls} c\"`) disqualified the whole component instantiation in `collect_component_instantiation`, silently dropping all OTHER props from the satisfies object. The de-risk fix emits the interpolated prop's value as `__svn_any()` so the rest of the component (here `label={bogus}` — number → string) is still checked and fires TS2322 at the directive position. Precise template-literal port deferred."
+}

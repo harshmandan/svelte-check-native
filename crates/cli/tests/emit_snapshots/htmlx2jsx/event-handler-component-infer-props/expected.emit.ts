@@ -3,6 +3,11 @@
 async function $$render_9c8eab23() {
     ;(async () => {
         // template type-check body (incremental)
+        {
+            const __svn_C_0 = __svn_ensure_component(Component);
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {"bare": true, shorthand, "text1": "val1", "text2": "val2", "text3": __svn_any(), "textEmpty": __svn_any(), "literal": (true), "strLiteral": ('foo'), "complex": ({a}), "a-dashed-complex": ({a}), ...__svn_css_prop({"--custom-cssprop": "foo"})} });
+            __svn_inst_0.$on("click", (e => e));
+        }
     });
     return { props: /** @type {any} */({}) };
 }

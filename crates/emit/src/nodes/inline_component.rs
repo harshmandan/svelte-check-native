@@ -392,7 +392,8 @@ fn prop_shape_name(p: &svn_analyze::PropShape) -> Option<&str> {
         | svn_analyze::PropShape::Expression { name, .. }
         | svn_analyze::PropShape::Shorthand { name, .. }
         | svn_analyze::PropShape::BoolShorthand { name, .. }
-        | svn_analyze::PropShape::GetSetBinding { name, .. } => Some(name),
+        | svn_analyze::PropShape::GetSetBinding { name, .. }
+        | svn_analyze::PropShape::Opaque { name, .. } => Some(name),
         svn_analyze::PropShape::Spread { .. } => None,
     }
 }
@@ -522,6 +523,19 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             buf.push_str(", ");
             buf.append_with_source(setter, *setter_range);
             buf.push_str(")");
+        }
+        svn_analyze::PropShape::Opaque { name, .. } => {
+            // Multi-part interpolated quoted attr like
+            // `name="lit {expr} more"` — emit `name: __svn_any()`
+            // so the prop is present in the satisfies object
+            // without committing to a precise type. Keeps the
+            // remaining props / events / bindings on the component
+            // checkable. The precise template-literal port
+            // (matching upstream Attribute.ts:233) is deferred —
+            // re-attempting it surfaced unrelated v5_stores
+            // regressions that need investigation first.
+            write_quoted_prop_key_with_source(buf, name, attr_range);
+            buf.push_str(": __svn_any()");
         }
     }
 }

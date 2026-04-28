@@ -4,26 +4,37 @@ async function $$render_03b58764() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            { svelteHTML.createElement("p", {});                 {
-                    let subthing: any;
-                    void subthing;
-                    (thing);
-                    (subthing);
-                }
-            }
+            const __svn_C_0 = __svn_ensure_component(Component);
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {unshadowed1, "foo": (unshadowed2), subthing, shadowed1, "shadowed-2": (shadowed2), "templateString": __svn_any(), "complex": __svn_any(), children: () => __svn_snippet_return()} });
             {
-                const __svn_C_169 = __svn_ensure_component(Sub);
-                new __svn_C_169({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} });
-                (thing);
-                (subthing);
-            }
-            {
-                const __svn_C_205 = __svn_ensure_component(Sub);
-                const __svn_inst_205 = new __svn_C_205({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} });
+                const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, name: n, shadowed1, shadowed2, subthing } = __svn_inst_0.$$slot_def.default; $$_$$;
                 {
-                    const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, subthing, othersubthing } = __svn_inst_205.$$slot_def.default; $$_$$;
-                    (thing);
-                    (subthing);
+                    const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, subthing } = __svn_inst_0.$$slot_def["sub1"]; $$_$$;
+                    { svelteHTML.createElement("p", {});                         {
+                            let subthing: any;
+                            void subthing;
+                            (thing);
+                            (subthing);
+                        }
+                    }
+                }
+                {
+                    const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, subthing, othersubthing } = __svn_inst_0.$$slot_def["sub2"]; $$_$$;
+                    {
+                        const __svn_C_169 = __svn_ensure_component(Sub);
+                        new __svn_C_169({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} });
+                        (thing);
+                        (subthing);
+                    }
+                }
+                {
+                    const __svn_C_205 = __svn_ensure_component(Sub);
+                    const __svn_inst_205 = new __svn_C_205({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} });
+                    {
+                        const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, subthing, othersubthing } = __svn_inst_205.$$slot_def.default; $$_$$;
+                        (thing);
+                        (subthing);
+                    }
                 }
             }
         }

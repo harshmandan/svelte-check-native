@@ -3,6 +3,10 @@
 async function $$render_5f955745() {
     ;(async () => {
         // template type-check body (incremental)
+        {
+            const __svn_C_0 = __svn_ensure_component(Component);
+            new __svn_C_0({ target: __svn_any(), props: {"propA": true, propB, "propC": "val1", "propD": "val2", "propE": __svn_any()} });
+        }
     });
     return { props: /** @type {any} */({}) };
 }

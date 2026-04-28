@@ -180,19 +180,19 @@
                 {
                     "file": "src/input.svelte",
                     "line": 1,
-                    "column": 19,
-                    "code": 2307
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 2,
                     "column": 23,
                     "code": 2307
                 },
                 {
                     "file": "src/input.svelte",
+                    "line": 2,
+                    "column": 27,
+                    "code": 2307
+                },
+                {
+                    "file": "src/input.svelte",
                     "line": 3,
-                    "column": 33,
+                    "column": 37,
                     "code": 2307
                 }
             ]
@@ -222,6 +222,24 @@
                     "line": 0,
                     "column": 3,
                     "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 19,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 22,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 37,
+                    "code": 2304
                 }
             ]
         },
@@ -230,8 +248,8 @@
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
-                    "line": 3,
-                    "column": 18,
+                    "line": 2,
+                    "column": 19,
                     "code": 2304
                 }
             ]
@@ -241,26 +259,38 @@
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
-                    "line": 5,
-                    "column": 53,
+                    "line": 0,
+                    "column": 20,
                     "code": 2304
                 },
                 {
                     "file": "src/input.svelte",
-                    "line": 6,
-                    "column": 67,
+                    "line": 0,
+                    "column": 29,
                     "code": 2304
                 },
                 {
                     "file": "src/input.svelte",
-                    "line": 6,
-                    "column": 76,
+                    "line": 0,
+                    "column": 39,
                     "code": 2304
                 },
                 {
                     "file": "src/input.svelte",
-                    "line": 6,
-                    "column": 86,
+                    "line": 1,
+                    "column": 17,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 26,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 36,
                     "code": 2304
                 }
             ]

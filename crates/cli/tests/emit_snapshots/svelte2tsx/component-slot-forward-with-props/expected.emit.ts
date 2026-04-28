@@ -4,6 +4,11 @@ async function $$render_19f891e5() {
     ;(async () => {
         // template type-check body (incremental)
         {
+            const __svn_C_0 = __svn_ensure_component(Parent);
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {"propA": true, propB, "propC": "val1", "propD": "val2", "propE": __svn_any(), children: () => __svn_snippet_return()} });
+            {
+                const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo } = __svn_inst_0.$$slot_def.default; $$_$$;
+            }
         }
     });
     return { props: /** @type {any} */({}) };

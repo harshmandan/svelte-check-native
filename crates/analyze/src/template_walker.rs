@@ -555,6 +555,7 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
     }
 
     fn visit_svelte_element(&mut self, s: &svn_parser::SvelteElement) {
+        use svn_parser::SvelteElementKind;
         let ctx = WalkCtx {
             source: self.source,
         };
@@ -569,7 +570,27 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
             &ctx,
             None,
         );
-        collect_bind_this_checks(&s.attributes, &mut self.summary);
+        // `bind:this` types differently across the `<svelte:*>` family:
+        //
+        //   - `<svelte:element>`        → DOM HTMLElement target (current).
+        //   - `<svelte:component this>` → bound expr is a Component<…> ref.
+        //   - `<svelte:self bind:this>` → bound expr is an instance of THIS component.
+        //   - `<svelte:window/body/...>`→ no `bind:this` makes sense.
+        //   - `<svelte:boundary>`       → no `bind:this`.
+        //
+        // The DOM-element check (`__svn_bind_this_check<HTMLElement>`)
+        // wraps the bind expression with an HTMLElement-compatible
+        // target type. Emitting it for the component-instance kinds
+        // produces a wrong-shape diagnostic at the user's
+        // `bind:this={x}` site (component instance fails
+        // HTMLElement subtype check). Reviewer item #1a: gate the
+        // collection to ONLY the `Element` kind. `Component`,
+        // `SelfRef`, and `Boundary` `bind:this` get the proper
+        // component-instance check from the full instantiation port
+        // (#1b, deferred).
+        if matches!(s.kind, SvelteElementKind::Element) {
+            collect_bind_this_checks(&s.attributes, &mut self.summary);
+        }
     }
 
     fn visit_each_block(&mut self, _b: &svn_parser::EachBlock) {

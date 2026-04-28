@@ -666,11 +666,43 @@ pub fn find_dispatched_event_names(
     program: &oxc_ast::ast::Program<'_>,
     dispatcher_locals: &[String],
 ) -> Vec<String> {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
+    // First pass: collect `const NAME = 'literal'` top-level
+    // bindings. Resolves the (#3c) string-literal variable form so
+    // `const ev = 'click'; dispatch(ev)` contributes 'click' to
+    // the synthesised event set.
+    let mut literal_vars: HashMap<String, String> = HashMap::new();
+    for stmt in &program.body {
+        let Statement::VariableDeclaration(decl) = stmt else {
+            continue;
+        };
+        // Limit to `const` to be conservative — `let` vars can be
+        // reassigned and the static name would lie about the
+        // dispatched set.
+        if !matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Const) {
+            continue;
+        }
+        for d in &decl.declarations {
+            let BindingPattern::BindingIdentifier(bid) = &d.id else {
+                continue;
+            };
+            let Some(init) = &d.init else { continue };
+            let Expression::StringLiteral(s) = init else {
+                continue;
+            };
+            literal_vars.insert(bid.name.to_string(), s.value.to_string());
+        }
+    }
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
     for stmt in &program.body {
-        scan_statement_for_dispatched_names(stmt, dispatcher_locals, &mut seen, &mut out);
+        scan_statement_for_dispatched_names(
+            stmt,
+            dispatcher_locals,
+            &literal_vars,
+            &mut seen,
+            &mut out,
+        );
     }
     out
 }
@@ -678,6 +710,7 @@ pub fn find_dispatched_event_names(
 fn scan_statement_for_dispatched_names(
     stmt: &Statement<'_>,
     dispatcher_locals: &[String],
+    literal_vars: &std::collections::HashMap<String, String>,
     seen: &mut std::collections::HashSet<String>,
     out: &mut Vec<String>,
 ) {
@@ -685,35 +718,83 @@ fn scan_statement_for_dispatched_names(
         Statement::VariableDeclaration(decl) => {
             for d in &decl.declarations {
                 if let Some(init) = &d.init {
-                    scan_expression_for_dispatched_names(init, dispatcher_locals, seen, out);
+                    scan_expression_for_dispatched_names(
+                        init,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
                 }
             }
         }
         Statement::ExpressionStatement(es) => {
-            scan_expression_for_dispatched_names(&es.expression, dispatcher_locals, seen, out);
+            scan_expression_for_dispatched_names(
+                &es.expression,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
         }
         Statement::FunctionDeclaration(fd) => {
             if let Some(body) = &fd.body {
                 for s in &body.statements {
-                    scan_statement_for_dispatched_names(s, dispatcher_locals, seen, out);
+                    scan_statement_for_dispatched_names(
+                        s,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
                 }
             }
         }
         Statement::ReturnStatement(rs) => {
             if let Some(arg) = &rs.argument {
-                scan_expression_for_dispatched_names(arg, dispatcher_locals, seen, out);
+                scan_expression_for_dispatched_names(
+                    arg,
+                    dispatcher_locals,
+                    literal_vars,
+                    seen,
+                    out,
+                );
             }
         }
         Statement::IfStatement(s) => {
-            scan_expression_for_dispatched_names(&s.test, dispatcher_locals, seen, out);
-            scan_statement_for_dispatched_names(&s.consequent, dispatcher_locals, seen, out);
+            scan_expression_for_dispatched_names(
+                &s.test,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
+            scan_statement_for_dispatched_names(
+                &s.consequent,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
             if let Some(alt) = &s.alternate {
-                scan_statement_for_dispatched_names(alt, dispatcher_locals, seen, out);
+                scan_statement_for_dispatched_names(
+                    alt,
+                    dispatcher_locals,
+                    literal_vars,
+                    seen,
+                    out,
+                );
             }
         }
         Statement::BlockStatement(b) => {
             for s in &b.body {
-                scan_statement_for_dispatched_names(s, dispatcher_locals, seen, out);
+                scan_statement_for_dispatched_names(
+                    s,
+                    dispatcher_locals,
+                    literal_vars,
+                    seen,
+                    out,
+                );
             }
         }
         _ => {}
@@ -723,42 +804,77 @@ fn scan_statement_for_dispatched_names(
 fn scan_expression_for_dispatched_names(
     expr: &Expression<'_>,
     dispatcher_locals: &[String],
+    literal_vars: &std::collections::HashMap<String, String>,
     seen: &mut std::collections::HashSet<String>,
     out: &mut Vec<String>,
 ) {
     match expr {
         Expression::CallExpression(call) => {
-            // Match `<local>(<string-literal>, ...)` where <local>
-            // is a known dispatcher binding.
+            // Match `<local>(<arg>, ...)` where <local> is a known
+            // dispatcher binding. The <arg> is the event name —
+            // either a direct string literal, or an identifier
+            // whose binding resolved to a string literal at module
+            // top level (#3c slice).
             if let Expression::Identifier(id) = &call.callee
                 && dispatcher_locals.iter().any(|n| n.as_str() == id.name.as_str())
                 && let Some(first) = call.arguments.first()
                 && let Some(first_expr) = first.as_expression()
-                && let Expression::StringLiteral(s) = first_expr
             {
-                let name = s.value.to_string();
-                if seen.insert(name.clone()) {
+                let resolved = match first_expr {
+                    Expression::StringLiteral(s) => Some(s.value.to_string()),
+                    Expression::Identifier(id) => {
+                        literal_vars.get(id.name.as_str()).cloned()
+                    }
+                    _ => None,
+                };
+                if let Some(name) = resolved
+                    && seen.insert(name.clone())
+                {
                     out.push(name);
                 }
             }
             // Recurse into callee + args to catch nested calls
             // (e.g. `wrap(dispatch('foo', payload))`).
-            scan_expression_for_dispatched_names(&call.callee, dispatcher_locals, seen, out);
+            scan_expression_for_dispatched_names(
+                &call.callee,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
             for a in &call.arguments {
                 if let Some(e) = a.as_expression() {
-                    scan_expression_for_dispatched_names(e, dispatcher_locals, seen, out);
+                    scan_expression_for_dispatched_names(
+                        e,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
                 }
             }
         }
         Expression::ArrowFunctionExpression(arrow) => {
             for s in &arrow.body.statements {
-                scan_statement_for_dispatched_names(s, dispatcher_locals, seen, out);
+                scan_statement_for_dispatched_names(
+                    s,
+                    dispatcher_locals,
+                    literal_vars,
+                    seen,
+                    out,
+                );
             }
         }
         Expression::FunctionExpression(fe) => {
             if let Some(body) = &fe.body {
                 for s in &body.statements {
-                    scan_statement_for_dispatched_names(s, dispatcher_locals, seen, out);
+                    scan_statement_for_dispatched_names(
+                        s,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
                 }
             }
         }

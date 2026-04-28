@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Parent.svelte",
+            "line": 13,
+            "column": 17,
+            "code": 2345
+        }
+    ],
+    "_note": "Reviewer item #3c (string-literal event variables): `dispatch(EV, …)` where `EV` is `const EV = 'click'` now contributes 'click' to the synthesised event set. Pre-fix only direct string-literal args were collected. Bubbled DOM events from bare `on:NAME` directives are tracked separately as a follow-up — they need a different emission path (DOM event types, no CustomEvent wrap)."
+}

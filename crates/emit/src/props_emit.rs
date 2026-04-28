@@ -319,6 +319,23 @@ pub(crate) fn write_slots_field_type(
                 svn_analyze::SlotAttrExpr::Shorthand(ident) => {
                     out.push_str(ident.as_str());
                 }
+                // Literal text from `<slot foo="bar">` — emit as a
+                // double-quoted TS string. Escape `"` and `\` so the
+                // emitted token-stream parses cleanly even when the
+                // user's literal contains them.
+                svn_analyze::SlotAttrExpr::Literal(text) => {
+                    out.push('"');
+                    for ch in text.chars() {
+                        match ch {
+                            '\\' => out.push_str("\\\\"),
+                            '"' => out.push_str("\\\""),
+                            '\n' => out.push_str("\\n"),
+                            '\r' => out.push_str("\\r"),
+                            _ => out.push(ch),
+                        }
+                    }
+                    out.push('"');
+                }
             }
             out.push(')');
         }

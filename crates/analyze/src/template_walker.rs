@@ -135,6 +135,10 @@ pub enum SlotAttrExpr {
     /// text. Stored inline as `SmolStr` so we don't recompute the
     /// inner-identifier range from the outer `{name}` range.
     Shorthand(SmolStr),
+    /// `name="literal"` quoted text value (no interpolations) —
+    /// emits as a TS string literal in the slot-def. Mirrors
+    /// upstream svelte2tsx's `SlotHandler` literal-attr branch.
+    Literal(String),
 }
 
 /// One `<slot [name="X"] [attr1={expr1}] [attr2]>` site captured for
@@ -663,6 +667,25 @@ fn collect_slot_def(
                     && let AttrValuePart::Text { content, .. } = &v.parts[0]
                 {
                     slot_name = SmolStr::from(content.as_str());
+                }
+            }
+            A::Plain(p) => {
+                // Plain literal attrs on `<slot>` other than `name=`
+                // (e.g. `<slot kind="header">`). Single-text-part
+                // values flow through as TS string literals so
+                // consumer-side `<Comp let:kind>` destructure resolves
+                // `kind` to `"header"`. Multi-part interpolated
+                // values (`<slot foo="a {b} c">`) and value-less
+                // boolean shorthand are still skipped (full
+                // SlotHandler port handles those).
+                if let Some(v) = &p.value
+                    && v.parts.len() == 1
+                    && let AttrValuePart::Text { content, .. } = &v.parts[0]
+                {
+                    entries.push((
+                        p.name.clone(),
+                        SlotAttrExpr::Literal(content.to_string()),
+                    ));
                 }
             }
             A::Expression(e) => {

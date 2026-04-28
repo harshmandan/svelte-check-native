@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "Reviewer item #4a (small slot wins): literal slot attrs `<slot kind=\"header\">` flow into the slot-def's emitted shape (`kind: (\"header\")`). Consumers' `let:kind` then resolves `kind` against the literal-string type. Pre-fix `collect_slot_def`'s catch-all `_ => {}` arm silently dropped every non-`name=` literal attr."
+}

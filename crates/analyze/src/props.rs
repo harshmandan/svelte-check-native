@@ -546,29 +546,26 @@ fn is_props_call_like(expr: &Expression<'_>) -> bool {
 /// into a synthesised `type $$Events = <T>;` so Item 3's existing
 /// intersection narrows child event handlers.
 ///
-/// Simple-identifier callee only (`createEventDispatcher`); import
-/// aliasing (`import { createEventDispatcher as d }`) is not tracked —
-/// missing that case falls through to the lax shim which is correct,
-/// just non-optimal.
-///
-/// Returns the FIRST hit's type arg. Multi-declarator statements
-/// (`const a = dispatcher<A>(), b = dispatcher<B>()`) and multiple
-/// dispatcher calls in one file aren't supported; `$$Events` only has
-/// one declaration slot and the common pattern is one dispatcher per
-/// component.
+/// Resolves aliased imports (`import { createEventDispatcher as d }`)
+/// so `d<T>()` calls also match. Returns the FIRST typed dispatcher's
+/// type arg. Multiple dispatchers per file aren't unioned — `$$Events`
+/// has one declaration slot and the common pattern is one dispatcher
+/// per component; for multi-dispatcher cases the user can declare
+/// `interface $$Events` explicitly.
 pub fn find_dispatcher_event_type_source(
     program: &oxc_ast::ast::Program<'_>,
     source: &str,
 ) -> Option<String> {
+    let ctor_locals = collect_ctor_locals(program);
     for stmt in &program.body {
         let maybe_slice = match stmt {
             Statement::VariableDeclaration(decl) => decl
                 .declarations
                 .iter()
                 .filter_map(|d| d.init.as_ref())
-                .find_map(|e| dispatcher_type_arg_slice(e, source)),
+                .find_map(|e| dispatcher_type_arg_slice(e, source, &ctor_locals)),
             Statement::ExpressionStatement(expr_stmt) => {
-                dispatcher_type_arg_slice(&expr_stmt.expression, source)
+                dispatcher_type_arg_slice(&expr_stmt.expression, source, &ctor_locals)
             }
             _ => None,
         };
@@ -581,13 +578,15 @@ pub fn find_dispatcher_event_type_source(
 
 /// Find local names bound to a `createEventDispatcher(...)` call at
 /// top level: `const NAME = createEventDispatcher(...)` (any
-/// type-arg form). Used by [`find_dispatched_event_names`] to
-/// scope the event-name scan to actual dispatcher calls.
+/// type-arg form). Resolves `import { createEventDispatcher as
+/// alias }` so `alias()` is also recognised. Returns ALL such
+/// bindings — multiple dispatchers per file are allowed.
 ///
-/// Aliased imports (`import { createEventDispatcher as d }`) aren't
-/// resolved — falling through to no-events is safe (the user opts
-/// in via `interface $$Events` or runes mode for those cases).
+/// Used by [`find_dispatched_event_names`] to scope the
+/// event-name scan to actual dispatcher calls.
 pub fn find_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) -> Vec<String> {
+    let ctor_locals = collect_ctor_locals(program);
+    // Every `const NAME = <ctor-local>(...)` binding.
     let mut out = Vec::new();
     for stmt in &program.body {
         let Statement::VariableDeclaration(decl) = stmt else {
@@ -601,7 +600,7 @@ pub fn find_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) -> Vec<S
             let Expression::Identifier(id) = &call.callee else {
                 continue;
             };
-            if id.name != "createEventDispatcher" {
+            if !ctor_locals.contains(id.name.as_str()) {
                 continue;
             }
             let BindingPattern::BindingIdentifier(bid) = &d.id else {
@@ -611,6 +610,45 @@ pub fn find_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) -> Vec<S
         }
     }
     out
+}
+
+/// Collect the set of locals that resolve to svelte's
+/// `createEventDispatcher`. Includes the un-aliased name plus
+/// every `import { createEventDispatcher as <local> }` form.
+/// Shared by typed (`createEventDispatcher<T>()`) and untyped
+/// (`createEventDispatcher()`) detection paths.
+fn collect_ctor_locals(program: &oxc_ast::ast::Program<'_>) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    let mut ctor_locals: HashSet<String> = HashSet::new();
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(decl) = stmt else {
+            continue;
+        };
+        let Some(specifiers) = &decl.specifiers else {
+            continue;
+        };
+        for spec in specifiers {
+            let oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) = spec else {
+                continue;
+            };
+            // `imported` is the source-side name; `local` is the
+            // value the user calls in this module. For the
+            // un-aliased form they're identical.
+            let imported = match &s.imported {
+                oxc_ast::ast::ModuleExportName::IdentifierName(n) => n.name.as_str(),
+                oxc_ast::ast::ModuleExportName::IdentifierReference(r) => r.name.as_str(),
+                oxc_ast::ast::ModuleExportName::StringLiteral(l) => l.value.as_str(),
+            };
+            if imported == "createEventDispatcher" {
+                ctor_locals.insert(s.local.name.to_string());
+            }
+        }
+    }
+    // Always include the un-aliased name, even if no import
+    // statement is present (Svelte tooling injects it in some
+    // contexts).
+    ctor_locals.insert("createEventDispatcher".to_string());
+    ctor_locals
 }
 
 /// Scan `program` for `<dispatcher>(<string-literal>, ...)` calls
@@ -730,8 +768,10 @@ fn scan_expression_for_dispatched_names(
 
 /// AST-based check: does `program` contain at least one call to
 /// `createEventDispatcher(...)` (typed or untyped, top-level or
-/// nested in an initializer / function body)? Used by the default-
-/// export shape decision to choose between the
+/// nested in an initializer / function body)? Resolves aliased
+/// imports (`import { createEventDispatcher as d }`) so `d()` is
+/// also counted (#3b slice). Used by the default-export shape
+/// decision to choose between the
 /// `__sveltets_2_fn_component`-equivalent `Component<P, X, B>`
 /// shape (no events) and the iso-component interface (events
 /// present).
@@ -740,75 +780,93 @@ fn scan_expression_for_dispatched_names(
 /// comments (`// uses createEventDispatcher`), string literals, and
 /// unused imports — none of which actually emit events. The AST
 /// walk only fires on real call expressions.
-///
-/// Aliased imports (`import { createEventDispatcher as d }`) aren't
-/// resolved here — falling through to the iso shape is safe (one
-/// extra indirection, no correctness loss). Future #3b slice will
-/// thread the import alias map through.
 pub fn has_event_dispatcher_call(program: &oxc_ast::ast::Program<'_>) -> bool {
-    program.body.iter().any(statement_has_dispatcher_call)
+    let ctor_locals = collect_ctor_locals(program);
+    program
+        .body
+        .iter()
+        .any(|s| statement_has_dispatcher_call(s, &ctor_locals))
 }
 
-fn statement_has_dispatcher_call(stmt: &Statement<'_>) -> bool {
+fn statement_has_dispatcher_call(
+    stmt: &Statement<'_>,
+    ctor_locals: &std::collections::HashSet<String>,
+) -> bool {
     match stmt {
         Statement::VariableDeclaration(decl) => decl
             .declarations
             .iter()
             .filter_map(|d| d.init.as_ref())
-            .any(expression_has_dispatcher_call),
-        Statement::ExpressionStatement(es) => expression_has_dispatcher_call(&es.expression),
-        Statement::FunctionDeclaration(fd) => fd
-            .body
-            .as_ref()
-            .is_some_and(|body| body.statements.iter().any(statement_has_dispatcher_call)),
+            .any(|e| expression_has_dispatcher_call(e, ctor_locals)),
+        Statement::ExpressionStatement(es) => {
+            expression_has_dispatcher_call(&es.expression, ctor_locals)
+        }
+        Statement::FunctionDeclaration(fd) => fd.body.as_ref().is_some_and(|body| {
+            body.statements
+                .iter()
+                .any(|s| statement_has_dispatcher_call(s, ctor_locals))
+        }),
         Statement::IfStatement(s) => {
-            statement_has_dispatcher_call(&s.consequent)
+            statement_has_dispatcher_call(&s.consequent, ctor_locals)
                 || s.alternate
                     .as_ref()
-                    .is_some_and(statement_has_dispatcher_call)
+                    .is_some_and(|s| statement_has_dispatcher_call(s, ctor_locals))
         }
-        Statement::BlockStatement(b) => b.body.iter().any(statement_has_dispatcher_call),
+        Statement::BlockStatement(b) => b
+            .body
+            .iter()
+            .any(|s| statement_has_dispatcher_call(s, ctor_locals)),
         _ => false,
     }
 }
 
-fn expression_has_dispatcher_call(expr: &Expression<'_>) -> bool {
+fn expression_has_dispatcher_call(
+    expr: &Expression<'_>,
+    ctor_locals: &std::collections::HashSet<String>,
+) -> bool {
     match expr {
         Expression::CallExpression(call) => {
             if let Expression::Identifier(id) = &call.callee
-                && id.name == "createEventDispatcher"
+                && ctor_locals.contains(id.name.as_str())
             {
                 return true;
             }
-            if expression_has_dispatcher_call(&call.callee) {
+            if expression_has_dispatcher_call(&call.callee, ctor_locals) {
                 return true;
             }
             call.arguments.iter().any(|a| {
                 a.as_expression()
-                    .is_some_and(expression_has_dispatcher_call)
+                    .is_some_and(|e| expression_has_dispatcher_call(e, ctor_locals))
             })
         }
         Expression::ArrowFunctionExpression(arrow) => arrow
             .body
             .statements
             .iter()
-            .any(statement_has_dispatcher_call),
-        Expression::FunctionExpression(fe) => fe
-            .body
-            .as_ref()
-            .is_some_and(|body| body.statements.iter().any(statement_has_dispatcher_call)),
+            .any(|s| statement_has_dispatcher_call(s, ctor_locals)),
+        Expression::FunctionExpression(fe) => fe.body.as_ref().is_some_and(|body| {
+            body.statements
+                .iter()
+                .any(|s| statement_has_dispatcher_call(s, ctor_locals))
+        }),
         _ => false,
     }
 }
 
-/// If `expr` is a `createEventDispatcher<T>(...)` call with an explicit
-/// type argument, return `T`'s source text. Otherwise `None`.
-fn dispatcher_type_arg_slice(expr: &Expression<'_>, source: &str) -> Option<String> {
+/// If `expr` is a `<dispatcher-local><T>(...)` call with an
+/// explicit type argument, return `T`'s source text. The
+/// `ctor_locals` set is the alias-aware list of names that resolve
+/// to `createEventDispatcher` (see [`collect_ctor_locals`]).
+fn dispatcher_type_arg_slice(
+    expr: &Expression<'_>,
+    source: &str,
+    ctor_locals: &std::collections::HashSet<String>,
+) -> Option<String> {
     let Expression::CallExpression(call) = expr else {
         return None;
     };
     match &call.callee {
-        Expression::Identifier(id) if id.name == "createEventDispatcher" => {}
+        Expression::Identifier(id) if ctor_locals.contains(id.name.as_str()) => {}
         _ => return None,
     }
     let tp = call.type_arguments.as_ref()?;

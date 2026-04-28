@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Parent.svelte",
+            "line": 12,
+            "column": 17,
+            "code": 2345
+        }
+    ],
+    "_note": "Reviewer item #3b: aliased imports (`import { createEventDispatcher as ced }`). The new `collect_ctor_locals` helper resolves the alias chain, so `ced<T>()` is recognised as a dispatcher constructor. The typed-event surface synthesises `$$Events = { click: CustomEvent<{ id: number }> }` and the wrong-shape consumer handler fires TS2345."
+}

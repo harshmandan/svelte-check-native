@@ -20,7 +20,9 @@ async function $$render_469e1c1c() {
         });
         }
         {
-            me = null as any as HTMLElement;
+            const __svn_C_2b0 = __svn_ensure_component(__svn_self_default);
+            const __svn_inst_2b0 = new __svn_C_2b0({ target: __svn_any(), props: {} });
+            me = __svn_inst_2b0;
         }
     });
     void me;

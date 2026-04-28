@@ -5,17 +5,13 @@ async function $$render_1110d804() {
         // template type-check body (incremental)
         if ((true)) {
             {
-                {
-                    let prop: any;
-                    void prop;
-                }
+                const __svn_C_b = __svn_ensure_component(__svn_self_default);
+                new __svn_C_b({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             }
         }
         {
-            {
-                let prop: any;
-                void prop;
-            }
+            const __svn_C_4b = __svn_ensure_component(testComponent);
+            new __svn_C_4b({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
         }
     });
     return { props: /** @type {any} */({}) };

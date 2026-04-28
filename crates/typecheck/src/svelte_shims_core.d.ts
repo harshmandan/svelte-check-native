@@ -358,6 +358,21 @@ type __SvnEachItem<T> = 0 extends 1 & T
 declare function __svn_any<T = any>(): T;
 
 /**
+ * `<svelte:self>` synthetic — the file's own component default
+ * referenced from inside its own template. We can't easily get
+ * "the component's own props" inside its own render fn (circular
+ * dep), so type as `any`-component: the `new __svn_C({…})` call
+ * goes through `__svn_ensure_component(__svn_self_default)` which
+ * returns an `any`-prop ctor. Excess-prop checks degenerate to
+ * "any prop accepted" but the rest of the component (events,
+ * bindings, children) still type-checks via the normal path.
+ *
+ * Mirrors upstream svelte2tsx's `__sveltets_2_createComponentAny`
+ * for `<svelte:self>` (see InlineComponent.ts:99).
+ */
+declare const __svn_self_default: import('svelte').Component<any, any, any>;
+
+/**
  * JS-overlay definite-assign: `let b; b = __svn_any(b);` is the JS
  * equivalent of the TS-overlay `let b!: T;` splice — a self-assign
  * through an any-cast helper that satisfies TS flow analysis without

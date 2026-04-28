@@ -1,0 +1,12 @@
+{
+    "errors": [
+        {
+            "file": "Parent.svelte",
+            "line": 12,
+            "column": 29,
+            "code": 2322
+        }
+    ],
+    "_warnings_note": "Svelte 5's `svelte_component_deprecated` warning fires too — emitted at the open-tag position. Filtered out of the expected list because it's a Svelte compiler warning, not a tsgo diagnostic.",
+    "_note": "Reviewer item #1b: `<svelte:component this={cmp} value=\"not-a-number\" />` routes through `__svn_ensure_component(cmp); new $$_C({ target, props: { value: \"not-a-number\" } })`. The wrong-type prop fires TS2322 at the directive's value position. Pre-fix `<svelte:component>` fell through to a bare `{` scope and the `value` prop went un-checked entirely."
+}

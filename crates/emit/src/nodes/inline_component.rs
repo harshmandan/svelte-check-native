@@ -212,7 +212,7 @@ pub(crate) fn emit_component_node(
 /// avoids shadowing / redeclaration when the same parent fragment
 /// contains multiple components.
 #[allow(clippy::too_many_arguments)]
-fn emit_component_call(
+pub(crate) fn emit_component_call(
     buf: &mut EmitBuffer,
     source: &str,
     inst: &svn_analyze::ComponentInstantiation,
@@ -339,7 +339,7 @@ fn emit_component_call(
 /// the component's children, so user-side `{@const}` / `let:`-bound
 /// names live inside the component-call's block scope — sibling
 /// components each get a fresh scope.
-fn emit_component_call_close(buf: &mut EmitBuffer, depth: usize) {
+pub(crate) fn emit_component_call_close(buf: &mut EmitBuffer, depth: usize) {
     let indent = "    ".repeat(depth);
     let _ = writeln!(buf, "{indent}}}");
 }

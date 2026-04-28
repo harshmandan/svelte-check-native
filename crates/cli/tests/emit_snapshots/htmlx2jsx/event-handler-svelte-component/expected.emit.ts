@@ -4,6 +4,9 @@ async function $$render_fd05f38e() {
     ;(async () => {
         // template type-check body (incremental)
         {
+            const __svn_C_0 = __svn_ensure_component(Whatever);
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {} });
+            __svn_inst_0.$on("submit", (handleSubmit));
         }
     });
     return { props: /** @type {any} */({}) };

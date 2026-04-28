@@ -4,7 +4,9 @@ async function $$render_2a8eb9ef() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            element = /** @type {HTMLElement} */ (null);
+            const __svn_C_0 = __svn_ensure_component(A);
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {} });
+            element = __svn_inst_0;
         }
     });
     return { props: /** @type {any} */({}) };

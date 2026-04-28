@@ -5,7 +5,9 @@ async function $$render_4dbcdbe9() {
         // template type-check body (incremental)
         if ((false)) {
             {
-                element = /** @type {HTMLElement} */ (null);
+                const __svn_C_10 = __svn_ensure_component(__svn_self_default);
+                const __svn_inst_10 = new __svn_C_10({ target: __svn_any(), props: {} });
+                element = __svn_inst_10;
             }
         }
     });

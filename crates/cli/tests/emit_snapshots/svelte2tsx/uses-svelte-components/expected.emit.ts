@@ -5,9 +5,13 @@ async function $$render_9bb80247() {
         // template type-check body (incremental)
         if ((true)) {
             {
+                const __svn_C_b = __svn_ensure_component(__svn_self_default);
+                new __svn_C_b({ target: __svn_any(), props: {"prop1": (1)} });
             }
         }
         {
+            const __svn_C_2b = __svn_ensure_component(testComponent);
+            new __svn_C_2b({ target: __svn_any(), props: {"propa": (5), children: () => __svn_snippet_return()} });
             { svelteHTML.createElement("h1", {});             }
         }
         { svelteHTML.createElement("svelte:window", {

@@ -574,6 +574,77 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
             &ctx,
             None,
         );
+        // Reviewer item #1b: `<svelte:component this={X}>` and
+        // `<svelte:self>` carry props / events / bindings just like
+        // a regular `<Component>` instantiation. Route through the
+        // same machinery with a synthetic `component_root` that emit
+        // recognises:
+        //   - SelfRef        → `__svn_self_default`
+        //                       (resolves to the file's iso-component
+        //                       interface via `__svn_create_component_any`)
+        //   - Component      → `__svn_dyn_component[(<this expr>)]`
+        //                       (unparseable raw — emit pulls out the
+        //                       expression range and feeds it to
+        //                       `__svn_ensure_component(EXPR)`)
+        // Pre-fix these passed un-checked through a bare scope.
+        match s.kind {
+            SvelteElementKind::SelfRef => {
+                collect_instantiation_inner(
+                    SmolStr::from("__svn_self_default"),
+                    &s.attributes,
+                    &s.children,
+                    s.range.start,
+                    self.source,
+                    &mut self.summary,
+                );
+            }
+            SvelteElementKind::Component => {
+                // Extract `this={X}`. The X expression text becomes
+                // the `component_root` so emit's
+                // `__svn_ensure_component(<root>)` resolves the
+                // dynamic component value at the user's site. When
+                // `this` is missing the directive degenerates to
+                // `__svn_create_component_any`.
+                let this_expr = s.attributes.iter().find_map(|a| {
+                    let svn_parser::Attribute::Expression(e) = a else {
+                        return None;
+                    };
+                    if e.name.as_str() != "this" {
+                        return None;
+                    }
+                    self.source
+                        .get(e.expression_range.start as usize..e.expression_range.end as usize)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(SmolStr::from)
+                });
+                let root = this_expr.unwrap_or_else(|| SmolStr::from("__svn_self_default"));
+                // Filter out the `this={…}` directive itself from
+                // the prop walk so it isn't surfaced as a regular
+                // prop on the synthetic component.
+                let attrs: Vec<svn_parser::Attribute> = s
+                    .attributes
+                    .iter()
+                    .filter(|a| {
+                        if let svn_parser::Attribute::Expression(e) = a {
+                            e.name.as_str() != "this"
+                        } else {
+                            true
+                        }
+                    })
+                    .cloned()
+                    .collect();
+                collect_instantiation_inner(
+                    root,
+                    &attrs,
+                    &s.children,
+                    s.range.start,
+                    self.source,
+                    &mut self.summary,
+                );
+            }
+            _ => {}
+        }
         // `bind:this` types differently across the `<svelte:*>` family:
         //
         //   - `<svelte:element>`        → DOM HTMLElement target (current).
@@ -1042,7 +1113,34 @@ fn collect_component_instantiation(
     source: &str,
     summary: &mut TemplateSummary,
 ) {
-    let mut props: Vec<PropShape> = Vec::with_capacity(c.attributes.len());
+    collect_instantiation_inner(
+        c.name.clone(),
+        &c.attributes,
+        &c.children,
+        c.range.start,
+        source,
+        summary,
+    );
+}
+
+/// Body of [`collect_component_instantiation`] generalised to accept
+/// the parts directly. Reused by `<svelte:component this={X}>` and
+/// `<svelte:self>` paths which don't have a `Component` AST node but
+/// still want excess-prop / on-event / bind:this checking through
+/// the same machinery. The `component_root` string is what emit
+/// passes to `__svn_ensure_component(...)`; for synthetic kinds
+/// (svelte:self → `__svn_self_default`, svelte:component →
+/// `(EXPR)`), emit recognises the synthetic form and routes
+/// accordingly.
+fn collect_instantiation_inner(
+    component_root: SmolStr,
+    attributes: &[Attribute],
+    children: &svn_parser::Fragment,
+    range_start: u32,
+    source: &str,
+    summary: &mut TemplateSummary,
+) {
+    let mut props: Vec<PropShape> = Vec::with_capacity(attributes.len());
     let mut on_events: Vec<OnEventDirective> = Vec::new();
     let mut bind_this_target: Option<Range> = None;
     let mut component_bind_widen_targets: Vec<SmolStr> = Vec::new();
@@ -1050,12 +1148,12 @@ fn collect_component_instantiation(
     // child node between the open/close tags. Pure `{#snippet}`
     // children hoist as explicit props (different code path); pure
     // whitespace (formatting indent) is ignored.
-    let has_implicit_children = c.children.nodes.iter().any(|n| match n {
+    let has_implicit_children = children.nodes.iter().any(|n| match n {
         Node::SnippetBlock(_) => false,
         Node::Text(t) => !t.content.trim().is_empty(),
         _ => true,
     });
-    for attr in &c.attributes {
+    for attr in attributes {
         match attr {
             Attribute::Plain(p) => {
                 // SVELTE-4-COMPAT: `slot="x"` on a component is a
@@ -1322,13 +1420,13 @@ fn collect_component_instantiation(
     summary
         .component_instantiations
         .push(ComponentInstantiation {
-            component_root: c.name.clone(),
+            component_root,
             props,
             has_implicit_children,
             on_events,
             bind_this_target,
             component_bind_widen_targets,
-            node_start: c.range.start,
+            node_start: range_start,
         });
 }
 

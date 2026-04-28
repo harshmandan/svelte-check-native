@@ -150,6 +150,48 @@ pub(crate) fn emit_svelte_element_node(
     insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
     action_counter: &mut usize,
 ) {
+    use svn_parser::SvelteElementKind;
+    // Reviewer item #1b: `<svelte:component this={X}>` and
+    // `<svelte:self>` route through the same component-instantiation
+    // emit path as a regular `<Component>` node. Pre-fix they fell
+    // through to a bare `{` scope, dropping every prop / event /
+    // binding check. The analyze phase populates
+    // `summary.component_instantiations` with a synthetic root
+    // (the `this` expression text or `__svn_self_default`), and
+    // emit walks them through `emit_component_call` to produce
+    // `__svn_ensure_component(<root>); new $$_C({…})`.
+    if matches!(s.kind, SvelteElementKind::SelfRef | SvelteElementKind::Component)
+        && let Some(inst) = insts.get(&s.range.start)
+    {
+        let snippet_children: Vec<&svn_parser::SnippetBlock> = s
+            .children
+            .nodes
+            .iter()
+            .filter_map(|n| match n {
+                svn_parser::Node::SnippetBlock(b) => Some(b),
+                _ => None,
+            })
+            .collect();
+        crate::nodes::inline_component::emit_component_call(
+            buf,
+            source,
+            inst,
+            depth,
+            &snippet_children,
+            insts,
+            action_counter,
+            false, // svelte:self/component don't currently use let:
+        );
+        // Walk non-snippet children inside the open block.
+        for child in &s.children.nodes {
+            if matches!(child, svn_parser::Node::SnippetBlock(_)) {
+                continue;
+            }
+            crate::emit_template_node(buf, source, child, depth + 1, insts, action_counter);
+        }
+        crate::nodes::inline_component::emit_component_call_close(buf, depth);
+        return;
+    }
     let dom_emit = dom_element_emit_enabled();
     let inner_depth = if dom_emit { depth + 1 } else { depth };
     let action_indices = if dom_emit {

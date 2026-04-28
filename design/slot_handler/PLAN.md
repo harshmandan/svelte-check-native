@@ -1,9 +1,25 @@
 # Port plan — upstream `SlotHandler` + `TemplateScope` resolver
 
-**Status:** research complete, implementation not started.
+**Status:** research complete, slice-1 design fixture validated
+(`design/slot_handler/fixtures/01-each-binding-resolved/`),
+implementation not started.
 **Target gap:** Sankey/+page.svelte +4 over-fire on layerchart
 (notes/OPEN.md §1). Revisit when this is the last remaining gap;
 otherwise defer.
+
+**Refinement (2026-04-28):** the slice-1 design fixture under
+`fixtures/01-each-binding-resolved/` validates a simpler resolution
+shape than the upstream-mirror sketch in §2.4 below: instead of
+emitting a `__svn_unwrap_arr(items)` helper, project the each-binding
+directly as a TS conditional type — `(typeof items extends
+Iterable<infer __svn_T> ? __svn_T : never)`. Same observable
+semantics as upstream, no shim addition required. Tsgo-clean on
+both the typed-clean and TS2339-on-typo break cases. The
+implementation slices in §4 (Stage 4 onwards) should adopt the
+conditional-type form for slot-def emission. The full port still
+needs the consumer-side destructure (Stage 5) and the
+`__svn_instanceOf` machinery for `<Component let:X>` (Stage 3 / §2.4)
+— those slices are unchanged.
 
 **Scope:** port the machinery that turns slot-attr expressions like
 `<slot {tooltip}>` inside `<TooltipContext let:tooltip>` into

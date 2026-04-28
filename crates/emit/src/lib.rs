@@ -427,12 +427,38 @@ fn emit_document_with_render_name(
     let synthesized_events_type: Option<String> = if !narrow_events || has_strict_events(doc) {
         None
     } else {
-        parsed_instance
+        // Priority 1: typed `createEventDispatcher<T>()` — `T` is
+        // the detail map; emit wraps once at synthesis (downstream).
+        let typed = parsed_instance
             .as_ref()
             .zip(doc.instance_script.as_ref())
             .and_then(|(p, s)| {
                 svn_analyze::find_dispatcher_event_type_source(&p.program, s.content)
-            })
+            });
+        // Priority 2 (#3a): untyped `createEventDispatcher()` +
+        // `dispatch('name', detail)` calls — collect the dispatched
+        // event names and synthesise a detail map of `{ name: any,
+        // … }`. The wrap-once at synthesis still applies, so the
+        // FINAL `$$Events` map is `{ name: CustomEvent<any>, … }`.
+        // Mirrors upstream `ComponentEvents` collection of
+        // `componentEventsFromEventsMap`.
+        typed.or_else(|| {
+            let p = parsed_instance.as_ref()?;
+            let dispatchers = svn_analyze::find_dispatcher_local_names(&p.program);
+            if dispatchers.is_empty() {
+                return None;
+            }
+            let names = svn_analyze::find_dispatched_event_names(&p.program, &dispatchers);
+            if names.is_empty() {
+                return None;
+            }
+            let body = names
+                .iter()
+                .map(|n| format!("{n:?}: any"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(format!("{{ {body} }}"))
+        })
     };
 
     // SVELTE-4-COMPAT: rewrite `$: ...` reactive statements before

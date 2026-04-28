@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Parent.svelte",
+            "line": 17,
+            "column": 38,
+            "code": 2345
+        }
+    ],
+    "_note": "Reviewer item #3a (untyped dispatcher under strictEvents). Pre-fix the synth path only handled typed `createEventDispatcher<T>()` — untyped dispatchers + dispatch('name', detail) calls fell through to no event narrowing. The new slice scans for dispatcher locals and string-literal first args (`dispatch('click', …)`, `dispatch('foo', …)`), synthesises a detail map (`{ click: any, foo: any }`), and the wrap-once at synthesis (#2) produces the FINAL `$$Events = { click: CustomEvent<any>, foo: CustomEvent<any> }`. Consumer's wrong-shape handler `(e: number) => void` no longer matches `(e: CustomEvent<any>) => void` and fires TS2345 at the directive's value position."
+}

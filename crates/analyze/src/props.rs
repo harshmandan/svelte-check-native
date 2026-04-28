@@ -579,6 +579,155 @@ pub fn find_dispatcher_event_type_source(
     None
 }
 
+/// Find local names bound to a `createEventDispatcher(...)` call at
+/// top level: `const NAME = createEventDispatcher(...)` (any
+/// type-arg form). Used by [`find_dispatched_event_names`] to
+/// scope the event-name scan to actual dispatcher calls.
+///
+/// Aliased imports (`import { createEventDispatcher as d }`) aren't
+/// resolved — falling through to no-events is safe (the user opts
+/// in via `interface $$Events` or runes mode for those cases).
+pub fn find_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) -> Vec<String> {
+    let mut out = Vec::new();
+    for stmt in &program.body {
+        let Statement::VariableDeclaration(decl) = stmt else {
+            continue;
+        };
+        for d in &decl.declarations {
+            let Some(init) = &d.init else { continue };
+            let Expression::CallExpression(call) = init else {
+                continue;
+            };
+            let Expression::Identifier(id) = &call.callee else {
+                continue;
+            };
+            if id.name != "createEventDispatcher" {
+                continue;
+            }
+            let BindingPattern::BindingIdentifier(bid) = &d.id else {
+                continue;
+            };
+            out.push(bid.name.to_string());
+        }
+    }
+    out
+}
+
+/// Scan `program` for `<dispatcher>(<string-literal>, ...)` calls
+/// where `<dispatcher>` is one of `dispatcher_locals`. Returns the
+/// union of distinct event-name string literals in source order.
+///
+/// Used by the untyped-dispatcher synth path
+/// (`<script strictEvents>` or runes mode without `interface
+/// $$Events` and without an explicit `createEventDispatcher<T>()`
+/// type arg). Each name flows into a synthesized `type $$Events =
+/// { name1: any, name2: any, … }` so the consumer-side `$on('name',
+/// cb)` resolves cb to `(e: any) => any` — narrowed from "any
+/// string" to the actual dispatched-name set.
+pub fn find_dispatched_event_names(
+    program: &oxc_ast::ast::Program<'_>,
+    dispatcher_locals: &[String],
+) -> Vec<String> {
+    use std::collections::HashSet;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for stmt in &program.body {
+        scan_statement_for_dispatched_names(stmt, dispatcher_locals, &mut seen, &mut out);
+    }
+    out
+}
+
+fn scan_statement_for_dispatched_names(
+    stmt: &Statement<'_>,
+    dispatcher_locals: &[String],
+    seen: &mut std::collections::HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    match stmt {
+        Statement::VariableDeclaration(decl) => {
+            for d in &decl.declarations {
+                if let Some(init) = &d.init {
+                    scan_expression_for_dispatched_names(init, dispatcher_locals, seen, out);
+                }
+            }
+        }
+        Statement::ExpressionStatement(es) => {
+            scan_expression_for_dispatched_names(&es.expression, dispatcher_locals, seen, out);
+        }
+        Statement::FunctionDeclaration(fd) => {
+            if let Some(body) = &fd.body {
+                for s in &body.statements {
+                    scan_statement_for_dispatched_names(s, dispatcher_locals, seen, out);
+                }
+            }
+        }
+        Statement::ReturnStatement(rs) => {
+            if let Some(arg) = &rs.argument {
+                scan_expression_for_dispatched_names(arg, dispatcher_locals, seen, out);
+            }
+        }
+        Statement::IfStatement(s) => {
+            scan_expression_for_dispatched_names(&s.test, dispatcher_locals, seen, out);
+            scan_statement_for_dispatched_names(&s.consequent, dispatcher_locals, seen, out);
+            if let Some(alt) = &s.alternate {
+                scan_statement_for_dispatched_names(alt, dispatcher_locals, seen, out);
+            }
+        }
+        Statement::BlockStatement(b) => {
+            for s in &b.body {
+                scan_statement_for_dispatched_names(s, dispatcher_locals, seen, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn scan_expression_for_dispatched_names(
+    expr: &Expression<'_>,
+    dispatcher_locals: &[String],
+    seen: &mut std::collections::HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    match expr {
+        Expression::CallExpression(call) => {
+            // Match `<local>(<string-literal>, ...)` where <local>
+            // is a known dispatcher binding.
+            if let Expression::Identifier(id) = &call.callee
+                && dispatcher_locals.iter().any(|n| n.as_str() == id.name.as_str())
+                && let Some(first) = call.arguments.first()
+                && let Some(first_expr) = first.as_expression()
+                && let Expression::StringLiteral(s) = first_expr
+            {
+                let name = s.value.to_string();
+                if seen.insert(name.clone()) {
+                    out.push(name);
+                }
+            }
+            // Recurse into callee + args to catch nested calls
+            // (e.g. `wrap(dispatch('foo', payload))`).
+            scan_expression_for_dispatched_names(&call.callee, dispatcher_locals, seen, out);
+            for a in &call.arguments {
+                if let Some(e) = a.as_expression() {
+                    scan_expression_for_dispatched_names(e, dispatcher_locals, seen, out);
+                }
+            }
+        }
+        Expression::ArrowFunctionExpression(arrow) => {
+            for s in &arrow.body.statements {
+                scan_statement_for_dispatched_names(s, dispatcher_locals, seen, out);
+            }
+        }
+        Expression::FunctionExpression(fe) => {
+            if let Some(body) = &fe.body {
+                for s in &body.statements {
+                    scan_statement_for_dispatched_names(s, dispatcher_locals, seen, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// AST-based check: does `program` contain at least one call to
 /// `createEventDispatcher(...)` (typed or untyped, top-level or
 /// nested in an initializer / function body)? Used by the default-

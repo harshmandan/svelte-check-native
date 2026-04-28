@@ -36,7 +36,7 @@ interface $$IsomorphicComponent {
     (internal: unknown, props: Awaited<ReturnType<typeof $$render_699ff1eb>>['props']): Awaited<ReturnType<typeof $$render_699ff1eb>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_699ff1eb>>['bindings'];
 }
-const __svn_component_default: $$IsomorphicComponent = null as any;
+const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: Awaited<ReturnType<typeof $$render_699ff1eb>>['events'] } = null as any;
 type __svn_component_default = InstanceType<typeof __svn_component_default>;
 export default __svn_component_default;
 

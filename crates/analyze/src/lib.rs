@@ -50,8 +50,9 @@ pub use jsdoc::{
 };
 pub use model::SemanticModel;
 pub use props::{
-    PropInfo, PropsInfo, PropsSource, contains_typeof_ref, find_dispatcher_event_type_source,
-    has_event_dispatcher_call, root_type_name_of,
+    PropInfo, PropsInfo, PropsSource, contains_typeof_ref, find_dispatched_event_names,
+    find_dispatcher_event_type_source, find_dispatcher_local_names, has_event_dispatcher_call,
+    root_type_name_of,
 };
 pub use rune::{RuneCall, RuneKind, find_runes};
 pub use store::{

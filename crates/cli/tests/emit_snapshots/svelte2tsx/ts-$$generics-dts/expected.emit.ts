@@ -36,7 +36,7 @@ interface $$IsomorphicComponent {
     (internal: unknown, props: Partial<Awaited<ReturnType<typeof $$render_960ff640>>['props'] & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }): Awaited<ReturnType<typeof $$render_960ff640>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_960ff640>>['bindings'];
 }
-const __svn_component_default: $$IsomorphicComponent = null as any;
+const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: Awaited<ReturnType<typeof $$render_960ff640>>['events'] } = null as any;
 type __svn_component_default = InstanceType<typeof __svn_component_default>;
 export default __svn_component_default;
 

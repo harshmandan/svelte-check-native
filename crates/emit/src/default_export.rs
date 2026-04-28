@@ -194,12 +194,28 @@ pub(crate) fn emit_default_export_declarations_ts(
             .module_script
             .as_ref()
             .is_some_and(|s| contains_export_let(s.content));
-    // v0.3 Item 3: when the child declares `$$Events`, carry it as
-    // `& { readonly __svn_events: $$Events }` on the default export.
-    let typed_events_intersection = if has_strict_events(doc) {
-        " & { readonly __svn_events: $$Events }"
+    // v0.3 Item 3: carry the typed event surface as `& { readonly
+    // __svn_events: <Events> }` on the default export so
+    // `__svn_ensure_component`'s marker branch resolves and
+    // narrows `$on(K, cb)` per declared event.
+    //
+    // Two sources fire this:
+    //   (a) Explicit `interface $$Events` / `type $$Events` —
+    //       reference `$$Events` at module scope (it's hoisted).
+    //   (b) Synthesised `type $$Events = …` from
+    //       `createEventDispatcher<T>()` or untyped
+    //       `dispatch('name', …)` calls (#3a slice). The synth
+    //       lives INSIDE the render body, so we project it back
+    //       out via `Awaited<ReturnType<typeof $$render>>['events']`
+    //       — same indirection used for props / exports.
+    let typed_events_intersection: String = if has_strict_events(doc) {
+        " & { readonly __svn_events: $$Events }".to_string()
+    } else if has_dispatcher_call {
+        format!(
+            " & {{ readonly __svn_events: Awaited<ReturnType<typeof {render_name}>>['events'] }}"
+        )
     } else {
-        ""
+        String::new()
     };
     // Conditional index-signature widen mirrors upstream's
     // `__sveltets_2_with_any(…)` factory: adds `SvelteAllProps =

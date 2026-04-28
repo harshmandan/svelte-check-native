@@ -36,7 +36,7 @@ interface $$IsomorphicComponent {
     <A, B extends keyof A, C extends boolean>(internal: unknown, props: Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }): ReturnType<__svn_Render_94f45523<A, B, C>['exports']> & { $set?: any; $on?: any };
     z_$$bindings?: ReturnType<__svn_Render_94f45523<any, any, any>['bindings']>;
 }
-const __svn_component_default: $$IsomorphicComponent = null as any;
+const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: Awaited<ReturnType<typeof $$render_94f45523>>['events'] } = null as any;
 type __svn_component_default<A, B extends keyof A, C extends boolean> = InstanceType<typeof __svn_component_default<A, B, C>>;
 export default __svn_component_default;
 

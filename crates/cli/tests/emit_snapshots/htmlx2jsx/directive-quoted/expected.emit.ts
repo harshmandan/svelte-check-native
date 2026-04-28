@@ -11,7 +11,8 @@ async function $$render_a390b0ad() {
         }
         {
             const __svn_C_36 = __svn_ensure_component(Component);
-            new __svn_C_36({ target: __svn_any(), props: {} });
+            const __svn_inst_36 = new __svn_C_36({ target: __svn_any(), props: {} });
+            __svn_inst_36.$on("click", () => {});
         }
             const __svn_action_0 = __svn_ensure_action(action(__svn_map_element_tag('img')));
         { svelteHTML.createElement("img", __svn_union(__svn_action_0), {});             void __svn_action_0;

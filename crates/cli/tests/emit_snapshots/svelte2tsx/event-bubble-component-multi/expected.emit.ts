@@ -5,11 +5,13 @@ async function $$render_a210f71d() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(Button);
-            new __svn_C_0({ target: __svn_any(), props: {} });
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {} });
+            __svn_inst_0.$on("click", () => {});
         }
         {
             const __svn_C_1b = __svn_ensure_component(Radio);
-            new __svn_C_1b({ target: __svn_any(), props: {} });
+            const __svn_inst_1b = new __svn_C_1b({ target: __svn_any(), props: {} });
+            __svn_inst_1b.$on("click", () => {});
         }
     });
     return { props: /** @type {any} */({}) };

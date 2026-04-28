@@ -313,10 +313,20 @@ pub struct OnEventDirective {
     /// `on:click`). Modifiers are stripped — runtime behavior, no
     /// type signature impact.
     pub event_name: SmolStr,
+    /// Source range of the event NAME itself in the directive's
+    /// source slice — used by emit to push a TokenMapEntry on the
+    /// synthesised `"NAME"` string literal. Reviewer follow-up #1
+    /// added this so TS2345 firing on a bubbled-event name the child
+    /// doesn't declare maps back to the source `on:NAME` position
+    /// rather than getting filtered by the synth-scaffolding source-
+    /// map filter.
+    pub name_range: Range,
     /// Source range of the handler expression. Empty (start == end)
-    /// when the user wrote `on:event` with no `={…}` value — those
-    /// re-dispatch the event to a parent listener at runtime; we
-    /// skip emit for type-check purposes.
+    /// when the user wrote `on:event` with no `={…}` value — bare
+    /// re-dispatch shorthand (event bubbling). Emit substitutes
+    /// `() => {}` as the handler so the `$on` overload still
+    /// resolves and the event name's `keyof Events` constraint
+    /// fires.
     pub handler_range: Range,
 }
 
@@ -1342,24 +1352,50 @@ fn collect_instantiation_inner(
                 // flows through `SvelteComponent<P, E, S>.$on`
                 // against the declared Events type.
                 if d.kind == svn_parser::DirectiveKind::On {
+                    // `on:` prefix is 3 bytes; the name follows
+                    // immediately (modifiers come after the name with
+                    // `|` separators, stored in `d.modifiers`, NOT
+                    // in `d.name`).
+                    let name_start = d.range.start + 3;
+                    let name_end = name_start + d.name.len() as u32;
+                    let name_range = Range::new(name_start, name_end);
                     if let Some(svn_parser::DirectiveValue::Expression {
                         expression_range, ..
                     }) = &d.value
                     {
                         on_events.push(OnEventDirective {
                             event_name: d.name.clone(),
+                            name_range,
                             handler_range: *expression_range,
                         });
                     } else {
                         // `on:event` with no value — bare re-dispatch
-                        // (event bubbling from sub-component). Flag at
-                        // summary level so emit can widen this
-                        // component's own default-export Props to
-                        // match upstream's `with_any_event` +
-                        // `isomorphic_component` inference-failure
-                        // widening (see
-                        // `TemplateSummary::has_bubbled_component_event`
-                        // docs for the mechanism).
+                        // (event bubbling from sub-component).
+                        //
+                        // Reviewer follow-up #1: ALSO push an
+                        // `OnEventDirective` with an empty range so
+                        // emit produces `$inst.$on("event", () => {})`
+                        // — type-checks the bubbled-event name against
+                        // the child's declared Events surface. Pre-fix
+                        // we only set `has_bubbled_component_event`
+                        // and skipped the $on call entirely, so a
+                        // bubbled event with a NAME the child doesn't
+                        // declare passed silently. Mirrors upstream
+                        // svelte2tsx's `EventHandler.ts:147` shape.
+                        //
+                        // The `has_bubbled_component_event` flag stays
+                        // — it drives the OUTER component's
+                        // default-export Props-widen (separate
+                        // upstream behavior: components that
+                        // re-dispatch sub-component events get their
+                        // Props widened to `Record<string, any>` per
+                        // upstream's `with_any_event` /
+                        // `isomorphic_component` inference fallback).
+                        on_events.push(OnEventDirective {
+                            event_name: d.name.clone(),
+                            name_range,
+                            handler_range: Range::new(d.range.start, d.range.start),
+                        });
                         summary.has_bubbled_component_event = true;
                     }
                     continue;

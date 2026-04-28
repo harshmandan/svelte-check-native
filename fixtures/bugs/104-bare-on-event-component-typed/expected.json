@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Wrapper.svelte",
+            "line": 19,
+            "column": 10,
+            "code": 2345
+        }
+    ],
+    "_note": "Reviewer follow-up #1: bare `<Inner on:NAME />` (no value) is event-bubble shorthand — the parent re-dispatches Inner's NAME event to its own consumers. Pre-fix the walker only flagged `has_bubbled_component_event` and skipped the `$on` call entirely, so a bubbled event name the child doesn't declare passed silently. Post-fix the walker pushes an `OnEventDirective` with an empty `handler_range`, the emit produces `$inst.$on(\"NAME\", () => {})`, and the synth `\"NAME\"` literal carries a TokenMapEntry pointing at the source's `on:NAME` directive position. TS2345 (`Argument of type '\"not_a_real_event\"' is not assignable to parameter of type 'keyof $$Events'`) maps back to the source directive. Mirrors upstream svelte2tsx's `EventHandler.ts:147` shape (`$on(\"NAME\", () => {})`)."
+}

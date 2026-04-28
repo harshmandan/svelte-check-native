@@ -5,7 +5,8 @@ async function $$render_0aec257e() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(Button);
-            new __svn_C_0({ target: __svn_any(), props: {} });
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {} });
+            __svn_inst_0.$on("click", () => {});
         }
     });
     return { props: /** @type {any} */({}) };

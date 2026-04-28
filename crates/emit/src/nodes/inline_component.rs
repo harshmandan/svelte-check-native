@@ -411,9 +411,27 @@ fn emit_on_event_calls(
     inner: &str,
 ) {
     for ev in &inst.on_events {
-        let expr = &source[ev.handler_range.start as usize..ev.handler_range.end as usize];
         let name = &ev.event_name;
-        let _ = write!(buf, "{inner}{inst_local}.$on(\"{name}\", (");
+        // Push a TokenMapEntry on the synthesised `"NAME"` string
+        // literal so a TS2345 firing on the name (e.g. when a bubbled
+        // event name isn't declared in the child's Events surface)
+        // maps back to the source `on:NAME` position. Without this
+        // the diagnostic falls inside the `(async () => {…})` synth
+        // scaffolding and gets filtered by `map_diagnostic`.
+        let _ = write!(buf, "{inner}{inst_local}.$on(");
+        buf.append_with_source(&format!("\"{name}\""), ev.name_range);
+        // Reviewer follow-up #1: bare `<Child on:event>` (no value)
+        // is event-bubble shorthand. Walker stores those with an
+        // empty handler_range; emit them as
+        // `$inst.$on("event", () => {})` so the event NAME is still
+        // type-checked against the child's declared Events surface.
+        // Mirrors upstream `EventHandler.ts:147`.
+        if ev.handler_range.start >= ev.handler_range.end {
+            buf.push_str(", () => {});\n");
+            continue;
+        }
+        let expr = &source[ev.handler_range.start as usize..ev.handler_range.end as usize];
+        buf.push_str(", (");
         buf.append_with_source(expr, ev.handler_range);
         buf.push_str("));\n");
     }

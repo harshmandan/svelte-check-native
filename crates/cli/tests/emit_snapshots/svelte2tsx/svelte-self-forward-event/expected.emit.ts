@@ -14,7 +14,8 @@ async function $$render_34e632ee() {
         for (const item of __svn_each_items(a)) {
             {
                 const __svn_C_c6 = __svn_ensure_component(__svn_self_default);
-                new __svn_C_c6({ target: __svn_any(), props: {} });
+                const __svn_inst_c6 = new __svn_C_c6({ target: __svn_any(), props: {} });
+                __svn_inst_c6.$on("foo", () => {});
             }
             void item;
         }

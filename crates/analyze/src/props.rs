@@ -1125,16 +1125,36 @@ fn statement_collect_inline_typed_members(
     ctor_locals: &std::collections::HashSet<String>,
     out: &mut Vec<String>,
 ) {
+    // Round-10 follow-up #1: assigned VarDecl + recursion (mirrors
+    // `statement_collect_typed_dispatcher_slices` from round-9 #3).
     match stmt {
         Statement::VariableDeclaration(decl) => {
             for d in &decl.declarations {
+                if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
+                    continue;
+                }
                 if let Some(init) = &d.init {
                     expression_collect_inline_typed_members(init, ctor_locals, out);
                 }
             }
         }
-        Statement::ExpressionStatement(es) => {
-            expression_collect_inline_typed_members(&es.expression, ctor_locals, out);
+        Statement::FunctionDeclaration(fd) => {
+            if let Some(body) = &fd.body {
+                for s in &body.statements {
+                    statement_collect_inline_typed_members(s, ctor_locals, out);
+                }
+            }
+        }
+        Statement::IfStatement(s) => {
+            statement_collect_inline_typed_members(&s.consequent, ctor_locals, out);
+            if let Some(alt) = &s.alternate {
+                statement_collect_inline_typed_members(alt, ctor_locals, out);
+            }
+        }
+        Statement::BlockStatement(b) => {
+            for s in &b.body {
+                statement_collect_inline_typed_members(s, ctor_locals, out);
+            }
         }
         _ => {}
     }
@@ -1202,15 +1222,36 @@ fn statement_has_inline_typed_dispatcher(
     stmt: &Statement<'_>,
     ctor_locals: &std::collections::HashSet<String>,
 ) -> bool {
+    // Round-10 follow-up #1: same "assigned VarDecl + recursion" rule
+    // as round-9 #3's `statement_collect_typed_dispatcher_slices`.
+    // Bare `createEventDispatcher<{x:string}>()` ExpressionStatements
+    // don't reach upstream's `setEventDispatcher`, so they shouldn't
+    // make `events.hasEvents()` true; nested declarations under
+    // function/block/if bodies should.
     match stmt {
-        Statement::VariableDeclaration(decl) => decl
-            .declarations
-            .iter()
-            .filter_map(|d| d.init.as_ref())
-            .any(|e| expression_has_inline_typed_dispatcher(e, ctor_locals)),
-        Statement::ExpressionStatement(es) => {
-            expression_has_inline_typed_dispatcher(&es.expression, ctor_locals)
+        Statement::VariableDeclaration(decl) => decl.declarations.iter().any(|d| {
+            if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
+                return false;
+            }
+            d.init
+                .as_ref()
+                .is_some_and(|e| expression_has_inline_typed_dispatcher(e, ctor_locals))
+        }),
+        Statement::FunctionDeclaration(fd) => fd.body.as_ref().is_some_and(|body| {
+            body.statements
+                .iter()
+                .any(|s| statement_has_inline_typed_dispatcher(s, ctor_locals))
+        }),
+        Statement::IfStatement(s) => {
+            statement_has_inline_typed_dispatcher(&s.consequent, ctor_locals)
+                || s.alternate
+                    .as_ref()
+                    .is_some_and(|a| statement_has_inline_typed_dispatcher(a, ctor_locals))
         }
+        Statement::BlockStatement(b) => b
+            .body
+            .iter()
+            .any(|s| statement_has_inline_typed_dispatcher(s, ctor_locals)),
         _ => false,
     }
 }

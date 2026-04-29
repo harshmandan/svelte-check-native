@@ -1363,12 +1363,21 @@ fn project_destructure_path(
                 current = format!("Omit<{current}, {union}>");
             }
             crate::template_scope::DestructureSeg::ArrayRest { skip } => {
-                // Round-10 follow-up #4: tuple-tail extraction. Build
-                // `T extends readonly [unknown, …(skip times), ...infer
-                // __svn_R] ? __svn_R : never`. For tuples this picks
-                // the tail; for variable arrays TS infers `__svn_R` as
-                // the same array type so `tail` stays an array of
-                // element type.
+                // Round-10 #4 / Round-11 #4: tuple-tail extraction
+                // with a variable-array fallback. The tuple-pattern
+                // conditional `T extends readonly [unknown, ...infer
+                // R]` doesn't reliably match variable arrays —
+                // `string[]` doesn't structurally satisfy a fixed-
+                // length tuple prefix, so the conditional falls
+                // through to `never`. Layer a second branch that
+                // catches the array case as `(infer U)[]` and
+                // projects back to `U[]`:
+                //
+                //   T extends readonly [unknown, …(skip), ...infer R]
+                //     ? R
+                //     : T extends readonly (infer U)[]
+                //       ? U[]
+                //       : never
                 let prefix = if *skip == 0 {
                     String::new()
                 } else {
@@ -1383,7 +1392,11 @@ fn project_destructure_path(
                     p
                 };
                 current = format!(
-                    "({current} extends readonly [{prefix}...infer __svn_R] ? __svn_R : never)"
+                    "({current} extends readonly [{prefix}...infer __svn_R] \
+                     ? __svn_R \
+                     : {current} extends readonly (infer __svn_U)[] \
+                     ? __svn_U[] \
+                     : never)"
                 );
             }
         }

@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 20,
+            "column": 22,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-11 follow-up #4: ArrayRest projection over a VARIABLE array (`string[]`, not a tuple). Round-10 #4's tuple-pattern conditional `T extends readonly [unknown, ...infer R]` doesn't match variable arrays — TS treats the tuple pattern as a fixed-length prefix and `string[]` falls through to `never`, so `tail` typed as `never` and consumers got every handler rejected (or worse, the never-typed slot prop silently typechecked any further use). Add a fallback branch `T extends readonly (infer U)[] ? U[] : never` so variable arrays project to an array of element type. Producer here exposes `head: string`, `tail: string[]` from `{#each rows as [head, ...tail]}` over `string[][]`. Consumer's `takesString(head)` and `takesStringArray(tail)` pass; the swapped `takesNumberArray(tail)` correctly fires TS2345 (`string[]` not assignable to `number[]`)."
+}

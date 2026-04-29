@@ -33,6 +33,19 @@
 //! Mirrors upstream `SlotHandler.resolveExpression` in
 //! `language-tools/packages/svelte2tsx/src/svelte2tsx/nodes/slot.ts:195-250`,
 //! adapted to TS-type-level output instead of value-level.
+//!
+//! Round-7 follow-up #1: a second entry point
+//! [`rewrite_slot_attr_expr_value`] walks the WHOLE expression AST
+//! and rewrites every shadowed identifier in-place, leaving the
+//! surrounding expression intact. Mirrors upstream's
+//! `resolveExpression` byte-replace pass: each identifier in
+//! non-member, non-key, non-shorthand position is replaced with its
+//! resolved value (cast through `undefined as any as TYPE` for
+//! type-resolved bindings); shorthand identifiers in object literals
+//! get expanded to `key: replacement`. Output is a value-level
+//! expression that splices verbatim into the slot literal — keeps
+//! patterns like `foo(item)`, `{ item }`, `fallback ?? item`,
+//! `items.map(item => item.x)` typed correctly.
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{Expression, Statement};
@@ -48,7 +61,7 @@ use svn_parser::{ScriptLang, parse_script_body};
 ///   - `None` — not in scope; not our identifier (let parent handle).
 pub fn rewrite_slot_attr_expr(
     text: &str,
-    lookup: impl Fn(&str) -> Option<Option<String>>,
+    lookup: &impl Fn(&str) -> Option<Option<String>>,
 ) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -75,7 +88,7 @@ pub fn rewrite_slot_attr_expr(
         Expression::ParenthesizedExpression(p) => &p.expression,
         other => other,
     };
-    rewrite_expression(inner, &lookup)
+    rewrite_expression(inner, lookup)
 }
 
 fn rewrite_expression(
@@ -150,6 +163,288 @@ fn rewrite_member_base(
     }
 }
 
+/// Three-state result for the value-level walker.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ValueRewrite {
+    /// At least one shadowed identifier was rewritten. The string is
+    /// the rewritten expression source.
+    Rewritten(String),
+    /// No shadowed identifiers were found anywhere in the expression
+    /// — the caller should splice the original source verbatim.
+    NoEdits,
+    /// A shadowed-but-unresolvable identifier was found (or the AST
+    /// was malformed) — the caller should drop the slot attr.
+    Bailed,
+}
+
+/// Round-7 follow-up #1: walk the WHOLE expression AST and rewrite
+/// each shadowed identifier in place. Returns a value-level
+/// expression suitable for splicing into the slot literal.
+///
+/// `lookup(name)` returns the same shape as
+/// [`rewrite_slot_attr_expr`]:
+/// - `Some(Some(resolved))` — replace identifier with this expression
+///   (we wrap as `(undefined as any as (resolved))` for type-resolved
+///   bindings — `lookup` callers always pass type-level resolutions
+///   here, so the cast is safe).
+/// - `Some(None)` — shadowed but unresolvable. Walker bails.
+/// - `None` — module-scope identifier. Leave unchanged.
+///
+/// Skips identifier sites that aren't real value references:
+/// - Member-expression property positions (`x.foo` — `foo` is a name,
+///   not an identifier reference).
+/// - Object-key positions (`{ foo: x }` — `foo` is a key).
+///
+/// Object-shorthand positions (`{ item }`) get expanded to
+/// `{ item: <replacement> }` — the identifier sits in BOTH key and
+/// value positions in the source, but only the value reference is
+/// replaced.
+///
+/// On any unrecognised AST node containing identifiers (e.g. JSX),
+/// returns whatever was found in walked nodes (no panics, no partial
+/// rewrites). The walk is conservative: missing a rewrite always
+/// degrades to module-scope semantics, never to a wrong type.
+pub fn rewrite_slot_attr_expr_value(
+    text: &str,
+    lookup: &impl Fn(&str) -> Option<Option<String>>,
+) -> ValueRewrite {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return ValueRewrite::Bailed;
+    }
+    let alloc = Allocator::default();
+    let wrapper = format!("const _x = ({trimmed});");
+    let parsed = parse_script_body(&alloc, &wrapper, ScriptLang::Ts);
+    if parsed.panicked {
+        return ValueRewrite::Bailed;
+    }
+    let Some(stmt) = parsed.program.body.first() else {
+        return ValueRewrite::Bailed;
+    };
+    let Statement::VariableDeclaration(decl) = stmt else {
+        return ValueRewrite::Bailed;
+    };
+    let Some(declarator) = decl.declarations.first() else {
+        return ValueRewrite::Bailed;
+    };
+    let Some(init) = declarator.init.as_ref() else {
+        return ValueRewrite::Bailed;
+    };
+    let inner = match init {
+        Expression::ParenthesizedExpression(p) => &p.expression,
+        other => other,
+    };
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    let mut bail = false;
+    walk_value_expr(inner, lookup, &mut edits, &mut bail, false);
+    if bail {
+        return ValueRewrite::Bailed;
+    }
+    if edits.is_empty() {
+        return ValueRewrite::NoEdits;
+    }
+    let prefix_len = "const _x = (".len();
+    let mut out = trimmed.to_string();
+    edits.sort_by_key(|(start, _, _)| *start);
+    for w in edits.windows(2) {
+        if w[0].1 > w[1].0 {
+            return ValueRewrite::Bailed;
+        }
+    }
+    for (wrap_start, wrap_end, replacement) in edits.into_iter().rev() {
+        let Some(start) = wrap_start.checked_sub(prefix_len) else {
+            return ValueRewrite::Bailed;
+        };
+        let Some(end) = wrap_end.checked_sub(prefix_len) else {
+            return ValueRewrite::Bailed;
+        };
+        if end > out.len() || start > end {
+            return ValueRewrite::Bailed;
+        }
+        out.replace_range(start..end, &replacement);
+    }
+    ValueRewrite::Rewritten(out)
+}
+
+fn walk_value_expr(
+    expr: &Expression<'_>,
+    lookup: &impl Fn(&str) -> Option<Option<String>>,
+    edits: &mut Vec<(usize, usize, String)>,
+    bail: &mut bool,
+    inside_skip: bool,
+) {
+    if *bail {
+        return;
+    }
+    match expr {
+        Expression::Identifier(id) => {
+            if inside_skip {
+                return;
+            }
+            let name = id.name.as_str();
+            match lookup(name) {
+                Some(Some(resolved)) => {
+                    let start = id.span.start as usize;
+                    let end = id.span.end as usize;
+                    edits.push((start, end, format!("(undefined as any as ({resolved}))")));
+                }
+                Some(None) => {
+                    *bail = true;
+                }
+                None => {}
+            }
+        }
+        Expression::ParenthesizedExpression(p) => {
+            walk_value_expr(&p.expression, lookup, edits, bail, inside_skip);
+        }
+        Expression::StaticMemberExpression(me) => {
+            walk_value_expr(&me.object, lookup, edits, bail, false);
+            // me.property is the static name — never resolved against shadow.
+        }
+        Expression::ComputedMemberExpression(me) => {
+            walk_value_expr(&me.object, lookup, edits, bail, false);
+            walk_value_expr(&me.expression, lookup, edits, bail, false);
+        }
+        Expression::CallExpression(call) => {
+            walk_value_expr(&call.callee, lookup, edits, bail, false);
+            for arg in &call.arguments {
+                if let Some(arg_expr) = arg.as_expression() {
+                    walk_value_expr(arg_expr, lookup, edits, bail, false);
+                }
+            }
+        }
+        Expression::ConditionalExpression(c) => {
+            walk_value_expr(&c.test, lookup, edits, bail, false);
+            walk_value_expr(&c.consequent, lookup, edits, bail, false);
+            walk_value_expr(&c.alternate, lookup, edits, bail, false);
+        }
+        Expression::LogicalExpression(b) => {
+            walk_value_expr(&b.left, lookup, edits, bail, false);
+            walk_value_expr(&b.right, lookup, edits, bail, false);
+        }
+        Expression::BinaryExpression(b) => {
+            walk_value_expr(&b.left, lookup, edits, bail, false);
+            walk_value_expr(&b.right, lookup, edits, bail, false);
+        }
+        Expression::UnaryExpression(u) => {
+            walk_value_expr(&u.argument, lookup, edits, bail, false);
+        }
+        Expression::TemplateLiteral(tl) => {
+            for e in &tl.expressions {
+                walk_value_expr(e, lookup, edits, bail, false);
+            }
+        }
+        Expression::ObjectExpression(obj) => {
+            for prop in &obj.properties {
+                use oxc_ast::ast::ObjectPropertyKind;
+                match prop {
+                    ObjectPropertyKind::ObjectProperty(p) => {
+                        // Computed keys (`{[k]: v}`) recurse through the key expression.
+                        if p.computed {
+                            if let Some(key_expr) = p.key.as_expression() {
+                                walk_value_expr(key_expr, lookup, edits, bail, false);
+                            }
+                        }
+                        // Shorthand `{ item }`: the value AST node sits at the same span
+                        // as the key. Expand to `key: replacement` so a single span carries
+                        // both identifiers cleanly.
+                        if p.shorthand {
+                            if let Expression::Identifier(id) = &p.value {
+                                let name = id.name.as_str();
+                                if let Some(resolved) = lookup(name) {
+                                    match resolved {
+                                        Some(resolved_text) => {
+                                            let start = id.span.start as usize;
+                                            let end = id.span.end as usize;
+                                            edits.push((
+                                                start,
+                                                end,
+                                                format!(
+                                                    "{name}: (undefined as any as ({resolved_text}))"
+                                                ),
+                                            ));
+                                        }
+                                        None => {
+                                            *bail = true;
+                                        }
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        walk_value_expr(&p.value, lookup, edits, bail, false);
+                    }
+                    ObjectPropertyKind::SpreadProperty(sp) => {
+                        walk_value_expr(&sp.argument, lookup, edits, bail, false);
+                    }
+                }
+            }
+        }
+        Expression::ArrayExpression(arr) => {
+            for elem in &arr.elements {
+                use oxc_ast::ast::ArrayExpressionElement;
+                match elem {
+                    ArrayExpressionElement::SpreadElement(sp) => {
+                        walk_value_expr(&sp.argument, lookup, edits, bail, false);
+                    }
+                    ArrayExpressionElement::Elision(_) => {}
+                    other => {
+                        if let Some(e) = other.as_expression() {
+                            walk_value_expr(e, lookup, edits, bail, false);
+                        }
+                    }
+                }
+            }
+        }
+        Expression::ChainExpression(c) => {
+            use oxc_ast::ast::ChainElement;
+            match &c.expression {
+                ChainElement::CallExpression(call) => {
+                    walk_value_expr(&call.callee, lookup, edits, bail, false);
+                    for arg in &call.arguments {
+                        if let Some(arg_expr) = arg.as_expression() {
+                            walk_value_expr(arg_expr, lookup, edits, bail, false);
+                        }
+                    }
+                }
+                ChainElement::StaticMemberExpression(me) => {
+                    walk_value_expr(&me.object, lookup, edits, bail, false);
+                }
+                ChainElement::ComputedMemberExpression(me) => {
+                    walk_value_expr(&me.object, lookup, edits, bail, false);
+                    walk_value_expr(&me.expression, lookup, edits, bail, false);
+                }
+                _ => {}
+            }
+        }
+        // Arrow functions, function expressions: the params introduce
+        // local scope, so identifiers inside the body that share names
+        // with outer shadow could be the local param. Bail rather
+        // than rewrite incorrectly. (Upstream walks these too but
+        // tracks scopes; we'd need a scope walker here to match. For
+        // now, leave inner closures as-is.)
+        Expression::ArrowFunctionExpression(_)
+        | Expression::FunctionExpression(_)
+        | Expression::ClassExpression(_) => {}
+        // Type-only wrappers — recurse.
+        Expression::TSAsExpression(t) => {
+            walk_value_expr(&t.expression, lookup, edits, bail, false);
+        }
+        Expression::TSNonNullExpression(t) => {
+            walk_value_expr(&t.expression, lookup, edits, bail, false);
+        }
+        Expression::TSTypeAssertion(t) => {
+            walk_value_expr(&t.expression, lookup, edits, bail, false);
+        }
+        // Anything else (literals, JSX, tagged templates, sequences,
+        // assignment, await, yield, regex, etc.): skip without bailing.
+        // Identifiers that appear inside these unhandled shapes won't
+        // get rewritten — degrades to module-scope semantics, not a
+        // wrong type.
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,7 +461,7 @@ mod tests {
 
     #[test]
     fn bare_identifier() {
-        let out = rewrite_slot_attr_expr("item", lookup_fn).unwrap();
+        let out = rewrite_slot_attr_expr("item", &lookup_fn).unwrap();
         assert_eq!(
             out,
             "((typeof items) extends Iterable<infer T> ? T : never)"
@@ -175,7 +470,7 @@ mod tests {
 
     #[test]
     fn member_expression() {
-        let out = rewrite_slot_attr_expr("item.foo", lookup_fn).unwrap();
+        let out = rewrite_slot_attr_expr("item.foo", &lookup_fn).unwrap();
         assert_eq!(
             out,
             "((typeof items) extends Iterable<infer T> ? T : never)[\"foo\"]"
@@ -184,7 +479,7 @@ mod tests {
 
     #[test]
     fn nested_member_expression() {
-        let out = rewrite_slot_attr_expr("item.foo.bar", lookup_fn).unwrap();
+        let out = rewrite_slot_attr_expr("item.foo.bar", &lookup_fn).unwrap();
         assert_eq!(
             out,
             "((typeof items) extends Iterable<infer T> ? T : never)[\"foo\"][\"bar\"]"
@@ -193,7 +488,7 @@ mod tests {
 
     #[test]
     fn computed_member_with_literal_key() {
-        let out = rewrite_slot_attr_expr("item['foo']", lookup_fn).unwrap();
+        let out = rewrite_slot_attr_expr("item['foo']", &lookup_fn).unwrap();
         assert_eq!(
             out,
             "((typeof items) extends Iterable<infer T> ? T : never)[\"foo\"]"
@@ -203,17 +498,17 @@ mod tests {
     #[test]
     fn module_identifier_returns_none() {
         // Caller splices source verbatim for module-scope refs.
-        assert_eq!(rewrite_slot_attr_expr("modScope", lookup_fn), None);
+        assert_eq!(rewrite_slot_attr_expr("modScope", &lookup_fn), None);
     }
 
     #[test]
     fn shadowed_unresolvable_bails() {
         assert_eq!(
-            rewrite_slot_attr_expr("shadowed_unresolvable", lookup_fn),
+            rewrite_slot_attr_expr("shadowed_unresolvable", &lookup_fn),
             None
         );
         assert_eq!(
-            rewrite_slot_attr_expr("shadowed_unresolvable.foo", lookup_fn),
+            rewrite_slot_attr_expr("shadowed_unresolvable.foo", &lookup_fn),
             None
         );
     }
@@ -222,10 +517,127 @@ mod tests {
     fn unsupported_shapes_return_none() {
         // Function call, ternary, binary, object, optional chain,
         // computed-non-literal-key — all bail.
-        assert_eq!(rewrite_slot_attr_expr("item.foo()", lookup_fn), None);
-        assert_eq!(rewrite_slot_attr_expr("item ?? other", lookup_fn), None);
-        assert_eq!(rewrite_slot_attr_expr("item?.foo", lookup_fn), None);
-        assert_eq!(rewrite_slot_attr_expr("item[0]", lookup_fn), None);
-        assert_eq!(rewrite_slot_attr_expr("{ x: item }", lookup_fn), None);
+        assert_eq!(rewrite_slot_attr_expr("item.foo()", &lookup_fn), None);
+        assert_eq!(rewrite_slot_attr_expr("item ?? other", &lookup_fn), None);
+        assert_eq!(rewrite_slot_attr_expr("item?.foo", &lookup_fn), None);
+        assert_eq!(rewrite_slot_attr_expr("item[0]", &lookup_fn), None);
+        assert_eq!(rewrite_slot_attr_expr("{ x: item }", &lookup_fn), None);
+    }
+
+    // Round-7 follow-up #1 walker tests.
+
+    fn r7_lookup(name: &str) -> Option<Option<String>> {
+        match name {
+            "item" => Some(Some("ItemTy".to_string())),
+            "row" => Some(Some("RowTy".to_string())),
+            "drop" => Some(None),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn value_walker_no_shadow_returns_no_edits() {
+        assert_eq!(
+            rewrite_slot_attr_expr_value("modScope", &r7_lookup),
+            ValueRewrite::NoEdits
+        );
+        assert_eq!(
+            rewrite_slot_attr_expr_value("foo(bar)", &r7_lookup),
+            ValueRewrite::NoEdits
+        );
+    }
+
+    #[test]
+    fn value_walker_call_with_shadowed_arg() {
+        let ValueRewrite::Rewritten(out) =
+            rewrite_slot_attr_expr_value("foo(item)", &r7_lookup)
+        else {
+            panic!("expected rewrite");
+        };
+        assert_eq!(out, "foo((undefined as any as (ItemTy)))");
+    }
+
+    #[test]
+    fn value_walker_object_shorthand_expands() {
+        let ValueRewrite::Rewritten(out) =
+            rewrite_slot_attr_expr_value("{ item }", &r7_lookup)
+        else {
+            panic!("expected rewrite");
+        };
+        assert_eq!(out, "{ item: (undefined as any as (ItemTy)) }");
+    }
+
+    #[test]
+    fn value_walker_object_key_skipped() {
+        // `item` is the value here, not the key — gets rewritten.
+        let ValueRewrite::Rewritten(out) =
+            rewrite_slot_attr_expr_value("{ k: item }", &r7_lookup)
+        else {
+            panic!("expected rewrite");
+        };
+        assert_eq!(out, "{ k: (undefined as any as (ItemTy)) }");
+    }
+
+    #[test]
+    fn value_walker_logical_or() {
+        let ValueRewrite::Rewritten(out) =
+            rewrite_slot_attr_expr_value("fallback ?? item", &r7_lookup)
+        else {
+            panic!("expected rewrite");
+        };
+        assert_eq!(out, "fallback ?? (undefined as any as (ItemTy))");
+    }
+
+    #[test]
+    fn value_walker_member_property_skipped() {
+        // `foo` in `item.foo` is a property NAME, not an identifier
+        // reference — must NOT be rewritten. `item` IS rewritten.
+        let ValueRewrite::Rewritten(out) =
+            rewrite_slot_attr_expr_value("item.foo", &r7_lookup)
+        else {
+            panic!("expected rewrite");
+        };
+        assert_eq!(out, "(undefined as any as (ItemTy)).foo");
+    }
+
+    #[test]
+    fn value_walker_bails_on_unresolvable() {
+        assert_eq!(
+            rewrite_slot_attr_expr_value("foo(drop)", &r7_lookup),
+            ValueRewrite::Bailed
+        );
+        assert_eq!(
+            rewrite_slot_attr_expr_value("{ drop }", &r7_lookup),
+            ValueRewrite::Bailed
+        );
+    }
+
+    #[test]
+    fn value_walker_arrow_inner_left_alone() {
+        // Arrow body's `item` could refer to the lambda parameter
+        // (same name) — bailing out of the body is conservative.
+        // `items.map(item => item.x)` — the OUTER `items` (if shadowed)
+        // would be rewritten; the inner arrow body is left alone.
+        let ValueRewrite::Rewritten(out) =
+            rewrite_slot_attr_expr_value("row.foo(item => item.x)", &r7_lookup)
+        else {
+            panic!("expected rewrite");
+        };
+        // `row` rewritten; arrow body untouched.
+        assert!(out.starts_with("(undefined as any as (RowTy))"));
+        assert!(out.contains("item => item.x"));
+    }
+
+    #[test]
+    fn value_walker_two_inner_idents() {
+        let ValueRewrite::Rewritten(out) =
+            rewrite_slot_attr_expr_value("foo(item, row)", &r7_lookup)
+        else {
+            panic!("expected rewrite");
+        };
+        assert_eq!(
+            out,
+            "foo((undefined as any as (ItemTy)), (undefined as any as (RowTy)))"
+        );
     }
 }

@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 17,
+            "column": 17,
+            "code": 2345
+        },
+        {
+            "file": "Consumer.svelte",
+            "line": 18,
+            "column": 17,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-7 follow-up #1: pre-fix native's slot-attr rewriter only fired when the LEADING identifier of the expression was shadowed — `<slot value={item}>` rewrote correctly, but `<slot value={fmt(item)}>`, `<slot {item}>`, `<slot value={fallback ?? item}>` all leaked `item` to module scope. Upstream `slot.ts:195-227` walks the whole expression AST and rewrites every relevant identifier in place. Native now mirrors that: a value-level walker (`rewrite_slot_attr_expr_value`) collects every shadowed identifier site (skipping member-property names, object keys, arrow-function bodies — same skip rules as upstream) and replaces each with `(undefined as any as (TYPE))`, leaving the surrounding expression structure intact. This Producer's `<slot doubled={double(item.id)} wrapped={{ inner: item.label }} />` exercises both a call-arg shadow (`item.id` inside `double(…)`) and an object-literal-value shadow (`item.label` as the value of `inner`); the consumer's typed `takesNumber(doubled)` and `takesString(wrapped.inner)` pass, while the swapped calls fire TS2345. Pre-fix `item` would have leaked to the module scope (TS2304 if undeclared, or wrong-type if a module-scope `item` happened to exist), and the slot-let consumers would have typed `doubled`/`wrapped` as `any` either way."
+}

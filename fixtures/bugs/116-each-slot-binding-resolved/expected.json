@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Parent.svelte",
+            "line": 18,
+            "column": 16,
+            "code": 2339
+        }
+    ],
+    "_note": "PLAN design/slot_handler/PLAN.md Stage 2: resolve `<slot {item} {index}>` references inside `{#each items as item, index}` through the each-block's outer expression instead of dropping them. Pre-fix the slot-def collector skipped attrs whose leading identifier was scope-shadowed (`item`, `index`) — the consumer-side `<Child let:item let:index>` then typed both as `any` and any field access passed silently. Post-fix the resolver stack maps `item` to `(typeof items) extends Iterable<infer T> ? T : never` (a TS type expression that projects the array element type) and `index` to `number`. The slot-def emits as `{ default: { item: undefined as any as (T_projection), index: undefined as any as (number) } }` so consumers' typo'd `item.title` access fires TS2339 against the resolved `{ id: string; label: string }` row shape."
+}

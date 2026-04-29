@@ -397,6 +397,31 @@ type __SvnComponentEvents<C> = C extends { readonly __svn_events: infer E }
       : Record<string, any>;
 
 /**
+ * SlotHandler PLAN Stage 4: extract a child component's slot
+ * surface for the parent's let-forwarded slot projection. When
+ * a wrapper has `<Wrapper let:tooltip><slot {tooltip}/></Wrapper>`,
+ * the slot-def's `tooltip` entry projects as
+ * `__SvnComponentSlots<typeof Wrapper>['default']['tooltip']`.
+ *
+ * Branch order:
+ *   1. `__svn_slots` marker — reserved for a future strict-shape
+ *      opt-in (no current emit path produces it).
+ *   2. Class constructor returning a `SvelteComponent<P, E, S>`
+ *      instance — extracts `S` directly. Covers our iso interface's
+ *      `new` signature AND legacy `SvelteComponentTyped<P, E, S>`
+ *      class components.
+ *   3. Anything else (callable `Component<P, X, B>` /
+ *      synthetic root) → `Record<string, Record<string, any>>` so
+ *      `[slotName][propName]` indexing falls through to `any`
+ *      without a TS lookup error.
+ */
+type __SvnComponentSlots<C> = C extends { readonly __svn_slots: infer S }
+    ? S
+    : C extends new (...args: any[]) => import('svelte').SvelteComponent<any, any, infer S>
+      ? S
+      : Record<string, Record<string, any>>;
+
+/**
  * Reviewer follow-up #3b: convert a wrapped `$$Events` map back to
  * the DETAIL form for `createEventDispatcher`'s type argument. The
  * wrapped form `{ name: CustomEvent<T> }` is what the user declares

@@ -241,13 +241,15 @@ pub enum SlotAttrExpr {
     /// scope-shadowed identifier to a scope-independent form (e.g.
     /// `(typeof items extends Iterable<infer __svn_T> ? __svn_T : never)`
     /// for an `{#each items as item}` reference). Two flavors:
-    ///   - `Value(s)` → emit splices `(s)` — for value expressions.
-    ///   - `Type(s)` → emit splices `undefined as any as (s)` — for
-    ///     type assertions where no value lives in scope.
+    ///
+    /// - `Value(s)` → emit splices `(s)` — for value expressions.
+    /// - `Type(s)` → emit splices `undefined as any as (s)` — for
+    ///   type assertions where no value lives in scope.
+    ///
     /// Stage 2 of the SlotHandler port — the each/await resolver
     /// uses this for bindings that don't need the upstream
     /// `__svn_instanceOf` shim. Let-forwarded bindings (Stage 4)
-    /// will use `Value(__svn_instanceOf(C).$$slot_def[…].name)`.
+    /// emit `Type("__SvnComponentSlots<typeof C>['default']['name']")`.
     Resolved(ResolvedSlotExpr),
 }
 
@@ -581,8 +583,11 @@ pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
         summary,
         counters: Counters::default(),
         source,
-        shadow: ShadowStack::default(),
+        shadow: ResolverStack::default(),
         scope_marks: Vec::new(),
+        pending_each_items_range: None,
+        pending_await_promise_range: None,
+        pending_let_owner: None,
     };
     crate::template_scope::walk_with_visitor(fragment, source, &mut visitor);
     visitor.summary
@@ -599,28 +604,42 @@ struct Counters {
     at_const_seen: std::collections::HashSet<SmolStr>,
 }
 
-/// Per-walk template-scope shadow tracker. Names entered into the
-/// stack as the walker descends into scope-introducing nodes
-/// (`{#each X as Y}` → `Y`; `{:then Y}` → `Y`; `<Comp let:Y>` /
-/// `<el let:Y>` → `Y`; `{#snippet name(Y, …)}` — pattern names);
-/// popped on exit. Used by `<slot {Y}>` capture to skip slot-attr
-/// expressions that reference scope-bound names — emitting those at
-/// module scope (where the `slots:` literal lives in `$$render`'s
-/// return) would resolve them to the wrong (module-scope)
-/// declaration. Skipped names fall through to `any` on the consumer
-/// side. Closing those properly needs the full SlotHandler scope-
-/// rewrite port (design/slot_handler/PLAN.md §1.2).
+/// Per-walk resolver stack — replaces the older shadow-stack-of-
+/// names model with one that ALSO carries each binding's
+/// `Option<ResolvedSlotExpr>` so slot-attr collection can rewrite
+/// bare references to scope-independent forms.
+///
+/// Three states per name when looked up:
+///   - `Some(Some(expr))` — bound and resolvable. Slot attrs
+///     splice `expr` directly. Stage-2 each/await bindings use
+///     this; Stage-4 let-forwarded bindings will too.
+///   - `Some(None)` — bound but NOT safely resolvable (let-
+///     directive / snippet param without upstream-equivalent
+///     resolution). Slot attrs DROP — emitting at module scope
+///     would resolve to the wrong declaration. Closes those
+///     properly when the resolver covers the binding kind.
+///   - `None` (missing from stack) — module / import / prop
+///     identifier. Slot attrs splice source verbatim.
+///
+/// Walks innermost-first via reverse iteration so a let-binding
+/// inside an `{#each}` overrides an outer same-name binding.
+///
+/// PLAN: design/slot_handler/PLAN.md §3.2.
 #[derive(Default)]
-struct ShadowStack {
-    names: Vec<SmolStr>,
+struct ResolverStack {
+    entries: Vec<(SmolStr, Option<ResolvedSlotExpr>)>,
 }
 
-impl ShadowStack {
+impl ResolverStack {
     fn truncate(&mut self, mark: usize) {
-        self.names.truncate(mark);
+        self.entries.truncate(mark);
     }
-    fn contains(&self, name: &str) -> bool {
-        self.names.iter().any(|n| n == name)
+    fn lookup(&self, name: &str) -> Option<&Option<ResolvedSlotExpr>> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v)
     }
 }
 
@@ -633,16 +652,49 @@ struct AnalyzeVisitor<'src> {
     summary: TemplateSummary,
     counters: Counters,
     source: &'src str,
-    shadow: ShadowStack,
+    shadow: ResolverStack,
     /// Stack of entry marks pushed by `enter_scope` / `enter_fragment`.
     /// `leave_scope` / `leave_fragment` pop the matching mark and
-    /// truncate the shadow back to it.
+    /// truncate the resolver stack back to it.
     scope_marks: Vec<usize>,
+    /// Source range of the most recent `{#each EXPR as ...}` outer
+    /// expression — stashed by `visit_each_block` and consumed by the
+    /// next `enter_scope(Each, …)` call. The walker calls
+    /// `visit_each_block` immediately before `enter_scope(Each)` so
+    /// they're guaranteed paired (per `template_scope::walk_node_inner`
+    /// for `Node::EachBlock`).
+    pending_each_items_range: Option<Range>,
+    /// Same idea, for `{#await EXPR ...}`. Consumed by the next
+    /// `enter_scope(AwaitThen, …)` (or AwaitCatch if there's no
+    /// then branch). Reset per await-block so each branch picks up
+    /// the same promise range.
+    pending_await_promise_range: Option<Range>,
+    /// SlotHandler PLAN Stage 4: stashed by `visit_component` /
+    /// `visit_svelte_element` (Component / SelfRef kinds) and
+    /// consumed by the next `enter_scope(LetDirective, …)` call.
+    /// When present, `let:foo` bindings on this component resolve
+    /// to `__SvnComponentSlots<typeof <root>>['default']['foo']`.
+    /// `None` for elements that aren't producer-side let owners
+    /// (DOM elements, components with `slot=` consumer wrappers,
+    /// dynamic `<svelte:component this={EXPR}>` forms whose root
+    /// isn't a typeable identifier).
+    pending_let_owner: Option<LetOwnerInfo>,
+}
+
+/// Producer-side let-owner info — see
+/// `AnalyzeVisitor.pending_let_owner`.
+#[derive(Debug, Clone)]
+struct LetOwnerInfo {
+    /// `typeof <root>`-safe component identifier.
+    component_root: SmolStr,
+    /// Slot name the let-bindings target. `"default"` unless a
+    /// future stage adds named-slot let-forwarding.
+    slot_name: SmolStr,
 }
 
 impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
     fn enter_fragment(&mut self) {
-        self.scope_marks.push(self.shadow.names.len());
+        self.scope_marks.push(self.shadow.entries.len());
     }
 
     fn leave_fragment(&mut self) {
@@ -651,14 +703,132 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
         }
     }
 
+    fn visit_each_block(&mut self, b: &svn_parser::EachBlock) {
+        self.summary.each_block_count += 1;
+        self.pending_each_items_range = Some(b.expression_range);
+    }
+
+    fn visit_await_block(&mut self, b: &svn_parser::AwaitBlock) {
+        self.pending_await_promise_range = Some(b.expression_range);
+    }
+
     fn enter_scope(
         &mut self,
-        _kind: crate::template_scope::ScopeKind,
+        kind: crate::template_scope::ScopeKind,
         bindings: &[crate::template_scope::BoundIdent],
     ) {
-        let mark = self.shadow.names.len();
-        for b in bindings {
-            self.shadow.names.push(b.name.clone());
+        let mark = self.shadow.entries.len();
+        match kind {
+            crate::template_scope::ScopeKind::Each { has_index, .. } => {
+                // Convention from `template_scope`: when `has_index`
+                // is true, the index identifier is the LAST binding;
+                // every preceding entry is a context (item) binding.
+                let items_range = self.pending_each_items_range.take();
+                let context_count = if has_index {
+                    bindings.len().saturating_sub(1)
+                } else {
+                    bindings.len()
+                };
+                let items_text = items_range.and_then(|r| {
+                    self.source
+                        .get(r.start as usize..r.end as usize)
+                        .map(|s| s.trim().to_string())
+                });
+                for (i, b) in bindings.iter().enumerate() {
+                    let resolved = if has_index && i == context_count {
+                        // Index — always `number`.
+                        Some(ResolvedSlotExpr::Type("number".to_string()))
+                    } else if let Some(items) = items_text.as_deref() {
+                        // Bare context binding only — destructured
+                        // patterns (`{#each rows as { id }}`)
+                        // produce multiple bindings whose source
+                        // doesn't match the items expression. Stage 3
+                        // will rewrite via OXC; for now leave them as
+                        // `None` (shadowed but unresolvable).
+                        if context_count == 1 {
+                            Some(ResolvedSlotExpr::Type(format!(
+                                "(typeof {items}) extends Iterable<infer __svn_T> \
+                                 ? __svn_T : never"
+                            )))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    self.shadow.entries.push((b.name.clone(), resolved));
+                }
+            }
+            crate::template_scope::ScopeKind::AwaitThen => {
+                let promise_range = self.pending_await_promise_range;
+                let promise_text = promise_range.and_then(|r| {
+                    self.source
+                        .get(r.start as usize..r.end as usize)
+                        .map(|s| s.trim().to_string())
+                });
+                for b in bindings {
+                    // Bare `{:then v}` → `Awaited<typeof p>`.
+                    // Destructured `{:then { x }}` falls to None
+                    // (Stage 3 OXC rewriter territory).
+                    let resolved = if bindings.len() == 1 {
+                        promise_text.as_deref().map(|p| {
+                            ResolvedSlotExpr::Type(format!("Awaited<typeof {p}>"))
+                        })
+                    } else {
+                        None
+                    };
+                    self.shadow.entries.push((b.name.clone(), resolved));
+                }
+            }
+            crate::template_scope::ScopeKind::AwaitCatch => {
+                // `{:catch e}` — error type is `any` (matches
+                // upstream's `resolveExpression` returning
+                // `__sveltets_2_any({})`).
+                for b in bindings {
+                    let resolved = if bindings.len() == 1 {
+                        Some(ResolvedSlotExpr::Type("any".to_string()))
+                    } else {
+                        None
+                    };
+                    self.shadow.entries.push((b.name.clone(), resolved));
+                }
+            }
+            crate::template_scope::ScopeKind::LetDirective => {
+                // SlotHandler PLAN Stage 4: producer-side
+                // `<Comp let:foo>` resolves `foo` to
+                // `__SvnComponentSlots<typeof Comp>['default']['foo']`.
+                // Consume the stash that `visit_component` /
+                // `visit_svelte_element` (Component / SelfRef) put
+                // there. None means we're inside a non-resolvable
+                // case (consumer wrapper with `slot=`, dynamic
+                // `<svelte:component this={EXPR}>` whose root isn't
+                // a typeable identifier, plain DOM element with
+                // `let:`); fall through as unresolvable so the
+                // slot-attr collector drops references rather than
+                // splicing module scope.
+                let owner = self.pending_let_owner.take();
+                for b in bindings {
+                    let resolved = owner.as_ref().map(|info| {
+                        ResolvedSlotExpr::Type(format!(
+                            "__SvnComponentSlots<typeof {root}>[{slot:?}][{name:?}]",
+                            root = info.component_root.as_str(),
+                            slot = info.slot_name.as_str(),
+                            name = b.name.as_str(),
+                        ))
+                    });
+                    self.shadow.entries.push((b.name.clone(), resolved));
+                }
+            }
+            crate::template_scope::ScopeKind::Snippet
+            | crate::template_scope::ScopeKind::Fragment => {
+                // Snippet params don't have an upstream-equivalent
+                // slot resolution (per PLAN §6 "things not to do").
+                // Fragment scope is a bracket boundary — no bindings
+                // declared. Both fall through as `None`.
+                for b in bindings {
+                    self.shadow.entries.push((b.name.clone(), None));
+                }
+            }
         }
         self.scope_marks.push(mark);
     }
@@ -713,6 +883,25 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
             None,
         );
         collect_component_instantiation(c, self.source, &mut self.summary);
+        // SlotHandler PLAN Stage 4: stash producer-side let-owner
+        // info so the next `enter_scope(LetDirective, …)` can
+        // resolve `let:foo` bindings to
+        // `__SvnComponentSlots<typeof Comp>['default']['foo']`.
+        // Skip when:
+        //   - `slot="X"` attr present (consumer-wrapper case —
+        //     the let-bindings then target the PARENT's slot,
+        //     not this component's; current resolver lacks
+        //     parent context, so leave unresolved).
+        //   - component name isn't a simple identifier (dotted
+        //     forms like `UI.Dropdown` would need a different
+        //     `typeof` shape; defer until a fixture proves it).
+        let has_slot_attr = literal_attr_value(&c.attributes, "slot").is_some();
+        if !has_slot_attr && is_simple_identifier(c.name.as_str()) {
+            self.pending_let_owner = Some(LetOwnerInfo {
+                component_root: c.name.clone(),
+                slot_name: SmolStr::new("default"),
+            });
+        }
     }
 
     fn visit_svelte_element(&mut self, s: &svn_parser::SvelteElement) {
@@ -847,10 +1036,6 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
         }
     }
 
-    fn visit_each_block(&mut self, _b: &svn_parser::EachBlock) {
-        self.summary.each_block_count += 1;
-    }
-
     fn visit_at_const(&mut self, bound_names: &[SmolStr], _expr_range: svn_core::Range) {
         // Push every bound name onto the shadow so subsequent
         // slot-attr / let-directive sites in the same fragment treat
@@ -874,7 +1059,13 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
             self.summary.at_const_names.push(first.clone());
         }
         for name in bound_names {
-            self.shadow.names.push(name.clone());
+            // `{@const NAME = expr}` introduces a template-scope
+            // binding without a value source we can rewrite (the
+            // initialiser walks in the parent scope, but the bound
+            // name itself is opaque to the slot resolver). Push as
+            // `None` — bound but unresolvable. Slot-attr collection
+            // drops references rather than splicing module-scope.
+            self.shadow.entries.push((name.clone(), None));
         }
     }
 }
@@ -903,7 +1094,7 @@ struct WalkCtx<'src> {
 fn collect_slot_def(
     attrs: &[Attribute],
     source: &str,
-    shadow: &ShadowStack,
+    shadow: &ResolverStack,
     summary: &mut TemplateSummary,
 ) {
     use svn_parser::{AttrValuePart, Attribute as A};
@@ -945,20 +1136,36 @@ fn collect_slot_def(
                     continue;
                 };
                 let trimmed = text.trim();
-                // Suppress when the expression's leading identifier
-                // is shadowed by an active template-scope binding.
-                // Bare-identifier check covers `{foo}` / `name={foo}`;
-                // the leading-identifier extraction handles
-                // `{item.id}`, `{rest[0]}`, `{user?.name}`, etc. —
-                // any of those that root in a let/each binding would
-                // otherwise be emitted from module scope and resolve
-                // to the wrong (outer) declaration.
-                //
-                // Stage 2 follow-up will swap this skip for an actual
-                // resolution via the resolver stack.
+                // Resolver stack lookup for the expression's leading
+                // identifier. Three states:
+                //   - In stack with `Some(expr)` AND the expression
+                //     is just a bare identifier — splice the resolved
+                //     form. (Member / call / etc. fall to Stage 3's
+                //     OXC rewriter — for now drop them.)
+                //   - In stack with `None` — bound but unresolvable.
+                //     Drop the slot attr; emitting at module scope
+                //     would resolve to the wrong declaration.
+                //   - Missing from stack — module-level identifier.
+                //     Splice source verbatim.
                 if let Some(head) = leading_identifier(trimmed)
-                    && shadow.contains(head)
+                    && let Some(resolved) = shadow.lookup(head)
                 {
+                    if let Some(expr) = resolved {
+                        // Only handle bare-identifier and shorthand-
+                        // equivalent cases for now: `{item}` /
+                        // `name={item}`. Member expressions
+                        // (`{item.value}`) need OXC rewriting and
+                        // stay dropped at this slice.
+                        if trimmed == head {
+                            entries.push(SlotAttr::Prop {
+                                name: e.name.clone(),
+                                expr: SlotAttrExpr::Resolved(expr.clone()),
+                            });
+                        }
+                        // Non-bare expressions over a resolvable
+                        // shadowed identifier — drop pending Stage 3.
+                    }
+                    // None: bound but unresolvable; drop.
                     continue;
                 }
                 entries.push(SlotAttr::Prop {
@@ -967,7 +1174,16 @@ fn collect_slot_def(
                 });
             }
             A::Shorthand(s) => {
-                if shadow.contains(s.name.as_str()) {
+                if let Some(resolved) = shadow.lookup(s.name.as_str()) {
+                    if let Some(expr) = resolved {
+                        entries.push(SlotAttr::Prop {
+                            name: s.name.clone(),
+                            expr: SlotAttrExpr::Resolved(expr.clone()),
+                        });
+                    }
+                    // None or Some-but-non-bare-already-handled-above:
+                    // shorthand always passes the bare-name check, so
+                    // the only fall-through here is None (drop).
                     continue;
                 }
                 entries.push(SlotAttr::Prop {
@@ -1313,6 +1529,21 @@ fn is_ident_start(c: char) -> bool {
 #[inline]
 fn is_ident_continue(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '$'
+}
+
+/// Whether `s` is a valid bare JS identifier (no dots, no
+/// brackets, no whitespace). Used to gate the SlotHandler
+/// let-owner resolver — only simple-named components like
+/// `<Wrapper let:foo>` get the `__SvnComponentSlots<typeof Wrapper>`
+/// projection. Dotted forms (`<UI.Dropdown let:foo>`) would
+/// produce malformed `typeof` references; those fall back to
+/// the unresolved-shadow path.
+fn is_simple_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    is_ident_start(first) && chars.all(is_ident_continue)
 }
 
 /// Inspect a `<Component ...>` site and, if it's a shape we know how to

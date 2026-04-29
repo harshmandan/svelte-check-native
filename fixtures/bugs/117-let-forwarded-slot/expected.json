@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 10,
+            "column": 18,
+            "code": 2339
+        }
+    ],
+    "_note": "PLAN design/slot_handler/PLAN.md Stage 4: producer-side `<Comp let:foo>` resolves to `__SvnComponentSlots<typeof Comp>['default']['foo']` so let-forwarded slot props carry the child's declared slot type up through the wrapper. Pre-Stage-4 the slot-def collector dropped `tooltip` (because `<Inner let:tooltip>` shadowed the identifier and the resolver had no upstream-equivalent rewrite); the consumer's `<Wrapper let:tooltip>` then typed `tooltip` as `any` and any field access passed silently. This is the canonical layerchart wrapper pattern (Chart wraps TooltipContext / BrushContext / LayerCake and forwards their let-bindings via its own slot). Post-Stage-4 the resolver stack builds the projection at scope-entry; the slot-def emits `tooltip` as a Type assertion `undefined as any as (__SvnComponentSlots<typeof Inner>['default']['tooltip'])`. Consumer's typo'd `tooltip.z` access then fires TS2339 against the resolved `{ x: number; y: number }` shape. The new `__SvnComponentSlots<C>` shim helper extracts S from a class constructor's `SvelteComponent<P, E, S>` instance type."
+}

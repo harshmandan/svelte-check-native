@@ -1,0 +1,7 @@
+{
+    "emit_not_contains": [
+        "type $$Events =",
+        "type $$ComponentProps ="
+    ],
+    "_note": "Reviewer follow-up #1 (Fix A): the `type $$Events = …` and `type $$ComponentProps = …` aliases used to emit unconditionally. JS overlays (`.svelte.svn.js`) can't carry TS-only `type X = …` syntax — pure-JS parsers reject it, and tsgo's `allowJs` mode flags it as syntactically invalid when `checkJs` is on. Post-fix both aliases gate on the `is_ts` flag; JS overlays emit cleanly without them. The Child here uses `<script strictEvents>` with NO `lang=\"ts\"` attribute — pre-fix the emit included the synthesised event-type alias even though the rest of the overlay is JS. Strict event narrowing for JS overlays is a separate deferred concern (would require JSDoc-friendly equivalents of the alias's mapped/conditional types — JS overlays currently fall through to the lax events surface)."
+}

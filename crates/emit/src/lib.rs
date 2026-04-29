@@ -819,7 +819,14 @@ fn emit_document_with_render_name(
     // annotation rewrite (`: $$ComponentProps`) downstream can reference
     // it. The `T` in `<script generics="T">` is the render fn's binder
     // and is in scope here.
-    if alias_in_render_body && let Some(body) = alias_body.as_deref() {
+    // Reviewer follow-up #1: same TS-only gate as `type $$Events`
+    // below — JS overlays can't carry TS-only `type X = …`
+    // declarations. The JS render-fn return short-circuits and
+    // doesn't reference `$$ComponentProps`; the JS default export
+    // gets its Props through `Awaited<ReturnType<typeof
+    // $$render>>['props']` which already projects the destructure's
+    // declared type. Skipping the alias on JS is safe.
+    if is_ts && alias_in_render_body && let Some(body) = alias_body.as_deref() {
         let _ = writeln!(buf, "    type $$ComponentProps = {body};");
     }
     // Synthesised `type $$Events = { [K in keyof <T>]:
@@ -897,7 +904,21 @@ fn emit_document_with_render_name(
     } else {
         None
     };
-    if let Some(body) = events_alias_body.as_deref() {
+    // Reviewer follow-up #1: gate the `type $$Events = …` alias on
+    // TS-only emission. JS overlays (`.svelte.svn.js`) can't carry
+    // TS-only `type X = …` syntax — pure-JS parsers reject it, and
+    // even tsgo's `allowJs` mode flags it as syntactically invalid
+    // when `checkJs` is on. The alias is dead code in JS overlays
+    // anyway: the JS render-fn return short-circuits to `{ props }`
+    // (no events field), and the JS default export is a JSDoc-typed
+    // `Component<__SvnDefaultProps>` with no events surface — so
+    // there's nothing for the alias to feed into. Skip on JS;
+    // strict event narrowing for JS overlays is a separate (larger)
+    // port that requires JSDoc-friendly equivalents of the
+    // mapped/conditional types this alias produces.
+    if is_ts
+        && let Some(body) = events_alias_body.as_deref()
+    {
         let _ = writeln!(buf, "    type $$Events = {body};");
     }
     let ScriptAndTemplateAnalysis {

@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "Round-8 follow-up #1: `<slot {...item}>` inside `{#each items as item}` produces `SlotAttr::Spread { expr: Resolved(Type(T)) }` — the analyze-side rewriter cast the shadowed `item` to a type-form. Pre-fix the props_emit Spread path called `write_slot_attr_expr_inner` which had a no-op arm for Resolved(Type(_)), emitting `slots: { 'default': { ...() } }` — a literal `...()` is a parse error and aborts tsgo's whole-file check, degrading every downstream slot-let lookup to `any`. Post-fix that arm emits `undefined as any as (T)` so the spread becomes `...(undefined as any as T)` — syntactically valid AND projecting the right element shape. Producer here exposes `<slot {...row}>` over `{#each rows as row}`; Consumer's `let:id` and `let:label` destructure the spread shape and the typed `takesNumber(id)` / `takesString(label)` calls pass."
+}

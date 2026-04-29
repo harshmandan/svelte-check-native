@@ -377,13 +377,19 @@ fn write_slot_attr_expr_inner(
         svn_analyze::SlotAttrExpr::Resolved(svn_analyze::ResolvedSlotExpr::Value(v)) => {
             out.push_str(v);
         }
-        svn_analyze::SlotAttrExpr::Resolved(svn_analyze::ResolvedSlotExpr::Type(_)) => {
-            // Type-form already handled by the outer
-            // `write_slot_attr_expr` paren-cast wrapper. Reaching
-            // this arm only happens for Spread { expr: Type(...) }
-            // which is an error shape — defensively splice the
-            // inner type without a paren cast (the caller's `(...)`
-            // around `...(...)` keeps it syntactically valid).
+        svn_analyze::SlotAttrExpr::Resolved(svn_analyze::ResolvedSlotExpr::Type(t)) => {
+            // Round-8 follow-up #1: this arm is only reached via the
+            // Spread case (`<slot {...row}>` whose `row` is shadowed
+            // and rewrites to a type-form). The Prop case strips
+            // Type() at the outer `write_slot_attr_expr` and never
+            // reaches this inner writer for Type. Pre-fix this arm
+            // wrote nothing — the spread emitted as `...()` (empty),
+            // which is a syntax error inside an object literal.
+            // Emit a typed cast so the spread becomes
+            // `...(undefined as any as (T))`.
+            out.push_str("undefined as any as (");
+            out.push_str(t);
+            out.push(')');
         }
     }
 }

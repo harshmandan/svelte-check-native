@@ -23,8 +23,7 @@ use svn_parser::{Document, Fragment};
 use crate::emit_buffer::EmitBuffer;
 use crate::process_instance_script_content;
 use crate::svelte4::compat::{
-    contains_export_let, fragment_contains_slot, has_strict_events_attr, is_runes_mode,
-    is_svelte4_component,
+    contains_export_let, fragment_contains_slot, is_runes_mode, is_svelte4_component,
 };
 use crate::util::{generic_arg_names, render_class_name};
 
@@ -133,7 +132,6 @@ pub(crate) fn emit_default_export_declarations_ts(
     if should_emit_fn_component_shape(
         doc,
         fragment,
-        split,
         generics,
         has_dispatcher_call,
         has_strict_events_decl,
@@ -389,14 +387,29 @@ pub(crate) fn emit_default_export_declarations_ts(
 /// X, B>` interface, callable-only) instead of the per-component
 /// `$$IsomorphicComponent` interface?
 ///
-/// Mirrors upstream `addComponentExport.ts:343` — true iff:
-/// - non-generic
-/// - Svelte 5 runes mode
-/// - no `<slot>` or `let:` consumers in the template
-/// - no events: no `$$Events` interface/type, no `strictEvents` attr,
-///   no `createEventDispatcher` calls, no Svelte-4 `export let`,
-///   no `$$props`/`$$restProps`/`$$slots` references, no exported
-///   instance-script locals
+/// Mirrors upstream `addComponentExport.ts:343`:
+///
+/// ```text
+/// exportedNames.isRunesMode() && !usesSlots && !events.hasEvents()
+/// ```
+///
+/// Where `events.hasEvents()` (`ComponentEvents.ts`) is true if any
+/// of: declared `$$Events` interface/type, a typed
+/// `createEventDispatcher<T>()`, an untyped dispatcher whose
+/// `dispatch('name', …)` calls supply a string-literal first arg, OR
+/// a bubbled DOM/component event. We collect the same set up-stream
+/// and pass it in as `has_strict_events_decl || has_dispatcher_call
+/// || has_bubbled_events`.
+///
+/// Round-6 follow-up #3: pre-fix the native gate also blocked on
+/// `<svelte:options strictEvents />` (no-op in runes mode),
+/// `$$slots`/`$$restProps`/`$$props` substrings (Svelte-4 features
+/// that runes mode disallows anyway), `export let` in the instance
+/// or module script, and any non-empty `exported_locals`. None of
+/// those affect upstream's gate, so they were drift — they pushed
+/// otherwise-eligible runes components onto the iso shape and broke
+/// `Parameters<typeof Comp>` / `(typeof Comp)[]` patterns that
+/// require the callable-only Component<> form.
 ///
 /// The Component<> shape's lack of a `new(...)` ctor is what makes
 /// `Parameters<typeof Comp>` and `(typeof Comp)[]` user patterns work
@@ -406,7 +419,6 @@ pub(crate) fn emit_default_export_declarations_ts(
 fn should_emit_fn_component_shape(
     doc: &Document<'_>,
     fragment: &Fragment,
-    split: Option<&process_instance_script_content::SplitScript>,
     generics: Option<&str>,
     has_dispatcher_call: bool,
     has_strict_events_decl: bool,
@@ -421,47 +433,12 @@ fn should_emit_fn_component_shape(
     if fragment_contains_slot(fragment) {
         return false;
     }
-    if has_strict_events_decl || has_strict_events_attr(doc) {
-        return false;
-    }
-    // AST-based dispatcher presence check, computed by the caller in
-    // lib.rs where the parsed instance/module ASTs already exist.
-    // Substring detection (the previous gate) false-fired on
-    // comments / unused imports / string literals containing the
-    // name. Mirrors upstream's `events.hasEvents()`.
-    if has_dispatcher_call {
-        return false;
-    }
-    // Reviewer follow-up #2 (round 5): bubbled events also count as
-    // `events.hasEvents()` upstream. `ComponentEvents.extractEvents`
-    // (`ComponentEvents.ts:80`) collects bubbled DOM and component
-    // events, so a runes-mode component with `<button on:click>` or
-    // `<Child on:click />` falls out of the `__sveltets_2_fn_component`
-    // gate. Pre-fix native still picked fn shape and intersected the
-    // `__svn_events` marker on top — narrowed `\$on` typing landed
-    // either way, but the value's constructor / class compatibility
-    // diverged from upstream.
-    if has_bubbled_events {
-        return false;
-    }
-    if doc.source.contains("$$slots")
-        || doc.source.contains("$$restProps")
-        || doc.source.contains("$$props")
-    {
-        return false;
-    }
-    let instance_src = doc
-        .instance_script
-        .as_ref()
-        .map(|s| s.content)
-        .unwrap_or("");
-    let module_src = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
-    if contains_export_let(instance_src) || contains_export_let(module_src) {
-        return false;
-    }
-    if let Some(s) = split
-        && !s.exported_locals.is_empty()
-    {
+    // events.hasEvents() — declared interface, typed/untyped
+    // dispatcher with detectable event names, or bubbled DOM/component
+    // events. Upstream's gate folds all three sources behind one
+    // boolean; we maintain three booleans so we can apply each at the
+    // right emit site, but at the gate they collapse to the same OR.
+    if has_strict_events_decl || has_dispatcher_call || has_bubbled_events {
         return false;
     }
     true

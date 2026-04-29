@@ -195,6 +195,21 @@ pub(crate) fn emit_svelte_element_node(
             crate::nodes::let_directive::collect_let_destructures(source, &s.attributes)
         };
         let has_let_bindings = !let_destructures.is_empty();
+        // Reviewer follow-up #6: pre-scan children for
+        // `<Inner slot="X" let:foo>` consumers — when ANY exists,
+        // the parent's component instance must be hoisted to a
+        // local so the consumer wrapper can reference
+        // `parent.$$slot_def["X"]`. Same shape as
+        // `emit_component_node`'s pre-scan; without it the
+        // svelte:component / svelte:self path passed `false` for
+        // the hoist signal and named-slot child consumers got
+        // dropped (their let-names became undeclared inside the
+        // child walk).
+        let any_child_consumes_slot_let = s
+            .children
+            .nodes
+            .iter()
+            .any(|n| crate::nodes::let_directive::child_is_slot_let_consumer(source, n));
         crate::nodes::inline_component::emit_component_call(
             buf,
             source,
@@ -203,7 +218,7 @@ pub(crate) fn emit_svelte_element_node(
             &snippet_children,
             insts,
             action_counter,
-            has_let_bindings,
+            has_let_bindings || any_child_consumes_slot_let,
         );
         let child_depth = depth + 1;
         let final_child_depth = if has_let_bindings {
@@ -221,12 +236,24 @@ pub(crate) fn emit_svelte_element_node(
         } else {
             child_depth
         };
-        // Walk non-snippet children inside the open block.
+        // Walk non-snippet children via `walk_child_with_slot_let`
+        // (not plain `emit_template_node`) so any
+        // `<Inner slot="X" let:foo>` consumer below opens its
+        // wrapper destructure against THIS component's
+        // `$$slot_def["X"]`. Mirrors `emit_component_node`.
         for child in &s.children.nodes {
             if matches!(child, svn_parser::Node::SnippetBlock(_)) {
                 continue;
             }
-            crate::emit_template_node(buf, source, child, final_child_depth, insts, action_counter);
+            crate::nodes::let_directive::walk_child_with_slot_let(
+                buf,
+                source,
+                child,
+                final_child_depth,
+                insts,
+                action_counter,
+                Some(inst),
+            );
         }
         if has_let_bindings {
             let inner_close_indent = "    ".repeat(child_depth);

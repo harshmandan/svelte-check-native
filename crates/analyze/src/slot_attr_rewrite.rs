@@ -526,10 +526,104 @@ fn walk_statement_for_value_rewrite(
                 walk_statement_for_value_rewrite(alt, lookup, shadowed, edits, bail);
             }
         }
-        // For brevity, other statement shapes (loops, try, switch)
-        // are walked shallowly — the common slot-attr shape we care
-        // about is `(x) => row.id` (single expression body), not
-        // arbitrarily complex bodies.
+        // Round-13 follow-up #5: extend coverage so closed-over
+        // template locals inside loops/try/switch/function-decl get
+        // rewritten too. Pre-fix native bailed silently and the
+        // identifiers leaked to module scope.
+        Statement::ForStatement(s) => {
+            if let Some(init) = &s.init {
+                use oxc_ast::ast::ForStatementInit;
+                match init {
+                    ForStatementInit::VariableDeclaration(decl) => {
+                        for d in &decl.declarations {
+                            collect_pattern_idents(&d.id, shadowed);
+                            if let Some(d_init) = &d.init {
+                                walk_value_expr(d_init, lookup, shadowed, edits, bail, false);
+                            }
+                        }
+                    }
+                    other => {
+                        if let Some(expr) = other.as_expression() {
+                            walk_value_expr(expr, lookup, shadowed, edits, bail, false);
+                        }
+                    }
+                }
+            }
+            if let Some(test) = &s.test {
+                walk_value_expr(test, lookup, shadowed, edits, bail, false);
+            }
+            if let Some(update) = &s.update {
+                walk_value_expr(update, lookup, shadowed, edits, bail, false);
+            }
+            walk_statement_for_value_rewrite(&s.body, lookup, shadowed, edits, bail);
+        }
+        Statement::ForInStatement(s) => {
+            walk_value_expr(&s.right, lookup, shadowed, edits, bail, false);
+            walk_statement_for_value_rewrite(&s.body, lookup, shadowed, edits, bail);
+        }
+        Statement::ForOfStatement(s) => {
+            walk_value_expr(&s.right, lookup, shadowed, edits, bail, false);
+            walk_statement_for_value_rewrite(&s.body, lookup, shadowed, edits, bail);
+        }
+        Statement::WhileStatement(s) => {
+            walk_value_expr(&s.test, lookup, shadowed, edits, bail, false);
+            walk_statement_for_value_rewrite(&s.body, lookup, shadowed, edits, bail);
+        }
+        Statement::DoWhileStatement(s) => {
+            walk_statement_for_value_rewrite(&s.body, lookup, shadowed, edits, bail);
+            walk_value_expr(&s.test, lookup, shadowed, edits, bail, false);
+        }
+        Statement::SwitchStatement(s) => {
+            walk_value_expr(&s.discriminant, lookup, shadowed, edits, bail, false);
+            for case in &s.cases {
+                if let Some(test) = &case.test {
+                    walk_value_expr(test, lookup, shadowed, edits, bail, false);
+                }
+                for stmt in &case.consequent {
+                    walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
+                }
+            }
+        }
+        Statement::TryStatement(s) => {
+            for stmt in &s.block.body {
+                walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
+            }
+            if let Some(handler) = &s.handler {
+                let before = shadowed.len();
+                if let Some(param) = &handler.param {
+                    collect_pattern_idents(&param.pattern, shadowed);
+                }
+                for stmt in &handler.body.body {
+                    walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
+                }
+                shadowed.truncate(before);
+            }
+            if let Some(finalizer) = &s.finalizer {
+                for stmt in &finalizer.body {
+                    walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
+                }
+            }
+        }
+        Statement::LabeledStatement(s) => {
+            walk_statement_for_value_rewrite(&s.body, lookup, shadowed, edits, bail);
+        }
+        Statement::FunctionDeclaration(fd) => {
+            // Function decls inside callback bodies — walk with their
+            // params pushed onto the shadow stack.
+            if let Some(body) = &fd.body {
+                let before = shadowed.len();
+                for param in &fd.params.items {
+                    collect_pattern_idents(&param.pattern, shadowed);
+                }
+                for stmt in &body.statements {
+                    walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
+                }
+                shadowed.truncate(before);
+            }
+        }
+        Statement::ThrowStatement(t) => {
+            walk_value_expr(&t.argument, lookup, shadowed, edits, bail, false);
+        }
         _ => {}
     }
 }

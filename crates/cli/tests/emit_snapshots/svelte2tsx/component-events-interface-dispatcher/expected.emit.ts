@@ -22,7 +22,7 @@ async function $$render_406cac59() {
           
      
 
-    const dispatch = createEventDispatcher();
+    const dispatch = createEventDispatcher<__SvnCustomEvents<$$Events>>();
     ;(async () => {
         // template type-check body (incremental)
     });

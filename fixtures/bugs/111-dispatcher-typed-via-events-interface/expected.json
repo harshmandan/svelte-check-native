@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Child.svelte",
+            "line": 27,
+            "column": 28,
+            "code": 2353
+        }
+    ],
+    "_note": "Reviewer follow-up #3b: when `interface $$Events` is declared and `createEventDispatcher()` is called UNTYPED, upstream svelte2tsx rewrites the call to `createEventDispatcher<__sveltets_2_CustomEvents<$$Events>>()` so `dispatch('name', detail)` calls inside the component type-check against $$Events. Pre-fix our pipeline left the dispatcher untyped — only consumers' `<Child on:NAME>` got narrowed (via the synth_events path), but bad `dispatch(...)` calls inside the component passed silently. Post-fix the new `dispatcher_typing_rewrite` pass walks the parsed instance script for top-level `const X = createEventDispatcher()` (no type args, Svelte-imported, possibly aliased) and splices `<__SvnCustomEvents<$$Events>>` after the callee identifier. The wrong-shape `dispatch('click', { wrong: 'string' })` then fires TS2353 at the unknown-key position. Mirrors upstream `ComponentEvents.ts:130`."
+}

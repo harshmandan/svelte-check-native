@@ -375,6 +375,24 @@ type __SvnComponentEvents<C> = C extends { readonly __svn_events: infer E }
     : Record<string, any>;
 
 /**
+ * Reviewer follow-up #3b: convert a wrapped `$$Events` map back to
+ * the DETAIL form for `createEventDispatcher`'s type argument. The
+ * wrapped form `{ name: CustomEvent<T> }` is what the user declares
+ * in `interface $$Events`; the dispatcher's `<T>` wants the inner
+ * detail type for each entry, so unwrap each `CustomEvent<…>`
+ * back to `…`.
+ *
+ * Mirrors upstream `__sveltets_2_CustomEvents` in
+ * `svelte2tsx/svelte-shims.d.ts`. Used in the synthesised
+ * `createEventDispatcher<__SvnCustomEvents<$$Events>>()` rewrite —
+ * after the rewrite, `dispatch('name', detail)` calls type-check
+ * `detail` against the original `$$Events.name` payload type.
+ */
+type __SvnCustomEvents<T> = {
+    [K in keyof T]: T[K] extends CustomEvent<infer D> ? D : T[K];
+};
+
+/**
  * Fresh `any` placeholder. Used as the anchor / target argument in the
  * emitted `new Comp({ target: __svn_any(), props: {...} })` call.
  *

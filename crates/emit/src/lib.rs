@@ -61,6 +61,7 @@ mod props_emit;
 mod render_function;
 mod script_body_rewrites;
 mod script_template_analysis;
+mod dispatcher_typing_rewrite;
 mod state_nullish_rewrite;
 mod void_block;
 // SVELTE-4-COMPAT: droppable submodule for Svelte-4 emit rewrites.
@@ -653,6 +654,17 @@ fn emit_document_with_render_name(
         // explicit `<T>` no longer propagates as contextual type to
         // the argument.
         let after_state = state_nullish_rewrite::rewrite(&after_reactive, s.lang);
+        // Reviewer follow-up #3b: when `interface $$Events` is
+        // declared, rewrite untyped `createEventDispatcher()` calls
+        // to `createEventDispatcher<__SvnCustomEvents<$$Events>>()`
+        // so `dispatch('name', detail)` calls inside the component
+        // type-check against $$Events. Mirrors upstream
+        // `ComponentEvents.ts:130`.
+        let after_state = if has_strict_events_decl {
+            dispatcher_typing_rewrite::rewrite(&after_state, s.lang)
+        } else {
+            after_state
+        };
         // Inject `: $$ComponentProps` on the untyped `$props()`
         // destructure pattern when an alias was synthesized. Without
         // this, `const { data } = $props()` picks up `$props()`'s loose

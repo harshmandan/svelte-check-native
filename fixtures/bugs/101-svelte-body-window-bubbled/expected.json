@@ -1,10 +1,10 @@
 {
     "emit_contains": [
-        "\"click\": HTMLBodyElementEventMap[\"click\"]",
-        "\"resize\": WindowEventMap[\"resize\"]"
+        "\"click\": WindowEventMap[\"click\"]",
+        "\"resize\": HTMLBodyElementEventMap[\"resize\"]"
     ],
     "emit_not_contains": [
         "\"click\": HTMLElementEventMap[\"click\"]"
     ],
-    "_note": "Reviewer follow-up #6: bare `on:NAME` on `<svelte:body>` / `<svelte:window>` was not mapped into `$$Events`. Pre-fix the bubbled-DOM-event collector hardcoded `HTMLElementEventMap` for all bubbles and explicitly skipped svelte:body/window. Post-fix the collector tags each captured event with a `BubbledDomEventScope` (Element / SvelteBody / SvelteWindow) and emit projects `HTMLElementEventMap` / `HTMLBodyElementEventMap` / `WindowEventMap` per source. Mirrors upstream svelte2tsx `event-handler.ts:63-72`. `<svelte:document>` stays out — upstream's `event-handler.ts` doesn't handle it either."
+    "_note": "Reviewer follow-up #6: bare `on:NAME` on `<svelte:body>` / `<svelte:window>` was not mapped into `$$Events`. Pre-fix the bubbled-DOM-event collector hardcoded `HTMLElementEventMap` for all bubbles and explicitly skipped svelte:body/window. Post-fix the collector tags each captured event with a `BubbledDomEventScope` (Element / SvelteBody / SvelteWindow). Reviewer follow-up #7 then aligned the projected event-map names with upstream's odd shim convention (`svelte-shims.d.ts:185-190`): `svelte:body` projects via `WindowEventMap` and `svelte:window` projects via `HTMLBodyElementEventMap`. Naming is swapped relative to what TS itself uses, but it's the source of truth for parity."
 }

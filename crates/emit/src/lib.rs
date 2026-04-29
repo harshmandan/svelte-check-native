@@ -524,10 +524,20 @@ fn emit_document_with_render_name(
                 if !body.is_empty() {
                     body.push_str(", ");
                 }
+                // Reviewer follow-up #7: upstream svelte2tsx's shim
+                // (`svelte-shims.d.ts:185-190`) declares
+                // `__sveltets_2_mapBodyEvent` returning
+                // `WindowEventMap[K]` and `__sveltets_2_mapWindowEvent`
+                // returning `HTMLBodyElementEventMap[K]`. The naming
+                // is upstream-internal (not what TS itself uses) and
+                // looks swapped relative to the DOM API, but it's
+                // the source of truth for parity. Mirror the swap
+                // so consumer-side handler types match upstream
+                // byte-for-byte.
                 let map_name = match ev.scope {
                     svn_analyze::BubbledDomEventScope::Element => "HTMLElementEventMap",
-                    svn_analyze::BubbledDomEventScope::SvelteBody => "HTMLBodyElementEventMap",
-                    svn_analyze::BubbledDomEventScope::SvelteWindow => "WindowEventMap",
+                    svn_analyze::BubbledDomEventScope::SvelteBody => "WindowEventMap",
+                    svn_analyze::BubbledDomEventScope::SvelteWindow => "HTMLBodyElementEventMap",
                 };
                 let _ = write!(body, "{n:?}: {map_name}[{n:?}]", n = ev.name.as_str());
             }

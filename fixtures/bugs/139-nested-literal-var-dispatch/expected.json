@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "Round-10 follow-up #3: a `const NAME = 'literal'` declared inside a function body should resolve a sibling `dispatch(NAME)` to its literal name. Pre-fix native's literal-var collection inside `find_dispatched_event_names` was top-level only, so the dispatched-name scan (which already recursed into function bodies) couldn't see the nested literal binding — `dispatch(EV)` resolved to nothing and contributed no event surface. Upstream's TS walker visits all variable declarations (`ComponentEvents.ts:210`). Post-fix native's literal-var pass mirrors the dispatched-name scan's recursion via `scan_statement_for_literal_vars`. Inner here exposes `function fire() { const EV = 'save'; dispatch(EV) }` — the synth events surface includes `'save'`, so Consumer's `<Inner on:save={handle}>` typechecks against the typed-events map. Pre-fix `'save'` was missed and the consumer would have fallen through to the lax untyped path."
+}

@@ -819,31 +819,20 @@ pub fn find_dispatched_event_names(
     dispatcher_locals: &[String],
 ) -> Vec<String> {
     use std::collections::{HashMap, HashSet};
-    // First pass: collect `const NAME = 'literal'` top-level
-    // bindings. Resolves the (#3c) string-literal variable form so
-    // `const ev = 'click'; dispatch(ev)` contributes 'click' to
+    // First pass: collect `const NAME = 'literal'` bindings anywhere
+    // in the script. Resolves the (#3c) string-literal variable form
+    // so `const ev = 'click'; dispatch(ev)` contributes 'click' to
     // the synthesised event set.
+    //
+    // Round-10 follow-up #3: pre-fix this was top-level only — a
+    // `const ev = 'save'` inside `function f(){ … dispatch(ev) }`
+    // didn't resolve, so the dispatched name was missed. The
+    // dispatched-name scan recurses through Function/Block/If/Arrow/
+    // Function expression bodies; the literal-var collection now
+    // mirrors the same recursion.
     let mut literal_vars: HashMap<String, String> = HashMap::new();
     for stmt in &program.body {
-        let Statement::VariableDeclaration(decl) = stmt else {
-            continue;
-        };
-        // Limit to `const` to be conservative — `let` vars can be
-        // reassigned and the static name would lie about the
-        // dispatched set.
-        if !matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Const) {
-            continue;
-        }
-        for d in &decl.declarations {
-            let BindingPattern::BindingIdentifier(bid) = &d.id else {
-                continue;
-            };
-            let Some(init) = &d.init else { continue };
-            let Expression::StringLiteral(s) = init else {
-                continue;
-            };
-            literal_vars.insert(bid.name.to_string(), s.value.to_string());
-        }
+        scan_statement_for_literal_vars(stmt, &mut literal_vars);
     }
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
@@ -857,6 +846,65 @@ pub fn find_dispatched_event_names(
         );
     }
     out
+}
+
+/// Round-10 follow-up #3: walk the program statement tree
+/// collecting `const NAME = 'literal'` bindings into `literal_vars`.
+/// Recurses through Function/Block/If statements AND into arrow/
+/// function expression bodies attached as variable initializers
+/// (matches `scan_statement_for_dispatched_names`'s recursion).
+fn scan_statement_for_literal_vars(
+    stmt: &Statement<'_>,
+    literal_vars: &mut std::collections::HashMap<String, String>,
+) {
+    match stmt {
+        Statement::VariableDeclaration(decl) => {
+            // Limit to `const` to be conservative — `let` vars can
+            // be reassigned and the static name would lie about the
+            // dispatched set.
+            let is_const =
+                matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Const);
+            for d in &decl.declarations {
+                if let Some(init) = &d.init {
+                    if is_const
+                        && let BindingPattern::BindingIdentifier(bid) = &d.id
+                        && let Expression::StringLiteral(s) = init
+                    {
+                        literal_vars.insert(bid.name.to_string(), s.value.to_string());
+                    }
+                    // Recurse into a function/arrow body initializer
+                    // for nested `const NAME = 'literal'`.
+                    for s in statements_inside_function_expr(init) {
+                        scan_statement_for_literal_vars(s, literal_vars);
+                    }
+                }
+            }
+        }
+        Statement::FunctionDeclaration(fd) => {
+            if let Some(body) = &fd.body {
+                for s in &body.statements {
+                    scan_statement_for_literal_vars(s, literal_vars);
+                }
+            }
+        }
+        Statement::IfStatement(s) => {
+            scan_statement_for_literal_vars(&s.consequent, literal_vars);
+            if let Some(alt) = &s.alternate {
+                scan_statement_for_literal_vars(alt, literal_vars);
+            }
+        }
+        Statement::BlockStatement(b) => {
+            for s in &b.body {
+                scan_statement_for_literal_vars(s, literal_vars);
+            }
+        }
+        Statement::ExpressionStatement(es) => {
+            for s in statements_inside_function_expr(&es.expression) {
+                scan_statement_for_literal_vars(s, literal_vars);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn scan_statement_for_dispatched_names(

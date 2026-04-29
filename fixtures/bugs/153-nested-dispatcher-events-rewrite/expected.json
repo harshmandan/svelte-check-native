@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Inner.svelte",
+            "line": 27,
+            "column": 20,
+            "code": 2353
+        }
+    ],
+    "_note": "Round-13 follow-up #2-rewrite: when `interface $$Events` is declared, untyped `createEventDispatcher()` calls get rewritten to `createEventDispatcher<__SvnCustomEvents<$$Events>>()` so internal `dispatch('name', detail)` calls type-check against the declared event surface. Pre-fix `dispatcher_typing_rewrite::rewrite` only walked `parsed.program.body` (top level), so a dispatcher declared inside `function init() { const d = createEventDispatcher() }` stayed un-rewritten and `d('save', wrongShape)` calls passed the lax `<{}>` inference. Native now recurses through Function/Block/If/For/While/Switch/Try/Labeled bodies + arrow/function args (mirrors the dispatcher walkers in props.rs and upstream's `ComponentEvents.ts:130` TS walk). Inner here declares the dispatcher inside `function init()`; the post-fix rewrite makes `d.save`'s detail type `{id: number}`, and calling with `{wrong: 'shape'}` correctly fires TS2353 (`Object literal may only specify known properties, and 'wrong' does not exist in type '{ id: number; }'`)."
+}

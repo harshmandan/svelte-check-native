@@ -42,34 +42,14 @@ pub fn rewrite(content: &str, lang: ScriptLang) -> String {
     }
 
     let mut insertions: Vec<(usize, &'static str)> = Vec::new();
+    // Round-13 follow-up #2: walk recursively so nested untyped
+    // dispatchers (inside function bodies, control-flow blocks,
+    // callback args) also get the typed-events rewrite. Pre-fix
+    // only top-level VariableDeclarations were rewritten;
+    // `function f() { const d = createEventDispatcher() }`'s `d`
+    // dispatched calls then bypassed the typed-events check.
     for stmt in &parsed.program.body {
-        let Statement::VariableDeclaration(decl) = stmt else {
-            continue;
-        };
-        for declarator in &decl.declarations {
-            // Binding identifier (`const X = …`) — destructures /
-            // patterns aren't dispatcher bindings.
-            if !matches!(&declarator.id, BindingPattern::BindingIdentifier(_)) {
-                continue;
-            }
-            let Some(init) = &declarator.init else {
-                continue;
-            };
-            let Expression::CallExpression(call) = init else {
-                continue;
-            };
-            let Expression::Identifier(callee_id) = &call.callee else {
-                continue;
-            };
-            if !ctor_locals.iter().any(|n| n == callee_id.name.as_str()) {
-                continue;
-            }
-            // Already typed — don't double-specify.
-            if call.type_arguments.is_some() {
-                continue;
-            }
-            insertions.push((callee_id.span.end as usize, "<__SvnCustomEvents<$$Events>>"));
-        }
+        collect_rewrite_insertions(stmt, &ctor_locals, &mut insertions);
     }
 
     if insertions.is_empty() {
@@ -83,6 +63,170 @@ pub fn rewrite(content: &str, lang: ScriptLang) -> String {
         out.insert_str(pos, text);
     }
     out
+}
+
+/// Round-13 #2-rewrite: walk a statement and collect the byte
+/// position of every untyped `<ctor-local>()` call's callee end.
+/// Recurses through Function/Block/If/For/While/Switch/Try/
+/// LabeledStatement bodies + arrow/function expression bodies
+/// attached as VarDecl initializers / IIFE wrappers / call-arg
+/// callbacks. Mirrors the dispatcher walkers in
+/// `crates/analyze/src/props.rs`.
+fn collect_rewrite_insertions(
+    stmt: &Statement<'_>,
+    ctor_locals: &[String],
+    out: &mut Vec<(usize, &'static str)>,
+) {
+    match stmt {
+        Statement::VariableDeclaration(decl) => {
+            for declarator in &decl.declarations {
+                if !matches!(&declarator.id, BindingPattern::BindingIdentifier(_)) {
+                    continue;
+                }
+                let Some(init) = &declarator.init else {
+                    continue;
+                };
+                if let Expression::CallExpression(call) = init
+                    && let Expression::Identifier(callee_id) = &call.callee
+                    && ctor_locals.iter().any(|n| n == callee_id.name.as_str())
+                    && call.type_arguments.is_none()
+                {
+                    out.push((callee_id.span.end as usize, "<__SvnCustomEvents<$$Events>>"));
+                }
+                for s in stmts_in_function_expr(init) {
+                    collect_rewrite_insertions(s, ctor_locals, out);
+                }
+            }
+        }
+        Statement::FunctionDeclaration(fd) => {
+            if let Some(body) = &fd.body {
+                for s in &body.statements {
+                    collect_rewrite_insertions(s, ctor_locals, out);
+                }
+            }
+        }
+        Statement::IfStatement(s) => {
+            collect_rewrite_insertions(&s.consequent, ctor_locals, out);
+            if let Some(alt) = &s.alternate {
+                collect_rewrite_insertions(alt, ctor_locals, out);
+            }
+        }
+        Statement::BlockStatement(b) => {
+            for s in &b.body {
+                collect_rewrite_insertions(s, ctor_locals, out);
+            }
+        }
+        Statement::ExpressionStatement(es) => {
+            for s in stmts_in_function_expr(&es.expression) {
+                collect_rewrite_insertions(s, ctor_locals, out);
+            }
+        }
+        Statement::ForStatement(s) => {
+            if let Some(init) = &s.init {
+                use oxc_ast::ast::ForStatementInit;
+                match init {
+                    ForStatementInit::VariableDeclaration(decl) => {
+                        for d in &decl.declarations {
+                            if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
+                                continue;
+                            }
+                            let Some(d_init) = &d.init else { continue };
+                            if let Expression::CallExpression(call) = d_init
+                                && let Expression::Identifier(callee_id) = &call.callee
+                                && ctor_locals.iter().any(|n| n == callee_id.name.as_str())
+                                && call.type_arguments.is_none()
+                            {
+                                out.push((
+                                    callee_id.span.end as usize,
+                                    "<__SvnCustomEvents<$$Events>>",
+                                ));
+                            }
+                            for s2 in stmts_in_function_expr(d_init) {
+                                collect_rewrite_insertions(s2, ctor_locals, out);
+                            }
+                        }
+                    }
+                    other => {
+                        if let Some(expr) = other.as_expression() {
+                            for s2 in stmts_in_function_expr(expr) {
+                                collect_rewrite_insertions(s2, ctor_locals, out);
+                            }
+                        }
+                    }
+                }
+            }
+            collect_rewrite_insertions(&s.body, ctor_locals, out);
+        }
+        Statement::ForInStatement(s) => collect_rewrite_insertions(&s.body, ctor_locals, out),
+        Statement::ForOfStatement(s) => collect_rewrite_insertions(&s.body, ctor_locals, out),
+        Statement::WhileStatement(s) => collect_rewrite_insertions(&s.body, ctor_locals, out),
+        Statement::DoWhileStatement(s) => collect_rewrite_insertions(&s.body, ctor_locals, out),
+        Statement::SwitchStatement(s) => {
+            for case in &s.cases {
+                for stmt in &case.consequent {
+                    collect_rewrite_insertions(stmt, ctor_locals, out);
+                }
+            }
+        }
+        Statement::TryStatement(s) => {
+            for stmt in &s.block.body {
+                collect_rewrite_insertions(stmt, ctor_locals, out);
+            }
+            if let Some(handler) = &s.handler {
+                for stmt in &handler.body.body {
+                    collect_rewrite_insertions(stmt, ctor_locals, out);
+                }
+            }
+            if let Some(finalizer) = &s.finalizer {
+                for stmt in &finalizer.body {
+                    collect_rewrite_insertions(stmt, ctor_locals, out);
+                }
+            }
+        }
+        Statement::LabeledStatement(s) => collect_rewrite_insertions(&s.body, ctor_locals, out),
+        _ => {}
+    }
+}
+
+/// Yield the body statements of nested function/arrow expressions
+/// (including IIFE-wrapped + callback-arg shapes). Mirrors
+/// `props.rs::statements_inside_function_expr`.
+fn stmts_in_function_expr<'a, 'b>(expr: &'a Expression<'b>) -> Vec<&'a Statement<'b>> {
+    let mut out = Vec::new();
+    collect_function_body_stmts(expr, &mut out);
+    out
+}
+
+fn collect_function_body_stmts<'a, 'b>(
+    expr: &'a Expression<'b>,
+    out: &mut Vec<&'a Statement<'b>>,
+) {
+    match expr {
+        Expression::ArrowFunctionExpression(arrow) => {
+            for s in &arrow.body.statements {
+                out.push(s);
+            }
+        }
+        Expression::FunctionExpression(fe) => {
+            if let Some(body) = &fe.body {
+                for s in &body.statements {
+                    out.push(s);
+                }
+            }
+        }
+        Expression::ParenthesizedExpression(p) => {
+            collect_function_body_stmts(&p.expression, out);
+        }
+        Expression::CallExpression(call) => {
+            collect_function_body_stmts(&call.callee, out);
+            for arg in &call.arguments {
+                if let Some(arg_expr) = arg.as_expression() {
+                    collect_function_body_stmts(arg_expr, out);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Same shape as `crates/analyze/src/props.rs::collect_ctor_locals`,

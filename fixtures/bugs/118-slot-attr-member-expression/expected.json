@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Parent.svelte",
+            "line": 14,
+            "column": 16,
+            "code": 2551
+        }
+    ],
+    "_note": "PLAN design/slot_handler/PLAN.md Stage 3: slot attrs whose root is shadowed by a template-scope binding but whose expression isn't a bare identifier (e.g. `<slot label={item.label}>` over `{#each rows as item}`) used to be dropped because the Stage 2 resolver only handled bare names. Stage 3's OXC-based `slot_attr_rewrite::rewrite_slot_attr_expr` parses the expression, finds the leftmost identifier, and rewrites the member chain to bracket-notation type access: `item.label` → `(<resolved item type>)['label']`. The fixture's `<Child let:label let:kind>` then types `label` and `kind` as the precise field types from the row shape (`string` each); a `kind.toFixed(2)` call (number-only method) fails TS2551 with the suggestion 'Did you mean fixed?'. Pre-Stage-3 both let-bindings typed as `any` and the call passed silently."
+}

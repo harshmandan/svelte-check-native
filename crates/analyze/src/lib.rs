@@ -39,6 +39,7 @@ pub mod jsdoc;
 pub mod model;
 pub mod props;
 pub mod rune;
+pub mod slot_attr_rewrite;
 pub mod store;
 pub mod template_refs;
 pub mod template_scope;

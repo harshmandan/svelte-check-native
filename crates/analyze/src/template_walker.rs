@@ -1136,36 +1136,34 @@ fn collect_slot_def(
                     continue;
                 };
                 let trimmed = text.trim();
-                // Resolver stack lookup for the expression's leading
-                // identifier. Three states:
-                //   - In stack with `Some(expr)` AND the expression
-                //     is just a bare identifier — splice the resolved
-                //     form. (Member / call / etc. fall to Stage 3's
-                //     OXC rewriter — for now drop them.)
-                //   - In stack with `None` — bound but unresolvable.
-                //     Drop the slot attr; emitting at module scope
-                //     would resolve to the wrong declaration.
-                //   - Missing from stack — module-level identifier.
-                //     Splice source verbatim.
+                // Stage 3 OXC rewriter handles every shape we know
+                // how to express at type level: bare identifiers,
+                // member expressions over a shadowed root (with
+                // bracket-notation conversion), and computed-member
+                // with literal-string keys. The rewriter returns
+                // `None` for shapes outside that set OR for
+                // shadowed-but-unresolvable roots — caller drops
+                // those slot attrs (would emit module-scope
+                // identifiers that resolve to the wrong
+                // declaration).
                 if let Some(head) = leading_identifier(trimmed)
-                    && let Some(resolved) = shadow.lookup(head)
+                    && shadow.lookup(head).is_some()
                 {
-                    if let Some(expr) = resolved {
-                        // Only handle bare-identifier and shorthand-
-                        // equivalent cases for now: `{item}` /
-                        // `name={item}`. Member expressions
-                        // (`{item.value}`) need OXC rewriting and
-                        // stay dropped at this slice.
-                        if trimmed == head {
-                            entries.push(SlotAttr::Prop {
-                                name: e.name.clone(),
-                                expr: SlotAttrExpr::Resolved(expr.clone()),
-                            });
-                        }
-                        // Non-bare expressions over a resolvable
-                        // shadowed identifier — drop pending Stage 3.
+                    let lookup = |name: &str| -> Option<Option<String>> {
+                        shadow.lookup(name).map(|v| match v {
+                            Some(ResolvedSlotExpr::Type(t)) => Some(t.clone()),
+                            Some(ResolvedSlotExpr::Value(v)) => Some(v.clone()),
+                            None => None,
+                        })
+                    };
+                    if let Some(rewritten) =
+                        crate::slot_attr_rewrite::rewrite_slot_attr_expr(trimmed, lookup)
+                    {
+                        entries.push(SlotAttr::Prop {
+                            name: e.name.clone(),
+                            expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Type(rewritten)),
+                        });
                     }
-                    // None: bound but unresolvable; drop.
                     continue;
                 }
                 entries.push(SlotAttr::Prop {
@@ -1191,9 +1189,44 @@ fn collect_slot_def(
                     expr: SlotAttrExpr::Shorthand(s.name.clone()),
                 });
             }
-            // Plain literal attrs on `<slot>` (other than `name=`)
-            // are unusual; skip them for now. Spread, directives:
-            // also skip — full slot-handler port territory.
+            A::Spread(spread) => {
+                // SlotHandler PLAN Stage 3: `<slot {...rest}>` —
+                // spreads survive as object-spread entries. The
+                // expression must resolve through the same OXC
+                // rewriter (when `rest` is shadowed) or splice
+                // verbatim (module-scope identifier).
+                let start = spread.expression_range.start as usize;
+                let end = spread.expression_range.end as usize;
+                let Some(text) = source.get(start..end) else {
+                    continue;
+                };
+                let trimmed = text.trim();
+                if let Some(head) = leading_identifier(trimmed)
+                    && shadow.lookup(head).is_some()
+                {
+                    let lookup = |name: &str| -> Option<Option<String>> {
+                        shadow.lookup(name).map(|v| match v {
+                            Some(ResolvedSlotExpr::Type(t)) => Some(t.clone()),
+                            Some(ResolvedSlotExpr::Value(v)) => Some(v.clone()),
+                            None => None,
+                        })
+                    };
+                    if let Some(rewritten) =
+                        crate::slot_attr_rewrite::rewrite_slot_attr_expr(trimmed, lookup)
+                    {
+                        entries.push(SlotAttr::Spread {
+                            expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Type(rewritten)),
+                        });
+                    }
+                    continue;
+                }
+                entries.push(SlotAttr::Spread {
+                    expr: SlotAttrExpr::Range(spread.expression_range),
+                });
+            }
+            // Directives and shapes we don't understand fall through
+            // — drop them rather than emit something that resolves to
+            // the wrong thing.
             _ => {}
         }
     }

@@ -534,15 +534,34 @@ fn emit_document_with_render_name(
             // both a regular DOM element and `<svelte:body>` /
             // `<svelte:window>` would otherwise emit two keys for the
             // same string, which fires TS2300 / TS1117 on the synth
-            // object type. First-occurrence-wins in walk order; rare
-            // double-bubble case stays observably consistent.
+            // object type.
+            //
+            // Reviewer follow-up #6 (round 4): switch first-wins to
+            // LAST-wins to match upstream's `Map.set` semantics in
+            // `event-handler.ts:18` (`bubbledEvents.set(...)` always
+            // overwrites). For mixed-scope cases like `<button
+            // on:resize />` followed by `<svelte:window on:resize />`
+            // upstream picks the WindowEventMap projection;
+            // first-wins picked HTMLElementEventMap and silently
+            // narrowed the consumer-handler arg.
+            //
+            // Walk in reverse, dedup, then reverse back to preserve
+            // walk-order for the surviving entries (cosmetic — the
+            // TS object literal is unordered, but stable emit makes
+            // snapshots clean).
+            let mut kept: Vec<&svn_analyze::BubbledDomEvent> =
+                Vec::with_capacity(summary.bubbled_dom_events.len());
             let mut seen: Vec<&str> = Vec::with_capacity(summary.bubbled_dom_events.len());
-            let mut body = String::new();
-            for ev in &summary.bubbled_dom_events {
+            for ev in summary.bubbled_dom_events.iter().rev() {
                 if seen.iter().any(|s| *s == ev.name.as_str()) {
                     continue;
                 }
                 seen.push(ev.name.as_str());
+                kept.push(ev);
+            }
+            kept.reverse();
+            let mut body = String::new();
+            for ev in &kept {
                 if !body.is_empty() {
                     body.push_str(", ");
                 }

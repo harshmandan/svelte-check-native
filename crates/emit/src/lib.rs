@@ -548,24 +548,38 @@ fn emit_document_with_render_name(
     // collisions with bubbles still produce a TS intersection,
     // an acknowledged divergence).
     //
-    // Per-entry kind tracks how to render the projection:
-    //   - Dom(scope)           → `<Map>[name]` per scope.
-    //   - Component(roots)     → `(__SvnComponentEvents<typeof A>[name] | …)`
-    //                            unioned across all contributing
-    //                            component roots.
+    // Per-entry source tracks how each contribution renders:
+    //   - Dom(scope)      → `<Map>[name]` for the given element scope.
+    //   - Component(root) → `__SvnComponentEvents<typeof root>[name]`.
     //
-    // Merge rules (positional source-order traversal):
-    //   - DOM source for `name`           → REPLACE existing entry
-    //                                       with Dom (matches upstream
-    //                                       `bubbledEvents.set(...)`
-    //                                       in `event-handler.ts:18`).
-    //   - Component source for `name`     → if existing is Component:
-    //                                       append root (union); if
-    //                                       Dom or absent: REPLACE
-    //                                       with Component(vec![root]).
-    enum BubbleKind {
+    // The full per-name entry is an ordered `Vec<BubbleSource>` and
+    // the final emit is the union of every projection in the list
+    // (or just the single projection if only one source survives).
+    //
+    // Merge rules (positional source-order traversal) — mirror upstream
+    // `event-handler.ts:18` (`set(name, expr)` for DOM) and
+    // `event-handler.ts:55-60` (`[].concat(exist, exp)` for component
+    // bubbles):
+    //   - DOM source incoming for `name`       → REPLACE the entire
+    //                                             entry with the new
+    //                                             Dom source (matches
+    //                                             upstream's `set()`,
+    //                                             which drops any
+    //                                             prior expression).
+    //   - Component source incoming for `name` → APPEND to the entry
+    //                                             so a prior DOM (or
+    //                                             component) source
+    //                                             unions with the new
+    //                                             component root.
+    //
+    // Concretely:
+    //   D, C  →  [D, C]   (component appends to DOM)
+    //   C, D  →  [D]      (DOM replaces all prior)
+    //   D, D' →  [D']     (later DOM replaces earlier DOM)
+    //   C, C' →  [C, C']  (components accumulate)
+    enum BubbleSource {
         Dom(svn_analyze::BubbledDomEventScope),
-        Component(Vec<String>),
+        Component(String),
     }
     let bubbled_event_map: Option<String> = if has_strict_events_decl
         || (summary.bubbled_dom_events.is_empty() && summary.bubbled_component_events.is_empty())
@@ -573,12 +587,12 @@ fn emit_document_with_render_name(
         None
     } else {
         // Collect every bubble entry with its source position.
-        // `(position, name, kind)`.
-        let mut all: Vec<(u32, &str, BubbleKind)> = Vec::with_capacity(
+        // `(position, name, source)`.
+        let mut all: Vec<(u32, &str, BubbleSource)> = Vec::with_capacity(
             summary.bubbled_dom_events.len() + summary.bubbled_component_events.len(),
         );
         for ev in &summary.bubbled_dom_events {
-            all.push((ev.position, ev.name.as_str(), BubbleKind::Dom(ev.scope)));
+            all.push((ev.position, ev.name.as_str(), BubbleSource::Dom(ev.scope)));
         }
         for ev in &summary.bubbled_component_events {
             // Skip synthetic roots — `typeof __svn_self_default` /
@@ -597,66 +611,65 @@ fn emit_document_with_render_name(
             all.push((
                 ev.position,
                 ev.event_name.as_str(),
-                BubbleKind::Component(vec![root.to_string()]),
+                BubbleSource::Component(root.to_string()),
             ));
         }
         all.sort_by_key(|(pos, _, _)| *pos);
         // Apply merge rules in position order.
-        let mut entries: Vec<(&str, BubbleKind)> = Vec::new();
-        for (_, name, kind) in all {
+        let mut entries: Vec<(&str, Vec<BubbleSource>)> = Vec::new();
+        for (_, name, src) in all {
             let pos = entries.iter().position(|(n, _)| *n == name);
-            match (pos, kind) {
-                (Some(idx), BubbleKind::Dom(scope)) => {
-                    entries[idx].1 = BubbleKind::Dom(scope);
+            match (pos, src) {
+                (Some(idx), BubbleSource::Dom(scope)) => {
+                    entries[idx].1 = vec![BubbleSource::Dom(scope)];
                 }
-                (Some(idx), BubbleKind::Component(roots)) => {
-                    let new_root = roots.into_iter().next().unwrap_or_default();
-                    match &mut entries[idx].1 {
-                        BubbleKind::Component(existing) => {
-                            if !existing.iter().any(|r| r == &new_root) {
-                                existing.push(new_root);
-                            }
-                        }
-                        BubbleKind::Dom(_) => {
-                            entries[idx].1 = BubbleKind::Component(vec![new_root]);
-                        }
+                (Some(idx), BubbleSource::Component(root)) => {
+                    let already_present = entries[idx].1.iter().any(
+                        |s| matches!(s, BubbleSource::Component(existing) if existing == &root),
+                    );
+                    if !already_present {
+                        entries[idx].1.push(BubbleSource::Component(root));
                     }
                 }
-                (None, kind) => {
-                    entries.push((name, kind));
+                (None, src) => {
+                    entries.push((name, vec![src]));
+                }
+            }
+        }
+        // Reviewer follow-up #7: upstream svelte2tsx's shim
+        // (`svelte-shims.d.ts:185-190`) declares
+        // `__sveltets_2_mapBodyEvent` returning `WindowEventMap[K]`
+        // and `__sveltets_2_mapWindowEvent` returning
+        // `HTMLBodyElementEventMap[K]`. The naming is upstream-
+        // internal — looks swapped relative to the DOM API, but it's
+        // the source of truth for parity.
+        fn render_source(src: &BubbleSource, name: &str) -> String {
+            match src {
+                BubbleSource::Dom(scope) => {
+                    let map_name = match scope {
+                        svn_analyze::BubbledDomEventScope::Element => "HTMLElementEventMap",
+                        svn_analyze::BubbledDomEventScope::SvelteBody => "WindowEventMap",
+                        svn_analyze::BubbledDomEventScope::SvelteWindow => {
+                            "HTMLBodyElementEventMap"
+                        }
+                    };
+                    format!("{map_name}[{name:?}]")
+                }
+                BubbleSource::Component(root) => {
+                    format!("__SvnComponentEvents<typeof {root}>[{name:?}]")
                 }
             }
         }
         let mut body = String::new();
-        for (i, (name, kind)) in entries.iter().enumerate() {
+        for (i, (name, sources)) in entries.iter().enumerate() {
             if i > 0 {
                 body.push_str(", ");
             }
-            match kind {
-                BubbleKind::Dom(scope) => {
-                    // Reviewer follow-up #7: upstream svelte2tsx's shim
-                    // (`svelte-shims.d.ts:185-190`) declares
-                    // `__sveltets_2_mapBodyEvent` returning
-                    // `WindowEventMap[K]` and
-                    // `__sveltets_2_mapWindowEvent` returning
-                    // `HTMLBodyElementEventMap[K]`. The naming is
-                    // upstream-internal — looks swapped relative to
-                    // the DOM API, but it's the source of truth for
-                    // parity.
-                    let map_name = match scope {
-                        svn_analyze::BubbledDomEventScope::Element => "HTMLElementEventMap",
-                        svn_analyze::BubbledDomEventScope::SvelteBody => "WindowEventMap",
-                        svn_analyze::BubbledDomEventScope::SvelteWindow => "HTMLBodyElementEventMap",
-                    };
-                    let _ = write!(body, "{name:?}: {map_name}[{name:?}]");
-                }
-                BubbleKind::Component(roots) => {
-                    let union_parts: Vec<String> = roots
-                        .iter()
-                        .map(|r| format!("__SvnComponentEvents<typeof {r}>[{name:?}]"))
-                        .collect();
-                    let _ = write!(body, "{name:?}: ({})", union_parts.join(" | "));
-                }
+            if sources.len() == 1 {
+                let _ = write!(body, "{name:?}: {}", render_source(&sources[0], name));
+            } else {
+                let parts: Vec<String> = sources.iter().map(|s| render_source(s, name)).collect();
+                let _ = write!(body, "{name:?}: ({})", parts.join(" | "));
             }
         }
         if body.is_empty() {
@@ -1165,8 +1178,7 @@ fn emit_document_with_render_name(
     // without events, the fn shape stays unmarked. Iso shape still
     // gets the marker on any non-None alias because the typed
     // branch of `__svn_ensure_component` keys on it.
-    let has_synth_events_content =
-        synthesized_events_type.is_some() || bubbled_event_map.is_some();
+    let has_synth_events_content = synthesized_events_type.is_some() || bubbled_event_map.is_some();
     if is_ts {
         let has_bubbled_events =
             !summary.bubbled_dom_events.is_empty() || summary.has_bubbled_component_event;

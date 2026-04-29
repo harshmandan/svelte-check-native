@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 22,
+            "column": 19,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-6 follow-up #2: DOM-then-component bubble merge must UNION (not REPLACE). Pre-fix native special-cased Component-arriving-on-top-of-Dom by REPLACING the entry with just the component projection, throwing away the DOM contribution silently. Upstream `event-handler.ts:55-60` does `set(name, [].concat(exist, exp))` for component bubbles, which APPENDS to whatever's already there (DOM or component) — emit time then renders `unionType(DOM_expr, comp_expr)`. This fixture has DOM-first (`<button on:click>`) then component (`<Inner on:click />`); the wrapper's `$$Events.click` should be `MouseEvent | CustomEvent<{ id: number }>`. The union-typed handler passes; the MouseEvent-only handler is not assignable to the wider union and correctly fires TS2345. Companion to fixture 115 which exercises the opposite (component-then-DOM) direction."
+}

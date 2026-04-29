@@ -10,21 +10,26 @@
     //
     // Upstream svelte2tsx runs all bubbles through one
     // `EventHandler.bubbledEvents` map. DOM bubbles call
-    // `Map.set(name, ...)` which OVERWRITES; component bubbles
-    // accumulate into a list per name that's later wrapped in
-    // `__sveltets_2_unionType(...)`. So same-name DOM-then-component
-    // ends up as the component's projection; component-then-DOM ends
-    // up as the DOM projection.
+    // `Map.set(name, expr)` which OVERWRITES the entire entry;
+    // component bubbles call `set(name, [].concat(exist, exp))`
+    // which APPENDS to whatever is already there (DOM or component).
+    // The map is later rendered with `__sveltets_2_unionType(...)`.
     //
-    // Post-fix: merge DOM and component bubbles into ONE flat map in
-    // source-position order. DOM source REPLACES the entry; component
-    // source after a Component entry APPENDS (union); component
-    // after DOM REPLACES with the component projection.
+    // Direction matters:
+    //   - component-then-DOM → DOM overwrites → DOM event only.
+    //   - DOM-then-component → component appends → union(DOM, comp).
     //
-    // This fixture has the order Inner (component) → button (DOM).
-    // The button's DOM bubble is the LAST source for `click`, so the
-    // wrapper's `$$Events.click` should be `MouseEvent` (the DOM
-    // event), not the intersection / not Inner's CustomEvent.
+    // Post-fix: merge DOM and component bubbles into ONE position-
+    // ordered list per name. A DOM source REPLACES the entire list
+    // (mirrors upstream's `set()`); a Component source APPENDS to
+    // the list (mirrors upstream's `[].concat(exist, exp)`).
+    //
+    // This fixture exercises the component-then-DOM direction:
+    // Inner (component) → button (DOM). The DOM bubble REPLACES the
+    // prior component entry, so the wrapper's `$$Events.click` is
+    // `MouseEvent` (the DOM event) only — not the intersection, and
+    // not Inner's CustomEvent. (See fixture
+    // 120-bubble-dom-then-component-union for the opposite direction.)
     import Inner from './Inner.svelte'
     let { label = '' }: { label?: string } = $props()
     void label

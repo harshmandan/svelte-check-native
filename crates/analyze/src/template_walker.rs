@@ -783,15 +783,27 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
             }
             crate::template_scope::ScopeKind::AwaitCatch => {
                 // `{:catch e}` — error type is `any` (matches
-                // upstream's `resolveExpression` returning
-                // `__sveltets_2_any({})`).
+                // upstream `slot.ts:93`'s `__sveltets_2_any({})`
+                // resolution for CatchBlock owners).
+                //
+                // Round-8 follow-up #3: destructure leaves
+                // (`{:catch { message }}`) all resolve to `any` too.
+                // Upstream walks each leaf through
+                // resolveDestructuringAssignment which returns
+                // `((${pattern}) => ${id})(any)` — at type level
+                // every leaf collapses to `any` regardless of the
+                // pattern shape (TS narrows `any[…]` to `any`).
+                // Pre-fix native dropped destructure leaves to None
+                // when `bindings.len() > 1`, so consumer references
+                // to those leaves silently typed as `any` via the
+                // unresolved-shadow path anyway — same observable
+                // outcome as resolving to `any`, but consumer-side
+                // slot-attrs that referenced the leaves would have
+                // been DROPPED instead of typed. Drop the guard.
                 for b in bindings {
-                    let resolved = if bindings.len() == 1 {
-                        Some(ResolvedSlotExpr::Type("any".to_string()))
-                    } else {
-                        None
-                    };
-                    self.shadow.entries.push((b.name.clone(), resolved));
+                    self.shadow
+                        .entries
+                        .push((b.name.clone(), Some(ResolvedSlotExpr::Type("any".to_string()))));
                 }
             }
             crate::template_scope::ScopeKind::LetDirective => {

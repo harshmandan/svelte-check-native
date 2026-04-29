@@ -107,24 +107,23 @@ pub(crate) fn peek_and_consume_terminator(
         }
         "then" | "catch" => {
             scanner.skip_ascii_whitespace();
-            // Optional binding before `}`.
+            // Optional binding before `}`. Round-8 follow-up #3:
+            // destructure patterns (`{:catch { message }}`) contain
+            // nested `{...}` braces; scan depth-aware via
+            // `find_mustache_end` instead of stopping at the first
+            // `}` (which would land inside the destructure pattern).
             let ctx_start = scanner.pos();
-            // Read until `}`.
-            while let Some(b) = scanner.peek_byte() {
-                if b == b'}' {
-                    break;
-                }
-                scanner.advance_char();
-            }
-            let ctx_end = scanner.pos();
-            if scanner.peek_byte() != Some(b'}') {
+            let close_pos = find_mustache_end(scanner.source(), ctx_start);
+            let Some(close_pos) = close_pos else {
                 errors.push(ParseError::MalformedOpenTag {
                     range: Range::new(start, scanner.pos()),
                 });
                 scanner.set_pos(start);
                 return None;
-            }
-            scanner.advance_byte();
+            };
+            let ctx_end = close_pos;
+            scanner.set_pos(ctx_end);
+            scanner.advance_byte(); // consume the `}`
             let ctx_trimmed_start = skip_ws_start(scanner.source(), ctx_start, ctx_end);
             let ctx_trimmed_end = skip_ws_end(scanner.source(), ctx_trimmed_start, ctx_end);
             let context_range = if ctx_trimmed_start < ctx_trimmed_end {

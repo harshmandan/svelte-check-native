@@ -5,7 +5,7 @@ async function $$render_4ce17e3b() {
         // template type-check body (incremental)
         { const $$_promise = (thePromise);
         ;(async () => {
-            const $$_await = await $$_promise; const { result, error = $$_await;
+            const $$_await = await $$_promise; const { result, error } = $$_await;
             void result;
             void error;
         }); }

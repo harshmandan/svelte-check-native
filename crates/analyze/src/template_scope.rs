@@ -749,14 +749,29 @@ fn collect_let_directive_bindings(
                 } else {
                     // Destructure pattern (`let:foo={{a, b}}`,
                     // `let:foo={[x, y]}`, defaults like `{a = 1}`).
-                    // Slot-key resolution would need to project each
-                    // leaf as `[directive_name][...path]` per upstream
-                    // (`slot.ts:wrapDestructureAroundDirective`); not
-                    // yet ported. Leave `slot_key_path` None so the
-                    // resolver falls through to the unresolvable path
-                    // (drops references rather than splicing module
-                    // scope).
-                    for b in pb.bindings {
+                    //
+                    // Round-8 follow-up #2: combine the directive
+                    // name with each leaf's destructure path so the
+                    // resolver projects through `[directive][...inner]`.
+                    // Mirrors upstream `slot.ts:resolveDestructuring
+                    // AssignmentForLet` (line 129), which wraps the
+                    // destructure pattern around `getSingleSlotDef
+                    // (component, slotName).${letNode.name}`. For
+                    // `<Comp let:foo={{a}}>`, `a` resolves to
+                    // `__SvnComponentSlots[…][slot]['foo']['a']`.
+                    for mut b in pb.bindings {
+                        let mut combined = directive_path.clone();
+                        if let Some(inner) = &b.destructure_path {
+                            combined.extend(inner.iter().cloned());
+                        }
+                        b.slot_key_path = Some(combined);
+                        // The destructure_path is now subsumed into
+                        // slot_key_path for let-directive bindings;
+                        // clear it so the each/await resolver path
+                        // doesn't double-apply (paranoia — visitor
+                        // dispatches by ScopeKind already, but cheap
+                        // and self-documenting).
+                        b.destructure_path = None;
                         push(b, &mut out, &mut seen);
                     }
                     // Default-value expressions inside let-directive

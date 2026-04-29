@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Wrapper.svelte",
+            "line": 29,
+            "column": 17,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-8 follow-up #2: `<Inner let:tooltip={{ x, y, label }}>` destructures Inner's `tooltip` slot prop into the locals x/y/label. Pre-fix native left `slot_key_path` as None for destructure leaves of let-directives, so each leaf dropped to the unresolved-shadow path and consumer references typed as `any` (no error firing on mismatched calls). Upstream's `slot.ts:resolveDestructuringAssignmentForLet` wraps the destructure pattern around `getSingleSlotDef(component, slotName).${letNode.name}`, which at type level resolves to `__SvnComponentSlots[Inner][default]['tooltip']['x']` for x, `['y']` for y, etc. Native now combines `directive_path` (= `[directive_name]`) with each leaf's `destructure_path` (set by the round-7 #3 pattern walker) to form `[directive_name, ...inner_path]` — leaves project through the proper TS bracket-chain. The Wrapper here exercises this: `x`, `y` resolve to `number`, `label` to `string`. Three correct calls (`takesNumber(x)`, `takesNumber(y)`, `takesString(label)`) pass; the swapped `takesString(x)` correctly fires TS2345."
+}

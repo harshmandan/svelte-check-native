@@ -1227,10 +1227,29 @@ fn collect_slot_def(
             _ => {}
         }
     }
-    summary.slot_defs.push(SlotDef {
+    // Round-7 follow-up #4: upstream stores slots in a Map and
+    // `set(slotName, attrs)` per `<slot name="x">` — multiple sites
+    // for the same name resolve as later-wins. Native pre-fix pushed
+    // every SlotDef in walk order and emit serialised them as
+    // duplicate object keys (`{ 'x': {...}, 'x': {...} }`), which TS
+    // accepts but flags as a noisy duplicate-key error and which
+    // consumers would only ever see the last entry of regardless.
+    // Replace any existing entry for `slot_name` with the new one so
+    // emit produces a single key per name with the LAST occurrence's
+    // attrs.
+    let new_def = SlotDef {
         slot_name,
         attrs: entries,
-    });
+    };
+    if let Some(existing) = summary
+        .slot_defs
+        .iter_mut()
+        .find(|d| d.slot_name == new_def.slot_name)
+    {
+        *existing = new_def;
+    } else {
+        summary.slot_defs.push(new_def);
+    }
 }
 
 /// Return the leading identifier of an expression source slice — the

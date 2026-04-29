@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 14,
+            "column": 22,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-12 follow-up #3: slot-attr expressions whose CALLBACK bodies close over an outer template local should rewrite the closed-over identifier even though it appears inside an arrow/function body. Pre-fix native's `slot_attr_rewrite::walk_value_expr` skipped Arrow/Function/Class expressions entirely — `<slot doubled={row.vals.map(x => x + row.id)}>` left the inner `row.id` untouched, leaking `row` to module scope (TS2304 if no module-scope `row` exists, or wrong-type if one does). Native now walks arrow/function bodies with a shadow stack: the function's params (`x` here) are pushed before recursing, so identifiers whose name matches a param are left alone but closed-over outer template locals (`row`) get rewritten with the appropriate cast. Producer here exposes `doubled: number[]` from `{#each rows as row}`'s `row.vals.map(x => x + row.id)`. Consumer's `takesNumberArray(doubled)` passes; `takesStringArray(doubled)` correctly fires TS2345."
+}

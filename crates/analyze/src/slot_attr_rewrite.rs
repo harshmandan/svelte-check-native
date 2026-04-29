@@ -236,7 +236,8 @@ pub fn rewrite_slot_attr_expr_value(
     };
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     let mut bail = false;
-    walk_value_expr(inner, lookup, &mut edits, &mut bail, false);
+    let mut shadowed: Vec<String> = Vec::new();
+    walk_value_expr(inner, lookup, &mut shadowed, &mut edits, &mut bail, false);
     if bail {
         return ValueRewrite::Bailed;
     }
@@ -269,6 +270,11 @@ pub fn rewrite_slot_attr_expr_value(
 fn walk_value_expr(
     expr: &Expression<'_>,
     lookup: &impl Fn(&str) -> Option<Option<String>>,
+    // Round-12 follow-up #3: stack of identifier names introduced by
+    // enclosing arrow/function expressions' params. When walking
+    // their bodies, identifiers whose name is in this stack are NOT
+    // rewritten — the param shadows the outer template binding.
+    shadowed: &mut Vec<String>,
     edits: &mut Vec<(usize, usize, String)>,
     bail: &mut bool,
     inside_skip: bool,
@@ -282,6 +288,11 @@ fn walk_value_expr(
                 return;
             }
             let name = id.name.as_str();
+            // Round-12 #3: skip identifiers shadowed by an
+            // enclosing arrow/function param.
+            if shadowed.iter().any(|s| s == name) {
+                return;
+            }
             match lookup(name) {
                 Some(Some(resolved)) => {
                     let start = id.span.start as usize;
@@ -295,43 +306,43 @@ fn walk_value_expr(
             }
         }
         Expression::ParenthesizedExpression(p) => {
-            walk_value_expr(&p.expression, lookup, edits, bail, inside_skip);
+            walk_value_expr(&p.expression, lookup, shadowed, edits, bail, inside_skip);
         }
         Expression::StaticMemberExpression(me) => {
-            walk_value_expr(&me.object, lookup, edits, bail, false);
+            walk_value_expr(&me.object, lookup, shadowed, edits, bail, false);
             // me.property is the static name — never resolved against shadow.
         }
         Expression::ComputedMemberExpression(me) => {
-            walk_value_expr(&me.object, lookup, edits, bail, false);
-            walk_value_expr(&me.expression, lookup, edits, bail, false);
+            walk_value_expr(&me.object, lookup, shadowed, edits, bail, false);
+            walk_value_expr(&me.expression, lookup, shadowed, edits, bail, false);
         }
         Expression::CallExpression(call) => {
-            walk_value_expr(&call.callee, lookup, edits, bail, false);
+            walk_value_expr(&call.callee, lookup, shadowed, edits, bail, false);
             for arg in &call.arguments {
                 if let Some(arg_expr) = arg.as_expression() {
-                    walk_value_expr(arg_expr, lookup, edits, bail, false);
+                    walk_value_expr(arg_expr, lookup, shadowed, edits, bail, false);
                 }
             }
         }
         Expression::ConditionalExpression(c) => {
-            walk_value_expr(&c.test, lookup, edits, bail, false);
-            walk_value_expr(&c.consequent, lookup, edits, bail, false);
-            walk_value_expr(&c.alternate, lookup, edits, bail, false);
+            walk_value_expr(&c.test, lookup, shadowed, edits, bail, false);
+            walk_value_expr(&c.consequent, lookup, shadowed, edits, bail, false);
+            walk_value_expr(&c.alternate, lookup, shadowed, edits, bail, false);
         }
         Expression::LogicalExpression(b) => {
-            walk_value_expr(&b.left, lookup, edits, bail, false);
-            walk_value_expr(&b.right, lookup, edits, bail, false);
+            walk_value_expr(&b.left, lookup, shadowed, edits, bail, false);
+            walk_value_expr(&b.right, lookup, shadowed, edits, bail, false);
         }
         Expression::BinaryExpression(b) => {
-            walk_value_expr(&b.left, lookup, edits, bail, false);
-            walk_value_expr(&b.right, lookup, edits, bail, false);
+            walk_value_expr(&b.left, lookup, shadowed, edits, bail, false);
+            walk_value_expr(&b.right, lookup, shadowed, edits, bail, false);
         }
         Expression::UnaryExpression(u) => {
-            walk_value_expr(&u.argument, lookup, edits, bail, false);
+            walk_value_expr(&u.argument, lookup, shadowed, edits, bail, false);
         }
         Expression::TemplateLiteral(tl) => {
             for e in &tl.expressions {
-                walk_value_expr(e, lookup, edits, bail, false);
+                walk_value_expr(e, lookup, shadowed, edits, bail, false);
             }
         }
         Expression::ObjectExpression(obj) => {
@@ -342,7 +353,7 @@ fn walk_value_expr(
                         // Computed keys (`{[k]: v}`) recurse through the key expression.
                         if p.computed {
                             if let Some(key_expr) = p.key.as_expression() {
-                                walk_value_expr(key_expr, lookup, edits, bail, false);
+                                walk_value_expr(key_expr, lookup, shadowed, edits, bail, false);
                             }
                         }
                         // Shorthand `{ item }`: the value AST node sits at the same span
@@ -351,6 +362,9 @@ fn walk_value_expr(
                         if p.shorthand {
                             if let Expression::Identifier(id) = &p.value {
                                 let name = id.name.as_str();
+                                if shadowed.iter().any(|s| s == name) {
+                                    continue;
+                                }
                                 if let Some(resolved) = lookup(name) {
                                     match resolved {
                                         Some(resolved_text) => {
@@ -372,10 +386,10 @@ fn walk_value_expr(
                             }
                             continue;
                         }
-                        walk_value_expr(&p.value, lookup, edits, bail, false);
+                        walk_value_expr(&p.value, lookup, shadowed, edits, bail, false);
                     }
                     ObjectPropertyKind::SpreadProperty(sp) => {
-                        walk_value_expr(&sp.argument, lookup, edits, bail, false);
+                        walk_value_expr(&sp.argument, lookup, shadowed, edits, bail, false);
                     }
                 }
             }
@@ -385,12 +399,12 @@ fn walk_value_expr(
                 use oxc_ast::ast::ArrayExpressionElement;
                 match elem {
                     ArrayExpressionElement::SpreadElement(sp) => {
-                        walk_value_expr(&sp.argument, lookup, edits, bail, false);
+                        walk_value_expr(&sp.argument, lookup, shadowed, edits, bail, false);
                     }
                     ArrayExpressionElement::Elision(_) => {}
                     other => {
                         if let Some(e) = other.as_expression() {
-                            walk_value_expr(e, lookup, edits, bail, false);
+                            walk_value_expr(e, lookup, shadowed, edits, bail, false);
                         }
                     }
                 }
@@ -400,41 +414,61 @@ fn walk_value_expr(
             use oxc_ast::ast::ChainElement;
             match &c.expression {
                 ChainElement::CallExpression(call) => {
-                    walk_value_expr(&call.callee, lookup, edits, bail, false);
+                    walk_value_expr(&call.callee, lookup, shadowed, edits, bail, false);
                     for arg in &call.arguments {
                         if let Some(arg_expr) = arg.as_expression() {
-                            walk_value_expr(arg_expr, lookup, edits, bail, false);
+                            walk_value_expr(arg_expr, lookup, shadowed, edits, bail, false);
                         }
                     }
                 }
                 ChainElement::StaticMemberExpression(me) => {
-                    walk_value_expr(&me.object, lookup, edits, bail, false);
+                    walk_value_expr(&me.object, lookup, shadowed, edits, bail, false);
                 }
                 ChainElement::ComputedMemberExpression(me) => {
-                    walk_value_expr(&me.object, lookup, edits, bail, false);
-                    walk_value_expr(&me.expression, lookup, edits, bail, false);
+                    walk_value_expr(&me.object, lookup, shadowed, edits, bail, false);
+                    walk_value_expr(&me.expression, lookup, shadowed, edits, bail, false);
                 }
                 _ => {}
             }
         }
-        // Arrow functions, function expressions: the params introduce
-        // local scope, so identifiers inside the body that share names
-        // with outer shadow could be the local param. Bail rather
-        // than rewrite incorrectly. (Upstream walks these too but
-        // tracks scopes; we'd need a scope walker here to match. For
-        // now, leave inner closures as-is.)
-        Expression::ArrowFunctionExpression(_)
-        | Expression::FunctionExpression(_)
-        | Expression::ClassExpression(_) => {}
+        // Round-12 follow-up #3: walk arrow/function bodies with the
+        // function's param names pushed onto the shadow stack so
+        // outer-template-locals get rewritten while same-name params
+        // are left alone. ClassExpression and Generator/Async forms
+        // still skip — class bodies have method scoping that's
+        // harder to handle uniformly.
+        Expression::ArrowFunctionExpression(arrow) => {
+            let before = shadowed.len();
+            for param in &arrow.params.items {
+                collect_pattern_idents(&param.pattern, shadowed);
+            }
+            for stmt in &arrow.body.statements {
+                walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
+            }
+            shadowed.truncate(before);
+        }
+        Expression::FunctionExpression(fe) => {
+            let before = shadowed.len();
+            for param in &fe.params.items {
+                collect_pattern_idents(&param.pattern, shadowed);
+            }
+            if let Some(body) = &fe.body {
+                for stmt in &body.statements {
+                    walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
+                }
+            }
+            shadowed.truncate(before);
+        }
+        Expression::ClassExpression(_) => {}
         // Type-only wrappers — recurse.
         Expression::TSAsExpression(t) => {
-            walk_value_expr(&t.expression, lookup, edits, bail, false);
+            walk_value_expr(&t.expression, lookup, shadowed, edits, bail, false);
         }
         Expression::TSNonNullExpression(t) => {
-            walk_value_expr(&t.expression, lookup, edits, bail, false);
+            walk_value_expr(&t.expression, lookup, shadowed, edits, bail, false);
         }
         Expression::TSTypeAssertion(t) => {
-            walk_value_expr(&t.expression, lookup, edits, bail, false);
+            walk_value_expr(&t.expression, lookup, shadowed, edits, bail, false);
         }
         // Anything else (literals, JSX, tagged templates, sequences,
         // assignment, await, yield, regex, etc.): skip without bailing.
@@ -442,6 +476,94 @@ fn walk_value_expr(
         // get rewritten — degrades to module-scope semantics, not a
         // wrong type.
         _ => {}
+    }
+}
+
+/// Round-12 #3: walk a statement looking for expressions that
+/// might reference shadowed template locals. Arrow body shorthand
+/// (single-expression body) is handled by walking the expression
+/// directly. Statement bodies (block) descend through return /
+/// expression / variable-decl init / control-flow.
+fn walk_statement_for_value_rewrite(
+    stmt: &oxc_ast::ast::Statement<'_>,
+    lookup: &impl Fn(&str) -> Option<Option<String>>,
+    shadowed: &mut Vec<String>,
+    edits: &mut Vec<(usize, usize, String)>,
+    bail: &mut bool,
+) {
+    use oxc_ast::ast::Statement;
+    if *bail {
+        return;
+    }
+    match stmt {
+        Statement::ExpressionStatement(es) => {
+            walk_value_expr(&es.expression, lookup, shadowed, edits, bail, false);
+        }
+        Statement::ReturnStatement(rs) => {
+            if let Some(arg) = &rs.argument {
+                walk_value_expr(arg, lookup, shadowed, edits, bail, false);
+            }
+        }
+        Statement::VariableDeclaration(decl) => {
+            for d in &decl.declarations {
+                let before = shadowed.len();
+                collect_pattern_idents(&d.id, shadowed);
+                if let Some(init) = &d.init {
+                    walk_value_expr(init, lookup, shadowed, edits, bail, false);
+                }
+                let _ = before;
+            }
+        }
+        Statement::BlockStatement(b) => {
+            for s in &b.body {
+                walk_statement_for_value_rewrite(s, lookup, shadowed, edits, bail);
+            }
+        }
+        Statement::IfStatement(s) => {
+            walk_value_expr(&s.test, lookup, shadowed, edits, bail, false);
+            walk_statement_for_value_rewrite(&s.consequent, lookup, shadowed, edits, bail);
+            if let Some(alt) = &s.alternate {
+                walk_statement_for_value_rewrite(alt, lookup, shadowed, edits, bail);
+            }
+        }
+        // For brevity, other statement shapes (loops, try, switch)
+        // are walked shallowly — the common slot-attr shape we care
+        // about is `(x) => row.id` (single expression body), not
+        // arbitrarily complex bodies.
+        _ => {}
+    }
+}
+
+/// Collect leaf binding-identifier names from a pattern into
+/// `shadowed`. Used for arrow/function param scoping.
+fn collect_pattern_idents(
+    pat: &oxc_ast::ast::BindingPattern<'_>,
+    shadowed: &mut Vec<String>,
+) {
+    use oxc_ast::ast::BindingPattern;
+    match pat {
+        BindingPattern::BindingIdentifier(id) => {
+            shadowed.push(id.name.to_string());
+        }
+        BindingPattern::ObjectPattern(op) => {
+            for prop in &op.properties {
+                collect_pattern_idents(&prop.value, shadowed);
+            }
+            if let Some(rest) = &op.rest {
+                collect_pattern_idents(&rest.argument, shadowed);
+            }
+        }
+        BindingPattern::ArrayPattern(ap) => {
+            for elem in ap.elements.iter().flatten() {
+                collect_pattern_idents(elem, shadowed);
+            }
+            if let Some(rest) = &ap.rest {
+                collect_pattern_idents(&rest.argument, shadowed);
+            }
+        }
+        BindingPattern::AssignmentPattern(asn) => {
+            collect_pattern_idents(&asn.left, shadowed);
+        }
     }
 }
 

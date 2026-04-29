@@ -96,7 +96,6 @@ pub(crate) fn emit_default_export_declarations_ts(
     has_dispatcher_call: bool,
     has_concrete_dispatcher_events: bool,
     has_synth_events_alias: bool,
-    has_synth_events_content: bool,
     has_strict_events_decl: bool,
     has_bubbled_events: bool,
 ) {
@@ -138,16 +137,14 @@ pub(crate) fn emit_default_export_declarations_ts(
         has_strict_events_decl,
         has_bubbled_events,
     ) {
-        // Fn-shape marker gates on CONTENT, not alias-existence: a
-        // runes-mode component with no dispatcher and no bubbled events
-        // emits `type $$Events = {}` (the empty surface that mirrors
-        // upstream's `_events(strictEvents=true, ...)` behavior under
-        // runes mode), but the marker `& { __svn_events: {} }` would
-        // intersect a phantom field onto the `Component<P, X, B>`
-        // value that breaks `Parameters<typeof Producer>` /
-        // `(typeof Producer)[]` consumers (Threlte instancing —
-        // bugs/78-iso-component-extract).
-        emit_fn_component_default_export(buf, render_name, has_synth_events_content);
+        // Round-9 follow-up #1: fn-shape doesn't carry the typed-
+        // events marker (upstream's `__sveltets_2_fn_component` is a
+        // plain `Component<P, X, B>` with no events channel). For
+        // type-ref-only typed dispatchers — which round-8 #4 keeps
+        // on fn-shape — this means consumer-side `<Comp on:foo>`
+        // resolves through `__svn_ensure_component`'s lax untyped
+        // overload, matching upstream.
+        emit_fn_component_default_export(buf, render_name);
         return;
     }
     let use_class_wrapper = generics.is_some() && prop_type_source.is_some();
@@ -469,21 +466,19 @@ fn should_emit_fn_component_shape(
 /// fn types `bindings` as `string` regardless of declared binds, so
 /// projecting through wouldn't add detail.
 ///
-/// When `has_synth_events_alias` is true, intersect the typed-events
-/// marker (`& { readonly __svn_events: … }`) onto the value so
-/// `__svn_ensure_component`'s typed-events branch fires at consumer
-/// sites. Used today for the bubbled-DOM-event narrow-path
-/// (reviewer item #3c part 2): `<button on:click>` in the Child
-/// emits a synth alias even without a dispatcher, and the consumer's
-/// `<Child on:click={cb})` expects narrowed `MouseEvent` typing.
-/// Without the marker the consumer falls through `__svn_ensure_component`'s
-/// untyped Component branch, where `$on` is the lax `(event: string,
-/// handler: (...args: any[]) => any)` overload.
-fn emit_fn_component_default_export(
-    buf: &mut EmitBuffer,
-    render_name: &SmolStr,
-    has_synth_events_alias: bool,
-) {
+/// Round-9 follow-up #1: the fn-shape NEVER carries an `__svn_events`
+/// marker. Upstream's `__sveltets_2_fn_component` returns a plain
+/// `Component<P, X, B>` with no events channel — consumer-side `$on`
+/// resolves through the lax `(event: string, handler) => any`
+/// overload. Pre-fix native attached the marker when any synth
+/// events surface existed, which was wrong for the type-ref-only
+/// typed dispatcher case (kept on fn-shape post round-8 #4 but
+/// previously got the marker, narrowing `$on` more strictly than
+/// upstream). Bubbled-DOM events disqualify fn-shape entirely
+/// (round-8 #4's gate routes them to iso shape), so the original
+/// "bubbled-DOM-event narrow-path" rationale for the marker is
+/// satisfied at the iso shape's marker emit site, not here.
+fn emit_fn_component_default_export(buf: &mut EmitBuffer, render_name: &SmolStr) {
     let _ = writeln!(
         buf,
         "const __svn_component_default: import('svelte').Component<"
@@ -497,14 +492,7 @@ fn emit_fn_component_default_export(
         "    Awaited<ReturnType<typeof {render_name}>>['exports'],"
     );
     let _ = writeln!(buf, "    ''");
-    if has_synth_events_alias {
-        let _ = writeln!(
-            buf,
-            "> & {{ readonly __svn_events: Awaited<ReturnType<typeof {render_name}>>['events'] }} = null as any;"
-        );
-    } else {
-        let _ = writeln!(buf, "> = null as any;");
-    }
+    let _ = writeln!(buf, "> = null as any;");
     let _ = writeln!(
         buf,
         "type __svn_component_default = ReturnType<typeof __svn_component_default>;"

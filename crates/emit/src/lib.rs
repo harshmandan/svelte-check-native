@@ -580,15 +580,6 @@ fn emit_document_with_render_name(
             };
             (typed, untyped)
         };
-    // Round-7 #6 hook: the fn-shape gate uses
-    // `synthesized_events_type.is_some()` as a stand-in for upstream's
-    // `events.size > 0` from dispatcher sources. Compute the same
-    // OR over our two halves.
-    let synthesized_events_type: Option<()> =
-        match (synthesized_typed_events.as_deref(), synthesized_untyped_events.as_deref()) {
-            (None, None) => None,
-            _ => Some(()),
-        };
     // Reviewer item #3c part 2: bare `<button on:click>` directives on
     // a DOM element forward the native DOM event to a parent listener.
     // At type-check time, the consumer's `<Child on:click={cb}>` should
@@ -1272,17 +1263,6 @@ fn emit_document_with_render_name(
     // `has_synth_events_content` distinguishes "alias emitted with
     // actual events" (dispatcher OR bubbled DOM events) from "alias
     // emitted as the empty `{}` because narrow_events is on but
-    // nothing was synthesised". Drives the fn-component-shape
-    // marker decision below: empty `$$Events` on the
-    // `Component<P, X, ''>` value would intersect a phantom
-    // `__svn_events: {}` field that breaks the Threlte instancing
-    // pattern (`Parameters<typeof Producer>` /
-    // `(typeof Producer)[]` — see fixtures/bugs/78-iso-component-extract).
-    // For that pattern to keep working under runes-mode components
-    // without events, the fn shape stays unmarked. Iso shape still
-    // gets the marker on any non-None alias because the typed
-    // branch of `__svn_ensure_component` keys on it.
-    let has_synth_events_content = synthesized_events_type.is_some() || bubbled_event_map.is_some();
     if is_ts {
         let has_bubbled_events =
             !summary.bubbled_dom_events.is_empty() || summary.has_bubbled_component_event;
@@ -1327,7 +1307,6 @@ fn emit_document_with_render_name(
             has_dispatcher_call,
             has_concrete_dispatcher_events,
             events_alias_body.is_some(),
-            has_synth_events_content,
             has_strict_events_decl,
             has_bubbled_events,
         );

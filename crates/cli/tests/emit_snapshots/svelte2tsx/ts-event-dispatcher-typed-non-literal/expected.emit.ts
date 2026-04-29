@@ -8,7 +8,7 @@ declare const bye: { [key: string]: any } & ((...args: any[]) => any);
         btn: string;
     };
 async function $$render_6194130b() {
-    type $$Events = (({ [__svn_K in keyof ((Events))]: CustomEvent<((Events))[__svn_K]> })) & { [evt: string]: CustomEvent<any> };
+    type $$Events = ({ [__svn_K in keyof ((Events))]: CustomEvent<((Events))[__svn_K]> }) & { [evt: string]: CustomEvent<any> };
 
                                                    
 

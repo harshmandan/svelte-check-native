@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 27,
+            "column": 17,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-6 follow-up #1: when the same event name is BOTH dispatched (typed `createEventDispatcher<T>`) AND bubbled from a DOM element (`<button on:click>`), upstream's emit spreads the bubble map AFTER the dispatcher mapped type so bubble keys OVERRIDE dispatcher keys (`{...toEventTypings<{click: …}>(), 'click': mapElementEvent('click')}` per upstream `ts-event-dispatchers-same-event/expectedv2.ts`). Pre-fix native intersected the dispatcher and bubble fragments with `&` — same-name collisions collapsed to `CustomEvent<{...}> & MouseEvent`, neither shape a usable consumer-handler-arg type. Post-fix native models upstream's spread semantics at the type level via `Omit<Dispatcher, keyof Bubble> & Bubble` — the bubble's `MouseEvent` projection wins for `click` while the dispatcher's `CustomEvent<string>` still covers the unique `dispatched` name. The MouseEvent and CustomEvent<string> handlers pass; a handler typed against the now-overridden `CustomEvent<{ id: number }>` payload correctly fails TS2345."
+}

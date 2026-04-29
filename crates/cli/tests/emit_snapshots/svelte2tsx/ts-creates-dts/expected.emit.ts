@@ -5,7 +5,7 @@
   import Bar from './bar';
   import { createEventDispatcher } from 'svelte';
 async function $$render_39dbed3c() {
-    type $$Events = (({ [__svn_K in keyof (({swipe: string}))]: CustomEvent<(({swipe: string}))[__svn_K]> }) & ({ "click": HTMLElementEventMap["click"] })) & { [evt: string]: CustomEvent<any> };
+    type $$Events = (Omit<{ [__svn_K in keyof (({swipe: string}))]: CustomEvent<(({swipe: string}))[__svn_K]> }, keyof ({ "click": HTMLElementEventMap["click"] })> & ({ "click": HTMLElementEventMap["click"] })) & { [evt: string]: CustomEvent<any> };
 
                           
                                                  

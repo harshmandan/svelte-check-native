@@ -919,35 +919,47 @@ fn emit_document_with_render_name(
     // — at module scope `A` would fire TS2304. The class-wrapper's
     // `events()` method projects this back out to consumers via
     // `Awaited<ReturnType<typeof $$render<…>>>['events']`.
-    // Final `$$Events` body. Two synthesised halves intersect:
+    // Final `$$Events` body. Combines two synthesised halves:
     //   1. `synthesized_events_type` is the dispatcher DETAIL map (`T`
     //      from `createEventDispatcher<T>()`, or `{ name: any, … }`
     //      from an untyped dispatcher's `dispatch('name', …)` calls).
     //      Wrapped once HERE into the FINAL `$on` event-object map:
     //      `{ [K in keyof T]: CustomEvent<T[K]> }`.
-    //   2. `bubbled_dom_event_map` is already the FINAL form
+    //   2. `bubbled_event_map` is already the FINAL form
     //      (`{ "click": HTMLElementEventMap["click"], … }`) projected
-    //      from bare `<button on:click>` directives on DOM elements.
-    //      DOM events are NOT wrapped in `CustomEvent` — they're the
-    //      native event shape. Intersection gives a single map where
-    //      dispatcher keys carry `CustomEvent<…>` and bubbled-DOM
-    //      keys carry the DOM event type.
-    // Pathological case: same name in BOTH halves (user dispatched
-    // 'click' AND has `<button on:click>`) → intersection produces
-    // `CustomEvent<any> & MouseEvent` — neither shape is a usual
-    // user-handler-arg type and TS will reject most consumer
-    // handlers. That's fine (and arguably correct) — the user
-    // conflated two different event sources, surfacing the conflict
-    // is the right outcome.
-    let mut events_alias_parts: Vec<String> = Vec::new();
-    if let Some(t) = synthesized_events_type.as_deref() {
-        events_alias_parts.push(format!(
+    //      from bare `<elem|Comp on:NAME>` directives. DOM events are
+    //      NOT wrapped in `CustomEvent` — they're the native event
+    //      shape; component-bubbled events project through
+    //      `__SvnComponentEvents<…>[NAME]`.
+    //
+    // Round-6 follow-up #1: for same-name keys in BOTH halves
+    // (user dispatched 'click' AND has `<button on:click>`),
+    // upstream's emit treats the bubble map as a JS object literal
+    // SPREAD AFTER the dispatcher mapped type — bubble keys
+    // OVERRIDE dispatcher keys (`{...toEventTypings<{click: …}>(),
+    // 'click': mapElementEvent('click')}`, see upstream
+    // `addComponentExport.ts:_events()` and the `ts-event-dispatchers-
+    // same-event` fixture's `expectedv2.ts`). Pre-fix native built
+    // the two as separate intersected fragments which collapsed
+    // collisions to `CustomEvent<any> & MouseEvent` — neither shape
+    // a usable consumer-handler-arg type. Now we model upstream's
+    // spread semantics at the type level: when both halves are
+    // present, drop the bubble keys from the dispatcher mapped type
+    // first via `Omit<Dispatcher, keyof Bubble>`, then intersect.
+    // Same-name → bubble wins; non-overlapping keys keep both.
+    let events_combined: Option<String> = match (
+        synthesized_events_type.as_deref(),
+        bubbled_event_map.as_deref(),
+    ) {
+        (Some(t), Some(b)) => Some(format!(
+            "Omit<{{ [__svn_K in keyof ({t})]: CustomEvent<({t})[__svn_K]> }}, keyof ({b})> & ({b})"
+        )),
+        (Some(t), None) => Some(format!(
             "{{ [__svn_K in keyof ({t})]: CustomEvent<({t})[__svn_K]> }}"
-        ));
-    }
-    if let Some(b) = bubbled_event_map.as_deref() {
-        events_alias_parts.push(b.to_string());
-    }
+        )),
+        (None, Some(b)) => Some(b.to_string()),
+        (None, None) => None,
+    };
     // Reviewer follow-up #1 (round 4): for NON-strict mode,
     // intersect the collected events with the lax index signature
     // `{ [evt: string]: CustomEvent<any> }` so unknown event names
@@ -962,14 +974,9 @@ fn emit_document_with_render_name(
     // block — `$$Events` resolves to the user's declaration at
     // module scope, no body-local synth needed.
     let lax_index_signature = "{ [evt: string]: CustomEvent<any> }";
-    let events_alias_body: Option<String> = if !events_alias_parts.is_empty() {
-        let collected = events_alias_parts
-            .iter()
-            .map(|p| format!("({p})"))
-            .collect::<Vec<_>>()
-            .join(" & ");
+    let events_alias_body: Option<String> = if let Some(collected) = events_combined.as_deref() {
         if narrow_events {
-            Some(collected)
+            Some(format!("({collected})"))
         } else {
             Some(format!("({collected}) & {lax_index_signature}"))
         }

@@ -5,7 +5,7 @@
     type B = $$Generic<keyof A>;
     type C = $$Generic<boolean>;
 async function $$render_960ff640() {
-    type $$Events = (({ [__svn_K in keyof (({a: A}))]: CustomEvent<(({a: A}))[__svn_K]> })) & { [evt: string]: CustomEvent<any> };
+    type $$Events = ({ [__svn_K in keyof (({a: A}))]: CustomEvent<(({a: A}))[__svn_K]> }) & { [evt: string]: CustomEvent<any> };
 
                                                    
 

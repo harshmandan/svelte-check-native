@@ -1194,6 +1194,15 @@ fn emit_document_with_render_name(
     if is_ts {
         let has_bubbled_events =
             !summary.bubbled_dom_events.is_empty() || summary.has_bubbled_component_event;
+        // Round-7 follow-up #6: the fn-shape gate cares about
+        // CONCRETE events from the dispatcher path, not just
+        // "is `createEventDispatcher()` called". A dispatcher with no
+        // type arg AND no string-literal dispatch calls contributes
+        // zero entries to upstream's `events.size` and shouldn't
+        // disqualify the runes fn-component shape. The synthesised
+        // events type is built from exactly those two sources, so
+        // its presence is a precise stand-in.
+        let has_concrete_dispatcher_events = synthesized_events_type.is_some();
         emit_default_export_declarations_ts(
             &mut buf,
             doc,
@@ -1204,6 +1213,7 @@ fn emit_document_with_render_name(
             prop_type_effective.as_deref(),
             &template_type_refs,
             has_dispatcher_call,
+            has_concrete_dispatcher_events,
             events_alias_body.is_some(),
             has_synth_events_content,
             has_strict_events_decl,

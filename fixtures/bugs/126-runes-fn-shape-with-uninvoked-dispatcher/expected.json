@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "Round-7 follow-up #6: native's pre-fix runes fn_component gate disqualified any component with ANY `createEventDispatcher()` call. Upstream's `events.hasEvents()` (`ComponentEvents.ts`) only counts CONCRETE collected events — declared `$$Events` interface, typed dispatcher with members, untyped dispatcher with string-literal `dispatch('name', …)` calls, or bubbled DOM/component events. A bare untyped `createEventDispatcher()` that never gets invoked contributes zero — `events.size === 0` upstream → fn-component shape is correct. Post-fix native gates on `has_concrete_dispatcher_events` (== synthesised events-type is some) instead of `has_dispatcher_call`, so this Producer keeps the callable-only `Component<P, X, B>` shape and the Consumer's `(typeof Producer)[]` pattern type-checks clean. Pre-fix this fired TS2322 because the iso interface's `new(...)` ctor signature can't be satisfied by a callable-only function expression."
+}

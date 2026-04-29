@@ -94,6 +94,7 @@ pub(crate) fn emit_default_export_declarations_ts(
     prop_type_source: Option<&str>,
     template_type_refs: &[SmolStr],
     has_dispatcher_call: bool,
+    has_concrete_dispatcher_events: bool,
     has_synth_events_alias: bool,
     has_synth_events_content: bool,
     has_strict_events_decl: bool,
@@ -133,7 +134,7 @@ pub(crate) fn emit_default_export_declarations_ts(
         doc,
         fragment,
         generics,
-        has_dispatcher_call,
+        has_concrete_dispatcher_events,
         has_strict_events_decl,
         has_bubbled_events,
     ) {
@@ -395,11 +396,22 @@ pub(crate) fn emit_default_export_declarations_ts(
 ///
 /// Where `events.hasEvents()` (`ComponentEvents.ts`) is true if any
 /// of: declared `$$Events` interface/type, a typed
-/// `createEventDispatcher<T>()`, an untyped dispatcher whose
-/// `dispatch('name', …)` calls supply a string-literal first arg, OR
-/// a bubbled DOM/component event. We collect the same set up-stream
-/// and pass it in as `has_strict_events_decl || has_dispatcher_call
-/// || has_bubbled_events`.
+/// `createEventDispatcher<T>()` whose `<T>` contributes properties,
+/// an untyped dispatcher whose `dispatch('name', …)` calls supply a
+/// string-literal first arg, OR a bubbled DOM/component event. We
+/// pass the equivalent set in as `has_strict_events_decl ||
+/// has_concrete_dispatcher_events || has_bubbled_events`.
+///
+/// Round-7 follow-up #6: `has_concrete_dispatcher_events` (computed
+/// from `synthesized_events_type.is_some()` upstream of the call)
+/// only fires when there's a real event source — typed dispatcher
+/// with a type arg, or untyped dispatcher with at least one
+/// string-literal `dispatch('name', …)` call. Pre-fix native passed
+/// `has_dispatcher_call` here, which fires for ANY
+/// `createEventDispatcher()` call site regardless of whether it
+/// produces actual events. A runes component that creates a
+/// dispatcher but never dispatches anything (or doesn't supply a
+/// type arg) was wrongly disqualified from the fn-component shape.
 ///
 /// Round-6 follow-up #3: pre-fix the native gate also blocked on
 /// `<svelte:options strictEvents />` (no-op in runes mode),
@@ -420,7 +432,7 @@ fn should_emit_fn_component_shape(
     doc: &Document<'_>,
     fragment: &Fragment,
     generics: Option<&str>,
-    has_dispatcher_call: bool,
+    has_concrete_dispatcher_events: bool,
     has_strict_events_decl: bool,
     has_bubbled_events: bool,
 ) -> bool {
@@ -434,11 +446,15 @@ fn should_emit_fn_component_shape(
         return false;
     }
     // events.hasEvents() — declared interface, typed/untyped
-    // dispatcher with detectable event names, or bubbled DOM/component
-    // events. Upstream's gate folds all three sources behind one
-    // boolean; we maintain three booleans so we can apply each at the
-    // right emit site, but at the gate they collapse to the same OR.
-    if has_strict_events_decl || has_dispatcher_call || has_bubbled_events {
+    // dispatcher contributing concrete event names, or bubbled
+    // DOM/component events. Upstream's gate folds all three sources
+    // behind one boolean; we maintain three booleans so we can apply
+    // each at the right emit site, but at the gate they collapse to
+    // the same OR. The dispatcher signal is `concrete_dispatcher_events`
+    // (Some(synthesized_events_type)), not the broader "any
+    // createEventDispatcher() exists" — a dispatcher with no type arg
+    // and no actual `dispatch('name', …)` calls produces zero events.
+    if has_strict_events_decl || has_concrete_dispatcher_events || has_bubbled_events {
         return false;
     }
     true

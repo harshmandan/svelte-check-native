@@ -370,9 +370,31 @@ type __SvnEachItem<T> = 0 extends 1 & T
  * semantics at type-level — we project from the typed marker
  * directly, no runtime helper call needed.
  */
+/**
+ * Reviewer follow-up #3 (round 4): also extract events from
+ * legacy / external `SvelteComponentTyped<Props, Events, Slots>`
+ * class constructors that don't carry the `__svn_events` marker.
+ * Pre-fix only the marker branch fired, so package-installed
+ * Svelte-3-style components forwarded their events as `any` when
+ * a wrapper bubbled them.
+ *
+ * Branch order:
+ *   1. `__svn_events` marker — our overlay's strict shape.
+ *   2. Class constructor returning a `SvelteComponent<P, E, S>`
+ *      instance — covers both legacy `SvelteComponentTyped<P, E,
+ *      S>` (deprecated alias) and our own iso interface's `new`
+ *      sig when the marker is absent. Inferring `E` directly
+ *      from `SvelteComponent`'s second type parameter.
+ *   3. Callable `Component<P, X, B>` (Svelte-5 fn-component
+ *      shape) — no events parameter. Fall through to
+ *      `Record<string, any>` for the lax fallback (matches
+ *      upstream's behavior for runes-only components).
+ */
 type __SvnComponentEvents<C> = C extends { readonly __svn_events: infer E }
     ? E
-    : Record<string, any>;
+    : C extends new (...args: any[]) => import('svelte').SvelteComponent<any, infer E, any>
+      ? E
+      : Record<string, any>;
 
 /**
  * Reviewer follow-up #3b: convert a wrapped `$$Events` map back to

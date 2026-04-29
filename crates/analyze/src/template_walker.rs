@@ -1362,6 +1362,30 @@ fn project_destructure_path(
                     .join(" | ");
                 current = format!("Omit<{current}, {union}>");
             }
+            crate::template_scope::DestructureSeg::ArrayRest { skip } => {
+                // Round-10 follow-up #4: tuple-tail extraction. Build
+                // `T extends readonly [unknown, …(skip times), ...infer
+                // __svn_R] ? __svn_R : never`. For tuples this picks
+                // the tail; for variable arrays TS infers `__svn_R` as
+                // the same array type so `tail` stays an array of
+                // element type.
+                let prefix = if *skip == 0 {
+                    String::new()
+                } else {
+                    let mut p = String::new();
+                    for i in 0..*skip {
+                        if i > 0 {
+                            p.push_str(", ");
+                        }
+                        p.push_str("unknown");
+                    }
+                    p.push_str(", ");
+                    p
+                };
+                current = format!(
+                    "({current} extends readonly [{prefix}...infer __svn_R] ? __svn_R : never)"
+                );
+            }
         }
     }
     current

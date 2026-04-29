@@ -104,6 +104,14 @@ pub enum DestructureSeg {
     /// same destructure level — the leaf type is
     /// `Omit<parent, sibling1 | sibling2 | …>`.
     ObjectRest { siblings: Vec<SmolStr> },
+    /// Round-10 follow-up #4: array-pattern rest (`[a, b, ...tail]`'s
+    /// `tail`). `skip` is the number of fixed elements that appeared
+    /// BEFORE the rest. Rendered as
+    /// `parent extends readonly [unknown, …, ...infer __svn_T] ? __svn_T : never`
+    /// (with `skip` `unknown` placeholders). Works for tuples and
+    /// — by TS narrowing `array[number]` through the conditional —
+    /// also for variable-length arrays.
+    ArrayRest { skip: u32 },
 }
 
 /// Output of [`collect_pattern_bindings`]. Bindings are emitted in
@@ -225,25 +233,26 @@ fn walk(
             }
         }
         BindingPattern::ArrayPattern(ap) => {
+            let mut leading_count: u32 = 0;
             for (idx, elem) in ap.elements.iter().enumerate() {
                 if let Some(elem) = elem {
                     path.push(DestructureSeg::Key(SmolStr::from(idx.to_string())));
                     walk(elem, offset, inside_rest, path, out);
                     path.pop();
                 }
+                leading_count = leading_count.saturating_add(1);
             }
-            // Array-rest (`[head, ...tail]`). Round-4 G9: must walk
-            // here, otherwise `tail` never reaches the shadow stack
-            // and template references resolve to a wrong binding.
-            // Round-9 #4 leaves array-rest projection unsupported —
-            // would need a tuple-tail extraction at the type level
-            // (`T extends [unknown, …infer R] ? R : never`) which is
-            // a larger port. Falls through to inheriting parent path
-            // (TS treats `array[number]` for the type, so accessing
-            // `tail.x` projects element type, which is reasonable
-            // even if not exactly upstream's IIFE shape).
+            // Round-10 follow-up #4: array-pattern rest
+            // (`[head, ...tail]`'s `tail`) projects as a tuple-tail
+            // extraction. `skip` = number of elements before the
+            // rest (counts elisions too — `[, ...rest]` skips the
+            // hole, matching the JS rest semantic).
             if let Some(rest) = &ap.rest {
+                path.push(DestructureSeg::ArrayRest {
+                    skip: leading_count,
+                });
                 walk(&rest.argument, offset, true, path, out);
+                path.pop();
             }
         }
         BindingPattern::AssignmentPattern(asn) => {

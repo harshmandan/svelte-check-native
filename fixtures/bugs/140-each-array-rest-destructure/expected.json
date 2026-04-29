@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 24,
+            "column": 17,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-10 follow-up #4: `{#each tuples as [head, ...tail]}` — `tail` should be the tuple-tail extraction. For `[number, string, boolean][]` rows, `tail` is `[string, boolean]`. Pre-fix native treated array-rest as parent-path inheritance → `tail` typed as the WHOLE element tuple, so `tail[0]` would have wrongly typed as `number` (head's type) rather than `string`. Upstream's IIFE preserves JS rest semantics. Native now mirrors with a TS-level conditional: `T extends readonly [unknown, ...infer R] ? R : never` (skip placeholders for elements before the rest). Producer here exposes `head: number`, `tail: [string, boolean]`. Consumer's typed calls `takesNumber(head)`, `takesString(tail[0])`, `takesBoolean(tail[1])` pass; the swapped `takesNumber(tail[0])` correctly fires TS2345 (`string` not assignable to `number`)."
+}

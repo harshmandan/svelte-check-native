@@ -705,6 +705,60 @@ pub fn find_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) -> Vec<S
     out
 }
 
+/// Round-11 follow-up #3: find local names bound to an UNTYPED
+/// `createEventDispatcher()` call (no `<T>` type argument). Mirrors
+/// upstream's per-call-typed-vs-untyped check
+/// (`ComponentEvents.ts:256-264`): a call like `dispatch('foo', …)`
+/// only contributes 'foo' to the events surface when at least one
+/// dispatcher binding with that NAME is untyped.
+///
+/// Pre-fix native computed `untyped_locals` as
+/// `find_dispatcher_local_names \ find_typed_dispatcher_local_names`
+/// by name, which wrongly excluded a top-level untyped dispatcher
+/// SHADOWED by a nested typed dispatcher with the same name. This
+/// helper instead lists names that have AT LEAST ONE untyped
+/// binding anywhere in the script (regardless of whether other
+/// bindings with the same name are typed) — matching upstream's
+/// `eventDispatchers.some(d => !d.typing && d.name === call.name)`
+/// check.
+pub fn find_untyped_dispatcher_local_names(
+    program: &oxc_ast::ast::Program<'_>,
+) -> Vec<String> {
+    let ctor_locals = collect_ctor_locals(program);
+    let mut all: Vec<String> = Vec::new();
+    for stmt in &program.body {
+        statement_collect_dispatcher_locals(stmt, &ctor_locals, false, &mut all);
+    }
+    let mut typed: Vec<String> = Vec::new();
+    for stmt in &program.body {
+        statement_collect_dispatcher_locals(stmt, &ctor_locals, true, &mut typed);
+    }
+    // A name has at least one untyped binding iff its multiset
+    // count in `all` exceeds its count in `typed` — same name can
+    // appear once typed AND once untyped under shadowing, and the
+    // untyped binding still makes the name "reachable" as untyped.
+    let mut counts_all: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for n in &all {
+        *counts_all.entry(n.clone()).or_default() += 1;
+    }
+    let mut counts_typed: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for n in &typed {
+        *counts_typed.entry(n.clone()).or_default() += 1;
+    }
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for n in all {
+        let total = counts_all.get(&n).copied().unwrap_or(0);
+        let typed_count = counts_typed.get(&n).copied().unwrap_or(0);
+        if total > typed_count && seen.insert(n.clone()) {
+            out.push(n);
+        }
+    }
+    out
+}
+
 /// Walk a statement tree and collect `BindingIdentifier`s whose init
 /// is a `<ctor-local>(...)` dispatcher call. When `typed_only` is
 /// true, only collect declarators whose call has an explicit

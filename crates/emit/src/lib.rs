@@ -497,15 +497,21 @@ fn emit_document_with_render_name(
             let mut untyped_names: Vec<String> = parsed_instance
                 .as_ref()
                 .map(|p| {
-                    let all_locals = svn_analyze::find_dispatcher_local_names(&p.program);
-                    if all_locals.is_empty() {
-                        return Vec::new();
-                    }
-                    let typed_locals = svn_analyze::find_typed_dispatcher_local_names(&p.program);
-                    let untyped_locals: Vec<String> = all_locals
-                        .into_iter()
-                        .filter(|n| !typed_locals.iter().any(|t| t == n))
-                        .collect();
+                    // Round-11 follow-up #3: scan dispatched names
+                    // through dispatcher locals whose NAME has at
+                    // least one UNTYPED binding. Pre-fix native
+                    // computed `untyped_locals` as the multiset
+                    // difference `all_locals \ typed_locals` BY NAME,
+                    // which wrongly excluded a top-level untyped
+                    // dispatcher when a nested typed dispatcher
+                    // shadowed it (same name → both entries cancel
+                    // → calls missed). The new helper keeps any
+                    // name where the untyped count exceeds zero —
+                    // mirrors upstream's per-call check
+                    // `eventDispatchers.some(d => !d.typing && d.name
+                    // === call.name)` (`ComponentEvents.ts:256`).
+                    let untyped_locals =
+                        svn_analyze::find_untyped_dispatcher_local_names(&p.program);
                     if untyped_locals.is_empty() {
                         return Vec::new();
                     }

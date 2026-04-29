@@ -53,7 +53,8 @@ pub use model::SemanticModel;
 pub use props::{
     PropInfo, PropsInfo, PropsSource, collect_inline_typed_dispatcher_member_names,
     contains_typeof_ref, find_dispatched_event_names, find_dispatcher_event_type_sources,
-    find_dispatcher_local_names, find_typed_dispatcher_local_names, has_event_dispatcher_call,
+    find_dispatcher_local_names, find_typed_dispatcher_local_names,
+    find_untyped_dispatcher_local_names, has_event_dispatcher_call,
     has_inline_typed_dispatcher_members, root_type_name_of,
 };
 pub use rune::{RuneCall, RuneKind, find_runes};

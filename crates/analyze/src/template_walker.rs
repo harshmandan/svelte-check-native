@@ -150,6 +150,37 @@ pub struct TemplateSummary {
     /// dedupes when projecting (a duplicate key in a TS object type
     /// is fine but noisy).
     pub bubbled_dom_events: SmallVec<BubbledDomEvent, 2>,
+    /// Bare `<Child on:NAME />` directives on components — each
+    /// re-dispatches Child's NAME event up to the wrapper's own
+    /// consumers. Reviewer follow-up #2: pre-fix the walker only
+    /// flagged `has_bubbled_component_event` and recorded the local
+    /// `$on(...)` for child-event-name validation, but the wrapper's
+    /// own `$$Events` surface didn't carry the bubbled name —
+    /// consumers of the wrapper saw nothing.
+    ///
+    /// Emit projects each entry into `events_alias_body` via
+    /// `__SvnComponentEvents<typeof <component_root>>["<name>"]`.
+    /// Mirrors upstream svelte2tsx's
+    /// `__sveltets_2_bubbleEventDef(__sveltets_2_instanceOf(<Comp>).$$events_def, '<name>')`
+    /// projection in `event-handler.ts:55-60`.
+    ///
+    /// Walk-order preserved; emit dedupes by name.
+    pub bubbled_component_events: Vec<BubbledComponentEvent>,
+}
+
+/// One bare `<Child on:NAME />` directive — the wrapper's
+/// `$$Events` surface should carry NAME with Child's declared event
+/// type. Captured in walk order; emit dedupes and projects.
+#[derive(Debug, Clone)]
+pub struct BubbledComponentEvent {
+    pub event_name: SmolStr,
+    /// Source-text of the component identifier (or dotted form like
+    /// `UI.Dropdown`). Used in emit's `typeof <root>` reference; if
+    /// it's a synthetic root (`__svn_self_default` for
+    /// `<svelte:self>` / `(<expr>)` for `<svelte:component>`), emit
+    /// falls back to `Record<string, any>` for the event type
+    /// (matches upstream's any-fallback for dynamic components).
+    pub component_root: SmolStr,
 }
 
 /// Source-element kind for a bubbled `on:NAME` directive — drives the
@@ -1402,6 +1433,16 @@ fn collect_instantiation_inner(
                             handler_range: Range::new(d.range.start, d.range.start),
                         });
                         summary.has_bubbled_component_event = true;
+                        // Reviewer follow-up #2: also record the
+                        // (event_name, component_root) pair so the
+                        // wrapper's own `$$Events` surface carries the
+                        // bubbled name. Emit projects via
+                        // `__SvnComponentEvents<typeof <root>>["NAME"]`
+                        // and intersects with `events_alias_body`.
+                        summary.bubbled_component_events.push(BubbledComponentEvent {
+                            event_name: d.name.clone(),
+                            component_root: component_root.clone(),
+                        });
                     }
                     continue;
                 }

@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 21,
+            "column": 19,
+            "code": 2345
+        }
+    ],
+    "_note": "Reviewer follow-up #2: bare `<Inner on:NAME />` re-dispatches Inner's NAME event to the wrapper's consumers — so the wrapper's `$$Events` surface must carry NAME with Inner's declared event type. Pre-fix the walker only set `has_bubbled_component_event` (which drives Props widening) and emitted a local `$inst.$on(NAME, () => {})` for child-event-name validation, but the wrapper's `events_alias_body` was built only from dispatcher synth + DOM bubbles. The wrapper's consumers saw nothing. Post-fix the walker records `bubbled_component_events: [(name, root)]` per bare bubble; emit projects each via `__SvnComponentEvents<typeof <root>>[\"name\"]` and intersects into `events_alias_body`. Mirrors upstream svelte2tsx's `__sveltets_2_bubbleEventDef(__sveltets_2_instanceOf(<Comp>).$$events_def, '<name>')` projection (`event-handler.ts:55-60`). Consumer's wrong handler `(e: number) => void` then fails against the propagated `CustomEvent<{id: number}>` and fires TS2345."
+}

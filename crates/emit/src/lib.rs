@@ -551,6 +551,62 @@ fn emit_document_with_render_name(
             }
             Some(format!("{{ {body} }}"))
         };
+    // Reviewer follow-up #2: bare `<Child on:NAME />` directives
+    // re-dispatch Child's NAME event to the wrapper's consumers.
+    // Project each into the wrapper's `$$Events` surface via
+    // `__SvnComponentEvents<typeof <root>>["NAME"]` so consumers'
+    // `<Wrapper on:NAME={cb}>` see Child's declared event type.
+    // Mirrors upstream svelte2tsx's
+    // `__sveltets_2_bubbleEventDef(__sveltets_2_instanceOf(<Child>).$$events_def, '<name>')`
+    // projection in `event-handler.ts:55-60`. Pre-fix the bubble
+    // was only checked locally via `$inst.$on(...)` for
+    // child-event-name validation but never propagated.
+    //
+    // Synthetic component roots (`__svn_self_default` for
+    // `<svelte:self>` and `(<expr>)` for `<svelte:component>`)
+    // would produce malformed `typeof` expressions. Skip those
+    // here — the lax fallback (`Record<string, any>`) lands via
+    // the type alias's untyped branch.
+    let bubbled_component_event_map: Option<String> = if !narrow_events
+        || summary.bubbled_component_events.is_empty()
+    {
+        None
+    } else {
+        let mut seen: Vec<&str> = Vec::with_capacity(summary.bubbled_component_events.len());
+        let mut body = String::new();
+        for ev in &summary.bubbled_component_events {
+            if seen.iter().any(|s| *s == ev.event_name.as_str()) {
+                continue;
+            }
+            // Skip synthetic roots — `typeof __svn_self_default` /
+            // `typeof (<expr>)` aren't well-formed `typeof`
+            // expressions for arbitrary user code.
+            let root = ev.component_root.as_str();
+            if root == "__svn_self_default"
+                || root.starts_with('(')
+                || !root
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+            {
+                continue;
+            }
+            seen.push(ev.event_name.as_str());
+            if !body.is_empty() {
+                body.push_str(", ");
+            }
+            let _ = write!(
+                body,
+                "{n:?}: __SvnComponentEvents<typeof {root}>[{n:?}]",
+                n = ev.event_name.as_str(),
+            );
+        }
+        if body.is_empty() {
+            None
+        } else {
+            Some(format!("{{ {body} }}"))
+        }
+    };
 
     // SVELTE-4-COMPAT: rewrite `$: ...` reactive statements before
     // the Svelte-5-shaped passes run, so downstream code sees the
@@ -791,34 +847,43 @@ fn emit_document_with_render_name(
     // handlers. That's fine (and arguably correct) — the user
     // conflated two different event sources, surfacing the conflict
     // is the right outcome.
-    let events_alias_body: Option<String> = match (
-        synthesized_events_type.as_deref(),
-        bubbled_dom_event_map.as_deref(),
-    ) {
-        (Some(t), Some(b)) => Some(format!(
-            "({{ [__svn_K in keyof ({t})]: CustomEvent<({t})[__svn_K]> }}) & ({b})"
-        )),
-        (Some(t), None) => Some(format!(
-            "{{ [__svn_K in keyof ({t})]: CustomEvent<({t})[__svn_K]> }}"
-        )),
-        (None, Some(b)) => Some(b.to_string()),
-        // Reviewer follow-up #2: when a strict trigger is in play
-        // (`<script strictEvents>` attr or runes mode) but neither
-        // synth half fired, fall through with the empty surface
-        // `type $$Events = {}`. Mirrors upstream
-        // `_events(strictEvents=true, …)` in
+    let mut events_alias_parts: Vec<String> = Vec::new();
+    if let Some(t) = synthesized_events_type.as_deref() {
+        events_alias_parts
+            .push(format!("{{ [__svn_K in keyof ({t})]: CustomEvent<({t})[__svn_K]> }}"));
+    }
+    if let Some(b) = bubbled_dom_event_map.as_deref() {
+        events_alias_parts.push(b.to_string());
+    }
+    if let Some(c) = bubbled_component_event_map.as_deref() {
+        events_alias_parts.push(c.to_string());
+    }
+    let events_alias_body: Option<String> = if !events_alias_parts.is_empty() {
+        Some(
+            events_alias_parts
+                .iter()
+                .map(|p| format!("({p})"))
+                .collect::<Vec<_>>()
+                .join(" & "),
+        )
+    } else if narrow_events && !has_strict_events_decl {
+        // Reviewer follow-up #2 (the original): when a strict
+        // trigger is in play (runes mode or `<script
+        // strictEvents>` attr) but no synth half fired, fall
+        // through with the empty surface `type $$Events = {}`.
+        // Mirrors upstream `_events(strictEvents=true, …)` in
         // `addComponentExport.ts:416-418`: drops the
         // `with_any_event` wrapper unconditionally on strict mode
         // — even with no declared events — so consumers' `on:NAME`
         // for any unknown name fails the empty `keyof $$Events`
-        // constraint. Pre-fix this case fell back to lax `{ [evt:
-        // string]: CustomEvent<any> }`, masking unknown-event typos.
+        // constraint.
         //
         // `has_strict_events_decl` is the interface case: handled
         // separately downstream — `$$Events` resolves to the user's
         // declaration at module scope, no body-local synth needed.
-        (None, None) if narrow_events && !has_strict_events_decl => Some("{}".to_string()),
-        (None, None) => None,
+        Some("{}".to_string())
+    } else {
+        None
     };
     if let Some(body) = events_alias_body.as_deref() {
         let _ = writeln!(buf, "    type $$Events = {body};");
@@ -995,8 +1060,9 @@ fn emit_document_with_render_name(
     // without events, the fn shape stays unmarked. Iso shape still
     // gets the marker on any non-None alias because the typed
     // branch of `__svn_ensure_component` keys on it.
-    let has_synth_events_content =
-        synthesized_events_type.is_some() || bubbled_dom_event_map.is_some();
+    let has_synth_events_content = synthesized_events_type.is_some()
+        || bubbled_dom_event_map.is_some()
+        || bubbled_component_event_map.is_some();
     if is_ts {
         emit_default_export_declarations_ts(
             &mut buf,

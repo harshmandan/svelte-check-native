@@ -349,6 +349,32 @@ type __SvnEachItem<T> = 0 extends 1 & T
             : never;
 
 /**
+ * Reviewer follow-up #2: extract a child component's events surface
+ * for the parent's bubbled-event projection. When the wrapper has
+ * `<Child on:NAME />` (no value, event-bubble shorthand), the
+ * wrapper's own `$$Events` carries NAME with Child's declared event
+ * type — projected as `__SvnComponentEvents<typeof Child>["NAME"]`.
+ *
+ * Three branches:
+ *   1. `__svn_events` marker present (iso shape with declared
+ *      $$Events) → return the marker's E.
+ *   2. Plain `Component<P, X, B>` (fn-component shape, no events
+ *      surface) → return `Record<string, any>` so the projected
+ *      event types as `any` (matches upstream's lax fallback for
+ *      runes-only components).
+ *   3. Anything else (synthetic dynamic-component root, malformed
+ *      input) → `Record<string, any>` lax fallback.
+ *
+ * Mirrors upstream svelte2tsx's `__sveltets_2_bubbleEventDef(
+ * __sveltets_2_instanceOf(<Comp>).$$events_def, '<name>')`
+ * semantics at type-level — we project from the typed marker
+ * directly, no runtime helper call needed.
+ */
+type __SvnComponentEvents<C> = C extends { readonly __svn_events: infer E }
+    ? E
+    : Record<string, any>;
+
+/**
  * Fresh `any` placeholder. Used as the anchor / target argument in the
  * emitted `new Comp({ target: __svn_any(), props: {...} })` call.
  *

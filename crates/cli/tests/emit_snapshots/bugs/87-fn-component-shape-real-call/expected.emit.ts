@@ -3,7 +3,7 @@
 import { createEventDispatcher } from 'svelte'
 async function $$render_699ff1eb() {
     type $$ComponentProps = { value: number };
-    type $$Events = { [__svn_K in keyof (({ click: { id: number } }))]: CustomEvent<(({ click: { id: number } }))[__svn_K]> };
+    type $$Events = ({ [__svn_K in keyof (({ click: { id: number } }))]: CustomEvent<(({ click: { id: number } }))[__svn_K]> });
 
 // Real `createEventDispatcher()` call — must disqualify the
 // `__sveltets_2_fn_component` default-export shape and route

@@ -494,7 +494,7 @@ fn emit_document_with_render_name(
                     svn_analyze::find_dispatcher_event_type_sources(&p.program, s.content)
                 })
                 .unwrap_or_default();
-            let untyped_names: Vec<String> = parsed_instance
+            let mut untyped_names: Vec<String> = parsed_instance
                 .as_ref()
                 .map(|p| {
                     let all_locals = svn_analyze::find_dispatcher_local_names(&p.program);
@@ -512,18 +512,45 @@ fn emit_document_with_render_name(
                     svn_analyze::find_dispatched_event_names(&p.program, &untyped_locals)
                 })
                 .unwrap_or_default();
-            // Typed dispatcher source intersect: `{...toEventTypings<T1>(),
-            // ...toEventTypings<T2>()}` upstream → `(T1) & (T2)` here. The
-            // mapped type wraps these into the per-key `CustomEvent<…>`
-            // shape at combine time. Note: TS intersection of
-            // `{foo: A} & {foo: B}` is `{foo: A & B}` — for `string &
-            // number = never` that diverges from upstream, where the
-            // `addToEvents` collision detector pushes the duplicate name
-            // into `dispatchedEvents` and emits it as
-            // `'foo': customEvent` last, collapsing to
-            // `CustomEvent<any>`. We don't enumerate type-arg keys at
-            // synth time so can't detect that collision; left as an
-            // acknowledged divergence (rare in practice).
+            // Round-8 follow-up #5: collapse names duplicated across
+            // multiple inline typed dispatchers to `CustomEvent<any>`.
+            // Upstream's `addToEvents` (`ComponentEvents.ts:279`)
+            // detects a name added twice and pushes it into
+            // `dispatchedEvents`, which `toDefString` emits last as
+            // `'name': customEvent` — overriding both spreads with
+            // `CustomEvent<any>`. We use the same path: any inline-
+            // type-literal member name that appears 2+ times across
+            // typed dispatchers gets injected into `untyped_names`
+            // (route they already take through the round-7 #5 layer
+            // order, where untyped overrides typed and bubble).
+            //
+            // `{foo: A} & {foo: B}` (TS intersection of typed
+            // sources, our pre-fix behaviour) collapsed to
+            // `CustomEvent<A & B>` — typically `never` for unrelated
+            // primitives, which TS rejects on every consumer call.
+            // The post-fix override produces `CustomEvent<any>`,
+            // which matches upstream and accepts every handler.
+            if let Some(p) = parsed_instance.as_ref() {
+                let all_inline_member_names =
+                    svn_analyze::collect_inline_typed_dispatcher_member_names(&p.program);
+                let mut seen: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                let mut already_in_untyped: std::collections::HashSet<String> =
+                    untyped_names.iter().cloned().collect();
+                for name in all_inline_member_names {
+                    if !seen.insert(name.clone()) && !already_in_untyped.contains(&name) {
+                        untyped_names.push(name.clone());
+                        already_in_untyped.insert(name);
+                    }
+                }
+            }
+            // Typed dispatcher sources are intersected via `&`. The
+            // mapped type wraps the intersection into the per-key
+            // `CustomEvent<…>` shape at combine time. Duplicate keys
+            // (where the intersection would collapse to e.g. `never`)
+            // are pre-emptively routed into the untyped-names set
+            // above so they reach the last layer as `CustomEvent<any>`
+            // and override the now-broken intersected type.
             let typed = if typed_args.is_empty() {
                 None
             } else {

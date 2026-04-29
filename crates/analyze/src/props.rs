@@ -1046,6 +1046,86 @@ fn dispatcher_type_arg_slice(
         .map(str::to_string)
 }
 
+/// Round-8 follow-up #5: collect every property-signature name from
+/// every inline-type-literal typed dispatcher in this program. Used
+/// by emit to detect names shared across multiple typed dispatchers
+/// — upstream's `addToEvents` collapses such duplicates to
+/// `CustomEvent<any>` via the dispatchedEvents-set override; we
+/// route the duplicates through the untyped-names layer (which the
+/// round-7 #5 layer order already overrides last with
+/// `CustomEvent<any>`).
+///
+/// Returns names in walk order, with duplicates retained — caller
+/// can dedupe to find the names that appeared >= 2 times.
+pub fn collect_inline_typed_dispatcher_member_names(
+    program: &oxc_ast::ast::Program<'_>,
+) -> Vec<String> {
+    let ctor_locals = collect_ctor_locals(program);
+    let mut out = Vec::new();
+    for stmt in &program.body {
+        statement_collect_inline_typed_members(stmt, &ctor_locals, &mut out);
+    }
+    out
+}
+
+fn statement_collect_inline_typed_members(
+    stmt: &Statement<'_>,
+    ctor_locals: &std::collections::HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    match stmt {
+        Statement::VariableDeclaration(decl) => {
+            for d in &decl.declarations {
+                if let Some(init) = &d.init {
+                    expression_collect_inline_typed_members(init, ctor_locals, out);
+                }
+            }
+        }
+        Statement::ExpressionStatement(es) => {
+            expression_collect_inline_typed_members(&es.expression, ctor_locals, out);
+        }
+        _ => {}
+    }
+}
+
+fn expression_collect_inline_typed_members(
+    expr: &Expression<'_>,
+    ctor_locals: &std::collections::HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    let Expression::CallExpression(call) = expr else {
+        return;
+    };
+    let Expression::Identifier(id) = &call.callee else {
+        return;
+    };
+    if !ctor_locals.contains(id.name.as_str()) {
+        return;
+    }
+    let Some(tp) = call.type_arguments.as_ref() else {
+        return;
+    };
+    let Some(arg) = tp.params.first() else {
+        return;
+    };
+    let oxc_ast::ast::TSType::TSTypeLiteral(lit) = arg else {
+        return;
+    };
+    for member in &lit.members {
+        let oxc_ast::ast::TSSignature::TSPropertySignature(prop) = member else {
+            continue;
+        };
+        let key_name = match &prop.key {
+            oxc_ast::ast::PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
+            oxc_ast::ast::PropertyKey::StringLiteral(s) => Some(s.value.to_string()),
+            _ => None,
+        };
+        if let Some(name) = key_name {
+            out.push(name);
+        }
+    }
+}
+
 /// Round-8 follow-up #4: does any typed `createEventDispatcher<T>()`
 /// in this program have an INLINE type literal (`{foo: …}`) with at
 /// least one property signature?

@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 14,
+            "column": 17,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-12 follow-up #5: multi-part text attrs on `<slot>` (e.g. `label=\"hi {name}\"`) — pre-fix native dropped these attrs entirely from the slot literal, so consumer-side `let:label` typed as `any` and any field/argument check passed silently. Upstream's `slot.ts:46` casts multi-part interpolated attrs to a dummy string expression giving `label: string` at the slot prop type. Native now emits multi-part attrs as `Resolved(Type(\"string\"))` slot attrs. Producer here exposes `label: string` from `<slot label=\"hi {name}\" />`; Consumer's `takesString(label)` passes; the swapped `takesNumber(label)` correctly fires TS2345 (`string` not assignable to `number`). Pre-fix `label` was `any` and both calls would have passed silently."
+}

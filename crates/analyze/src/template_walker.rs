@@ -1145,10 +1145,12 @@ fn collect_slot_def(
                 // (e.g. `<slot kind="header">`). Single-text-part
                 // values flow through as TS string literals so
                 // consumer-side `<Comp let:kind>` destructure resolves
-                // `kind` to `"header"`. Multi-part interpolated
-                // values (`<slot foo="a {b} c">`) and value-less
-                // boolean shorthand are still skipped (full
-                // SlotHandler port handles those).
+                // `kind` to `"header"`. Round-12 follow-up #5: multi-
+                // part interpolated values (`<slot foo="a {b} c">`)
+                // resolve to plain `string` (matches upstream
+                // `slot.ts:46` which casts any multi-part attr to a
+                // dummy string expression). Value-less boolean
+                // shorthand is still skipped.
                 if let Some(v) = &p.value
                     && v.parts.len() == 1
                     && let AttrValuePart::Text { content, .. } = &v.parts[0]
@@ -1156,6 +1158,15 @@ fn collect_slot_def(
                     entries.push(SlotAttr::Prop {
                         name: p.name.clone(),
                         expr: SlotAttrExpr::Literal(content.to_string()),
+                    });
+                } else if let Some(v) = &p.value
+                    && !v.parts.is_empty()
+                {
+                    entries.push(SlotAttr::Prop {
+                        name: p.name.clone(),
+                        expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Type(
+                            "string".to_string(),
+                        )),
                     });
                 }
             }

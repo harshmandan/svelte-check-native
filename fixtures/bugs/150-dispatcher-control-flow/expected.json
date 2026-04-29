@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 14,
+            "column": 25,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-12 follow-up #4: dispatcher walkers extend recursion through for/while/switch/try/labeled statements AND function-expression arguments to call expressions. Pre-fix native handled VarDecl/Function/Block/If only, so dispatchers nested inside callbacks (`setTimeout(() => { const d = createEventDispatcher<...>() })`), try/catch blocks, loop bodies, and switch cases were silently missed. Upstream's TS walker visits them all via `ts.forEachChild` (`processInstanceScriptContent.ts:271`). Inner here declares typed dispatchers in BOTH a setTimeout callback AND a try block; both must reach the events surface. Consumer's `<Inner on:from_callback={handleString}>` and `<Inner on:from_try={handleNumber}>` both pass; the swapped `<Inner on:from_callback={handleNumber}>` correctly fires TS2345 (`CustomEvent<number>` not assignable to `CustomEvent<string>` handler). Pre-fix BOTH events would have been missed and the consumer would have fallen through to the lax untyped overload, accepting any handler shape silently."
+}

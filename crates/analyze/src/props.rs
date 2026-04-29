@@ -624,13 +624,58 @@ fn statement_collect_typed_dispatcher_slices(
             }
         }
         Statement::ExpressionStatement(es) => {
-            // IIFE-shaped wrappers (`(() => { ... })()`) — walk the
-            // function bodies inside the call so nested declarations
-            // still land. A bare `createEventDispatcher<{...}>()` here
-            // is intentionally NOT collected (round-9 #3).
+            // IIFE-shaped wrappers (`(() => { ... })()`) and call-
+            // argument callbacks (`setTimeout(() => { ... })`) — walk
+            // the function bodies inside the call so nested
+            // declarations still land. A bare
+            // `createEventDispatcher<{...}>()` here is intentionally
+            // NOT collected (round-9 #3).
             for s in statements_inside_function_expr(&es.expression) {
                 statement_collect_typed_dispatcher_slices(s, source, ctor_locals, out);
             }
+        }
+        // Round-12 follow-up #4: recurse through control-flow
+        // statements upstream's TS walker visits via
+        // `ts.forEachChild`.
+        Statement::ForStatement(s) => {
+            statement_collect_typed_dispatcher_slices(&s.body, source, ctor_locals, out);
+        }
+        Statement::ForInStatement(s) => {
+            statement_collect_typed_dispatcher_slices(&s.body, source, ctor_locals, out);
+        }
+        Statement::ForOfStatement(s) => {
+            statement_collect_typed_dispatcher_slices(&s.body, source, ctor_locals, out);
+        }
+        Statement::WhileStatement(s) => {
+            statement_collect_typed_dispatcher_slices(&s.body, source, ctor_locals, out);
+        }
+        Statement::DoWhileStatement(s) => {
+            statement_collect_typed_dispatcher_slices(&s.body, source, ctor_locals, out);
+        }
+        Statement::SwitchStatement(s) => {
+            for case in &s.cases {
+                for stmt in &case.consequent {
+                    statement_collect_typed_dispatcher_slices(stmt, source, ctor_locals, out);
+                }
+            }
+        }
+        Statement::TryStatement(s) => {
+            for stmt in &s.block.body {
+                statement_collect_typed_dispatcher_slices(stmt, source, ctor_locals, out);
+            }
+            if let Some(handler) = &s.handler {
+                for stmt in &handler.body.body {
+                    statement_collect_typed_dispatcher_slices(stmt, source, ctor_locals, out);
+                }
+            }
+            if let Some(finalizer) = &s.finalizer {
+                for stmt in &finalizer.body {
+                    statement_collect_typed_dispatcher_slices(stmt, source, ctor_locals, out);
+                }
+            }
+        }
+        Statement::LabeledStatement(s) => {
+            statement_collect_typed_dispatcher_slices(&s.body, source, ctor_locals, out);
         }
         _ => {}
     }
@@ -645,22 +690,50 @@ fn statement_collect_typed_dispatcher_slices(
 /// bodies attached as variable initializers or wrapped as IIFEs.
 fn statements_inside_function_expr<'a, 'b>(
     expr: &'a Expression<'b>,
-) -> &'a [Statement<'b>] {
+) -> Vec<&'a Statement<'b>> {
+    let mut out = Vec::new();
+    collect_function_body_stmts(expr, &mut out);
+    out
+}
+
+/// Round-12 follow-up #4: walk an expression looking for nested
+/// function/arrow bodies — including those passed as call arguments
+/// (`setTimeout(() => { … })`). All recovered statements get
+/// flattened into `out` so each dispatcher walker can iterate
+/// uniformly.
+fn collect_function_body_stmts<'a, 'b>(
+    expr: &'a Expression<'b>,
+    out: &mut Vec<&'a Statement<'b>>,
+) {
     match expr {
-        Expression::ArrowFunctionExpression(arrow) => arrow.body.statements.as_slice(),
-        Expression::FunctionExpression(fe) => fe
-            .body
-            .as_ref()
-            .map(|b| b.statements.as_slice())
-            .unwrap_or(&[]),
-        Expression::ParenthesizedExpression(p) => statements_inside_function_expr(&p.expression),
-        Expression::CallExpression(call) => {
-            // IIFE — peek through the callee. `((() => {…}))()`
-            // happens to nest one or more parens around the function
-            // expression; the recursion above unwraps those.
-            statements_inside_function_expr(&call.callee)
+        Expression::ArrowFunctionExpression(arrow) => {
+            for s in &arrow.body.statements {
+                out.push(s);
+            }
         }
-        _ => &[],
+        Expression::FunctionExpression(fe) => {
+            if let Some(body) = &fe.body {
+                for s in &body.statements {
+                    out.push(s);
+                }
+            }
+        }
+        Expression::ParenthesizedExpression(p) => {
+            collect_function_body_stmts(&p.expression, out);
+        }
+        Expression::CallExpression(call) => {
+            // IIFE — peek through the callee.
+            collect_function_body_stmts(&call.callee, out);
+            // Callback args — `setTimeout(() => { … }, 100)` and
+            // similar patterns. Each argument expression that
+            // contains a function body contributes its statements.
+            for arg in &call.arguments {
+                if let Some(arg_expr) = arg.as_expression() {
+                    collect_function_body_stmts(arg_expr, out);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -810,6 +883,47 @@ fn statement_collect_dispatcher_locals(
             for s in statements_inside_function_expr(&es.expression) {
                 statement_collect_dispatcher_locals(s, ctor_locals, typed_only, out);
             }
+        }
+        // Round-12 follow-up #4: control-flow recursion.
+        Statement::ForStatement(s) => {
+            statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
+        }
+        Statement::ForInStatement(s) => {
+            statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
+        }
+        Statement::ForOfStatement(s) => {
+            statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
+        }
+        Statement::WhileStatement(s) => {
+            statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
+        }
+        Statement::DoWhileStatement(s) => {
+            statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
+        }
+        Statement::SwitchStatement(s) => {
+            for case in &s.cases {
+                for stmt in &case.consequent {
+                    statement_collect_dispatcher_locals(stmt, ctor_locals, typed_only, out);
+                }
+            }
+        }
+        Statement::TryStatement(s) => {
+            for stmt in &s.block.body {
+                statement_collect_dispatcher_locals(stmt, ctor_locals, typed_only, out);
+            }
+            if let Some(handler) = &s.handler {
+                for stmt in &handler.body.body {
+                    statement_collect_dispatcher_locals(stmt, ctor_locals, typed_only, out);
+                }
+            }
+            if let Some(finalizer) = &s.finalizer {
+                for stmt in &finalizer.body {
+                    statement_collect_dispatcher_locals(stmt, ctor_locals, typed_only, out);
+                }
+            }
+        }
+        Statement::LabeledStatement(s) => {
+            statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
         }
         _ => {}
     }
@@ -1045,6 +1159,65 @@ fn scan_statement_in_source_order(
                     );
                 }
             }
+        }
+        // Round-12 follow-up #4: control-flow recursion.
+        Statement::ForStatement(s) => {
+            scan_statement_in_source_order(&s.body, dispatcher_locals, literal_vars, seen, out);
+        }
+        Statement::ForInStatement(s) => {
+            scan_statement_in_source_order(&s.body, dispatcher_locals, literal_vars, seen, out);
+        }
+        Statement::ForOfStatement(s) => {
+            scan_statement_in_source_order(&s.body, dispatcher_locals, literal_vars, seen, out);
+        }
+        Statement::WhileStatement(s) => {
+            scan_statement_in_source_order(&s.body, dispatcher_locals, literal_vars, seen, out);
+        }
+        Statement::DoWhileStatement(s) => {
+            scan_statement_in_source_order(&s.body, dispatcher_locals, literal_vars, seen, out);
+        }
+        Statement::SwitchStatement(s) => {
+            for case in &s.cases {
+                for stmt in &case.consequent {
+                    scan_statement_in_source_order(
+                        stmt,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
+                }
+            }
+        }
+        Statement::TryStatement(s) => {
+            for stmt in &s.block.body {
+                scan_statement_in_source_order(stmt, dispatcher_locals, literal_vars, seen, out);
+            }
+            if let Some(handler) = &s.handler {
+                for stmt in &handler.body.body {
+                    scan_statement_in_source_order(
+                        stmt,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
+                }
+            }
+            if let Some(finalizer) = &s.finalizer {
+                for stmt in &finalizer.body {
+                    scan_statement_in_source_order(
+                        stmt,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
+                }
+            }
+        }
+        Statement::LabeledStatement(s) => {
+            scan_statement_in_source_order(&s.body, dispatcher_locals, literal_vars, seen, out);
         }
         _ => {}
     }
@@ -1391,6 +1564,47 @@ fn statement_collect_inline_typed_members(
                 statement_collect_inline_typed_members(s, ctor_locals, out);
             }
         }
+        // Round-12 follow-up #4: control-flow recursion.
+        Statement::ForStatement(s) => {
+            statement_collect_inline_typed_members(&s.body, ctor_locals, out);
+        }
+        Statement::ForInStatement(s) => {
+            statement_collect_inline_typed_members(&s.body, ctor_locals, out);
+        }
+        Statement::ForOfStatement(s) => {
+            statement_collect_inline_typed_members(&s.body, ctor_locals, out);
+        }
+        Statement::WhileStatement(s) => {
+            statement_collect_inline_typed_members(&s.body, ctor_locals, out);
+        }
+        Statement::DoWhileStatement(s) => {
+            statement_collect_inline_typed_members(&s.body, ctor_locals, out);
+        }
+        Statement::SwitchStatement(s) => {
+            for case in &s.cases {
+                for stmt in &case.consequent {
+                    statement_collect_inline_typed_members(stmt, ctor_locals, out);
+                }
+            }
+        }
+        Statement::TryStatement(s) => {
+            for stmt in &s.block.body {
+                statement_collect_inline_typed_members(stmt, ctor_locals, out);
+            }
+            if let Some(handler) = &s.handler {
+                for stmt in &handler.body.body {
+                    statement_collect_inline_typed_members(stmt, ctor_locals, out);
+                }
+            }
+            if let Some(finalizer) = &s.finalizer {
+                for stmt in &finalizer.body {
+                    statement_collect_inline_typed_members(stmt, ctor_locals, out);
+                }
+            }
+        }
+        Statement::LabeledStatement(s) => {
+            statement_collect_inline_typed_members(&s.body, ctor_locals, out);
+        }
         _ => {}
     }
 }
@@ -1495,6 +1709,39 @@ fn statement_has_inline_typed_dispatcher(
         Statement::ExpressionStatement(es) => statements_inside_function_expr(&es.expression)
             .iter()
             .any(|s| statement_has_inline_typed_dispatcher(s, ctor_locals)),
+        // Round-12 follow-up #4: control-flow recursion.
+        Statement::ForStatement(s) => statement_has_inline_typed_dispatcher(&s.body, ctor_locals),
+        Statement::ForInStatement(s) => statement_has_inline_typed_dispatcher(&s.body, ctor_locals),
+        Statement::ForOfStatement(s) => statement_has_inline_typed_dispatcher(&s.body, ctor_locals),
+        Statement::WhileStatement(s) => statement_has_inline_typed_dispatcher(&s.body, ctor_locals),
+        Statement::DoWhileStatement(s) => {
+            statement_has_inline_typed_dispatcher(&s.body, ctor_locals)
+        }
+        Statement::SwitchStatement(s) => s.cases.iter().any(|case| {
+            case.consequent
+                .iter()
+                .any(|stmt| statement_has_inline_typed_dispatcher(stmt, ctor_locals))
+        }),
+        Statement::TryStatement(s) => {
+            s.block
+                .body
+                .iter()
+                .any(|stmt| statement_has_inline_typed_dispatcher(stmt, ctor_locals))
+                || s.handler.as_ref().is_some_and(|h| {
+                    h.body
+                        .body
+                        .iter()
+                        .any(|stmt| statement_has_inline_typed_dispatcher(stmt, ctor_locals))
+                })
+                || s.finalizer.as_ref().is_some_and(|f| {
+                    f.body
+                        .iter()
+                        .any(|stmt| statement_has_inline_typed_dispatcher(stmt, ctor_locals))
+                })
+        }
+        Statement::LabeledStatement(s) => {
+            statement_has_inline_typed_dispatcher(&s.body, ctor_locals)
+        }
         _ => false,
     }
 }

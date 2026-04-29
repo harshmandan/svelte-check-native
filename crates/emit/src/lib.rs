@@ -1272,9 +1272,6 @@ fn emit_document_with_render_name(
     } else {
         prop_type_source.clone()
     };
-    // `has_synth_events_content` distinguishes "alias emitted with
-    // actual events" (dispatcher OR bubbled DOM events) from "alias
-    // emitted as the empty `{}` because narrow_events is on but
     if is_ts {
         let has_bubbled_events =
             !summary.bubbled_dom_events.is_empty() || summary.has_bubbled_component_event;

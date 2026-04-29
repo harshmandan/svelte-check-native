@@ -541,12 +541,13 @@ fn is_props_call_like(expr: &Expression<'_>) -> bool {
 
 /// SVELTE-4-COMPAT — typed-events narrowing source.
 ///
-/// Find every top-level `createEventDispatcher<T>()` call in `program`
-/// and return the source slices of each `T` in declaration order.
-/// Caller intersects them into a synthesised `type $$Events =
-/// <T1> & <T2> & …;` so multi-dispatcher components mirror upstream
-/// `ComponentEvents.toDefString()`'s `...__sveltets_2_toEventTypings<T>()`
-/// spread shape.
+/// Find every assigned `createEventDispatcher<T>()` call (top-level
+/// and nested under function/block/if bodies) in `program` and
+/// return the source slices of each `T` in declaration order. Caller
+/// chains them into a source-order spread (`Omit<T1, keyof T2> & T2 …`)
+/// so multi-dispatcher components mirror upstream
+/// `ComponentEvents.toDefString()`'s
+/// `...__sveltets_2_toEventTypings<T>()` shape (see round-9 #2).
 ///
 /// Resolves aliased imports (`import { createEventDispatcher as d }`)
 /// so `d<T>()` calls also match. Untyped `createEventDispatcher()`

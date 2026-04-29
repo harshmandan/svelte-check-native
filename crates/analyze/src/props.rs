@@ -592,10 +592,16 @@ fn statement_collect_typed_dispatcher_slices(
                 if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
                     continue;
                 }
-                if let Some(init) = &d.init
-                    && let Some(slice) = dispatcher_type_arg_slice(init, source, ctor_locals)
-                {
+                let Some(init) = &d.init else { continue };
+                if let Some(slice) = dispatcher_type_arg_slice(init, source, ctor_locals) {
                     out.push(slice);
+                }
+                // Round-10 follow-up #2: recurse into function/arrow
+                // expression bodies used as the variable's initializer.
+                // Common shape: `const setup = () => { const d =
+                // createEventDispatcher<{...}>() }`.
+                for s in statements_inside_function_expr(init) {
+                    statement_collect_typed_dispatcher_slices(s, source, ctor_locals, out);
                 }
             }
         }
@@ -617,7 +623,34 @@ fn statement_collect_typed_dispatcher_slices(
                 statement_collect_typed_dispatcher_slices(s, source, ctor_locals, out);
             }
         }
+        Statement::ExpressionStatement(es) => {
+            // IIFE-shaped wrappers (`(() => { ... })()`) — walk the
+            // function bodies inside the call so nested declarations
+            // still land. A bare `createEventDispatcher<{...}>()` here
+            // is intentionally NOT collected (round-9 #3).
+            for s in statements_inside_function_expr(&es.expression) {
+                statement_collect_typed_dispatcher_slices(s, source, ctor_locals, out);
+            }
+        }
         _ => {}
+    }
+}
+
+/// Round-10 follow-up #2: yield the body statements of a function /
+/// arrow expression. Empty slice for any other expression shape.
+/// Used by the dispatcher collectors to recurse into nested function
+/// bodies attached as variable initializers.
+fn statements_inside_function_expr<'a, 'b>(
+    expr: &'a Expression<'b>,
+) -> &'a [Statement<'b>] {
+    match expr {
+        Expression::ArrowFunctionExpression(arrow) => arrow.body.statements.as_slice(),
+        Expression::FunctionExpression(fe) => fe
+            .body
+            .as_ref()
+            .map(|b| b.statements.as_slice())
+            .unwrap_or(&[]),
+        _ => &[],
     }
 }
 
@@ -676,22 +709,19 @@ fn statement_collect_dispatcher_locals(
         Statement::VariableDeclaration(decl) => {
             for d in &decl.declarations {
                 let Some(init) = &d.init else { continue };
-                let Expression::CallExpression(call) = init else {
-                    continue;
-                };
-                let Expression::Identifier(id) = &call.callee else {
-                    continue;
-                };
-                if !ctor_locals.contains(id.name.as_str()) {
-                    continue;
+                if let Expression::CallExpression(call) = init
+                    && let Expression::Identifier(id) = &call.callee
+                    && ctor_locals.contains(id.name.as_str())
+                    && (!typed_only || call.type_arguments.is_some())
+                    && let BindingPattern::BindingIdentifier(bid) = &d.id
+                {
+                    out.push(bid.name.to_string());
                 }
-                if typed_only && call.type_arguments.is_none() {
-                    continue;
+                // Round-10 follow-up #2: recurse into function/arrow
+                // expression bodies attached as initializers.
+                for s in statements_inside_function_expr(init) {
+                    statement_collect_dispatcher_locals(s, ctor_locals, typed_only, out);
                 }
-                let BindingPattern::BindingIdentifier(bid) = &d.id else {
-                    continue;
-                };
-                out.push(bid.name.to_string());
             }
         }
         Statement::FunctionDeclaration(fd) => {
@@ -709,6 +739,11 @@ fn statement_collect_dispatcher_locals(
         }
         Statement::BlockStatement(b) => {
             for s in &b.body {
+                statement_collect_dispatcher_locals(s, ctor_locals, typed_only, out);
+            }
+        }
+        Statement::ExpressionStatement(es) => {
+            for s in statements_inside_function_expr(&es.expression) {
                 statement_collect_dispatcher_locals(s, ctor_locals, typed_only, out);
             }
         }
@@ -1133,8 +1168,12 @@ fn statement_collect_inline_typed_members(
                 if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
                     continue;
                 }
-                if let Some(init) = &d.init {
-                    expression_collect_inline_typed_members(init, ctor_locals, out);
+                let Some(init) = &d.init else { continue };
+                expression_collect_inline_typed_members(init, ctor_locals, out);
+                // Round-10 follow-up #2: recurse into function/arrow
+                // bodies used as initializers.
+                for s in statements_inside_function_expr(init) {
+                    statement_collect_inline_typed_members(s, ctor_locals, out);
                 }
             }
         }
@@ -1153,6 +1192,11 @@ fn statement_collect_inline_typed_members(
         }
         Statement::BlockStatement(b) => {
             for s in &b.body {
+                statement_collect_inline_typed_members(s, ctor_locals, out);
+            }
+        }
+        Statement::ExpressionStatement(es) => {
+            for s in statements_inside_function_expr(&es.expression) {
                 statement_collect_inline_typed_members(s, ctor_locals, out);
             }
         }
@@ -1233,9 +1277,14 @@ fn statement_has_inline_typed_dispatcher(
             if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
                 return false;
             }
-            d.init
-                .as_ref()
-                .is_some_and(|e| expression_has_inline_typed_dispatcher(e, ctor_locals))
+            let Some(init) = &d.init else { return false };
+            if expression_has_inline_typed_dispatcher(init, ctor_locals) {
+                return true;
+            }
+            // Round-10 follow-up #2: recurse into function/arrow body.
+            statements_inside_function_expr(init)
+                .iter()
+                .any(|s| statement_has_inline_typed_dispatcher(s, ctor_locals))
         }),
         Statement::FunctionDeclaration(fd) => fd.body.as_ref().is_some_and(|body| {
             body.statements
@@ -1250,6 +1299,9 @@ fn statement_has_inline_typed_dispatcher(
         }
         Statement::BlockStatement(b) => b
             .body
+            .iter()
+            .any(|s| statement_has_inline_typed_dispatcher(s, ctor_locals)),
+        Statement::ExpressionStatement(es) => statements_inside_function_expr(&es.expression)
             .iter()
             .any(|s| statement_has_inline_typed_dispatcher(s, ctor_locals)),
         _ => false,

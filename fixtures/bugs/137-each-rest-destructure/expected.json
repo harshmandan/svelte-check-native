@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 17,
+            "column": 22,
+            "code": 2339
+        }
+    ],
+    "_note": "Round-9 follow-up #4: `{#each rows as { id, ...rest }}` — `rest` should resolve to `Omit<element, 'id'>`. Pre-fix native's pattern walker pushed nothing for ObjectPattern.rest, so the rest leaf inherited the parent path (empty for top-level `{ id, ...rest }`) and typed as the WHOLE element. Consumer-side `rest.id` would have wrongly succeeded — the element type still has `id`. Upstream's `slot.ts:111` IIFE `((${pattern}) => ${id})(unwrapArr(items))` preserves JS rest semantics so `rest` excludes the destructured siblings. Native now mirrors at the type level via a new `DestructureSeg::ObjectRest { siblings }` variant: at walk time, the rest leaf's path captures the sibling property names, and `project_destructure_path` wraps the running expression in `Omit<…, sibling1 | sibling2 | …>`. Producer here exposes `rest` typed as `Omit<{id: number; label: string}, 'id'>`; Consumer's `takesString(rest.label)` passes (label survived), and the wrong access `rest.id` correctly fires TS2339 (`Property 'id' does not exist on type 'Omit<{...}, \"id\">'`)."
+}

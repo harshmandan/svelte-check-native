@@ -745,12 +745,11 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
                         let element_ty = format!(
                             "((typeof {items}) extends Iterable<infer __svn_T> ? __svn_T : never)"
                         );
-                        let path_suffix = b
-                            .destructure_path
-                            .as_deref()
-                            .map(format_path_suffix)
-                            .unwrap_or_default();
-                        Some(ResolvedSlotExpr::Type(format!("{element_ty}{path_suffix}")))
+                        let projected = match b.destructure_path.as_deref() {
+                            Some(path) => project_destructure_path(&element_ty, path),
+                            None => element_ty,
+                        };
+                        Some(ResolvedSlotExpr::Type(projected))
                     } else {
                         None
                     };
@@ -771,12 +770,11 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
                 for b in bindings {
                     let resolved = promise_text.as_deref().map(|p| {
                         let unwrapped = format!("(Awaited<typeof {p}>)");
-                        let path_suffix = b
-                            .destructure_path
-                            .as_deref()
-                            .map(format_path_suffix)
-                            .unwrap_or_default();
-                        ResolvedSlotExpr::Type(format!("{unwrapped}{path_suffix}"))
+                        let projected = match b.destructure_path.as_deref() {
+                            Some(path) => project_destructure_path(&unwrapped, path),
+                            None => unwrapped,
+                        };
+                        ResolvedSlotExpr::Type(projected)
                     });
                     self.shadow.entries.push((b.name.clone(), resolved));
                 }
@@ -839,17 +837,14 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
                         if path.is_empty() {
                             return None;
                         }
-                        let mut out = format!(
+                        let root_expr = format!(
                             "__SvnComponentSlots<typeof {root}>[{slot:?}]",
                             root = info.component_root.as_str(),
                             slot = info.slot_name.as_str(),
                         );
-                        for seg in path {
-                            out.push('[');
-                            out.push_str(&format!("{:?}", seg.as_str()));
-                            out.push(']');
-                        }
-                        Some(ResolvedSlotExpr::Type(out))
+                        Some(ResolvedSlotExpr::Type(project_destructure_path(
+                            &root_expr, path,
+                        )))
                     });
                     self.shadow.entries.push((b.name.clone(), resolved));
                 }
@@ -1335,20 +1330,41 @@ fn collect_slot_def(
 /// root binding is shadowed by an active template-scope let/each
 /// binding — bare-identifier check alone misses member-access /
 /// optional-chain / index-access shapes.
-/// Round-7 follow-up #3: render a destructure path as a chain of
-/// bracket-notation accesses, e.g. `["a"]["b"]` for path
-/// `["a", "b"]`. Numeric segments stay quoted (TS treats `obj["0"]`
-/// and `obj[0]` interchangeably for numeric-keyed access on tuples
-/// and arrays, and we only ever produce numeric segments for array
-/// patterns where this works).
-fn format_path_suffix(path: &[smol_str::SmolStr]) -> String {
-    let mut out = String::with_capacity(path.iter().map(|s| s.len() + 4).sum());
+/// Round-7 follow-up #3 / Round-9 #4: project a `root` expression
+/// down a destructure-segment chain. `Key` segments append bracket
+/// access (`["name"]`); `ObjectRest` segments wrap the running
+/// expression in `Omit<…, sibling1 | sibling2 | …>`. Numeric `Key`
+/// segments stay quoted (TS treats `obj["0"]` and `obj[0]`
+/// interchangeably for tuple/array access).
+fn project_destructure_path(
+    root: &str,
+    path: &[crate::template_scope::DestructureSeg],
+) -> String {
+    let mut current = root.to_string();
     for seg in path {
-        out.push('[');
-        out.push_str(&format!("{:?}", seg.as_str()));
-        out.push(']');
+        match seg {
+            crate::template_scope::DestructureSeg::Key(k) => {
+                current.push('[');
+                current.push_str(&format!("{:?}", k.as_str()));
+                current.push(']');
+            }
+            crate::template_scope::DestructureSeg::ObjectRest { siblings } => {
+                if siblings.is_empty() {
+                    // No siblings to subtract — rest IS the parent.
+                    // (Pathological case: `{ ...rest }` with no other
+                    // properties. Type stays as parent.)
+                    continue;
+                }
+                let union = siblings
+                    .iter()
+                    .map(|s| format!("{:?}", s.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                current = format!("Omit<{current}, {union}>");
+            }
+        }
     }
-    out
+    current
 }
 
 fn leading_identifier(s: &str) -> Option<&str> {

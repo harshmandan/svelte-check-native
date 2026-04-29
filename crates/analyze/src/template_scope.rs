@@ -62,31 +62,48 @@ pub struct BoundIdent {
     /// `bind_invalid_each_rest` rule consumes the flag; analyze
     /// ignores it.
     pub inside_rest: bool,
-    /// SlotHandler PLAN Stage 4 / Round-7 follow-up #2: for bindings
-    /// declared by a `let:NAME[={…}]` directive, this carries the
-    /// property-access path (in slot-prop coordinates) from the
+    /// SlotHandler PLAN Stage 4 / Round-7 follow-up #2 / Round-9 #4:
+    /// for bindings declared by a `let:NAME[={…}]` directive, this
+    /// carries the segment chain (in slot-prop coordinates) from the
     /// containing `$$slot_def[slot_name]` value down to this binding.
     /// `None` everywhere else.
     ///
     /// Populated cases:
-    /// - shorthand `let:foo` → `["foo"]` (binding name == directive name).
-    /// - alias `let:foo={bar}` → `["foo"]` (single bare-ident expression
-    ///   aliases the slot's `foo` value to `bar`).
-    /// - destructure `let:foo={{a, b}}` → `["foo", "a"]` for `a`,
-    ///   `["foo", "b"]` for `b`. Round-8 #2 combines the directive
-    ///   name with each leaf's `destructure_path` so leaves resolve
-    ///   through the proper bracket-chain.
-    pub slot_key_path: Option<Vec<SmolStr>>,
-    /// Round-7 follow-up #3: for bindings declared by a destructure
-    /// pattern in `{#each items as PATTERN}` or `{:then PATTERN}`,
-    /// this carries the property-access path INSIDE the iterated /
-    /// awaited value down to the leaf binding.
+    /// - shorthand `let:foo` → `[Key("foo")]`.
+    /// - alias `let:foo={bar}` → `[Key("foo")]` (single bare-ident
+    ///   expression aliases the slot's `foo` value to `bar`).
+    /// - destructure `let:foo={{a, b}}` → `[Key("foo"), Key("a")]`
+    ///   for `a`, `[Key("foo"), Key("b")]` for `b`.
+    /// - destructure rest `let:foo={{a, ...rest}}` → `[Key("foo"),
+    ///   ObjectRest{siblings:["a"]}]` for `rest`.
+    pub slot_key_path: Option<Vec<DestructureSeg>>,
+    /// Round-7 follow-up #3 / Round-9 #4: for bindings declared by a
+    /// destructure pattern in `{#each items as PATTERN}`,
+    /// `{:then PATTERN}`, or `{:catch PATTERN}`, this carries the
+    /// segment chain INSIDE the iterated/awaited/caught value down
+    /// to the leaf binding.
     ///
-    /// Path segments are property names for object patterns and
-    /// numeric strings for array-pattern indices (`["0"]` for
-    /// `[a, b]`'s first element). `None` for bare-identifier patterns
-    /// (no destructure path needed) and for non-each/await scopes.
-    pub destructure_path: Option<Vec<SmolStr>>,
+    /// Segments include `Key` (object property name or numeric array
+    /// index) and `ObjectRest` (object-pattern rest, with the list
+    /// of sibling keys consumed by other properties at that level).
+    /// `None` for bare-identifier patterns (no destructure path
+    /// needed) and for non-each/await/catch scopes.
+    pub destructure_path: Option<Vec<DestructureSeg>>,
+}
+
+/// Segment of a destructure projection chain. Each segment maps to a
+/// type-level operation: `Key` is bracket access (`T[K]`),
+/// `ObjectRest` is a `Omit<T, sibling1 | sibling2 | …>` wrap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DestructureSeg {
+    /// Object property key or array-pattern numeric index. The
+    /// SmolStr is rendered as `["name"]` in TS bracket notation.
+    Key(SmolStr),
+    /// Object-pattern rest (`{ a, b, ...rest }`'s `rest`). The
+    /// `siblings` list captures the OTHER property names at the
+    /// same destructure level — the leaf type is
+    /// `Omit<parent, sibling1 | sibling2 | …>`.
+    ObjectRest { siblings: Vec<SmolStr> },
 }
 
 /// Output of [`collect_pattern_bindings`]. Bindings are emitted in
@@ -120,7 +137,7 @@ pub struct PatternBindings {
 /// `[..., ...rest]`).
 pub fn collect_pattern_bindings(pat: &BindingPattern<'_>, offset: i32) -> PatternBindings {
     let mut out = PatternBindings::default();
-    let mut path: Vec<SmolStr> = Vec::new();
+    let mut path: Vec<DestructureSeg> = Vec::new();
     walk(pat, offset, false, &mut path, &mut out);
     out
 }
@@ -129,12 +146,14 @@ fn walk(
     pat: &BindingPattern<'_>,
     offset: i32,
     inside_rest: bool,
-    // Round-7 follow-up #3: property-access path from the pattern
-    // root down to the current node, for typed projection of
-    // each-block / await-block destructure leaves. Object property
-    // names land in path; array-pattern indices land as numeric
-    // strings (`"0"`, `"1"`, …). Non-each consumers ignore this.
-    path: &mut Vec<SmolStr>,
+    // Round-7 follow-up #3 / Round-9 #4: segment chain from the
+    // pattern root down to the current node, for typed projection
+    // of each-block / await-block / catch-block destructure leaves.
+    // Object property names land as `Key`, array-pattern indices
+    // land as `Key("0")`/`Key("1")`/…, object-rest lands as
+    // `ObjectRest { siblings }` capturing the other property names
+    // at the same level. Non-each consumers ignore this.
+    path: &mut Vec<DestructureSeg>,
     out: &mut PatternBindings,
 ) {
     match pat {
@@ -155,6 +174,23 @@ fn walk(
             });
         }
         BindingPattern::ObjectPattern(op) => {
+            // Collect sibling names FIRST so the rest-leaf has the
+            // full list to subtract. Static-identifier and string-
+            // literal keys go in; computed/non-static keys are
+            // skipped (the rest excludes only enumerable static
+            // keys at the type level too).
+            let mut sibling_keys: Vec<SmolStr> = Vec::new();
+            for prop in &op.properties {
+                match &prop.key {
+                    oxc_ast::ast::PropertyKey::StaticIdentifier(id) => {
+                        sibling_keys.push(SmolStr::from(id.name.as_str()));
+                    }
+                    oxc_ast::ast::PropertyKey::StringLiteral(s) => {
+                        sibling_keys.push(SmolStr::from(s.value.as_str()));
+                    }
+                    _ => {}
+                }
+            }
             for prop in &op.properties {
                 let key_name = match &prop.key {
                     oxc_ast::ast::PropertyKey::StaticIdentifier(id) => {
@@ -167,7 +203,7 @@ fn walk(
                 };
                 let pushed = match key_name {
                     Some(name) => {
-                        path.push(name);
+                        path.push(DestructureSeg::Key(name));
                         true
                     }
                     None => false,
@@ -177,18 +213,21 @@ fn walk(
                     path.pop();
                 }
             }
-            // Object-rest (`{ ...rest }`) — lint flags this for
-            // `bind_invalid_each_rest`; analyze just needs the name
-            // for shadow tracking. Either way, the inside-rest flag
-            // propagates to anything inside.
+            // Object-rest (`{ ...rest }`). Round-9 #4: project the
+            // rest binding via `Omit<parent, sibling1 | sibling2 | …>`
+            // by pushing `ObjectRest { siblings }` onto the path.
             if let Some(rest) = &op.rest {
+                path.push(DestructureSeg::ObjectRest {
+                    siblings: sibling_keys,
+                });
                 walk(&rest.argument, offset, true, path, out);
+                path.pop();
             }
         }
         BindingPattern::ArrayPattern(ap) => {
             for (idx, elem) in ap.elements.iter().enumerate() {
                 if let Some(elem) = elem {
-                    path.push(SmolStr::from(idx.to_string()));
+                    path.push(DestructureSeg::Key(SmolStr::from(idx.to_string())));
                     walk(elem, offset, inside_rest, path, out);
                     path.pop();
                 }
@@ -196,6 +235,13 @@ fn walk(
             // Array-rest (`[head, ...tail]`). Round-4 G9: must walk
             // here, otherwise `tail` never reaches the shadow stack
             // and template references resolve to a wrong binding.
+            // Round-9 #4 leaves array-rest projection unsupported —
+            // would need a tuple-tail extraction at the type level
+            // (`T extends [unknown, …infer R] ? R : never`) which is
+            // a larger port. Falls through to inheriting parent path
+            // (TS treats `array[number]` for the type, so accessing
+            // `tail.x` projects element type, which is reasonable
+            // even if not exactly upstream's IIFE shape).
             if let Some(rest) = &ap.rest {
                 walk(&rest.argument, offset, true, path, out);
             }
@@ -715,7 +761,7 @@ fn collect_let_directive_bindings(
         // (alias case `let:foo={bar}`) but both resolve to the SAME
         // slot prop. Destructure patterns leave `slot_key_path` at
         // None — see the field doc on BoundIdent.
-        let directive_path = vec![name.clone()];
+        let directive_path: Vec<DestructureSeg> = vec![DestructureSeg::Key(name.clone())];
         match value {
             Some(DirectiveValue::Expression {
                 expression_range, ..

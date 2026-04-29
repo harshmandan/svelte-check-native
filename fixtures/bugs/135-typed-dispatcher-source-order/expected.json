@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 25,
+            "column": 14,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-9 follow-up #2: TWO typed dispatchers with TYPE-ALIAS args (`<EventsA>` + `<EventsB>`) sharing event name `hi`. Round-8 #5's inline-literal duplicate-collapse can't see alias members at synth time, so the duplicate detection misses this case. Pre-fix native intersected sources as `(EventsA) & (EventsB)` — `hi`'s type became `boolean & string` = `never` and every consumer handler failed. Upstream emits `...toEventTypings<EventsA>(), ...toEventTypings<EventsB>()` and JS spread last-wins resolves `hi` to EventsB's `string` typing. Native now mirrors at the type level via chained `Omit<(EventsA), keyof (EventsB)> & (EventsB)` — same source-order-last-wins without needing key enumeration. Inner here exercises the path: `hi` resolves to `CustomEvent<string>` (EventsB wins), `foo` stays `CustomEvent<number>` (only in EventsA), `bar` stays `CustomEvent<boolean>` (only in EventsB). Consumer's `handleString` and `handleNumber` pass; the swapped `handleBoolean` for `hi` correctly fires TS2345."
+}

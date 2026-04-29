@@ -544,23 +544,35 @@ fn emit_document_with_render_name(
                     }
                 }
             }
-            // Typed dispatcher sources are intersected via `&`. The
-            // mapped type wraps the intersection into the per-key
-            // `CustomEvent<…>` shape at combine time. Duplicate keys
-            // (where the intersection would collapse to e.g. `never`)
-            // are pre-emptively routed into the untyped-names set
-            // above so they reach the last layer as `CustomEvent<any>`
-            // and override the now-broken intersected type.
-            let typed = if typed_args.is_empty() {
-                None
-            } else {
-                Some(
-                    typed_args
-                        .iter()
-                        .map(|t| format!("({t})"))
-                        .collect::<Vec<_>>()
-                        .join(" & "),
-                )
+            // Round-9 follow-up #2: model upstream's
+            // `{...toEventTypings<T1>(), ...toEventTypings<T2>(), ...}`
+            // value-spread at the TYPE level via chained
+            // `Omit<prev, keyof Ti> & Ti`. Each later spread overrides
+            // the previous spread's keys for the same name. Pre-fix
+            // native intersected the sources as `(T1) & (T2)`, which
+            // for shared keys with incompatible types collapses to
+            // `T1 & T2` (e.g. `boolean & string` = `never`) — every
+            // consumer handler then failed against `CustomEvent<never>`.
+            // The new shape gives source-order-last-wins, matching
+            // upstream's spread.
+            //
+            // Inline-literal duplicate handling (round-8 #5) still
+            // applies: collisions detected at synth time also route
+            // through the untyped-names layer, which the round-7 #5
+            // layer order overrides last with `CustomEvent<any>`.
+            // For type-aliased sources (where we can't enumerate keys
+            // at synth time), the chained Omit handles overlap on its
+            // own — `keyof Tj` is computed at type-check time and
+            // produces the correct override.
+            let typed = match typed_args.split_first() {
+                None => None,
+                Some((first, rest)) => {
+                    let mut acc = format!("({first})");
+                    for next in rest {
+                        acc = format!("Omit<{acc}, keyof ({next})> & ({next})");
+                    }
+                    Some(acc)
+                }
             };
             // Untyped dispatched names: each gets `CustomEvent<any>`
             // at the type level (mirrors upstream's

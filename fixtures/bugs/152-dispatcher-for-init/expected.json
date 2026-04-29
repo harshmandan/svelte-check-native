@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 13,
+            "column": 16,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-13 follow-up #6: dispatcher walkers extend recursion through for-statement init/test/update, ForOf/ForIn .right, While/DoWhile .test, and SwitchStatement .discriminant + per-case .test. Round-12 #4 added For/While/Switch/Try recursion but only walked the bodies — headers were skipped. Upstream's TS walker visits every part via `ts.forEachChild` (`processInstanceScriptContent.ts:347`). Inner here declares a typed dispatcher in a `for (let _d = createEventDispatcher<{tick: number}>(), i = 0; ...)` initializer; pre-fix the dispatcher went undetected. Post-fix `tick: number` reaches the events surface; Consumer's `takesNumber` handler passes; the swapped `takesString` correctly fires TS2345."
+}

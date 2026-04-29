@@ -638,22 +638,98 @@ fn statement_collect_typed_dispatcher_slices(
         // statements upstream's TS walker visits via
         // `ts.forEachChild`.
         Statement::ForStatement(s) => {
+            // Round-13 follow-up #6: walk init/test/update too. The
+            // init can be a VariableDeclaration (a dispatcher decl
+            // like `for (let d = createEventDispatcher(); …)`),
+            // and any of init/test/update can carry function-body
+            // expressions (`for (let d = (() => …)(); …)`).
+            if let Some(init) = &s.init {
+                use oxc_ast::ast::ForStatementInit;
+                match init {
+                    ForStatementInit::VariableDeclaration(decl) => {
+                        for d in &decl.declarations {
+                            if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
+                                continue;
+                            }
+                            let Some(d_init) = &d.init else { continue };
+                            if let Some(slice) =
+                                dispatcher_type_arg_slice(d_init, source, ctor_locals)
+                            {
+                                out.push(slice);
+                            }
+                            for s2 in statements_inside_function_expr(d_init) {
+                                statement_collect_typed_dispatcher_slices(
+                                    s2,
+                                    source,
+                                    ctor_locals,
+                                    out,
+                                );
+                            }
+                        }
+                    }
+                    other => {
+                        if let Some(expr) = other.as_expression() {
+                            for s2 in statements_inside_function_expr(expr) {
+                                statement_collect_typed_dispatcher_slices(
+                                    s2,
+                                    source,
+                                    ctor_locals,
+                                    out,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(test) = &s.test {
+                for s2 in statements_inside_function_expr(test) {
+                    statement_collect_typed_dispatcher_slices(s2, source, ctor_locals, out);
+                }
+            }
+            if let Some(update) = &s.update {
+                for s2 in statements_inside_function_expr(update) {
+                    statement_collect_typed_dispatcher_slices(s2, source, ctor_locals, out);
+                }
+            }
             statement_collect_typed_dispatcher_slices(&s.body, source, ctor_locals, out);
         }
         Statement::ForInStatement(s) => {
+            // Round-13 #6: walk left (declaration or expression)
+            // and right (the iterated expression).
+            for s2 in statements_inside_function_expr(&s.right) {
+                statement_collect_typed_dispatcher_slices(s2, source, ctor_locals, out);
+            }
             statement_collect_typed_dispatcher_slices(&s.body, source, ctor_locals, out);
         }
         Statement::ForOfStatement(s) => {
+            for s2 in statements_inside_function_expr(&s.right) {
+                statement_collect_typed_dispatcher_slices(s2, source, ctor_locals, out);
+            }
             statement_collect_typed_dispatcher_slices(&s.body, source, ctor_locals, out);
         }
         Statement::WhileStatement(s) => {
+            for s2 in statements_inside_function_expr(&s.test) {
+                statement_collect_typed_dispatcher_slices(s2, source, ctor_locals, out);
+            }
             statement_collect_typed_dispatcher_slices(&s.body, source, ctor_locals, out);
         }
         Statement::DoWhileStatement(s) => {
             statement_collect_typed_dispatcher_slices(&s.body, source, ctor_locals, out);
+            for s2 in statements_inside_function_expr(&s.test) {
+                statement_collect_typed_dispatcher_slices(s2, source, ctor_locals, out);
+            }
         }
         Statement::SwitchStatement(s) => {
+            // Round-13 #6: discriminant + per-case test expressions.
+            for s2 in statements_inside_function_expr(&s.discriminant) {
+                statement_collect_typed_dispatcher_slices(s2, source, ctor_locals, out);
+            }
             for case in &s.cases {
+                if let Some(test) = &case.test {
+                    for s2 in statements_inside_function_expr(test) {
+                        statement_collect_typed_dispatcher_slices(s2, source, ctor_locals, out);
+                    }
+                }
                 for stmt in &case.consequent {
                     statement_collect_typed_dispatcher_slices(stmt, source, ctor_locals, out);
                 }
@@ -884,24 +960,93 @@ fn statement_collect_dispatcher_locals(
                 statement_collect_dispatcher_locals(s, ctor_locals, typed_only, out);
             }
         }
-        // Round-12 follow-up #4: control-flow recursion.
+        // Round-12 follow-up #4 / Round-13 follow-up #6: control-flow
+        // recursion including loop-headers and switch discriminants.
         Statement::ForStatement(s) => {
+            if let Some(init) = &s.init {
+                use oxc_ast::ast::ForStatementInit;
+                match init {
+                    ForStatementInit::VariableDeclaration(decl) => {
+                        for d in &decl.declarations {
+                            let Some(d_init) = &d.init else { continue };
+                            if let Expression::CallExpression(call) = d_init
+                                && let Expression::Identifier(id) = &call.callee
+                                && ctor_locals.contains(id.name.as_str())
+                                && (!typed_only || call.type_arguments.is_some())
+                                && let BindingPattern::BindingIdentifier(bid) = &d.id
+                            {
+                                out.push(bid.name.to_string());
+                            }
+                            for s2 in statements_inside_function_expr(d_init) {
+                                statement_collect_dispatcher_locals(
+                                    s2,
+                                    ctor_locals,
+                                    typed_only,
+                                    out,
+                                );
+                            }
+                        }
+                    }
+                    other => {
+                        if let Some(expr) = other.as_expression() {
+                            for s2 in statements_inside_function_expr(expr) {
+                                statement_collect_dispatcher_locals(
+                                    s2,
+                                    ctor_locals,
+                                    typed_only,
+                                    out,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(test) = &s.test {
+                for s2 in statements_inside_function_expr(test) {
+                    statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
+                }
+            }
+            if let Some(update) = &s.update {
+                for s2 in statements_inside_function_expr(update) {
+                    statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
+                }
+            }
             statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
         }
         Statement::ForInStatement(s) => {
+            for s2 in statements_inside_function_expr(&s.right) {
+                statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
+            }
             statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
         }
         Statement::ForOfStatement(s) => {
+            for s2 in statements_inside_function_expr(&s.right) {
+                statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
+            }
             statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
         }
         Statement::WhileStatement(s) => {
+            for s2 in statements_inside_function_expr(&s.test) {
+                statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
+            }
             statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
         }
         Statement::DoWhileStatement(s) => {
             statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
+            for s2 in statements_inside_function_expr(&s.test) {
+                statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
+            }
         }
         Statement::SwitchStatement(s) => {
+            for s2 in statements_inside_function_expr(&s.discriminant) {
+                statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
+            }
             for case in &s.cases {
+                if let Some(test) = &case.test {
+                    for s2 in statements_inside_function_expr(test) {
+                        statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
+                    }
+                }
                 for stmt in &case.consequent {
                     statement_collect_dispatcher_locals(stmt, ctor_locals, typed_only, out);
                 }
@@ -1160,24 +1305,164 @@ fn scan_statement_in_source_order(
                 }
             }
         }
-        // Round-12 follow-up #4: control-flow recursion.
+        // Round-12 #4 / Round-13 #6: control-flow recursion
+        // including loop headers and switch discriminants.
         Statement::ForStatement(s) => {
+            if let Some(init) = &s.init {
+                use oxc_ast::ast::ForStatementInit;
+                match init {
+                    ForStatementInit::VariableDeclaration(decl) => {
+                        // Inline the VarDecl handling so literal_vars
+                        // and dispatcher names register in source
+                        // order with the for-body scan.
+                        let is_const =
+                            matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Const);
+                        for d in &decl.declarations {
+                            if let Some(d_init) = &d.init {
+                                if is_const
+                                    && let BindingPattern::BindingIdentifier(bid) = &d.id
+                                    && let Expression::StringLiteral(slit) = d_init
+                                {
+                                    literal_vars
+                                        .insert(bid.name.to_string(), slit.value.to_string());
+                                }
+                                scan_expression_for_dispatched_names(
+                                    d_init,
+                                    dispatcher_locals,
+                                    literal_vars,
+                                    seen,
+                                    out,
+                                );
+                                for s2 in statements_inside_function_expr(d_init) {
+                                    scan_statement_in_source_order(
+                                        s2,
+                                        dispatcher_locals,
+                                        literal_vars,
+                                        seen,
+                                        out,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    other => {
+                        if let Some(expr) = other.as_expression() {
+                            scan_expression_for_dispatched_names(
+                                expr,
+                                dispatcher_locals,
+                                literal_vars,
+                                seen,
+                                out,
+                            );
+                            for s2 in statements_inside_function_expr(expr) {
+                                scan_statement_in_source_order(
+                                    s2,
+                                    dispatcher_locals,
+                                    literal_vars,
+                                    seen,
+                                    out,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(test) = &s.test {
+                scan_expression_for_dispatched_names(
+                    test,
+                    dispatcher_locals,
+                    literal_vars,
+                    seen,
+                    out,
+                );
+                for s2 in statements_inside_function_expr(test) {
+                    scan_statement_in_source_order(
+                        s2,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
+                }
+            }
+            if let Some(update) = &s.update {
+                scan_expression_for_dispatched_names(
+                    update,
+                    dispatcher_locals,
+                    literal_vars,
+                    seen,
+                    out,
+                );
+                for s2 in statements_inside_function_expr(update) {
+                    scan_statement_in_source_order(
+                        s2,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
+                }
+            }
             scan_statement_in_source_order(&s.body, dispatcher_locals, literal_vars, seen, out);
         }
         Statement::ForInStatement(s) => {
+            scan_expression_for_dispatched_names(
+                &s.right,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
             scan_statement_in_source_order(&s.body, dispatcher_locals, literal_vars, seen, out);
         }
         Statement::ForOfStatement(s) => {
+            scan_expression_for_dispatched_names(
+                &s.right,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
             scan_statement_in_source_order(&s.body, dispatcher_locals, literal_vars, seen, out);
         }
         Statement::WhileStatement(s) => {
+            scan_expression_for_dispatched_names(
+                &s.test,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
             scan_statement_in_source_order(&s.body, dispatcher_locals, literal_vars, seen, out);
         }
         Statement::DoWhileStatement(s) => {
             scan_statement_in_source_order(&s.body, dispatcher_locals, literal_vars, seen, out);
+            scan_expression_for_dispatched_names(
+                &s.test,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
         }
         Statement::SwitchStatement(s) => {
+            scan_expression_for_dispatched_names(
+                &s.discriminant,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
             for case in &s.cases {
+                if let Some(test) = &case.test {
+                    scan_expression_for_dispatched_names(
+                        test,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
+                }
                 for stmt in &case.consequent {
                     scan_statement_in_source_order(
                         stmt,
@@ -1564,24 +1849,79 @@ fn statement_collect_inline_typed_members(
                 statement_collect_inline_typed_members(s, ctor_locals, out);
             }
         }
-        // Round-12 follow-up #4: control-flow recursion.
+        // Round-12 #4 / Round-13 #6: control-flow recursion
+        // including loop headers and switch discriminants.
         Statement::ForStatement(s) => {
+            if let Some(init) = &s.init {
+                use oxc_ast::ast::ForStatementInit;
+                match init {
+                    ForStatementInit::VariableDeclaration(decl) => {
+                        for d in &decl.declarations {
+                            if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
+                                continue;
+                            }
+                            let Some(d_init) = &d.init else { continue };
+                            expression_collect_inline_typed_members(d_init, ctor_locals, out);
+                            for s2 in statements_inside_function_expr(d_init) {
+                                statement_collect_inline_typed_members(s2, ctor_locals, out);
+                            }
+                        }
+                    }
+                    other => {
+                        if let Some(expr) = other.as_expression() {
+                            for s2 in statements_inside_function_expr(expr) {
+                                statement_collect_inline_typed_members(s2, ctor_locals, out);
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(test) = &s.test {
+                for s2 in statements_inside_function_expr(test) {
+                    statement_collect_inline_typed_members(s2, ctor_locals, out);
+                }
+            }
+            if let Some(update) = &s.update {
+                for s2 in statements_inside_function_expr(update) {
+                    statement_collect_inline_typed_members(s2, ctor_locals, out);
+                }
+            }
             statement_collect_inline_typed_members(&s.body, ctor_locals, out);
         }
         Statement::ForInStatement(s) => {
+            for s2 in statements_inside_function_expr(&s.right) {
+                statement_collect_inline_typed_members(s2, ctor_locals, out);
+            }
             statement_collect_inline_typed_members(&s.body, ctor_locals, out);
         }
         Statement::ForOfStatement(s) => {
+            for s2 in statements_inside_function_expr(&s.right) {
+                statement_collect_inline_typed_members(s2, ctor_locals, out);
+            }
             statement_collect_inline_typed_members(&s.body, ctor_locals, out);
         }
         Statement::WhileStatement(s) => {
+            for s2 in statements_inside_function_expr(&s.test) {
+                statement_collect_inline_typed_members(s2, ctor_locals, out);
+            }
             statement_collect_inline_typed_members(&s.body, ctor_locals, out);
         }
         Statement::DoWhileStatement(s) => {
             statement_collect_inline_typed_members(&s.body, ctor_locals, out);
+            for s2 in statements_inside_function_expr(&s.test) {
+                statement_collect_inline_typed_members(s2, ctor_locals, out);
+            }
         }
         Statement::SwitchStatement(s) => {
+            for s2 in statements_inside_function_expr(&s.discriminant) {
+                statement_collect_inline_typed_members(s2, ctor_locals, out);
+            }
             for case in &s.cases {
+                if let Some(test) = &case.test {
+                    for s2 in statements_inside_function_expr(test) {
+                        statement_collect_inline_typed_members(s2, ctor_locals, out);
+                    }
+                }
                 for stmt in &case.consequent {
                     statement_collect_inline_typed_members(stmt, ctor_locals, out);
                 }
@@ -1709,19 +2049,83 @@ fn statement_has_inline_typed_dispatcher(
         Statement::ExpressionStatement(es) => statements_inside_function_expr(&es.expression)
             .iter()
             .any(|s| statement_has_inline_typed_dispatcher(s, ctor_locals)),
-        // Round-12 follow-up #4: control-flow recursion.
-        Statement::ForStatement(s) => statement_has_inline_typed_dispatcher(&s.body, ctor_locals),
-        Statement::ForInStatement(s) => statement_has_inline_typed_dispatcher(&s.body, ctor_locals),
-        Statement::ForOfStatement(s) => statement_has_inline_typed_dispatcher(&s.body, ctor_locals),
-        Statement::WhileStatement(s) => statement_has_inline_typed_dispatcher(&s.body, ctor_locals),
+        // Round-12 #4 / Round-13 #6: control-flow recursion
+        // including loop headers and switch discriminants.
+        Statement::ForStatement(s) => {
+            let init_has = if let Some(init) = &s.init {
+                use oxc_ast::ast::ForStatementInit;
+                match init {
+                    ForStatementInit::VariableDeclaration(decl) => decl.declarations.iter().any(|d| {
+                        if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
+                            return false;
+                        }
+                        let Some(d_init) = &d.init else { return false };
+                        expression_has_inline_typed_dispatcher(d_init, ctor_locals)
+                            || statements_inside_function_expr(d_init)
+                                .iter()
+                                .any(|s2| statement_has_inline_typed_dispatcher(s2, ctor_locals))
+                    }),
+                    other => other.as_expression().is_some_and(|expr| {
+                        statements_inside_function_expr(expr)
+                            .iter()
+                            .any(|s2| statement_has_inline_typed_dispatcher(s2, ctor_locals))
+                    }),
+                }
+            } else {
+                false
+            };
+            init_has
+                || s.test.as_ref().is_some_and(|t| {
+                    statements_inside_function_expr(t)
+                        .iter()
+                        .any(|s2| statement_has_inline_typed_dispatcher(s2, ctor_locals))
+                })
+                || s.update.as_ref().is_some_and(|u| {
+                    statements_inside_function_expr(u)
+                        .iter()
+                        .any(|s2| statement_has_inline_typed_dispatcher(s2, ctor_locals))
+                })
+                || statement_has_inline_typed_dispatcher(&s.body, ctor_locals)
+        }
+        Statement::ForInStatement(s) => {
+            statements_inside_function_expr(&s.right)
+                .iter()
+                .any(|s2| statement_has_inline_typed_dispatcher(s2, ctor_locals))
+                || statement_has_inline_typed_dispatcher(&s.body, ctor_locals)
+        }
+        Statement::ForOfStatement(s) => {
+            statements_inside_function_expr(&s.right)
+                .iter()
+                .any(|s2| statement_has_inline_typed_dispatcher(s2, ctor_locals))
+                || statement_has_inline_typed_dispatcher(&s.body, ctor_locals)
+        }
+        Statement::WhileStatement(s) => {
+            statements_inside_function_expr(&s.test)
+                .iter()
+                .any(|s2| statement_has_inline_typed_dispatcher(s2, ctor_locals))
+                || statement_has_inline_typed_dispatcher(&s.body, ctor_locals)
+        }
         Statement::DoWhileStatement(s) => {
             statement_has_inline_typed_dispatcher(&s.body, ctor_locals)
+                || statements_inside_function_expr(&s.test)
+                    .iter()
+                    .any(|s2| statement_has_inline_typed_dispatcher(s2, ctor_locals))
         }
-        Statement::SwitchStatement(s) => s.cases.iter().any(|case| {
-            case.consequent
+        Statement::SwitchStatement(s) => {
+            statements_inside_function_expr(&s.discriminant)
                 .iter()
-                .any(|stmt| statement_has_inline_typed_dispatcher(stmt, ctor_locals))
-        }),
+                .any(|s2| statement_has_inline_typed_dispatcher(s2, ctor_locals))
+                || s.cases.iter().any(|case| {
+                    case.test.as_ref().is_some_and(|t| {
+                        statements_inside_function_expr(t)
+                            .iter()
+                            .any(|s2| statement_has_inline_typed_dispatcher(s2, ctor_locals))
+                    }) || case
+                        .consequent
+                        .iter()
+                        .any(|stmt| statement_has_inline_typed_dispatcher(stmt, ctor_locals))
+                })
+        }
         Statement::TryStatement(s) => {
             s.block
                 .body

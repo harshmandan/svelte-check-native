@@ -1256,15 +1256,35 @@ fn emit_document_with_render_name(
     if is_ts {
         let has_bubbled_events =
             !summary.bubbled_dom_events.is_empty() || summary.has_bubbled_component_event;
-        // Round-7 follow-up #6: the fn-shape gate cares about
-        // CONCRETE events from the dispatcher path, not just
-        // "is `createEventDispatcher()` called". A dispatcher with no
-        // type arg AND no string-literal dispatch calls contributes
-        // zero entries to upstream's `events.size` and shouldn't
-        // disqualify the runes fn-component shape. The synthesised
-        // events type is built from exactly those two sources, so
-        // its presence is a precise stand-in.
-        let has_concrete_dispatcher_events = synthesized_events_type.is_some();
+        // Round-7 follow-up #6 / Round-8 follow-up #4: the fn-shape
+        // gate cares about CONCRETE events from the dispatcher path
+        // — entries that upstream's `events.size > 0` would count.
+        // Two dispatcher sources contribute concrete entries:
+        //
+        //   - typed dispatcher with INLINE type literal members
+        //     (`createEventDispatcher<{foo: string}>()`). The literal
+        //     members enumerate at parse time so upstream's
+        //     `dispatcherTyping.members.filter(...).forEach(addToEvents)`
+        //     fires per member. A type-REFERENCE arg
+        //     (`createEventDispatcher<MyEventMap>()`) does NOT —
+        //     upstream stores the ref for `toDefString` spread but
+        //     doesn't enumerate keys, so events.size stays 0.
+        //
+        //   - untyped dispatcher with string-literal `dispatch('name',
+        //     …)` calls (covered by `find_dispatched_event_names` ⇒
+        //     `untyped_names` ⇒ `synthesized_untyped_events`).
+        //
+        // Round-7 #6 used `synthesized_events_type.is_some()` which
+        // OR'd typed-ANY (including type refs) and untyped — it
+        // wrongly disqualified runes components that only had a
+        // type-ref typed dispatcher. Compute the inline-literal
+        // signal separately via `has_inline_typed_dispatcher_members`
+        // and use the precise OR.
+        let has_inline_typed_members = parsed_instance
+            .as_ref()
+            .is_some_and(|p| svn_analyze::has_inline_typed_dispatcher_members(&p.program));
+        let has_concrete_dispatcher_events =
+            has_inline_typed_members || synthesized_untyped_events.is_some();
         emit_default_export_declarations_ts(
             &mut buf,
             doc,

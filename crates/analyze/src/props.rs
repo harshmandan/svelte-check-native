@@ -1046,6 +1046,65 @@ fn dispatcher_type_arg_slice(
         .map(str::to_string)
 }
 
+/// Round-8 follow-up #4: does any typed `createEventDispatcher<T>()`
+/// in this program have an INLINE type literal (`{foo: …}`) with at
+/// least one property signature?
+///
+/// Mirrors upstream's `events.size > 0` from typed-dispatcher
+/// processing (`ComponentEvents.ts:231`), which only counts events
+/// when the typed arg's `members` is enumerable — i.e. a
+/// `ts.TypeLiteral` node, NOT a `ts.TypeReference` to an alias. The
+/// fn-shape gate consults this so a runes component with
+/// `createEventDispatcher<MyEventMap>()` (typed but ref-only)
+/// stays on the fn-component path; only inline-literal type args
+/// make events.hasEvents() upstream and disqualify fn-shape.
+pub fn has_inline_typed_dispatcher_members(program: &oxc_ast::ast::Program<'_>) -> bool {
+    let ctor_locals = collect_ctor_locals(program);
+    program
+        .body
+        .iter()
+        .any(|s| statement_has_inline_typed_dispatcher(s, &ctor_locals))
+}
+
+fn statement_has_inline_typed_dispatcher(
+    stmt: &Statement<'_>,
+    ctor_locals: &std::collections::HashSet<String>,
+) -> bool {
+    match stmt {
+        Statement::VariableDeclaration(decl) => decl
+            .declarations
+            .iter()
+            .filter_map(|d| d.init.as_ref())
+            .any(|e| expression_has_inline_typed_dispatcher(e, ctor_locals)),
+        Statement::ExpressionStatement(es) => {
+            expression_has_inline_typed_dispatcher(&es.expression, ctor_locals)
+        }
+        _ => false,
+    }
+}
+
+fn expression_has_inline_typed_dispatcher(
+    expr: &Expression<'_>,
+    ctor_locals: &std::collections::HashSet<String>,
+) -> bool {
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    let Expression::Identifier(id) = &call.callee else {
+        return false;
+    };
+    if !ctor_locals.contains(id.name.as_str()) {
+        return false;
+    }
+    let Some(tp) = call.type_arguments.as_ref() else {
+        return false;
+    };
+    let Some(arg) = tp.params.first() else {
+        return false;
+    };
+    matches!(arg, oxc_ast::ast::TSType::TSTypeLiteral(lit) if !lit.members.is_empty())
+}
+
 fn collect_from_binding(pat: &BindingPattern<'_>, out: &mut Vec<PropInfo>) {
     match pat {
         BindingPattern::ObjectPattern(obj) => {

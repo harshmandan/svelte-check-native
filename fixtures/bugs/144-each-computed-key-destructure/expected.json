@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 18,
+            "column": 17,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-11 follow-up #5: computed-key destructure (`{ [k]: value }`) — `value` should resolve to `parent[typeof k]`. Pre-fix native skipped the segment entirely so `value` inherited the parent path (typed as the WHOLE element), and consumers got every handler accepted regardless of the actual key. Upstream's IIFE `(({ [k]: value }) => value)(source)` lets TS infer `value: source[typeof k]` natively. Native now mirrors with a new `DestructureSeg::KeyTypeof(SmolStr)` segment rendered as `[typeof <ident>]`. Producer here exposes `value: Row[typeof key]` where `key: 'id' | 'label'` — TS resolves that to `number | string`. Consumer's `takesUnion(value)` passes; the swapped `takesNumber(value)` correctly fires TS2345 (`string | number` not assignable to `number`)."
+}

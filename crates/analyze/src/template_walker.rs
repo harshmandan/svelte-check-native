@@ -1362,6 +1362,18 @@ fn project_destructure_path(
                     .join(" | ");
                 current = format!("Omit<{current}, {union}>");
             }
+            crate::template_scope::DestructureSeg::KeyTypeof(name) => {
+                // Round-11 follow-up #5: computed-key with bare
+                // identifier (`{ [k]: v }`). Project as
+                // `parent[typeof k]`. The `typeof` lookup at the
+                // type level gives whatever string-literal type the
+                // identifier carries, which TS uses to index into
+                // `parent`.
+                current.push('[');
+                current.push_str("typeof ");
+                current.push_str(name.as_str());
+                current.push(']');
+            }
             crate::template_scope::DestructureSeg::ArrayRest { skip } => {
                 // Round-10 #4 / Round-11 #4: tuple-tail extraction
                 // with a variable-array fallback. The tuple-pattern

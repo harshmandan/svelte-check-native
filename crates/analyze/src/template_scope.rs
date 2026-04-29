@@ -112,6 +112,13 @@ pub enum DestructureSeg {
     /// — by TS narrowing `array[number]` through the conditional —
     /// also for variable-length arrays.
     ArrayRest { skip: u32 },
+    /// Round-11 follow-up #5: computed-key object-pattern entry whose
+    /// key is a bare identifier (`{ [k]: v }`). The leaf type is
+    /// `parent[typeof k]`. Non-bare-ident computed keys (e.g.
+    /// `{ ['lit']: v }` or `{ [a + 1]: v }`) fall back to no segment
+    /// — the leaf inherits the parent path, matching pre-fix
+    /// behaviour for those edge cases.
+    KeyTypeof(SmolStr),
 }
 
 /// Output of [`collect_pattern_bindings`]. Bindings are emitted in
@@ -200,21 +207,35 @@ fn walk(
                 }
             }
             for prop in &op.properties {
-                let key_name = match &prop.key {
-                    oxc_ast::ast::PropertyKey::StaticIdentifier(id) => {
-                        Some(SmolStr::from(id.name.as_str()))
+                // Round-11 follow-up #5: detect computed-key with bare
+                // identifier (`{ [k]: v }`) and project as
+                // `parent[typeof k]`. Static identifiers and string
+                // literals stay as plain `Key` segments. Other
+                // computed-key shapes (string literal in brackets,
+                // computed expressions like `[a + 1]`) fall through
+                // with no segment pushed — leaf inherits parent path.
+                let pushed_seg = if prop.computed {
+                    if let oxc_ast::ast::PropertyKey::Identifier(id) = &prop.key {
+                        Some(DestructureSeg::KeyTypeof(SmolStr::from(id.name.as_str())))
+                    } else {
+                        None
                     }
-                    oxc_ast::ast::PropertyKey::StringLiteral(s) => {
-                        Some(SmolStr::from(s.value.as_str()))
+                } else {
+                    match &prop.key {
+                        oxc_ast::ast::PropertyKey::StaticIdentifier(id) => {
+                            Some(DestructureSeg::Key(SmolStr::from(id.name.as_str())))
+                        }
+                        oxc_ast::ast::PropertyKey::StringLiteral(s) => {
+                            Some(DestructureSeg::Key(SmolStr::from(s.value.as_str())))
+                        }
+                        _ => None,
                     }
-                    _ => None,
                 };
-                let pushed = match key_name {
-                    Some(name) => {
-                        path.push(DestructureSeg::Key(name));
-                        true
-                    }
-                    None => false,
+                let pushed = if let Some(seg) = pushed_seg {
+                    path.push(seg);
+                    true
+                } else {
+                    false
                 };
                 walk(&prop.value, offset, inside_rest, path, out);
                 if pushed {

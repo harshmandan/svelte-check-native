@@ -98,6 +98,7 @@ pub(crate) fn emit_default_export_declarations_ts(
     has_synth_events_alias: bool,
     has_synth_events_content: bool,
     has_strict_events_decl: bool,
+    has_bubbled_events: bool,
 ) {
     // Upstream's `addComponentExport.ts:343` selects between three
     // default-export shapes. For the **non-generic, runes, no-slots,
@@ -136,6 +137,7 @@ pub(crate) fn emit_default_export_declarations_ts(
         generics,
         has_dispatcher_call,
         has_strict_events_decl,
+        has_bubbled_events,
     ) {
         // Fn-shape marker gates on CONTENT, not alias-existence: a
         // runes-mode component with no dispatcher and no bubbled events
@@ -408,6 +410,7 @@ fn should_emit_fn_component_shape(
     generics: Option<&str>,
     has_dispatcher_call: bool,
     has_strict_events_decl: bool,
+    has_bubbled_events: bool,
 ) -> bool {
     if generics.is_some() {
         return false;
@@ -427,6 +430,18 @@ fn should_emit_fn_component_shape(
     // comments / unused imports / string literals containing the
     // name. Mirrors upstream's `events.hasEvents()`.
     if has_dispatcher_call {
+        return false;
+    }
+    // Reviewer follow-up #2 (round 5): bubbled events also count as
+    // `events.hasEvents()` upstream. `ComponentEvents.extractEvents`
+    // (`ComponentEvents.ts:80`) collects bubbled DOM and component
+    // events, so a runes-mode component with `<button on:click>` or
+    // `<Child on:click />` falls out of the `__sveltets_2_fn_component`
+    // gate. Pre-fix native still picked fn shape and intersected the
+    // `__svn_events` marker on top — narrowed `\$on` typing landed
+    // either way, but the value's constructor / class compatibility
+    // diverged from upstream.
+    if has_bubbled_events {
         return false;
     }
     if doc.source.contains("$$slots")

@@ -1171,6 +1171,8 @@ fn emit_document_with_render_name(
         || bubbled_dom_event_map.is_some()
         || bubbled_component_event_map.is_some();
     if is_ts {
+        let has_bubbled_events =
+            !summary.bubbled_dom_events.is_empty() || summary.has_bubbled_component_event;
         emit_default_export_declarations_ts(
             &mut buf,
             doc,
@@ -1184,6 +1186,7 @@ fn emit_document_with_render_name(
             events_alias_body.is_some(),
             has_synth_events_content,
             has_strict_events_decl,
+            has_bubbled_events,
         );
     } else {
         emit_default_export_declarations_js(&mut buf, &render_name);

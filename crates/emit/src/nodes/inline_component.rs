@@ -517,13 +517,18 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             // on a CSS custom-property attr) wraps the same way as
             // `--foo="value"` and `--foo={expr}`. Without the wrap
             // the prop hits excess-prop on the component's Props
-            // type. Upstream `Attribute.ts:97-107` defaults the
-            // missing value to `""` — mirror that so the wrapped
-            // object is structurally well-formed.
+            // type.
+            //
+            // Reviewer follow-up #7 (round 4): the wrapped value is
+            // `true`, NOT `""`. Upstream `Attribute.ts:164-168`
+            // emits `'true'` for boolean shorthand on regular attrs
+            // and only special-cases `popover=""`. We were emitting
+            // `""` for every CSS-prop boolean shorthand, which
+            // diverged.
             if is_css_custom_prop_name(name) {
                 buf.push_str("...__svn_css_prop({");
                 write_quoted_prop_key_with_source(buf, name, attr_range);
-                buf.push_str(": \"\"})");
+                buf.push_str(": true})");
                 return;
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);

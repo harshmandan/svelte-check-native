@@ -5,7 +5,7 @@ async function $$render_249aed4a() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(Component);
-            new __svn_C_0({ target: __svn_any(), props: {...__svn_css_prop({"--custom-css-property1": ('hi')}), ...__svn_css_prop({"--custom-css-property2": "hi"}), "betweenprop": true, ...__svn_css_prop({"--custom-css-property3": `hi${jo}hi`}), ...__svn_css_prop({"--custom-css-property4": `hi${jo}hi`}), ...__svn_css_prop({"--custom-css-property5": `hi${jo}hi`}), ...__svn_css_prop({"--custom-css-property6": ""})} });
+            new __svn_C_0({ target: __svn_any(), props: {...__svn_css_prop({"--custom-css-property1": ('hi')}), ...__svn_css_prop({"--custom-css-property2": "hi"}), "betweenprop": true, ...__svn_css_prop({"--custom-css-property3": `hi${jo}hi`}), ...__svn_css_prop({"--custom-css-property4": `hi${jo}hi`}), ...__svn_css_prop({"--custom-css-property5": `hi${jo}hi`}), ...__svn_css_prop({"--custom-css-property6": true})} });
         }
     });
     return { props: /** @type {any} */({}) };

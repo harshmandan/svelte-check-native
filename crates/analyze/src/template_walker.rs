@@ -1400,6 +1400,18 @@ fn collect_slot_def(
 /// - anything else (chained calls, indexing,
 ///   ternary, optional chains, etc.)           → `any`
 ///
+/// Round-13 follow-up #3 (acknowledged divergence): the
+/// `ReturnType<typeof callee>` form for calls loses argument-based
+/// generic inference and overload selection. Upstream's
+/// `__sveltets_2_unwrapArr(expr)` keeps the actual call expression
+/// at value level so TS resolves the callsite-specific instantiation;
+/// native's type-level emit can't replicate that without hoisting a
+/// `const __svn_iter_<id> = (<items_expr>);` at render-fn body scope
+/// (a larger emit-side refactor). Common cases — non-generic calls
+/// or generics whose T flows through the items-list type — work
+/// today; generic functions whose T is inferred PURELY from the
+/// arguments lose precision and fall to the unbound default.
+///
 /// The fallback to `any` is conservative — element type via
 /// `Iterable<infer __svn_T>` then unwraps to `any`, accepting any
 /// consumer use without firing TS errors. Pre-fix native emitted

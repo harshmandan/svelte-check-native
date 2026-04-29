@@ -283,10 +283,7 @@ pub struct SlotDef {
 #[derive(Debug, Clone)]
 pub enum SlotAttr {
     /// `name={expr}` / `{name}` / `name="lit"` / a resolved attr.
-    Prop {
-        name: SmolStr,
-        expr: SlotAttrExpr,
-    },
+    Prop { name: SmolStr, expr: SlotAttrExpr },
     /// `{...expr}` — spread of an object's properties. Stage 3 of
     /// the SlotHandler port wires this through; for now nothing
     /// produces it (`collect_slot_def` skips spreads).
@@ -771,9 +768,9 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
                     // Destructured `{:then { x }}` falls to None
                     // (Stage 3 OXC rewriter territory).
                     let resolved = if bindings.len() == 1 {
-                        promise_text.as_deref().map(|p| {
-                            ResolvedSlotExpr::Type(format!("Awaited<typeof {p}>"))
-                        })
+                        promise_text
+                            .as_deref()
+                            .map(|p| ResolvedSlotExpr::Type(format!("Awaited<typeof {p}>")))
                     } else {
                         None
                     };
@@ -1401,17 +1398,23 @@ fn collect_bind_this_checks(attrs: &[Attribute], summary: &mut TemplateSummary) 
 /// the same name.
 ///
 /// Emit projects each name into the event-map dictated by the
-/// element scope:
+/// element scope, following upstream svelte2tsx's swapped naming
+/// convention (the upstream helpers' map types are inverted relative
+/// to their names, and we mirror the actual map types byte-for-byte
+/// so consumer-side event types match):
 ///
 ///   - DOM element → `HTMLElementEventMap[NAME]`
-///   - `<svelte:body>` → `HTMLBodyElementEventMap[NAME]`
-///   - `<svelte:window>` → `WindowEventMap[NAME]`
+///   - `<svelte:body>` → `WindowEventMap[NAME]`
+///   - `<svelte:window>` → `HTMLBodyElementEventMap[NAME]`
 ///
 /// so that consumers' `<Child on:click={cb}>` see the DOM event type
 /// (`MouseEvent`, `KeyboardEvent`, …) rather than the lax
 /// `CustomEvent<any>` fallback. Mirrors upstream svelte2tsx's
 /// `__sveltets_2_mapElementEvent` / `__sveltets_2_mapBodyEvent` /
-/// `__sveltets_2_mapWindowEvent` dispatch in `event-handler.ts:63-72`.
+/// `__sveltets_2_mapWindowEvent` dispatch in `event-handler.ts:63-72`,
+/// with the same swapped K-type bound (`mapBodyEvent<K extends keyof
+/// WindowEventMap>` / `mapWindowEvent<K extends keyof
+/// HTMLBodyElementEventMap>` per `svelte-shims.d.ts:185-190`).
 ///
 /// `<svelte:document>` is intentionally NOT routed here — upstream's
 /// `event-handler.ts` doesn't handle it either. Component-bubbled

@@ -513,6 +513,19 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             }
         }
         svn_analyze::PropShape::BoolShorthand { name, .. } => {
+            // Reviewer follow-up #5: `<Comp --foo>` (boolean shorthand
+            // on a CSS custom-property attr) wraps the same way as
+            // `--foo="value"` and `--foo={expr}`. Without the wrap
+            // the prop hits excess-prop on the component's Props
+            // type. Upstream `Attribute.ts:97-107` defaults the
+            // missing value to `""` — mirror that so the wrapped
+            // object is structurally well-formed.
+            if is_css_custom_prop_name(name) {
+                buf.push_str("...__svn_css_prop({");
+                write_quoted_prop_key_with_source(buf, name, attr_range);
+                buf.push_str(": \"\"})");
+                return;
+            }
             write_quoted_prop_key_with_source(buf, name, attr_range);
             buf.push_str(": true");
         }
@@ -555,6 +568,17 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             // Expression part splices `${EXPR}` from the source
             // range so tsgo diagnostics on the inner expression
             // map back to the user's source position.
+            //
+            // Reviewer follow-up #5: when the attr name starts with
+            // `--`, wrap the whole `key: \`…\`` pair in
+            // `...__svn_css_prop({…})` like the Literal and
+            // Expression variants do. Without the wrap the
+            // CSS-prop attr would hit excess-prop on the component's
+            // declared Props.
+            let css_prop = is_css_custom_prop_name(name);
+            if css_prop {
+                buf.push_str("...__svn_css_prop({");
+            }
             write_quoted_prop_key_with_source(buf, name, attr_range);
             buf.push_str(": `");
             for part in parts {
@@ -585,6 +609,9 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
                 }
             }
             buf.push('`');
+            if css_prop {
+                buf.push_str("})");
+            }
         }
     }
 }

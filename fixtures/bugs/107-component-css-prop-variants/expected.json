@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Reviewer follow-up #5: CSS custom-property attrs (`--foo`) on a component must always route through `__svn_css_prop({…})` so the key isn't checked against the component's declared Props. Pre-fix the wrap fired only for `Literal` and `Expression` PropShape variants — `BoolShorthand` (`<Comp --foo>`) and `TemplateLiteral` (`<Comp --foo=\"a {b}\">`) fell through as regular component props and hit excess-prop on the strict Props type. Post-fix all four variants wrap. Mirrors upstream svelte2tsx's `Attribute.ts:97-107`. The fixture's Child declares only `label?: string` as a prop; without the wrap, the four `<Child --…>` instantiations would each fire TS2353 (excess-prop on the synthesised Props satisfies object). Clean post-fix."
+}

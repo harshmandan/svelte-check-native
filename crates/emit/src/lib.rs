@@ -542,11 +542,16 @@ fn emit_document_with_render_name(
     // bubbles into ONE flat per-name map so cross-kind same-name
     // collisions resolve as overwrite/union (matching upstream's
     // single `EventHandler.bubbledEvents` map) rather than
-    // intersecting two separate fragments. Dispatchers stay
-    // separate (the dispatcher fragment is a mapped type whose
-    // keys can't be enumerated at synthesis time — same-name
-    // collisions with bubbles still produce a TS intersection,
-    // an acknowledged divergence).
+    // intersecting two separate fragments.
+    //
+    // Round-6 follow-up #1: dispatcher fragments and the bubbled
+    // event map are no longer intersected with `&`. Instead the
+    // dispatcher mapped type and the bubble literal are combined as
+    // `Omit<Dispatcher, keyof Bubble> & Bubble` — TS-level analogue
+    // of upstream's value-position spread (`{...toEventTypings<T>(),
+    // 'click': mapElementEvent('click')}`), where bubble keys
+    // override dispatcher keys for same name and non-overlapping
+    // keys keep both. See the `events_combined` block further down.
     //
     // Per-entry source tracks how each contribution renders:
     //   - Dom(scope)      → `<Map>[name]` for the given element scope.

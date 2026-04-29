@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "Round-7 follow-up #7: `<svelte:self on:click>` (bare bubble) should NOT register as a bubbled component event. Upstream's event-handler.ts:12-15 explicitly skips `handleEventHandlerBubble` when the parent is `<svelte:self>` — bubbling self's own events back into self's $$Events is a no-op and wrongly disqualifies the runes fn_component shape. Pre-fix native pushed BubbledComponentEvent + set has_bubbled_component_event for self bubbles; that disqualified Producer's runes-mode fn-shape gate, dropping it onto the iso `$$IsomorphicComponent` shape and breaking Consumer's `(typeof Producer)[]` assignment with TS2322. Post-fix: native skips the bubble registration for self while still emitting `$inst.$on(\"click\", () => {})` so the bubbled event name still type-checks against self's declared events surface."
+}

@@ -1740,7 +1740,7 @@ fn collect_instantiation_inner(
                         // `on:event` with no value — bare re-dispatch
                         // (event bubbling from sub-component).
                         //
-                        // Reviewer follow-up #1: ALSO push an
+                        // Reviewer follow-up #1: push an
                         // `OnEventDirective` with an empty range so
                         // emit produces `$inst.$on("event", () => {})`
                         // — type-checks the bubbled-event name against
@@ -1764,6 +1764,21 @@ fn collect_instantiation_inner(
                             name_range,
                             handler_range: Range::new(d.range.start, d.range.start),
                         });
+                        // Round-7 follow-up #7: upstream's
+                        // `event-handler.ts:12-15` skips
+                        // `handleEventHandlerBubble` when the parent
+                        // is `<svelte:self>` — bubbling self's own
+                        // events into the wrapper's `$$Events` is a
+                        // no-op (the parent component IS the child)
+                        // and would wrongly disqualify the runes
+                        // fn_component shape and trigger the
+                        // Svelte-4 props-widen path. The `$inst.$on`
+                        // call still fires above so the bubbled name
+                        // type-checks against self's events surface;
+                        // we just don't register a bubble for it.
+                        if component_root.as_str() == "__svn_self_default" {
+                            continue;
+                        }
                         summary.has_bubbled_component_event = true;
                         // Reviewer follow-up #2: also record the
                         // (event_name, component_root) pair so the

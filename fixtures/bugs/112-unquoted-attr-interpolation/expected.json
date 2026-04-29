@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Parent.svelte",
+            "line": 24,
+            "column": 19,
+            "code": 2731
+        }
+    ],
+    "_note": "Reviewer follow-up #4: unquoted component attrs with `{…}` interpolations (`label=hi{bar}hi`) used to parse as a single Text part — the parser explicitly stopped at whitespace/`>`/`/` and never recognized `{` as an interpolation boundary. Pre-fix the literal substring `hi{bar}hi` flowed through as a fixed string, the embedded expression was never type-checked, and `Symbol(…)` interpolation passed silently. Post-fix the unquoted-value parser mirrors the quoted-value parser: flushes Text on `{`, parses the mustache body via the shared brace-balancing scanner, pushes an Expression part. The PropShape is now `TemplateLiteral` and the symbol's implicit-string conversion fires TS2731 at the source interpolation position. Mirrors upstream svelte2tsx's `Attribute.ts:233`."
+}

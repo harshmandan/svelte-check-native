@@ -449,21 +449,80 @@ fn parse_attr_value(scanner: &mut Scanner<'_>, errors: &mut Vec<ParseError>) -> 
             })
         }
         _ => {
-            // Unquoted literal value — read until whitespace/>/.
+            // Unquoted literal value — read until whitespace/>/, but
+            // also recognize `{…}` interpolations so the user-visible
+            // shape of `foo=hi{bar}hi` mirrors the quoted form
+            // (`foo="hi{bar}hi"`). Reviewer follow-up #4: pre-fix
+            // this parser produced ONE Text part with the literal
+            // string content `hi{bar}hi` — the `{bar}` interpolation
+            // was never extracted as an expression and downstream
+            // emit silently typed it as a literal substring.
+            //
+            // Mirrors the quoted-value parser at `parse_quoted_value`
+            // above: flush a Text chunk on `{`, scan the mustache
+            // body via the shared brace-balancing scanner, push an
+            // Expression part. Terminator remains whitespace / `>`
+            // / `/`.
             let start = scanner.pos();
+            let mut parts: Vec<AttrValuePart> = Vec::new();
+            let mut chunk_start = start;
             while let Some(b) = scanner.peek_byte() {
                 if b.is_ascii_whitespace() || matches!(b, b'>' | b'/') {
                     break;
                 }
+                if b == b'{' {
+                    let text_end = scanner.pos();
+                    if text_end > chunk_start {
+                        let content = scanner.source()[chunk_start as usize..text_end as usize]
+                            .to_string();
+                        parts.push(AttrValuePart::Text {
+                            content,
+                            range: Range::new(chunk_start, text_end),
+                        });
+                    }
+                    let brace_start = scanner.pos();
+                    scanner.advance_byte(); // past `{`
+                    let expr_start = scanner.pos();
+                    let Some(end) = find_mustache_end(scanner.source(), expr_start) else {
+                        // Unterminated mustache — best-effort: emit
+                        // what we have so far, terminate the value.
+                        let trailing_end = scanner.pos();
+                        return Some(AttrValue {
+                            parts,
+                            range: Range::new(start, trailing_end),
+                            quoted: false,
+                        });
+                    };
+                    scanner.set_pos(end + 1);
+                    parts.push(AttrValuePart::Expression {
+                        expression_range: Range::new(expr_start, end),
+                        range: Range::new(brace_start, end + 1),
+                    });
+                    chunk_start = scanner.pos();
+                    continue;
+                }
                 scanner.advance_char();
             }
             let end = scanner.pos();
-            let content = scanner.source()[start as usize..end as usize].to_string();
-            Some(AttrValue {
-                parts: vec![AttrValuePart::Text {
+            if end > chunk_start {
+                let content = scanner.source()[chunk_start as usize..end as usize].to_string();
+                parts.push(AttrValuePart::Text {
                     content,
+                    range: Range::new(chunk_start, end),
+                });
+            }
+            // Empty-value edge: scanner immediately hit a terminator.
+            // Preserve a single empty Text part so downstream
+            // `parts.len() == 1` literal-value handling still
+            // matches.
+            if parts.is_empty() {
+                parts.push(AttrValuePart::Text {
+                    content: String::new(),
                     range: Range::new(start, end),
-                }],
+                });
+            }
+            Some(AttrValue {
+                parts,
                 range: Range::new(start, end),
                 quoted: false,
             })

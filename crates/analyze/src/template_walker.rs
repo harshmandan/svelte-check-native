@@ -803,15 +803,37 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
                 // `let:`); fall through as unresolvable so the
                 // slot-attr collector drops references rather than
                 // splicing module scope.
+                //
+                // Round-7 follow-up #2: each binding carries its
+                // own `slot_key_path` (set by
+                // `collect_let_directive_bindings`) — for shorthand
+                // and bare-ident-alias forms the path is the
+                // directive name (e.g. `["foo"]` for both `let:foo`
+                // and `let:foo={bar}`). Pre-fix native used the
+                // BoundIdent's `name` as the slot key, so an alias
+                // `let:foo={bar}` resolved `bar` to
+                // `…['default']['bar']` instead of
+                // `…['default']['foo']`. Use `slot_key_path` when
+                // present; bindings without one (today: any
+                // destructure leaf) drop to None as before.
                 let owner = self.pending_let_owner.take();
                 for b in bindings {
-                    let resolved = owner.as_ref().map(|info| {
-                        ResolvedSlotExpr::Type(format!(
-                            "__SvnComponentSlots<typeof {root}>[{slot:?}][{name:?}]",
+                    let resolved = owner.as_ref().and_then(|info| {
+                        let path = b.slot_key_path.as_ref()?;
+                        if path.is_empty() {
+                            return None;
+                        }
+                        let mut out = format!(
+                            "__SvnComponentSlots<typeof {root}>[{slot:?}]",
                             root = info.component_root.as_str(),
                             slot = info.slot_name.as_str(),
-                            name = b.name.as_str(),
-                        ))
+                        );
+                        for seg in path {
+                            out.push('[');
+                            out.push_str(&format!("{:?}", seg.as_str()));
+                            out.push(']');
+                        }
+                        Some(ResolvedSlotExpr::Type(out))
                     });
                     self.shadow.entries.push((b.name.clone(), resolved));
                 }

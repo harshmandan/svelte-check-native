@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 29,
+            "column": 17,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-7 follow-up #2: native pre-fix used the BoundIdent's local name as the slot-key for `let:` directives, so `<Inner let:tooltip={tip}>` resolved `tip` to `__SvnComponentSlots<typeof Inner>['default']['tip']` — but the slot's actual prop name is `tooltip`, not `tip`. The local var typed as `any` (the slot has no `'tip'` prop, so the lookup fell through), and any field access passed silently. Upstream's `handleScopeAndResolveForSlot.ts:55` uses `letNode.name` (the directive name) as the slot key, regardless of how the expression aliases the binding locally. Post-fix: BoundIdent carries `slot_key_path` populated with the directive name for shorthand and bare-ident-alias forms; the alias case `let:tooltip={tip}` resolves `tip` to the proper `{ x: number; y: number }` shape. The TS2345 here proves it: `takesNumber(tip)` (param `n: number`) fires on the `{x,y}` object, where pre-fix `tip: any` would have passed through. (Destructure forms `let:tooltip={{x, y}}` are explicitly left unsupported here — they fall back to the existing 'shadowed but unresolvable' path until Round-7 #1 lands the destructure-aware pattern walker.)"
+}

@@ -62,6 +62,22 @@ pub struct BoundIdent {
     /// `bind_invalid_each_rest` rule consumes the flag; analyze
     /// ignores it.
     pub inside_rest: bool,
+    /// SlotHandler PLAN Stage 4 / Round-7 follow-up #2: for bindings
+    /// declared by a `let:NAME[={…}]` directive, this carries the
+    /// property-access path (in slot-prop coordinates) from the
+    /// containing `$$slot_def[slot_name]` value down to this binding.
+    /// `None` everywhere else.
+    ///
+    /// Populated cases:
+    /// - shorthand `let:foo` → `["foo"]` (binding name == directive name).
+    /// - alias `let:foo={bar}` → `["foo"]` (single bare-ident expression
+    ///   aliases the slot's `foo` value to `bar`).
+    /// - destructure `let:foo={pattern}` → currently unsupported; left
+    ///   `None` so the slot-let resolver falls through to the existing
+    ///   "shadowed but unresolvable" path. Round-7 #1 will extend this
+    ///   to carry the destructure's property path (`["foo", "a"]` for
+    ///   `let:foo={{a}}`).
+    pub slot_key_path: Option<Vec<SmolStr>>,
 }
 
 /// Output of [`collect_pattern_bindings`]. Bindings are emitted in
@@ -108,6 +124,7 @@ fn walk(pat: &BindingPattern<'_>, offset: i32, inside_rest: bool, out: &mut Patt
                 name: SmolStr::from(id.name.as_str()),
                 range: Range::new(start, end),
                 inside_rest,
+                slot_key_path: None,
             });
         }
         BindingPattern::ObjectPattern(op) => {
@@ -519,6 +536,32 @@ struct LetDirectiveScope {
     defaults: Vec<Range>,
 }
 
+/// Round-7 follow-up #2: detect the alias form `let:foo={bar}` —
+/// the value expression is a single bare JS identifier with no
+/// surrounding parens, dot-access, or destructure brackets. Used to
+/// distinguish the alias case (slot key path = `[directive_name]`)
+/// from destructure patterns (left unsupported at the slot-key
+/// level for now).
+fn expression_is_bare_identifier(source: &str, range: Range) -> bool {
+    let start = range.start as usize;
+    let end = range.end as usize;
+    let Some(slice) = source.get(start..end) else {
+        return false;
+    };
+    let trimmed = slice.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let mut bytes = trimmed.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == b'_' || first == b'$') {
+        return false;
+    }
+    bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$')
+}
+
 /// Parse a binding-pattern source slice (the `as` clause of
 /// `{#each}`, an await branch's `{value}`, or a snippet's
 /// `(p1, p2)` list) and return the bindings it declares plus any
@@ -614,11 +657,23 @@ fn collect_let_directive_bindings(
         else {
             continue;
         };
+        // Round-7 follow-up #2: every binding declared by a let-
+        // directive carries the directive name as its slot-key path
+        // root. For shorthand and bare-identifier-alias forms, the
+        // path is just `[directive_name]`; the local var name (the
+        // BoundIdent's `name`) may differ from the directive name
+        // (alias case `let:foo={bar}`) but both resolve to the SAME
+        // slot prop. Destructure patterns leave `slot_key_path` at
+        // None — see the field doc on BoundIdent.
+        let directive_path = vec![name.clone()];
         match value {
             Some(DirectiveValue::Expression {
                 expression_range, ..
             }) => {
                 let pb = collect_pattern_bindings_from_slice(source, *expression_range);
+                let is_alias = pb.bindings.len() == 1
+                    && pb.default_value_ranges.is_empty()
+                    && expression_is_bare_identifier(source, *expression_range);
                 if pb.bindings.is_empty() {
                     // Empty expression — fall back to the directive name itself.
                     push(
@@ -626,11 +681,29 @@ fn collect_let_directive_bindings(
                             name: name.clone(),
                             range: *range,
                             inside_rest: false,
+                            slot_key_path: Some(directive_path.clone()),
                         },
                         &mut out,
                         &mut seen,
                     );
+                } else if is_alias {
+                    // Alias form `let:foo={bar}` — single bare-ident
+                    // expression, no default value. Local var
+                    // `bar` resolves to the slot's `foo` prop.
+                    for mut b in pb.bindings {
+                        b.slot_key_path = Some(directive_path.clone());
+                        push(b, &mut out, &mut seen);
+                    }
                 } else {
+                    // Destructure pattern (`let:foo={{a, b}}`,
+                    // `let:foo={[x, y]}`, defaults like `{a = 1}`).
+                    // Slot-key resolution would need to project each
+                    // leaf as `[directive_name][...path]` per upstream
+                    // (`slot.ts:wrapDestructureAroundDirective`); not
+                    // yet ported. Leave `slot_key_path` None so the
+                    // resolver falls through to the unresolvable path
+                    // (drops references rather than splicing module
+                    // scope).
                     for b in pb.bindings {
                         push(b, &mut out, &mut seen);
                     }
@@ -648,6 +721,7 @@ fn collect_let_directive_bindings(
                     name: name.clone(),
                     range: *range,
                     inside_rest: false,
+                    slot_key_path: Some(directive_path),
                 },
                 &mut out,
                 &mut seen,

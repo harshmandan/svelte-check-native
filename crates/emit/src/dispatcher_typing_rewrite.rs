@@ -106,6 +106,13 @@ fn collect_rewrite_insertions(
             }
         }
         Statement::IfStatement(s) => {
+            // Round-14 #1: walk function-body stmts inside the if-test
+            // expression too. An untyped dispatcher decl hidden in an
+            // IIFE used as the test condition needs the typed-events
+            // rewrite or its `dispatch(...)` calls go un-checked.
+            for s2 in stmts_in_function_expr(&s.test) {
+                collect_rewrite_insertions(s2, ctor_locals, out);
+            }
             collect_rewrite_insertions(&s.consequent, ctor_locals, out);
             if let Some(alt) = &s.alternate {
                 collect_rewrite_insertions(alt, ctor_locals, out);
@@ -197,10 +204,7 @@ fn stmts_in_function_expr<'a, 'b>(expr: &'a Expression<'b>) -> Vec<&'a Statement
     out
 }
 
-fn collect_function_body_stmts<'a, 'b>(
-    expr: &'a Expression<'b>,
-    out: &mut Vec<&'a Statement<'b>>,
-) {
+fn collect_function_body_stmts<'a, 'b>(expr: &'a Expression<'b>, out: &mut Vec<&'a Statement<'b>>) {
     match expr {
         Expression::ArrowFunctionExpression(arrow) => {
             for s in &arrow.body.statements {

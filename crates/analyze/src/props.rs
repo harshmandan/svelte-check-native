@@ -613,6 +613,14 @@ fn statement_collect_typed_dispatcher_slices(
             }
         }
         Statement::IfStatement(s) => {
+            // Round-14 #1: walk function-body stmts inside the if-test
+            // expression too. `if ((() => { const d =
+            // createEventDispatcher<{x:string}>(); … })()) { … }`
+            // hides a typed dispatcher decl in an IIFE; pre-fix
+            // native skipped it.
+            for s2 in statements_inside_function_expr(&s.test) {
+                statement_collect_typed_dispatcher_slices(s2, source, ctor_locals, out);
+            }
             statement_collect_typed_dispatcher_slices(&s.consequent, source, ctor_locals, out);
             if let Some(alt) = &s.alternate {
                 statement_collect_typed_dispatcher_slices(alt, source, ctor_locals, out);
@@ -937,6 +945,12 @@ fn statement_collect_dispatcher_locals(
             }
         }
         Statement::IfStatement(s) => {
+            // Round-14 #1: walk function-body stmts inside the if-test
+            // expression too — a dispatcher local can hide in an IIFE
+            // used as the test condition.
+            for s2 in statements_inside_function_expr(&s.test) {
+                statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
+            }
             statement_collect_dispatcher_locals(&s.consequent, ctor_locals, typed_only, out);
             if let Some(alt) = &s.alternate {
                 statement_collect_dispatcher_locals(alt, ctor_locals, typed_only, out);
@@ -1273,6 +1287,21 @@ fn scan_statement_in_source_order(
             }
         }
         Statement::IfStatement(s) => {
+            // Round-14 #1: walk function-body stmts inside the if-test
+            // first so dispatcher decls / dispatched-name calls
+            // hidden in an IIFE used as the test condition register
+            // before consequent/alternate. Source-order matters: the
+            // test runs before either branch.
+            for s2 in statements_inside_function_expr(&s.test) {
+                scan_statement_in_source_order(
+                    s2,
+                    ctor_locals,
+                    dispatcher_locals,
+                    literal_vars,
+                    seen,
+                    out,
+                );
+            }
             scan_statement_in_source_order(
                 &s.consequent,
                 ctor_locals,
@@ -1786,7 +1815,12 @@ fn statement_has_dispatcher_call(
                 .any(|s| statement_has_dispatcher_call(s, ctor_locals))
         }),
         Statement::IfStatement(s) => {
-            statement_has_dispatcher_call(&s.consequent, ctor_locals)
+            // Round-14 #1: an IIFE in the if-test that calls a
+            // dispatcher counts too.
+            statements_inside_function_expr(&s.test)
+                .iter()
+                .any(|s2| statement_has_dispatcher_call(s2, ctor_locals))
+                || statement_has_dispatcher_call(&s.consequent, ctor_locals)
                 || s.alternate
                     .as_ref()
                     .is_some_and(|s| statement_has_dispatcher_call(s, ctor_locals))
@@ -1946,6 +1980,11 @@ fn statement_collect_inline_typed_members(
             }
         }
         Statement::IfStatement(s) => {
+            // Round-14 #1: walk function-body stmts inside the
+            // if-test for typed dispatcher decls hidden in an IIFE.
+            for s2 in statements_inside_function_expr(&s.test) {
+                statement_collect_inline_typed_members(s2, ctor_locals, literal_vars, out);
+            }
             statement_collect_inline_typed_members(&s.consequent, ctor_locals, literal_vars, out);
             if let Some(alt) = &s.alternate {
                 statement_collect_inline_typed_members(alt, ctor_locals, literal_vars, out);
@@ -2180,7 +2219,12 @@ fn statement_has_inline_typed_dispatcher(
                 .any(|s| statement_has_inline_typed_dispatcher(s, ctor_locals))
         }),
         Statement::IfStatement(s) => {
-            statement_has_inline_typed_dispatcher(&s.consequent, ctor_locals)
+            // Round-14 #1: a typed dispatcher hidden in an IIFE used
+            // as the if-test condition counts.
+            statements_inside_function_expr(&s.test)
+                .iter()
+                .any(|s2| statement_has_inline_typed_dispatcher(s2, ctor_locals))
+                || statement_has_inline_typed_dispatcher(&s.consequent, ctor_locals)
                 || s.alternate
                     .as_ref()
                     .is_some_and(|a| statement_has_inline_typed_dispatcher(a, ctor_locals))

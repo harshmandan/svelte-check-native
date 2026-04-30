@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Inner.svelte",
+            "line": 29,
+            "column": 24,
+            "code": 2353
+        }
+    ],
+    "_note": "Round-14 follow-up #1: every dispatcher walker (analyze + rewrite) skipped `IfStatement.test` — only the consequent and alternate were recursed. A dispatcher local hidden inside an IIFE used as the if-test condition (`if ((() => { const d = createEventDispatcher(); ... })())`) never reached the typed-events rewrite, so internal `dispatch('name', detail)` calls passed the lax `<{}>` inference and accepted any second arg silently. Post-fix every dispatcher walker descends into `s.test` via `statements_inside_function_expr` (matching the analyzer/rewrite contract elsewhere): `statement_collect_typed_dispatcher_slices`, `statement_collect_dispatcher_locals`, `statement_collect_inline_typed_members`, `statement_has_dispatcher_call`, `statement_has_inline_typed_dispatcher`, and `scan_statement_in_source_order` (analyze) plus `collect_rewrite_insertions` (emit). Inner here declares the dispatcher inside the if-test IIFE; post-fix the rewrite makes `d.save`'s detail type `{id: number}` and `{wrong: 'shape'}` correctly fires TS2353 (`Object literal may only specify known properties, and 'wrong' does not exist in type '{ id: number; }'`)."
+}

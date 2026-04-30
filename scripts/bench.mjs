@@ -30,14 +30,34 @@
 //   node scripts/bench.mjs --target bench/some-project --mode parity --csv out.csv
 //
 // Flags
-//   --target <path>     Workspace to bench (defaults to $BENCH_TARGET).
-//   --mode <m>          `timing` (default) or `parity`.
-//   --csv <path>        Write CSV rows to file (otherwise stdout only).
-//   --runs <N>          Per-scenario sample count for timing mode
-//                       (default 3). Parity mode always runs once per
-//                       tool — counts are deterministic.
-//   --tsconfig <path>   Pass through to the binary.
-//   --quiet             Suppress per-run timing lines (CSV still prints).
+//   --target <path>          Workspace to bench (defaults to $BENCH_TARGET).
+//   --mode <m>               `timing` (default) or `parity`.
+//   --csv <path>             Write CSV rows to file (otherwise stdout only).
+//   --runs <N>               Per-scenario sample count for timing mode
+//                            (default 3). Parity mode always runs once per
+//                            tool — counts are deterministic.
+//   --tsconfig <path>        Pass through to the binary.
+//   --quiet                  Suppress per-run timing lines (CSV still prints).
+//   --diagnostic-detail      Parity mode: capture every per-diagnostic
+//                            ERROR/WARNING line via `--output
+//                            machine-verbose` and print symmetric-diff
+//                            lists per (ours, upstream) and (ours,
+//                            upstream --tsgo) pair. Off by default so
+//                            existing CI/scripts keep their counts-only
+//                            behaviour. Implies machine-verbose for
+//                            every tool.
+//   --exceptions <path>      Path to a JSON file overriding per-bench
+//                            allowlists (default: <repo>/bench/.parity-exceptions.json
+//                            keyed by basename(target)). Shape:
+//                            {"<bench-name>": {"ours_minus_upstream":
+//                            ["src/foo.svelte:23:4 [2345]", …],
+//                            "upstream_minus_ours": [...],
+//                            "ours_minus_tsgo": [...],
+//                            "tsgo_minus_ours": [...]}}.
+//                            Each entry is an exact match against
+//                            "<file>:<line>:<col> [<code>]". Symmetric
+//                            differences match the allowlist exactly →
+//                            silent; any extra item → exit 1.
 //
 // Exit 0 on success; 2 on bad invocation; 1 when parity mode detects a
 // non-matching count (see --allow-delta to opt out).
@@ -131,7 +151,7 @@ function runParityMode() {
     const upstream = findUpstreamSvelteCheck(effectiveWorkspace)
         ?? findUpstreamSvelteCheck(targetAbs);
     const rows = [
-        { tool: 'ours', ...oursResult.counts },
+        { tool: 'ours', ...oursResult.counts, diagnostics: oursResult.diagnostics },
     ];
     if (upstream) {
         if (!args.quiet) console.error(`  running upstream…`);
@@ -167,17 +187,28 @@ function runParityMode() {
     ];
     emitCsv(csvLines);
 
+    // Per-diagnostic detail (off by default). Compute symmetric diffs
+    // for (ours vs upstream) and (ours vs upstream --tsgo). Apply any
+    // exception allowlist before deciding to exit non-zero.
+    let detailMismatch = false;
+    if (args.diagnosticDetail) {
+        detailMismatch = reportDiagnosticDetail(rows);
+    }
+
     // Exit 1 if ours deviates from the best upstream baseline. Prefer
     // upstream (non-tsgo); fall back to upstream --tsgo. If no upstream
     // was available, always exit 0.
     const ours = rows.find(r => r.tool === 'ours');
     const upstreamRow = rows.find(r => r.tool === 'upstream')
         ?? rows.find(r => r.tool === 'upstream --tsgo');
-    if (!upstreamRow || args.allowDelta) return;
+    if (!upstreamRow || args.allowDelta) {
+        if (detailMismatch) process.exit(1);
+        return;
+    }
     const mismatch = ours.errors !== upstreamRow.errors
         || ours.warnings !== upstreamRow.warnings
         || ours.files_with_problems !== upstreamRow.files_with_problems;
-    if (mismatch) process.exit(1);
+    if (mismatch || detailMismatch) process.exit(1);
 
     // File-count drift gate. Compare against `upstream --tsgo`
     // specifically because non-tsgo upstream walks the entire
@@ -209,10 +240,11 @@ function runOursForCountsWithStderr() {
     wipeCaches();
     let stdout = '';
     let stderr = '';
+    const outputFormat = args.diagnosticDetail ? 'machine-verbose' : 'machine';
     try {
         stdout = execFileSync(
             binary,
-            ['--workspace', targetAbs, '--output', 'machine', ...extraArgs],
+            ['--workspace', targetAbs, '--output', outputFormat, ...extraArgs],
             { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024, encoding: 'utf8' },
         );
     } catch (err) {
@@ -233,7 +265,8 @@ function runOursForCountsWithStderr() {
         ?? { files: -1, errors: -1, warnings: -1, files_with_problems: -1 };
     const redirectMatch = /redirected workspace to (\S+)/.exec(stderr);
     const redirectedTo = redirectMatch ? redirectMatch[1] : detectRedirectByTsconfig(targetAbs);
-    return { counts, redirectedTo };
+    const diagnostics = args.diagnosticDetail ? parseMachineVerboseDiagnostics(stdout) : null;
+    return { counts, redirectedTo, diagnostics };
 }
 
 /// Heuristic: if the target's tsconfig is a project-references
@@ -273,9 +306,10 @@ function runUpstream(bin, { tsgo, cwd }) {
     // errors. Wrap in try so we still parse the COMPLETED line when
     // errors exist.
     let stdout = '';
+    const outputFormat = args.diagnosticDetail ? 'machine-verbose' : 'machine';
     const runArgs = [
         '--workspace', cwd ?? targetAbs,
-        '--output', 'machine',
+        '--output', outputFormat,
         '--diagnostic-sources', 'js,svelte',
         // Forward the same --tsconfig the user passed for ours so the
         // comparison is apples-to-apples. Without this, ours runs
@@ -297,7 +331,10 @@ function runUpstream(bin, { tsgo, cwd }) {
         if (err.status === 1) stdout = err.stdout?.toString('utf8') ?? '';
         else throw err;
     }
-    return parseCompleted(stdout) ?? { files: -1, errors: -1, warnings: -1, files_with_problems: -1 };
+    const counts = parseCompleted(stdout)
+        ?? { files: -1, errors: -1, warnings: -1, files_with_problems: -1 };
+    const diagnostics = args.diagnosticDetail ? parseMachineVerboseDiagnostics(stdout) : null;
+    return { ...counts, diagnostics };
 }
 
 /// Parse the upstream "COMPLETED N FILES E ERRORS W WARNINGS F FILES_WITH_PROBLEMS"
@@ -399,6 +436,119 @@ function upstreamSupportsTsgo(bin) {
     }
 }
 
+/// Parse a `--output machine-verbose` stream into a Set of
+/// "file:line:col [code]" identifiers. machine-verbose lines look
+/// like `<ts> {"type":"ERROR", …, "filename":"…", "start":{"line":N,
+/// "character":N}, "code":2322, …}`. Both ours and upstream emit
+/// 0-indexed line/character per LSP convention; we render 1-indexed
+/// for human readability (matches the `--output machine` shape).
+function parseMachineVerboseDiagnostics(output) {
+    const ids = new Set();
+    for (const line of output.split('\n')) {
+        const braceIdx = line.indexOf('{');
+        if (braceIdx < 0) continue;
+        // Drop the leading `<ts> ` timestamp before the JSON payload.
+        const payload = line.slice(braceIdx);
+        let obj;
+        try {
+            obj = JSON.parse(payload);
+        } catch {
+            continue;
+        }
+        if (obj?.type !== 'ERROR' && obj?.type !== 'WARNING') continue;
+        const file = obj.filename ?? '';
+        const lineNum = (obj.start?.line ?? 0) + 1;
+        const colNum = (obj.start?.character ?? 0) + 1;
+        const code = obj.code ?? '';
+        ids.add(`${file}:${lineNum}:${colNum} [${code}]`);
+    }
+    return [...ids].sort();
+}
+
+/// Compute the symmetric-difference pair (a−b, b−a) between two
+/// diagnostic-id sets, applying the per-direction allowlist. Returns
+/// {extraA, extraB, missingA, missingB}: extra* are diagnostics
+/// outside the allowlist (genuine drift); missing* are allowlist
+/// entries that no longer fire (allowlist staleness).
+function symmetricDiffWithAllowlist(a, b, aMinusBAllow, bMinusAAllow) {
+    const aSet = new Set(a);
+    const bSet = new Set(b);
+    const aMinusB = a.filter(x => !bSet.has(x));
+    const bMinusA = b.filter(x => !aSet.has(x));
+    const allowAB = new Set(aMinusBAllow ?? []);
+    const allowBA = new Set(bMinusAAllow ?? []);
+    const extraA = aMinusB.filter(x => !allowAB.has(x));
+    const extraB = bMinusA.filter(x => !allowBA.has(x));
+    const missingA = [...allowAB].filter(x => !aMinusB.includes(x));
+    const missingB = [...allowBA].filter(x => !bMinusA.includes(x));
+    return { extraA, extraB, missingA, missingB };
+}
+
+/// Print symmetric diffs vs upstream and vs upstream --tsgo. Returns
+/// true if any genuine drift was detected (after allowlist).
+function reportDiagnosticDetail(rows) {
+    const ours = rows.find(r => r.tool === 'ours');
+    if (!ours?.diagnostics) {
+        console.error('  --diagnostic-detail requested but ours produced no machine-verbose output');
+        return false;
+    }
+    const exceptions = loadExceptions(targetAbs);
+    let drift = false;
+
+    for (const peer of ['upstream', 'upstream --tsgo']) {
+        const peerRow = rows.find(r => r.tool === peer);
+        if (!peerRow?.diagnostics) continue;
+        const aKey = peer === 'upstream' ? 'ours_minus_upstream' : 'ours_minus_tsgo';
+        const bKey = peer === 'upstream' ? 'upstream_minus_ours' : 'tsgo_minus_ours';
+        const { extraA, extraB, missingA, missingB } = symmetricDiffWithAllowlist(
+            ours.diagnostics,
+            peerRow.diagnostics,
+            exceptions[aKey],
+            exceptions[bKey],
+        );
+
+        const peerLabel = peer.replace(/\s+/g, '-');
+        console.error(`\n--- diagnostic detail vs ${peer} ---`);
+        if (extraA.length === 0 && extraB.length === 0) {
+            console.error(`  ours == ${peer} (after allowlist)`);
+        } else {
+            drift = true;
+            if (extraA.length > 0) {
+                console.error(`  ours - ${peer} (${extraA.length}):`);
+                for (const d of extraA) console.error(`    ${d}`);
+            }
+            if (extraB.length > 0) {
+                console.error(`  ${peer} - ours (${extraB.length}):`);
+                for (const d of extraB) console.error(`    ${d}`);
+            }
+        }
+        if (missingA.length > 0 || missingB.length > 0) {
+            console.error(`  STALE allowlist entries (no longer firing) for ${peerLabel}:`);
+            for (const d of missingA) console.error(`    ${aKey}: ${d}`);
+            for (const d of missingB) console.error(`    ${bKey}: ${d}`);
+        }
+    }
+    return drift;
+}
+
+/// Load per-bench exception allowlist. Default path:
+/// <repo>/bench/.parity-exceptions.json keyed by basename(target).
+function loadExceptions(target) {
+    const path = args.exceptions
+        ?? join(repoRoot, 'bench', '.parity-exceptions.json');
+    if (!existsSync(path)) return {};
+    let data;
+    try {
+        data = JSON.parse(readFileSync(path, 'utf8'));
+    } catch (err) {
+        console.error(`  warning: failed to parse ${path}: ${err.message}`);
+        return {};
+    }
+    // Lookup by full target path first, fall back to basename.
+    const targetBase = target.split('/').filter(Boolean).pop() ?? target;
+    return data[target] ?? data[targetBase] ?? {};
+}
+
 function formatParityTable(rows, target) {
     const headers = ['tool', 'files', 'errors', 'warnings', 'files_with_problems'];
     const widths = headers.map(h => h.length);
@@ -483,7 +633,17 @@ function emitCsv(csvLines) {
 }
 
 function parseArgs(a) {
-    const out = { target: null, mode: null, csv: null, runs: null, tsconfig: null, quiet: false, allowDelta: false };
+    const out = {
+        target: null,
+        mode: null,
+        csv: null,
+        runs: null,
+        tsconfig: null,
+        quiet: false,
+        allowDelta: false,
+        diagnosticDetail: false,
+        exceptions: null,
+    };
     for (let i = 0; i < a.length; i++) {
         const v = a[i];
         switch (v) {
@@ -494,6 +654,8 @@ function parseArgs(a) {
             case '--tsconfig': out.tsconfig = a[++i]; break;
             case '--quiet': out.quiet = true; break;
             case '--allow-delta': out.allowDelta = true; break;
+            case '--diagnostic-detail': out.diagnosticDetail = true; break;
+            case '--exceptions': out.exceptions = a[++i]; break;
             case '--help':
             case '-h': printHelp(); process.exit(0);
             default: return { error: `unknown flag: ${v}` };

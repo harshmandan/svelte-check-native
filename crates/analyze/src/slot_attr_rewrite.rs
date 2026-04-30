@@ -442,6 +442,15 @@ fn walk_value_expr(
             for param in &arrow.params.items {
                 collect_pattern_idents(&param.pattern, shadowed);
             }
+            // Round-15 #3: hoist `var` decls and FunctionDeclaration
+            // names to the function-scope at body entry. JS scopes
+            // these to the enclosing function (not the block) — the
+            // inner-block snapshot/truncate added in R14 #5 would
+            // otherwise drop them as soon as their block exited.
+            // Mirroring JS hoisting at function-body entry keeps the
+            // bindings alive for the whole function until our
+            // `shadowed.truncate(before)` on body exit.
+            collect_hoisted_for_function_body(&arrow.body.statements, shadowed);
             for stmt in &arrow.body.statements {
                 walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
             }
@@ -453,6 +462,7 @@ fn walk_value_expr(
                 collect_pattern_idents(&param.pattern, shadowed);
             }
             if let Some(body) = &fe.body {
+                collect_hoisted_for_function_body(&body.statements, shadowed);
                 for stmt in &body.statements {
                     walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
                 }
@@ -505,14 +515,20 @@ fn walk_statement_for_value_rewrite(
             }
         }
         Statement::VariableDeclaration(decl) => {
-            // `let`/`const`/`var` introduce bindings that live until
-            // the end of the enclosing block (caller's snapshot/
-            // truncate handles the scope boundary). We push idents
-            // here without truncating — they're meant to leak forward
-            // within the same block so subsequent statements see the
-            // shadow.
+            // Round-15 #3: `var` bindings are FUNCTION-scoped (not
+            // block-scoped) — they're already pushed to the shadow
+            // stack at function-body entry via
+            // `collect_hoisted_for_function_body`. Re-pushing here
+            // would only matter for a block-truncate to pop them,
+            // which is exactly the wrong behavior for `var`. So we
+            // only push for `let` / `const` (block-scoped); the
+            // enclosing block's snapshot/truncate (R14 #5) handles
+            // their scope boundary.
+            let is_var = matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Var);
             for d in &decl.declarations {
-                collect_pattern_idents(&d.id, shadowed);
+                if !is_var {
+                    collect_pattern_idents(&d.id, shadowed);
+                }
                 if let Some(init) = &d.init {
                     walk_value_expr(init, lookup, shadowed, edits, bail, false);
                 }
@@ -552,8 +568,15 @@ fn walk_statement_for_value_rewrite(
                 use oxc_ast::ast::ForStatementInit;
                 match init {
                     ForStatementInit::VariableDeclaration(decl) => {
+                        // Round-15 #3: skip `var` — already hoisted
+                        // to function scope; pushing here would cause
+                        // the for's truncate to wrongly drop it.
+                        let is_var =
+                            matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Var);
                         for d in &decl.declarations {
-                            collect_pattern_idents(&d.id, shadowed);
+                            if !is_var {
+                                collect_pattern_idents(&d.id, shadowed);
+                            }
                             if let Some(d_init) = &d.init {
                                 walk_value_expr(d_init, lookup, shadowed, edits, bail, false);
                             }
@@ -576,17 +599,35 @@ fn walk_statement_for_value_rewrite(
             shadowed.truncate(before);
         }
         Statement::ForInStatement(s) => {
-            // Round-14 #5: same scope discipline as `ForStatement`.
-            // The `for (… in right)` left-binding (when present)
-            // shadows template locals only inside the body.
+            // Round-14 #5 / Round-15 #3: same scope discipline as
+            // `ForStatement`. Collect the loop's let/const left-
+            // binding into the shadow stack so the body sees it
+            // shadowed; the `before`/truncate pair restores when the
+            // loop exits. `var` left-bindings are already hoisted to
+            // function-scope by `collect_hoisted_for_function_body`
+            // and intentionally don't push here.
             let before = shadowed.len();
             walk_value_expr(&s.right, lookup, shadowed, edits, bail, false);
+            if let oxc_ast::ast::ForStatementLeft::VariableDeclaration(decl) = &s.left
+                && !matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Var)
+            {
+                for d in &decl.declarations {
+                    collect_pattern_idents(&d.id, shadowed);
+                }
+            }
             walk_statement_for_value_rewrite(&s.body, lookup, shadowed, edits, bail);
             shadowed.truncate(before);
         }
         Statement::ForOfStatement(s) => {
             let before = shadowed.len();
             walk_value_expr(&s.right, lookup, shadowed, edits, bail, false);
+            if let oxc_ast::ast::ForStatementLeft::VariableDeclaration(decl) = &s.left
+                && !matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Var)
+            {
+                for d in &decl.declarations {
+                    collect_pattern_idents(&d.id, shadowed);
+                }
+            }
             walk_statement_for_value_rewrite(&s.body, lookup, shadowed, edits, bail);
             shadowed.truncate(before);
         }
@@ -647,12 +688,18 @@ fn walk_statement_for_value_rewrite(
         }
         Statement::FunctionDeclaration(fd) => {
             // Function decls inside callback bodies — walk with their
-            // params pushed onto the shadow stack.
+            // params pushed onto the shadow stack. Round-15 #3: also
+            // hoist the function's own `var`s and inner FunctionDecl
+            // names at body entry. The fn's NAME (`fd.id`) was
+            // already hoisted by the enclosing function-scope's
+            // `collect_hoisted_for_function_body` pass — we don't
+            // re-push it here.
             if let Some(body) = &fd.body {
                 let before = shadowed.len();
                 for param in &fd.params.items {
                     collect_pattern_idents(&param.pattern, shadowed);
                 }
+                collect_hoisted_for_function_body(&body.statements, shadowed);
                 for stmt in &body.statements {
                     walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
                 }
@@ -662,6 +709,112 @@ fn walk_statement_for_value_rewrite(
         Statement::ThrowStatement(t) => {
             walk_value_expr(&t.argument, lookup, shadowed, edits, bail, false);
         }
+        _ => {}
+    }
+}
+
+/// Round-15 #3: hoist `var` declarations and `FunctionDeclaration`
+/// names from a function body into the shadow stack. JS scopes both
+/// to the enclosing FUNCTION (not the block), so they need to be
+/// pushed at function-body entry — before the inner-block snapshot/
+/// truncate boundaries land. We recurse through Block / If / For /
+/// While / DoWhile / Switch / Try / Labeled bodies but stop at
+/// nested arrow/function/class expressions and at nested
+/// FunctionDeclaration bodies (which have their own function scope
+/// that runs its own hoisting pass).
+fn collect_hoisted_for_function_body(
+    stmts: &[oxc_ast::ast::Statement<'_>],
+    shadowed: &mut Vec<String>,
+) {
+    for stmt in stmts {
+        collect_hoisted_in_stmt(stmt, shadowed);
+    }
+}
+
+fn collect_hoisted_in_stmt(stmt: &oxc_ast::ast::Statement<'_>, shadowed: &mut Vec<String>) {
+    use oxc_ast::ast::{Statement, VariableDeclarationKind};
+    match stmt {
+        Statement::VariableDeclaration(decl) => {
+            if matches!(decl.kind, VariableDeclarationKind::Var) {
+                for d in &decl.declarations {
+                    collect_pattern_idents(&d.id, shadowed);
+                }
+            }
+        }
+        Statement::FunctionDeclaration(fd) => {
+            if let Some(id) = &fd.id {
+                shadowed.push(id.name.to_string());
+            }
+            // Don't recurse into the body — it's its own function
+            // scope and runs its own hoisting pass.
+        }
+        Statement::BlockStatement(b) => {
+            for s in &b.body {
+                collect_hoisted_in_stmt(s, shadowed);
+            }
+        }
+        Statement::IfStatement(s) => {
+            collect_hoisted_in_stmt(&s.consequent, shadowed);
+            if let Some(alt) = &s.alternate {
+                collect_hoisted_in_stmt(alt, shadowed);
+            }
+        }
+        Statement::ForStatement(s) => {
+            // `for (var x = …; …; …) { … }` — the var hoists.
+            if let Some(oxc_ast::ast::ForStatementInit::VariableDeclaration(decl)) = &s.init
+                && matches!(decl.kind, VariableDeclarationKind::Var)
+            {
+                for d in &decl.declarations {
+                    collect_pattern_idents(&d.id, shadowed);
+                }
+            }
+            collect_hoisted_in_stmt(&s.body, shadowed);
+        }
+        Statement::ForInStatement(s) => {
+            if let oxc_ast::ast::ForStatementLeft::VariableDeclaration(decl) = &s.left
+                && matches!(decl.kind, VariableDeclarationKind::Var)
+            {
+                for d in &decl.declarations {
+                    collect_pattern_idents(&d.id, shadowed);
+                }
+            }
+            collect_hoisted_in_stmt(&s.body, shadowed);
+        }
+        Statement::ForOfStatement(s) => {
+            if let oxc_ast::ast::ForStatementLeft::VariableDeclaration(decl) = &s.left
+                && matches!(decl.kind, VariableDeclarationKind::Var)
+            {
+                for d in &decl.declarations {
+                    collect_pattern_idents(&d.id, shadowed);
+                }
+            }
+            collect_hoisted_in_stmt(&s.body, shadowed);
+        }
+        Statement::WhileStatement(s) => collect_hoisted_in_stmt(&s.body, shadowed),
+        Statement::DoWhileStatement(s) => collect_hoisted_in_stmt(&s.body, shadowed),
+        Statement::SwitchStatement(s) => {
+            for case in &s.cases {
+                for stmt in &case.consequent {
+                    collect_hoisted_in_stmt(stmt, shadowed);
+                }
+            }
+        }
+        Statement::TryStatement(s) => {
+            for stmt in &s.block.body {
+                collect_hoisted_in_stmt(stmt, shadowed);
+            }
+            if let Some(handler) = &s.handler {
+                for stmt in &handler.body.body {
+                    collect_hoisted_in_stmt(stmt, shadowed);
+                }
+            }
+            if let Some(finalizer) = &s.finalizer {
+                for stmt in &finalizer.body {
+                    collect_hoisted_in_stmt(stmt, shadowed);
+                }
+            }
+        }
+        Statement::LabeledStatement(s) => collect_hoisted_in_stmt(&s.body, shadowed),
         _ => {}
     }
 }

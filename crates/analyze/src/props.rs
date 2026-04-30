@@ -1375,6 +1375,24 @@ fn scan_statement_in_source_order(
                                     literal_vars
                                         .insert(bid.name.to_string(), slit.value.to_string());
                                 }
+                                // Round-14 #2: register untyped
+                                // dispatcher bindings declared in
+                                // the for-init slot too. Pre-fix
+                                // only the top-level VarDecl arm
+                                // (line ~1227) registered them, so
+                                // `for (let d = createEventDispatcher();
+                                // …) { d('save', …) }` left `d`
+                                // out of `dispatcher_locals` and
+                                // the dispatched-name walk skipped
+                                // 'save'.
+                                if let BindingPattern::BindingIdentifier(bid) = &d.id
+                                    && let Expression::CallExpression(call) = d_init
+                                    && let Expression::Identifier(callee_id) = &call.callee
+                                    && ctor_locals.contains(callee_id.name.as_str())
+                                    && call.type_arguments.is_none()
+                                {
+                                    dispatcher_locals.insert(bid.name.to_string());
+                                }
                                 scan_expression_for_dispatched_names(
                                     d_init,
                                     dispatcher_locals,

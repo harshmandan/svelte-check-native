@@ -361,11 +361,49 @@ where
             collect_function_body_stmts(&s.object, &mut iife_stmts);
             walk_statement_descend(&s.body, f);
         }
-        // Leaf statements: BreakStatement, ContinueStatement, DebuggerStatement,
-        // EmptyStatement, ImportDeclaration, ExportAllDeclaration,
-        // ExportDefaultDeclaration, ClassDeclaration, TS*Declaration —
-        // no nested Statement / IIFE descent for the dispatcher walkers.
-        _ => {}
+        // Explicit no-op arms below: every Statement variant gets a
+        // line so a future oxc bump that adds a new variant fails to
+        // compile until handled (rustc warns
+        // `unreachable_patterns`/`non_exhaustive_omitted_patterns`
+        // when a variant exists without a match arm). This is the
+        // exhaustiveness-by-construction gate
+        // `notes/PARITY_TESTING_PLAN.md` P3 calls for — every
+        // dispatcher / slot-rewrite walker rides through this single
+        // descent surface, so a missed variant fails ONE place
+        // instead of seven.
+        //
+        // Bare statements: no nested Statement and no IIFE-bearing
+        // expressions to recover.
+        Statement::BreakStatement(_)
+        | Statement::ContinueStatement(_)
+        | Statement::DebuggerStatement(_)
+        | Statement::EmptyStatement(_) => {}
+        // Module declarations: ImportDeclaration is a leaf;
+        // ExportNamedDeclaration is handled above (Statement::Export
+        // NamedDeclaration arm); ExportAllDeclaration / ExportDefault
+        // Declaration / TSExportAssignment / TSNamespaceExport
+        // Declaration are leaves for our purposes (nothing dispatcher-
+        // adjacent can hide inside them in a Svelte component
+        // script).
+        Statement::ImportDeclaration(_)
+        | Statement::ExportAllDeclaration(_)
+        | Statement::ExportDefaultDeclaration(_)
+        | Statement::TSExportAssignment(_)
+        | Statement::TSNamespaceExportDeclaration(_) => {}
+        // ClassDeclaration: its body has its own scope; method bodies
+        // never declare top-level dispatchers in a Svelte component
+        // script. Static field initializers are skipped for the same
+        // reason `collect_function_body_stmts` stops at
+        // ClassExpression.
+        Statement::ClassDeclaration(_) => {}
+        // TS-only declarations: pure type-system constructs, no
+        // runtime expressions to scan.
+        Statement::TSTypeAliasDeclaration(_)
+        | Statement::TSInterfaceDeclaration(_)
+        | Statement::TSEnumDeclaration(_)
+        | Statement::TSModuleDeclaration(_)
+        | Statement::TSGlobalDeclaration(_)
+        | Statement::TSImportEqualsDeclaration(_) => {}
     }
     for s in iife_stmts {
         walk_statement_descend(s, f);

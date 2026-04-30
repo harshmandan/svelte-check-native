@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 20,
+            "column": 17,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-14 follow-up #4: switch the each-block slot-attr resolver's element-type projection from the inline `(typeof items extends Iterable<infer __svn_T> ? __svn_T : never)` to `__SvnEachItem<typeof items>`. The shim (`crates/typecheck/src/svelte_shims_core.d.ts:343`) distinguishes ArrayLike before falling back to Iterable, so for an ArrayLike-only items source (`{ length: N, [n]: U }` — no `Symbol.iterator`) the projected element type is `U` instead of collapsing to `never`. Producer here types `rows` as a non-iterable `ArrayLike<Row>` shape; pre-fix the slot-attr expression `row.id` projected to `never.id` = `never`, and the consumer's `let:doubled` would have resolved to `never` (silently assignable to anything, so wrong-shape uses pass without error). Post-fix `doubled` correctly resolves to `number`; `takesNumber(doubled)` passes and the deliberately-wrong `takesString(doubled)` correctly fires TS2345 (`Argument of type 'number' is not assignable to parameter of type 'string'`)."
+}

@@ -239,8 +239,8 @@ pub enum SlotAttrExpr {
     Literal(String),
     /// Resolved expression — analyze rewrote the user's
     /// scope-shadowed identifier to a scope-independent form (e.g.
-    /// `(typeof items extends Iterable<infer __svn_T> ? __svn_T : never)`
-    /// for an `{#each items as item}` reference). Two flavors:
+    /// `__SvnEachItem<typeof items>` for an `{#each items as item}`
+    /// reference). Two flavors:
     ///
     /// - `Value(s)` → emit splices `(s)` — for value expressions.
     /// - `Type(s)` → emit splices `undefined as any as (s)` — for
@@ -754,10 +754,17 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
                         //     becomes `any`, which is permissive but
                         //     parses cleanly; pre-fix produced a
                         //     parse-error like `typeof getRows()`).
+                        // Round-14 #4: route through the
+                        // `__SvnEachItem<T>` shim instead of an
+                        // inline `T extends Iterable<infer U> ? U
+                        // : never` projection. The shim has the
+                        // `0 extends 1 & T ? any` guard for
+                        // `any`-preservation and an `ArrayLike`
+                        // branch (so plain `{ length: N }` shapes
+                        // resolve too), matching upstream's
+                        // `__sveltets_2_each` distribution.
                         let items_ty = items_typeof_expr(items);
-                        let element_ty = format!(
-                            "({items_ty} extends Iterable<infer __svn_T> ? __svn_T : never)"
-                        );
+                        let element_ty = format!("__SvnEachItem<{items_ty}>");
                         let projected = match b.destructure_path.as_deref() {
                             Some(path) => project_destructure_path(&element_ty, path),
                             None => element_ty,
@@ -1212,9 +1219,7 @@ fn collect_slot_def(
                 {
                     entries.push(SlotAttr::Prop {
                         name: p.name.clone(),
-                        expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Type(
-                            "string".to_string(),
-                        )),
+                        expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Type("string".to_string())),
                     });
                 }
             }
@@ -1413,7 +1418,8 @@ fn collect_slot_def(
 /// arguments lose precision and fall to the unbound default.
 ///
 /// The fallback to `any` is conservative — element type via
-/// `Iterable<infer __svn_T>` then unwraps to `any`, accepting any
+/// `__SvnEachItem<any>` resolves to `any` (the shim's
+/// `0 extends 1 & T` guard short-circuits), accepting any
 /// consumer use without firing TS errors. Pre-fix native emitted
 /// raw `typeof <expr>` which fails to parse for non-typeof-able
 /// shapes (e.g. `typeof getRows()`).
@@ -1552,10 +1558,7 @@ fn default_typeof_expr(text: &str) -> Option<String> {
 /// expression in `Omit<…, sibling1 | sibling2 | …>`. Numeric `Key`
 /// segments stay quoted (TS treats `obj["0"]` and `obj[0]`
 /// interchangeably for tuple/array access).
-fn project_destructure_path(
-    root: &str,
-    path: &[crate::template_scope::DestructureSeg],
-) -> String {
+fn project_destructure_path(root: &str, path: &[crate::template_scope::DestructureSeg]) -> String {
     let mut current = root.to_string();
     for seg in path {
         match seg {

@@ -282,6 +282,15 @@ fn stmts_in_function_expr<'a, 'b>(expr: &'a Expression<'b>) -> Vec<&'a Statement
 }
 
 fn collect_function_body_stmts<'a, 'b>(expr: &'a Expression<'b>, out: &mut Vec<&'a Statement<'b>>) {
+    // Round-15 #2: mirror upstream's `ts.forEachChild` descent so
+    // patterns like `const handlers = { save: () =>
+    // dispatch('save') }` reach the rewrite walker. Pre-fix only
+    // direct Arrow / Function / Parenthesised / Call callee+args
+    // were pierced — every other expression form hid nested
+    // arrow/function bodies.
+    //
+    // Stop at `ClassExpression` / `JSXElement` / `JSXFragment` —
+    // they have their own scoping rules.
     match expr {
         Expression::ArrowFunctionExpression(arrow) => {
             for s in &arrow.body.statements {
@@ -295,6 +304,8 @@ fn collect_function_body_stmts<'a, 'b>(expr: &'a Expression<'b>, out: &mut Vec<&
                 }
             }
         }
+        Expression::ClassExpression(_) => {}
+        Expression::JSXElement(_) | Expression::JSXFragment(_) => {}
         Expression::ParenthesizedExpression(p) => {
             collect_function_body_stmts(&p.expression, out);
         }
@@ -305,6 +316,111 @@ fn collect_function_body_stmts<'a, 'b>(expr: &'a Expression<'b>, out: &mut Vec<&
                     collect_function_body_stmts(arg_expr, out);
                 }
             }
+        }
+        Expression::NewExpression(call) => {
+            collect_function_body_stmts(&call.callee, out);
+            for arg in &call.arguments {
+                if let Some(arg_expr) = arg.as_expression() {
+                    collect_function_body_stmts(arg_expr, out);
+                }
+            }
+        }
+        Expression::ConditionalExpression(c) => {
+            collect_function_body_stmts(&c.test, out);
+            collect_function_body_stmts(&c.consequent, out);
+            collect_function_body_stmts(&c.alternate, out);
+        }
+        Expression::LogicalExpression(b) => {
+            collect_function_body_stmts(&b.left, out);
+            collect_function_body_stmts(&b.right, out);
+        }
+        Expression::BinaryExpression(b) => {
+            collect_function_body_stmts(&b.left, out);
+            collect_function_body_stmts(&b.right, out);
+        }
+        Expression::UnaryExpression(u) => {
+            collect_function_body_stmts(&u.argument, out);
+        }
+        Expression::AwaitExpression(a) => {
+            collect_function_body_stmts(&a.argument, out);
+        }
+        Expression::YieldExpression(y) => {
+            if let Some(arg) = &y.argument {
+                collect_function_body_stmts(arg, out);
+            }
+        }
+        Expression::SequenceExpression(s) => {
+            for e in &s.expressions {
+                collect_function_body_stmts(e, out);
+            }
+        }
+        Expression::AssignmentExpression(a) => {
+            collect_function_body_stmts(&a.right, out);
+        }
+        Expression::ObjectExpression(o) => {
+            for prop in &o.properties {
+                match prop {
+                    oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) => {
+                        if p.computed
+                            && let Some(key_expr) = p.key.as_expression()
+                        {
+                            collect_function_body_stmts(key_expr, out);
+                        }
+                        collect_function_body_stmts(&p.value, out);
+                    }
+                    oxc_ast::ast::ObjectPropertyKind::SpreadProperty(s) => {
+                        collect_function_body_stmts(&s.argument, out);
+                    }
+                }
+            }
+        }
+        Expression::ArrayExpression(a) => {
+            for elem in &a.elements {
+                if let Some(e) = elem.as_expression() {
+                    collect_function_body_stmts(e, out);
+                } else if let oxc_ast::ast::ArrayExpressionElement::SpreadElement(s) = elem {
+                    collect_function_body_stmts(&s.argument, out);
+                }
+            }
+        }
+        Expression::TemplateLiteral(t) => {
+            for e in &t.expressions {
+                collect_function_body_stmts(e, out);
+            }
+        }
+        Expression::TaggedTemplateExpression(t) => {
+            collect_function_body_stmts(&t.tag, out);
+            for e in &t.quasi.expressions {
+                collect_function_body_stmts(e, out);
+            }
+        }
+        Expression::StaticMemberExpression(me) => {
+            collect_function_body_stmts(&me.object, out);
+        }
+        Expression::ComputedMemberExpression(me) => {
+            collect_function_body_stmts(&me.object, out);
+            collect_function_body_stmts(&me.expression, out);
+        }
+        Expression::PrivateFieldExpression(me) => {
+            collect_function_body_stmts(&me.object, out);
+        }
+        Expression::ImportExpression(i) => {
+            collect_function_body_stmts(&i.source, out);
+        }
+        Expression::TSAsExpression(t) => {
+            collect_function_body_stmts(&t.expression, out);
+        }
+        Expression::TSSatisfiesExpression(t) => {
+            collect_function_body_stmts(&t.expression, out);
+        }
+        Expression::TSTypeAssertion(t) => {
+            collect_function_body_stmts(&t.expression, out);
+        }
+        Expression::TSNonNullExpression(t) => {
+            collect_function_body_stmts(&t.expression, out);
+        }
+        Expression::TSInstantiationExpression(t) => {
+            collect_function_body_stmts(&t.expression, out);
         }
         _ => {}
     }

@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 14,
+            "column": 16,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-15 follow-up #2: `collect_function_body_stmts` (the helper backing every dispatcher walker's nested-function recursion) only pierced Arrow / FunctionExpression / ParenthesizedExpression / CallExpression (callee + args). Common shapes like `const handlers = { save: () => dispatch('save') }` (object-literal value) hid inner arrow bodies from the typed-slice collector, the dispatched-name walker, the inline-typed-members pass, the rewrite walker, and the `has_*` boolean walkers. Upstream's TS walker visits every child via `ts.forEachChild`; native now mirrors that breadth — object literals, arrays, conditionals, logical/binary ops, sequences, assignments, member access, awaits, new, template literals, tagged templates, TS-cast wrappers all recurse. Inner here puts a typed `createEventDispatcher<{save: {id: number}}>()` inside an object-literal value's arrow body. Pre-fix that typed slice was invisible to `find_dispatcher_event_type_sources`, the events surface stayed at the lax `[evt: string]: CustomEvent<any>` default, and any consumer handler passed silently. Post-fix the slice reaches the surface; Consumer's `(e: CustomEvent<string>) => void` is NOT assignable to `CustomEvent<{id: number}>` and TS2345 fires on `on:save`."
+}

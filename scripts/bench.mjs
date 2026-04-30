@@ -436,14 +436,20 @@ function upstreamSupportsTsgo(bin) {
     }
 }
 
-/// Parse a `--output machine-verbose` stream into a Set of
+/// Parse a `--output machine-verbose` stream into a sorted list of
 /// "file:line:col [code]" identifiers. machine-verbose lines look
 /// like `<ts> {"type":"ERROR", …, "filename":"…", "start":{"line":N,
 /// "character":N}, "code":2322, …}`. Both ours and upstream emit
 /// 0-indexed line/character per LSP convention; we render 1-indexed
 /// for human readability (matches the `--output machine` shape).
+///
+/// Round-Parity #3: keep duplicates. Pre-fix this used a Set, which
+/// collapsed two diagnostics at the same `(file, line, col, code)`
+/// to one — masking parity divergences where one side fires the
+/// same code twice (e.g. an overlay-emit pattern that fans out to
+/// two TS errors on the same source position) and the other once.
 function parseMachineVerboseDiagnostics(output) {
-    const ids = new Set();
+    const ids = [];
     for (const line of output.split('\n')) {
         const braceIdx = line.indexOf('{');
         if (braceIdx < 0) continue;
@@ -460,27 +466,49 @@ function parseMachineVerboseDiagnostics(output) {
         const lineNum = (obj.start?.line ?? 0) + 1;
         const colNum = (obj.start?.character ?? 0) + 1;
         const code = obj.code ?? '';
-        ids.add(`${file}:${lineNum}:${colNum} [${code}]`);
+        ids.push(`${file}:${lineNum}:${colNum} [${code}]`);
     }
-    return [...ids].sort();
+    return ids.sort();
+}
+
+/// Multiset subtraction `a \ b`: returns elements of `a` whose
+/// occurrences exceed `b`'s count. Pre-fix this used Set membership
+/// (`a.filter(x => !bSet.has(x))`), which collapsed multiplicity —
+/// `a = [d, d, d]`, `b = [d]` wrongly yielded `[]` instead of
+/// `[d, d]`. Round-Parity #3 fixes parity-detail to keep
+/// per-occurrence accounting end-to-end.
+function multisetSubtract(a, b) {
+    const counts = new Map();
+    for (const x of b) counts.set(x, (counts.get(x) ?? 0) + 1);
+    const out = [];
+    for (const x of a) {
+        const c = counts.get(x) ?? 0;
+        if (c === 0) out.push(x);
+        else counts.set(x, c - 1);
+    }
+    return out;
 }
 
 /// Compute the symmetric-difference pair (a−b, b−a) between two
-/// diagnostic-id sets, applying the per-direction allowlist. Returns
-/// {extraA, extraB, missingA, missingB}: extra* are diagnostics
-/// outside the allowlist (genuine drift); missing* are allowlist
-/// entries that no longer fire (allowlist staleness).
+/// diagnostic-id MULTISETS, applying the per-direction allowlist.
+/// Returns {extraA, extraB, missingA, missingB}: extra* are
+/// diagnostics outside the allowlist (genuine drift); missing* are
+/// allowlist entries that no longer fire (allowlist staleness).
+///
+/// Round-Parity #3: switched from Set-based `\` to multiset-aware
+/// subtraction so duplicates are accounted per occurrence. Stale
+/// allowlist entries (`missingA`/`missingB`) are reported by the
+/// caller AND cause `drift = true` — pre-fix they were printed but
+/// silently allowed to rot.
 function symmetricDiffWithAllowlist(a, b, aMinusBAllow, bMinusAAllow) {
-    const aSet = new Set(a);
-    const bSet = new Set(b);
-    const aMinusB = a.filter(x => !bSet.has(x));
-    const bMinusA = b.filter(x => !aSet.has(x));
-    const allowAB = new Set(aMinusBAllow ?? []);
-    const allowBA = new Set(bMinusAAllow ?? []);
-    const extraA = aMinusB.filter(x => !allowAB.has(x));
-    const extraB = bMinusA.filter(x => !allowBA.has(x));
-    const missingA = [...allowAB].filter(x => !aMinusB.includes(x));
-    const missingB = [...allowBA].filter(x => !bMinusA.includes(x));
+    const aMinusB = multisetSubtract(a, b);
+    const bMinusA = multisetSubtract(b, a);
+    const allowAB = aMinusBAllow ?? [];
+    const allowBA = bMinusAAllow ?? [];
+    const extraA = multisetSubtract(aMinusB, allowAB);
+    const extraB = multisetSubtract(bMinusA, allowBA);
+    const missingA = multisetSubtract(allowAB, aMinusB);
+    const missingB = multisetSubtract(allowBA, bMinusA);
     return { extraA, extraB, missingA, missingB };
 }
 
@@ -523,6 +551,14 @@ function reportDiagnosticDetail(rows) {
             }
         }
         if (missingA.length > 0 || missingB.length > 0) {
+            // Round-Parity #3: stale allowlist entries are drift.
+            // Pre-fix this only printed and let `drift` stay false,
+            // so an allowlist entry whose underlying divergence got
+            // fixed silently rotted in the JSON until the NEXT real
+            // regression made it through. Now staleness fails the
+            // gate the same way new drift does — the allowlist has
+            // to be pruned before the bench can stay green.
+            drift = true;
             console.error(`  STALE allowlist entries (no longer firing) for ${peerLabel}:`);
             for (const d of missingA) console.error(`    ${aKey}: ${d}`);
             for (const d of missingB) console.error(`    ${bKey}: ${d}`);

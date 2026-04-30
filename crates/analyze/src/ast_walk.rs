@@ -156,9 +156,81 @@ pub fn collect_function_body_stmts<'a, 'b>(
         Expression::TSInstantiationExpression(t) => {
             collect_function_body_stmts(&t.expression, out);
         }
-        // Literals, identifiers, this/super/meta, update/private-in
-        // — no nested function bodies to discover.
-        _ => {}
+        // Round-Parity #4a: enumerate every remaining Expression
+        // variant explicitly so the compiler enforces a decision when
+        // oxc adds new variants. Pre-fix the wildcard `_ => {}` arm
+        // would silently swallow new node kinds and the walker would
+        // miss any function bodies they hold (the same regression
+        // class P3 was meant to end).
+        //
+        // Optional chains: pierce into the underlying call/member.
+        Expression::ChainExpression(c) => {
+            collect_chain_element_stmts(&c.expression, out);
+        }
+        // PrivateIn (`#field in obj`): only the right side can hold
+        // a function body (e.g. an object-expression containing
+        // arrow values).
+        Expression::PrivateInExpression(p) => {
+            collect_function_body_stmts(&p.right, out);
+        }
+        // V8-intrinsic calls (`%FunctionCall(...)`): treat like a
+        // call — args can hold function bodies.
+        Expression::V8IntrinsicExpression(call) => {
+            for arg in &call.arguments {
+                if let Some(arg_expr) = arg.as_expression() {
+                    collect_function_body_stmts(arg_expr, out);
+                }
+            }
+        }
+        // Update expressions (`++x` / `x--`): operand is a
+        // SimpleAssignmentTarget — identifier-shaped, no function
+        // bodies to descend into.
+        Expression::UpdateExpression(_) => {}
+        // Pure-leaf expressions: no nested children to discover.
+        Expression::BooleanLiteral(_)
+        | Expression::NullLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::RegExpLiteral(_)
+        | Expression::StringLiteral(_)
+        | Expression::Identifier(_)
+        | Expression::MetaProperty(_)
+        | Expression::Super(_)
+        | Expression::ThisExpression(_) => {}
+    }
+}
+
+/// Round-Parity #4a: ChainExpression's `expression` is a
+/// `ChainElement` enum that inherits MemberExpression variants and
+/// adds CallExpression / TSNonNullExpression. Map each arm into the
+/// corresponding `Expression` descent.
+fn collect_chain_element_stmts<'a, 'b>(
+    elem: &'a oxc_ast::ast::ChainElement<'b>,
+    out: &mut Vec<&'a Statement<'b>>,
+) {
+    use oxc_ast::ast::ChainElement;
+    match elem {
+        ChainElement::CallExpression(call) => {
+            collect_function_body_stmts(&call.callee, out);
+            for arg in &call.arguments {
+                if let Some(arg_expr) = arg.as_expression() {
+                    collect_function_body_stmts(arg_expr, out);
+                }
+            }
+        }
+        ChainElement::TSNonNullExpression(t) => {
+            collect_function_body_stmts(&t.expression, out);
+        }
+        ChainElement::ComputedMemberExpression(me) => {
+            collect_function_body_stmts(&me.object, out);
+            collect_function_body_stmts(&me.expression, out);
+        }
+        ChainElement::StaticMemberExpression(me) => {
+            collect_function_body_stmts(&me.object, out);
+        }
+        ChainElement::PrivateFieldExpression(me) => {
+            collect_function_body_stmts(&me.object, out);
+        }
     }
 }
 

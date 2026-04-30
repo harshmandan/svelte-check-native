@@ -251,6 +251,25 @@ The committed bench script (`scripts/bench.mjs`) takes
 `--target <path>` or `$BENCH_TARGET` — no project name hardcoded
 so the scenario is reproducible against any workspace.
 
+**Per-diagnostic parity (`--diagnostic-detail`).** `bench.mjs --mode
+parity --diagnostic-detail` runs ours + upstream + upstream
+`--tsgo` with `--output machine-verbose`, parses every ERROR/
+WARNING line into `(file, line, col, code)` tuples, and prints
+the symmetric diff per pair. Per-bench allowlist lives at
+`bench/.parity-exceptions.json` (the only path under `bench/`
+that's tracked in git). Stale-allowlist entries (no longer firing)
+print as a warning so the file decays toward zero.
+
+**SvelteKit test apps as differential targets.**
+`scripts/bootstrap-kit-bench.mjs` clones `sveltejs/kit` shallowly
+into `bench/_kit/` (dev-local — `bench/*` stays gitignored) and
+runs `pnpm install` at the monorepo root. Each app under
+`packages/kit/test/apps/` then works as a `bench.mjs --target`
+arg. Use this to lock per-diagnostic parity against
+framework-author-specific edge cases (`amp`, `dev-only`, `embed`)
+that the real-world bench fleet doesn't exercise. Pin the kit ref
+via `KIT_REF=<sha-or-tag> node scripts/bootstrap-kit-bench.mjs`.
+
 - **Spec-first.** Write the test (snapshot or fixture) before the
   implementation. Snapshot workflow: add `input.svelte`, run
   `UPDATE_SNAPSHOTS=1 cargo test --test emit_snapshots` once the

@@ -23,6 +23,24 @@ pub(crate) fn emit_style_directive(
     indent: &str,
 ) {
     match &d.value {
+        // Bare `style:foo` — upstream emits the slice `[indexOf(':')+1,
+        // style.end]` as the value reference. Mirror by lifting the
+        // name span from source so TS2345 reverse-maps to the directive
+        // name's char range.
+        None => {
+            let name_start =
+                d.range.start + svn_parser::DirectiveKind::Style.prefix_len_with_colon();
+            let name_end = name_start + d.name.len() as u32;
+            let Some(name) = source.get(name_start as usize..name_end as usize) else {
+                return;
+            };
+            let _ = write!(buf, "{indent}__svn_ensure_type(String, Number, ");
+            buf.append_with_source(name, svn_core::Range::new(name_start, name_end));
+            let _ = writeln!(buf, ");");
+        }
+        Some(svn_parser::DirectiveValue::Quoted(av)) => {
+            emit_template_literal(buf, source, av, indent);
+        }
         Some(svn_parser::DirectiveValue::Expression {
             expression_range, ..
         }) => {
@@ -42,10 +60,10 @@ pub(crate) fn emit_style_directive(
             buf.append_with_source(trimmed, svn_core::Range::new(start, end));
             let _ = writeln!(buf, ");");
         }
-        Some(svn_parser::DirectiveValue::Quoted(av)) => {
-            emit_template_literal(buf, source, av, indent);
-        }
-        _ => {}
+        // BindPair (`{getter, setter}`) is bind-only — not legal under
+        // `style:`, but enumerate it so the compiler enforces match
+        // exhaustiveness if a new DirectiveValue variant lands.
+        Some(svn_parser::DirectiveValue::BindPair { .. }) => {}
     }
 }
 

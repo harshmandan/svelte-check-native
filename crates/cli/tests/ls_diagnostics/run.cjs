@@ -131,7 +131,6 @@ const SKIP_LIST = {
     'slot-typechecks': 'overlay-counts: 2339/2367 missing',
     'snippet-js.v5': 'overlay-counts: 2345/2367 missing',
     'strictEvents': 'overlay-counts: 2345 missing',
-    'style-directive': 'overlay-counts: 2345 missing',
     'svelte-element': 'overlay-counts: 2353 missing, 2322/2741/7006 extra',
     'transition-options': 'overlay-counts: extra 2554',
 

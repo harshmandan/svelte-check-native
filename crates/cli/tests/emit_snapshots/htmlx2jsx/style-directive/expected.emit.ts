@@ -3,7 +3,8 @@
 async function $$render_96f6c695() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("div", {});         }
+        { svelteHTML.createElement("div", {});             __svn_ensure_type(String, Number, shorthand);
+        }
         { svelteHTML.createElement("div", {});             __svn_ensure_type(String, Number, value);
         }
         { svelteHTML.createElement("div", {});             __svn_ensure_type(String, Number, value);
@@ -24,7 +25,8 @@ async function $$render_96f6c695() {
         }
         { svelteHTML.createElement("div", {});             __svn_ensure_type(String, Number, `template${literal}`);
         }
-        { svelteHTML.createElement("div", {});         }
+        { svelteHTML.createElement("div", {});             __svn_ensure_type(String, Number, shorthand);
+        }
     });
     return { props: /** @type {any} */({}) };
 }

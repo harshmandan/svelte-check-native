@@ -350,6 +350,17 @@ impl DirectiveKind {
             Self::Let => "let",
         }
     }
+
+    /// Length of the prefix INCLUDING the trailing `:`. Used by emit
+    /// to synthesise a name-only range from a `Directive.range`
+    /// (which spans the full `prefix:NAME[={value}]` slice). Lets
+    /// diagnostics anchor on `NAME` rather than the directive
+    /// keyword — matching upstream's LS reverse-mapping for
+    /// component-bind sites (see R-Conv #1 in the parity plan).
+    pub fn prefix_len_with_colon(self) -> u32 {
+        // `as_str()` returns the keyword without the colon; +1 covers it.
+        self.as_str().len() as u32 + 1
+    }
 }
 
 /// The RHS of a directive after `=`.

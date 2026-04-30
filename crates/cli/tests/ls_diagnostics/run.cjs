@@ -135,10 +135,11 @@ const SKIP_LIST = {
     'svelte-element': 'overlay-counts: 2353 missing, 2322/2741/7006 extra',
     'transition-options': 'overlay-counts: extra 2554',
 
-    // bucket=position-drift (surfaced by R-Parity #1's strict-position match)
-    '$store-bind': 'position-drift: 2322 column anchor 11 vs upstream 16 on bind: sites (×2)',
-    'modulescript-boolean-not-assignable-to-string': 'position-drift: 2322 column 6 (decl) vs upstream 41 (operand) at line 0',
-    'script-boolean-not-assignable-to-string': 'position-drift: 2322 column 6 (decl) vs upstream 24 (operand) at line 0',
+    // bucket=position-drift was here. All three entries
+    // (`$store-bind`, `script-boolean-not-assignable-to-string`,
+    // `modulescript-boolean-not-assignable-to-string`) unblocked
+    // by R-Conv #1 (component-bind name anchor) and R-Conv #2
+    // (single-line script body TokenMapEntry).
 };
 
 let passed = 0;

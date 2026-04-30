@@ -2300,10 +2300,21 @@ fn collect_instantiation_inner(
                         | PropShape::TemplateLiteral { name, .. } => name != &target,
                         PropShape::Spread { .. } => true, // spreads pass through
                     });
+                    // R-Conv #1: anchor diagnostics on the property
+                    // NAME (`prop` in `bind:prop={…}`), not the
+                    // whole `bind:prop={…}` slice. Upstream's LS
+                    // reverse-mapping for component-bind sites
+                    // points at the name (`$store-bind` fixture's
+                    // expected col 16 = start of `prop`, not col 11
+                    // = start of `bind:`). Using `d.range` here
+                    // anchored 5 chars too early.
+                    let name_start = d.range.start + d.kind.prefix_len_with_colon();
+                    let name_end = name_start + target.len() as u32;
+                    let name_range = svn_core::Range::new(name_start, name_end);
                     props.push(PropShape::Expression {
                         name: target,
                         expr_range: *expression_range,
-                        attr_range: d.range,
+                        attr_range: name_range,
                     });
                     // Widen target if the expression is a simple
                     // identifier — emit's post-`new` trailer will write

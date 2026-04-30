@@ -265,6 +265,18 @@ fn emit_document_with_render_name(
             padded = format!("{}\n", module_script.content);
             &padded
         };
+        // R-Conv #2: same TokenMapEntry treatment as the instance
+        // script body — module-script content is verbatim from
+        // source, so push a 1:1 byte-range token-map so single-line
+        // scripts get column-accurate reverse-mapping.
+        let body_no_pad = module_script.content.trim_end_matches('\n');
+        let overlay_start = buf.raw_string_mut().len() as u32;
+        buf.push_token_map(TokenMapEntry {
+            overlay_byte_start: overlay_start,
+            overlay_byte_end: overlay_start + body_no_pad.len() as u32,
+            source_byte_start: module_script.content_range.start,
+            source_byte_end: module_script.content_range.start + body_no_pad.len() as u32,
+        });
         buf.append_verbatim(text, doc.source, module_script.content_range);
     }
 
@@ -1197,6 +1209,36 @@ fn emit_document_with_render_name(
                 padded = format!("{}\n", s.body);
                 &padded
             };
+            // R-Conv #2: when the body bytes equal the source slice
+            // 1:1 (no imports stripped, no store-prefix rewrites),
+            // push a TokenMapEntry covering the body's overlay span
+            // so position translation preserves the column offset
+            // inside the span. Without this, single-line scripts
+            // (`<script lang="ts">const asd: string = true;asd;
+            // </script>`) reverse-mapped to source col 6 because
+            // the line-map fallback returns the overlay column
+            // unchanged — but the script content sits at source col
+            // 18 / 35 (after `<script lang="ts">` /
+            // `<script context="module" lang="ts">`), not col 0.
+            //
+            // For rewritten bodies the byte offsets shift, so the
+            // token-map's 1:1 mapping would lie. Skip in that case
+            // and let the line-map approximation handle it.
+            let body_no_pad = s.body.trim_end_matches('\n');
+            if let Some(src_slice) = doc
+                .source
+                .get(instance.content_range.start as usize..instance.content_range.end as usize)
+                && src_slice.trim_end_matches('\n') == body_no_pad
+            {
+                let overlay_start = buf.raw_string_mut().len() as u32;
+                let overlay_end = overlay_start + body_no_pad.len() as u32;
+                buf.push_token_map(TokenMapEntry {
+                    overlay_byte_start: overlay_start,
+                    overlay_byte_end: overlay_end,
+                    source_byte_start: instance.content_range.start,
+                    source_byte_end: instance.content_range.start + body_no_pad.len() as u32,
+                });
+            }
             buf.append_verbatim(text, doc.source, instance.content_range);
         }
     }

@@ -47,7 +47,7 @@ pub mod template_scope;
 pub mod template_walker;
 pub mod void_refs;
 
-pub use ast_walk::{collect_function_body_stmts, walk_statement_descend};
+pub use ast_walk::{WalkNode, collect_function_body_stmts, walk_statement_descend};
 pub use jsdoc::{
     scan_jsdoc_props_typedef_keys, scan_jsdoc_typedef_name, should_synthesise_js_props,
 };

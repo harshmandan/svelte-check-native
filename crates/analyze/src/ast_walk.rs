@@ -8,7 +8,9 @@
 //! land its descent fix in two places. Keeping the recursion in one
 //! module means a new oxc enum variant only adds one match arm, not seven.
 
-use oxc_ast::ast::{Declaration, Expression, ForStatementInit, Statement};
+use oxc_ast::ast::{
+    Declaration, Expression, ForStatementInit, Statement, VariableDeclaration,
+};
 
 /// Walk an expression looking for nested function/arrow bodies — including
 /// those passed as call arguments (`setTimeout(() => { … })`) and reachable
@@ -162,6 +164,26 @@ pub fn collect_function_body_stmts<'a, 'b>(
     }
 }
 
+/// AST node yielded by [`walk_statement_descend`] — Statements plus
+/// the one non-Statement binding context dispatcher walkers need
+/// (`ForStatementInit::VariableDeclaration`, which oxc models
+/// separately from regular Statements).
+///
+/// Adding a new variant when a future walker needs to react to
+/// another binding context (e.g. catch-clause params, class-method
+/// bodies, JSX tag attributes) is a single match arm here plus the
+/// matching surfacing in [`walk_statement_descend`].
+#[derive(Copy, Clone)]
+pub enum WalkNode<'a, 'b> {
+    /// Any oxc `Statement<'b>` reached through control-flow descent.
+    Statement(&'a Statement<'b>),
+    /// A `VariableDeclaration` that lives inside a `for (let x = …;
+    /// …; …)` for-init slot. `ForStatementInit` isn't a `Statement`
+    /// in oxc's AST, so callers that want to register binders at
+    /// this position need a separate node type.
+    ForInitVarDecl(&'a VariableDeclaration<'b>),
+}
+
 /// Visit `stmt` and every Statement reachable through control-flow
 /// descent: block bodies, function bodies, if/else branches, loop
 /// bodies, switch cases, try/catch/finally blocks, labeled-statement
@@ -177,9 +199,12 @@ pub fn collect_function_body_stmts<'a, 'b>(
 /// observation (e.g. dispatcher-locals registration tracking
 /// declaration sites) get it for free.
 ///
-/// `f` is invoked on every Statement node — the closure decides which
-/// variants are interesting. Use `walk_program` for whole-program
-/// traversal.
+/// `f` is invoked on every node — the closure decides which variants
+/// are interesting. ForStatement init's VariableDeclaration arrives
+/// as `WalkNode::ForInitVarDecl` (separate from `Statement::Variable
+/// Declaration`) so callers can react to binders in that position
+/// without relying on `Statement::ForStatement` arms re-implementing
+/// the same logic.
 ///
 /// IMPORTANT: this is the descent surface every dispatcher /
 /// slot-attr-rewrite walker SHOULD use instead of hand-rolling
@@ -189,15 +214,15 @@ pub fn collect_function_body_stmts<'a, 'b>(
 /// helper keeps the enumeration in ONE place.
 pub fn walk_statement_descend<'a, 'b, F>(stmt: &'a Statement<'b>, f: &mut F)
 where
-    F: FnMut(&'a Statement<'b>),
+    F: FnMut(WalkNode<'a, 'b>),
 {
-    f(stmt);
+    f(WalkNode::Statement(stmt));
     walk_statement_children(stmt, f);
 }
 
 fn walk_statement_children<'a, 'b, F>(stmt: &'a Statement<'b>, f: &mut F)
 where
-    F: FnMut(&'a Statement<'b>),
+    F: FnMut(WalkNode<'a, 'b>),
 {
     let mut iife_stmts: Vec<&'a Statement<'b>> = Vec::new();
     match stmt {
@@ -256,6 +281,15 @@ where
             if let Some(init) = &s.init {
                 match init {
                     ForStatementInit::VariableDeclaration(decl) => {
+                        // Surface as ForInitVarDecl so binding-site
+                        // walkers (statement_collect_dispatcher_locals,
+                        // scan_var_decl_in_source_order) can register
+                        // dispatchers declared in the for-init slot
+                        // — `for (let d = createEventDispatcher();
+                        // …; …) { d('save', …) }` should still flow
+                        // through the same registration logic as a
+                        // top-level `const d = …`.
+                        f(WalkNode::ForInitVarDecl(decl.as_ref()));
                         for d in &decl.declarations {
                             if let Some(d_init) = &d.init {
                                 collect_function_body_stmts(d_init, &mut iife_stmts);

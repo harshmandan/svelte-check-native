@@ -824,11 +824,7 @@ fn statements_inside_function_expr<'a, 'b>(expr: &'a Expression<'b>) -> Vec<&'a 
 pub fn find_typed_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) -> Vec<String> {
     let ctor_locals = collect_ctor_locals(program);
     let mut out = Vec::new();
-    // Round-9 follow-up #3: walk recursively through function/block/
-    // if bodies so nested declarations land too.
-    for stmt in &program.body {
-        statement_collect_dispatcher_locals(stmt, &ctor_locals, true, &mut out);
-    }
+    collect_dispatcher_locals_via_walker(program, &ctor_locals, true, &mut out);
     out
 }
 
@@ -842,14 +838,8 @@ pub fn find_typed_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) ->
 /// event-name scan to actual dispatcher calls.
 pub fn find_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) -> Vec<String> {
     let ctor_locals = collect_ctor_locals(program);
-    // Round-9 follow-up #3: walk recursively (see typed-locals
-    // counterpart for the rationale). Every `const NAME =
-    // <ctor-local>(...)` binding contributes regardless of typed
-    // /untyped form.
     let mut out = Vec::new();
-    for stmt in &program.body {
-        statement_collect_dispatcher_locals(stmt, &ctor_locals, false, &mut out);
-    }
+    collect_dispatcher_locals_via_walker(program, &ctor_locals, false, &mut out);
     out
 }
 
@@ -872,13 +862,9 @@ pub fn find_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) -> Vec<S
 pub fn find_untyped_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) -> Vec<String> {
     let ctor_locals = collect_ctor_locals(program);
     let mut all: Vec<String> = Vec::new();
-    for stmt in &program.body {
-        statement_collect_dispatcher_locals(stmt, &ctor_locals, false, &mut all);
-    }
+    collect_dispatcher_locals_via_walker(program, &ctor_locals, false, &mut all);
     let mut typed: Vec<String> = Vec::new();
-    for stmt in &program.body {
-        statement_collect_dispatcher_locals(stmt, &ctor_locals, true, &mut typed);
-    }
+    collect_dispatcher_locals_via_walker(program, &ctor_locals, true, &mut typed);
     // A name has at least one untyped binding iff its multiset
     // count in `all` exceeds its count in `typed` — same name can
     // appear once typed AND once untyped under shadowing, and the
@@ -904,201 +890,59 @@ pub fn find_untyped_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) 
     out
 }
 
-/// Round-15 #1: shared body for `Statement::VariableDeclaration` /
-/// `ExportNamedDeclaration(Declaration::VariableDeclaration)` arms.
-fn collect_dispatcher_locals_from_var_decl(
-    decl: &oxc_ast::ast::VariableDeclaration<'_>,
+/// Walk every VariableDeclaration in `program` (including nested,
+/// in for-init slots, inside function bodies, in catch handlers,
+/// etc.) and append the names of `BindingIdentifier`s whose init is
+/// a `<ctor-local>(...)` dispatcher call. When `typed_only` is true,
+/// only declarators whose call has an explicit `<T>` type argument
+/// contribute.
+///
+/// Driven by [`crate::ast_walk::walk_statement_descend`] — every
+/// VariableDeclaration in the program reaches the closure once, no
+/// matter where the AST hides it (block bodies, loop init slots,
+/// switch case bodies, IIFEs, exported wrappers). Adding a new
+/// container means adding a single descent arm to `walk_statement_
+/// descend`, not 7 walker arms.
+fn collect_dispatcher_locals_via_walker(
+    program: &oxc_ast::ast::Program<'_>,
     ctor_locals: &std::collections::HashSet<String>,
     typed_only: bool,
     out: &mut Vec<String>,
 ) {
-    for d in &decl.declarations {
-        let Some(init) = &d.init else { continue };
-        if let Expression::CallExpression(call) = init
-            && let Expression::Identifier(id) = &call.callee
-            && ctor_locals.contains(id.name.as_str())
-            && (!typed_only || call.type_arguments.is_some())
-            && let BindingPattern::BindingIdentifier(bid) = &d.id
-        {
-            out.push(bid.name.to_string());
+    let mut handle_var_decl = |decl: &oxc_ast::ast::VariableDeclaration<'_>| {
+        for d in &decl.declarations {
+            let Some(init) = &d.init else { continue };
+            let Expression::CallExpression(call) = init else {
+                continue;
+            };
+            let Expression::Identifier(id) = &call.callee else {
+                continue;
+            };
+            if !ctor_locals.contains(id.name.as_str()) {
+                continue;
+            }
+            if typed_only && call.type_arguments.is_none() {
+                continue;
+            }
+            if let BindingPattern::BindingIdentifier(bid) = &d.id {
+                out.push(bid.name.to_string());
+            }
         }
-        // Round-10 follow-up #2: recurse into function/arrow
-        // expression bodies attached as initializers.
-        for s in statements_inside_function_expr(init) {
-            statement_collect_dispatcher_locals(s, ctor_locals, typed_only, out);
-        }
-    }
-}
-
-/// Walk a statement tree and collect `BindingIdentifier`s whose init
-/// is a `<ctor-local>(...)` dispatcher call. When `typed_only` is
-/// true, only collect declarators whose call has an explicit
-/// `<T>` type argument.
-fn statement_collect_dispatcher_locals(
-    stmt: &Statement<'_>,
-    ctor_locals: &std::collections::HashSet<String>,
-    typed_only: bool,
-    out: &mut Vec<String>,
-) {
-    match stmt {
-        Statement::VariableDeclaration(decl) => {
-            collect_dispatcher_locals_from_var_decl(decl, ctor_locals, typed_only, out);
-        }
-        Statement::FunctionDeclaration(fd) => {
-            if let Some(body) = &fd.body {
-                for s in &body.statements {
-                    statement_collect_dispatcher_locals(s, ctor_locals, typed_only, out);
+    };
+    for stmt in &program.body {
+        crate::ast_walk::walk_statement_descend(stmt, &mut |node| match node {
+            crate::ast_walk::WalkNode::Statement(Statement::VariableDeclaration(decl)) => {
+                handle_var_decl(decl);
+            }
+            crate::ast_walk::WalkNode::Statement(Statement::ExportNamedDeclaration(ed)) => {
+                if let Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) = &ed.declaration
+                {
+                    handle_var_decl(decl);
                 }
             }
-        }
-        // Round-15 #1: `export const x = createEventDispatcher(...)` /
-        // `export function ...` — same handling as the bare form.
-        Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
-            Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) => {
-                collect_dispatcher_locals_from_var_decl(decl, ctor_locals, typed_only, out);
-            }
-            Some(oxc_ast::ast::Declaration::FunctionDeclaration(fd)) => {
-                if let Some(body) = &fd.body {
-                    for s in &body.statements {
-                        statement_collect_dispatcher_locals(s, ctor_locals, typed_only, out);
-                    }
-                }
-            }
+            crate::ast_walk::WalkNode::ForInitVarDecl(decl) => handle_var_decl(decl),
             _ => {}
-        },
-        Statement::IfStatement(s) => {
-            // Round-14 #1: walk function-body stmts inside the if-test
-            // expression too — a dispatcher local can hide in an IIFE
-            // used as the test condition.
-            for s2 in statements_inside_function_expr(&s.test) {
-                statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
-            }
-            statement_collect_dispatcher_locals(&s.consequent, ctor_locals, typed_only, out);
-            if let Some(alt) = &s.alternate {
-                statement_collect_dispatcher_locals(alt, ctor_locals, typed_only, out);
-            }
-        }
-        Statement::BlockStatement(b) => {
-            for s in &b.body {
-                statement_collect_dispatcher_locals(s, ctor_locals, typed_only, out);
-            }
-        }
-        Statement::ExpressionStatement(es) => {
-            for s in statements_inside_function_expr(&es.expression) {
-                statement_collect_dispatcher_locals(s, ctor_locals, typed_only, out);
-            }
-        }
-        // Round-12 follow-up #4 / Round-13 follow-up #6: control-flow
-        // recursion including loop-headers and switch discriminants.
-        Statement::ForStatement(s) => {
-            if let Some(init) = &s.init {
-                use oxc_ast::ast::ForStatementInit;
-                match init {
-                    ForStatementInit::VariableDeclaration(decl) => {
-                        for d in &decl.declarations {
-                            let Some(d_init) = &d.init else { continue };
-                            if let Expression::CallExpression(call) = d_init
-                                && let Expression::Identifier(id) = &call.callee
-                                && ctor_locals.contains(id.name.as_str())
-                                && (!typed_only || call.type_arguments.is_some())
-                                && let BindingPattern::BindingIdentifier(bid) = &d.id
-                            {
-                                out.push(bid.name.to_string());
-                            }
-                            for s2 in statements_inside_function_expr(d_init) {
-                                statement_collect_dispatcher_locals(
-                                    s2,
-                                    ctor_locals,
-                                    typed_only,
-                                    out,
-                                );
-                            }
-                        }
-                    }
-                    other => {
-                        if let Some(expr) = other.as_expression() {
-                            for s2 in statements_inside_function_expr(expr) {
-                                statement_collect_dispatcher_locals(
-                                    s2,
-                                    ctor_locals,
-                                    typed_only,
-                                    out,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(test) = &s.test {
-                for s2 in statements_inside_function_expr(test) {
-                    statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
-                }
-            }
-            if let Some(update) = &s.update {
-                for s2 in statements_inside_function_expr(update) {
-                    statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
-                }
-            }
-            statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
-        }
-        Statement::ForInStatement(s) => {
-            for s2 in statements_inside_function_expr(&s.right) {
-                statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
-            }
-            statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
-        }
-        Statement::ForOfStatement(s) => {
-            for s2 in statements_inside_function_expr(&s.right) {
-                statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
-            }
-            statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
-        }
-        Statement::WhileStatement(s) => {
-            for s2 in statements_inside_function_expr(&s.test) {
-                statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
-            }
-            statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
-        }
-        Statement::DoWhileStatement(s) => {
-            statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
-            for s2 in statements_inside_function_expr(&s.test) {
-                statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
-            }
-        }
-        Statement::SwitchStatement(s) => {
-            for s2 in statements_inside_function_expr(&s.discriminant) {
-                statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
-            }
-            for case in &s.cases {
-                if let Some(test) = &case.test {
-                    for s2 in statements_inside_function_expr(test) {
-                        statement_collect_dispatcher_locals(s2, ctor_locals, typed_only, out);
-                    }
-                }
-                for stmt in &case.consequent {
-                    statement_collect_dispatcher_locals(stmt, ctor_locals, typed_only, out);
-                }
-            }
-        }
-        Statement::TryStatement(s) => {
-            for stmt in &s.block.body {
-                statement_collect_dispatcher_locals(stmt, ctor_locals, typed_only, out);
-            }
-            if let Some(handler) = &s.handler {
-                for stmt in &handler.body.body {
-                    statement_collect_dispatcher_locals(stmt, ctor_locals, typed_only, out);
-                }
-            }
-            if let Some(finalizer) = &s.finalizer {
-                for stmt in &finalizer.body {
-                    statement_collect_dispatcher_locals(stmt, ctor_locals, typed_only, out);
-                }
-            }
-        }
-        Statement::LabeledStatement(s) => {
-            statement_collect_dispatcher_locals(&s.body, ctor_locals, typed_only, out);
-        }
-        _ => {}
+        });
     }
 }
 
@@ -1876,11 +1720,22 @@ pub fn has_event_dispatcher_call(program: &oxc_ast::ast::Program<'_>) -> bool {
     let ctor_locals = collect_ctor_locals(program);
     let mut found = false;
     for stmt in &program.body {
-        crate::ast_walk::walk_statement_descend(stmt, &mut |s| {
+        crate::ast_walk::walk_statement_descend(stmt, &mut |node| {
             if found {
                 return;
             }
-            if statement_local_has_dispatcher_call(s, &ctor_locals) {
+            let exprs: Vec<&Expression<'_>> = match node {
+                crate::ast_walk::WalkNode::Statement(s) => statement_local_exprs(s),
+                crate::ast_walk::WalkNode::ForInitVarDecl(decl) => decl
+                    .declarations
+                    .iter()
+                    .filter_map(|d| d.init.as_ref())
+                    .collect(),
+            };
+            if exprs
+                .iter()
+                .any(|e| expression_has_dispatcher_call_local(e, &ctor_locals))
+            {
                 found = true;
             }
         });
@@ -1891,34 +1746,28 @@ pub fn has_event_dispatcher_call(program: &oxc_ast::ast::Program<'_>) -> bool {
     false
 }
 
-/// Local check: does THIS statement (NOT its descendants — that's the
-/// walker's job) directly hold a dispatcher-call expression? Returns
-/// true only when an expression on this statement (init / es-expr / etc.)
-/// itself contains a dispatcher call. The descent into nested function
-/// bodies / control-flow children is handled by `walk_statement_descend`,
-/// which surfaces every reachable statement back to the closure.
-fn statement_local_has_dispatcher_call(
-    stmt: &Statement<'_>,
-    ctor_locals: &std::collections::HashSet<String>,
-) -> bool {
+/// Surface the expressions that hang directly off `stmt` (init for a
+/// VariableDeclaration / ExportNamedDeclaration's wrapped VarDecl,
+/// the bare expression of an ExpressionStatement). The walker handles
+/// descent into nested function bodies / control-flow children
+/// separately, so this stays a non-recursive scan.
+fn statement_local_exprs<'a, 'b>(stmt: &'a Statement<'b>) -> Vec<&'a Expression<'b>> {
     match stmt {
         Statement::VariableDeclaration(decl) => decl
             .declarations
             .iter()
             .filter_map(|d| d.init.as_ref())
-            .any(|e| expression_has_dispatcher_call_local(e, ctor_locals)),
-        Statement::ExpressionStatement(es) => {
-            expression_has_dispatcher_call_local(&es.expression, ctor_locals)
-        }
+            .collect(),
+        Statement::ExpressionStatement(es) => vec![&es.expression],
         Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
             Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) => decl
                 .declarations
                 .iter()
                 .filter_map(|d| d.init.as_ref())
-                .any(|e| expression_has_dispatcher_call_local(e, ctor_locals)),
-            _ => false,
+                .collect(),
+            _ => Vec::new(),
         },
-        _ => false,
+        _ => Vec::new(),
     }
 }
 

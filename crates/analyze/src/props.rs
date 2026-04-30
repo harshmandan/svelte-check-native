@@ -764,9 +764,7 @@ fn statement_collect_typed_dispatcher_slices(
 /// (IIFE: `(() => { … })()`). Empty slice for everything else.
 /// Used by the dispatcher collectors to recurse into nested function
 /// bodies attached as variable initializers or wrapped as IIFEs.
-fn statements_inside_function_expr<'a, 'b>(
-    expr: &'a Expression<'b>,
-) -> Vec<&'a Statement<'b>> {
+fn statements_inside_function_expr<'a, 'b>(expr: &'a Expression<'b>) -> Vec<&'a Statement<'b>> {
     let mut out = Vec::new();
     collect_function_body_stmts(expr, &mut out);
     out
@@ -777,10 +775,7 @@ fn statements_inside_function_expr<'a, 'b>(
 /// (`setTimeout(() => { … })`). All recovered statements get
 /// flattened into `out` so each dispatcher walker can iterate
 /// uniformly.
-fn collect_function_body_stmts<'a, 'b>(
-    expr: &'a Expression<'b>,
-    out: &mut Vec<&'a Statement<'b>>,
-) {
+fn collect_function_body_stmts<'a, 'b>(expr: &'a Expression<'b>, out: &mut Vec<&'a Statement<'b>>) {
     match expr {
         Expression::ArrowFunctionExpression(arrow) => {
             for s in &arrow.body.statements {
@@ -870,9 +865,7 @@ pub fn find_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) -> Vec<S
 /// bindings with the same name are typed) — matching upstream's
 /// `eventDispatchers.some(d => !d.typing && d.name === call.name)`
 /// check.
-pub fn find_untyped_dispatcher_local_names(
-    program: &oxc_ast::ast::Program<'_>,
-) -> Vec<String> {
+pub fn find_untyped_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) -> Vec<String> {
     let ctor_locals = collect_ctor_locals(program);
     let mut all: Vec<String> = Vec::new();
     for stmt in &program.body {
@@ -886,8 +879,7 @@ pub fn find_untyped_dispatcher_local_names(
     // count in `all` exceeds its count in `typed` — same name can
     // appear once typed AND once untyped under shadowing, and the
     // untyped binding still makes the name "reachable" as untyped.
-    let mut counts_all: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut counts_all: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for n in &all {
         *counts_all.entry(n.clone()).or_default() += 1;
     }
@@ -1195,8 +1187,7 @@ fn scan_statement_in_source_order(
 ) {
     match stmt {
         Statement::VariableDeclaration(decl) => {
-            let is_const =
-                matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Const);
+            let is_const = matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Const);
             for d in &decl.declarations {
                 // Register the literal binding AND the untyped-
                 // dispatcher binding FIRST, then walk the init for
@@ -1243,7 +1234,7 @@ fn scan_statement_in_source_order(
                             literal_vars,
                             seen,
                             out,
-);
+                        );
                     }
                 }
             }
@@ -1264,7 +1255,7 @@ fn scan_statement_in_source_order(
                     literal_vars,
                     seen,
                     out,
-);
+                );
             }
         }
         Statement::FunctionDeclaration(fd) => {
@@ -1277,7 +1268,7 @@ fn scan_statement_in_source_order(
                         literal_vars,
                         seen,
                         out,
-);
+                    );
                 }
             }
         }
@@ -1289,7 +1280,7 @@ fn scan_statement_in_source_order(
                 literal_vars,
                 seen,
                 out,
-);
+            );
             if let Some(alt) = &s.alternate {
                 scan_statement_in_source_order(
                     alt,
@@ -1298,7 +1289,7 @@ fn scan_statement_in_source_order(
                     literal_vars,
                     seen,
                     out,
-);
+                );
             }
         }
         Statement::BlockStatement(b) => {
@@ -1310,7 +1301,7 @@ fn scan_statement_in_source_order(
                     literal_vars,
                     seen,
                     out,
-);
+                );
             }
         }
         Statement::ReturnStatement(rs) => {
@@ -1330,7 +1321,7 @@ fn scan_statement_in_source_order(
                         literal_vars,
                         seen,
                         out,
-);
+                    );
                 }
             }
         }
@@ -1370,7 +1361,7 @@ fn scan_statement_in_source_order(
                                         literal_vars,
                                         seen,
                                         out,
-);
+                                    );
                                 }
                             }
                         }
@@ -1392,7 +1383,7 @@ fn scan_statement_in_source_order(
                                     literal_vars,
                                     seen,
                                     out,
-);
+                                );
                             }
                         }
                     }
@@ -1414,7 +1405,7 @@ fn scan_statement_in_source_order(
                         literal_vars,
                         seen,
                         out,
-);
+                    );
                 }
             }
             if let Some(update) = &s.update {
@@ -1433,10 +1424,17 @@ fn scan_statement_in_source_order(
                         literal_vars,
                         seen,
                         out,
-);
+                    );
                 }
             }
-            scan_statement_in_source_order(&s.body, ctor_locals, dispatcher_locals, literal_vars, seen, out);
+            scan_statement_in_source_order(
+                &s.body,
+                ctor_locals,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
         }
         Statement::ForInStatement(s) => {
             scan_expression_for_dispatched_names(
@@ -1446,7 +1444,14 @@ fn scan_statement_in_source_order(
                 seen,
                 out,
             );
-            scan_statement_in_source_order(&s.body, ctor_locals, dispatcher_locals, literal_vars, seen, out);
+            scan_statement_in_source_order(
+                &s.body,
+                ctor_locals,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
         }
         Statement::ForOfStatement(s) => {
             scan_expression_for_dispatched_names(
@@ -1456,7 +1461,14 @@ fn scan_statement_in_source_order(
                 seen,
                 out,
             );
-            scan_statement_in_source_order(&s.body, ctor_locals, dispatcher_locals, literal_vars, seen, out);
+            scan_statement_in_source_order(
+                &s.body,
+                ctor_locals,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
         }
         Statement::WhileStatement(s) => {
             scan_expression_for_dispatched_names(
@@ -1466,10 +1478,24 @@ fn scan_statement_in_source_order(
                 seen,
                 out,
             );
-            scan_statement_in_source_order(&s.body, ctor_locals, dispatcher_locals, literal_vars, seen, out);
+            scan_statement_in_source_order(
+                &s.body,
+                ctor_locals,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
         }
         Statement::DoWhileStatement(s) => {
-            scan_statement_in_source_order(&s.body, ctor_locals, dispatcher_locals, literal_vars, seen, out);
+            scan_statement_in_source_order(
+                &s.body,
+                ctor_locals,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
             scan_expression_for_dispatched_names(
                 &s.test,
                 dispatcher_locals,
@@ -1504,13 +1530,20 @@ fn scan_statement_in_source_order(
                         literal_vars,
                         seen,
                         out,
-);
+                    );
                 }
             }
         }
         Statement::TryStatement(s) => {
             for stmt in &s.block.body {
-                scan_statement_in_source_order(stmt, ctor_locals, dispatcher_locals, literal_vars, seen, out);
+                scan_statement_in_source_order(
+                    stmt,
+                    ctor_locals,
+                    dispatcher_locals,
+                    literal_vars,
+                    seen,
+                    out,
+                );
             }
             if let Some(handler) = &s.handler {
                 for stmt in &handler.body.body {
@@ -1521,7 +1554,7 @@ fn scan_statement_in_source_order(
                         literal_vars,
                         seen,
                         out,
-);
+                    );
                 }
             }
             if let Some(finalizer) = &s.finalizer {
@@ -1533,12 +1566,19 @@ fn scan_statement_in_source_order(
                         literal_vars,
                         seen,
                         out,
-);
+                    );
                 }
             }
         }
         Statement::LabeledStatement(s) => {
-            scan_statement_in_source_order(&s.body, ctor_locals, dispatcher_locals, literal_vars, seen, out);
+            scan_statement_in_source_order(
+                &s.body,
+                ctor_locals,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
         }
         _ => {}
     }
@@ -1831,9 +1871,46 @@ pub fn collect_inline_typed_dispatcher_member_names(
     program: &oxc_ast::ast::Program<'_>,
 ) -> Vec<String> {
     let ctor_locals = collect_ctor_locals(program);
+    // Round-14 #6: mirror upstream's `getIdentifierValue` /
+    // `getVariableAtTopLevel` (`ComponentEvents.ts:319`) — computed
+    // property keys like `[EVENT]` resolve against top-level
+    // `const EVENT = 'literal'` declarations. We collect those
+    // bindings once and pass them down so member-name extraction
+    // sees the resolved literal.
+    let literal_vars = collect_top_level_string_const_literals(program);
     let mut out = Vec::new();
     for stmt in &program.body {
-        statement_collect_inline_typed_members(stmt, &ctor_locals, &mut out);
+        statement_collect_inline_typed_members(stmt, &ctor_locals, &literal_vars, &mut out);
+    }
+    out
+}
+
+/// Round-14 #6: walk the program's TOP-LEVEL `const NAME = 'literal'`
+/// bindings and return them as a name → value map. Mirrors upstream's
+/// `getVariableAtTopLevel` (`ComponentEvents.ts:339`) which only
+/// considers bindings at module scope when resolving computed
+/// property names. Locals declared inside functions / blocks are
+/// intentionally NOT walked — upstream doesn't see them either.
+fn collect_top_level_string_const_literals(
+    program: &oxc_ast::ast::Program<'_>,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for stmt in &program.body {
+        let Statement::VariableDeclaration(decl) = stmt else {
+            continue;
+        };
+        if !matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Const) {
+            continue;
+        }
+        for d in &decl.declarations {
+            let BindingPattern::BindingIdentifier(bid) = &d.id else {
+                continue;
+            };
+            let Some(Expression::StringLiteral(s)) = &d.init else {
+                continue;
+            };
+            out.insert(bid.name.to_string(), s.value.to_string());
+        }
     }
     out
 }
@@ -1841,6 +1918,7 @@ pub fn collect_inline_typed_dispatcher_member_names(
 fn statement_collect_inline_typed_members(
     stmt: &Statement<'_>,
     ctor_locals: &std::collections::HashSet<String>,
+    literal_vars: &std::collections::HashMap<String, String>,
     out: &mut Vec<String>,
 ) {
     // Round-10 follow-up #1: assigned VarDecl + recursion (mirrors
@@ -1852,35 +1930,35 @@ fn statement_collect_inline_typed_members(
                     continue;
                 }
                 let Some(init) = &d.init else { continue };
-                expression_collect_inline_typed_members(init, ctor_locals, out);
+                expression_collect_inline_typed_members(init, ctor_locals, literal_vars, out);
                 // Round-10 follow-up #2: recurse into function/arrow
                 // bodies used as initializers.
                 for s in statements_inside_function_expr(init) {
-                    statement_collect_inline_typed_members(s, ctor_locals, out);
+                    statement_collect_inline_typed_members(s, ctor_locals, literal_vars, out);
                 }
             }
         }
         Statement::FunctionDeclaration(fd) => {
             if let Some(body) = &fd.body {
                 for s in &body.statements {
-                    statement_collect_inline_typed_members(s, ctor_locals, out);
+                    statement_collect_inline_typed_members(s, ctor_locals, literal_vars, out);
                 }
             }
         }
         Statement::IfStatement(s) => {
-            statement_collect_inline_typed_members(&s.consequent, ctor_locals, out);
+            statement_collect_inline_typed_members(&s.consequent, ctor_locals, literal_vars, out);
             if let Some(alt) = &s.alternate {
-                statement_collect_inline_typed_members(alt, ctor_locals, out);
+                statement_collect_inline_typed_members(alt, ctor_locals, literal_vars, out);
             }
         }
         Statement::BlockStatement(b) => {
             for s in &b.body {
-                statement_collect_inline_typed_members(s, ctor_locals, out);
+                statement_collect_inline_typed_members(s, ctor_locals, literal_vars, out);
             }
         }
         Statement::ExpressionStatement(es) => {
             for s in statements_inside_function_expr(&es.expression) {
-                statement_collect_inline_typed_members(s, ctor_locals, out);
+                statement_collect_inline_typed_members(s, ctor_locals, literal_vars, out);
             }
         }
         // Round-12 #4 / Round-13 #6: control-flow recursion
@@ -1895,16 +1973,31 @@ fn statement_collect_inline_typed_members(
                                 continue;
                             }
                             let Some(d_init) = &d.init else { continue };
-                            expression_collect_inline_typed_members(d_init, ctor_locals, out);
+                            expression_collect_inline_typed_members(
+                                d_init,
+                                ctor_locals,
+                                literal_vars,
+                                out,
+                            );
                             for s2 in statements_inside_function_expr(d_init) {
-                                statement_collect_inline_typed_members(s2, ctor_locals, out);
+                                statement_collect_inline_typed_members(
+                                    s2,
+                                    ctor_locals,
+                                    literal_vars,
+                                    out,
+                                );
                             }
                         }
                     }
                     other => {
                         if let Some(expr) = other.as_expression() {
                             for s2 in statements_inside_function_expr(expr) {
-                                statement_collect_inline_typed_members(s2, ctor_locals, out);
+                                statement_collect_inline_typed_members(
+                                    s2,
+                                    ctor_locals,
+                                    literal_vars,
+                                    out,
+                                );
                             }
                         }
                     }
@@ -1912,72 +2005,72 @@ fn statement_collect_inline_typed_members(
             }
             if let Some(test) = &s.test {
                 for s2 in statements_inside_function_expr(test) {
-                    statement_collect_inline_typed_members(s2, ctor_locals, out);
+                    statement_collect_inline_typed_members(s2, ctor_locals, literal_vars, out);
                 }
             }
             if let Some(update) = &s.update {
                 for s2 in statements_inside_function_expr(update) {
-                    statement_collect_inline_typed_members(s2, ctor_locals, out);
+                    statement_collect_inline_typed_members(s2, ctor_locals, literal_vars, out);
                 }
             }
-            statement_collect_inline_typed_members(&s.body, ctor_locals, out);
+            statement_collect_inline_typed_members(&s.body, ctor_locals, literal_vars, out);
         }
         Statement::ForInStatement(s) => {
             for s2 in statements_inside_function_expr(&s.right) {
-                statement_collect_inline_typed_members(s2, ctor_locals, out);
+                statement_collect_inline_typed_members(s2, ctor_locals, literal_vars, out);
             }
-            statement_collect_inline_typed_members(&s.body, ctor_locals, out);
+            statement_collect_inline_typed_members(&s.body, ctor_locals, literal_vars, out);
         }
         Statement::ForOfStatement(s) => {
             for s2 in statements_inside_function_expr(&s.right) {
-                statement_collect_inline_typed_members(s2, ctor_locals, out);
+                statement_collect_inline_typed_members(s2, ctor_locals, literal_vars, out);
             }
-            statement_collect_inline_typed_members(&s.body, ctor_locals, out);
+            statement_collect_inline_typed_members(&s.body, ctor_locals, literal_vars, out);
         }
         Statement::WhileStatement(s) => {
             for s2 in statements_inside_function_expr(&s.test) {
-                statement_collect_inline_typed_members(s2, ctor_locals, out);
+                statement_collect_inline_typed_members(s2, ctor_locals, literal_vars, out);
             }
-            statement_collect_inline_typed_members(&s.body, ctor_locals, out);
+            statement_collect_inline_typed_members(&s.body, ctor_locals, literal_vars, out);
         }
         Statement::DoWhileStatement(s) => {
-            statement_collect_inline_typed_members(&s.body, ctor_locals, out);
+            statement_collect_inline_typed_members(&s.body, ctor_locals, literal_vars, out);
             for s2 in statements_inside_function_expr(&s.test) {
-                statement_collect_inline_typed_members(s2, ctor_locals, out);
+                statement_collect_inline_typed_members(s2, ctor_locals, literal_vars, out);
             }
         }
         Statement::SwitchStatement(s) => {
             for s2 in statements_inside_function_expr(&s.discriminant) {
-                statement_collect_inline_typed_members(s2, ctor_locals, out);
+                statement_collect_inline_typed_members(s2, ctor_locals, literal_vars, out);
             }
             for case in &s.cases {
                 if let Some(test) = &case.test {
                     for s2 in statements_inside_function_expr(test) {
-                        statement_collect_inline_typed_members(s2, ctor_locals, out);
+                        statement_collect_inline_typed_members(s2, ctor_locals, literal_vars, out);
                     }
                 }
                 for stmt in &case.consequent {
-                    statement_collect_inline_typed_members(stmt, ctor_locals, out);
+                    statement_collect_inline_typed_members(stmt, ctor_locals, literal_vars, out);
                 }
             }
         }
         Statement::TryStatement(s) => {
             for stmt in &s.block.body {
-                statement_collect_inline_typed_members(stmt, ctor_locals, out);
+                statement_collect_inline_typed_members(stmt, ctor_locals, literal_vars, out);
             }
             if let Some(handler) = &s.handler {
                 for stmt in &handler.body.body {
-                    statement_collect_inline_typed_members(stmt, ctor_locals, out);
+                    statement_collect_inline_typed_members(stmt, ctor_locals, literal_vars, out);
                 }
             }
             if let Some(finalizer) = &s.finalizer {
                 for stmt in &finalizer.body {
-                    statement_collect_inline_typed_members(stmt, ctor_locals, out);
+                    statement_collect_inline_typed_members(stmt, ctor_locals, literal_vars, out);
                 }
             }
         }
         Statement::LabeledStatement(s) => {
-            statement_collect_inline_typed_members(&s.body, ctor_locals, out);
+            statement_collect_inline_typed_members(&s.body, ctor_locals, literal_vars, out);
         }
         _ => {}
     }
@@ -1986,6 +2079,7 @@ fn statement_collect_inline_typed_members(
 fn expression_collect_inline_typed_members(
     expr: &Expression<'_>,
     ctor_locals: &std::collections::HashSet<String>,
+    literal_vars: &std::collections::HashMap<String, String>,
     out: &mut Vec<String>,
 ) {
     let Expression::CallExpression(call) = expr else {
@@ -2010,10 +2104,25 @@ fn expression_collect_inline_typed_members(
         let oxc_ast::ast::TSSignature::TSPropertySignature(prop) = member else {
             continue;
         };
-        let key_name = match &prop.key {
-            oxc_ast::ast::PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
-            oxc_ast::ast::PropertyKey::StringLiteral(s) => Some(s.value.to_string()),
-            _ => None,
+        // Round-14 #6: computed `[EVENT]` keys resolve against
+        // top-level `const EVENT = 'literal'`. A bare identifier
+        // with no top-level binding falls through (no name pushed)
+        // — upstream throws in that case; we silently skip so the
+        // duplicate-collapse logic doesn't see a phantom name.
+        let key_name = if prop.computed {
+            match &prop.key {
+                oxc_ast::ast::PropertyKey::StringLiteral(s) => Some(s.value.to_string()),
+                oxc_ast::ast::PropertyKey::Identifier(id) => {
+                    literal_vars.get(id.name.as_str()).cloned()
+                }
+                _ => None,
+            }
+        } else {
+            match &prop.key {
+                oxc_ast::ast::PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
+                oxc_ast::ast::PropertyKey::StringLiteral(s) => Some(s.value.to_string()),
+                _ => None,
+            }
         };
         if let Some(name) = key_name {
             out.push(name);
@@ -2089,16 +2198,18 @@ fn statement_has_inline_typed_dispatcher(
             let init_has = if let Some(init) = &s.init {
                 use oxc_ast::ast::ForStatementInit;
                 match init {
-                    ForStatementInit::VariableDeclaration(decl) => decl.declarations.iter().any(|d| {
-                        if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
-                            return false;
-                        }
-                        let Some(d_init) = &d.init else { return false };
-                        expression_has_inline_typed_dispatcher(d_init, ctor_locals)
-                            || statements_inside_function_expr(d_init)
-                                .iter()
-                                .any(|s2| statement_has_inline_typed_dispatcher(s2, ctor_locals))
-                    }),
+                    ForStatementInit::VariableDeclaration(decl) => {
+                        decl.declarations.iter().any(|d| {
+                            if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
+                                return false;
+                            }
+                            let Some(d_init) = &d.init else { return false };
+                            expression_has_inline_typed_dispatcher(d_init, ctor_locals)
+                                || statements_inside_function_expr(d_init).iter().any(|s2| {
+                                    statement_has_inline_typed_dispatcher(s2, ctor_locals)
+                                })
+                        })
+                    }
                     other => other.as_expression().is_some_and(|expr| {
                         statements_inside_function_expr(expr)
                             .iter()

@@ -47,8 +47,11 @@ Thumbs.db
 *.log
 
 # Local benchmark workspaces (cloned third-party repos used to dogfood
-# the binary against real-world codebases — never committed)
-bench/
+# the binary against real-world codebases — never committed). The
+# parity-exceptions allowlist is tracked metadata, not a workspace,
+# so it's an explicit re-include against the bench/* ignore.
+bench/*
+!bench/.parity-exceptions.json
 
 # Private working notes
 notes/

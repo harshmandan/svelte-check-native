@@ -1,0 +1,41 @@
+{
+  "_doc": [
+    "Per-bench allowlist for `node scripts/bench.mjs --diagnostic-detail`.",
+    "Each top-level key is the basename of a bench target (i.e. the",
+    "directory name under `bench/`, e.g. \"control-svelte-5\"). Each",
+    "value is a record of four directional symmetric-diff allowlists:",
+    "  ours_minus_upstream    — diagnostics ours fires that upstream",
+    "                            (non-tsgo) does not. Usually false",
+    "                            positives we know are wrong.",
+    "  upstream_minus_ours    — diagnostics upstream fires that ours",
+    "                            misses. Usually rules we haven't ported.",
+    "  ours_minus_tsgo        — same as ours_minus_upstream, but vs",
+    "                            `svelte-check --tsgo`.",
+    "  tsgo_minus_ours        — same as upstream_minus_ours, but vs",
+    "                            `svelte-check --tsgo`.",
+    "Each entry is the literal '<file>:<line>:<col> [<code>]' string",
+    "from the diff output — paste-from-stderr exactly. The runner",
+    "warns on stale entries (allowlisted but no longer firing) so",
+    "the file decays toward zero as we close gaps. Adding a new",
+    "entry requires a one-line justification in this _doc block",
+    "below — keep the file living, not stagnant.",
+    "",
+    "Populating this file: run `node scripts/bench.mjs --target",
+    "bench/<name> --mode parity --diagnostic-detail` against each",
+    "bench, eyeball the symmetric-diff output, and add the entries",
+    "you've already triaged as known/expected.",
+    "",
+    "Per-bench notes:",
+    "  - control-svelte-5: ours emits no svn-lint warnings on this",
+    "    workspace today (separate investigation). The 49",
+    "    upstream_minus_ours entries are svn-lint codes ours should",
+    "    fire too — track via 'fix svn-lint dispatch on this bench',",
+    "    not by allowlisting them. Left empty deliberately."
+  ],
+  "control-svelte-4": {
+    "ours_minus_upstream": [],
+    "upstream_minus_ours": [],
+    "ours_minus_tsgo": [],
+    "tsgo_minus_ours": []
+  }
+}

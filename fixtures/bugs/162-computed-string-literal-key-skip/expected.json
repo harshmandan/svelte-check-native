@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 16,
+            "column": 16,
+            "code": 2345
+        }
+    ],
+    "_note": "Round-15 follow-up #5: typed-dispatcher member keys of the form `['foo']: T` (computed StringLiteral) are not a valid event-key path upstream. `ComponentEvents.ts:319`'s `getName` accepts only Identifier, StringLiteral (non-computed), and ComputedPropertyName(Identifier)-resolved-via-`getIdentifierValue`; everything else throws. Native silently skips (we can't propagate user-script syntax errors), but pre-round-15 native accepted the computed-StringLiteral form as if it were the equivalent non-computed key — that produced a phantom event name in `collect_inline_typed_dispatcher_member_names` and the round-8 #5 duplicate-collapse pass treated it as a collision against the second typed dispatcher's `save: string`, routing 'save' through the untyped-override layer to `CustomEvent<any>`. Inner here pairs `<{ ['save']: boolean }>` with `<{ save: string }>`. Post-fix the computed form is skipped, no duplicate is detected, and the event surface keeps the second typed source's `CustomEvent<string>`. Consumer's `(e: CustomEvent<number>) => void` handler is NOT assignable to `CustomEvent<string>` — TS2322 fires on `on:save`. Pre-fix the duplicate collapsed everything to `CustomEvent<any>` and the file passed silently."
+}

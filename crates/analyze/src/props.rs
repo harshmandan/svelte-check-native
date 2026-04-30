@@ -2161,14 +2161,19 @@ fn expression_collect_inline_typed_members(
         let oxc_ast::ast::TSSignature::TSPropertySignature(prop) = member else {
             continue;
         };
-        // Round-14 #6: computed `[EVENT]` keys resolve against
-        // top-level `const EVENT = 'literal'`. A bare identifier
-        // with no top-level binding falls through (no name pushed)
-        // — upstream throws in that case; we silently skip so the
-        // duplicate-collapse logic doesn't see a phantom name.
+        // Round-14 #6 / Round-15 #5: computed `[EVENT]` keys resolve
+        // ONLY against a top-level `const EVENT = 'literal'`. Upstream's
+        // `getName` (`ComponentEvents.ts:319`) accepts computed names
+        // exclusively for the `ComputedPropertyName(Identifier)` case —
+        // computed string-literal `['foo']: T` and any other computed
+        // form throw. Native can't propagate user-script syntax errors,
+        // so the divergence is to NOT count those keys (silent skip
+        // instead of throw). Pre-round-15 #5 native accepted computed
+        // string-literal as if it were `'foo': T`; that gave us a
+        // phantom name in the duplicate-collapse pass that upstream
+        // doesn't see.
         let key_name = if prop.computed {
             match &prop.key {
-                oxc_ast::ast::PropertyKey::StringLiteral(s) => Some(s.value.to_string()),
                 oxc_ast::ast::PropertyKey::Identifier(id) => {
                     literal_vars.get(id.name.as_str()).cloned()
                 }

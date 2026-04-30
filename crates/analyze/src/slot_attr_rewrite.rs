@@ -505,19 +505,31 @@ fn walk_statement_for_value_rewrite(
             }
         }
         Statement::VariableDeclaration(decl) => {
+            // `let`/`const`/`var` introduce bindings that live until
+            // the end of the enclosing block (caller's snapshot/
+            // truncate handles the scope boundary). We push idents
+            // here without truncating — they're meant to leak forward
+            // within the same block so subsequent statements see the
+            // shadow.
             for d in &decl.declarations {
-                let before = shadowed.len();
                 collect_pattern_idents(&d.id, shadowed);
                 if let Some(init) = &d.init {
                     walk_value_expr(init, lookup, shadowed, edits, bail, false);
                 }
-                let _ = before;
             }
         }
         Statement::BlockStatement(b) => {
+            // Round-14 #5: snapshot/restore the shadow stack at block
+            // boundaries so `let`/`const` bindings declared inside
+            // don't leak to the enclosing scope. Pre-fix native
+            // pushed and never popped, so a template ident shadowed
+            // by a block-local with the same name remained "shadowed"
+            // for every statement after the block as well.
+            let before = shadowed.len();
             for s in &b.body {
                 walk_statement_for_value_rewrite(s, lookup, shadowed, edits, bail);
             }
+            shadowed.truncate(before);
         }
         Statement::IfStatement(s) => {
             walk_value_expr(&s.test, lookup, shadowed, edits, bail, false);
@@ -531,6 +543,11 @@ fn walk_statement_for_value_rewrite(
         // rewritten too. Pre-fix native bailed silently and the
         // identifiers leaked to module scope.
         Statement::ForStatement(s) => {
+            // Round-14 #5: scope the for-init bindings (`let i = 0`)
+            // to the for-statement; pre-fix they leaked to the
+            // enclosing block. Snapshot before, walk all parts,
+            // truncate on exit.
+            let before = shadowed.len();
             if let Some(init) = &s.init {
                 use oxc_ast::ast::ForStatementInit;
                 match init {
@@ -556,24 +573,40 @@ fn walk_statement_for_value_rewrite(
                 walk_value_expr(update, lookup, shadowed, edits, bail, false);
             }
             walk_statement_for_value_rewrite(&s.body, lookup, shadowed, edits, bail);
+            shadowed.truncate(before);
         }
         Statement::ForInStatement(s) => {
+            // Round-14 #5: same scope discipline as `ForStatement`.
+            // The `for (… in right)` left-binding (when present)
+            // shadows template locals only inside the body.
+            let before = shadowed.len();
             walk_value_expr(&s.right, lookup, shadowed, edits, bail, false);
             walk_statement_for_value_rewrite(&s.body, lookup, shadowed, edits, bail);
+            shadowed.truncate(before);
         }
         Statement::ForOfStatement(s) => {
+            let before = shadowed.len();
             walk_value_expr(&s.right, lookup, shadowed, edits, bail, false);
             walk_statement_for_value_rewrite(&s.body, lookup, shadowed, edits, bail);
+            shadowed.truncate(before);
         }
         Statement::WhileStatement(s) => {
+            let before = shadowed.len();
             walk_value_expr(&s.test, lookup, shadowed, edits, bail, false);
             walk_statement_for_value_rewrite(&s.body, lookup, shadowed, edits, bail);
+            shadowed.truncate(before);
         }
         Statement::DoWhileStatement(s) => {
+            let before = shadowed.len();
             walk_statement_for_value_rewrite(&s.body, lookup, shadowed, edits, bail);
             walk_value_expr(&s.test, lookup, shadowed, edits, bail, false);
+            shadowed.truncate(before);
         }
         Statement::SwitchStatement(s) => {
+            // Cases share a single block scope. Snapshot once around
+            // all cases so case-local `let`s don't leak to siblings
+            // of the switch.
+            let before = shadowed.len();
             walk_value_expr(&s.discriminant, lookup, shadowed, edits, bail, false);
             for case in &s.cases {
                 if let Some(test) = &case.test {
@@ -583,11 +616,14 @@ fn walk_statement_for_value_rewrite(
                     walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
                 }
             }
+            shadowed.truncate(before);
         }
         Statement::TryStatement(s) => {
+            let before_block = shadowed.len();
             for stmt in &s.block.body {
                 walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
             }
+            shadowed.truncate(before_block);
             if let Some(handler) = &s.handler {
                 let before = shadowed.len();
                 if let Some(param) = &handler.param {
@@ -599,9 +635,11 @@ fn walk_statement_for_value_rewrite(
                 shadowed.truncate(before);
             }
             if let Some(finalizer) = &s.finalizer {
+                let before = shadowed.len();
                 for stmt in &finalizer.body {
                     walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
                 }
+                shadowed.truncate(before);
             }
         }
         Statement::LabeledStatement(s) => {
@@ -630,10 +668,7 @@ fn walk_statement_for_value_rewrite(
 
 /// Collect leaf binding-identifier names from a pattern into
 /// `shadowed`. Used for arrow/function param scoping.
-fn collect_pattern_idents(
-    pat: &oxc_ast::ast::BindingPattern<'_>,
-    shadowed: &mut Vec<String>,
-) {
+fn collect_pattern_idents(pat: &oxc_ast::ast::BindingPattern<'_>, shadowed: &mut Vec<String>) {
     use oxc_ast::ast::BindingPattern;
     match pat {
         BindingPattern::BindingIdentifier(id) => {
@@ -765,8 +800,7 @@ mod tests {
 
     #[test]
     fn value_walker_call_with_shadowed_arg() {
-        let ValueRewrite::Rewritten(out) =
-            rewrite_slot_attr_expr_value("foo(item)", &r7_lookup)
+        let ValueRewrite::Rewritten(out) = rewrite_slot_attr_expr_value("foo(item)", &r7_lookup)
         else {
             panic!("expected rewrite");
         };
@@ -775,8 +809,7 @@ mod tests {
 
     #[test]
     fn value_walker_object_shorthand_expands() {
-        let ValueRewrite::Rewritten(out) =
-            rewrite_slot_attr_expr_value("{ item }", &r7_lookup)
+        let ValueRewrite::Rewritten(out) = rewrite_slot_attr_expr_value("{ item }", &r7_lookup)
         else {
             panic!("expected rewrite");
         };
@@ -786,8 +819,7 @@ mod tests {
     #[test]
     fn value_walker_object_key_skipped() {
         // `item` is the value here, not the key — gets rewritten.
-        let ValueRewrite::Rewritten(out) =
-            rewrite_slot_attr_expr_value("{ k: item }", &r7_lookup)
+        let ValueRewrite::Rewritten(out) = rewrite_slot_attr_expr_value("{ k: item }", &r7_lookup)
         else {
             panic!("expected rewrite");
         };
@@ -808,8 +840,7 @@ mod tests {
     fn value_walker_member_property_skipped() {
         // `foo` in `item.foo` is a property NAME, not an identifier
         // reference — must NOT be rewritten. `item` IS rewritten.
-        let ValueRewrite::Rewritten(out) =
-            rewrite_slot_attr_expr_value("item.foo", &r7_lookup)
+        let ValueRewrite::Rewritten(out) = rewrite_slot_attr_expr_value("item.foo", &r7_lookup)
         else {
             panic!("expected rewrite");
         };

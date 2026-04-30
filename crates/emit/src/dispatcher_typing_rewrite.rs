@@ -72,6 +72,34 @@ pub fn rewrite(content: &str, lang: ScriptLang) -> String {
 /// attached as VarDecl initializers / IIFE wrappers / call-arg
 /// callbacks. Mirrors the dispatcher walkers in
 /// `crates/analyze/src/props.rs`.
+/// Round-15 #1: shared body for the rewrite walker's
+/// `Statement::VariableDeclaration` /
+/// `ExportNamedDeclaration(Declaration::VariableDeclaration)` arms.
+fn collect_rewrite_insertions_from_var_decl(
+    decl: &oxc_ast::ast::VariableDeclaration<'_>,
+    ctor_locals: &[String],
+    out: &mut Vec<(usize, &'static str)>,
+) {
+    for declarator in &decl.declarations {
+        if !matches!(&declarator.id, BindingPattern::BindingIdentifier(_)) {
+            continue;
+        }
+        let Some(init) = &declarator.init else {
+            continue;
+        };
+        if let Expression::CallExpression(call) = init
+            && let Expression::Identifier(callee_id) = &call.callee
+            && ctor_locals.iter().any(|n| n == callee_id.name.as_str())
+            && call.type_arguments.is_none()
+        {
+            out.push((callee_id.span.end as usize, "<__SvnCustomEvents<$$Events>>"));
+        }
+        for s in stmts_in_function_expr(init) {
+            collect_rewrite_insertions(s, ctor_locals, out);
+        }
+    }
+}
+
 fn collect_rewrite_insertions(
     stmt: &Statement<'_>,
     ctor_locals: &[String],
@@ -79,24 +107,7 @@ fn collect_rewrite_insertions(
 ) {
     match stmt {
         Statement::VariableDeclaration(decl) => {
-            for declarator in &decl.declarations {
-                if !matches!(&declarator.id, BindingPattern::BindingIdentifier(_)) {
-                    continue;
-                }
-                let Some(init) = &declarator.init else {
-                    continue;
-                };
-                if let Expression::CallExpression(call) = init
-                    && let Expression::Identifier(callee_id) = &call.callee
-                    && ctor_locals.iter().any(|n| n == callee_id.name.as_str())
-                    && call.type_arguments.is_none()
-                {
-                    out.push((callee_id.span.end as usize, "<__SvnCustomEvents<$$Events>>"));
-                }
-                for s in stmts_in_function_expr(init) {
-                    collect_rewrite_insertions(s, ctor_locals, out);
-                }
-            }
+            collect_rewrite_insertions_from_var_decl(decl, ctor_locals, out);
         }
         Statement::FunctionDeclaration(fd) => {
             if let Some(body) = &fd.body {
@@ -105,6 +116,22 @@ fn collect_rewrite_insertions(
                 }
             }
         }
+        // Round-15 #1: `export const x = createEventDispatcher(...)` /
+        // `export function ...` — walk the inner decl identically to
+        // the bare form.
+        Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
+            Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) => {
+                collect_rewrite_insertions_from_var_decl(decl, ctor_locals, out);
+            }
+            Some(oxc_ast::ast::Declaration::FunctionDeclaration(fd)) => {
+                if let Some(body) = &fd.body {
+                    for s in &body.statements {
+                        collect_rewrite_insertions(s, ctor_locals, out);
+                    }
+                }
+            }
+            _ => {}
+        },
         Statement::IfStatement(s) => {
             // Round-14 #1: walk function-body stmts inside the if-test
             // expression too. An untyped dispatcher decl hidden in an

@@ -580,6 +580,35 @@ pub fn find_dispatcher_event_type_sources(
     out
 }
 
+/// Round-15 #1: shared body for `Statement::VariableDeclaration` /
+/// `ExportNamedDeclaration(Declaration::VariableDeclaration)` arms.
+/// Walks each declarator's init for an inline `<T>` type-arg slice
+/// and recurses through any function/arrow expression bodies the
+/// init contains.
+fn collect_typed_slices_from_var_decl(
+    decl: &oxc_ast::ast::VariableDeclaration<'_>,
+    source: &str,
+    ctor_locals: &std::collections::HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    for d in &decl.declarations {
+        if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
+            continue;
+        }
+        let Some(init) = &d.init else { continue };
+        if let Some(slice) = dispatcher_type_arg_slice(init, source, ctor_locals) {
+            out.push(slice);
+        }
+        // Round-10 follow-up #2: recurse into function/arrow
+        // expression bodies used as the variable's initializer.
+        // Common shape: `const setup = () => { const d =
+        // createEventDispatcher<{...}>() }`.
+        for s in statements_inside_function_expr(init) {
+            statement_collect_typed_dispatcher_slices(s, source, ctor_locals, out);
+        }
+    }
+}
+
 fn statement_collect_typed_dispatcher_slices(
     stmt: &Statement<'_>,
     source: &str,
@@ -588,22 +617,7 @@ fn statement_collect_typed_dispatcher_slices(
 ) {
     match stmt {
         Statement::VariableDeclaration(decl) => {
-            for d in &decl.declarations {
-                if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
-                    continue;
-                }
-                let Some(init) = &d.init else { continue };
-                if let Some(slice) = dispatcher_type_arg_slice(init, source, ctor_locals) {
-                    out.push(slice);
-                }
-                // Round-10 follow-up #2: recurse into function/arrow
-                // expression bodies used as the variable's initializer.
-                // Common shape: `const setup = () => { const d =
-                // createEventDispatcher<{...}>() }`.
-                for s in statements_inside_function_expr(init) {
-                    statement_collect_typed_dispatcher_slices(s, source, ctor_locals, out);
-                }
-            }
+            collect_typed_slices_from_var_decl(decl, source, ctor_locals, out);
         }
         Statement::FunctionDeclaration(fd) => {
             if let Some(body) = &fd.body {
@@ -612,6 +626,24 @@ fn statement_collect_typed_dispatcher_slices(
                 }
             }
         }
+        // Round-15 #1: `export const x = …` / `export function …` /
+        // wraps a Var/FnDecl in `ExportNamedDeclaration`. Upstream
+        // (`processInstanceScriptContent.ts:271`) visits every
+        // statement via `ts.forEachChild`, so the export wrapper
+        // doesn't hide the inner decl from the dispatcher pass.
+        Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
+            Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) => {
+                collect_typed_slices_from_var_decl(decl, source, ctor_locals, out);
+            }
+            Some(oxc_ast::ast::Declaration::FunctionDeclaration(fd)) => {
+                if let Some(body) = &fd.body {
+                    for s in &body.statements {
+                        statement_collect_typed_dispatcher_slices(s, source, ctor_locals, out);
+                    }
+                }
+            }
+            _ => {}
+        },
         Statement::IfStatement(s) => {
             // Round-14 #1: walk function-body stmts inside the if-test
             // expression too. `if ((() => { const d =
@@ -908,6 +940,32 @@ pub fn find_untyped_dispatcher_local_names(program: &oxc_ast::ast::Program<'_>) 
     out
 }
 
+/// Round-15 #1: shared body for `Statement::VariableDeclaration` /
+/// `ExportNamedDeclaration(Declaration::VariableDeclaration)` arms.
+fn collect_dispatcher_locals_from_var_decl(
+    decl: &oxc_ast::ast::VariableDeclaration<'_>,
+    ctor_locals: &std::collections::HashSet<String>,
+    typed_only: bool,
+    out: &mut Vec<String>,
+) {
+    for d in &decl.declarations {
+        let Some(init) = &d.init else { continue };
+        if let Expression::CallExpression(call) = init
+            && let Expression::Identifier(id) = &call.callee
+            && ctor_locals.contains(id.name.as_str())
+            && (!typed_only || call.type_arguments.is_some())
+            && let BindingPattern::BindingIdentifier(bid) = &d.id
+        {
+            out.push(bid.name.to_string());
+        }
+        // Round-10 follow-up #2: recurse into function/arrow
+        // expression bodies attached as initializers.
+        for s in statements_inside_function_expr(init) {
+            statement_collect_dispatcher_locals(s, ctor_locals, typed_only, out);
+        }
+    }
+}
+
 /// Walk a statement tree and collect `BindingIdentifier`s whose init
 /// is a `<ctor-local>(...)` dispatcher call. When `typed_only` is
 /// true, only collect declarators whose call has an explicit
@@ -920,22 +978,7 @@ fn statement_collect_dispatcher_locals(
 ) {
     match stmt {
         Statement::VariableDeclaration(decl) => {
-            for d in &decl.declarations {
-                let Some(init) = &d.init else { continue };
-                if let Expression::CallExpression(call) = init
-                    && let Expression::Identifier(id) = &call.callee
-                    && ctor_locals.contains(id.name.as_str())
-                    && (!typed_only || call.type_arguments.is_some())
-                    && let BindingPattern::BindingIdentifier(bid) = &d.id
-                {
-                    out.push(bid.name.to_string());
-                }
-                // Round-10 follow-up #2: recurse into function/arrow
-                // expression bodies attached as initializers.
-                for s in statements_inside_function_expr(init) {
-                    statement_collect_dispatcher_locals(s, ctor_locals, typed_only, out);
-                }
-            }
+            collect_dispatcher_locals_from_var_decl(decl, ctor_locals, typed_only, out);
         }
         Statement::FunctionDeclaration(fd) => {
             if let Some(body) = &fd.body {
@@ -944,6 +987,21 @@ fn statement_collect_dispatcher_locals(
                 }
             }
         }
+        // Round-15 #1: `export const x = createEventDispatcher(...)` /
+        // `export function ...` — same handling as the bare form.
+        Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
+            Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) => {
+                collect_dispatcher_locals_from_var_decl(decl, ctor_locals, typed_only, out);
+            }
+            Some(oxc_ast::ast::Declaration::FunctionDeclaration(fd)) => {
+                if let Some(body) = &fd.body {
+                    for s in &body.statements {
+                        statement_collect_dispatcher_locals(s, ctor_locals, typed_only, out);
+                    }
+                }
+            }
+            _ => {}
+        },
         Statement::IfStatement(s) => {
             // Round-14 #1: walk function-body stmts inside the if-test
             // expression too — a dispatcher local can hide in an IIFE
@@ -1185,6 +1243,64 @@ pub fn find_dispatched_event_names(program: &oxc_ast::ast::Program<'_>) -> Vec<S
     out
 }
 
+/// Round-15 #1: shared body for the source-order walker's
+/// `Statement::VariableDeclaration` /
+/// `ExportNamedDeclaration(Declaration::VariableDeclaration)` arms.
+/// Registers literal aliases AND untyped-dispatcher locals before
+/// walking the init for dispatched-name calls / nested function
+/// bodies (matches upstream's `processInstanceScriptContent.ts:271`
+/// visit-then-recurse ordering).
+fn scan_var_decl_in_source_order(
+    decl: &oxc_ast::ast::VariableDeclaration<'_>,
+    ctor_locals: &std::collections::HashSet<String>,
+    dispatcher_locals: &mut std::collections::HashSet<String>,
+    literal_vars: &mut std::collections::HashMap<String, String>,
+    seen: &mut std::collections::HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    for d in &decl.declarations {
+        // Round-15 #1: drop the const-only restriction.
+        // Upstream's `getVariableAtTopLevel` walks every
+        // VariableDeclaration regardless of kind, so
+        // `let EV = 'save'; dispatch(EV)` resolves the alias the
+        // same way as `const EV = 'save'`. The `let` form is
+        // technically reassignable, but upstream doesn't gate on
+        // that and we don't either.
+        if let BindingPattern::BindingIdentifier(bid) = &d.id
+            && let Some(Expression::StringLiteral(s)) = &d.init
+        {
+            literal_vars.insert(bid.name.to_string(), s.value.to_string());
+        }
+        // Round-13 follow-up #1: track untyped dispatcher locals
+        // incrementally. A forward call `dispatch('ready'); const
+        // dispatch = createEventDispatcher();` doesn't see
+        // `dispatch` in dispatcher_locals at the call site — so
+        // 'ready' doesn't register. Pre-fix native pre-collected
+        // every untyped dispatcher and accepted forward refs.
+        if let BindingPattern::BindingIdentifier(bid) = &d.id
+            && let Some(Expression::CallExpression(call)) = &d.init
+            && let Expression::Identifier(callee_id) = &call.callee
+            && ctor_locals.contains(callee_id.name.as_str())
+            && call.type_arguments.is_none()
+        {
+            dispatcher_locals.insert(bid.name.to_string());
+        }
+        if let Some(init) = &d.init {
+            scan_expression_for_dispatched_names(init, dispatcher_locals, literal_vars, seen, out);
+            for s in statements_inside_function_expr(init) {
+                scan_statement_in_source_order(
+                    s,
+                    ctor_locals,
+                    dispatcher_locals,
+                    literal_vars,
+                    seen,
+                    out,
+                );
+            }
+        }
+    }
+}
+
 /// Round-11 follow-up #2: single source-order walk. For each
 /// statement, populates literal-var bindings BEFORE descending
 /// into the init's expression scan (matches upstream's
@@ -1201,46 +1317,31 @@ fn scan_statement_in_source_order(
 ) {
     match stmt {
         Statement::VariableDeclaration(decl) => {
-            let is_const = matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Const);
-            for d in &decl.declarations {
-                // Register the literal binding AND the untyped-
-                // dispatcher binding FIRST, then walk the init for
-                // any nested calls/function bodies (so the newly-
-                // registered name is visible inside subsequent
-                // statements but NOT inside this declarator's own
-                // init — matches upstream's visit-then-recurse
-                // ordering in `processInstanceScriptContent.ts:271`).
-                if is_const
-                    && let BindingPattern::BindingIdentifier(bid) = &d.id
-                    && let Some(Expression::StringLiteral(s)) = &d.init
-                {
-                    literal_vars.insert(bid.name.to_string(), s.value.to_string());
-                }
-                // Round-13 follow-up #1: track untyped dispatcher
-                // locals incrementally. A forward call
-                // `dispatch('ready'); const dispatch =
-                // createEventDispatcher();` doesn't see `dispatch`
-                // in dispatcher_locals at the call site — so 'ready'
-                // doesn't register. Pre-fix native pre-collected
-                // every untyped dispatcher and accepted forward
-                // refs.
-                if let BindingPattern::BindingIdentifier(bid) = &d.id
-                    && let Some(Expression::CallExpression(call)) = &d.init
-                    && let Expression::Identifier(callee_id) = &call.callee
-                    && ctor_locals.contains(callee_id.name.as_str())
-                    && call.type_arguments.is_none()
-                {
-                    dispatcher_locals.insert(bid.name.to_string());
-                }
-                if let Some(init) = &d.init {
-                    scan_expression_for_dispatched_names(
-                        init,
-                        dispatcher_locals,
-                        literal_vars,
-                        seen,
-                        out,
-                    );
-                    for s in statements_inside_function_expr(init) {
+            scan_var_decl_in_source_order(
+                decl,
+                ctor_locals,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
+        }
+        // Round-15 #1: `export const x = …` / `export function …` —
+        // upstream walks the inner decl identically.
+        Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
+            Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) => {
+                scan_var_decl_in_source_order(
+                    decl,
+                    ctor_locals,
+                    dispatcher_locals,
+                    literal_vars,
+                    seen,
+                    out,
+                );
+            }
+            Some(oxc_ast::ast::Declaration::FunctionDeclaration(fd)) => {
+                if let Some(body) = &fd.body {
+                    for s in &body.statements {
                         scan_statement_in_source_order(
                             s,
                             ctor_locals,
@@ -1252,7 +1353,8 @@ fn scan_statement_in_source_order(
                     }
                 }
             }
-        }
+            _ => {}
+        },
         Statement::ExpressionStatement(es) => {
             scan_expression_for_dispatched_names(
                 &es.expression,
@@ -1832,6 +1934,23 @@ fn statement_has_dispatcher_call(
                 .iter()
                 .any(|s| statement_has_dispatcher_call(s, ctor_locals))
         }),
+        // Round-15 #1: `export const x = …` / `export function …` —
+        // upstream walks the inner decl identically.
+        Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
+            Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) => decl
+                .declarations
+                .iter()
+                .filter_map(|d| d.init.as_ref())
+                .any(|e| expression_has_dispatcher_call(e, ctor_locals)),
+            Some(oxc_ast::ast::Declaration::FunctionDeclaration(fd)) => {
+                fd.body.as_ref().is_some_and(|body| {
+                    body.statements
+                        .iter()
+                        .any(|s| statement_has_dispatcher_call(s, ctor_locals))
+                })
+            }
+            _ => false,
+        },
         Statement::IfStatement(s) => {
             // Round-14 #1: an IIFE in the if-test that calls a
             // dispatcher counts too.
@@ -1948,12 +2067,20 @@ fn collect_top_level_string_const_literals(
 ) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
     for stmt in &program.body {
-        let Statement::VariableDeclaration(decl) = stmt else {
-            continue;
+        // Round-15 #1: accept both bare `let/const/var x = '…'` and
+        // `export let/const/var x = '…'`. Upstream's
+        // `getVariableAtTopLevel` (`ComponentEvents.ts:339`) walks
+        // every top-level VariableDeclaration regardless of kind or
+        // `export` wrapping; native used to require const-only and
+        // skipped the export form entirely.
+        let decl = match stmt {
+            Statement::VariableDeclaration(decl) => decl.as_ref(),
+            Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
+                Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) => decl.as_ref(),
+                _ => continue,
+            },
+            _ => continue,
         };
-        if !matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Const) {
-            continue;
-        }
         for d in &decl.declarations {
             let BindingPattern::BindingIdentifier(bid) = &d.id else {
                 continue;
@@ -1967,6 +2094,29 @@ fn collect_top_level_string_const_literals(
     out
 }
 
+/// Round-15 #1: shared body for the inline-typed-members walker's
+/// `Statement::VariableDeclaration` /
+/// `ExportNamedDeclaration(Declaration::VariableDeclaration)` arms.
+fn collect_inline_typed_members_from_var_decl(
+    decl: &oxc_ast::ast::VariableDeclaration<'_>,
+    ctor_locals: &std::collections::HashSet<String>,
+    literal_vars: &std::collections::HashMap<String, String>,
+    out: &mut Vec<String>,
+) {
+    for d in &decl.declarations {
+        if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
+            continue;
+        }
+        let Some(init) = &d.init else { continue };
+        expression_collect_inline_typed_members(init, ctor_locals, literal_vars, out);
+        // Round-10 follow-up #2: recurse into function/arrow
+        // bodies used as initializers.
+        for s in statements_inside_function_expr(init) {
+            statement_collect_inline_typed_members(s, ctor_locals, literal_vars, out);
+        }
+    }
+}
+
 fn statement_collect_inline_typed_members(
     stmt: &Statement<'_>,
     ctor_locals: &std::collections::HashSet<String>,
@@ -1977,18 +2127,7 @@ fn statement_collect_inline_typed_members(
     // `statement_collect_typed_dispatcher_slices` from round-9 #3).
     match stmt {
         Statement::VariableDeclaration(decl) => {
-            for d in &decl.declarations {
-                if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
-                    continue;
-                }
-                let Some(init) = &d.init else { continue };
-                expression_collect_inline_typed_members(init, ctor_locals, literal_vars, out);
-                // Round-10 follow-up #2: recurse into function/arrow
-                // bodies used as initializers.
-                for s in statements_inside_function_expr(init) {
-                    statement_collect_inline_typed_members(s, ctor_locals, literal_vars, out);
-                }
-            }
+            collect_inline_typed_members_from_var_decl(decl, ctor_locals, literal_vars, out);
         }
         Statement::FunctionDeclaration(fd) => {
             if let Some(body) = &fd.body {
@@ -1997,6 +2136,21 @@ fn statement_collect_inline_typed_members(
                 }
             }
         }
+        // Round-15 #1: `export const x = …` / `export function …` —
+        // upstream walks the inner decl identically.
+        Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
+            Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) => {
+                collect_inline_typed_members_from_var_decl(decl, ctor_locals, literal_vars, out);
+            }
+            Some(oxc_ast::ast::Declaration::FunctionDeclaration(fd)) => {
+                if let Some(body) = &fd.body {
+                    for s in &body.statements {
+                        statement_collect_inline_typed_members(s, ctor_locals, literal_vars, out);
+                    }
+                }
+            }
+            _ => {}
+        },
         Statement::IfStatement(s) => {
             // Round-14 #1: walk function-body stmts inside the
             // if-test for typed dispatcher decls hidden in an IIFE.
@@ -2212,6 +2366,28 @@ pub fn has_inline_typed_dispatcher_members(program: &oxc_ast::ast::Program<'_>) 
         .any(|s| statement_has_inline_typed_dispatcher(s, &ctor_locals))
 }
 
+/// Round-15 #1: shared body for the inline-typed-dispatcher
+/// boolean walker's `Statement::VariableDeclaration` /
+/// `ExportNamedDeclaration(Declaration::VariableDeclaration)` arms.
+fn var_decl_has_inline_typed_dispatcher(
+    decl: &oxc_ast::ast::VariableDeclaration<'_>,
+    ctor_locals: &std::collections::HashSet<String>,
+) -> bool {
+    decl.declarations.iter().any(|d| {
+        if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
+            return false;
+        }
+        let Some(init) = &d.init else { return false };
+        if expression_has_inline_typed_dispatcher(init, ctor_locals) {
+            return true;
+        }
+        // Round-10 follow-up #2: recurse into function/arrow body.
+        statements_inside_function_expr(init)
+            .iter()
+            .any(|s| statement_has_inline_typed_dispatcher(s, ctor_locals))
+    })
+}
+
 fn statement_has_inline_typed_dispatcher(
     stmt: &Statement<'_>,
     ctor_locals: &std::collections::HashSet<String>,
@@ -2223,24 +2399,29 @@ fn statement_has_inline_typed_dispatcher(
     // make `events.hasEvents()` true; nested declarations under
     // function/block/if bodies should.
     match stmt {
-        Statement::VariableDeclaration(decl) => decl.declarations.iter().any(|d| {
-            if !matches!(&d.id, BindingPattern::BindingIdentifier(_)) {
-                return false;
-            }
-            let Some(init) = &d.init else { return false };
-            if expression_has_inline_typed_dispatcher(init, ctor_locals) {
-                return true;
-            }
-            // Round-10 follow-up #2: recurse into function/arrow body.
-            statements_inside_function_expr(init)
-                .iter()
-                .any(|s| statement_has_inline_typed_dispatcher(s, ctor_locals))
-        }),
+        Statement::VariableDeclaration(decl) => {
+            var_decl_has_inline_typed_dispatcher(decl, ctor_locals)
+        }
         Statement::FunctionDeclaration(fd) => fd.body.as_ref().is_some_and(|body| {
             body.statements
                 .iter()
                 .any(|s| statement_has_inline_typed_dispatcher(s, ctor_locals))
         }),
+        // Round-15 #1: `export const x = …` / `export function …` —
+        // upstream walks the inner decl identically.
+        Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
+            Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) => {
+                var_decl_has_inline_typed_dispatcher(decl, ctor_locals)
+            }
+            Some(oxc_ast::ast::Declaration::FunctionDeclaration(fd)) => {
+                fd.body.as_ref().is_some_and(|body| {
+                    body.statements
+                        .iter()
+                        .any(|s| statement_has_inline_typed_dispatcher(s, ctor_locals))
+                })
+            }
+            _ => false,
+        },
         Statement::IfStatement(s) => {
             // Round-14 #1: a typed dispatcher hidden in an IIFE used
             // as the if-test condition counts.

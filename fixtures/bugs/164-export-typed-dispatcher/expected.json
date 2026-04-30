@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Inner.svelte",
+            "line": 27,
+            "column": 20,
+            "code": 2353
+        }
+    ],
+    "_note": "Round-15 follow-up #1: every dispatcher walker matched only the bare `Statement::VariableDeclaration` and skipped the `Statement::ExportNamedDeclaration(Declaration::VariableDeclaration)` form. Upstream's `processInstanceScriptContent.ts:271` walks each statement via `ts.forEachChild`, so the export wrapper is invisible — an exported dispatcher is processed identically. For `dispatcher_typing_rewrite::collect_rewrite_insertions` specifically, pre-fix `export const d = createEventDispatcher()` stayed un-rewritten and internal `d('name', detail)` calls passed the lax `<{}>` inference silently. Post-fix every walker (analyze + rewrite) gets a `Statement::ExportNamedDeclaration` arm that delegates to the same VarDecl/FnDecl body as the bare form. Inner here exports an untyped dispatcher and dispatches the `$$Events`-declared `save` with `{wrong: 'shape'}` — post-fix the rewrite makes detail `{id: number}` and the wrong shape correctly fires TS2353."
+}

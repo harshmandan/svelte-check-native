@@ -58,8 +58,6 @@ use oxc_span::GetSpan;
 use smol_str::SmolStr;
 use svn_core::Range;
 
-use crate::ast_walk::collect_function_body_stmts;
-
 /// One destructured prop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PropInfo {
@@ -605,19 +603,6 @@ pub fn find_dispatcher_event_type_sources(
     out
 }
 
-/// Round-10 follow-up #2 / Round-11 follow-up #1: yield the body
-/// statements of any expression that wraps a function body —
-/// directly (Arrow/FunctionExpression), via parentheses
-/// (`(() => { … })`), or via an immediate call
-/// (IIFE: `(() => { … })()`). Empty slice for everything else.
-/// Used by the dispatcher collectors to recurse into nested function
-/// bodies attached as variable initializers or wrapped as IIFEs.
-fn statements_inside_function_expr<'a, 'b>(expr: &'a Expression<'b>) -> Vec<&'a Statement<'b>> {
-    let mut out = Vec::new();
-    collect_function_body_stmts(expr, &mut out);
-    out
-}
-
 /// Find the typed-dispatcher locals — the subset of
 /// `find_dispatcher_local_names` whose `createEventDispatcher`
 /// call was given an explicit `<T>` type argument.
@@ -844,507 +829,208 @@ pub fn find_dispatched_event_names(program: &oxc_ast::ast::Program<'_>) -> Vec<S
     let mut dispatcher_locals_seen: HashSet<String> = HashSet::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
+
+    let scan_var_decl = |decl: &oxc_ast::ast::VariableDeclaration<'_>,
+                         dispatcher_locals: &mut HashSet<String>,
+                         literal_vars: &mut HashMap<String, String>,
+                         seen: &mut HashSet<String>,
+                         out: &mut Vec<String>| {
+        for d in &decl.declarations {
+            // Round-15 #1: drop the const-only restriction.
+            // Upstream's `getVariableAtTopLevel` walks every
+            // VariableDeclaration regardless of kind, so
+            // `let EV = 'save'; dispatch(EV)` resolves the alias the
+            // same way as `const EV = 'save'`. The `let` form is
+            // technically reassignable, but upstream doesn't gate on
+            // that and we don't either.
+            if let BindingPattern::BindingIdentifier(bid) = &d.id
+                && let Some(Expression::StringLiteral(s)) = &d.init
+            {
+                literal_vars.insert(bid.name.to_string(), s.value.to_string());
+            }
+            // Round-13 follow-up #1: track untyped dispatcher locals
+            // incrementally. A forward call `dispatch('ready'); const
+            // dispatch = createEventDispatcher();` doesn't see
+            // `dispatch` in dispatcher_locals at the call site — so
+            // 'ready' doesn't register. Pre-fix native pre-collected
+            // every untyped dispatcher and accepted forward refs.
+            if let BindingPattern::BindingIdentifier(bid) = &d.id
+                && let Some(Expression::CallExpression(call)) = &d.init
+                && let Expression::Identifier(callee_id) = &call.callee
+                && ctor_locals.contains(callee_id.name.as_str())
+                && call.type_arguments.is_none()
+            {
+                dispatcher_locals.insert(bid.name.to_string());
+            }
+            if let Some(init) = &d.init {
+                scan_expression_for_dispatched_names(
+                    init,
+                    dispatcher_locals,
+                    literal_vars,
+                    seen,
+                    out,
+                );
+            }
+        }
+    };
+
     for stmt in &program.body {
-        scan_statement_in_source_order(
-            stmt,
-            &ctor_locals,
-            &mut dispatcher_locals_seen,
-            &mut literal_vars,
-            &mut seen,
-            &mut out,
-        );
-    }
-    out
-}
-
-/// Round-15 #1: shared body for the source-order walker's
-/// `Statement::VariableDeclaration` /
-/// `ExportNamedDeclaration(Declaration::VariableDeclaration)` arms.
-/// Registers literal aliases AND untyped-dispatcher locals before
-/// walking the init for dispatched-name calls / nested function
-/// bodies (matches upstream's `processInstanceScriptContent.ts:271`
-/// visit-then-recurse ordering).
-fn scan_var_decl_in_source_order(
-    decl: &oxc_ast::ast::VariableDeclaration<'_>,
-    ctor_locals: &std::collections::HashSet<String>,
-    dispatcher_locals: &mut std::collections::HashSet<String>,
-    literal_vars: &mut std::collections::HashMap<String, String>,
-    seen: &mut std::collections::HashSet<String>,
-    out: &mut Vec<String>,
-) {
-    for d in &decl.declarations {
-        // Round-15 #1: drop the const-only restriction.
-        // Upstream's `getVariableAtTopLevel` walks every
-        // VariableDeclaration regardless of kind, so
-        // `let EV = 'save'; dispatch(EV)` resolves the alias the
-        // same way as `const EV = 'save'`. The `let` form is
-        // technically reassignable, but upstream doesn't gate on
-        // that and we don't either.
-        if let BindingPattern::BindingIdentifier(bid) = &d.id
-            && let Some(Expression::StringLiteral(s)) = &d.init
-        {
-            literal_vars.insert(bid.name.to_string(), s.value.to_string());
-        }
-        // Round-13 follow-up #1: track untyped dispatcher locals
-        // incrementally. A forward call `dispatch('ready'); const
-        // dispatch = createEventDispatcher();` doesn't see
-        // `dispatch` in dispatcher_locals at the call site — so
-        // 'ready' doesn't register. Pre-fix native pre-collected
-        // every untyped dispatcher and accepted forward refs.
-        if let BindingPattern::BindingIdentifier(bid) = &d.id
-            && let Some(Expression::CallExpression(call)) = &d.init
-            && let Expression::Identifier(callee_id) = &call.callee
-            && ctor_locals.contains(callee_id.name.as_str())
-            && call.type_arguments.is_none()
-        {
-            dispatcher_locals.insert(bid.name.to_string());
-        }
-        if let Some(init) = &d.init {
-            scan_expression_for_dispatched_names(init, dispatcher_locals, literal_vars, seen, out);
-            for s in statements_inside_function_expr(init) {
-                scan_statement_in_source_order(
-                    s,
-                    ctor_locals,
-                    dispatcher_locals,
-                    literal_vars,
-                    seen,
-                    out,
-                );
-            }
-        }
-    }
-}
-
-/// Round-11 follow-up #2: single source-order walk. For each
-/// statement, populates literal-var bindings BEFORE descending
-/// into the init's expression scan (matches upstream's
-/// VariableStatement visitor order). Forward references
-/// (`dispatch(EV); const EV = 'save'`) don't resolve because the
-/// call is visited before the binding is registered.
-fn scan_statement_in_source_order(
-    stmt: &Statement<'_>,
-    ctor_locals: &std::collections::HashSet<String>,
-    dispatcher_locals: &mut std::collections::HashSet<String>,
-    literal_vars: &mut std::collections::HashMap<String, String>,
-    seen: &mut std::collections::HashSet<String>,
-    out: &mut Vec<String>,
-) {
-    match stmt {
-        Statement::VariableDeclaration(decl) => {
-            scan_var_decl_in_source_order(
-                decl,
-                ctor_locals,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-        }
-        // Round-15 #1: `export const x = …` / `export function …` —
-        // upstream walks the inner decl identically.
-        Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
-            Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) => {
-                scan_var_decl_in_source_order(
+        crate::ast_walk::walk_statement_descend(stmt, &mut |node| match node {
+            crate::ast_walk::WalkNode::Statement(Statement::VariableDeclaration(decl)) => {
+                scan_var_decl(
                     decl,
-                    ctor_locals,
-                    dispatcher_locals,
-                    literal_vars,
-                    seen,
-                    out,
+                    &mut dispatcher_locals_seen,
+                    &mut literal_vars,
+                    &mut seen,
+                    &mut out,
                 );
             }
-            Some(oxc_ast::ast::Declaration::FunctionDeclaration(fd)) => {
-                if let Some(body) = &fd.body {
-                    for s in &body.statements {
-                        scan_statement_in_source_order(
-                            s,
-                            ctor_locals,
-                            dispatcher_locals,
-                            literal_vars,
-                            seen,
-                            out,
+            crate::ast_walk::WalkNode::Statement(Statement::ExportNamedDeclaration(ed)) => {
+                if let Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) = &ed.declaration
+                {
+                    scan_var_decl(
+                        decl,
+                        &mut dispatcher_locals_seen,
+                        &mut literal_vars,
+                        &mut seen,
+                        &mut out,
+                    );
+                }
+            }
+            crate::ast_walk::WalkNode::ForInitVarDecl(decl) => {
+                scan_var_decl(
+                    decl,
+                    &mut dispatcher_locals_seen,
+                    &mut literal_vars,
+                    &mut seen,
+                    &mut out,
+                );
+            }
+            crate::ast_walk::WalkNode::Statement(Statement::ExpressionStatement(es)) => {
+                scan_expression_for_dispatched_names(
+                    &es.expression,
+                    &dispatcher_locals_seen,
+                    &literal_vars,
+                    &mut seen,
+                    &mut out,
+                );
+            }
+            crate::ast_walk::WalkNode::Statement(Statement::ReturnStatement(rs)) => {
+                if let Some(arg) = &rs.argument {
+                    scan_expression_for_dispatched_names(
+                        arg,
+                        &dispatcher_locals_seen,
+                        &literal_vars,
+                        &mut seen,
+                        &mut out,
+                    );
+                }
+            }
+            // Loop / switch headers — `while (dispatch('e'))`, etc.
+            // The walker descends into IIFEs in these positions on its
+            // own (via collect_function_body_stmts). The closure handles
+            // the bare expression scan upstream's
+            // `processInstanceScriptContent.ts:271` does at each header.
+            crate::ast_walk::WalkNode::Statement(Statement::IfStatement(s)) => {
+                scan_expression_for_dispatched_names(
+                    &s.test,
+                    &dispatcher_locals_seen,
+                    &literal_vars,
+                    &mut seen,
+                    &mut out,
+                );
+            }
+            crate::ast_walk::WalkNode::Statement(Statement::ForStatement(s)) => {
+                if let Some(test) = &s.test {
+                    scan_expression_for_dispatched_names(
+                        test,
+                        &dispatcher_locals_seen,
+                        &literal_vars,
+                        &mut seen,
+                        &mut out,
+                    );
+                }
+                if let Some(update) = &s.update {
+                    scan_expression_for_dispatched_names(
+                        update,
+                        &dispatcher_locals_seen,
+                        &literal_vars,
+                        &mut seen,
+                        &mut out,
+                    );
+                }
+                if let Some(init) = &s.init
+                    && let Some(e) = init.as_expression()
+                {
+                    scan_expression_for_dispatched_names(
+                        e,
+                        &dispatcher_locals_seen,
+                        &literal_vars,
+                        &mut seen,
+                        &mut out,
+                    );
+                }
+            }
+            crate::ast_walk::WalkNode::Statement(Statement::ForInStatement(s)) => {
+                scan_expression_for_dispatched_names(
+                    &s.right,
+                    &dispatcher_locals_seen,
+                    &literal_vars,
+                    &mut seen,
+                    &mut out,
+                );
+            }
+            crate::ast_walk::WalkNode::Statement(Statement::ForOfStatement(s)) => {
+                scan_expression_for_dispatched_names(
+                    &s.right,
+                    &dispatcher_locals_seen,
+                    &literal_vars,
+                    &mut seen,
+                    &mut out,
+                );
+            }
+            crate::ast_walk::WalkNode::Statement(Statement::WhileStatement(s)) => {
+                scan_expression_for_dispatched_names(
+                    &s.test,
+                    &dispatcher_locals_seen,
+                    &literal_vars,
+                    &mut seen,
+                    &mut out,
+                );
+            }
+            crate::ast_walk::WalkNode::Statement(Statement::DoWhileStatement(s)) => {
+                scan_expression_for_dispatched_names(
+                    &s.test,
+                    &dispatcher_locals_seen,
+                    &literal_vars,
+                    &mut seen,
+                    &mut out,
+                );
+            }
+            crate::ast_walk::WalkNode::Statement(Statement::SwitchStatement(s)) => {
+                scan_expression_for_dispatched_names(
+                    &s.discriminant,
+                    &dispatcher_locals_seen,
+                    &literal_vars,
+                    &mut seen,
+                    &mut out,
+                );
+                for case in &s.cases {
+                    if let Some(test) = &case.test {
+                        scan_expression_for_dispatched_names(
+                            test,
+                            &dispatcher_locals_seen,
+                            &literal_vars,
+                            &mut seen,
+                            &mut out,
                         );
                     }
                 }
             }
             _ => {}
-        },
-        Statement::ExpressionStatement(es) => {
-            scan_expression_for_dispatched_names(
-                &es.expression,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-            for s in statements_inside_function_expr(&es.expression) {
-                scan_statement_in_source_order(
-                    s,
-                    ctor_locals,
-                    dispatcher_locals,
-                    literal_vars,
-                    seen,
-                    out,
-                );
-            }
-        }
-        Statement::FunctionDeclaration(fd) => {
-            if let Some(body) = &fd.body {
-                for s in &body.statements {
-                    scan_statement_in_source_order(
-                        s,
-                        ctor_locals,
-                        dispatcher_locals,
-                        literal_vars,
-                        seen,
-                        out,
-                    );
-                }
-            }
-        }
-        Statement::IfStatement(s) => {
-            // Round-14 #1: walk function-body stmts inside the if-test
-            // first so dispatcher decls / dispatched-name calls
-            // hidden in an IIFE used as the test condition register
-            // before consequent/alternate. Source-order matters: the
-            // test runs before either branch.
-            for s2 in statements_inside_function_expr(&s.test) {
-                scan_statement_in_source_order(
-                    s2,
-                    ctor_locals,
-                    dispatcher_locals,
-                    literal_vars,
-                    seen,
-                    out,
-                );
-            }
-            scan_statement_in_source_order(
-                &s.consequent,
-                ctor_locals,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-            if let Some(alt) = &s.alternate {
-                scan_statement_in_source_order(
-                    alt,
-                    ctor_locals,
-                    dispatcher_locals,
-                    literal_vars,
-                    seen,
-                    out,
-                );
-            }
-        }
-        Statement::BlockStatement(b) => {
-            for s in &b.body {
-                scan_statement_in_source_order(
-                    s,
-                    ctor_locals,
-                    dispatcher_locals,
-                    literal_vars,
-                    seen,
-                    out,
-                );
-            }
-        }
-        Statement::ReturnStatement(rs) => {
-            if let Some(arg) = &rs.argument {
-                scan_expression_for_dispatched_names(
-                    arg,
-                    dispatcher_locals,
-                    literal_vars,
-                    seen,
-                    out,
-                );
-                for s in statements_inside_function_expr(arg) {
-                    scan_statement_in_source_order(
-                        s,
-                        ctor_locals,
-                        dispatcher_locals,
-                        literal_vars,
-                        seen,
-                        out,
-                    );
-                }
-            }
-        }
-        // Round-12 #4 / Round-13 #6: control-flow recursion
-        // including loop headers and switch discriminants.
-        Statement::ForStatement(s) => {
-            if let Some(init) = &s.init {
-                use oxc_ast::ast::ForStatementInit;
-                match init {
-                    ForStatementInit::VariableDeclaration(decl) => {
-                        // Inline the VarDecl handling so literal_vars
-                        // and dispatcher names register in source
-                        // order with the for-body scan.
-                        let is_const =
-                            matches!(decl.kind, oxc_ast::ast::VariableDeclarationKind::Const);
-                        for d in &decl.declarations {
-                            if let Some(d_init) = &d.init {
-                                if is_const
-                                    && let BindingPattern::BindingIdentifier(bid) = &d.id
-                                    && let Expression::StringLiteral(slit) = d_init
-                                {
-                                    literal_vars
-                                        .insert(bid.name.to_string(), slit.value.to_string());
-                                }
-                                // Round-14 #2: register untyped
-                                // dispatcher bindings declared in
-                                // the for-init slot too. Pre-fix
-                                // only the top-level VarDecl arm
-                                // (line ~1227) registered them, so
-                                // `for (let d = createEventDispatcher();
-                                // …) { d('save', …) }` left `d`
-                                // out of `dispatcher_locals` and
-                                // the dispatched-name walk skipped
-                                // 'save'.
-                                if let BindingPattern::BindingIdentifier(bid) = &d.id
-                                    && let Expression::CallExpression(call) = d_init
-                                    && let Expression::Identifier(callee_id) = &call.callee
-                                    && ctor_locals.contains(callee_id.name.as_str())
-                                    && call.type_arguments.is_none()
-                                {
-                                    dispatcher_locals.insert(bid.name.to_string());
-                                }
-                                scan_expression_for_dispatched_names(
-                                    d_init,
-                                    dispatcher_locals,
-                                    literal_vars,
-                                    seen,
-                                    out,
-                                );
-                                for s2 in statements_inside_function_expr(d_init) {
-                                    scan_statement_in_source_order(
-                                        s2,
-                                        ctor_locals,
-                                        dispatcher_locals,
-                                        literal_vars,
-                                        seen,
-                                        out,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    other => {
-                        if let Some(expr) = other.as_expression() {
-                            scan_expression_for_dispatched_names(
-                                expr,
-                                dispatcher_locals,
-                                literal_vars,
-                                seen,
-                                out,
-                            );
-                            for s2 in statements_inside_function_expr(expr) {
-                                scan_statement_in_source_order(
-                                    s2,
-                                    ctor_locals,
-                                    dispatcher_locals,
-                                    literal_vars,
-                                    seen,
-                                    out,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(test) = &s.test {
-                scan_expression_for_dispatched_names(
-                    test,
-                    dispatcher_locals,
-                    literal_vars,
-                    seen,
-                    out,
-                );
-                for s2 in statements_inside_function_expr(test) {
-                    scan_statement_in_source_order(
-                        s2,
-                        ctor_locals,
-                        dispatcher_locals,
-                        literal_vars,
-                        seen,
-                        out,
-                    );
-                }
-            }
-            if let Some(update) = &s.update {
-                scan_expression_for_dispatched_names(
-                    update,
-                    dispatcher_locals,
-                    literal_vars,
-                    seen,
-                    out,
-                );
-                for s2 in statements_inside_function_expr(update) {
-                    scan_statement_in_source_order(
-                        s2,
-                        ctor_locals,
-                        dispatcher_locals,
-                        literal_vars,
-                        seen,
-                        out,
-                    );
-                }
-            }
-            scan_statement_in_source_order(
-                &s.body,
-                ctor_locals,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-        }
-        Statement::ForInStatement(s) => {
-            scan_expression_for_dispatched_names(
-                &s.right,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-            scan_statement_in_source_order(
-                &s.body,
-                ctor_locals,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-        }
-        Statement::ForOfStatement(s) => {
-            scan_expression_for_dispatched_names(
-                &s.right,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-            scan_statement_in_source_order(
-                &s.body,
-                ctor_locals,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-        }
-        Statement::WhileStatement(s) => {
-            scan_expression_for_dispatched_names(
-                &s.test,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-            scan_statement_in_source_order(
-                &s.body,
-                ctor_locals,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-        }
-        Statement::DoWhileStatement(s) => {
-            scan_statement_in_source_order(
-                &s.body,
-                ctor_locals,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-            scan_expression_for_dispatched_names(
-                &s.test,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-        }
-        Statement::SwitchStatement(s) => {
-            scan_expression_for_dispatched_names(
-                &s.discriminant,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-            for case in &s.cases {
-                if let Some(test) = &case.test {
-                    scan_expression_for_dispatched_names(
-                        test,
-                        dispatcher_locals,
-                        literal_vars,
-                        seen,
-                        out,
-                    );
-                }
-                for stmt in &case.consequent {
-                    scan_statement_in_source_order(
-                        stmt,
-                        ctor_locals,
-                        dispatcher_locals,
-                        literal_vars,
-                        seen,
-                        out,
-                    );
-                }
-            }
-        }
-        Statement::TryStatement(s) => {
-            for stmt in &s.block.body {
-                scan_statement_in_source_order(
-                    stmt,
-                    ctor_locals,
-                    dispatcher_locals,
-                    literal_vars,
-                    seen,
-                    out,
-                );
-            }
-            if let Some(handler) = &s.handler {
-                for stmt in &handler.body.body {
-                    scan_statement_in_source_order(
-                        stmt,
-                        ctor_locals,
-                        dispatcher_locals,
-                        literal_vars,
-                        seen,
-                        out,
-                    );
-                }
-            }
-            if let Some(finalizer) = &s.finalizer {
-                for stmt in &finalizer.body {
-                    scan_statement_in_source_order(
-                        stmt,
-                        ctor_locals,
-                        dispatcher_locals,
-                        literal_vars,
-                        seen,
-                        out,
-                    );
-                }
-            }
-        }
-        Statement::LabeledStatement(s) => {
-            scan_statement_in_source_order(
-                &s.body,
-                ctor_locals,
-                dispatcher_locals,
-                literal_vars,
-                seen,
-                out,
-            );
-        }
-        _ => {}
+        });
     }
+    out
 }
 
 fn scan_statement_for_dispatched_names(

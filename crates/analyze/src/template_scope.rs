@@ -105,6 +105,24 @@ pub struct BoundIdent {
     /// `Exclude`-only when the default's source can't be
     /// typeof-converted (complex expressions).
     pub default_value_range: Option<Range>,
+    /// Round-15 #4: source range of the OUTER destructure pattern
+    /// the binding was extracted from (e.g. for
+    /// `{#each items as { value = 42 }}` every binding under the
+    /// pattern carries the range of `{ value = 42 }`). Lets the
+    /// resolver emit upstream's `((PATTERN) => name)(value)` IIFE
+    /// shape (`slot.ts:117`) when a default expression is too
+    /// complex to convert to a type-level union — TS evaluates the
+    /// destructure with the real default, preserving type fidelity
+    /// for object/array/template-literal defaults that the
+    /// `Exclude<…, undefined> | <typeof default>` approximation
+    /// drops.
+    ///
+    /// Populated by `collect_pattern_bindings_from_slice` (every
+    /// each-block / await-then / await-catch / let-directive /
+    /// snippet pattern goes through it). `None` for bindings
+    /// produced by `collect_pattern_bindings` directly (already-
+    /// parsed `BindingPattern` with no enclosing source slice).
+    pub pattern_source_range: Option<Range>,
 }
 
 /// Segment of a destructure projection chain. Each segment maps to a
@@ -220,6 +238,7 @@ fn walk(
                 destructure_path,
                 has_default: false,
                 default_value_range: None,
+                pattern_source_range: None,
             });
         }
         BindingPattern::ObjectPattern(op) => {
@@ -272,9 +291,9 @@ fn walk(
                 //     leaf inherits parent path
                 let pushed_seg = if prop.computed {
                     match &prop.key {
-                        oxc_ast::ast::PropertyKey::Identifier(id) => Some(
-                            DestructureSeg::KeyTypeof(SmolStr::from(id.name.as_str())),
-                        ),
+                        oxc_ast::ast::PropertyKey::Identifier(id) => {
+                            Some(DestructureSeg::KeyTypeof(SmolStr::from(id.name.as_str())))
+                        }
                         oxc_ast::ast::PropertyKey::StringLiteral(s) => {
                             Some(DestructureSeg::Key(SmolStr::from(s.value.as_str())))
                         }
@@ -820,6 +839,15 @@ fn collect_pattern_bindings_from_slice(source: &str, range: Range) -> PatternBin
         out.bindings.extend(pb.bindings);
         out.default_value_ranges.extend(pb.default_value_ranges);
     }
+    // Round-15 #4: stamp the OUTER pattern's source range on every
+    // leaf binding so the resolver can emit upstream's
+    // `((PATTERN) => name)(value)` IIFE shape (`slot.ts:117`) when a
+    // default expression is too complex to convert to a type-level
+    // union. Every leaf of one destructure shares the same pattern
+    // source.
+    for b in &mut out.bindings {
+        b.pattern_source_range = Some(range);
+    }
     out
 }
 
@@ -887,6 +915,7 @@ fn collect_let_directive_bindings(
                             destructure_path: None,
                             has_default: false,
                             default_value_range: None,
+                            pattern_source_range: None,
                         },
                         &mut out,
                         &mut seen,
@@ -945,6 +974,7 @@ fn collect_let_directive_bindings(
                     destructure_path: None,
                     has_default: false,
                     default_value_range: None,
+                    pattern_source_range: None,
                 },
                 &mut out,
                 &mut seen,

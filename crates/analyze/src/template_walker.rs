@@ -765,20 +765,43 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
                         // `__sveltets_2_each` distribution.
                         let items_ty = items_typeof_expr(items);
                         let element_ty = format!("__SvnEachItem<{items_ty}>");
-                        let projected = match b.destructure_path.as_deref() {
-                            Some(path) => project_destructure_path(&element_ty, path),
-                            None => element_ty,
-                        };
-                        let default_t = b.default_value_range.and_then(|r| {
-                            self.source
-                                .get(r.start as usize..r.end as usize)
-                                .and_then(default_typeof_expr)
-                        });
-                        Some(ResolvedSlotExpr::Type(apply_default_narrow(
-                            projected,
-                            b.has_default,
-                            default_t,
-                        )))
+                        // Round-15 #4: when the binding sits under an
+                        // AssignmentPattern, switch to upstream's
+                        // `((PATTERN) => name)(value)` IIFE shape
+                        // (`slot.ts:117`). TypeScript evaluates the
+                        // destructure with the actual default
+                        // expression, so object / array / template-
+                        // literal defaults preserve precise types
+                        // instead of collapsing to `Exclude<…,
+                        // undefined>` (or worse, leaking interpolated
+                        // template syntax into a TS type position).
+                        if b.has_default
+                            && let Some(pat_range) = b.pattern_source_range
+                            && let Some(pat_source) = self
+                                .source
+                                .get(pat_range.start as usize..pat_range.end as usize)
+                        {
+                            Some(ResolvedSlotExpr::Value(format!(
+                                "(({pat}) => {leaf})(undefined as any as ({element_ty}))",
+                                pat = pat_source.trim(),
+                                leaf = b.name.as_str(),
+                            )))
+                        } else {
+                            let projected = match b.destructure_path.as_deref() {
+                                Some(path) => project_destructure_path(&element_ty, path),
+                                None => element_ty,
+                            };
+                            let default_t = b.default_value_range.and_then(|r| {
+                                self.source
+                                    .get(r.start as usize..r.end as usize)
+                                    .and_then(default_typeof_expr)
+                            });
+                            Some(ResolvedSlotExpr::Type(apply_default_narrow(
+                                projected,
+                                b.has_default,
+                                default_t,
+                            )))
+                        }
                     } else {
                         None
                     };
@@ -808,6 +831,21 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
                         // was a parse error.
                         let promise_ty = items_typeof_expr(p);
                         let unwrapped = format!("(Awaited<{promise_ty}>)");
+                        // Round-15 #4: switch to upstream's IIFE shape
+                        // when the binding has a default — see
+                        // each-block branch above for the rationale.
+                        if b.has_default
+                            && let Some(pat_range) = b.pattern_source_range
+                            && let Some(pat_source) = self
+                                .source
+                                .get(pat_range.start as usize..pat_range.end as usize)
+                        {
+                            return ResolvedSlotExpr::Value(format!(
+                                "(({pat}) => {leaf})(undefined as any as ({unwrapped}))",
+                                pat = pat_source.trim(),
+                                leaf = b.name.as_str(),
+                            ));
+                        }
                         let projected = match b.destructure_path.as_deref() {
                             Some(path) => project_destructure_path(&unwrapped, path),
                             None => unwrapped,
@@ -846,9 +884,10 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
                 // slot-attrs that referenced the leaves would have
                 // been DROPPED instead of typed. Drop the guard.
                 for b in bindings {
-                    self.shadow
-                        .entries
-                        .push((b.name.clone(), Some(ResolvedSlotExpr::Type("any".to_string()))));
+                    self.shadow.entries.push((
+                        b.name.clone(),
+                        Some(ResolvedSlotExpr::Type("any".to_string())),
+                    ));
                 }
             }
             crate::template_scope::ScopeKind::LetDirective => {

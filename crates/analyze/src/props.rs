@@ -233,7 +233,13 @@ impl PropsInfo {
         if type_text.is_none()
             && let Some(synth) = synthesize_props_type_from_export_let(program, source)
         {
-            // Shape 4: export-let fallback.
+            // Shape 4: export-let fallback. Only synthesises when the
+            // component is Svelte-4-style (no runes markers in source).
+            // Runes-mode components carry their props via `$props()` —
+            // `export let` is illegal in runes mode, and `export
+            // function NAME` is exposed via Exports, NOT props
+            // (`runes-only-export.v5`'s expected shape: `props:
+            // Record<string, never>`, `exports: { foo: typeof foo }`).
             type_text = Some(synth);
             props_source = PropsSource::SynthesisedFromExports;
         }
@@ -299,6 +305,7 @@ fn synthesize_props_type_from_export_let(
     program: &oxc_ast::ast::Program<'_>,
     source: &str,
 ) -> Option<String> {
+    let in_runes_mode = source_uses_runes(source);
     let mut parts: Vec<String> = Vec::new();
     for stmt in &program.body {
         let Statement::ExportNamedDeclaration(export_decl) = stmt else {
@@ -306,6 +313,33 @@ fn synthesize_props_type_from_export_let(
         };
         if let Some(Declaration::VariableDeclaration(var_decl)) = &export_decl.declaration {
             append_props_from_var_decl(var_decl, source, &mut parts);
+        }
+        // SVELTE-4-COMPAT: `export function NAME(...)` / `export class
+        // NAME` are bindable props in Svelte 4 — `<Foo
+        // bind:NAME={target}>` aliases the function/class reference
+        // through `target`. Mirrors upstream svelte2tsx's
+        // `addExport(node.name, false)` route in
+        // `handleExportFunctionOrClass`: both let-exports and
+        // function/class exports end up in the synthesized Props
+        // shape (`createReturnElements(names, …)` enumerates ALL
+        // exports for the non-`$$Props` path), with optional `?:`
+        // markers since the consumer may omit them.
+        //
+        // Runes mode is excluded: `runes-only-export.v5` ships
+        // `let x = $state(); export function foo()` with upstream's
+        // `props: Record<string, never>`, `exports: { foo: typeof foo }`
+        // — exports go through Exports, not props.
+        if !in_runes_mode {
+            if let Some(Declaration::FunctionDeclaration(f)) = &export_decl.declaration
+                && let Some(id) = &f.id
+            {
+                parts.push(format!("{}?: typeof {};", id.name.as_str(), id.name.as_str()));
+            }
+            if let Some(Declaration::ClassDeclaration(c)) = &export_decl.declaration
+                && let Some(id) = &c.id
+            {
+                parts.push(format!("{}?: typeof {};", id.name.as_str(), id.name.as_str()));
+            }
         }
         // `export { name as alias, ... }` specifier form. Svelte 4
         // components use this to expose a local under a JS reserved
@@ -330,6 +364,66 @@ fn synthesize_props_type_from_export_let(
     }
     out.push_str(" }");
     Some(out)
+}
+
+/// Detect runes mode by scanning the script source for any rune
+/// marker followed by `(`. Mirrors `crates/emit/src/svelte4/compat.rs`'s
+/// `is_runes_mode` heuristic at the source-text level. A rune
+/// reference (`$state`, `$derived`, `$effect`, `$props`, `$bindable`,
+/// `$inspect`, `$host`) followed by an optional `.method` chain and
+/// `(` flips the file into runes mode. The `(` requirement excludes
+/// the ambient store-binding pattern `$$props` (always two `$`s) and
+/// the bare identifier `$state` from a non-rune `import { state as
+/// $state } from …` aliasing.
+fn source_uses_runes(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    for marker in [
+        "$state",
+        "$derived",
+        "$effect",
+        "$props",
+        "$bindable",
+        "$inspect",
+        "$host",
+    ] {
+        let mbytes = marker.as_bytes();
+        let mut i = 0;
+        while let Some(rel) = bytes[i..].windows(mbytes.len()).position(|w| w == mbytes) {
+            let pos = i + rel;
+            // Reject `$$bindable` etc. — `$$` ambients aren't runes.
+            if pos.checked_sub(1).and_then(|p| bytes.get(p)).copied() == Some(b'$') {
+                i = pos + mbytes.len();
+                continue;
+            }
+            // Reject identifier suffix continuation (`$states`, `$propsX`).
+            let after_marker = pos + mbytes.len();
+            let mut after = after_marker;
+            if let Some(b) = bytes.get(after)
+                && (b.is_ascii_alphanumeric() || *b == b'_')
+            {
+                i = after;
+                continue;
+            }
+            // Walk past `.method` chains (`$state.raw`, `$derived.by`).
+            while bytes.get(after) == Some(&b'.') {
+                after += 1;
+                while after < bytes.len()
+                    && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_')
+                {
+                    after += 1;
+                }
+            }
+            // Skip whitespace then require `(`.
+            while after < bytes.len() && matches!(bytes[after], b' ' | b'\t') {
+                after += 1;
+            }
+            if bytes.get(after) == Some(&b'(') {
+                return true;
+            }
+            i = pos + mbytes.len();
+        }
+    }
+    false
 }
 
 /// Extract a single property from `export { local as alias }`. Looks up

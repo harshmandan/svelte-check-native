@@ -7,7 +7,7 @@ async function $$render_47fd19aa() {
         // template type-check body (incremental)
     });
     void Foo;
-    return { props: /** @type {any} */({}) };
+    return { props: /** @type {{ Foo?: typeof Foo; }} */({}) };
 }
 $$render_47fd19aa;
 /**

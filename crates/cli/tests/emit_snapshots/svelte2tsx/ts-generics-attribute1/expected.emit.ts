@@ -22,7 +22,7 @@ async function $$render_94f45523<A, B extends keyof A, C extends boolean>() {
     void a;
     void b;
     void getA;
-    return { props: undefined as any as ({ a: A; b: B; c: C; }), events: undefined as any as $$Events, slots: { 'default': { c: (c) } }, bindings: undefined as any as string, exports: undefined as any as ({ a: A; b: B; c: C; getA: typeof getA; }) };
+    return { props: undefined as any as ({ a: A; b: B; c: C; getA?: typeof getA; }), events: undefined as any as $$Events, slots: { 'default': { c: (c) } }, bindings: undefined as any as string, exports: undefined as any as ({ a: A; b: B; c: C; getA: typeof getA; }) };
 }
 $$render_94f45523;
 declare class __svn_Render_94f45523<A, B extends keyof A, C extends boolean> {
@@ -33,8 +33,8 @@ declare class __svn_Render_94f45523<A, B extends keyof A, C extends boolean> {
     exports(): Awaited<ReturnType<typeof $$render_94f45523<A, B, C>>>['exports'];
 }
 interface $$IsomorphicComponent {
-    new <A, B extends keyof A, C extends boolean>(options: import('svelte').ComponentConstructorOptions<Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }>): import('svelte').SvelteComponent<Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>, ReturnType<__svn_Render_94f45523<A, B, C>['events']>, ReturnType<__svn_Render_94f45523<A, B, C>['slots']>> & { $$bindings?: ReturnType<__svn_Render_94f45523<A, B, C>['bindings']> } & ReturnType<__svn_Render_94f45523<A, B, C>['exports']>;
-    <A, B extends keyof A, C extends boolean>(internal: unknown, props: Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }): ReturnType<__svn_Render_94f45523<A, B, C>['exports']> & { $set?: any; $on?: any };
+    new <A, B extends keyof A, C extends boolean>(options: import('svelte').ComponentConstructorOptions<Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<ReturnType<__svn_Render_94f45523<A, B, C>['props']>>> & { children?: any }>): import('svelte').SvelteComponent<Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<ReturnType<__svn_Render_94f45523<A, B, C>['props']>>>, ReturnType<__svn_Render_94f45523<A, B, C>['events']>, ReturnType<__svn_Render_94f45523<A, B, C>['slots']>> & { $$bindings?: ReturnType<__svn_Render_94f45523<A, B, C>['bindings']> } & ReturnType<__svn_Render_94f45523<A, B, C>['exports']>;
+    <A, B extends keyof A, C extends boolean>(internal: unknown, props: Partial<ReturnType<__svn_Render_94f45523<A, B, C>['props']> & __SvnSvelte4PropsWiden<ReturnType<__svn_Render_94f45523<A, B, C>['props']>>> & { children?: any }): ReturnType<__svn_Render_94f45523<A, B, C>['exports']> & { $set?: any; $on?: any };
     z_$$bindings?: ReturnType<__svn_Render_94f45523<any, any, any>['bindings']>;
 }
 const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: Awaited<ReturnType<typeof $$render_94f45523>>['events'] } = null as any;

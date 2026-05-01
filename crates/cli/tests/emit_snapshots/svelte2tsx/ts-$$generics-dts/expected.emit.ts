@@ -29,12 +29,12 @@ async function $$render_960ff640() {
     void a;
     void b;
     void getA;
-    return { props: undefined as any as ({ a: A; b: B; c: C; }), events: undefined as any as $$Events, slots: { 'default': { c: (c) } }, bindings: undefined as any as string, exports: undefined as any as ({ a: A; b: B; c: C; getA: typeof getA; }) };
+    return { props: undefined as any as ({ a: A; b: B; c: C; getA?: typeof getA; }), events: undefined as any as $$Events, slots: { 'default': { c: (c) } }, bindings: undefined as any as string, exports: undefined as any as ({ a: A; b: B; c: C; getA: typeof getA; }) };
 }
 $$render_960ff640;
 interface $$IsomorphicComponent {
-    new (options: import('svelte').ComponentConstructorOptions<Partial<Awaited<ReturnType<typeof $$render_960ff640>>['props'] & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }>): import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_960ff640>>['props'] & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>>, Awaited<ReturnType<typeof $$render_960ff640>>['events'], Awaited<ReturnType<typeof $$render_960ff640>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_960ff640>>['bindings'] } & Awaited<ReturnType<typeof $$render_960ff640>>['exports'];
-    (internal: unknown, props: Partial<Awaited<ReturnType<typeof $$render_960ff640>>['props'] & __SvnSvelte4PropsWiden<{ a: A; b: B; c: C; }>> & { children?: any }): Awaited<ReturnType<typeof $$render_960ff640>>['exports'] & { $set?: any; $on?: any };
+    new (options: import('svelte').ComponentConstructorOptions<Partial<Awaited<ReturnType<typeof $$render_960ff640>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_960ff640>>['props']>> & { children?: any }>): import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_960ff640>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_960ff640>>['props']>>, Awaited<ReturnType<typeof $$render_960ff640>>['events'], Awaited<ReturnType<typeof $$render_960ff640>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_960ff640>>['bindings'] } & Awaited<ReturnType<typeof $$render_960ff640>>['exports'];
+    (internal: unknown, props: Partial<Awaited<ReturnType<typeof $$render_960ff640>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_960ff640>>['props']>> & { children?: any }): Awaited<ReturnType<typeof $$render_960ff640>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_960ff640>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: Awaited<ReturnType<typeof $$render_960ff640>>['events'] } = null as any;

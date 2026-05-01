@@ -1470,7 +1470,14 @@ declare module 'svelte/transition' {
     export const fly: TransitionFn<any>;
     export const slide: TransitionFn<any>;
     export const scale: TransitionFn<any>;
-    export const draw: TransitionFn<any>;
+    // `draw` is path-only — its `getTotalLength()` use limits the
+    // node parameter to SVGGeometryElement-shaped DOM. Mirrors real
+    // svelte/transition's `draw` signature.
+    export const draw: (
+        node: SVGElement & { getTotalLength(): number },
+        params?: any,
+        options?: { direction?: 'in' | 'out' | 'both' },
+    ) => TransitionConfig | (() => TransitionConfig);
     export const crossfade: (params?: any) => [TransitionFn<any>, TransitionFn<any>];
 }
 

@@ -28,6 +28,7 @@
 
 use std::fmt::Write;
 
+use crate::TokenMapEntry;
 use crate::emit_buffer::EmitBuffer;
 
 /// Emit `transition:NAME` / `in:NAME` / `out:NAME` (with or without
@@ -66,18 +67,46 @@ pub(crate) fn emit_transition_directive(
             };
             buf.push_str(indent);
             buf.push_str("__svn_ensure_transition(");
+            let inner_overlay_start = buf.len() as u32;
             buf.append_with_source(name, name_range);
             let _ = write!(buf, "(__svn_map_element_tag({tag_arg}), (");
             buf.append_with_source(params, *expression_range);
-            buf.push_str(")));\n");
+            buf.push_str("))");
+            push_inner_call_token_map(buf, inner_overlay_start, name_range);
+            buf.push_str(");\n");
         }
         _ => {
             // Bare `transition:fade` (no params expression). Params
             // slot is optional in Svelte's transition signature.
             buf.push_str(indent);
             buf.push_str("__svn_ensure_transition(");
+            let inner_overlay_start = buf.len() as u32;
             buf.append_with_source(name, name_range);
-            let _ = writeln!(buf, "(__svn_map_element_tag({tag_arg})));");
+            let _ = write!(buf, "(__svn_map_element_tag({tag_arg}))");
+            push_inner_call_token_map(buf, inner_overlay_start, name_range);
+            let _ = writeln!(buf, ");");
         }
     }
+}
+
+/// Push a TokenMap entry covering the inner `NAME(__svn_map_element_tag('tag'), params)`
+/// call expression so a TS2345 fired on the `__svn_map_element_tag('tag')`
+/// argument (e.g. `draw` rejecting `HTMLDivElement` when its node param
+/// is `SVGElement & { getTotalLength(): number }`) reverse-maps onto the
+/// user's `transition:NAME` directive name span instead of disappearing
+/// into synth scaffolding. Without this the diagnostic lands at an
+/// overlay byte with no source-side coverage; the diagnostic mapper
+/// then drops it as "synthesized scaffolding noise".
+fn push_inner_call_token_map(
+    buf: &mut EmitBuffer,
+    inner_overlay_start: u32,
+    name_range: svn_core::Range,
+) {
+    let inner_overlay_end = buf.len() as u32;
+    buf.push_token_map(TokenMapEntry {
+        overlay_byte_start: inner_overlay_start,
+        overlay_byte_end: inner_overlay_end,
+        source_byte_start: name_range.start,
+        source_byte_end: name_range.end,
+    });
 }

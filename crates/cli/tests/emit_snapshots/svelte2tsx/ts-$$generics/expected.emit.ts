@@ -29,7 +29,7 @@ async function $$render_7c9879e0() {
     void a;
     void b;
     void getA;
-    return { props: undefined as any as ({ a: A; b: B; c: C; }), events: undefined as any as $$Events, slots: { 'default': { c: (c) } }, bindings: undefined as any as string, exports: undefined as any as ({ a: A; b: B; c: C; getA: () => void; }) };
+    return { props: undefined as any as ({ a: A; b: B; c: C; }), events: undefined as any as $$Events, slots: { 'default': { c: (c) } }, bindings: undefined as any as string, exports: undefined as any as ({ a: A; b: B; c: C; getA: typeof getA; }) };
 }
 $$render_7c9879e0;
 interface $$IsomorphicComponent {

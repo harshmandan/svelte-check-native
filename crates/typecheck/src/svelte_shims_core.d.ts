@@ -667,19 +667,33 @@ declare function __svn_ensure_component<
 >(
     c: T,
 ): NonNullable<
-    T extends { readonly __svn_events: infer E extends Record<string, any> } & import('svelte').Component<
-        infer P extends Record<string, any>,
-        infer X extends Record<string, any>,
-        infer B extends string
-    >
-        ? new (options: { target?: any; props?: P }) => import('svelte').SvelteComponent<
-              P,
-              E,
-              Record<string, any>
-          > &
-              X & { $$bindings?: B }
-        : T extends new (...args: any[]) => any
-          ? T
+    // Branch order: the new (...args) passthrough comes FIRST so a
+    // generic IsomorphicComponent (which carries `new <T>(opts): ...`
+    // and a structurally-Component-matching call sig) preserves its
+    // generic at the consumer site. Pre-2026-05-01 the events-marker
+    // branch was first; that worked because the OLD Component shape
+    // returned a metadata-bag `{props, exports, bindings}` which DID
+    // NOT structurally match the iso shape's call return. Once
+    // Component was aligned with real svelte's `Exports & {$set?,
+    // $on?}` shape (D-ii bindings cluster), the iso shape started
+    // matching the events branch and the wrapper return type lost
+    // the generic — `<Generic a={await a} b={await c}>` stopped
+    // firing TS2322 because `T` collapsed to `unknown`. Putting
+    // passthrough first keeps the iso ctor intact; the events branch
+    // remains for the rare bare-Component+events-marker shape.
+    T extends new (...args: any[]) => any
+        ? T
+        : T extends { readonly __svn_events: infer E extends Record<string, any> } & import('svelte').Component<
+              infer P extends Record<string, any>,
+              infer X extends Record<string, any>,
+              infer B extends string
+          >
+          ? new (options: { target?: any; props?: P }) => import('svelte').SvelteComponent<
+                P,
+                E,
+                Record<string, any>
+            > &
+                X & { $$bindings?: B }
           : T extends import('svelte').Component<
                   infer P extends Record<string, any>,
                   infer X extends Record<string, any>,
@@ -1364,18 +1378,34 @@ declare module 'svelte' {
         $$slot_def: Slots;
     }
 
-    // Svelte 5 `Component` type — function form.
-    export type Component<
+    // Svelte 5 `Component` type — interface form. Mirrors real
+    // svelte's `Component<P, X, B>` (svelte/types/index.d.ts:140-171)
+    // so `ReturnType<typeof Comp>` for a runes-mode default export
+    // resolves to `Exports & {$set?, $on?}` — the user-visible
+    // instance shape. Pre-fix our shim returned the metadata-bag
+    // `{props, exports, bindings}` which leaked to consumer-side
+    // `let inst: ReturnType<typeof X>; inst.method()` as TS2339.
+    // Inference of P / X / B for the conditional-dispatch in
+    // `__svn_ensure_component` works structurally: P from the call
+    // sig's `props: P`, X from the call sig's return-intersection,
+    // B from the `z_$$bindings?: B` field.
+    interface ComponentInternals {}
+    export interface Component<
         Props extends Record<string, any> = Record<string, any>,
         Exports extends Record<string, any> = Record<string, any>,
         Bindings extends keyof Props | '' = string,
-    > = (
-        ...args: any[]
-    ) => {
-        props: Props;
-        exports: Exports;
-        bindings: Bindings;
-    };
+    > {
+        (
+            this: void,
+            internals: ComponentInternals,
+            props: Props,
+        ): {
+            $set?(props: Partial<Props>): void;
+            $on?(type: string, callback: (e: any) => void): () => void;
+        } & Exports;
+        element?: typeof HTMLElement;
+        z_$$bindings?: Bindings;
+    }
 
     export type Snippet<Parameters extends any[] = []> = {
         (...args: Parameters): any;

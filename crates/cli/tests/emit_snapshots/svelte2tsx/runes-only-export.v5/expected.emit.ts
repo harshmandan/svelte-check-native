@@ -11,7 +11,7 @@ async function $$render_39845b3c() {
     });
     void x;
     void foo;
-    return { props: undefined as any as (Record<string, never>), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: () => void; }) };
+    return { props: undefined as any as (Record<string, never>), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: typeof foo; }) };
 }
 $$render_39845b3c;
 const __svn_component_default: import('svelte').Component<

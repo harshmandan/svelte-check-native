@@ -797,28 +797,32 @@ fn collect_export_type_infos(
         Declaration::FunctionDeclaration(f) => {
             let Some(id) = &f.id else { return };
             let name = SmolStr::from(id.name.as_str());
-            let type_params = f
-                .type_parameters
-                .as_deref()
-                .map(|tp| {
-                    let span = GetSpan::span(tp);
-                    content[span.start as usize..span.end as usize].to_string()
-                })
-                .unwrap_or_default();
-            let params_span = GetSpan::span(f.params.as_ref());
-            let params_text = &content[params_span.start as usize..params_span.end as usize];
-            let ret_type = f
-                .return_type
-                .as_deref()
-                .map(|rt| {
-                    let span = GetSpan::span(&rt.type_annotation);
-                    content[span.start as usize..span.end as usize].to_string()
-                })
-                .unwrap_or_else(|| "void".to_string());
-            let sig = format!("{type_params}{params_text} => {ret_type}");
+            // When the declaration has an explicit return-type annotation,
+            // extract the literal signature so consumers see the user's
+            // declared shape verbatim. Without an annotation, leave
+            // `type_source = None` so build_exports_object falls back to
+            // `typeof <name>` — TS infers the return type from the body
+            // (function decls are hoisted in $$render's scope). Mirrors
+            // upstream svelte2tsx's `createReturnElementsType` (`typeof
+            // ${key}` when no explicit type).
+            let type_source = f.return_type.as_deref().map(|_| {
+                let type_params = f
+                    .type_parameters
+                    .as_deref()
+                    .map(|tp| {
+                        let span = GetSpan::span(tp);
+                        content[span.start as usize..span.end as usize].to_string()
+                    })
+                    .unwrap_or_default();
+                let params_span = GetSpan::span(f.params.as_ref());
+                let params_text = &content[params_span.start as usize..params_span.end as usize];
+                let rt_span = GetSpan::span(&f.return_type.as_deref().unwrap().type_annotation);
+                let ret_type = &content[rt_span.start as usize..rt_span.end as usize];
+                format!("{type_params}{params_text} => {ret_type}")
+            });
             out.push(ExportedLocalInfo {
                 name,
-                type_source: Some(sig),
+                type_source,
                 is_let: false,
                 has_init: true,
             });

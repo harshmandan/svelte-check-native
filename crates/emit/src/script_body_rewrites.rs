@@ -89,20 +89,17 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
             def_assign_names.push(name.clone());
         }
     }
-    // Every top-level `let NAME: Type;` (typed, no init) in the
-    // instance script — the Svelte "declare now, assign later from a
-    // handler" pattern. Upstream's TS version doesn't observe the
-    // uninitialised state across its transform pipeline; a `!` gives
-    // us the same behavior.
-    if let Some(parsed_orig) = parsed_instance {
-        let mut uninit_lets: Vec<SmolStr> = Vec::new();
-        collect_typed_uninit_lets(&parsed_orig.program, &mut uninit_lets);
-        for name in uninit_lets {
-            if !def_assign_names.iter().any(|n| n == &name) {
-                def_assign_names.push(name);
-            }
-        }
-    }
+    // R-Conv #20 (B2 #5): the blanket `collect_typed_uninit_lets`
+    // source was removed. It used to inject `!` on every `let NAME:
+    // Type;` (typed, no init) in the instance script — masking real
+    // TS2454 ("used before being assigned") diagnostics that
+    // upstream LS surfaces unmodified. The four explicit sources
+    // above (bind:this, exported lets, store-auto-subscribe,
+    // reactive-touched) cover every legitimate "Svelte assigns
+    // this at runtime" case; everything else is genuinely a
+    // user-source order bug that should fire TS2454.
+    let _ = parsed_instance;
+    let _ = collect_typed_uninit_lets;
     let route_kind = sveltekit::route_kind(source_path);
     if emit_is_ts() {
         if let Some(s) = split {

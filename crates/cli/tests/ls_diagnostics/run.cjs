@@ -95,7 +95,7 @@ const SKIP_LIST = {
     'const-tag': 'missing-code: 6133 unused-declaration hint filtered (5×)',
     'parser-error': 'missing-code: -1 svelte-compiler parser error path differs',
     'svelte-element-error': 'missing-code: -1 svelte-compiler parser error path differs',
-    'unInitialized': 'missing-code: 2454 used-before-assignment narrowing differs (3×)',
+    // (was 'unInitialized' — closed by R-Conv #20 B2 #5: drop blanket def_assign_names from typed-uninit lets)
     'bind-this': 'missing-code: 2322/2454/6133 mix not all surfaced',
     'undeclared-component': 'missing-code: 2304 cannot-find-name on auto-imported components',
     // (was 'ignore-generated-code' — bonus unblock from R-Conv #20 B2 #4 if-condition TokenMap)

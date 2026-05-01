@@ -121,7 +121,16 @@ pub(crate) fn emit_await_then_branch(
     // the arrow boundary. The arrow itself is necessary because
     // `{#await}` may appear inside a sync snippet/slot callback
     // where bare `await` would fire TS1308.
-    let _ = writeln!(buf, "{indent}{{ const $$_promise = ({promise_text});");
+    // Splice the promise expression via `append_with_source` so a
+    // diagnostic firing INSIDE it (e.g. TS18047 "X is possibly null"
+    // on a not-narrowed identifier inside `{#await EXPR then v}`)
+    // reverse-maps onto the user's source position. Pre-fix the
+    // expression went through plain string formatting, so its overlay
+    // bytes had no token-map coverage and the diagnostic mapper
+    // dropped it as synth scaffolding.
+    let _ = write!(buf, "{indent}{{ const $$_promise = (");
+    buf.append_with_source(promise_text, promise_range);
+    buf.push_str(");\n");
     let _ = writeln!(buf, "{indent};(async () => {{");
     match binding_text {
         Some(bind) => {

@@ -403,7 +403,7 @@ type __SvnEachItem<T> = 0 extends 1 & T
  */
 type __SvnComponentEvents<C> = C extends { readonly __svn_events: infer E }
     ? E
-    : C extends new (...args: any[]) => import('svelte').SvelteComponent<any, infer E, any>
+    : C extends new (...args: any[]) => import('svelte').SvelteComponent<any, infer E extends Record<string, any>, any>
       ? E
       : Record<string, any>;
 
@@ -428,7 +428,7 @@ type __SvnComponentEvents<C> = C extends { readonly __svn_events: infer E }
  */
 type __SvnComponentSlots<C> = C extends { readonly __svn_slots: infer S }
     ? S
-    : C extends new (...args: any[]) => import('svelte').SvelteComponent<any, any, infer S>
+    : C extends new (...args: any[]) => import('svelte').SvelteComponent<any, any, infer S extends Record<string, any>>
       ? S
       : Record<string, Record<string, any>>;
 
@@ -1029,7 +1029,7 @@ declare namespace svelteHTML {
     interface HTMLAttributes<T extends EventTarget = any> {}
     interface SVGAttributes<T extends EventTarget = any> {}
 
-    type HTMLProps<Property extends string, Override> =
+    type HTMLProps<Property extends keyof import('svelte/elements').SvelteHTMLElements, Override> =
         Omit<import('svelte/elements').SvelteHTMLElements[Property], keyof Override> & Override;
 
     interface IntrinsicElements {

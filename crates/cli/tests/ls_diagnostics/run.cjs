@@ -100,7 +100,6 @@ const SKIP_LIST = {
     'undeclared-component': 'missing-code: 2304 cannot-find-name on auto-imported components',
     'ignore-generated-code': 'missing-code: 2304 in injected blocks not surfaced',
     'if-control-flow': 'missing-code: 18047 narrowing diff vs upstream',
-    'typechecks-js-with-ts-check': 'missing-code: 2339 in @ts-check-only file not surfaced',
 
     // bucket=svelte-shim-resolution / structural
     '$$events-usage': 'shim-resolution: 2307 cannot-find-module svelte + 7006 implicit-any cascade',

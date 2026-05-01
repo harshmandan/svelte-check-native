@@ -9,6 +9,7 @@ use std::fmt::Write;
 use svn_parser::SnippetBlock;
 
 use crate::emit_buffer::EmitBuffer;
+use crate::is_ts::emit_is_ts;
 use crate::nodes::inline_component::annotate_snippet_params;
 use crate::{all_identifiers, emit_template_body};
 
@@ -61,7 +62,21 @@ pub(crate) fn emit_snippet_block(
     // <name>: any` so the snippet body type-checks without depending
     // on the arrow's inferred param types (which the `null as any`
     // cast erases anyway).
-    let annotated = annotate_snippet_params(params_text);
+    // For TS overlays, append `: any` to each unannotated param so the
+    // body type-checks under `--strict` without `noImplicitAny` firing
+    // on every snippet param. For JS overlays, skip the annotation —
+    // a TS-syntax `name: any` annotation in a `.svn.js` file overrides
+    // both JSDoc `/**@type {…}*/name` annotations AND default-value
+    // inference (`name = 2` → `number`). The JSDoc-driven flow is what
+    // makes JS-svelte snippets reachable for diagnostics like TS2367 /
+    // TS2345 against typed params; forcing `: any` collapses the type
+    // back to `any` and silences both. Mirrors upstream svelte2tsx's
+    // behavior of preserving the user's params verbatim in JSDoc mode.
+    let annotated = if emit_is_ts() {
+        annotate_snippet_params(params_text)
+    } else {
+        params_text.to_string()
+    };
     let idents = all_identifiers(params_text);
     // Emit the body INSIDE a no-op arrow function expression whose
     // params carry the user's type annotations. This serves two

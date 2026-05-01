@@ -15,7 +15,7 @@ async function $$render_0bc1cb85() {
             const jsDoc = undefined;
             void jsDoc;
             {
-                void ((x: any) => {
+                void ((x) => {
                     { svelteHTML.createElement("div", {});                         (x);
                     }
                     void x;
@@ -29,7 +29,7 @@ async function $$render_0bc1cb85() {
                 void bar;
             }); }
             {
-                void ((x: any = '') => {
+                void ((x = '') => {
                     { svelteHTML.createElement("div", {});                         (x);
                     }
                     void x;
@@ -113,7 +113,7 @@ async function $$render_0bc1cb85() {
             }
             (children());
             {
-                void ((/**@type {number}*/a: any) => {
+                void ((/**@type {number}*/a) => {
                     (a);
                     void type;
                     void number;

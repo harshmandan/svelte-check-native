@@ -12,7 +12,7 @@ async function $$render_edb4eb12<T>() {
             const foo = undefined;
             void foo;
             {
-                void ((bar: any) => {
+                void ((bar) => {
                     (bar);
                     void bar;
                 });

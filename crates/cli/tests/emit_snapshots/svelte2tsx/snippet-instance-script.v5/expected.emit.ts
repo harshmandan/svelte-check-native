@@ -7,7 +7,7 @@ async function $$render_253c43cc() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const bar = undefined;
+            const bar = () => null;
             void bar;
             (foo);
         }

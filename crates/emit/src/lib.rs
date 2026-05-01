@@ -1509,11 +1509,11 @@ pub(crate) fn emit_template_body(
         // upstream svelte2tsx's `const foo = (params) => …;` shape so
         // user-declared param annotations on the snippet flow into the
         // call site.
+        let params = source
+            .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
+            .unwrap_or("")
+            .trim();
         if is_ts {
-            let params = source
-                .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
-                .unwrap_or("")
-                .trim();
             if params.is_empty() {
                 let _ = writeln!(buf, "{inner}const {} = (): any => null as any;", s.name);
             } else {
@@ -1524,7 +1524,21 @@ pub(crate) fn emit_template_body(
                 );
             }
         } else {
-            let _ = writeln!(buf, "{inner}const {} = undefined;", s.name);
+            // R-Conv #20 (B2 #4): JS overlay used to emit `const NAME =
+            // undefined;` which fired TS2722 ("Cannot invoke an object
+            // which is possibly undefined") on every `{@render NAME(…)}`
+            // call — masking the real prop-type / arity diagnostics.
+            // Bind to a typed arrow so the params' JSDoc annotations
+            // (`/**@type {TypeA}*/a`) and default-value inference
+            // (`b = 2` → `number`) flow into both consumer call sites
+            // (the snippet's own `{@render}`) and the body itself.
+            // Mirrors upstream svelte2tsx's `const NAME = (params) =>
+            // null;` shape for `<script>` (no `lang="ts"`) sources.
+            if params.is_empty() {
+                let _ = writeln!(buf, "{inner}const {} = () => null;", s.name);
+            } else {
+                let _ = writeln!(buf, "{inner}const {} = ({params}) => null;", s.name);
+            }
         }
         let _ = writeln!(buf, "{inner}void {};", s.name);
     }

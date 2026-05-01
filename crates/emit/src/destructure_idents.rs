@@ -41,6 +41,28 @@ pub(crate) fn all_identifiers(binding: &str) -> Vec<String> {
     let mut depth_brace = 0usize; // tracks `{ ... }` for object key:value
     while i < bytes.len() {
         let b = bytes[i];
+        // Skip block comments — JSDoc annotations (`/**@type {Foo}*/`)
+        // contain identifiers that aren't bindings. Without this skip
+        // a snippet param like `(/**@type {TypeA}*/a, b = 2)` produces
+        // bogus `void type; void TypeA;` lines (TS2304 / TS2693 noise).
+        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            i += 2;
+            while i + 1 < bytes.len() {
+                if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        // Skip line comments — `// foo` shouldn't contribute idents.
+        if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
         match b {
             b'{' => {
                 depth_brace += 1;

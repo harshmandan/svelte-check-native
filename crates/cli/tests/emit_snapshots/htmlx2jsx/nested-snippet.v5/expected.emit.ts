@@ -4,18 +4,18 @@ async function $$render_df3e76f3() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const snippetBlock = undefined;
+            const snippetBlock = () => null;
             void snippetBlock;
             if ((true)) {
                 {
-                    const foo = undefined;
+                    const foo = () => null;
                     void foo;
                     (foo());
                 }
             }
             for (const item of __svn_each_items(arr)) {
                 {
-                    const foo = undefined;
+                    const foo = () => null;
                     void foo;
                     (foo());
                 }
@@ -23,14 +23,14 @@ async function $$render_df3e76f3() {
             }
             ;(key);
             {
-                const foo = undefined;
+                const foo = () => null;
                 void foo;
                 (foo());
             }
             {
-                const foo = undefined;
+                const foo = () => null;
                 void foo;
-                const foo2 = undefined;
+                const foo2 = () => null;
                 void foo2;
                 (foo());
             }
@@ -38,14 +38,14 @@ async function $$render_df3e76f3() {
             ;(async () => {
                 const $$_await = await $$_promise; const bar = $$_await;
                 {
-                    const foo = undefined;
+                    const foo = () => null;
                     void foo;
                     (foo());
                 }
                 void bar;
             }); }
             { svelteHTML.createElement("div", {});                 {
-                    const foo = undefined;
+                    const foo = () => null;
                     void foo;
                     (foo());
                 }

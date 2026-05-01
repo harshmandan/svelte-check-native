@@ -8,13 +8,13 @@ async function $$render_50f1c2a8() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const chain = undefined;
+            const chain = () => null;
             void chain;
-            const chain2 = undefined;
+            const chain2 = () => null;
             void chain2;
-            const chain3 = undefined;
+            const chain3 = () => null;
             void chain3;
-            const hoistable = undefined;
+            const hoistable = () => null;
             void hoistable;
             { svelteHTML.createElement("div", {});                 (foo);
             }

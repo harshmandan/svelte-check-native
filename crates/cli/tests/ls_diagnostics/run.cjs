@@ -98,7 +98,7 @@ const SKIP_LIST = {
     'unInitialized': 'missing-code: 2454 used-before-assignment narrowing differs (3×)',
     'bind-this': 'missing-code: 2322/2454/6133 mix not all surfaced',
     'undeclared-component': 'missing-code: 2304 cannot-find-name on auto-imported components',
-    'ignore-generated-code': 'missing-code: 2304 in injected blocks not surfaced',
+    // (was 'ignore-generated-code' — bonus unblock from R-Conv #20 B2 #4 if-condition TokenMap)
 
     // bucket=svelte-shim-resolution / structural
     '$$events-usage': 'shim-resolution: 2307 cannot-find-module svelte + 7006 implicit-any cascade',
@@ -123,7 +123,7 @@ const SKIP_LIST = {
     'svelte-native': 'namespace-handling: requires svelteOptions.namespace=svelteNative.JSX',
     'generics': 'overlay-counts: 2322/2367 multiset diverges',
     'getters': 'overlay-counts: 2367 vs 2749 mismatch',
-    'snippet-js.v5': 'overlay-counts: 2345/2367 missing',
+    // (was 'snippet-js.v5' — closed by R-Conv #20 B2 #4: typed JS snippet hoist + if-condition TokenMap)
     'strictEvents': 'overlay-counts: 2345 missing',
     'svelte-element': 'overlay-counts: 2353 missing, 2322/2741/7006 extra',
 

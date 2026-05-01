@@ -4,15 +4,15 @@ async function $$render_0bc1cb85() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const foo = undefined;
+            const foo = (x) => null;
             void foo;
-            const bar = undefined;
+            const bar = () => null;
             void bar;
-            const await_inside = undefined;
+            const await_inside = () => null;
             void await_inside;
-            const defaultValue = undefined;
+            const defaultValue = (x = '') => null;
             void defaultValue;
-            const jsDoc = undefined;
+            const jsDoc = (/**@type {number}*/a) => null;
             void jsDoc;
             {
                 void ((x) => {
@@ -115,8 +115,6 @@ async function $$render_0bc1cb85() {
             {
                 void ((/**@type {number}*/a) => {
                     (a);
-                    void type;
-                    void number;
                     void a;
                 });
             }

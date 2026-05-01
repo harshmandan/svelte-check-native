@@ -59,7 +59,19 @@ pub(crate) fn emit_if_block(
         .get(b.condition_range.start as usize..b.condition_range.end as usize)
         .unwrap_or("true")
         .trim();
-    let _ = writeln!(buf, "{indent}if (({main_cond})) {{");
+    // R-Conv #20 (B2 #4): splice the condition with append_with_source
+    // so any diagnostic firing on the condition expression
+    // (TS2367 "comparison appears to be unintentional", TS18047
+    // "possibly null/undefined") reverse-maps to the user's
+    // `{#if EXPR}` source span. Pre-fix `writeln!` wrote the text
+    // raw — diagnostics without a TokenMap entry got dropped.
+    let _ = write!(buf, "{indent}if ((");
+    if main_cond.is_empty() {
+        buf.push_str("true");
+    } else {
+        buf.append_with_source(main_cond, b.condition_range);
+    }
+    buf.push_str(")) {\n");
     emit_condition_ref_marker(buf, source, b.condition_range, depth + 1);
     emit_template_body(buf, source, &b.consequent, depth + 1, insts, action_counter);
     for arm in &b.elseif_arms {
@@ -67,7 +79,13 @@ pub(crate) fn emit_if_block(
             .get(arm.condition_range.start as usize..arm.condition_range.end as usize)
             .unwrap_or("true")
             .trim();
-        let _ = writeln!(buf, "{indent}}} else if (({arm_cond})) {{");
+        let _ = write!(buf, "{indent}}} else if ((");
+        if arm_cond.is_empty() {
+            buf.push_str("true");
+        } else {
+            buf.append_with_source(arm_cond, arm.condition_range);
+        }
+        buf.push_str(")) {\n");
         emit_condition_ref_marker(buf, source, arm.condition_range, depth + 1);
         emit_template_body(buf, source, &arm.body, depth + 1, insts, action_counter);
     }

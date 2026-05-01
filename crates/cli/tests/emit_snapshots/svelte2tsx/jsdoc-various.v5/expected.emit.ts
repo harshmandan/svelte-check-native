@@ -9,7 +9,7 @@ async function $$render_edb4eb12<T>() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const foo = undefined;
+            const foo = (bar) => null;
             void foo;
             {
                 void ((bar) => {

@@ -9,7 +9,7 @@ async function $$render_de15df1d() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const x = undefined;
+            const x = () => null;
             void x;
             (foo);
             (await promise);

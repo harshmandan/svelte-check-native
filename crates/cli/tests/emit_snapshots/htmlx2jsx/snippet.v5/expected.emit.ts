@@ -40,7 +40,7 @@ async function $$render_0bc1cb85() {
             (await_inside());
             {
                 const __svn_C_122 = __svn_ensure_component(Component);
-                new __svn_C_122({
+                const __svn_inst_122 = new __svn_C_122({
                     target: __svn_any(),
                     props: {
                         bar: (x) => {
@@ -52,12 +52,14 @@ async function $$render_0bc1cb85() {
                         children: () => __svn_snippet_return(),
                     },
                 });
+                /*svn:ignore_start*/const { bar } = __svn_inst_122.$$prop_def;/*svn:ignore_end*/
+                /*svn:ignore_start*/void bar;/*svn:ignore_end*/
                 { svelteHTML.createElement("div", {});                     (asd);
                 }
             }
             {
                 const __svn_C_181 = __svn_ensure_component(List);
-                new __svn_C_181({
+                const __svn_inst_181 = new __svn_C_181({
                     target: __svn_any(),
                     props: {
                         "data": ([1, 2, 3]),
@@ -77,6 +79,9 @@ async function $$render_0bc1cb85() {
                         },
                     },
                 });
+                /*svn:ignore_start*/const { row, await_inside } = __svn_inst_181.$$prop_def;/*svn:ignore_end*/
+                /*svn:ignore_start*/void row;/*svn:ignore_end*/
+                /*svn:ignore_start*/void await_inside;/*svn:ignore_end*/
             }
             {
                 const __svn_C_219 = __svn_ensure_component(List);
@@ -84,7 +89,7 @@ async function $$render_0bc1cb85() {
             }
             {
                 const __svn_C_23c = __svn_ensure_component(List);
-                new __svn_C_23c({
+                const __svn_inst_23c = new __svn_C_23c({
                     target: __svn_any(),
                     props: {
                         "data": ([1, 2, 3]),
@@ -101,6 +106,9 @@ async function $$render_0bc1cb85() {
                         children: () => __svn_snippet_return(),
                     },
                 });
+                /*svn:ignore_start*/const { row1, row2 } = __svn_inst_23c.$$prop_def;/*svn:ignore_end*/
+                /*svn:ignore_start*/void row1;/*svn:ignore_end*/
+                /*svn:ignore_start*/void row2;/*svn:ignore_end*/
                 { svelteHTML.createElement("p", {});                 }
             }
             (children());

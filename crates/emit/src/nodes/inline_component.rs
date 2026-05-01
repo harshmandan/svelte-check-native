@@ -230,8 +230,29 @@ pub(crate) fn emit_component_call(
     // `bind:this`, slot-let consumer destructure).
     let local = svn_core::synth_names::component_local(inst.node_start);
     let inst_local = svn_core::synth_names::instance_local(inst.node_start);
-    let hoist_instance =
-        !inst.on_events.is_empty() || inst.bind_this_target.is_some() || needs_inst_for_let;
+    // Hoist when ANY post-construction emit needs the instance:
+    // `$inst.$on(...)`, `bind:this`, slot-let consumer destructure,
+    // OR named snippet props that drive a `const { NAME } =
+    // __svn_inst.$$prop_def;` destructure so subsequent `{@render
+    // NAME(...)}` calls resolve.
+    //
+    // The implicit `children` snippet is excluded — it's handled by
+    // the parent's `let { children } = $props()` (if any) and never
+    // gets a post-instance destructure (would shadow / collide).
+    // Hoisting JUST for `children`-only snippets leaves
+    // `__svn_inst_NN` unreferenced → TS6133 reverse-maps onto the
+    // user's `<Comp>` source span. Skip the hoist entirely in that
+    // case. Mirrors upstream svelte2tsx's `snippetPropVariables` at
+    // `htmlxtojsx_v2/nodes/InlineComponent.ts:209-214` (its
+    // `snippetPropsTransformation` excludes implicit-`children` for
+    // the same reason).
+    let has_named_snippet = snippet_children
+        .iter()
+        .any(|s| s.name.as_str() != "children");
+    let hoist_instance = !inst.on_events.is_empty()
+        || inst.bind_this_target.is_some()
+        || needs_inst_for_let
+        || has_named_snippet;
     let ctor_lhs = if hoist_instance {
         format!("const {inst_local} = ")
     } else {
@@ -331,7 +352,62 @@ pub(crate) fn emit_component_call(
     emit_component_bind_widen_trailers(buf, inst, &inner);
     emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
     emit_on_event_calls(buf, source, inst, &inst_local, &inner);
+    emit_snippet_prop_destructure(buf, snippet_children, &inst_local, &inner);
     let _ = indent;
+}
+
+/// Emit `const { name1, name2 } = __svn_inst_NN.$$prop_def;` after the
+/// `new __svn_C_NN({...})` line so subsequent `{@render NAME(...)}`
+/// calls in the same block resolve `NAME` to the typed prop. Without
+/// this, the snippet declaration lives only as a value INSIDE the props
+/// literal and isn't a local — `{@render foo()}` outside would fire
+/// TS2304 "Cannot find name 'foo'".
+///
+/// Mirrors upstream svelte2tsx's
+/// `snippetPropVariablesDeclaration` at
+/// `htmlxtojsx_v2/nodes/InlineComponent.ts:209-214`.
+fn emit_snippet_prop_destructure(
+    buf: &mut EmitBuffer,
+    snippet_children: &[&SnippetBlock],
+    inst_local: &str,
+    inner: &str,
+) {
+    if snippet_children.is_empty() {
+        return;
+    }
+    // The implicit `children` snippet (declared via
+    // `{#snippet children}`) is special — `children` may already be a
+    // user local from `let { children } = $props()`. Skip it from the
+    // destructure to avoid TS2451 redeclaration. Other snippet names
+    // are unique-by-construction at the call site.
+    let names: Vec<&str> = snippet_children
+        .iter()
+        .map(|s| s.name.as_str())
+        .filter(|n| *n != "children")
+        .collect();
+    if names.is_empty() {
+        return;
+    }
+    let _ = write!(
+        buf,
+        "{inner}/*svn:ignore_start*/const {{ "
+    );
+    for (i, n) in names.iter().enumerate() {
+        if i > 0 {
+            buf.push_str(", ");
+        }
+        buf.push_str(n);
+    }
+    let _ = writeln!(buf, " }} = {inst_local}.$$prop_def;/*svn:ignore_end*/");
+    // Belt-and-suspenders against TS6133 ("declared but never used"):
+    // the ignore-region filter drops most false positives but tsgo
+    // sometimes reverse-maps the unused-decl diagnostic to a source
+    // position outside the synth scaffolding. Emitting `void NAME;`
+    // marks each destructured name as used, so 6133 never fires
+    // regardless of where the diagnostic anchor lands.
+    for n in &names {
+        let _ = writeln!(buf, "{inner}/*svn:ignore_start*/void {n};/*svn:ignore_end*/");
+    }
 }
 
 /// Emit the trailing `}` that closes a component-call block opened by

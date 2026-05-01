@@ -52,7 +52,7 @@ async function $$render_df3e76f3() {
             }
             {
                 const __svn_C_1f7 = __svn_ensure_component(Component);
-                new __svn_C_1f7({
+                const __svn_inst_1f7 = new __svn_C_1f7({
                     target: __svn_any(),
                     props: {
                         foo: () => {
@@ -61,6 +61,8 @@ async function $$render_df3e76f3() {
                         children: () => __svn_snippet_return(),
                     },
                 });
+                /*svn:ignore_start*/const { foo } = __svn_inst_1f7.$$prop_def;/*svn:ignore_end*/
+                /*svn:ignore_start*/void foo;/*svn:ignore_end*/
                 (foo());
             }
         }

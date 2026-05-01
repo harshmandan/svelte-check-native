@@ -126,7 +126,6 @@ const SKIP_LIST = {
     'svelte-native': 'namespace-handling: requires svelteOptions.namespace=svelteNative.JSX',
     'generics': 'overlay-counts: 2322/2367 multiset diverges',
     'getters': 'overlay-counts: 2367 vs 2749 mismatch',
-    'implicit-snippet.v5': 'overlay-counts: extra 2304',
     'import-precedence': 'overlay-counts: extra 2614 (×2)',
     'snippet-js.v5': 'overlay-counts: 2345/2367 missing',
     'strictEvents': 'overlay-counts: 2345 missing',

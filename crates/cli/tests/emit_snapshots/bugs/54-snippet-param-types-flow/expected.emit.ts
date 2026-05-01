@@ -48,7 +48,7 @@ async function $$render_8568e182() {
         // template type-check body (incremental)
         {
             const __svn_C_f9 = __svn_ensure_component(Wrapper);
-            new __svn_C_f9({
+            const __svn_inst_f9 = new __svn_C_f9({
                 target: __svn_any(),
                 props: {
                     row: ({ id, label }) => {
@@ -67,6 +67,9 @@ async function $$render_8568e182() {
                     },
                 },
             });
+            /*svn:ignore_start*/const { row, header } = __svn_inst_f9.$$prop_def;/*svn:ignore_end*/
+            /*svn:ignore_start*/void row;/*svn:ignore_end*/
+            /*svn:ignore_start*/void header;/*svn:ignore_end*/
         }
     });
     void Wrapper;

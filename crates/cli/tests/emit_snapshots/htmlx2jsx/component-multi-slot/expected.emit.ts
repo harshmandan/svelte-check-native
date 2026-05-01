@@ -8,10 +8,12 @@ async function $$render_8f62c0c3() {
             const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, var: new_var } = __svn_inst_0.$$slot_def.default; $$_$$;
+                void new_var;
                 { svelteHTML.createElement("h1", {});                     (new_var);
                 }
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, slotvar: newvar } = __svn_inst_0.$$slot_def["someslot"]; $$_$$;
+                    void newvar;
                     { svelteHTML.createElement("div", {});                         (newvar);
                         { svelteHTML.createElement("h2", {});                             (newvar);
                         }
@@ -19,11 +21,15 @@ async function $$render_8f62c0c3() {
                 }
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, newvar2 } = __svn_inst_0.$$slot_def["slotwithoutchildren"]; $$_$$;
+                    void newvar2;
                     { svelteHTML.createElement("div", {});                         (newvar2);
                     }
                 }
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, hi1, hi2, hi3: hi3alias } = __svn_inst_0.$$slot_def["slotwithmultiplelets"]; $$_$$;
+                    void hi1;
+                    void hi2;
+                    void hi3alias;
                     { svelteHTML.createElement("div", {});                     }
                 }
                 { svelteHTML.createElement("p", {});                 }

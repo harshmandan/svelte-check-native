@@ -131,7 +131,6 @@ const SKIP_LIST = {
     'implicit-snippet.v5': 'overlay-counts: extra 2304',
     'import-precedence': 'overlay-counts: extra 2614 (×2)',
     'js-untyped': 'overlay-counts: extra 2353 in JS-mode overlay',
-    'slot-typechecks': 'overlay-counts: 2339/2367 missing',
     'snippet-js.v5': 'overlay-counts: 2345/2367 missing',
     'strictEvents': 'overlay-counts: 2345 missing',
     'svelte-element': 'overlay-counts: 2353 missing, 2322/2741/7006 extra',

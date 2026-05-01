@@ -8,6 +8,7 @@ async function $$render_b9dbbb3b() {
             const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, a } = __svn_inst_0.$$slot_def["b"]; $$_$$;
+                void a;
                 { svelteHTML.createElement("div", {});                 }
             }
         }

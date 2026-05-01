@@ -10,6 +10,7 @@ async function $$render_dc3d7c74() {
                 const __svn_inst_10 = new __svn_C_10({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo } = __svn_inst_10.$$slot_def.default; $$_$$;
+                    void foo;
                     (foo);
                 }
             }
@@ -20,6 +21,7 @@ async function $$render_dc3d7c74() {
                     const __svn_inst_55 = new __svn_C_55({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo: bar } = __svn_inst_55.$$slot_def.default; $$_$$;
+                        void bar;
                         (bar);
                     }
                 }
@@ -30,6 +32,8 @@ async function $$render_dc3d7c74() {
                     const __svn_inst_a8 = new __svn_C_a8({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo, foo1 } = __svn_inst_a8.$$slot_def["named"]; $$_$$;
+                        void foo;
+                        void foo1;
                         { svelteHTML.createElement("div", {});                             (foo);
                         }
                     }
@@ -40,6 +44,7 @@ async function $$render_dc3d7c74() {
                     const __svn_inst_12c = new __svn_C_12c({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo: bar } = __svn_inst_12c.$$slot_def["named"]; $$_$$;
+                        void bar;
                         { svelteHTML.createElement("div", {});                             (bar);
                         }
                     }

@@ -17,6 +17,7 @@ async function $$render_8a5774d3() {
             const __svn_inst_fe = new __svn_C_fe({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, box } = __svn_inst_fe.$$slot_def["box1"]; $$_$$;
+                void box;
                 { svelteHTML.createElement("svelte:fragment", {});                     const {area, volume} = calculate(box.width, box.height, constant);
                     void area;
                     void volume;
@@ -37,6 +38,8 @@ async function $$render_8a5774d3() {
             }
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, width, height } = __svn_inst_fe.$$slot_def["box2"]; $$_$$;
+                void width;
+                void height;
                 { svelteHTML.createElement("svelte:fragment", {});                     const {area, volume} = calculate(width, height, constant);
                     void area;
                     void volume;
@@ -82,8 +85,10 @@ async function $$render_8a5774d3() {
             const __svn_inst_530 = new __svn_C_530({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, box } = __svn_inst_530.$$slot_def.default; $$_$$;
+                void box;
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, box } = __svn_inst_530.$$slot_def["box1"]; $$_$$;
+                    void box;
                     { svelteHTML.createElement("div", {});                         const {area, volume} = calculate(box.width, box.height, constant);
                         void area;
                         void volume;
@@ -104,6 +109,8 @@ async function $$render_8a5774d3() {
                 }
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, width, height } = __svn_inst_530.$$slot_def["box2"]; $$_$$;
+                    void width;
+                    void height;
                     { svelteHTML.createElement("div", {});                         const {area, volume} = calculate(width, height, constant);
                         void area;
                         void volume;

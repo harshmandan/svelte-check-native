@@ -8,8 +8,10 @@ async function $$render_55fa86f5() {
             const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {"bare": true, shorthand, "text1": "val1", "text2": "val2", "text3": `a${a}b${b}`, "textEmpty": ``, "literal": (true), "strLiteral": ('foo'), "complex": ({a}), "a-dashed-complex": ({a}), ...__svn_css_prop({"--custom-cssprop": "foo"}), children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo } = __svn_inst_0.$$slot_def.default; $$_$$;
+                void foo;
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, bar } = __svn_inst_0.$$slot_def["named"]; $$_$$;
+                    void bar;
                     {
                         const __svn_C_ba = __svn_ensure_component(Component);
                         new __svn_C_ba({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });

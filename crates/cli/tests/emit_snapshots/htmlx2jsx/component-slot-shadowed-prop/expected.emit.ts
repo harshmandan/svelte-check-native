@@ -8,14 +8,21 @@ async function $$render_03b58764() {
             const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {unshadowed1, "foo": (unshadowed2), subthing, shadowed1, "shadowed-2": (shadowed2), "templateString": ` ${complex} `, "complex": `${{complex}}`, children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, name: n, shadowed1, shadowed2, subthing } = __svn_inst_0.$$slot_def.default; $$_$$;
+                void n;
+                void shadowed1;
+                void shadowed2;
+                void subthing;
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, subthing } = __svn_inst_0.$$slot_def["sub1"]; $$_$$;
+                    void subthing;
                     { svelteHTML.createElement("p", {});                         (thing);
                         (subthing);
                     }
                 }
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, subthing, othersubthing } = __svn_inst_0.$$slot_def["sub2"]; $$_$$;
+                    void subthing;
+                    void othersubthing;
                     {
                         const __svn_C_169 = __svn_ensure_component(Sub);
                         new __svn_C_169({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} });
@@ -28,6 +35,8 @@ async function $$render_03b58764() {
                     const __svn_inst_205 = new __svn_C_205({ target: __svn_any(), props: {subthing, children: () => __svn_snippet_return()} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, subthing, othersubthing } = __svn_inst_205.$$slot_def.default; $$_$$;
+                        void subthing;
+                        void othersubthing;
                         (thing);
                         (subthing);
                     }

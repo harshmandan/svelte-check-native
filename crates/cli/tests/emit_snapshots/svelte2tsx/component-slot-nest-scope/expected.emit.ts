@@ -14,6 +14,7 @@ async function $$render_ce1c3a62() {
             const __svn_inst_89 = new __svn_C_89({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, c } = __svn_inst_89.$$slot_def.default; $$_$$;
+                void c;
                 (c);
             }
         }

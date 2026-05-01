@@ -8,6 +8,7 @@ async function $$render_19f891e5() {
             const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {"propA": true, propB, "propC": "val1", "propD": "val2", "propE": `a${a}b${b}`, children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo } = __svn_inst_0.$$slot_def.default; $$_$$;
+                void foo;
             }
         }
     });

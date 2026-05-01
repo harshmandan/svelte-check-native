@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use smol_str::SmolStr;
+use svn_core::Range;
 use svn_parser::{Fragment, Node};
 
 use crate::emit_buffer::EmitBuffer;
@@ -33,11 +34,32 @@ use crate::util::is_simple_js_identifier;
 /// instantiation, captured for the consumer-side slot-def
 /// destructure emit (`const { …, NAME } = inst.$$slot_def[…];`).
 pub(crate) struct LetDestructure {
+    /// Length in bytes of the leading NAME portion of `pattern_text`
+    /// — anchor for the TokenMap entry that maps the NAME bytes in
+    /// the destructure literal back to the source `let:NAME`
+    /// position. Without it, tsgo diagnostics on the destructure
+    /// entry (TS2339 "Property 'foo' does not exist on type
+    /// 'Slots[X]'") fall through `translate_position` and get
+    /// dropped.
+    name_byte_len: usize,
+    /// Source byte range of NAME in the original `let:NAME` directive
+    /// — anchor for the TokenMap entry described above. Targets the
+    /// NAME bytes specifically (skips the `let:` prefix), so a
+    /// diagnostic on the destructure literal maps to the source
+    /// NAME the user wrote.
+    name_range: Range,
     /// Source slice for the destructure pattern. For bare `let:foo`
     /// this is `"foo"`; for `let:foo={alias}` it's `"foo: alias"`;
     /// for destructure `let:foo={{a, b}}` it's `"foo: {a, b}"`.
-    /// Spliced verbatim into the destructure literal.
+    /// Spliced verbatim into the destructure literal — the leading
+    /// `name_byte_len` bytes get a TokenMap entry, the rest is plain.
     pattern_text: String,
+    /// The local binding the destructure introduces — `name` for
+    /// shorthand, the alias for `let:foo={alias}`. None for
+    /// non-identifier nested patterns (`let:foo={{a, b}}`); those
+    /// don't get a `void <X>;` suppressor since the inner names
+    /// resolve in the body's natural scope.
+    void_target: Option<SmolStr>,
 }
 
 /// Walk the children of an element that carries `let:NAME` directives.
@@ -141,16 +163,20 @@ pub(crate) fn collect_let_destructures(
     use svn_parser::{Attribute, Directive, DirectiveKind, DirectiveValue};
     let mut out: Vec<LetDestructure> = Vec::new();
     for attr in attributes {
-        let Attribute::Directive(Directive {
+        let Attribute::Directive(d) = attr else {
+            continue;
+        };
+        let Directive {
             kind: DirectiveKind::Let,
             name,
             value,
+            range,
             ..
-        }) = attr
+        } = d
         else {
             continue;
         };
-        let pattern_text: String = match value {
+        let (pattern_text, void_target): (String, Option<SmolStr>) = match value {
             Some(DirectiveValue::Expression {
                 expression_range, ..
             }) => {
@@ -158,21 +184,36 @@ pub(crate) fn collect_let_destructures(
                 let end = expression_range.end as usize;
                 let slice = source.get(start..end).unwrap_or("").trim();
                 if slice.is_empty() {
-                    name.to_string()
+                    (name.to_string(), Some(name.clone()))
                 } else if is_simple_js_identifier(slice) && slice == name.as_str() {
                     // `let:foo={foo}` — same name on both sides;
                     // emit shorthand `foo`.
-                    name.to_string()
+                    (name.to_string(), Some(name.clone()))
+                } else if is_simple_js_identifier(slice) {
+                    // `let:foo={alias}` — alias rename. The introduced
+                    // local is the alias; `void <alias>;` suppresses
+                    // TS6133 on it.
+                    (
+                        format!("{}: {}", name.as_str(), slice),
+                        Some(SmolStr::from(slice)),
+                    )
                 } else {
-                    // `let:foo={alias}` or `let:foo={{a, b}}` —
-                    // destructure rename / nested pattern. Emit as
-                    // `foo: <pattern>`.
-                    format!("{}: {}", name.as_str(), slice)
+                    // `let:foo={{a, b}}` — nested pattern. Emit as
+                    // `foo: <pattern>`. No `void` target — the inner
+                    // names resolve in the body's natural scope.
+                    (format!("{}: {}", name.as_str(), slice), None)
                 }
             }
-            _ => name.to_string(),
+            _ => (name.to_string(), Some(name.clone())),
         };
-        out.push(LetDestructure { pattern_text });
+        let name_start = range.start + DirectiveKind::Let.prefix_len_with_colon();
+        let name_end = name_start + name.len() as u32;
+        out.push(LetDestructure {
+            name_byte_len: name.len(),
+            name_range: Range::new(name_start, name_end),
+            pattern_text,
+            void_target,
+        });
     }
     out
 }
@@ -201,21 +242,52 @@ pub(crate) fn emit_let_slot_destructure(
     }
     let inst_local = svn_core::synth_names::instance_local(inst.node_start);
     let indent = "    ".repeat(depth);
-    let mut entries = String::new();
     // Upstream's `$$_$$` dummy keeps TS6133 quiet on unused
-    // destructure lists; the ignore markers tell svelte-check's
-    // diagnostic mapper to drop any error on the synthetic name.
-    entries.push_str("/*\u{03A9}ignore_start\u{03A9}*/$$_$$/*\u{03A9}ignore_end\u{03A9}*/");
+    // destructure lists; the omega markers are decorative (matched
+    // upstream svelte2tsx's marker style for symmetry — our scanner
+    // tolerates the missing TokenMap on `$$_$$` because the
+    // diagnostic mapper drops unmapped synthesised positions
+    // anyway).
+    let _ = write!(
+        buf,
+        "{indent}const {{ /*\u{03A9}ignore_start\u{03A9}*/$$_$$/*\u{03A9}ignore_end\u{03A9}*/"
+    );
     for d in let_destructures {
-        entries.push_str(", ");
-        entries.push_str(d.pattern_text.as_str());
+        buf.push_str(", ");
+        // Push a TokenMap entry for the NAME bytes so a tsgo
+        // diagnostic on the destructure (TS2339 "Property 'X' does
+        // not exist on type 'Slots[Y]'") survives `translate_position`
+        // and maps back to the source `let:NAME` position. Without
+        // this, the diagnostic falls inside the synthesised
+        // destructure literal, finds no token-map cover, and is
+        // dropped — leaving a real divergence with upstream
+        // (e.g. slot-typechecks fixture's TS2339 on `let:d` against
+        // a slot typed `{a: boolean, b: string}`).
+        buf.append_with_source(&d.pattern_text[..d.name_byte_len], d.name_range);
+        if d.name_byte_len < d.pattern_text.len() {
+            buf.push_str(&d.pattern_text[d.name_byte_len..]);
+        }
     }
     let access = if slot_name == "default" {
-        format!("{inst_local}.$$slot_def.default")
+        format!(" }} = {inst_local}.$$slot_def.default; $$_$$;\n")
     } else {
-        format!("{inst_local}.$$slot_def[\"{slot_name}\"]")
+        format!(" }} = {inst_local}.$$slot_def[\"{slot_name}\"]; $$_$$;\n")
     };
-    let _ = writeln!(buf, "{indent}const {{ {entries} }} = {access}; $$_$$;");
+    buf.push_str(&access);
+    // `void <name>;` per let-binding suppresses TS6133 on names the
+    // user's slot body doesn't reference. Without this the new
+    // TokenMap entry on the destructure name surfaces 6133 at the
+    // source `let:NAME` position — a regression for slot-let
+    // wrappers that forward without consuming (canonical layerchart
+    // pattern: `<Wrapper let:tooltip><slot {tooltip} /></Wrapper>`).
+    // 2339 / 2367 / 2353 on the destructure entry still fire
+    // because they target the destructure pattern itself, not the
+    // local binding's later use.
+    for d in let_destructures {
+        if let Some(target) = &d.void_target {
+            let _ = writeln!(buf, "{indent}void {target};");
+        }
+    }
 }
 
 /// Pluck the slot-let-consumer attributes off any node shape that can

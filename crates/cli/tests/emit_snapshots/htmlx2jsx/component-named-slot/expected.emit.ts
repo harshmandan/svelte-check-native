@@ -8,8 +8,11 @@ async function $$render_468914b6() {
             const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo, bar: baz } = __svn_inst_0.$$slot_def.default; $$_$$;
+                void foo;
+                void baz;
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, bla } = __svn_inst_0.$$slot_def["named"]; $$_$$;
+                    void bla;
                     {
                         const __svn_C_23 = __svn_ensure_component(Component);
                         new __svn_C_23({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
@@ -23,6 +26,7 @@ async function $$render_468914b6() {
                     const __svn_inst_73 = new __svn_C_73({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                     {
                         const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, blubb } = __svn_inst_73.$$slot_def.default; $$_$$;
+                        void blubb;
                         (blubb);
                     }
                 }

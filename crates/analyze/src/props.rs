@@ -2060,9 +2060,27 @@ mod tests {
     }
 
     #[test]
-    fn export_fn_does_not_contribute_props() {
-        // `export function` is an exported helper, not a prop; ignored.
+    fn export_fn_contributes_svelte4_prop() {
+        // R-Conv #19 (D-ii fix #2): in Svelte-4 mode, `export function
+        // NAME` is a bindable prop — `<Foo bind:NAME={target}>` aliases
+        // the function reference. Mirrors upstream svelte2tsx's
+        // `addExport(node.name, false)` path in
+        // `handleExportFunctionOrClass`. Pre-fix the test asserted
+        // `None`; that was wrong-behavior locking, fixed in R-Conv #19.
         let src = "export function helper() {}";
+        assert_eq!(
+            props_type(src).as_deref(),
+            Some("{ helper?: typeof helper; }")
+        );
+    }
+
+    #[test]
+    fn export_fn_skipped_in_runes_mode() {
+        // Runes-mode counterpart: `let x = $state(); export function
+        // foo()` keeps `props` empty — `export function` routes
+        // through the Exports field, NOT props (matches
+        // `runes-only-export.v5`'s `props: Record<string, never>`).
+        let src = "let x = $state();\nexport function helper() {}";
         assert_eq!(props_type(src), None);
     }
 

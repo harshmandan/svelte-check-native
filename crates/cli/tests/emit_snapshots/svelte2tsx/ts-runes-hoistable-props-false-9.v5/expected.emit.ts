@@ -9,7 +9,6 @@ async function $$render_e800a6a5<T extends { a: string }>() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    void a;
     return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_e800a6a5;

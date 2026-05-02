@@ -11,7 +11,6 @@ async function $$render_e2598f27() {
         // template type-check body (incremental)
         (children(true, () => {}));
     });
-    void children;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_e2598f27;
@@ -38,8 +37,6 @@ async function $$render_ea3119be() {
             (open ? 'close' : 'open');
         }
     });
-    void open;
-    void onToggle;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_ea3119be;

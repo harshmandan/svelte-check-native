@@ -14,8 +14,6 @@ async function $$render_17f189ba<T>() {
             __svn_create_slot("default", { x: x, y: y });
         }
     });
-    void a;
-    void b;
     void x;
     void y;
     return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: { 'default': { x: (x), y: (y) } }, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };

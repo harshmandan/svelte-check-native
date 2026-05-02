@@ -36,7 +36,6 @@ async function $$render_c6382cf7() {
             (rest.length);
         }
     });
-    void shape;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_c6382cf7;

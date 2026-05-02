@@ -10,7 +10,6 @@ async function $$render_01d4c0b9() {
         (id);
         (props);
     });
-    void props;
     void id;
     return { props: /** @type {$$ComponentProps} */({}) };
 }

@@ -8,8 +8,6 @@ async function $$render_1c6cdc07() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    void form;
-    void data;
     void snapshot;
     return { props: /** @type {$$ComponentProps} */({}) };
 }

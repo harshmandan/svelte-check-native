@@ -8,9 +8,7 @@ async function $$render_cae62ddc() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    void a;
     void b;
-    void c;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings('b'), exports: undefined as any as ({}) };
 }
 $$render_cae62ddc;

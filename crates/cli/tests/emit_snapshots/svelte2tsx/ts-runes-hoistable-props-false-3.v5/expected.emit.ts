@@ -11,7 +11,6 @@ async function $$render_cbdc5f31<T extends boolean>() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    void someProp;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_cbdc5f31;

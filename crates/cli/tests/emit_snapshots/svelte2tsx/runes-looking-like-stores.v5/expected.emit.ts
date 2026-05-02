@@ -11,7 +11,6 @@ async function $$render_94f8225d() {
         (state);
         (derived);
     });
-    void props;
     void state;
     void derived;
     return { props: /** @type {$$ComponentProps} */({}) };

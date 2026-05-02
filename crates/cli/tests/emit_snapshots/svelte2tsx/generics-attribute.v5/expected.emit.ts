@@ -12,9 +12,6 @@ async function $$render_cf56d9b2<A, B extends keyof A, C extends boolean>() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    void a;
-    void b;
-    void c;
     void getA;
     return { props: /** @type {$$ComponentProps} */({}) };
 }

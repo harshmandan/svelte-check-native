@@ -68,7 +68,6 @@ async function $$render_6e910aea() {
             (config.count);
         }
     });
-    void config;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_6e910aea;

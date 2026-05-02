@@ -56,7 +56,6 @@ async function $$render_de15df1d() {
             }
         }
     });
-    void prop;
     void foo;
     void promise;
     return { props: /** @type {$$ComponentProps} */({}) };

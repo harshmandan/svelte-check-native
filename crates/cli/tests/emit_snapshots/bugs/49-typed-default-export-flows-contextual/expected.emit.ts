@@ -22,8 +22,6 @@ async function $$render_1497f2af() {
             (checked ? 'on' : 'off');
         }
     });
-    void checked;
-    void onchange;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_1497f2af;

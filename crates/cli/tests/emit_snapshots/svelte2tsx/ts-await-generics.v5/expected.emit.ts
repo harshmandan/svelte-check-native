@@ -57,7 +57,6 @@ async function $$render_200dbc4a<T>() {
             }
         }
     });
-    void prop;
     void foo;
     void promise;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };

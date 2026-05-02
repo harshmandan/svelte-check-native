@@ -16,8 +16,6 @@ async function $$render_5a7d1551<T extends { id: string }>() {
             (item.id);
         }
     });
-    void item;
-    void label;
     return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_5a7d1551;

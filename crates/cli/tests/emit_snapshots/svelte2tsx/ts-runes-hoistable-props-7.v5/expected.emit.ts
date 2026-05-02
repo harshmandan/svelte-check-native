@@ -21,7 +21,6 @@ let {Abc}: A = $props()
     ;(async () => {
         // template type-check body (incremental)
     });
-    void Abc;
     return { props: undefined as any as (A), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_ed055030;

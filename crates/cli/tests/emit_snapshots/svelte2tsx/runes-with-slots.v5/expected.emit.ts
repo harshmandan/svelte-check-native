@@ -10,8 +10,6 @@ async function $$render_d2d4cb4e() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    void a;
-    void b;
     void x;
     void y;
     return { props: /** @type {$$ComponentProps} */({}) };

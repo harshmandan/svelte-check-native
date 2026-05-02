@@ -61,8 +61,14 @@ pub(crate) fn emit_bind_pair_declarations(
 /// Names covered:
 ///   - the template-check wrapper (`__svn_tpl_check`)
 ///   - store auto-subscribe aliases
-///   - destructured props (the component's public API; treat as used
-///     even if the body doesn't reference them directly)
+///   - **bindable** runes-mode props (`= $bindable(...)` entries
+///     from `let { … } = $props()`). Non-bindable destructure
+///     entries are deliberately NOT voided here so that TS6133
+///     fires on entries that are never read — mirrors upstream
+///     svelte2tsx's `ExportedNames.ts:197-204` behaviour where the
+///     post-decl `;name;` reference is emitted only for the
+///     `$$.props.bindings` set. The fixture `$bindable-reassign.v5`
+///     locks this contract.
 ///   - script-declared bindings that are referenced from the template
 ///     (component imports, locals only used in markup)
 ///
@@ -76,7 +82,7 @@ pub(crate) fn emit_void_block(
     out: &mut String,
     summary: &TemplateSummary,
     store_refs: &[SmolStr],
-    prop_names: &[SmolStr],
+    bindable_prop_names: &[SmolStr],
     template_refs: &[SmolStr],
     exported_locals: &[SmolStr],
 ) {
@@ -103,7 +109,7 @@ pub(crate) fn emit_void_block(
             emit(out, base);
         }
     }
-    for name in prop_names {
+    for name in bindable_prop_names {
         emit(out, name);
     }
     for name in template_refs {

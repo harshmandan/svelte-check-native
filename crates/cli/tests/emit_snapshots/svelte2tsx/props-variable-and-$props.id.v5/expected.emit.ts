@@ -10,7 +10,6 @@ async function $$render_ec5d75ac() {
         (id);
         (props);
     });
-    void props;
     void id;
     return { props: /** @type {$$ComponentProps} */({}) };
 }

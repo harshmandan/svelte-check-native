@@ -26,7 +26,6 @@ async function $$render_b09ebc4f() {
     });
     void $store;
     void store;
-    void foo;
     return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_b09ebc4f;

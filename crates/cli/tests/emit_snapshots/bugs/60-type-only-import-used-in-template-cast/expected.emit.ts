@@ -12,7 +12,6 @@ async function $$render_6743ac1f() {
         { svelteHTML.createElement("div", {});             (getDuration(item as AppVideo));
         }
     });
-    void item;
     void getDuration;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }

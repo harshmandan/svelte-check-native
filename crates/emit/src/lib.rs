@@ -1177,7 +1177,7 @@ fn emit_document_with_render_name(
         let _ = writeln!(buf, "    type $$Events = {body};");
     }
     let ScriptAndTemplateAnalysis {
-        prop_names,
+        bindable_prop_names,
         prop_type_source,
         store_refs,
         template_void_refs,
@@ -1322,7 +1322,7 @@ fn emit_document_with_render_name(
         buf.raw_string_mut(),
         summary,
         &store_refs,
-        &prop_names,
+        &bindable_prop_names,
         &template_void_refs,
         &exported_locals,
     );

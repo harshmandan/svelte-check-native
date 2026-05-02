@@ -1,9 +1,18 @@
 //! Cross-cutting analyze pass that runs after hoisted imports but
 //! before the template-check wrapper.
 //!
-//! Produces five named buckets in [`ScriptAndTemplateAnalysis`]:
+//! Produces six named buckets in [`ScriptAndTemplateAnalysis`]:
 //!
 //! - `prop_names` — destructured names from `let { … } = $props()`.
+//!   Used to keep `template_void_refs` from double-voiding what
+//!   void-emission already covers, and as the source set the
+//!   bindable subset is filtered from.
+//! - `bindable_prop_names` — the subset of `prop_names` whose
+//!   destructure entry is `= $bindable(...)`. Only these get the
+//!   outer-scope `void <name>;` emission — non-bindable prop locals
+//!   are left exposed so TS6133 fires on the ones that are never
+//!   read (matching upstream svelte2tsx's
+//!   `ExportedNames.ts:197-204` `;foo;`-on-$bindable behaviour).
 //! - `prop_type_source` — the Props type text emit will use, with
 //!   the SvelteKit route-prop synth (PageData / LayoutData /
 //!   ActionData) folded in when a route file has no user-provided
@@ -38,7 +47,7 @@ use crate::sveltekit;
 /// Props, store auto-subscribes, and template-referenced identifier
 /// buckets — see module docs.
 pub(crate) struct ScriptAndTemplateAnalysis {
-    pub prop_names: Vec<SmolStr>,
+    pub bindable_prop_names: Vec<SmolStr>,
     pub prop_type_source: Option<String>,
     pub store_refs: Vec<SmolStr>,
     pub template_void_refs: Vec<SmolStr>,
@@ -78,6 +87,13 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
     if let Some(parsed) = &parsed_mod {
         collect_top_level_bindings(&parsed.program, &mut script_bindings);
     }
+
+    let bindable_prop_names: Vec<SmolStr> = props_info
+        .destructures
+        .iter()
+        .filter(|p| p.is_bindable)
+        .map(|p| p.local_name.clone())
+        .collect();
 
     let (prop_names, prop_type_source): (Vec<SmolStr>, Option<String>) =
         if let (Some(_s), Some(instance), Some(parsed_orig)) =
@@ -194,7 +210,7 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
     store_refs.extend(template_store_refs);
 
     ScriptAndTemplateAnalysis {
-        prop_names,
+        bindable_prop_names,
         prop_type_source,
         store_refs,
         template_void_refs,

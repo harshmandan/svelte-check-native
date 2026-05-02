@@ -1,0 +1,15 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "strict": true,
+        "noEmit": true,
+        "isolatedModules": true,
+        "skipLibCheck": true,
+        "noUnusedLocals": true,
+        "lib": ["ES2022", "DOM", "DOM.Iterable"],
+        "types": []
+    },
+    "include": ["clean.ts", "broken.ts"]
+}

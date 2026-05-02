@@ -21,7 +21,6 @@ async function $$render_edb4eb12<T>() {
             }
         }
     });
-    void b;
     void rect;
     return { props: /** @type {$$ComponentProps} */({}) };
 }

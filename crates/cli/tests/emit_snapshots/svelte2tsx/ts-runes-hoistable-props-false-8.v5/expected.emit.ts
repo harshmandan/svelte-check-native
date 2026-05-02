@@ -17,7 +17,6 @@ async function $$render_f45a6d7c<T extends { a: string }>() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    void prop;
     return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_f45a6d7c;

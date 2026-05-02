@@ -11,8 +11,6 @@ async function $$render_628a5909() {
             (index);
         }
     });
-    void label;
-    void index;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_628a5909;

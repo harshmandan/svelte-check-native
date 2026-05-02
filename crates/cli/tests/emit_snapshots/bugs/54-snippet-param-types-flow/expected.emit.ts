@@ -18,8 +18,6 @@ async function $$render_22446700() {
         (header(['id', 'label']));
         (row({ id: 1, label: 'a' }));
     });
-    void row;
-    void header;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_22446700;

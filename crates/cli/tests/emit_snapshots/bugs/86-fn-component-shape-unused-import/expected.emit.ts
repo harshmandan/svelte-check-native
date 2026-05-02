@@ -19,7 +19,6 @@ let { value }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props()
         { svelteHTML.createElement("span", {});             (value);
         }
     });
-    void value;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_f80460e6;

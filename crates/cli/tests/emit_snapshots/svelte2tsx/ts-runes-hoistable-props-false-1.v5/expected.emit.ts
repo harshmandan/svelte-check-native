@@ -20,7 +20,6 @@ async function $$render_032e3bf2() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    void foo;
     return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_032e3bf2;

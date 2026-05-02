@@ -23,8 +23,6 @@ async function $$render_4e494ca9() {
             { svelteHTML.createElement("span", {});             }
         }
     });
-    void data;
-    void form;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_4e494ca9;

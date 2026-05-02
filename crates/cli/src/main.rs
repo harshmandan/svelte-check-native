@@ -158,6 +158,23 @@ struct Cli {
     /// against upstream's.
     #[arg(long = "list-relevant", default_value_t = false, hide = true)]
     list_relevant: bool,
+
+    /// Surface hint-severity diagnostics — TS6133 / 6192 / 6196
+    /// (declared-but-never-read / unused-imports), TS6385 / 6387
+    /// (deprecation hints). Default off, mirroring upstream
+    /// svelte-check's CLI writer (which drops severity ≠
+    /// ERROR/WARNING per writers.ts:166-171). With this flag,
+    /// tsgo gets `--noUnusedLocals` and `--noUnusedParameters`
+    /// appended to its argv so the codes fire from the CLI, and
+    /// the surfaced diagnostics are tagged `severity: Hint`
+    /// (printed as `HINT` in machine-output, severity 4 in
+    /// machine-verbose JSON), matching upstream LS's
+    /// `getSuggestionDiagnostics` semantics. Required for the
+    /// `language-server`-style fixtures that expect hint codes
+    /// (`$bindable-reassign.v5`, `deprecated-unused-hints`,
+    /// etc.).
+    #[arg(long = "include-suggestions", default_value_t = false)]
+    include_suggestions: bool,
 }
 
 fn main() -> ExitCode {
@@ -324,6 +341,7 @@ fn main() -> ExitCode {
         cli.ignore_node_modules_warnings,
         &warning_filter_plan,
         &kit_files_settings,
+        cli.include_suggestions,
     )
 }
 
@@ -577,7 +595,13 @@ fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Opti
     }
     let base = match severity {
         svn_typecheck::Severity::Error => "https://svelte.dev/docs/svelte/compiler-errors#",
-        svn_typecheck::Severity::Warning => "https://svelte.dev/docs/svelte/compiler-warnings#",
+        // Hint-severity diagnostics surface only via tsgo
+        // (`--include-suggestions`), never via the Svelte compiler,
+        // so they shouldn't reach this svelte-doc URL builder. Treat
+        // any non-error severity as warning for URL purposes.
+        svn_typecheck::Severity::Warning | svn_typecheck::Severity::Hint => {
+            "https://svelte.dev/docs/svelte/compiler-warnings#"
+        }
     };
     Some(format!("{base}{}", code.replace('-', "_")))
 }
@@ -802,6 +826,7 @@ fn escape_solution_tsconfig(candidate: &Path) -> Option<PathBuf> {
 /// human output; `timings` prints a phase-by-phase breakdown when
 /// true.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn run_typecheck(
     workspace: &Path,
     solution_root_tsconfig: Option<&Path>,
@@ -818,6 +843,7 @@ fn run_typecheck(
     ignore_node_modules_warnings: bool,
     warning_filter_plan: &svelte_config::WarningFilterPlan,
     kit_files_settings: &svn_core::sveltekit::KitFilesSettings,
+    include_suggestions: bool,
 ) -> ExitCode {
     let phase_start = std::time::Instant::now();
 
@@ -1089,6 +1115,7 @@ fn run_typecheck(
             tsconfig,
             inputs,
             tsgo_diagnostics,
+            include_suggestions,
         ) {
             Ok(out) => (out.diagnostics, out.extended_diagnostics),
             Err(err) => {
@@ -1222,7 +1249,10 @@ fn run_typecheck(
         .iter()
         .filter(|d| matches!(d.severity, svn_typecheck::Severity::Error))
         .count();
-    let warning_count = diagnostics.len() - error_count;
+    let warning_count = diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, svn_typecheck::Severity::Warning))
+        .count();
 
     // `<N> FILES` in the COMPLETED line mirrors upstream svelte-check's
     // denominator exactly: it's `|entries ∪ files-with-diagnostics|`,

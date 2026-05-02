@@ -35,7 +35,10 @@ pub(crate) fn print_diagnostics(
         .iter()
         .filter(|d| matches!(d.severity, svn_typecheck::Severity::Error))
         .count();
-    let warnings = diagnostics.len() - errors;
+    let warnings = diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, svn_typecheck::Severity::Warning))
+        .count();
     let files_with_problems: std::collections::HashSet<_> =
         diagnostics.iter().map(|d| &d.source_path).collect();
     let use_color = color.use_color();
@@ -107,6 +110,7 @@ fn print_machine(
         let type_label = match d.severity {
             svn_typecheck::Severity::Error => "ERROR",
             svn_typecheck::Severity::Warning => "WARNING",
+            svn_typecheck::Severity::Hint => "HINT",
         };
         if verbose {
             // Build the payload field-by-field so the `code` value
@@ -200,6 +204,7 @@ fn print_human(
         let label = match d.severity {
             svn_typecheck::Severity::Error => paint("Error", "31", color),
             svn_typecheck::Severity::Warning => paint("Warn", "33", color),
+            svn_typecheck::Severity::Hint => paint("Hint", "36", color),
         };
         // Span length for the code-frame caret. We have a real
         // [start, end) so prefer that; fall back to 1 char when the

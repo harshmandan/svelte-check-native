@@ -56,11 +56,19 @@ pub struct RunOutput {
 /// When `extended_diagnostics` is true, `--extendedDiagnostics` is
 /// appended to tsgo's argv; the stats block tsgo emits after the last
 /// diagnostic is captured in the returned `extended_diagnostics` field.
+///
+/// When `include_suggestions` is true, `--noUnusedLocals` and
+/// `--noUnusedParameters` are appended to tsgo's argv so TS6133
+/// (declared-but-never-read) fires in CLI mode the way upstream LS's
+/// `getSuggestionDiagnostics` would. The caller is responsible for
+/// reclassifying the resulting codes to `Severity::Hint` afterwards;
+/// the runner just gets tsgo to emit them.
 pub fn run(
     tsgo: &TsgoBinary,
     overlay_tsconfig: &Path,
     workspace: &Path,
     extended_diagnostics: bool,
+    include_suggestions: bool,
 ) -> Result<RunOutput, RunError> {
     let mut args: Vec<std::ffi::OsString> = vec![
         "--project".into(),
@@ -71,6 +79,10 @@ pub fn run(
     ];
     if extended_diagnostics {
         args.push("--extendedDiagnostics".into());
+    }
+    if include_suggestions {
+        args.push("--noUnusedLocals".into());
+        args.push("--noUnusedParameters".into());
     }
     // TS 7.0 parallelism knobs, exposed via env vars while we
     // validate impact. Eventually become first-class CLI flags on

@@ -230,6 +230,7 @@ pub fn check(
     user_tsconfig: &Path,
     inputs: Vec<CheckInput>,
     extended_diagnostics: bool,
+    include_suggestions: bool,
 ) -> Result<CheckOutput, CheckError> {
     let layout = CacheLayout::for_workspace_with_solution_root(
         workspace,
@@ -486,6 +487,7 @@ pub fn check(
         &layout.overlay_tsconfig,
         workspace,
         extended_diagnostics,
+        include_suggestions,
     )?;
 
     // Step 4: map diagnostics back to source paths + apply line map.
@@ -494,13 +496,70 @@ pub fn check(
     // (e.g. TS5102 baseUrl deprecation; we filter rather than re-add
     // baseUrl because doing so suppresses tsgo's diagnostic emission
     // on our overlay files entirely).
-    let diagnostics = run
+    let mut diagnostics: Vec<CheckDiagnostic> = run
         .diagnostics
         .into_iter()
         .filter(|d| !filters::is_overlay_tsconfig_noise(d, &layout))
         .filter_map(|d| map_diagnostic(d, &layout, &map_data))
         .filter(|d| !filters::is_svelte4_reactive_noop_comma(d))
+        .map(|mut d| {
+            // Reclassify suggestion-style codes as Hint when the caller
+            // asked for them. tsgo doesn't emit hint severity from CLI;
+            // it emits these codes as Error when `--noUnusedLocals` /
+            // `--noUnusedParameters` are on (which we set in the runner
+            // when `include_suggestions` is true). The reclassification
+            // is what makes the machine-output writer label them HINT
+            // instead of ERROR, matching upstream LS's
+            // `getSuggestionDiagnostics` semantics.
+            //
+            // Codes:
+            //   6133 — declared but never read (locals, params)
+            //   6192 — all imports unused
+            //   6196 — declared but never used (looser than 6133)
+            //   6385 — `<X>` is deprecated
+            //   6387 — function decorator deprecated
+            //
+            // 6385/6387 don't fire from tsgo CLI (no flag exposes
+            // them); kept here for symmetry once they do.
+            if include_suggestions
+                && let DiagnosticCode::Numeric(n) = &d.code
+                && matches!(*n, 6133 | 6192 | 6196 | 6385 | 6387)
+            {
+                d.severity = output::Severity::Hint;
+            }
+            d
+        })
         .collect();
+
+    // Drop unused-import / unused-local hints whose source position
+    // sits on an import statement that ALSO has a module-resolution
+    // error (TS2307 cannot-find-module / TS2305 missing export /
+    // TS2306 not a module). Mirrors upstream tsgo's
+    // getSuggestionDiagnostics behaviour: when a symbol's import
+    // source can't be resolved, the unused-locals checker can't
+    // safely conclude the symbol is unused (its type is unknown,
+    // so any usage analysis is moot). Upstream LS surfaces only
+    // the resolution error, not the spurious unused-decl hint
+    // (verified against `pug` fixture's expected JSON which has
+    // 2307×2 + 2322 only, no 6133/6192 on the same import lines).
+    if include_suggestions {
+        let suppressed_lines: std::collections::HashSet<(PathBuf, u32)> = diagnostics
+            .iter()
+            .filter(|d| {
+                matches!(
+                    d.code,
+                    DiagnosticCode::Numeric(2307 | 2305 | 2306)
+                )
+            })
+            .map(|d| (d.source_path.clone(), d.line))
+            .collect();
+        diagnostics.retain(|d| {
+            if !matches!(d.code, DiagnosticCode::Numeric(6133 | 6192 | 6196)) {
+                return true;
+            }
+            !suppressed_lines.contains(&(d.source_path.clone(), d.line))
+        });
+    }
     Ok(CheckOutput {
         diagnostics,
         extended_diagnostics: run.extended_diagnostics,

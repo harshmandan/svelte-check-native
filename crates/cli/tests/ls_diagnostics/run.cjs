@@ -91,7 +91,7 @@ const SKIP_LIST = {
     // bucket=missing-code
     '$$events': 'missing-code: 6385/6387 deprecation hints not surfaced',
     'deprecated-unused-hints': 'missing-code: 6133/6385 unused/deprecated hints filtered',
-    '$bindable-reassign.v5': 'missing-code: 6133 unused-declaration hint filtered',
+    // (was '$bindable-reassign.v5' — closed by R-Conv #22 V5 Phase 5: --include-suggestions surfaces TS6133 hints)
     'const-tag': 'missing-code: 6133 unused-declaration hint filtered (5×)',
     'parser-error': 'missing-code: -1 svelte-compiler parser error path differs',
     'svelte-element-error': 'missing-code: -1 svelte-compiler parser error path differs',
@@ -224,6 +224,13 @@ function runBinary(fixtureDir) {
         '--workspace', fixtureDir,
         '--tsconfig', tsconfig,
         '--output', 'machine-verbose',
+        // Upstream LS's DiagnosticsProvider always calls
+        // getSuggestionDiagnostics in addition to
+        // getSemanticDiagnostics (DiagnosticsProvider.ts:97), so
+        // hint-severity codes (TS6133/6192/6196/6385/6387) are
+        // part of every fixture's expected output. Pass our
+        // equivalent flag so the comparison sees the same surface.
+        '--include-suggestions',
     ];
 
     let stdout = '';
@@ -255,7 +262,7 @@ function runBinary(fixtureDir) {
         } catch {
             continue;
         }
-        if (entry.type !== 'ERROR' && entry.type !== 'WARNING') continue;
+        if (entry.type !== 'ERROR' && entry.type !== 'WARNING' && entry.type !== 'HINT') continue;
         const fname = String(entry.filename || '').replace(/\\/g, '/');
         const base = path.basename(fname);
         // Upstream's LS test asserts diagnostics for ONE opened document

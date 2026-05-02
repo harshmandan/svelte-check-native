@@ -38,6 +38,14 @@ pub struct RawDiagnostic {
 pub enum Severity {
     Error,
     Warning,
+    /// Hint-severity diagnostics — TS6133 / 6192 / 6196 (unused
+    /// locals, unused imports), TS6385 / 6387 (deprecation hints).
+    /// Upstream svelte-check's CLI writers drop these (writers.ts:166-171
+    /// only emits ERROR/WARNING types); upstream LS surfaces them via
+    /// `getSuggestionDiagnostics`. We keep the variant so the
+    /// `--include-suggestions` flag can flow them through the same
+    /// machine-output writer the LS-diagnostic test suite consumes.
+    Hint,
 }
 
 /// Parse tsgo's full stdout into a list of diagnostics. ANSI escape
@@ -89,6 +97,11 @@ fn parse_header(line: &str) -> Option<RawDiagnostic> {
     let after = after.strip_prefix(match severity {
         Severity::Error => "error TS",
         Severity::Warning => "warning TS",
+        // Unreachable: tsgo CLI never prints a "hint TS" header.
+        // The Hint variant is only assigned post-parse by callers
+        // who reclassify codes (lib.rs's `--include-suggestions`
+        // pass).
+        Severity::Hint => unreachable!("tsgo never emits a 'hint' header"),
     })?;
     let colon_idx = after.find(": ")?;
     let code: u32 = after[..colon_idx].parse().ok()?;

@@ -3,7 +3,12 @@
 async function $$render_5224841b() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("div", {});         }
+        { svelteHTML.createElement("div", {
+            ...__svn_empty({"data-foo": (true)}),
+            ...__svn_empty({"data-bare": __svn_any()}),
+            ...__svn_empty({"data-bar": `to`}),
+        });
+        }
     });
     return { props: /** @type {any} */({}) };
 }

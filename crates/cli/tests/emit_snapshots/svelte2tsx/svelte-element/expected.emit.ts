@@ -16,6 +16,7 @@ async function $$render_4160f2ef() {
         });
         }
         { svelteHTML.createElement(('a'), {
+            "data-sveltekit-preload-data": true,
             "href": `https://kit.svelte.dev`,
         });
         }

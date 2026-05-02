@@ -510,6 +510,26 @@ declare const __svn_self_default: import('svelte').Component<any, any, any>;
 declare function __svn_any(x: any): any;
 
 /**
+ * Type-erasing wrapper that returns `{}` regardless of its inputs.
+ * Mirrors upstream svelte2tsx's `__sveltets_2_empty` (svelte-shims-v4.d.ts:139).
+ *
+ * Used to wrap `data-*` attribute pairs in DOM-element createElement
+ * calls so TS sees the value expression as a real read (suppressing
+ * TS6133 on identifiers used only there) without polluting the
+ * strict typed-attribute interface with the dynamic key. Emit
+ * pattern (matches upstream Attribute.ts:86-94):
+ *
+ *     svelteHTML.createElement("div", {
+ *         ...__svn_empty({"data-tid": tid}),
+ *     });
+ *
+ * The spread of `{}` injects nothing into the resulting object,
+ * so per-element strict typing still works; the inner `{...}`
+ * literal is type-checked normally so `tid` counts as referenced.
+ */
+declare function __svn_empty(...dummy: any[]): {};
+
+/**
  * `interface $$Props` cross-check shim. When the component declares a
  * Svelte-4 `$$Props` interface AND a sibling `export let X: T`, the
  * render fn returns its props as

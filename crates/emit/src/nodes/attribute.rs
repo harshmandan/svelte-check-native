@@ -13,13 +13,19 @@ use std::fmt::Write;
 use crate::emit_buffer::EmitBuffer;
 
 /// Drop attributes that the svelte-jsx typings reject at the strict
-/// interface but real Svelte allows: `data-*`, `aria-*`, CSS custom
-/// properties, namespaced (`xml:lang`, `xlink:href`), the `this`
-/// directive on `<svelte:element>`, the `slot=""` directive, and
-/// React-style camelCase synonyms whose lowercase counterparts svelte-jsx
-/// declares.
+/// interface but real Svelte allows: `aria-*`, CSS custom properties,
+/// namespaced (`xml:lang`, `xlink:href`), the `this` directive on
+/// `<svelte:element>`, the `slot=""` directive, and React-style
+/// camelCase synonyms whose lowercase counterparts svelte-jsx declares.
+///
+/// `data-*` is NOT skipped — it's wrapped in `...__svn_empty({...})`
+/// at emit time so the value expression stays referenced (suppresses
+/// TS6133 on identifiers that only appear in `data-foo={expr}`
+/// attributes). Mirrors upstream svelte2tsx's `Attribute.ts:86-94`.
+/// `data-sveltekit-*` is the carve-out: those are typed in svelte-jsx
+/// directly so the wrap would add noise — pass them through unwrapped.
 pub(crate) fn should_skip(name: &str) -> bool {
-    if name.starts_with("data-") || name.starts_with("aria-") {
+    if name.starts_with("aria-") {
         return true;
     }
     if name.starts_with("--") {
@@ -38,6 +44,15 @@ pub(crate) fn should_skip(name: &str) -> bool {
         return true;
     }
     false
+}
+
+/// True when the attribute should be wrapped in
+/// `...__svn_empty({...})` at emit time. Matches upstream
+/// `Attribute.ts:86` predicate exactly: any `data-*` attribute that
+/// isn't a `data-sveltekit-*` (those are typed by svelte-jsx
+/// directly).
+pub(crate) fn needs_data_attr_wrap(name: &str) -> bool {
+    name.starts_with("data-") && !name.starts_with("data-sveltekit-")
 }
 
 /// React-style camelCase HTML attribute names that have a lowercase
@@ -116,19 +131,35 @@ pub(crate) fn emit_plain(
     let name = p.name.as_str();
     let name_range = svn_core::Range::new(p.range.start, p.range.start + name.len() as u32);
     let key_text = format!("\"{name}\"");
+    let wrap = needs_data_attr_wrap(name);
+    let (key_prefix, line_suffix) = if wrap {
+        ("...__svn_empty({", "}),")
+    } else {
+        ("", ",")
+    };
     match &p.value {
         None => {
             // Boolean attribute: `<input required>` → `"required": true,`
             // `<div popover>` carve-out: upstream emits `"": ""`.
-            let value = if name == "popover" { "\"\"" } else { "true" };
+            // For data-* boolean attrs, upstream uses `__sveltets_2_any()`
+            // as the value placeholder (Attribute.ts:91). Match it.
+            let value = if wrap {
+                "__svn_any()"
+            } else if name == "popover" {
+                "\"\""
+            } else {
+                "true"
+            };
             buf.push_str(&indent);
+            buf.push_str(key_prefix);
             buf.append_with_source(&key_text, name_range);
-            let _ = writeln!(buf, ": {value},");
+            let _ = writeln!(buf, ": {value}{line_suffix}");
         }
         Some(v) if v.parts.is_empty() => {
             buf.push_str(&indent);
+            buf.push_str(key_prefix);
             buf.append_with_source(&key_text, name_range);
-            buf.push_str(": \"\",\n");
+            let _ = writeln!(buf, ": \"\"{line_suffix}");
         }
         Some(v) if v.parts.len() == 1 => {
             match &v.parts[0] {
@@ -140,14 +171,16 @@ pub(crate) fn emit_plain(
                         && content.trim().parse::<f64>().is_ok()
                     {
                         buf.push_str(&indent);
+                        buf.push_str(key_prefix);
                         buf.append_with_source(&key_text, name_range);
-                        let _ = writeln!(buf, ": {},", content.trim());
+                        let _ = writeln!(buf, ": {}{line_suffix}", content.trim());
                         return;
                     }
                     let escaped = content.replace('\\', "\\\\").replace('`', "\\`");
                     buf.push_str(&indent);
+                    buf.push_str(key_prefix);
                     buf.append_with_source(&key_text, name_range);
-                    let _ = writeln!(buf, ": `{escaped}`,");
+                    let _ = writeln!(buf, ": `{escaped}`{line_suffix}");
                 }
                 svn_parser::AttrValuePart::Expression {
                     expression_range, ..
@@ -165,10 +198,11 @@ pub(crate) fn emit_plain(
                     let start = expression_range.start + leading_ws;
                     let end = start + trimmed.len() as u32;
                     buf.push_str(&indent);
+                    buf.push_str(key_prefix);
                     buf.append_with_source(&key_text, name_range);
                     buf.push_str(": (");
                     buf.append_with_source(trimmed, svn_core::Range::new(start, end));
-                    let _ = writeln!(buf, "),");
+                    let _ = writeln!(buf, "){line_suffix}");
                 }
             }
         }
@@ -178,6 +212,7 @@ pub(crate) fn emit_plain(
             // binds as a string. Follows upstream Attribute.ts's
             // multi-value branch.
             buf.push_str(&indent);
+            buf.push_str(key_prefix);
             buf.append_with_source(&key_text, name_range);
             buf.push_str(": `");
             for part in &v.parts {
@@ -207,7 +242,7 @@ pub(crate) fn emit_plain(
                     }
                 }
             }
-            let _ = writeln!(buf, "`,");
+            let _ = writeln!(buf, "`{line_suffix}");
         }
     }
 }
@@ -231,12 +266,19 @@ pub(crate) fn emit_expression(
     let start = e.expression_range.start + leading_ws;
     let end = start + trimmed.len() as u32;
     let name = e.name.as_str();
+    let wrap = needs_data_attr_wrap(name);
+    let (key_prefix, line_suffix) = if wrap {
+        ("...__svn_empty({", "}),")
+    } else {
+        ("", ",")
+    };
     buf.push_str(&indent);
+    buf.push_str(key_prefix);
     let name_range = svn_core::Range::new(e.range.start, e.range.start + name.len() as u32);
     buf.append_with_source(&format!("\"{name}\""), name_range);
     buf.push_str(": (");
     buf.append_with_source(trimmed, svn_core::Range::new(start, end));
-    let _ = writeln!(buf, "),");
+    let _ = writeln!(buf, "){line_suffix}");
 }
 
 pub(crate) fn emit_shorthand(

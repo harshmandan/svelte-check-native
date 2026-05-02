@@ -4,9 +4,12 @@ This file is loaded into every Claude Code session in this repo. Read
 `README.md` for the public-facing overview, and `notes/` (gitignored)
 for the current scoreboard (`notes/ROADMAP.md`), open work
 (`notes/OPEN.md`), bench fleet (`notes/BENCH.md`), deferred items
-(`notes/DEFERRED.md`), and chronological decision log
-(`notes/HISTORY.md`). This file is the shorter "rules of engagement"
-layer on top of all of them.
+(`notes/DEFERRED.md`), chronological decision log
+(`notes/HISTORY.md`), the parity strategy
+(`notes/PARITY_TESTING_PLAN.md`), and any active convergence work
+(e.g. `notes/LS_CONVERGENCE_NEXT_10.md`,
+`notes/LS_CONVERGENCE_V5_PRIORITY.md`). This file is the shorter
+"rules of engagement" layer on top of all of them.
 
 ## Project at a glance
 
@@ -83,6 +86,23 @@ mechanical — delete the submodule and grep for the marker.
    fragile by construction; an AST-level pattern match makes whole
    classes of bug categorically impossible.
 
+1a. **Every Statement walker uses `crates/analyze/src/ast_walk.rs`'s
+   `walk_statement_descend`.** Hand-rolled `match Statement::*`
+   recursion across N walkers is the exact bug class the parity plan's
+   P3 closed (see `notes/PARITY_TESTING_PLAN.md`). Pre-P3 every code
+   review round added a missing `Statement::ExportNamedDeclaration` /
+   `IfStatement.test` / for-init-VarDecl arm to seven walkers in
+   parallel. The shared visitor enforces a single source of truth, and
+   `WalkNode`'s match exhaustiveness fails the compiler when oxc adds
+   a Statement variant we haven't decided on. Same discipline on the
+   expression side: `collect_function_body_stmts`'s match enumerates
+   every `Expression` variant explicitly (no `_ => {}` fallback).
+   `slot_attr_rewrite::walk_statement_for_value_rewrite` and
+   `collect_hoisted_in_stmt` retain custom shape (scope-bracketed
+   shadow-stack management) but their Statement matches are still
+   exhaustive — the compiler enforces the rule even when the visitor
+   isn't a fit.
+
 2. **Two-phase transformer.** Phase 1 (analyze) produces a set of
    per-concern structs that Phase 2 (emit) reads read-only. Never
    mutate these during emit. Never register new names during emit.
@@ -91,7 +111,14 @@ mechanical — delete the submodule and grep for the marker.
    (template walker, includes `SlotDef[]` for the slot-let port),
    `VoidRefRegistry` (see rule #3), plus free-function helpers
    (`collect_top_level_bindings`, `find_store_refs`,
-   `find_template_refs`, `collect_typed_uninit_lets`).
+   `find_template_refs`, `collect_typed_uninit_lets`,
+   `find_dispatched_event_names`,
+   `collect_inline_typed_dispatcher_member_names`,
+   `find_dispatcher_event_type_sources`).
+   Shared infrastructure: `crates/analyze/src/ast_walk.rs` —
+   `walk_statement_descend` + `WalkNode` enum is the canonical
+   Statement descent; `collect_function_body_stmts` is the canonical
+   Expression descent. See rule #1a.
    Direction of travel is centralising into a single `SemanticModel`
    as each concern gets its second consumer — don't invent placeholder
    fields with no reader.
@@ -195,13 +222,13 @@ independently so a red signal points at exactly one stage.
 output. No tsgo in the loop. Mirrors upstream svelte2tsx's
 `expectedv2.js` pattern against _our_ emit. `UPDATE_SNAPSHOTS=1
 cargo test --test emit_snapshots` accepts deliberate emit changes;
-default mode fails on any mismatch with a contextual diff. ~410
-snapshots across three corpora:
+default mode fails on any mismatch with a contextual diff. Hundreds
+of snapshots across three corpora:
 
 - `svelte2tsx_v5/` — upstream's 63 `.v5` samples (full-component).
-- `htmlx2jsx/` — upstream's ~125 template-control-flow samples,
-  filtered against a 22-sample Svelte-4 skip list.
-- `bugs/` — our grey-box fixtures.
+- `htmlx2jsx/` — upstream's template-control-flow samples,
+  filtered against a Svelte-4 skip list.
+- `bugs/` — our grey-box fixtures (one per regression-locked bug).
 
 Runs in <1 s. Any emit change that's not deliberate must fail this
 gate before anything else is considered.
@@ -213,7 +240,7 @@ without pretending to test tsgo itself.
 **Stage 3 — error mapping (unit tests).** `crates/typecheck/src/lib.rs`'s
 test module exercises `map_diagnostic` in isolation — line-map
 translation, path reverse, edge cases (empty map, gaps, synthesized
-lines). 42 unit tests, no subprocess, no samples.
+lines). No subprocess, no samples.
 
 **Integration — targeted, small (`bug_fixtures`, `v5_fixtures`,
 `v5_stores_fixtures`).** Self-contained fixtures that do go through
@@ -222,6 +249,26 @@ or an exact expected-errors list. These catch "emit-plus-tsgo
 interaction" bugs — the kind where emit looks fine and tsgo looks
 fine but the combination has a surprise. Kept small on purpose;
 broad type-check surveying is the emit_snapshots job, not these.
+
+**LS diagnostic parity (`ls_diagnostics`).** Strictest gate, P1 of the
+parity plan. Runs upstream's 78 LS-feature diagnostic fixtures under
+`language-tools/packages/language-server/test/plugins/typescript/features/diagnostics/fixtures/`
+through our binary and asserts strict
+`(file, line, character, code)` multiset equality against
+`expectedv2.json` / `expected_svelte_5.json`. Every miss is a real
+upstream-divergence, not a self-snapshot drift. Each entry in
+`SKIP_LIST` (in `crates/cli/tests/ls_diagnostics/run.cjs`) carries a
+one-line bucket reason and is gated by stale-skip detection — a
+fixture that starts passing strict will fail the suite with `STALE:
+<name>` until removed from the list. Loose mode
+`LS_DIAGNOSTICS_LOOSE=1` falls back to `(file, code)` for envs
+that can't reach byte-perfect positions yet. Current scoreboard at
+HEAD: **53 / 78 passing, 25 skipped** (post-V5-Phase-5). Active
+convergence workstreams live in `notes/LS_CONVERGENCE_NEXT_10.md`,
+`notes/LS_CONVERGENCE_NEXT_10_BATCH2.md`,
+`notes/LS_CONVERGENCE_NEXT_10_BATCH3.md`, and
+`notes/LS_CONVERGENCE_V5_PRIORITY.md` (the V5 plan is complete —
+all three v5 fixtures closed via R-Conv #21 + #22).
 
 **End-to-end — `upstream_sanity`.** Reuses upstream's
 `test-sanity.js` unmodified via a node shim. Submodule bump =
@@ -250,6 +297,21 @@ by the suites above. Their error counts are not a shipping metric.
 The committed bench script (`scripts/bench.mjs`) takes
 `--target <path>` or `$BENCH_TARGET` — no project name hardcoded
 so the scenario is reproducible against any workspace.
+
+**Cache hygiene before every parity measurement.** Wipe THREE
+locations under the target workspace:
+`.svelte-check/`, `.svelte-kit/`, and
+`node_modules/.cache/svelte-check-native/`. The third is our
+shim cache; the first is our overlay cache; the second is
+SvelteKit's generated `$types`/route metadata. State from a
+prior run (or a different SvelteKit version) can persist in
+`.svelte-kit/types/` and silently poison our overlay's type
+references — observed on c4 admin-app where a stale
+`.svelte-kit/` caused our binary to fire 80+ spurious errors
+that vanished after wiping. As of HEAD `bench.mjs::wipeCaches`
+only wipes the first and third — wipe `.svelte-kit` manually
+when comparing against historical baselines. See
+`notes/BENCH.md` for the full recipe.
 
 **Per-diagnostic parity (`--diagnostic-detail`).** `bench.mjs --mode
 parity --diagnostic-detail` runs ours + upstream + upstream

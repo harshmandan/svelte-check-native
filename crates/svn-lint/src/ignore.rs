@@ -12,6 +12,23 @@ use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
 
+/// Runtime warning codes that upstream additionally accepts in
+/// `<!-- svelte-ignore X -->`. Mirrors `IGNORABLE_RUNTIME_WARNINGS` in
+/// `svelte/src/constants.js`. Our generated `Code` enum only covers
+/// compile warnings (the `messages/compile-warnings/*.md` source), so
+/// this list is the second half of upstream's `codes` union in
+/// `extract_svelte_ignore.js:20`.
+const IGNORABLE_RUNTIME_WARNINGS: &[&str] = &[
+    "await_waterfall",
+    "await_reactivity_loss",
+    "state_snapshot_uncloneable",
+    "binding_property_non_reactive",
+    "hydration_attribute_changed",
+    "hydration_html_changed",
+    "ownership_invalid_binding",
+    "ownership_invalid_mutation",
+];
+
 /// Legacy dashed codes → new underscore codes. Static table copied
 /// from upstream `extract_svelte_ignore.js:7-17`.
 const LEGACY_RENAMES: &[(&str, &str)] = &[
@@ -284,7 +301,11 @@ fn is_ident_char(b: u8) -> bool {
 fn fuzzymatch_known_code(input: &str) -> Option<&'static str> {
     let target = input.to_ascii_lowercase();
     let mut best: Option<(f64, &'static str)> = None;
-    for c in crate::codes::CODES {
+    let candidates = crate::codes::CODES
+        .iter()
+        .copied()
+        .chain(IGNORABLE_RUNTIME_WARNINGS.iter().copied());
+    for c in candidates {
         let sim = lev_similarity(&target, c);
         if sim >= 0.7 && best.map(|(s, _)| sim > s).unwrap_or(true) {
             best = Some((sim, c));
@@ -314,7 +335,7 @@ fn lev_similarity(a: &str, b: &str) -> f64 {
 }
 
 fn is_known_code(code: &str) -> bool {
-    Code::try_from_str(code).is_some()
+    Code::try_from_str(code).is_some() || IGNORABLE_RUNTIME_WARNINGS.contains(&code)
 }
 
 fn legacy_rename(code: &str) -> Option<&'static str> {

@@ -3,6 +3,8 @@
 async function $$render_200dbc4a<T>() {
     type $$ComponentProps = { prop?: T };
     type $$Events = {};
+    const x: any = undefined as any;
+    void x;
 
     let { prop }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     const foo = await fetch('/foo');
@@ -10,7 +12,10 @@ async function $$render_200dbc4a<T>() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const x = (): any => null as any;
+            const x = (): any => {
+                (await promise);
+                return null as any;
+            };
             void x;
             (foo);
             (await promise);
@@ -40,7 +45,6 @@ async function $$render_200dbc4a<T>() {
             } else if ((await promise)) {
                 void [promise];
             }
-            (await promise);
             {
                 const __svn_C_1f6 = __svn_ensure_component(Component);
                 new __svn_C_1f6({ target: __svn_any(), props: {"prop": (await promise)} });

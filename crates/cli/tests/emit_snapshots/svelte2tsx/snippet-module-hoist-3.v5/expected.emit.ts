@@ -3,16 +3,24 @@
 
     let foo = true;
 async function $$render_9abb519b() {
+    const hoistable1: any = undefined as any;
+    void hoistable1;
+    const hoistable2: any = undefined as any;
+    void hoistable2;
     ;(async () => {
         // template type-check body (incremental)
         {
-            const hoistable1 = (): any => null as any;
+            const hoistable1 = (): any => {
+                { svelteHTML.createElement("div", {});                 }
+                return null as any;
+            };
             void hoistable1;
-            const hoistable2 = (): any => null as any;
+            const hoistable2 = (): any => {
+                { svelteHTML.createElement("div", {});                     (foo);
+                }
+                return null as any;
+            };
             void hoistable2;
-            { svelteHTML.createElement("div", {});             }
-            { svelteHTML.createElement("div", {});                 (foo);
-            }
         }
     });
     void foo;

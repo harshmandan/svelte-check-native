@@ -3,24 +3,40 @@
 
 
 async function $$render_50f1c2a8() {
+    /** @type {any} */ const chain = /** @type {any} */ (undefined);
+    void chain;
+    /** @type {any} */ const chain2 = /** @type {any} */ (undefined);
+    void chain2;
+    /** @type {any} */ const chain3 = /** @type {any} */ (undefined);
+    void chain3;
+    /** @type {any} */ const hoistable = /** @type {any} */ (undefined);
+    void hoistable;
 
     let foo = true;
     ;(async () => {
         // template type-check body (incremental)
         {
-            const chain = () => null;
+            const chain = () => {
+                { svelteHTML.createElement("div", {});                     (foo);
+                }
+                return null;
+            };
             void chain;
-            const chain2 = () => null;
+            const chain2 = () => {
+                (chain());
+                return null;
+            };
             void chain2;
-            const chain3 = () => null;
+            const chain3 = () => {
+                (chain2());
+                return null;
+            };
             void chain3;
-            const hoistable = () => null;
+            const hoistable = () => {
+                { svelteHTML.createElement("h1", {});                 }
+                return null;
+            };
             void hoistable;
-            { svelteHTML.createElement("div", {});                 (foo);
-            }
-            (chain());
-            (chain2());
-            { svelteHTML.createElement("h1", {});             }
         }
     });
     void foo;

@@ -8,17 +8,25 @@ async function $$render_6c5b63d4() {
     let $store = /** @type {any} */ (/** @type {any} */ (null));
     /** @type {__SvnStoreValue<typeof store2>} */
     let $store2 = /** @type {any} */ (/** @type {any} */ (null));
+    /** @type {any} */ const _foo = /** @type {any} */ (undefined);
+    void _foo;
+    /** @type {any} */ const _foo2 = /** @type {any} */ (undefined);
+    void _foo2;
 
                                   
     ;(async () => {
         // template type-check body (incremental)
         {
-            const _foo = () => null;
+            const _foo = () => {
+                ($store);
+                return null;
+            };
             void _foo;
-            const _foo2 = () => null;
+            const _foo2 = () => {
+                ($store2);
+                return null;
+            };
             void _foo2;
-            ($store);
-            ($store2);
         }
     });
     void $store;

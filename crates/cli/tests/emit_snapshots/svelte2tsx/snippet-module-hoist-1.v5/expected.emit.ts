@@ -4,81 +4,105 @@
     let module = true;
     import { imported } from './x';
 async function $$render_3d709d05() {
+    const hoistable1: any = undefined as any;
+    void hoistable1;
+    const hoistable2: any = undefined as any;
+    void hoistable2;
+    const hoistable3: any = undefined as any;
+    void hoistable3;
+    const hoistable4: any = undefined as any;
+    void hoistable4;
+    const hoistable5: any = undefined as any;
+    void hoistable5;
+    const hoistable6: any = undefined as any;
+    void hoistable6;
+    const hoistable7: any = undefined as any;
+    void hoistable7;
+    const hoistable8: any = undefined as any;
+    void hoistable8;
+    const hoistable9: any = undefined as any;
+    void hoistable9;
+    const hoistable10: any = undefined as any;
+    void hoistable10;
+    const not_hoistable: any = undefined as any;
+    void not_hoistable;
 
                                    
     let foo = true;
     ;(async () => {
         // template type-check body (incremental)
         {
-            const hoistable1 = (): any => null as any;
+            const hoistable1 = (): any => {
+                { svelteHTML.createElement("div", {});                 }
+                return null as any;
+            };
             void hoistable1;
-            const hoistable2 = (bar): any => null as any;
+            const hoistable2 = (bar: any): any => {
+                { svelteHTML.createElement("div", {});                     (bar);
+                }
+                void bar;
+                return null as any;
+            };
             void hoistable2;
-            const hoistable3 = (bar: string): any => null as any;
+            const hoistable3 = (bar: string): any => {
+                { svelteHTML.createElement("div", {});                     (bar);
+                }
+                void bar;
+                return null as any;
+            };
             void hoistable3;
-            const hoistable4 = (foo): any => null as any;
+            const hoistable4 = (foo: any): any => {
+                { svelteHTML.createElement("div", {});                     (foo);
+                }
+                void foo;
+                return null as any;
+            };
             void hoistable4;
-            const hoistable5 = (): any => null as any;
+            const hoistable5 = (): any => {
+                { svelteHTML.createElement("button", {
+                    "onclick": (e => e),
+                });
+                }
+                return null as any;
+            };
             void hoistable5;
-            const hoistable6 = (): any => null as any;
+            const hoistable6 = (): any => {
+                { svelteHTML.createElement("div", {});                     (module);
+                }
+                return null as any;
+            };
             void hoistable6;
-            const hoistable7 = (): any => null as any;
+            const hoistable7 = (): any => {
+                { svelteHTML.createElement("div", {});                     (imported);
+                }
+                return null as any;
+            };
             void hoistable7;
-            const hoistable8 = (): any => null as any;
+            const hoistable8 = (): any => {
+                { svelteHTML.createElement("div", {});                     (global);
+                }
+                return null as any;
+            };
             void hoistable8;
-            const hoistable9 = (props: HTMLAttributes<HTMLDivElement>): any => null as any;
+            const hoistable9 = (props: HTMLAttributes<HTMLDivElement>): any => {
+                void props;
+                return null as any;
+            };
             void hoistable9;
-            const hoistable10 = (foo): any => null as any;
+            const hoistable10 = (foo: any): any => {
+                const bar = foo;
+                void bar;
+                (bar);
+                void foo;
+                return null as any;
+            };
             void hoistable10;
-            const not_hoistable = (): any => null as any;
+            const not_hoistable = (): any => {
+                { svelteHTML.createElement("div", {});                     (foo);
+                }
+                return null as any;
+            };
             void not_hoistable;
-            { svelteHTML.createElement("div", {});             }
-            {
-                void ((bar: any) => {
-                    { svelteHTML.createElement("div", {});                         (bar);
-                    }
-                    void bar;
-                });
-            }
-            {
-                void ((bar: string) => {
-                    { svelteHTML.createElement("div", {});                         (bar);
-                    }
-                    void bar;
-                });
-            }
-            {
-                void ((foo: any) => {
-                    { svelteHTML.createElement("div", {});                         (foo);
-                    }
-                    void foo;
-                });
-            }
-            { svelteHTML.createElement("button", {
-                "onclick": (e => e),
-            });
-            }
-            { svelteHTML.createElement("div", {});                 (module);
-            }
-            { svelteHTML.createElement("div", {});                 (imported);
-            }
-            { svelteHTML.createElement("div", {});                 (global);
-            }
-            {
-                void ((props: HTMLAttributes<HTMLDivElement>) => {
-                    void props;
-                });
-            }
-            {
-                void ((foo: any) => {
-                    const bar = foo;
-                    void bar;
-                    (bar);
-                    void foo;
-                });
-            }
-            { svelteHTML.createElement("div", {});                 (foo);
-            }
         }
     });
     void foo;

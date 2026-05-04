@@ -3,10 +3,14 @@
 
     export const foo = _foo;
 async function $$render_665a52b9() {
+    /** @type {any} */ const _foo = /** @type {any} */ (undefined);
+    void _foo;
     ;(async () => {
         // template type-check body (incremental)
         {
-            const _foo = () => null;
+            const _foo = () => {
+                return null;
+            };
             void _foo;
         }
     });

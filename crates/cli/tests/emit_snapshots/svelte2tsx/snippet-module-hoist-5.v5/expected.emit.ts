@@ -3,10 +3,14 @@
 
     import {} from 'svelte'
 async function $$render_3a14f9f8() {
+    /** @type {any} */ const foo = /** @type {any} */ (undefined);
+    void foo;
     ;(async () => {
         // template type-check body (incremental)
         {
-            const foo = () => null;
+            const foo = () => {
+                return null;
+            };
             void foo;
         }
     });

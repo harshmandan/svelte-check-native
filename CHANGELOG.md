@@ -4,6 +4,30 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2]
+
+Patch release. Two user-reported false positives.
+
+### Fixed
+
+- **`<!-- svelte-ignore <runtime_code> -->` no longer warns.** Codes
+  in upstream's `IGNORABLE_RUNTIME_WARNINGS` set
+  (`ownership_invalid_binding`, `ownership_invalid_mutation`,
+  `await_waterfall`, `await_reactivity_loss`,
+  `binding_property_non_reactive`, `state_snapshot_uncloneable`,
+  `hydration_attribute_changed`, `hydration_html_changed`) are now
+  recognised, matching upstream's `extract_svelte_ignore.js` union of
+  compile + runtime codes. Closes #11.
+- **TS2304 false positive on snippets referenced from `<script>` is
+  gone.** `let x = mySnippet` referencing a top-level `{#snippet
+  mySnippet(...)}` now resolves: the snippet's name is forward-
+  declared at the `$$render` function-body scope (matching upstream
+  svelte2tsx's `hoistSnippetBlock` behaviour). The inner-IIFE hoist
+  also consolidated body + signature into one arrow, so the user's
+  `(params)` site appears once in the overlay instead of twice —
+  drops a duplicate `noImplicitAny` diagnostic under `strict: true`.
+  Closes #10.
+
 ## [0.8.0]
 
 Minor release. 149 commits of upstream-parity convergence. The

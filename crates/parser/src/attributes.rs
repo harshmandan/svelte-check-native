@@ -201,33 +201,41 @@ fn parse_named_attribute(
     // only after a `:` but harmless to allow generally since plain
     // HTML attrs don't use pipes.
     //
-    // Tailwind/UnoCSS arbitrary-value class names need broader support:
-    //   `class:aspect-16/9={cond}`              — `/` in the bare name
+    // The upstream Svelte compiler reads attribute and directive names
+    // by terminating only on `\s`, `=`, `/`, `>`, `"`, `'` — every other
+    // byte is part of the name. Mirror that here so Tailwind/UnoCSS
+    // class-directive shapes round-trip:
+    //   `class:!font-semibold={cond}`            — `!` important prefix
+    //   `class:*:bg-red-500={cond}`              — `*:` child variant
+    //   `class:aspect-16/9={cond}`               — `/` in the bare name
     //   `class:grid-cols-[1fr_500px]={cond}`     — bracketed value
     //   `class:bg-[var(--my-prop)]={cond}`       — parens inside brackets
     //   `class:grid-cols-[minmax(0,1fr)]={cond}` — commas inside brackets
-    // Truncating at the first unsupported byte would split the directive
-    // into a malformed shorthand whose emit is invalid TS and aborts
-    // tsgo's program-wide type-check (TS1109 → no diagnostics for any
-    // file in the program).
+    // Terminator-set enforcement (instead of an alphanumeric allowlist)
+    // is what makes the parser robust to Tailwind's evolving sigil
+    // grammar without a code change per character — pre-fix, an
+    // unsupported byte truncated the name, the rest fell through to
+    // `parse_named_attribute` recovery as a separate plain attribute,
+    // and downstream emit reported it as an unknown DOM prop (TS2353
+    // — see gh#14). Bracket depth is still tracked so a closing `]`
+    // doesn't mistakenly terminate when the depth-0 terminator set
+    // (which excludes `]`) is in effect inside `[...]` — e.g. so
+    // `class:[&>li]:foo` doesn't end at the inner `>`.
     //
-    // Outside brackets: alphanumerics, `-_:.$|/`. Inside `[...]`:
-    // anything except the HTML attribute-name terminators
-    // (whitespace, `=`, `>`, `<`, `"`, `'`). Bracket depth is tracked
-    // so nested `[[...]]` round-trips, but Tailwind doesn't actually
-    // nest brackets in practice.
+    // `<` is the only depth-0 terminator we keep that upstream's
+    // regex doesn't include — Svelte's parser allows `<` inside
+    // attribute names but practical templates don't, and stopping
+    // there speeds up malformed-tag recovery in the surrounding
+    // template walker.
+    //
+    // `/` keeps terminating at depth 0 — without lookahead, accepting
+    // it would swallow the self-closing `/>` terminator (`<input
+    // bind:value/>`). Inside `[...]` upstream allows it, and so do
+    // we; that's where Tailwind's `aspect-16/9` shape lives.
     let name_start = scanner.pos();
     let mut bracket_depth: u32 = 0;
     while let Some(b) = scanner.peek_byte() {
         if bracket_depth > 0 {
-            // Inside brackets: terminate only on the chars that are
-            // also illegal in HTML attribute names (whitespace, `=`,
-            // `>`, `<`, `"`, `'`). Everything else (parens, commas,
-            // hashes, percents, slashes, etc.) is legitimate
-            // arbitrary-value content. We DON'T try to accept `>` or
-            // quotes for things like `[&>li]:before:content-['•']`
-            // — upstream svelte-check rejects those too, so emitting
-            // a malformed directive there is the correct surface.
             if matches!(
                 b,
                 b' ' | b'\t' | b'\n' | b'\r' | b'=' | b'>' | b'<' | b'"' | b'\''
@@ -240,19 +248,16 @@ fn parse_named_attribute(
                 bracket_depth -= 1;
             }
             scanner.advance_byte();
-        } else if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.' | b'$' | b'|')
-        {
-            // Note: `/` is NOT accepted outside brackets — it would
-            // swallow the self-closing `/>` terminator (`<input
-            // bind:value/>`). Tailwind's `aspect-16/9` shape doesn't
-            // appear in `class:` directives in practice; users put
-            // it in the quoted `class="…"` attr where `/` is fine.
-            scanner.advance_byte();
+        } else if matches!(
+            b,
+            b' ' | b'\t' | b'\n' | b'\r' | b'=' | b'/' | b'>' | b'<' | b'"' | b'\''
+        ) {
+            break;
         } else if b == b'[' {
             bracket_depth += 1;
             scanner.advance_byte();
         } else {
-            break;
+            scanner.advance_byte();
         }
     }
     if scanner.pos() == name_start {
@@ -920,6 +925,26 @@ mod tests {
         };
         assert_eq!(d.kind, DirectiveKind::Class);
         assert_eq!(d.name, "active");
+    }
+
+    #[test]
+    fn class_directive_with_bang_prefix() {
+        // Tailwind v4's important modifier prefix `!` (e.g. `!font-semibold`
+        // → `font-semibold !important`). Svelte's compiler accepts any
+        // non-terminator byte after `class:`, so the `!` must round-trip
+        // as part of the directive name. Pre-fix the scanner allowlist
+        // didn't include `!`, the name truncated at `class:`, the rest
+        // fell through to `parse_named_attribute` recovery, and
+        // `font-semibold` ended up as a plain attribute → tsgo flagged
+        // TS2353 against the element's prop type. See gh#14.
+        let attrs = parse_ok("class:!font-semibold={unread}");
+        assert_eq!(attrs.len(), 1, "got {:?}", attrs);
+        let Attribute::Directive(d) = &attrs[0] else {
+            panic!("expected directive, got {:?}", attrs[0]);
+        };
+        assert_eq!(d.kind, DirectiveKind::Class);
+        assert_eq!(d.name, "!font-semibold");
+        assert!(d.value.is_some());
     }
 
     #[test]

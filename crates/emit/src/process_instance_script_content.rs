@@ -805,7 +805,7 @@ fn collect_export_type_infos(
             // (function decls are hoisted in $$render's scope). Mirrors
             // upstream svelte2tsx's `createReturnElementsType` (`typeof
             // ${key}` when no explicit type).
-            let type_source = f.return_type.as_deref().map(|_| {
+            let type_source = f.return_type.as_deref().map(|rt| {
                 let type_params = f
                     .type_parameters
                     .as_deref()
@@ -816,7 +816,7 @@ fn collect_export_type_infos(
                     .unwrap_or_default();
                 let params_span = GetSpan::span(f.params.as_ref());
                 let params_text = &content[params_span.start as usize..params_span.end as usize];
-                let rt_span = GetSpan::span(&f.return_type.as_deref().unwrap().type_annotation);
+                let rt_span = GetSpan::span(&rt.type_annotation);
                 let ret_type = &content[rt_span.start as usize..rt_span.end as usize];
                 format!("{type_params}{params_text} => {ret_type}")
             });

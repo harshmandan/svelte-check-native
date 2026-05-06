@@ -546,10 +546,7 @@ pub fn check(
         let suppressed_lines: std::collections::HashSet<(PathBuf, u32)> = diagnostics
             .iter()
             .filter(|d| {
-                matches!(
-                    d.code,
-                    DiagnosticCode::Numeric(2307 | 2305 | 2306)
-                )
+                matches!(d.code, DiagnosticCode::Numeric(2305..=2307))
             })
             .map(|d| (d.source_path.clone(), d.line))
             .collect();

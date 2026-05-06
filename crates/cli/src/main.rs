@@ -826,7 +826,6 @@ fn escape_solution_tsconfig(candidate: &Path) -> Option<PathBuf> {
 /// human output; `timings` prints a phase-by-phase breakdown when
 /// true.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn run_typecheck(
     workspace: &Path,
     solution_root_tsconfig: Option<&Path>,

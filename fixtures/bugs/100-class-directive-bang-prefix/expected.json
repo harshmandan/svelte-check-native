@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "gh#14: `class:!NAME={cond}` (Tailwind v4 important-modifier prefix) round-trips as a single directive name. Pre-fix the attribute-name scanner allow-listed only `[A-Za-z0-9-_:.$|]` outside brackets; the `!` byte truncated the name to `class:`, the rest fell through to plain-attribute recovery as `font-semibold={unread}`, and tsgo flagged TS2353 against the `<span>` prop type. Post-fix the scanner mirrors upstream Svelte's terminator-set rule (`\\s = / > \" '`) — every other byte is part of the name, including `!`, `*`, and Tailwind's other sigils."
+}

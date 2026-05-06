@@ -4,6 +4,25 @@ All notable changes to `svelte-check-native` will be documented in this
 file. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3]
+
+Patch release. One user-reported false positive.
+
+### Fixed
+
+- **`class:!font-semibold={cond}` and other Tailwind-sigil class
+  directives no longer false-positive as TS2353.** The directive-name
+  scanner used an alphanumeric/`-_:.$|`/`[` allowlist outside
+  brackets, so a `!` byte (Tailwind v4's important-modifier prefix)
+  truncated the name to `class:`. Recovery then re-parsed the rest
+  as a plain DOM attribute, and tsgo correctly flagged it as an
+  unknown prop. The fix mirrors upstream Svelte's `read_tag` rule
+  (`compiler/phases/1-parse/state/element.js`): outside brackets,
+  terminate only on `\s = / > " '` (plus `<` for malformed-tag
+  recovery) — every other byte is part of the name. `!`, `*`, `&`,
+  and any future Tailwind sigil now round-trip without per-character
+  changes. Closes #14.
+
 ## [0.8.2]
 
 Patch release. Two user-reported false positives.

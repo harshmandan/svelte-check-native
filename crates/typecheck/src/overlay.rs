@@ -442,6 +442,23 @@ pub fn build(
         }
     }
 
+    // JS-overlay include glob — `<cache>/svelte/**/*.svn.js`. Picks
+    // up `.svelte.svn.js` overlays (script-less `.svelte` or
+    // `<script>` without `lang="ts"`) so they enter the program when
+    // the user's effective tsconfig has `allowJs: true`. Listing
+    // them in `compilerOptions.files` directly is what triggered
+    // tsgo's TS6504 fatal under the default `allowJs: false` and
+    // silently zeroed every other diagnostic (issue #16) — reaching
+    // them via `include` instead lets tsgo's own `allowJs` gate
+    // decide whether to load them, matching upstream svelte-check
+    // parity. `.svelte.svn.ts` overlays continue to land in
+    // `compilerOptions.files` directly via `generated_files` (no
+    // glob needed for them — they're plain TypeScript).
+    let cache_js_overlay_glob = format!("{}/**/*.svn.js", layout.svelte_dir.to_string_lossy());
+    if !user_includes.contains(&cache_js_overlay_glob) {
+        user_includes.push(cache_js_overlay_glob);
+    }
+
     let mut overlay = serde_json::Map::new();
     overlay.insert("extends".into(), Value::String(extends_rel));
     overlay.insert("compilerOptions".into(), Value::Object(compiler_options));

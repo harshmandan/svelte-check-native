@@ -16,7 +16,7 @@ use smol_str::SmolStr;
 
 use crate::process_instance_script_content;
 use crate::sveltekit;
-use crate::util::{is_ascii_ws, is_ident_byte, utf8_char_len};
+use crate::util::{is_ascii_ws, is_horiz_ws, is_ident_byte, utf8_char_len};
 
 /// Rewrite `let <name>: T;` → `let <name>!: T;` for each bind-target
 /// identifier, in-place inside the already-built output buffer.
@@ -530,6 +530,87 @@ pub(crate) fn is_runes_mode(doc: &svn_parser::Document<'_>) -> bool {
 /// Declarations without a type annotation or without an initializer
 /// are skipped — those are already handled by the widen / definite-
 /// assign passes.
+/// True iff a `\n` at byte position `s` is INSIDE a continued
+/// expression — i.e. the surrounding tokens make this newline an
+/// ASI-suppressed line break rather than a statement terminator.
+///
+/// Continues if either side hints at continuation:
+///   - previous non-ws byte is `=` (RHS of assignment incomplete)
+///   - next non-ws byte is an operator that takes a LHS (`?:.&|+-*/%^=`)
+///     EXCLUDING comment starts (`//` and `/*`), where the `/` would
+///     otherwise be misread as division.
+///
+/// `*` could also start `*/` (block comment close), but a `*/` only
+/// appears inside a block comment which the scanner shouldn't be
+/// inside — block comments suppress `\n` handling at parse time.
+/// Conservative: `*` followed by `/` is also non-continuation.
+fn line_continues(bytes: &[u8], s: usize) -> bool {
+    let mut prev = s;
+    while prev > 0 {
+        prev -= 1;
+        let b = bytes[prev];
+        if b != b' ' && b != b'\t' {
+            break;
+        }
+    }
+    let prev_continues = bytes[prev] == b'=';
+
+    let mut next = s + 1;
+    while next < bytes.len() && matches!(bytes[next], b' ' | b'\t' | b'\n') {
+        next += 1;
+    }
+    let next_continues = if next >= bytes.len() {
+        false
+    } else {
+        let c = bytes[next];
+        if !matches!(
+            c,
+            b'?' | b':'
+                | b'.'
+                | b'&'
+                | b'|'
+                | b'+'
+                | b'-'
+                | b'*'
+                | b'/'
+                | b'%'
+                | b'^'
+                | b'='
+        ) {
+            false
+        } else {
+            let after = bytes.get(next + 1).copied();
+            // `//` line comment, `/*` block comment, `*/` block close
+            !matches!((c, after), (b'/', Some(b'/')) | (b'/', Some(b'*')) | (b'*', Some(b'/')))
+        }
+    };
+
+    prev_continues || next_continues
+}
+
+/// Advance `s` past horizontal whitespace, then optionally past one
+/// `\n` (and following indentation) iff the next non-ws byte signals
+/// the declarator continues — i.e. is `:` (type annotation), `=`
+/// (initializer), or `!` (definite-assign marker). Returns the new
+/// `s`. Used by both declarator scanners to walk the post-name gap
+/// without misreading `let X\nlet Y = init` as one declarator.
+fn skip_to_decl_continuation(bytes: &[u8], mut s: usize) -> usize {
+    while s < bytes.len() && is_horiz_ws(bytes[s]) {
+        s += 1;
+    }
+    if s < bytes.len() && bytes[s] == b'\n' {
+        let mut probe = s + 1;
+        while probe < bytes.len() && is_ascii_ws(bytes[probe]) {
+            probe += 1;
+        }
+        let continues = probe < bytes.len() && matches!(bytes[probe], b':' | b'=' | b'!');
+        if continues {
+            s = probe;
+        }
+    }
+    s
+}
+
 pub(crate) fn denarrow_typed_exported_props_in_place(out: &mut String, target_names: &[SmolStr]) {
     if target_names.is_empty() {
         return;
@@ -599,15 +680,10 @@ fn try_process_let_statement_for_denarrow(
         let name_end = p;
         let name_bytes = &bytes[name_start..name_end];
 
-        let mut s = name_end;
-        while s < bytes.len() && is_ascii_ws(bytes[s]) {
-            s += 1;
-        }
+        let mut s = skip_to_decl_continuation(bytes, name_end);
         if s < bytes.len() && bytes[s] == b'!' {
             s += 1;
-            while s < bytes.len() && is_ascii_ws(bytes[s]) {
-                s += 1;
-            }
+            s = skip_to_decl_continuation(bytes, s);
         }
         let has_type_annotation = s < bytes.len() && bytes[s] == b':';
         if has_type_annotation {
@@ -618,6 +694,31 @@ fn try_process_let_statement_for_denarrow(
         let mut paren_depth: i32 = 0;
         while s < bytes.len() {
             let c = bytes[s];
+            // Inline `//` comment at top level ends the declarator-of-
+            // interest scan. The comment itself can contain anything
+            // (`= {} | "foo"` etc.) and walking through that text
+            // mis-fires the `=` / `\n` / `,` arms below. Stop at the
+            // `//` position so the trailer (if matched) is appended
+            // BEFORE the comment, not buried inside it. `/*` block
+            // comments behave the same way; skip to `*/` so the walk
+            // doesn't mis-fire on tokens inside.
+            if paren_depth == 0
+                && c == b'/'
+                && bytes.get(s + 1).copied() == Some(b'/')
+            {
+                break;
+            }
+            if paren_depth == 0
+                && c == b'/'
+                && bytes.get(s + 1).copied() == Some(b'*')
+            {
+                let mut k = s + 2;
+                while k + 1 < bytes.len() && !(bytes[k] == b'*' && bytes[k + 1] == b'/') {
+                    k += 1;
+                }
+                s = k.saturating_add(2).min(bytes.len());
+                continue;
+            }
             match c {
                 b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
                 b')' | b']' | b'}' => paren_depth -= 1,
@@ -644,37 +745,7 @@ fn try_process_let_statement_for_denarrow(
                 }
                 b',' | b';' if paren_depth == 0 => break,
                 b'\n' if paren_depth == 0 => {
-                    let mut prev = s;
-                    while prev > 0 {
-                        prev -= 1;
-                        let b = bytes[prev];
-                        if b != b' ' && b != b'\t' {
-                            break;
-                        }
-                    }
-                    let prev_continues = bytes[prev] == b'=';
-                    let mut next = s + 1;
-                    while next < bytes.len()
-                        && (bytes[next] == b' ' || bytes[next] == b'\t' || bytes[next] == b'\n')
-                    {
-                        next += 1;
-                    }
-                    let next_continues = next < bytes.len()
-                        && matches!(
-                            bytes[next],
-                            b'?' | b':'
-                                | b'.'
-                                | b'&'
-                                | b'|'
-                                | b'+'
-                                | b'-'
-                                | b'*'
-                                | b'/'
-                                | b'%'
-                                | b'^'
-                                | b'='
-                        );
-                    if !prev_continues && !next_continues {
+                    if !line_continues(bytes, s) {
                         break;
                     }
                 }
@@ -895,10 +966,7 @@ fn try_process_let_statement_for_widening(
         let name_end = p;
         let name = &bytes[name_start..name_end];
 
-        let mut s = name_end;
-        while s < bytes.len() && is_ascii_ws(bytes[s]) {
-            s += 1;
-        }
+        let mut s = skip_to_decl_continuation(bytes, name_end);
         let has_type_annotation = s < bytes.len() && bytes[s] == b':';
         if has_type_annotation {
             s += 1;

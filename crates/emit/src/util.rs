@@ -407,6 +407,19 @@ pub(crate) fn is_ascii_ws(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r')
 }
 
+/// Horizontal whitespace only: space and tab. Used by declarator
+/// scanners that need to know when a `\n` ends a statement vs.
+/// continues it — `is_ascii_ws` is too greedy for that, since a
+/// blanket newline skip after the name lets `let X\nlet Y = init`
+/// be misread as a single `let X = init` (with the next line's `=`
+/// attributed to the previous line's `X`). Pair with a deliberate
+/// `\n` continuation check at each call site so multi-line `let X:
+///     Type = init` shapes still parse as one declarator.
+#[inline]
+pub(crate) fn is_horiz_ws(b: u8) -> bool {
+    matches!(b, b' ' | b'\t')
+}
+
 #[inline]
 pub(crate) fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$'

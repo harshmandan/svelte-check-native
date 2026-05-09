@@ -3,7 +3,7 @@
 async function $$render_1b9e86d7() {
 
     let name1 = "world"
-    let name2
+    let name2 = /** @type {any} */ (null)
 
     let rename1 = '';
     let rename2 = /** @type {any} */ (null);

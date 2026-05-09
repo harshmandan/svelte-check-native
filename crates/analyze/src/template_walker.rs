@@ -1167,14 +1167,26 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
             collect_bind_this_checks(&s.attributes, &mut self.summary);
         }
         // Bare `on:NAME` event-bubbling on `<svelte:body>` /
-        // `<svelte:window>`. Each emits to a different DOM event-map
-        // (`HTMLBodyElementEventMap` / `WindowEventMap`) so the
-        // collector dispatches on the SvelteElementKind. Mirrors
-        // upstream svelte2tsx `event-handler.ts:63-72` which routes
-        // these through `__sveltets_2_mapBodyEvent` /
-        // `__sveltets_2_mapWindowEvent`. `<svelte:document>` is
-        // intentionally skipped — upstream's `event-handler.ts` doesn't
-        // handle it either.
+        // `<svelte:window>` / `<svelte:element>`. Each emits to a
+        // different DOM event-map (`HTMLBodyElementEventMap` /
+        // `WindowEventMap` / `HTMLElementEventMap`) so the collector
+        // dispatches on the SvelteElementKind. Mirrors upstream
+        // svelte2tsx `event-handler.ts:63-72` which routes these
+        // through `__sveltets_2_mapBodyEvent` /
+        // `__sveltets_2_mapWindowEvent` / `__sveltets_2_mapElementEvent`.
+        // `<svelte:document>` is intentionally skipped — upstream's
+        // `event-handler.ts` doesn't handle it either.
+        //
+        // `<svelte:element>` reuses the regular-element scope
+        // (`HTMLElementEventMap`) — the dynamic-tag form picks an
+        // arbitrary HTML element at runtime, so the broadest DOM-event
+        // map matches what consumers see when bubbling. Closes c4
+        // false-positive on `<Button on:click={onSubmit}>` where Button
+        // forwards from `<svelte:element on:click>` and pre-fix the
+        // bubble was missed entirely (events fell through to
+        // `{[k:string]: CustomEvent<any>}` index sig, making
+        // `(e?: MouseEvent) => void` handlers fail TS2345 against the
+        // resolved `(e: CustomEvent<any>) => void` callback).
         match s.kind {
             SvelteElementKind::Body => collect_bubbled_dom_events(
                 &s.attributes,
@@ -1184,6 +1196,11 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
             SvelteElementKind::Window => collect_bubbled_dom_events(
                 &s.attributes,
                 BubbledDomEventScope::SvelteWindow,
+                &mut self.summary,
+            ),
+            SvelteElementKind::Element => collect_bubbled_dom_events(
+                &s.attributes,
+                BubbledDomEventScope::Element,
                 &mut self.summary,
             ),
             _ => {}

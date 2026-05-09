@@ -522,7 +522,7 @@ declare function __svn_any<T = any>(): T;
  * Mirrors upstream svelte2tsx's `__sveltets_2_createComponentAny`
  * for `<svelte:self>` (see InlineComponent.ts:99).
  */
-declare const __svn_self_default: import('svelte').Component<any, any, any>;
+declare const __svn_self_default: import('svelte').Component<any, {}, any>;
 
 /**
  * JS-overlay definite-assign: `let b; b = __svn_any(b);` is the JS
@@ -801,7 +801,7 @@ declare function __svn_ensure_component<
               >
             ? new (options: { target?: any; props?: P }) => import('svelte').SvelteComponent<
                   P,
-                  Record<string, any>,
+                  Record<string, CustomEvent<any>>,
                   Record<string, any>
               > &
                   X & { $$bindings?: B }

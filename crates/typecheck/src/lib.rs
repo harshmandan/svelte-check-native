@@ -433,35 +433,38 @@ pub fn check(
                 pug_template_ranges,
             },
         );
-        // Only Kit-file overlays (route+layout+server+hooks) land in
-        // the tsconfig's `files` list now. They have no `.d.svelte.ts`
-        // re-export chain — their source `.ts`/`.js` paths go straight
-        // into `files` (and the originals go into `exclude` via
-        // `kit_overlay_sources`).
+        // `.svn.ts` (TS) Svelte overlays + Kit-file overlays land in
+        // the tsconfig's `files` list directly. `.svn.js` (JS overlays
+        // — script-less `.svelte` or `<script>` without `lang="ts"`)
+        // do NOT — listing a `.js` file in `compilerOptions.files`
+        // makes tsgo fire TS6504 under default `allowJs: false`, fatal
+        // at the program-config layer (issue #16). They reach the
+        // program through the `<cache>/svelte/**/*.svn.js` cache-mirror
+        // include glob.
         //
-        // `.svn.ts` and `.svn.js` Svelte overlays are reachable through
-        // the `<cache>/svelte/**/*.d.svelte.ts` include glob in
-        // `overlay::build`. Each ambient sidecar re-exports from the
-        // sibling overlay, so tsgo follows the re-export and pulls the
-        // `.svn.ts`/`.svn.js` into the program transitively. This
-        // mirrors upstream svelte-check (incremental.ts:456 keeps only
-        // user-listed config files + shims in `files`; overlays reach
-        // the program through the virtual `.d.svelte.ts` projection).
+        // `SvelteAuxiliary` overlays — out-of-scope `.svelte` files
+        // pulled in by transitive imports — also stay out of `files`.
+        // Listing them unconditionally re-introduces the
+        // out-of-scope-error noise the tsconfig scope filter exists
+        // to prevent. They reach via the `.d.svelte.ts` ambient
+        // sidecar chain when an in-scope file imports them.
         //
-        // The arrangement also fixes two pre-existing program-config
-        // hazards by construction:
-        //   - `.svn.js` overlays in `files` triggered tsgo's TS6504
-        //     under default `allowJs: false`, fatal at the
-        //     program-config layer (issue #16).
-        //   - `SvelteAuxiliary` overlays in `files` re-introduced the
-        //     out-of-scope-error noise that the tsconfig scope filter
-        //     exists to prevent.
-        // Both are now reached via the same `.d.svelte.ts` chain
-        // gated by the user's effective `allowJs` and scope filters.
-        if matches!(
-            input.kind,
-            InputKind::KitFile | InputKind::UserTsOverlay
-        ) {
+        // Why `.svn.ts` overlays stay in `files` (not in include via
+        // a `.d.svelte.ts` re-export glob, which would mirror upstream
+        // svelte-check's structure exactly): the
+        // `export { default } from './File.svelte.svn.ts'; export *
+        // from './File.svelte.svn.ts';` re-export chain doesn't
+        // preserve enough type info for tsgo to type-check Svelte 5
+        // snippet props at the consumer site (observed on shadcn-docs:
+        // 0 → 111 spurious TS7031 errors when overlays were dropped
+        // from `files` in commit a6a77bce; reverted here while keeping
+        // the rest of the overlay-parity refactor). Ours diverges
+        // from upstream's structure here for correctness — same
+        // class of intentional-divergence as `kit_types_mirror`,
+        // `__svn_self_default`, and the `.svn` infix.
+        let is_js_overlay = matches!(input.kind, InputKind::Svelte | InputKind::SvelteAuxiliary)
+            && !input.is_ts_overlay;
+        if !matches!(input.kind, InputKind::SvelteAuxiliary) && !is_js_overlay {
             generated_paths.push(gen_path);
         }
         if matches!(input.kind, InputKind::Svelte | InputKind::SvelteAuxiliary) {

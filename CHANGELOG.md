@@ -6,6 +6,18 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.5]
+
+Patch release. Closes the v0.7.2 emit regression on Svelte-4
+components (control-svelte-4 control-rig: 70 → 5 errors,
+restoring the v0.7.0 zero-error baseline modulo 5 valid user
+bugs that the tighter typing now correctly surfaces) plus the
+overlay-tsconfig parity refactor and a chain of secondary emit
+fixes. Net effect across the 24-bench fleet: **-264 errors**
+vs the v0.7.0 baseline, 12 byte-perfect matches, 8 improved
+benches (cobalt-web, cryptgeon, layerchart, palacms -252,
+threlte-flex/rapier/theatre/xr).
+
 ### Fixed
 
 - **Markup-only `.svelte` files no longer silently zero out every
@@ -22,6 +34,97 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   load them, matching upstream `svelte-check` parity (a `.js`
   overlay only enters upstream's program when the user opted into
   `allowJs: true`). Closes #16.
+- **Empty-Props Svelte-4 components with default slots no longer
+  fire TS2322 on every consumer.** v0.7.2's `Record<string,
+  never>` fallback for empty-Props (intended to fix `bind:this`
+  false positives — exported methods leaking as required props)
+  produced an unsatisfiable type when intersected with `{
+  children?: any }` for components with `<slot/>`: TS's index-
+  signature rules collapsed `Partial<Record<string, never> &
+  {children?: any}>` to a `[k: string]?: never`-bound shape that
+  rejects any `children` value not assignable to `never`.
+  Consumers passing implicit-children (`<StartLayout>...</StartLayout>`
+  Svelte-4 default-slot syntax) fired TS2322 at every call site.
+  Mirror upstream's `__sveltets_2_PropsWithChildren` shape via a
+  new `__SvnSvelte4SlotedProps<P, Widened>` helper that widens to
+  `any` when `P extends Record<string, never>` AND the component
+  has a default slot — same workaround upstream's source comments
+  out as "the alternative is non-fixable type errors because of
+  the way TypeScript index signatures work." control-svelte-4:
+  70 → 14 → 5 errors via this fix + the prop-widening scanner +
+  void-sequence rewrite + dispatcher/bubble overlap +
+  `<svelte:self>` ctor + `<svelte:element>` bubble.
+- **Prop-widening trailers (`X = undefined as any;`) no longer
+  attach to the wrong line.** Two scanner bugs in
+  `script_body_rewrites`: (1) post-name whitespace skip used
+  `is_ascii_ws` (which includes `\n`), so `let placeholder\nlet
+  autofocus = false` was misread as one declarator with
+  `autofocus`'s `=` attributed to `placeholder`; the trailer
+  for `placeholder` then landed AFTER autofocus's statement, and
+  autofocus lost its own widening. (2) The walk-loop's `\n`
+  continuation detection treated `/` as a continuation operator,
+  causing `let X = init // comment` to walk into the comment text
+  and bury the trailer inside it. Both fixed via a new
+  `is_horiz_ws` helper, `skip_to_decl_continuation`, and a
+  `line_continues` predicate that excludes `//`/`/*`/`*/`.
+- **`void (a, b, c)` and `$: (a, b, c)` reactive-dep idioms no
+  longer fire TS2871.** Svelte-4's "list reactive deps without
+  using their values" pattern produced sequence expressions whose
+  comma-LHS values had no side effects. Rewrite to `void [a, b,
+  c]` and `$: void [a, b, c]` post-emit — array-element position
+  satisfies the strict-mode "expression must be used" check.
+- **Dispatcher + bubble same-name event override now produces
+  `CustomEvent<any>`, not the bubble's exclusive type.** Mirrors
+  upstream `ComponentEvents.ts:283-286, 304` — when an event
+  name appears in BOTH the typed dispatcher AND the bubbled-event
+  list (DOM or component), the duplicate-property-key-last-wins
+  pattern emits `'name': __sveltets_2_customEvent` last in the
+  events object, widening to `CustomEvent<any>`. Closes a c4
+  false positive on `<Component on:menuOptionSelected={({detail})
+  => detail.folderId}>` when the component dispatches the event
+  with payload `{folderId, optionId}` AND bare-forwards the same
+  name from a child whose payload is `{id, optionId}` — pre-fix
+  bubble won exclusively, dropping the dispatcher's payload.
+- **`<svelte:self on:event={({detail}) => …}>` no longer fires
+  TS7031 on the `detail` destructure.** Two coupled changes in
+  the type shim: `__svn_ensure_component`'s Component branch
+  widened the events default from `Record<string, any>` to
+  `Record<string, CustomEvent<any>>` so `$on`'s callback contextually
+  types the destructure parameter; and `__svn_self_default`'s
+  Component generic Exports param tightened from `any` to `{}`
+  to prevent the intersection `SvelteComponent<...> & any & ...`
+  from collapsing the instance type to bare `any` (which would
+  defeat the contextual typing).
+- **`<svelte:element on:click>` now bubbles a `MouseEvent`, not
+  `CustomEvent<any>`.** Pre-fix the bubbled-DOM-event collector
+  gated on `Body` and `Window` only, so `<svelte:element>` events
+  fell through to the lax index sig. Now also handles `Element`
+  (the dynamic-tag form) with `BubbledDomEventScope::Element` —
+  same path upstream svelte2tsx routes through
+  `__sveltets_2_mapElementEvent`.
+
+### Changed
+
+- **Overlay tsconfig structure aligned with upstream `svelte-check`.**
+  Five-step refactor (commits `7fd098e7`..`a61a0d69`):
+  source `.svelte` paths now land in overlay's `exclude`; user
+  `include` patterns flow verbatim (no more `drop_svelte_only`
+  filter); `<cache>/svelte/**/*.d.svelte.ts` baseline glob added;
+  per-pattern virtual projection of user includes mirrors
+  upstream's `virtualInclude` shape. Functional-correctness
+  improvement on real-world benches: layerchart -17, palacms
+  -252, threlte-flex -2, threlte-rapier -1, threlte-theatre -2,
+  threlte-xr -2, cobalt-web -2, cryptgeon-frontend -5.
+
+  ONE intentional divergence: `.svn.ts` overlays remain in
+  `compilerOptions.files` rather than reaching the program via
+  the `.d.svelte.ts` re-export chain. The `export *` re-export
+  shape doesn't preserve enough type information for tsgo to
+  type-check Svelte 5 snippet props at the consumer site
+  (observed on shadcn-docs: 0 → 111 spurious TS7031 when
+  overlays were dropped from `files`). Same class of intentional
+  divergence as `kit_types_mirror`, `__svn_self_default`, the
+  `.svn` infix, and the baseline cache glob.
 
 ## [0.8.3]
 

@@ -530,6 +530,178 @@ pub(crate) fn is_runes_mode(doc: &svn_parser::Document<'_>) -> bool {
 /// Declarations without a type annotation or without an initializer
 /// are skipped — those are already handled by the widen / definite-
 /// assign passes.
+/// SVELTE-4-COMPAT: rewrite every parenthesized sequence expression
+/// emitted in two specific Svelte-4 idiomatic positions to an array
+/// literal:
+///
+///   1. `void (a, b, c)`     → `void [a, b, c]`
+///   2. `$: (a, b, c)`       → `$: void [a, b, c]`
+///
+/// Both shapes are how Svelte-4 components declare reactive
+/// dependencies: `$:` re-runs whenever any referenced identifier
+/// changes, and `void (deps…)` is the canonical "list deps without
+/// using them" pattern when the actual side effect is in a separate
+/// statement. tsgo's strict checking fires TS2871 ("Left side of
+/// comma operator is unused and has no side effects") on every comma
+/// in the list because each LHS of a comma is just an identifier
+/// read with no side effect. The array-literal form puts each
+/// reference in array-element position where TS treats it as "used"
+/// and the warning doesn't fire. Runtime semantics are equivalent
+/// (both forms evaluate every expression and discard the result),
+/// and the rewrite lives entirely in our type-check overlay so user
+/// runtime behaviour is untouched.
+///
+/// Detection: `void` or `$:` keyword followed (after ws/newlines) by
+/// `(`, scan paren-balanced content; rewrite ONLY if a top-level `,`
+/// was seen (i.e. a sequence expression, not just `void (x)` with a
+/// single expression in parens). String / template / comment content
+/// inside the parens is skipped so a `,` inside a string doesn't
+/// trigger a false rewrite.
+pub(crate) fn rewrite_void_sequence_to_array(out: &mut String) {
+    let original = std::mem::take(out);
+    let bytes = original.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some((kind, paren_open, paren_close)) = find_paren_sequence(bytes, i) {
+            out.push_str(&original[i..paren_open]);
+            if matches!(kind, SeqKind::ReactiveLabel) {
+                out.push_str("void ");
+            }
+            out.push('[');
+            out.push_str(&original[paren_open + 1..paren_close]);
+            out.push(']');
+            i = paren_close + 1;
+        } else {
+            let ch_len = utf8_char_len(bytes[i]);
+            out.push_str(&original[i..i + ch_len]);
+            i += ch_len;
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+enum SeqKind {
+    /// `void (a, b)` — already has `void`, just swap parens for brackets.
+    Void,
+    /// `$: (a, b)` — emit `void` prefix in addition to swapping parens.
+    ReactiveLabel,
+}
+
+/// At byte `i`, look for `void` or `$:` followed by a parenthesized
+/// sequence expression. Returns `(kind, paren_open, paren_close)` iff
+/// matched. Match conditions:
+///   - `void` keyword: byte[i..i+4] == `void` AND surrounding
+///     boundaries are not identifier chars (otherwise `avoid` /
+///     `void_x` would match), then ws, then `(`
+///   - `$:` label: byte[i..i+2] == `$:` AND not preceded by an
+///     identifier char (avoids `foo$:bar` though that's not valid
+///     JS anyway), then ws, then `(`
+///   - inside the parens, at least one TOP-LEVEL `,` (paren_depth=1)
+fn find_paren_sequence(bytes: &[u8], i: usize) -> Option<(SeqKind, usize, usize)> {
+    let (kind, after_keyword) = if i + 4 <= bytes.len()
+        && &bytes[i..i + 4] == b"void"
+        && (i == 0 || !is_ident_byte(bytes[i - 1]))
+        && bytes.get(i + 4).copied().is_some_and(|b| !is_ident_byte(b))
+    {
+        (SeqKind::Void, i + 4)
+    } else if i + 2 <= bytes.len()
+        && &bytes[i..i + 2] == b"$:"
+        && (i == 0 || !is_ident_byte(bytes[i - 1]))
+    {
+        (SeqKind::ReactiveLabel, i + 2)
+    } else {
+        return None;
+    };
+    let mut p = after_keyword;
+    while p < bytes.len() && is_ascii_ws(bytes[p]) {
+        p += 1;
+    }
+    if p >= bytes.len() || bytes[p] != b'(' {
+        return None;
+    }
+    let paren_open = p;
+    let mut depth: i32 = 1;
+    let mut top_level_comma = false;
+    let mut s = paren_open + 1;
+    while s < bytes.len() && depth > 0 {
+        let c = bytes[s];
+        match c {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    if !top_level_comma {
+                        return None;
+                    }
+                    return Some((kind, paren_open, s));
+                }
+            }
+            b',' if depth == 1 => {
+                top_level_comma = true;
+            }
+            b'"' | b'\'' | b'`' => {
+                s = skip_string_literal(bytes, s, c);
+                continue;
+            }
+            b'/' if bytes.get(s + 1).copied() == Some(b'/') => {
+                while s < bytes.len() && bytes[s] != b'\n' {
+                    s += 1;
+                }
+                continue;
+            }
+            b'/' if bytes.get(s + 1).copied() == Some(b'*') => {
+                let mut k = s + 2;
+                while k + 1 < bytes.len() && !(bytes[k] == b'*' && bytes[k + 1] == b'/') {
+                    k += 1;
+                }
+                s = k.saturating_add(2).min(bytes.len());
+                continue;
+            }
+            _ => {}
+        }
+        s += 1;
+    }
+    None
+}
+
+/// Skip past a JS string / template literal starting at `start`
+/// (which is the opening quote). Returns the byte position AFTER
+/// the closing quote. Handles `\\` escapes and template
+/// `${ … }` interpolations recursively (depth tracked so a `}`
+/// inside an interpolation expression doesn't close the template).
+fn skip_string_literal(bytes: &[u8], start: usize, quote: u8) -> usize {
+    let mut s = start + 1;
+    while s < bytes.len() {
+        let c = bytes[s];
+        if c == b'\\' {
+            s += 2;
+            continue;
+        }
+        if c == quote {
+            return s + 1;
+        }
+        if quote == b'`' && c == b'$' && bytes.get(s + 1).copied() == Some(b'{') {
+            let mut depth = 1;
+            s += 2;
+            while s < bytes.len() && depth > 0 {
+                match bytes[s] {
+                    b'{' => depth += 1,
+                    b'}' => depth -= 1,
+                    b'"' | b'\'' | b'`' => {
+                        s = skip_string_literal(bytes, s, bytes[s]);
+                        continue;
+                    }
+                    _ => {}
+                }
+                s += 1;
+            }
+            continue;
+        }
+        s += 1;
+    }
+    s
+}
+
 /// True iff a `\n` at byte position `s` is INSIDE a continued
 /// expression — i.e. the surrounding tokens make this newline an
 /// ASI-suppressed line break rather than a statement terminator.

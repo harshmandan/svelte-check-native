@@ -36,7 +36,8 @@ use crate::emit_is_ts;
 use crate::process_instance_script_content;
 use crate::svelte4::compat::{
     denarrow_typed_exported_props_in_place, rewrite_definite_assignment_in_place,
-    widen_untyped_exported_props_in_place, widen_untyped_exports_jsdoc_in_place,
+    rewrite_void_sequence_to_array, widen_untyped_exported_props_in_place,
+    widen_untyped_exports_jsdoc_in_place,
 };
 use crate::sveltekit;
 use svn_analyze::{collect_typed_top_level_lets, collect_typed_uninit_lets};
@@ -145,4 +146,15 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
         }
         denarrow_typed_exported_props_in_place(buf.raw_string_mut(), &denarrow_targets);
     }
+    // SVELTE-4-COMPAT: rewrite `void (a, b, c)` (the dependency-list
+    // idiom for `$:` reactive blocks) to `void [a, b, c]`. The
+    // sequence-expression form fires TS2871 ("Left side of comma
+    // operator is unused and has no side effects") on every comma-
+    // separated reference under tsgo's strict checking; the array
+    // literal form puts each ref in array-element position where TS
+    // doesn't fire the warning. Runtime semantics are equivalent (both
+    // evaluate every expression and discard the result via `void`),
+    // and the rewrite lives entirely in our type-check overlay so
+    // user runtime is untouched.
+    rewrite_void_sequence_to_array(buf.raw_string_mut());
 }

@@ -183,6 +183,37 @@ declare type __SvnSvelte4PropsWiden<P> = 'children' extends keyof P
     ? {}
     : { children?: any };
 
+// SVELTE-4-COMPAT: mirrors upstream's `__sveltets_2_PropsWithChildren`
+// (svelte-shims-v4.d.ts:258-266) for the consumer-facing constructor /
+// callable Props type when a Svelte-4 component has a default slot.
+//
+// The non-trivial branch: `P extends Record<string, never>` widens to
+// `any`. Without that short-circuit, the natural shape
+// `Partial<Record<string, never> & { children?: any }> & { children?:
+// any }` collapses under TS's intersection rules to a type with a
+// `[k: string]?: never` index signature plus an explicit `children?:
+// any`. The index signature demands `never` for every string key —
+// including `children` after Partial flattens — so a consumer's
+// `props: { children: () => …}` fails TS2322 ("not assignable to
+// 'Partial<Record<string, never>> & { children?: any }'"). Upstream's
+// own comment names this exact trap: "the alternative is non-fixable
+// type errors because of the way TypeScript index signatures work
+// (they will always take precedence and make an impossible-to-satisfy
+// children type)." Hence both upstream and our copy widen to `any`.
+//
+// `Widened` is the second parameter so emit can pass the
+// already-computed `P & __SvnSvelte4PropsWiden<P>` (or, when the child
+// uses `$$props`, `P & __SvnSvelte4PropsWiden<P> & __SvnAllProps`)
+// directly. Centralising the conditional here keeps emit simple — it
+// just emits `__SvnSvelte4SlotedProps<P, P & widen<P>>` for the
+// has-default-slot branch.
+declare type __SvnSvelte4SlotedProps<P, Widened> = P extends Record<
+    string,
+    never
+>
+    ? any
+    : Partial<Widened> & { children?: any };
+
 // Applied CONDITIONALLY at the emit site (intersected into the widen
 // only when the child component uses `$$props` / `$$restProps`). Mirror
 // of upstream's `SvelteAllProps` (svelte-shims-v4.d.ts:39), which

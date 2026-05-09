@@ -330,11 +330,39 @@ pub(crate) fn emit_default_export_declarations_ts(
     };
 
     let props_wrapped = wrap_props(props_typed.clone());
-    let children_intersection = if has_slot {
-        " & { children?: any }"
+    // `props_arg` is the Props type seen by consumer-side
+    // construction. For Svelte-4 components with a default slot we
+    // mirror upstream's `__sveltets_2_PropsWithChildren` shape via
+    // `__SvnSvelte4SlotedProps<P, Widened>`: it widens to `any` when
+    // P is `Record<string, never>`, sidestepping the index-signature
+    // trap that fires `Type '{ children: () => any }' is not
+    // assignable to 'Partial<Record<string, never>> & { children?:
+    // any }'` on consumers passing implicit-children to an
+    // empty-Props Svelte-4 component (e.g. `<StartLayout>...</StartLayout>`
+    // where `StartLayout` declares no `export let` / no `$props()`
+    // but takes a `<slot/>`). See upstream svelte-shims-v4.d.ts:258-266
+    // for the same trap and same workaround.
+    //
+    // For the non-svelte4-slot path we keep the existing inline
+    // shape: `props_wrapped` (already includes Partial<…> when
+    // svelte4_with_slot, identity otherwise) plus the conditional
+    // `& { children?: any }` for has_slot=true. Svelte-5 components
+    // declare `children` in their Props directly, so this branch
+    // doesn't need the widen-to-any short-circuit.
+    let props_arg: String = if svelte4_with_slot {
+        format!("__SvnSvelte4SlotedProps<{props_src}, {props_typed}>")
+    } else if has_slot {
+        format!("{props_wrapped} & {{ children?: any }}")
     } else {
-        ""
+        props_wrapped.clone()
     };
+    // The constructor's `SvelteComponent<Props, …>` argument keeps
+    // the un-widened wrapped Props — it feeds into TS-level
+    // `InstanceType<…>` lookups (component instance shape) where
+    // the upstream-style `Partial<…>` form is what the typechecker
+    // expects. The widen-to-any short-circuit applies only at the
+    // construction-options Props position.
+    let svelte_component_props: String = props_wrapped.clone();
 
     // The CALLABLE return uses `Exports & { $set?: any; $on?: any }`
     // — matches upstream's `__sveltets_2_IsomorphicComponent`'s
@@ -347,11 +375,11 @@ pub(crate) fn emit_default_export_declarations_ts(
     let _ = writeln!(buf, "interface $$IsomorphicComponent {{");
     let _ = writeln!(
         buf,
-        "    new {g_prefix}(options: import('svelte').ComponentConstructorOptions<{props_wrapped}{children_intersection}>): import('svelte').SvelteComponent<{props_wrapped}, {events_src}, {slots_src}> & {{ $$bindings?: {bindings_src} }} & {exports_src};"
+        "    new {g_prefix}(options: import('svelte').ComponentConstructorOptions<{props_arg}>): import('svelte').SvelteComponent<{svelte_component_props}, {events_src}, {slots_src}> & {{ $$bindings?: {bindings_src} }} & {exports_src};"
     );
     let _ = writeln!(
         buf,
-        "    {g_prefix}(internal: unknown, props: {props_wrapped}{children_intersection}): {exports_src} & {{ $set?: any; $on?: any }};"
+        "    {g_prefix}(internal: unknown, props: {props_arg}): {exports_src} & {{ $set?: any; $on?: any }};"
     );
     let _ = writeln!(buf, "    z_$$bindings?: {bindings_any_src};");
     let _ = writeln!(buf, "}}");

@@ -580,10 +580,47 @@ fn emit_document_with_render_name(
                 let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
                 let mut already_in_untyped: std::collections::HashSet<String> =
                     untyped_names.iter().cloned().collect();
-                for name in all_inline_member_names {
-                    if !seen.insert(name.clone()) && !already_in_untyped.contains(&name) {
+                for name in &all_inline_member_names {
+                    if !seen.insert(name.clone()) && !already_in_untyped.contains(name) {
                         untyped_names.push(name.clone());
-                        already_in_untyped.insert(name);
+                        already_in_untyped.insert(name.clone());
+                    }
+                }
+                // SVELTE-4-COMPAT: dispatcher-vs-bubble name collision.
+                // When a component declares an explicit dispatcher event
+                // AND bare-forwards an event of the same name from a
+                // child component or DOM element, BOTH paths fire that
+                // event on the parent. The consumer's `$on(name, h)`
+                // handler receives EITHER payload, so the type at the
+                // consumer site should be the union — but TypeScript
+                // can't naturally union "the dispatcher type" with "an
+                // arbitrary CustomEvent payload" without losing precision
+                // on either side. Upstream svelte2tsx sidesteps this by
+                // emitting a final `'name': __sveltets_2_customEvent`
+                // (CustomEvent<any>) entry in the events object literal
+                // — duplicate-key-last-wins makes the conflict resolve
+                // to `CustomEvent<any>` for those names. Mirror that:
+                // if a name appears in BOTH the inline-typed dispatcher
+                // member list AND the bubbled event list, add it to
+                // `untyped_names` so the layer-last override emits
+                // `'name': CustomEvent<any>` here too. Without this the
+                // `Omit<typed, keyof bubble> & bubble` shape lets bubble
+                // win exclusively, dropping the dispatcher's payload
+                // type — `<Parent on:menuOptionSelected={({detail}) =>
+                // detail.folderId}>` then fails TS2339 because the
+                // bubbled child's payload doesn't have `folderId`.
+                let mut bubble_names: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                for ev in &summary.bubbled_dom_events {
+                    bubble_names.insert(ev.name.to_string());
+                }
+                for ev in &summary.bubbled_component_events {
+                    bubble_names.insert(ev.event_name.to_string());
+                }
+                for name in &all_inline_member_names {
+                    if bubble_names.contains(name) && !already_in_untyped.contains(name) {
+                        untyped_names.push(name.clone());
+                        already_in_untyped.insert(name.clone());
                     }
                 }
             }

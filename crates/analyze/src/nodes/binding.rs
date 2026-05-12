@@ -5,7 +5,7 @@ use svn_parser::{Attribute, Directive, DirectiveValue};
 
 use crate::nodes::attribute::literal_attr_value;
 use crate::nodes::destructure::simple_identifier_in;
-use crate::template_walker::{
+use crate::walker::{
     BindThisCheck, BindThisTarget, Counters, DomBinding, DomBindingExpression, TemplateSummary,
 };
 

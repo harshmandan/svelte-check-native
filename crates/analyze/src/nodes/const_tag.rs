@@ -5,7 +5,7 @@ use smol_str::SmolStr;
 use svn_core::Range;
 
 use crate::nodes::destructure::is_destructure;
-use crate::template_walker::AnalyzeVisitor;
+use crate::walker::AnalyzeVisitor;
 
 pub(crate) fn visit_at_const(
     v: &mut AnalyzeVisitor<'_>,

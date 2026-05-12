@@ -9,7 +9,7 @@ use svn_parser::{Attribute, Directive, DirectiveKind};
 
 use crate::nodes::action::handle_use_directive;
 use crate::nodes::binding::handle_bind_directive;
-use crate::template_walker::{Counters, TemplateSummary};
+use crate::walker::{Counters, TemplateSummary};
 
 /// Per-walk context threaded through `walk_attributes` /
 /// `walk_directive`. Currently a single-field source-text wrapper —

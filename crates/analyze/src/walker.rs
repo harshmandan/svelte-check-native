@@ -24,9 +24,6 @@ use smol_str::SmolStr;
 use svn_core::Range;
 use svn_parser::{AttrValuePart, Fragment};
 
-use crate::nodes::destructure::{
-    apply_default_narrow, default_typeof_expr, items_typeof_expr, project_destructure_path,
-};
 use crate::void_refs::VoidRefRegistry;
 
 /// Per-template summary populated during the walk.
@@ -747,245 +744,26 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
         let mark = self.shadow.entries.len();
         match kind {
             crate::template_scope::ScopeKind::Each { has_index, .. } => {
-                // Convention from `template_scope`: when `has_index`
-                // is true, the index identifier is the LAST binding;
-                // every preceding entry is a context (item) binding.
-                let items_range = self.pending_each_items_range.take();
-                let context_count = if has_index {
-                    bindings.len().saturating_sub(1)
-                } else {
-                    bindings.len()
-                };
-                let items_text = items_range.and_then(|r| {
-                    self.source
-                        .get(r.start as usize..r.end as usize)
-                        .map(|s| s.trim().to_string())
-                });
-                // Round-7 follow-up #3: destructured patterns now
-                // carry a `destructure_path` per leaf binding, so
-                // `{#each rows as { id }}` resolves `id` to the
-                // element's `['id']` slice. Mirrors upstream's
-                // `((${destructuring}) => ${id})(__sveltets_2_unwrapArr(items))`
-                // IIFE shape, but at TYPE level.
-                for (i, b) in bindings.iter().enumerate() {
-                    let resolved = if has_index && i == context_count {
-                        // Index — always `number`.
-                        Some(ResolvedSlotExpr::Type("number".to_string()))
-                    } else if let Some(items) = items_text.as_deref() {
-                        // Round-12 follow-up #1: `typeof <items>` is
-                        // only legal when `<items>` is a bare
-                        // identifier or dotted member chain. For
-                        // expressions that aren't directly typeof-able
-                        // (calls, indexing, ternaries, etc.) build
-                        // the items type via a typeof-safe stand-in:
-                        //   - call on typeof-safe callee →
-                        //     `ReturnType<typeof <callee>>`
-                        //   - anything else → `any` (element type
-                        //     becomes `any`, which is permissive but
-                        //     parses cleanly; pre-fix produced a
-                        //     parse-error like `typeof getRows()`).
-                        // Round-14 #4: route through the
-                        // `__SvnEachItem<T>` shim instead of an
-                        // inline `T extends Iterable<infer U> ? U
-                        // : never` projection. The shim has the
-                        // `0 extends 1 & T ? any` guard for
-                        // `any`-preservation and an `ArrayLike`
-                        // branch (so plain `{ length: N }` shapes
-                        // resolve too), matching upstream's
-                        // `__sveltets_2_each` distribution.
-                        let items_ty = items_typeof_expr(items);
-                        let element_ty = format!("__SvnEachItem<{items_ty}>");
-                        // Round-15 #4: when the binding sits under an
-                        // AssignmentPattern, switch to upstream's
-                        // `((PATTERN) => name)(value)` IIFE shape
-                        // (`slot.ts:117`). TypeScript evaluates the
-                        // destructure with the actual default
-                        // expression, so object / array / template-
-                        // literal defaults preserve precise types
-                        // instead of collapsing to `Exclude<…,
-                        // undefined>` (or worse, leaking interpolated
-                        // template syntax into a TS type position).
-                        if b.has_default
-                            && let Some(pat_range) = b.pattern_source_range
-                            && let Some(pat_source) = self
-                                .source
-                                .get(pat_range.start as usize..pat_range.end as usize)
-                        {
-                            Some(ResolvedSlotExpr::Value(format!(
-                                "(({pat}) => {leaf})(undefined as any as ({element_ty}))",
-                                pat = pat_source.trim(),
-                                leaf = b.name.as_str(),
-                            )))
-                        } else {
-                            let projected = match b.destructure_path.as_deref() {
-                                Some(path) => project_destructure_path(&element_ty, path),
-                                None => element_ty,
-                            };
-                            let default_t = b.default_value_range.and_then(|r| {
-                                self.source
-                                    .get(r.start as usize..r.end as usize)
-                                    .and_then(default_typeof_expr)
-                            });
-                            Some(ResolvedSlotExpr::Type(apply_default_narrow(
-                                projected,
-                                b.has_default,
-                                default_t,
-                            )))
-                        }
-                    } else {
-                        None
-                    };
-                    self.shadow.entries.push((b.name.clone(), resolved));
-                }
+                crate::nodes::each_block::enter(self, bindings, has_index);
             }
             crate::template_scope::ScopeKind::AwaitThen => {
-                let promise_range = self.pending_await_promise_range;
-                let promise_text = promise_range.and_then(|r| {
-                    self.source
-                        .get(r.start as usize..r.end as usize)
-                        .map(|s| s.trim().to_string())
-                });
-                // Round-7 follow-up #3: destructured `{:then { x }}`
-                // resolves each leaf via the binding's
-                // `destructure_path`. Bare `{:then v}` keeps the
-                // unwrapped promise type directly (no path suffix).
-                for b in bindings {
-                    let resolved = promise_text.as_deref().map(|p| {
-                        // Round-12 follow-up #1: same typeof-safety
-                        // guard as the each-block path. For non-
-                        // typeof-able promise expressions (calls,
-                        // chains), use a typeof-safe stand-in — the
-                        // promise itself becomes `Promise<any>` in
-                        // the worst case, which Awaited unwraps to
-                        // `any`. Pre-fix `Awaited<typeof load()>`
-                        // was a parse error.
-                        let promise_ty = items_typeof_expr(p);
-                        let unwrapped = format!("(Awaited<{promise_ty}>)");
-                        // Round-15 #4: switch to upstream's IIFE shape
-                        // when the binding has a default — see
-                        // each-block branch above for the rationale.
-                        if b.has_default
-                            && let Some(pat_range) = b.pattern_source_range
-                            && let Some(pat_source) = self
-                                .source
-                                .get(pat_range.start as usize..pat_range.end as usize)
-                        {
-                            return ResolvedSlotExpr::Value(format!(
-                                "(({pat}) => {leaf})(undefined as any as ({unwrapped}))",
-                                pat = pat_source.trim(),
-                                leaf = b.name.as_str(),
-                            ));
-                        }
-                        let projected = match b.destructure_path.as_deref() {
-                            Some(path) => project_destructure_path(&unwrapped, path),
-                            None => unwrapped,
-                        };
-                        let default_t = b.default_value_range.and_then(|r| {
-                            self.source
-                                .get(r.start as usize..r.end as usize)
-                                .and_then(default_typeof_expr)
-                        });
-                        ResolvedSlotExpr::Type(apply_default_narrow(
-                            projected,
-                            b.has_default,
-                            default_t,
-                        ))
-                    });
-                    self.shadow.entries.push((b.name.clone(), resolved));
-                }
+                crate::nodes::await_pending_catch_block::enter_then(self, bindings);
             }
             crate::template_scope::ScopeKind::AwaitCatch => {
-                // `{:catch e}` — error type is `any` (matches
-                // upstream `slot.ts:93`'s `__sveltets_2_any({})`
-                // resolution for CatchBlock owners).
-                //
-                // Round-8 follow-up #3: destructure leaves
-                // (`{:catch { message }}`) all resolve to `any` too.
-                // Upstream walks each leaf through
-                // resolveDestructuringAssignment which returns
-                // `((${pattern}) => ${id})(any)` — at type level
-                // every leaf collapses to `any` regardless of the
-                // pattern shape (TS narrows `any[…]` to `any`).
-                // Pre-fix native dropped destructure leaves to None
-                // when `bindings.len() > 1`, so consumer references
-                // to those leaves silently typed as `any` via the
-                // unresolved-shadow path anyway — same observable
-                // outcome as resolving to `any`, but consumer-side
-                // slot-attrs that referenced the leaves would have
-                // been DROPPED instead of typed. Drop the guard.
-                for b in bindings {
-                    self.shadow.entries.push((
-                        b.name.clone(),
-                        Some(ResolvedSlotExpr::Type("any".to_string())),
-                    ));
-                }
+                crate::nodes::await_pending_catch_block::enter_catch(self, bindings);
             }
             crate::template_scope::ScopeKind::LetDirective => {
-                // SlotHandler PLAN Stage 4: producer-side
-                // `<Comp let:foo>` resolves `foo` to
-                // `__SvnComponentSlots<typeof Comp>['default']['foo']`.
-                // Consume the stash that `visit_component` /
-                // `visit_svelte_element` (Component / SelfRef) put
-                // there. None means we're inside a non-resolvable
-                // case (consumer wrapper with `slot=`, dynamic
-                // `<svelte:component this={EXPR}>` whose root isn't
-                // a typeable identifier, plain DOM element with
-                // `let:`); fall through as unresolvable so the
-                // slot-attr collector drops references rather than
-                // splicing module scope.
-                //
-                // Round-7 follow-up #2: each binding carries its
-                // own `slot_key_path` (set by
-                // `collect_let_directive_bindings`) — for shorthand
-                // and bare-ident-alias forms the path is the
-                // directive name (e.g. `["foo"]` for both `let:foo`
-                // and `let:foo={bar}`). Pre-fix native used the
-                // BoundIdent's `name` as the slot key, so an alias
-                // `let:foo={bar}` resolved `bar` to
-                // `…['default']['bar']` instead of
-                // `…['default']['foo']`. Use `slot_key_path` when
-                // present; bindings without one (today: any
-                // destructure leaf) drop to None as before.
-                let owner = self.pending_let_owner.take();
-                for b in bindings {
-                    let resolved = owner.as_ref().and_then(|info| {
-                        let path = b.slot_key_path.as_ref()?;
-                        if path.is_empty() {
-                            return None;
-                        }
-                        let root_expr = format!(
-                            "__SvnComponentSlots<typeof {root}>[{slot:?}]",
-                            root = info.component_root.as_str(),
-                            slot = info.slot_name.as_str(),
-                        );
-                        let projected = project_destructure_path(&root_expr, path);
-                        let default_t = b.default_value_range.and_then(|r| {
-                            self.source
-                                .get(r.start as usize..r.end as usize)
-                                .and_then(default_typeof_expr)
-                        });
-                        Some(ResolvedSlotExpr::Type(apply_default_narrow(
-                            projected,
-                            b.has_default,
-                            default_t,
-                        )))
-                    });
-                    self.shadow.entries.push((b.name.clone(), resolved));
-                }
+                crate::nodes::let_directive::enter(self, bindings);
             }
             crate::template_scope::ScopeKind::Snippet
             | crate::template_scope::ScopeKind::Fragment => {
-                // Snippet params don't have an upstream-equivalent
-                // slot resolution (per PLAN §6 "things not to do").
-                // Fragment scope is a bracket boundary — no bindings
-                // declared. Both fall through as `None`.
-                for b in bindings {
-                    self.shadow.entries.push((b.name.clone(), None));
-                }
+                crate::nodes::snippet_block::enter_unresolved(self, bindings);
             }
         }
         self.scope_marks.push(mark);
     }
+
+
 
     fn leave_scope(&mut self, _kind: crate::template_scope::ScopeKind) {
         if let Some(mark) = self.scope_marks.pop() {

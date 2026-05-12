@@ -45,7 +45,7 @@ pub mod slot_attr_rewrite;
 pub mod store;
 pub mod template_refs;
 pub mod template_scope;
-pub mod template_walker;
+pub mod walker;
 pub mod void_refs;
 
 pub use ast_walk::{WalkNode, collect_function_body_stmts, walk_statement_descend};
@@ -68,7 +68,7 @@ pub use store::{
 pub use template_refs::find_template_refs;
 pub use nodes::attribute::literal_attr_value;
 pub use nodes::binding::resolve_bind_value_type;
-pub use template_walker::{
+pub use walker::{
     BindDirective, BindThisCheck, BindThisTarget, BubbledComponentEvent, BubbledDomEvent,
     BubbledDomEventScope, ComponentInstantiation, DomBinding, DomBindingExpression,
     OnEventDirective, PropShape, ResolvedSlotExpr, SlotAttr, SlotAttrExpr, SlotDef,

@@ -3,7 +3,7 @@
 
 use svn_parser::{Attribute, DirectiveKind};
 
-use crate::template_walker::{BubbledDomEvent, BubbledDomEventScope, TemplateSummary};
+use crate::walker::{BubbledDomEvent, BubbledDomEventScope, TemplateSummary};
 
 /// SVELTE-4-COMPAT: collect bare `on:NAME` directives on a real DOM
 /// element OR `<svelte:body>` / `<svelte:window>`. The bare form (no

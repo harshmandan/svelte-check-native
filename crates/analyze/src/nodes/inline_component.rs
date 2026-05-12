@@ -7,7 +7,7 @@ use svn_parser::{AttrValuePart, Attribute, Component, Node};
 
 use crate::nodes::attribute::{WalkCtx, literal_attr_value, walk_attributes};
 use crate::nodes::destructure::{is_simple_identifier, simple_identifier_in};
-use crate::template_walker::{
+use crate::walker::{
     AnalyzeVisitor, BindDirective, BubbledComponentEvent, ComponentInstantiation, LetOwnerInfo,
     OnEventDirective, PropShape, TemplateSummary,
 };

@@ -4,9 +4,13 @@
 use smol_str::SmolStr;
 use svn_parser::Attribute;
 
-use crate::nodes::destructure::leading_identifier;
-use crate::template_walker::{
-    ResolvedSlotExpr, ResolverStack, SlotAttr, SlotAttrExpr, SlotDef, TemplateSummary,
+use crate::nodes::destructure::{
+    apply_default_narrow, default_typeof_expr, leading_identifier, project_destructure_path,
+};
+use crate::template_scope::BoundIdent;
+use crate::walker::{
+    AnalyzeVisitor, ResolvedSlotExpr, ResolverStack, SlotAttr, SlotAttrExpr, SlotDef,
+    TemplateSummary,
 };
 
 /// Capture a `<slot [name="X"] [attr=…]>` site into
@@ -220,5 +224,52 @@ pub(crate) fn collect_slot_def(
         *existing = new_def;
     } else {
         summary.slot_defs.push(new_def);
+    }
+}
+
+/// `<Comp let:foo>` / `<el let:foo>` scope — SlotHandler PLAN Stage 4.
+/// Resolves each binding to
+/// `__SvnComponentSlots<typeof Comp>['default']['foo']` (with
+/// destructure-path projection). Reads `pending_let_owner` stashed by
+/// `visit_component` / `visit_svelte_element`; falls through as
+/// unresolvable when None (consumer-wrapper with `slot=`, dynamic
+/// `<svelte:component this={EXPR}>` whose root isn't typeable,
+/// plain DOM element with `let:`) so the slot-attr collector drops
+/// references rather than splicing module scope.
+///
+/// Round-7 follow-up #2: each binding carries its own `slot_key_path`
+/// (set by `collect_let_directive_bindings`). For shorthand and
+/// bare-ident-alias forms the path is the directive name (e.g.
+/// `["foo"]` for both `let:foo` and `let:foo={bar}`). Pre-fix native
+/// used the BoundIdent's `name` as the slot key, so an alias
+/// `let:foo={bar}` resolved `bar` to `…['default']['bar']` instead
+/// of `…['default']['foo']`. Bindings without a path (today: any
+/// destructure leaf) drop to None.
+pub(crate) fn enter(v: &mut AnalyzeVisitor<'_>, bindings: &[BoundIdent]) {
+    let owner = v.pending_let_owner.take();
+    for b in bindings {
+        let resolved = owner.as_ref().and_then(|info| {
+            let path = b.slot_key_path.as_ref()?;
+            if path.is_empty() {
+                return None;
+            }
+            let root_expr = format!(
+                "__SvnComponentSlots<typeof {root}>[{slot:?}]",
+                root = info.component_root.as_str(),
+                slot = info.slot_name.as_str(),
+            );
+            let projected = project_destructure_path(&root_expr, path);
+            let default_t = b.default_value_range.and_then(|r| {
+                v.source
+                    .get(r.start as usize..r.end as usize)
+                    .and_then(default_typeof_expr)
+            });
+            Some(ResolvedSlotExpr::Type(apply_default_narrow(
+                projected,
+                b.has_default,
+                default_t,
+            )))
+        });
+        v.shadow.entries.push((b.name.clone(), resolved));
     }
 }

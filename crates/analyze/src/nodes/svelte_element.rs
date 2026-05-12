@@ -8,7 +8,7 @@ use crate::nodes::attribute::{WalkCtx, walk_attributes};
 use crate::nodes::binding::collect_bind_this_checks;
 use crate::nodes::event_handler::collect_bubbled_dom_events;
 use crate::nodes::inline_component::collect_instantiation_inner;
-use crate::template_walker::{AnalyzeVisitor, BubbledDomEventScope};
+use crate::walker::{AnalyzeVisitor, BubbledDomEventScope};
 
 pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
     let ctx = WalkCtx { source: v.source };

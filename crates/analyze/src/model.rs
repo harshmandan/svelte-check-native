@@ -28,7 +28,7 @@
 //! consumer needs the same answer.
 
 use crate::props::PropsInfo;
-use crate::template_walker::TemplateSummary;
+use crate::walker::TemplateSummary;
 
 /// Bundled analyze outputs for one component.
 ///

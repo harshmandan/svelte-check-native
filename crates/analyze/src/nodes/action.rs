@@ -4,7 +4,7 @@
 use smol_str::SmolStr;
 use svn_parser::{Directive, DirectiveValue};
 
-use crate::template_walker::{ActionDirective, Counters, TemplateSummary};
+use crate::walker::{ActionDirective, Counters, TemplateSummary};
 
 /// Handle the `use:` arm of `walk_directive`. Registers a
 /// `__svn_action_attrs_N` void-ref (one per directive, counter

@@ -1,6 +1,224 @@
 //! `let:` directive (slot-let) analyze pass — mirrors upstream
 //! `htmlxtojsx_v2/nodes/Let.ts`.
-//!
-//! Currently empty; `collect_slot_def` migrates from
-//! `template_walker.rs` per Step 1 of
-//! `notes/TEMPLATE_WALKER_SPLIT.md`.
+
+use smol_str::SmolStr;
+use svn_parser::Attribute;
+
+use crate::nodes::destructure::leading_identifier;
+use crate::template_walker::{
+    ResolvedSlotExpr, ResolverStack, SlotAttr, SlotAttrExpr, SlotDef, TemplateSummary,
+};
+
+/// Capture a `<slot [name="X"] [attr=…]>` site into
+/// `summary.slot_defs`. Skips attrs whose expression references a
+/// name in the active shadow stack — those need full scope
+/// resolution to emit at module scope correctly. The slot is still
+/// recorded (with a possibly-empty attrs list) so consumer-side
+/// `<Comp let:foo>` destructure has SOMETHING to read from
+/// `inst.$$slot_def[name]`.
+pub(crate) fn collect_slot_def(
+    attrs: &[Attribute],
+    source: &str,
+    shadow: &ResolverStack,
+    summary: &mut TemplateSummary,
+) {
+    use svn_parser::{AttrValuePart, Attribute as A};
+    let mut slot_name = SmolStr::new("default");
+    let mut entries: Vec<SlotAttr> = Vec::new();
+    for attr in attrs {
+        match attr {
+            A::Plain(p) if p.name.as_str() == "name" => {
+                if let Some(v) = &p.value
+                    && v.parts.len() == 1
+                    && let AttrValuePart::Text { content, .. } = &v.parts[0]
+                {
+                    slot_name = SmolStr::from(content.as_str());
+                }
+            }
+            A::Plain(p) => {
+                // Plain literal attrs on `<slot>` other than `name=`
+                // (e.g. `<slot kind="header">`). Single-text-part
+                // values flow through as TS string literals so
+                // consumer-side `<Comp let:kind>` destructure resolves
+                // `kind` to `"header"`. Round-12 follow-up #5: multi-
+                // part interpolated values (`<slot foo="a {b} c">`)
+                // resolve to plain `string` (matches upstream
+                // `slot.ts:46` which casts any multi-part attr to a
+                // dummy string expression). Value-less boolean
+                // shorthand is still skipped.
+                if let Some(v) = &p.value
+                    && v.parts.len() == 1
+                    && let AttrValuePart::Text { content, .. } = &v.parts[0]
+                {
+                    entries.push(SlotAttr::Prop {
+                        name: p.name.clone(),
+                        expr: SlotAttrExpr::Literal(content.to_string()),
+                    });
+                } else if let Some(v) = &p.value
+                    && !v.parts.is_empty()
+                {
+                    entries.push(SlotAttr::Prop {
+                        name: p.name.clone(),
+                        expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Type("string".to_string())),
+                    });
+                }
+            }
+            A::Expression(e) => {
+                let start = e.expression_range.start as usize;
+                let end = e.expression_range.end as usize;
+                let Some(text) = source.get(start..end) else {
+                    continue;
+                };
+                let trimmed = text.trim();
+                let lookup = |name: &str| -> Option<Option<String>> {
+                    shadow.lookup(name).map(|v| match v {
+                        Some(ResolvedSlotExpr::Type(t)) => Some(t.clone()),
+                        Some(ResolvedSlotExpr::Value(v)) => Some(v.clone()),
+                        None => None,
+                    })
+                };
+                // Path 1 — leading-ident shadowed. Try the TYPE-level
+                // rewriter first (bare ident, member chain, computed
+                // member); it produces the cleanest emit shape. If
+                // the expression is in a richer shape the type-level
+                // rewriter doesn't handle (calls, ternaries, object
+                // literals, etc.), fall through to the value-level
+                // walker so the inner shadowed identifiers still get
+                // their typed casts. Bail if neither produces a result.
+                if let Some(head) = leading_identifier(trimmed)
+                    && shadow.lookup(head).is_some()
+                {
+                    if let Some(rewritten) =
+                        crate::slot_attr_rewrite::rewrite_slot_attr_expr(trimmed, &lookup)
+                    {
+                        entries.push(SlotAttr::Prop {
+                            name: e.name.clone(),
+                            expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Type(rewritten)),
+                        });
+                        continue;
+                    }
+                    if let crate::slot_attr_rewrite::ValueRewrite::Rewritten(rewritten) =
+                        crate::slot_attr_rewrite::rewrite_slot_attr_expr_value(trimmed, &lookup)
+                    {
+                        entries.push(SlotAttr::Prop {
+                            name: e.name.clone(),
+                            expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Value(rewritten)),
+                        });
+                    }
+                    continue;
+                }
+                // Path 2 — leading-ident NOT shadowed (or no leading
+                // ident). Round-7 follow-up #1: still walk the whole
+                // expression for INNER shadowed identifiers (e.g.
+                // `foo(item)`, `{ item }`, `fallback ?? item`,
+                // `items.map(item => item.x)`). Pre-fix native emitted
+                // these verbatim so the shadowed identifier leaked to
+                // module scope; the value-level walker rewrites each
+                // inner shadowed leaf to its typed cast and splices
+                // the rest of the expression unchanged.
+                match crate::slot_attr_rewrite::rewrite_slot_attr_expr_value(trimmed, &lookup) {
+                    crate::slot_attr_rewrite::ValueRewrite::Rewritten(rewritten) => {
+                        entries.push(SlotAttr::Prop {
+                            name: e.name.clone(),
+                            expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Value(rewritten)),
+                        });
+                    }
+                    crate::slot_attr_rewrite::ValueRewrite::NoEdits => {
+                        // No shadowed identifiers anywhere — splice
+                        // source verbatim.
+                        entries.push(SlotAttr::Prop {
+                            name: e.name.clone(),
+                            expr: SlotAttrExpr::Range(e.expression_range),
+                        });
+                    }
+                    crate::slot_attr_rewrite::ValueRewrite::Bailed => {
+                        // Shadowed-but-unresolvable name somewhere in
+                        // the expression — drop the attr (would emit
+                        // module-scope identifiers that resolve to
+                        // the wrong declaration).
+                    }
+                }
+            }
+            A::Shorthand(s) => {
+                if let Some(resolved) = shadow.lookup(s.name.as_str()) {
+                    if let Some(expr) = resolved {
+                        entries.push(SlotAttr::Prop {
+                            name: s.name.clone(),
+                            expr: SlotAttrExpr::Resolved(expr.clone()),
+                        });
+                    }
+                    // None or Some-but-non-bare-already-handled-above:
+                    // shorthand always passes the bare-name check, so
+                    // the only fall-through here is None (drop).
+                    continue;
+                }
+                entries.push(SlotAttr::Prop {
+                    name: s.name.clone(),
+                    expr: SlotAttrExpr::Shorthand(s.name.clone()),
+                });
+            }
+            A::Spread(spread) => {
+                // SlotHandler PLAN Stage 3: `<slot {...rest}>` —
+                // spreads survive as object-spread entries. The
+                // expression must resolve through the same OXC
+                // rewriter (when `rest` is shadowed) or splice
+                // verbatim (module-scope identifier).
+                let start = spread.expression_range.start as usize;
+                let end = spread.expression_range.end as usize;
+                let Some(text) = source.get(start..end) else {
+                    continue;
+                };
+                let trimmed = text.trim();
+                if let Some(head) = leading_identifier(trimmed)
+                    && shadow.lookup(head).is_some()
+                {
+                    let lookup = |name: &str| -> Option<Option<String>> {
+                        shadow.lookup(name).map(|v| match v {
+                            Some(ResolvedSlotExpr::Type(t)) => Some(t.clone()),
+                            Some(ResolvedSlotExpr::Value(v)) => Some(v.clone()),
+                            None => None,
+                        })
+                    };
+                    if let Some(rewritten) =
+                        crate::slot_attr_rewrite::rewrite_slot_attr_expr(trimmed, &lookup)
+                    {
+                        entries.push(SlotAttr::Spread {
+                            expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Type(rewritten)),
+                        });
+                    }
+                    continue;
+                }
+                entries.push(SlotAttr::Spread {
+                    expr: SlotAttrExpr::Range(spread.expression_range),
+                });
+            }
+            // Directives and shapes we don't understand fall through
+            // — drop them rather than emit something that resolves to
+            // the wrong thing.
+            _ => {}
+        }
+    }
+    // Round-7 follow-up #4: upstream stores slots in a Map and
+    // `set(slotName, attrs)` per `<slot name="x">` — multiple sites
+    // for the same name resolve as later-wins. Native pre-fix pushed
+    // every SlotDef in walk order and emit serialised them as
+    // duplicate object keys (`{ 'x': {...}, 'x': {...} }`), which TS
+    // accepts but flags as a noisy duplicate-key error and which
+    // consumers would only ever see the last entry of regardless.
+    // Replace any existing entry for `slot_name` with the new one so
+    // emit produces a single key per name with the LAST occurrence's
+    // attrs.
+    let new_def = SlotDef {
+        slot_name,
+        attrs: entries,
+    };
+    if let Some(existing) = summary
+        .slot_defs
+        .iter_mut()
+        .find(|d| d.slot_name == new_def.slot_name)
+    {
+        *existing = new_def;
+    } else {
+        summary.slot_defs.push(new_def);
+    }
+}

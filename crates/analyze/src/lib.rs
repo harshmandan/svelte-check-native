@@ -66,10 +66,12 @@ pub use store::{
     collect_typed_uninit_lets, find_store_refs, find_store_refs_with_bindings,
 };
 pub use template_refs::find_template_refs;
+pub use nodes::attribute::literal_attr_value;
+pub use nodes::binding::resolve_bind_value_type;
 pub use template_walker::{
     BindDirective, BindThisCheck, BindThisTarget, BubbledComponentEvent, BubbledDomEvent,
     BubbledDomEventScope, ComponentInstantiation, DomBinding, DomBindingExpression,
     OnEventDirective, PropShape, ResolvedSlotExpr, SlotAttr, SlotAttrExpr, SlotDef,
-    TemplateSummary, literal_attr_value, resolve_bind_value_type, walk_template,
+    TemplateSummary, walk_template,
 };
 pub use void_refs::VoidRefRegistry;

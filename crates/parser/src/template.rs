@@ -686,6 +686,8 @@ impl<'src> TemplateParser<'src> {
         let is_void = is_void_element(&name);
         let children = if self_closing || is_void {
             Fragment::default()
+        } else if name.eq_ignore_ascii_case("style") {
+            self.parse_raw_text_children_until(&name, tag_start, open_tag_end)?
         } else {
             self.parse_children_until(&name, tag_start, open_tag_end)?
         };
@@ -775,6 +777,88 @@ impl<'src> TemplateParser<'src> {
         })
     }
 
+    fn parse_raw_text_children_until(
+        &mut self,
+        tag: &str,
+        open_start: u32,
+        open_end: u32,
+    ) -> Option<Fragment> {
+        let children_start = self.scanner.pos();
+        let Some(close_start) = self.find_raw_text_close_tag(tag) else {
+            self.errors.push(ParseError::UnterminatedElement {
+                name: tag.to_string(),
+                range: Range::new(open_start, open_end),
+            });
+            self.scanner.set_pos(self.fragment_end);
+            return Some(Fragment {
+                nodes: Vec::new(),
+                range: Range::new(children_start, self.fragment_end),
+            });
+        };
+
+        // CSS is not Svelte template syntax. Keep the source range for
+        // diagnostics/future linting, but emit no child nodes until a CSS
+        // parser exists.
+        self.scanner.set_pos(close_start);
+        let children_end = close_start;
+
+        if self.scanner.starts_with("</") {
+            let close_start = self.scanner.pos();
+            self.scanner.advance(2);
+            for exp in tag.bytes() {
+                match self.scanner.peek_byte() {
+                    Some(b) if b.eq_ignore_ascii_case(&exp) => self.scanner.advance_byte(),
+                    _ => {
+                        self.errors.push(ParseError::MismatchedClosingTag {
+                            expected: tag.to_string(),
+                            range: Range::new(close_start, self.scanner.pos()),
+                        });
+                        return None;
+                    }
+                }
+            }
+            self.scanner.skip_ascii_whitespace();
+            if self.scanner.peek_byte() == Some(b'>') {
+                self.scanner.advance_byte();
+            }
+        }
+
+        Some(Fragment {
+            nodes: Vec::new(),
+            range: Range::new(children_start, children_end),
+        })
+    }
+
+    /// Locate the matching raw-text close tag without interpreting the body.
+    /// `<style>` may contain arbitrary CSS braces that would be valid CSS but
+    /// invalid Svelte template syntax.
+    fn find_raw_text_close_tag(&self, tag: &str) -> Option<u32> {
+        let bytes = self.scanner.source().as_bytes();
+        let tag_bytes = tag.as_bytes();
+        let mut i = self.scanner.pos() as usize;
+        let end = self.fragment_end as usize;
+
+        while i + 2 + tag_bytes.len() <= end {
+            if bytes[i] == b'<' && bytes.get(i + 1) == Some(&b'/') {
+                let name_start = i + 2;
+                let name_end = name_start + tag_bytes.len();
+                let name_matches = bytes[name_start..name_end]
+                    .iter()
+                    .zip(tag_bytes)
+                    .all(|(a, b)| a.eq_ignore_ascii_case(b));
+                let boundary_matches = bytes.get(name_end).is_none_or(|b| {
+                    !b.is_ascii_alphanumeric() && !matches!(b, b'-' | b'_' | b'.' | b':')
+                });
+                if name_matches && boundary_matches {
+                    return Some(i as u32);
+                }
+            }
+            i += 1;
+        }
+
+        None
+    }
+
     fn peek_closing_tag_matches(&self, tag: &str) -> bool {
         // self.scanner is at `</`. Check if what follows is `tag` then a
         // non-ident char.
@@ -851,6 +935,41 @@ mod tests {
             panic!("expected Comment");
         };
         assert_eq!(c.data, " hi ");
+    }
+
+    #[test]
+    fn nested_style_body_is_opaque() {
+        let src = r#"<svelte:head>
+  <style>
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+      }
+      to {
+        opacity: 1;
+      }
+    }
+  </style>
+</svelte:head>"#;
+        let frag = parse_ok(src);
+        let [Node::SvelteElement(head)] = frag.nodes.as_slice() else {
+            panic!("expected one svelte:head node, got {:?}", frag.nodes);
+        };
+        let style = head
+            .children
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                Node::Element(element) if element.name.as_str() == "style" => Some(element),
+                _ => None,
+            })
+            .expect("expected style child");
+
+        assert_eq!(style.name.as_str(), "style");
+        assert!(
+            style.children.nodes.is_empty(),
+            "style contents are CSS, not Svelte template expressions"
+        );
     }
 
     #[test]

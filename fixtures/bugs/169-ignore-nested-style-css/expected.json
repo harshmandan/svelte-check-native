@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Nested <style> tags, commonly inside <svelte:head>, contain CSS rather than Svelte template syntax. Pre-fix the template parser walked the CSS body, treated keyframe braces as mustache expressions, and emitted broken TypeScript diagnostics such as TS1005/TS1434. Until CSS linting is implemented, style bodies must be ignored."
+}

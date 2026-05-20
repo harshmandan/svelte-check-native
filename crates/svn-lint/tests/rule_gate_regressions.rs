@@ -198,6 +198,147 @@ fn attribute_global_event_suppressed_by_snippet_parameter_binding() {
     );
 }
 
+// ----------------------------------------------------------------
+// attribute_invalid_property_name: component props vs DOM attrs
+// ----------------------------------------------------------------
+
+#[test]
+fn react_style_attribute_name_is_allowed_on_component_prop() {
+    let src = "\
+<script>
+  import Favicon from './Favicon.svelte'
+</script>
+
+<Favicon className=\"text-muted\" />
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"attribute_invalid_property_name"),
+        "component prop `className` must not fire DOM attr warning, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+#[test]
+fn react_style_attribute_name_still_warns_on_dom_element() {
+    let src = "<div className=\"text-muted\"></div>";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"attribute_invalid_property_name"),
+        "DOM `className` should still warn, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+#[test]
+fn react_style_expression_attribute_name_is_allowed_on_component_prop() {
+    let src = "\
+<script>
+  import Favicon from './Favicon.svelte'
+  let className = 'text-muted'
+</script>
+
+<Favicon className={className} />
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"attribute_invalid_property_name"),
+        "component prop expression `className` must not fire DOM attr warning, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+#[test]
+fn react_style_expression_attribute_name_still_warns_on_dom_element() {
+    let src = "\
+<script>
+  let className = 'text-muted'
+</script>
+
+<div className={className}></div>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"attribute_invalid_property_name"),
+        "DOM expression `className` should still warn, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+#[test]
+fn react_style_shorthand_attribute_name_is_allowed_on_component_prop() {
+    let src = "\
+<script>
+  import Favicon from './Favicon.svelte'
+  let className = 'text-muted'
+</script>
+
+<Favicon {className} />
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"attribute_invalid_property_name"),
+        "component prop shorthand `className` must not fire DOM attr warning, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+#[test]
+fn react_style_shorthand_attribute_name_still_warns_on_dom_element() {
+    let src = "\
+<script>
+  let className = 'text-muted'
+</script>
+
+<div {className}></div>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"attribute_invalid_property_name"),
+        "DOM shorthand `className` should still warn, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+#[test]
+fn react_style_attribute_name_still_warns_on_custom_element() {
+    let src = "<my-widget className=\"text-muted\"></my-widget>";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"attribute_invalid_property_name"),
+        "custom-element `className` should still warn, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+#[test]
+fn react_style_attribute_name_is_allowed_on_svelte_component_prop() {
+    let src = "\
+<script>
+  import Favicon from './Favicon.svelte'
+</script>
+
+<svelte:component this={Favicon} className=\"text-muted\" />
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"attribute_invalid_property_name"),
+        "`svelte:component` prop `className` must not fire DOM attr warning, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+#[test]
+fn react_style_attribute_name_still_warns_on_svelte_element() {
+    let src = "<svelte:element this=\"div\" className=\"text-muted\" />";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"attribute_invalid_property_name"),
+        "`svelte:element` `className` should still warn, got: {:?}",
+        codes(&warnings)
+    );
+}
+
 /// Negative case — make sure the rule still fires when NO binding
 /// named `onclick` exists anywhere.
 #[test]

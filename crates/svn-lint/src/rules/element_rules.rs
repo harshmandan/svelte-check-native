@@ -181,6 +181,7 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
         parent,
         AttrParent::RegularElement { .. } | AttrParent::SvelteElement
     );
+    let fires_invalid_property_name = parent_is_regular_or_svelte;
     match attr {
         Attribute::Plain(p) => {
             let name = p.name.as_str();
@@ -203,9 +204,10 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
             }
 
             // attribute_invalid_property_name: React-style name.
-            if let Some(correct) = REACT_ATTRIBUTE_RENAMES
-                .iter()
-                .find_map(|(wrong, right)| if *wrong == name { Some(*right) } else { None })
+            if fires_invalid_property_name
+                && let Some(correct) = REACT_ATTRIBUTE_RENAMES
+                    .iter()
+                    .find_map(|(wrong, right)| if *wrong == name { Some(*right) } else { None })
             {
                 let msg = messages::attribute_invalid_property_name(name, correct);
                 ctx.emit(Code::attribute_invalid_property_name, msg, p.range);
@@ -229,10 +231,19 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
             // expression / shorthand forms below.
         }
         Attribute::Shorthand(s) => {
+            let name = s.name.as_str();
+            if fires_invalid_property_name
+                && let Some(correct) = REACT_ATTRIBUTE_RENAMES
+                    .iter()
+                    .find_map(|(wrong, right)| if *wrong == name { Some(*right) } else { None })
+            {
+                let msg = messages::attribute_invalid_property_name(name, correct);
+                ctx.emit(Code::attribute_invalid_property_name, msg, s.range);
+            }
+
             // `{onkeydown}` — name IS the value identifier. Fire iff
             // the name starts with `on` and has no local binding in
             // the instance/module scope.
-            let name = s.name.as_str();
             if parent_is_regular_or_svelte
                 && name.starts_with("on")
                 && name.len() > 2
@@ -253,9 +264,10 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
                 let msg = messages::attribute_illegal_colon();
                 ctx.emit(Code::attribute_illegal_colon, msg, e.range);
             }
-            if let Some(correct) = REACT_ATTRIBUTE_RENAMES
-                .iter()
-                .find_map(|(wrong, right)| if *wrong == name { Some(*right) } else { None })
+            if fires_invalid_property_name
+                && let Some(correct) = REACT_ATTRIBUTE_RENAMES
+                    .iter()
+                    .find_map(|(wrong, right)| if *wrong == name { Some(*right) } else { None })
             {
                 let msg = messages::attribute_invalid_property_name(name, correct);
                 ctx.emit(Code::attribute_invalid_property_name, msg, e.range);

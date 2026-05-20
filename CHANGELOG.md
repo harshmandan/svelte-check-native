@@ -6,6 +6,37 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.6]
+
+Patch release. Closes four upstream parity bugs in the lint /
+template-parser layer, plus the routine dep bump to oxc 0.129 and
+the cargo-deny GitHub Action to 2.0.18. Lint-validator coverage
+holds steady at 125 / 125 enforced fixtures passing.
+
+### Fixed
+
+- **`a11y_no_static_element_interactions` now fires on dynamic
+  `<svelte:element>`** with a literal `this="div"` (or any string
+  literal that resolves to a static element name), matching
+  upstream svelte-check.
+- **Nested `<style>` content is treated as raw text** by the
+  template scanner, so JS-looking selectors inside a style block
+  no longer confuse the mustache walker.
+- **Regex literals inside mustache expressions are scanned as
+  regexes,** not as a `/` operator followed by stray tokens —
+  fixes spurious parse errors on `{value.replace(/foo/g, '')}`
+  patterns.
+- **React-style prop names are accepted on components.**
+  `<Comp aria-label="x">` and similar dashed identifiers no
+  longer parse-error.
+
+### Changed
+
+- **`oxc_*` 0.128 → 0.129.** Internal allocator + parser bug
+  fixes; no API-surface impact on our crates. Closes #22.
+- **`EmbarkStudios/cargo-deny-action` 2.0.17 → 2.0.18** in the
+  supply-chain CI workflow. Closes #21.
+
 ## [0.8.5]
 
 Patch release. Closes the v0.7.2 emit regression on Svelte-4

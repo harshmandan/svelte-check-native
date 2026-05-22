@@ -1,4 +1,4 @@
 {
-  "bucket": "shim-resolution",
-  "reason": "2307 cannot-find-module svelte"
+  "bucket": "overlay-counts",
+  "reason": "sibling-workspace import: ../$$props-valid/input.svelte is in a sibling fixture dir; its overlay isn't generated under $$props-usage/.svelte-check/svelte/. Same root cause as $$events-usage and $$slots-usage"
 }

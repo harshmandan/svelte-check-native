@@ -1,4 +1,4 @@
 {
-  "bucket": "shim-resolution",
-  "reason": "2307 cannot-find-module svelte + 2339/2367 mismatch"
+  "bucket": "overlay-counts",
+  "reason": "sibling-workspace import: imports a sibling fixture's input.svelte; overlay not generated for the sibling. Same root cause as $$events-usage and $$props-usage"
 }

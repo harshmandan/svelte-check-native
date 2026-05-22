@@ -1,4 +1,4 @@
 {
-  "bucket": "shim-resolution",
-  "reason": "2307 cannot-find-module svelte + 7006 implicit-any cascade"
+  "bucket": "overlay-counts",
+  "reason": "sibling-workspace import: ../$$events/input.svelte is in a sibling fixture dir, so its overlay (.svelte-check/svelte/input.svelte.svn.ts) isn't generated when only $$events-usage/ is the --workspace. Rewritten import resolves to a non-existent path, cascading 2307 + 7006 implicit-any on event handler params"
 }

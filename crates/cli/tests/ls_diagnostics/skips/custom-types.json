@@ -1,4 +1,4 @@
 {
-  "bucket": "shim-resolution",
-  "reason": "7006 implicit-any leak (\u00d74) plus 2353/7044 missing \u2014 overlay differs"
+  "bucket": "overlay-counts",
+  "reason": "fixture's svelte-ambient-typings.d.ts extends svelteHTML.HTMLAttributes / IntrinsicElements with owntype/on:ownclick/own-element entries; the ambient .d.ts isn't being merged into our overlay's type-checking program, so 5 of the 6 expected 2353 attribute errors fire on attrs that should be valid"
 }

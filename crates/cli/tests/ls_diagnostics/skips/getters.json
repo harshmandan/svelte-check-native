@@ -1,4 +1,4 @@
 {
   "bucket": "overlay-counts",
-  "reason": "2367 vs 2749 mismatch"
+  "reason": "JS-mode (<script> no lang=ts) component-with-getters.svelte emits a simple `const __svn_component_default = (null)` default-export without a matching `type __svn_component_default = InstanceType<...>` alias. `import D from \"./component-with-getters.svelte\"` then binds D as value only, not type — TS2749 fires on `const comp: D = …` where expected was TS2367 on `comp.bar === 'foo'`. Iso-shape emit (used in lang=ts files) does emit the alias"
 }

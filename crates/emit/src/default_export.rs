@@ -53,6 +53,18 @@ use crate::util::{generic_arg_names, render_class_name};
 /// every consumer. Use a double-cast so the const's TYPE is
 /// `Component<Props>` while its runtime VALUE is `null` (no actual
 /// runtime needed in a .d.ts-esque overlay).
+///
+/// The const is `export const` (not bare) and is followed by a
+/// matching `@typedef ReturnType<typeof X> X` so the same identifier
+/// has both value and type meaning. Without that pair, a consumer
+/// doing `import C from "./foo.svelte"` followed by `const x: C = …`
+/// fires TS2749 ("C refers to a value, but is being used as a type
+/// here"). The named export carries the type alias through the
+/// `.d.svelte.ts` sidecar's `export *` re-export, and the dual
+/// meaning rides on the default identifier itself — `ReturnType` is
+/// the right utility because `Component<P>` is callable-only (no ctor
+/// signature), matching the TS fn-component path's choice in
+/// [`emit_fn_component_default_export`].
 pub(crate) fn emit_default_export_declarations_js(buf: &mut EmitBuffer, render_name: &SmolStr) {
     let _ = writeln!(
         buf,
@@ -64,7 +76,11 @@ pub(crate) fn emit_default_export_declarations_js(buf: &mut EmitBuffer, render_n
     );
     let _ = writeln!(
         buf,
-        "const __svn_component_default = /** @type {{any}} */ (null);"
+        "export const __svn_component_default = /** @type {{any}} */ (null);"
+    );
+    let _ = writeln!(
+        buf,
+        "/** @typedef {{ReturnType<typeof __svn_component_default>}} __svn_component_default */"
     );
     buf.push_str("export default __svn_component_default;\n");
 }

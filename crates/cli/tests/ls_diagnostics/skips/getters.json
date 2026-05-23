@@ -1,4 +1,4 @@
 {
   "bucket": "overlay-counts",
-  "reason": "JS-mode (<script> no lang=ts) component-with-getters.svelte emits a simple `const __svn_component_default = (null)` default-export without a matching `type __svn_component_default = InstanceType<...>` alias. `import D from \"./component-with-getters.svelte\"` then binds D as value only, not type — TS2749 fires on `const comp: D = …` where expected was TS2367 on `comp.bar === 'foo'`. Iso-shape emit (used in lang=ts files) does emit the alias"
+  "reason": "JS-mode component-with-getters.svelte now emits both the value and a matching `@typedef ReturnType<typeof X> X` (closing the TS2749 'D refers to value, not type' leg). However the JS render-fn returns only `{ props }`, not the full `{ props, exports, bindings, slots, events }` shape upstream emits. `Component<__SvnDefaultProps>` defaults Exports to `{}`, so `comp.bar` types as `any` (via the `& { $set?: any }` widening) and the expected TS2367 ('boolean'/'string' no-overlap) on `comp.bar === 'foo'` doesn't fire. Closing this requires extending the JS render-fn body to project all five render-result fields"
 }

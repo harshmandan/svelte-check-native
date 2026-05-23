@@ -50,8 +50,11 @@ struct Cli {
     tsconfig: Option<PathBuf>,
 
     /// Output format. Accepted values match upstream svelte-check.
-    #[arg(long, default_value = "human-verbose")]
-    output: String,
+    /// Default is `human-verbose` interactively, or `machine` when
+    /// invoked from an agent CLI (CLAUDECODE/GEMINI_CLI/CODEX_CI=1).
+    /// An explicit `--output` always wins.
+    #[arg(long)]
+    output: Option<String>,
 
     /// Diagnostic-source filter: comma-separated subset of
     /// `ts,js,svelte,css`.
@@ -185,14 +188,22 @@ fn main() -> ExitCode {
     // we extend the same machine-output default to Gemini CLI (GEMINI_CLI=1)
     // and OpenAI Codex CLI (CODEX_CI=1) since they consume tool output the
     // same way.
+    //
+    // The override only fires when the user didn't pass `--output`. An
+    // explicit `--output machine-verbose` (e.g. from scripts/bench.mjs)
+    // must reach the formatter unchanged — pre-fix, the agent-env check
+    // silently downgraded verbose JSON to the line-oriented `machine`
+    // format, breaking any caller's JSON parser.
     let in_agent_cli = ["CLAUDECODE", "GEMINI_CLI", "CODEX_CI"]
         .iter()
         .any(|k| std::env::var(k).as_deref() == Ok("1"));
-    let output = if in_agent_cli {
-        "machine".to_string()
-    } else {
-        cli.output.clone()
-    };
+    let output = cli.output.clone().unwrap_or_else(|| {
+        if in_agent_cli {
+            "machine".to_string()
+        } else {
+            "human-verbose".to_string()
+        }
+    });
 
     let workspace_arg = cli
         .workspace

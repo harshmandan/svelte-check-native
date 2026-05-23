@@ -1,0 +1,10 @@
+{
+    "errors": [
+        {
+            "file": "Component.svelte",
+            "line": 21,
+            "column": 10,
+            "code": 2322
+        }
+    ]
+}

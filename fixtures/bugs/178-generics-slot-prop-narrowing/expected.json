@@ -1,0 +1,10 @@
+{
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 17,
+            "column": 12,
+            "code": 2339
+        }
+    ]
+}

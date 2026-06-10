@@ -207,7 +207,7 @@ fn parse_named_attribute(
     // class-directive shapes round-trip:
     //   `class:!font-semibold={cond}`            — `!` important prefix
     //   `class:*:bg-red-500={cond}`              — `*:` child variant
-    //   `class:aspect-16/9={cond}`               — `/` in the bare name
+    //   `class:[aspect-16/9]={cond}`             — `/` only inside `[…]`
     //   `class:grid-cols-[1fr_500px]={cond}`     — bracketed value
     //   `class:bg-[var(--my-prop)]={cond}`       — parens inside brackets
     //   `class:grid-cols-[minmax(0,1fr)]={cond}` — commas inside brackets
@@ -274,15 +274,26 @@ fn parse_named_attribute(
         return parse_directive(scanner, start, kind, colon_idx, errors);
     }
 
-    // Plain-style named attribute.
+    // Plain-style named attribute. Svelte's `read_attribute` allows
+    // whitespace around `=` (`allow_whitespace()` on both sides), so
+    // `class = "foo"` is a single valued attribute, not a boolean
+    // `class` plus a stray `foo`. Peek past whitespace to decide
+    // whether a value follows; only commit when we actually see `=`.
     let name_sym: SmolStr = name.into();
+    let after_name = scanner.pos();
+    scanner.skip_ascii_whitespace();
     let value = if scanner.peek_byte() == Some(b'=') {
         scanner.advance_byte();
+        scanner.skip_ascii_whitespace();
         match parse_attr_value(scanner, errors) {
             Some(v) => Some(v),
             None => return None,
         }
     } else {
+        // Boolean attribute — restore the scanner to just after the
+        // name so the attribute-list loop sees the trailing whitespace
+        // exactly as before.
+        scanner.set_pos(after_name);
         None
     };
 
@@ -477,7 +488,15 @@ fn parse_attr_value(scanner: &mut Scanner<'_>, errors: &mut Vec<ParseError>) -> 
             let mut parts: Vec<AttrValuePart> = Vec::new();
             let mut chunk_start = start;
             while let Some(b) = scanner.peek_byte() {
-                if b.is_ascii_whitespace() || matches!(b, b'>' | b'/') {
+                if b.is_ascii_whitespace() || b == b'>' {
+                    break;
+                }
+                // A bare `/` is part of an unquoted value (`href=/foo`,
+                // `src=//cdn/x.js`). Svelte terminates unquoted values
+                // only at whitespace or `>`; the sole `/` exception is
+                // the self-closing `/>`. So break on `/` ONLY when it's
+                // immediately followed by `>`.
+                if b == b'/' && scanner.peek_byte_at(1) == Some(b'>') {
                     break;
                 }
                 if b == b'{' {
@@ -792,6 +811,56 @@ mod tests {
         };
         assert_eq!(a.name, "disabled");
         assert!(a.value.is_none());
+    }
+
+    #[test]
+    fn whitespace_around_equals_is_one_valued_attr() {
+        // Svelte allows `class = "foo"` (whitespace around `=`). Pre-fix
+        // this parsed as boolean `class` + a stray `foo` attribute.
+        let attrs = parse_ok(r#"class = "foo""#);
+        assert_eq!(attrs.len(), 1, "got {attrs:?}");
+        let Attribute::Plain(a) = &attrs[0] else {
+            panic!("expected Plain, got {:?}", attrs[0]);
+        };
+        assert_eq!(a.name, "class");
+        let v = a.value.as_ref().expect("class should have a value");
+        assert!(v.quoted);
+    }
+
+    #[test]
+    fn unquoted_value_keeps_bare_slash() {
+        // `href=/foo` — a bare `/` is part of an unquoted value; only
+        // `/>` terminates it. Pre-fix the `/` ended the value, leaving
+        // `href` empty and `/foo` to misparse.
+        let src = "href=/foo";
+        let attrs = parse_ok(src);
+        assert_eq!(attrs.len(), 1, "got {attrs:?}");
+        let Attribute::Plain(a) = &attrs[0] else {
+            panic!("expected Plain, got {:?}", attrs[0]);
+        };
+        assert_eq!(a.name, "href");
+        let v = a.value.as_ref().expect("href should have a value");
+        assert!(!v.quoted);
+        // The single Text part covers the whole `/foo`.
+        let AttrValuePart::Text { range, .. } = &v.parts[0] else {
+            panic!("expected Text part, got {:?}", v.parts);
+        };
+        assert_eq!(range.slice(src), "/foo");
+    }
+
+    #[test]
+    fn unquoted_value_self_closing_still_terminates() {
+        // `<input value=x/>` — the `/>` must still terminate the value
+        // at `x`, not swallow the `/`.
+        let attrs = parse_ok("value=x/>");
+        let Attribute::Plain(a) = &attrs[0] else {
+            panic!("expected Plain, got {:?}", attrs[0]);
+        };
+        let v = a.value.as_ref().expect("value should be present");
+        let AttrValuePart::Text { range, .. } = &v.parts[0] else {
+            panic!("expected Text part");
+        };
+        assert_eq!(range.slice("value=x/>"), "x");
     }
 
     #[test]

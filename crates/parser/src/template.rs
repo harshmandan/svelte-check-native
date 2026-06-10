@@ -1,19 +1,19 @@
 //! Template-level parser.
 //!
 //! Parses the template fragments recovered by the structural section parser
-//! into a proper [`Fragment`] AST. Current scope:
+//! into a proper [`Fragment`] AST. Scope:
 //!
-//! - Text
-//! - `{expression}` mustache interpolations
+//! - Text and `{expression}` mustache interpolations
 //! - `<!-- comments -->`
-//! - Elements / components / `<svelte:*>` **without attributes** (attributes
-//!   land in a subsequent commit)
+//! - Elements / components / `<svelte:*>` with attributes and directives
 //! - Void + self-closing elements
+//! - Control-flow blocks (`{#if}`/`{#each}`/`{#await}`/`{#key}`/`{#snippet}`)
+//!   and their branches
+//! - Tags (`{@html}`/`{@const}`/`{@render}`/`{@debug}`/`{@attach}`)
 //!
-//! Control-flow blocks, tags (`{@html}`/`{@const}`/`{@render}`/`{@debug}`/`{@attach}`),
-//! attributes and directives are **not yet implemented**. Encountering any of
-//! those currently produces a `NotYetImplemented` error with the offending
-//! range; upgrade as we land each grammar piece.
+//! All scans are bounded to the current fragment (`fragment_end`) so a
+//! malformed/unterminated construct can't consume into a following
+//! template run or script/style section.
 
 use smol_str::SmolStr;
 use svn_core::Range;
@@ -104,6 +104,17 @@ impl<'src> TemplateParser<'src> {
         self.scanner.pos() >= self.fragment_end || self.scanner.eof()
     }
 
+    /// [`find_mustache_end`] clamped to this fragment. The scanner spans
+    /// the whole source, so an unterminated mustache would otherwise
+    /// find a `}` belonging to a following template run or script/style
+    /// section, producing a node whose range bleeds past `fragment_end`.
+    /// A match at/after `fragment_end` means the mustache is unterminated
+    /// *within this fragment* — report `None` so the caller's recovery
+    /// path (which clamps to `fragment_end`) runs instead.
+    fn find_mustache_end_in_fragment(&self, expr_start: u32) -> Option<u32> {
+        find_mustache_end(self.scanner.source(), expr_start).filter(|&end| end < self.fragment_end)
+    }
+
     /// Parse a sequence of nodes until a stop condition is hit. Returns the
     /// parsed nodes and *why* parsing stopped.
     ///
@@ -158,7 +169,7 @@ impl<'src> TemplateParser<'src> {
             // local that doesn't shadow a script local just gets dropped.
             if self.scanner.starts_with("{@") {
                 let start = self.scanner.pos();
-                match find_mustache_end(self.scanner.source(), self.scanner.pos() + 1) {
+                match self.find_mustache_end_in_fragment(self.scanner.pos() + 1) {
                     Some(end) => {
                         let body_start = self.scanner.pos() + 2; // past `{@`
                         let src = self.scanner.source();
@@ -269,11 +280,17 @@ impl<'src> TemplateParser<'src> {
                 });
                 // Skip to the end of this opening mustache and beyond to the
                 // matching `{/other}` if we can find one — else bail.
-                if let Some(end) = find_mustache_end(self.scanner.source(), self.scanner.pos()) {
+                if let Some(end) = self.find_mustache_end_in_fragment(self.scanner.pos()) {
                     self.scanner.set_pos(end + 1);
                 }
                 let needle = format!("{{/{other}}}");
-                if let Some(pos) = self.scanner.find(needle.as_bytes()) {
+                // Only jump to a matching close that lies within this
+                // fragment — a `{/other}` in a later run isn't ours.
+                if let Some(pos) = self
+                    .scanner
+                    .find(needle.as_bytes())
+                    .filter(|&pos| pos < self.fragment_end)
+                {
                     self.scanner.set_pos(pos + needle.len() as u32);
                 }
                 None
@@ -297,21 +314,23 @@ impl<'src> TemplateParser<'src> {
             match next {
                 Some(BlockTerminator::Close { tag }) if tag == "if" => break,
                 Some(BlockTerminator::ElseIf { condition_range }) => {
+                    let body_start = self.scanner.pos();
                     let (body_nodes, t) = self.parse_fragment_until(None);
                     elseif_arms.push(ElseIfArm {
                         condition_range,
                         body: Fragment {
                             nodes: body_nodes,
-                            range: Range::new(0, 0),
+                            range: Range::new(body_start, self.scanner.pos()),
                         },
                     });
                     next = t;
                 }
                 Some(BlockTerminator::Else) => {
+                    let body_start = self.scanner.pos();
                     let (body_nodes, t) = self.parse_fragment_until(None);
                     alternate = Some(Fragment {
                         nodes: body_nodes,
-                        range: Range::new(0, 0),
+                        range: Range::new(body_start, self.scanner.pos()),
                     });
                     next = t;
                 }
@@ -347,10 +366,11 @@ impl<'src> TemplateParser<'src> {
         match term {
             Some(BlockTerminator::Close { tag }) if tag == "each" => {}
             Some(BlockTerminator::Else) => {
+                let alt_start = self.scanner.pos();
                 let (alt_nodes, t2) = self.parse_fragment_until(None);
                 alternate = Some(Fragment {
                     nodes: alt_nodes,
-                    range: Range::new(0, 0),
+                    range: Range::new(alt_start, self.scanner.pos()),
                 });
                 match t2 {
                     Some(BlockTerminator::Close { tag }) if tag == "each" => {}
@@ -390,22 +410,24 @@ impl<'src> TemplateParser<'src> {
                 // `{#await p then v}` — body is the then-branch directly,
                 // BUT `{:catch}` is still allowed afterward in Svelte's
                 // grammar. So parse until either `:catch` or `{/await}`.
+                let then_start = self.scanner.pos();
                 let (body, mut term) = self.parse_fragment_until(None);
                 then_branch = Some(ThenBranch {
                     context_range: ctx,
                     body: Fragment {
                         nodes: body,
-                        range: Range::new(0, 0),
+                        range: Range::new(then_start, self.scanner.pos()),
                     },
                 });
                 if let Some(BlockTerminator::Catch { context_range }) = &term {
                     let cctx = *context_range;
+                    let catch_start = self.scanner.pos();
                     let (catch_nodes, t2) = self.parse_fragment_until(None);
                     catch_branch = Some(CatchBranch {
                         context_range: cctx,
                         body: Fragment {
                             nodes: catch_nodes,
-                            range: Range::new(0, 0),
+                            range: Range::new(catch_start, self.scanner.pos()),
                         },
                     });
                     term = t2;
@@ -413,32 +435,35 @@ impl<'src> TemplateParser<'src> {
                 self.finish_await_block(term, block_start);
             }
             AwaitShortForm::Catch(ctx) => {
+                let catch_start = self.scanner.pos();
                 let (body, t) = self.parse_fragment_until(None);
                 catch_branch = Some(CatchBranch {
                     context_range: ctx,
                     body: Fragment {
                         nodes: body,
-                        range: Range::new(0, 0),
+                        range: Range::new(catch_start, self.scanner.pos()),
                     },
                 });
                 self.finish_await_block(t, block_start);
             }
             AwaitShortForm::None => {
                 // Full form: pending, then optional :then, optional :catch, {/await}.
+                let pending_start = self.scanner.pos();
                 let (pending_nodes, mut term) = self.parse_fragment_until(None);
                 pending = Some(Fragment {
                     nodes: pending_nodes,
-                    range: Range::new(0, 0),
+                    range: Range::new(pending_start, self.scanner.pos()),
                 });
                 // :then?
                 if let Some(BlockTerminator::Then { context_range }) = &term {
                     let ctx = *context_range;
+                    let then_start = self.scanner.pos();
                     let (then_nodes, t2) = self.parse_fragment_until(None);
                     then_branch = Some(ThenBranch {
                         context_range: ctx,
                         body: Fragment {
                             nodes: then_nodes,
-                            range: Range::new(0, 0),
+                            range: Range::new(then_start, self.scanner.pos()),
                         },
                     });
                     term = t2;
@@ -446,12 +471,13 @@ impl<'src> TemplateParser<'src> {
                 // :catch?
                 if let Some(BlockTerminator::Catch { context_range }) = &term {
                     let ctx = *context_range;
+                    let catch_start = self.scanner.pos();
                     let (catch_nodes, t2) = self.parse_fragment_until(None);
                     catch_branch = Some(CatchBranch {
                         context_range: ctx,
                         body: Fragment {
                             nodes: catch_nodes,
-                            range: Range::new(0, 0),
+                            range: Range::new(catch_start, self.scanner.pos()),
                         },
                     });
                     term = t2;
@@ -557,7 +583,10 @@ impl<'src> TemplateParser<'src> {
         self.scanner.advance(4);
         let body_start = self.scanner.pos();
 
-        let body_end = match self.scanner.find(b"-->") {
+        // Clamp to the fragment: a `-->` belonging to a later run /
+        // section must not be treated as this comment's terminator
+        // (it would over-consume into following content).
+        let body_end = match self.scanner.find(b"-->").filter(|&pos| pos < self.fragment_end) {
             Some(pos) => pos,
             None => {
                 // Unterminated — treat everything to fragment end as the body.
@@ -589,7 +618,7 @@ impl<'src> TemplateParser<'src> {
         self.scanner.advance_byte();
         let expr_start = self.scanner.pos();
 
-        match find_mustache_end(self.scanner.source(), expr_start) {
+        match self.find_mustache_end_in_fragment(expr_start) {
             Some(end) => {
                 let expr_range = Range::new(expr_start, end);
                 self.scanner.set_pos(end + 1);
@@ -1313,14 +1342,13 @@ mod tests {
     }
 
     #[test]
-    fn element_with_simple_attrs_skipped_cleanly() {
-        // Attributes are not yet supported — we only verify the parser
-        // doesn't blow up on them.
+    fn element_with_simple_attrs_parsed() {
         let frag = parse_ok(r#"<div class="foo" id="bar">body</div>"#);
         let Node::Element(e) = &frag.nodes[0] else {
             unreachable!()
         };
         assert_eq!(e.name, "div");
+        assert_eq!(e.attributes.len(), 2);
         assert_eq!(e.children.nodes.len(), 1);
     }
 

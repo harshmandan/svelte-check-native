@@ -89,7 +89,15 @@ pub(crate) fn peek_and_consume_terminator(
             if scanner.peek_byte() == Some(b'}') {
                 scanner.advance_byte();
                 Some(BlockTerminator::Else)
-            } else if scanner.starts_with("if") {
+            } else if scanner.starts_with("if")
+                // Require a word boundary after `if` so `{:else iffy}`
+                // isn't read as `{:else if}` with condition `fy`. The
+                // keyword ends only when the next char can't continue an
+                // identifier (whitespace, `{`, `(`, etc.).
+                && !scanner
+                    .peek_byte_at(2)
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$')
+            {
                 scanner.advance(2);
                 scanner.skip_ascii_whitespace();
                 let cond_start = scanner.pos();
@@ -421,7 +429,9 @@ pub(crate) fn parse_snippet_header(
     scanner.advance_byte();
     let params_start = scanner.pos();
 
-    // Find matching `)`.
+    // Find matching `)`. String/char/template literals are skipped so a
+    // `)` inside a default-value string (`{#snippet s(a = ")")}`) doesn't
+    // close the params early.
     let mut depth = 1;
     while !scanner.eof() {
         match scanner.peek_byte() {
@@ -431,6 +441,23 @@ pub(crate) fn parse_snippet_header(
                 if depth == 0 {
                     break;
                 }
+            }
+            Some(q @ (b'"' | b'\'' | b'`')) => {
+                scanner.advance_char(); // past the opening quote
+                while !scanner.eof() {
+                    match scanner.peek_byte() {
+                        Some(b'\\') => {
+                            // Skip the backslash and the escaped char.
+                            scanner.advance_char();
+                            scanner.advance_char();
+                            continue;
+                        }
+                        Some(c) if c == q => break, // at the closing quote
+                        _ => scanner.advance_char(),
+                    }
+                }
+                // Leave the scanner on the closing quote; the trailing
+                // advance_char below steps past it.
             }
             _ => {}
         }
@@ -639,6 +666,49 @@ pub(crate) fn build_snippet_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn else_if_requires_word_boundary() {
+        // `{:else iffy}` must NOT be read as `{:else if}` with condition
+        // `fy` — `iffy` is not the `if` keyword.
+        let src = "{:else iffy}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let term = peek_and_consume_terminator(&mut scanner, &mut errors);
+        assert!(
+            !matches!(term, Some(BlockTerminator::ElseIf { .. })),
+            "got {term:?}"
+        );
+        assert!(!errors.is_empty(), "expected a malformed-open-tag error");
+    }
+
+    #[test]
+    fn else_if_real_condition_parses() {
+        let src = "{:else if ready}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let term = peek_and_consume_terminator(&mut scanner, &mut errors);
+        let Some(BlockTerminator::ElseIf { condition_range }) = term else {
+            panic!("expected ElseIf, got {term:?}");
+        };
+        assert_eq!(condition_range.slice(src), "ready");
+    }
+
+    #[test]
+    fn snippet_params_are_string_aware() {
+        // `)` inside a default-value string must not close the params
+        // early: `{#snippet s(a = ")")}`.
+        let src = r#"s(a = ")")}"#;
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let result = parse_snippet_header(&mut scanner, &mut errors);
+        let Some((name, params)) = result else {
+            panic!("expected a snippet header, errors: {errors:?}");
+        };
+        assert_eq!(name, "s");
+        assert_eq!(params.slice(src), r#"a = ")""#);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
 
     #[test]
     fn find_token_at_depth_zero_basic() {

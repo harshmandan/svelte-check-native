@@ -529,10 +529,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let base = tmp.path().join("base.json");
         let ts = tmp.path().join("tsconfig.json");
-        write(
-            &base,
-            r#"{ "references": [{ "path": "./packages/a" }] }"#,
-        );
+        write(&base, r#"{ "references": [{ "path": "./packages/a" }] }"#);
         write(&ts, r#"{ "extends": "./base.json" }"#);
 
         let cfg = load(&ts).unwrap();

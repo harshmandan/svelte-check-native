@@ -586,7 +586,11 @@ impl<'src> TemplateParser<'src> {
         // Clamp to the fragment: a `-->` belonging to a later run /
         // section must not be treated as this comment's terminator
         // (it would over-consume into following content).
-        let body_end = match self.scanner.find(b"-->").filter(|&pos| pos < self.fragment_end) {
+        let body_end = match self
+            .scanner
+            .find(b"-->")
+            .filter(|&pos| pos < self.fragment_end)
+        {
             Some(pos) => pos,
             None => {
                 // Unterminated — treat everything to fragment end as the body.

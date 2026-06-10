@@ -22,9 +22,7 @@ use clap::Parser;
 use rayon::prelude::*;
 
 use collisions::rewrite_svelte_imports_for_collisions;
-use discovery::{
-    discover_relevant_files, discover_svelte_files, path_is_under_node_modules,
-};
+use discovery::{discover_relevant_files, discover_svelte_files, path_is_under_node_modules};
 use output::{print_diagnostics, print_machine_failure};
 
 #[derive(Parser, Debug)]
@@ -407,7 +405,9 @@ fn main() -> ExitCode {
     let threshold = match cli.threshold.as_str() {
         "error" | "warning" => cli.threshold.as_str(),
         other => {
-            eprintln!("svelte-check-native: invalid threshold \"{other}\", using \"warning\" instead");
+            eprintln!(
+                "svelte-check-native: invalid threshold \"{other}\", using \"warning\" instead"
+            );
             "warning"
         }
     };
@@ -908,10 +908,7 @@ fn parse_compiler_warnings(
 /// caller should also relocate the workspace. An explicit `--tsconfig`
 /// pointing at an ordinary config returns `false`, so the workspace
 /// stays put (upstream keeps workspace and tsconfig independent).
-fn resolve_tsconfig(
-    workspace: &Path,
-    explicit: Option<&Path>,
-) -> Result<(PathBuf, bool), String> {
+fn resolve_tsconfig(workspace: &Path, explicit: Option<&Path>) -> Result<(PathBuf, bool), String> {
     let candidate: PathBuf = if let Some(p) = explicit {
         let resolved = if p.is_absolute() {
             p.to_path_buf()

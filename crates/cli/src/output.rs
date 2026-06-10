@@ -119,9 +119,8 @@ fn print_machine(
     // JSON-escape the workspace path (mirrors upstream's
     // `START ${JSON.stringify(workspaceDir)}`) so a path containing a
     // quote or backslash doesn't break machine-output parsers.
-    let ws = serde_json::to_string(&workspace.display().to_string()).unwrap_or_else(|_| {
-        format!("\"{}\"", workspace.display())
-    });
+    let ws = serde_json::to_string(&workspace.display().to_string())
+        .unwrap_or_else(|_| format!("\"{}\"", workspace.display()));
     println!("{now_ms} START {ws}");
     for d in diagnostics {
         if !passes_threshold(d.severity, threshold) {

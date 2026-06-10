@@ -207,7 +207,6 @@ pub(crate) fn build_glob_set_absolute(patterns: &[String]) -> Option<globset::Gl
     builder.build().ok()
 }
 
-
 /// Directory names the discovery walker never descends into.
 ///
 /// Matches upstream svelte-check's `findFiles` exactly (utils.ts): it
@@ -284,8 +283,7 @@ mod tests {
     #[test]
     fn glob_set_absolute_matches_absolute_paths_and_expands_bare_dirs() {
         // A glob pattern matches by absolute path.
-        let set =
-            build_glob_set_absolute(&["/ws/src/**/*.svelte".to_string()]).expect("glob set");
+        let set = build_glob_set_absolute(&["/ws/src/**/*.svelte".to_string()]).expect("glob set");
         assert!(set.is_match(Path::new("/ws/src/lib/Foo.svelte")));
         assert!(!set.is_match(Path::new("/other/src/Foo.svelte")));
         // A non-existent bare dir stays a literal (no /**/* expansion,

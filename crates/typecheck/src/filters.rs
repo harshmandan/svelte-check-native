@@ -144,9 +144,6 @@ pub(crate) fn is_overlay_attribute_key(overlay: &str, offset: u32) -> bool {
             .get(start)
             .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'-' | b'_' | b'$'))
     {
-        if start == 0 {
-            break;
-        }
         start -= 1;
     }
     if bytes.get(start) != Some(&b'"') {

@@ -16,18 +16,9 @@
 //!    --noErrorTruncation`, capture combined stdout+stderr, and parse with
 //!    [`output::parse`].
 //! 6. We map diagnostics back to original `.svelte` paths via the cache
-//!    layout. Line/column mapping is best-effort for now (we account for
-//!    the wrapper offset added by [`emit::emit_document`] but don't yet
-//!    have a real source map).
-//!
-//! ### What's not yet here
-//!
-//! - Proper source-map mapping (currently we apply a fixed offset matching
-//!   the emitter's wrapper; once the emitter writes sourcemap mappings,
-//!   this becomes a v3 source-map consumer).
-//! - Path-aliased tsconfig support (`paths`/`rootDirs`/`extends-array`
-//!   beyond what the user's tsconfig handles via the extends chain itself).
-//! - `references` (project references) propagation.
+//!    layout, translating overlay positions to source positions through
+//!    the per-file line/token maps the emitter produces (see
+//!    [`position`] and `map_diagnostic`) — not a fixed offset.
 
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 

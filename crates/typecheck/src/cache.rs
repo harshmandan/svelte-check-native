@@ -141,8 +141,30 @@ impl CacheLayout {
     /// On JS-Svelte sources the user's tsconfig usually carries
     /// `noImplicitAny: false`, and emitting a `.ts` overlay forces
     /// strict inference that the user never opted into.
+    /// Make `source` relative to the workspace for use as a cache-mirror
+    /// suffix. When `source` is OUTSIDE the workspace (so `strip_prefix`
+    /// fails), drop its root/prefix components so the result is still
+    /// relative — otherwise `svelte_dir.join(absolute)` would *replace*
+    /// the cache root and write overlay files outside the cache. Dormant
+    /// in practice (the monorepo-root auto-escape keeps sources under
+    /// the workspace), but cheap insurance against a path traversal.
+    fn relativize(&self, source: &Path) -> PathBuf {
+        if let Ok(rel) = source.strip_prefix(&self.workspace) {
+            return rel.to_path_buf();
+        }
+        source
+            .components()
+            .filter(|c| {
+                !matches!(
+                    c,
+                    std::path::Component::RootDir | std::path::Component::Prefix(_)
+                )
+            })
+            .collect()
+    }
+
     pub fn generated_path_with_lang(&self, source: &Path, is_ts: bool) -> PathBuf {
-        let rel = source.strip_prefix(&self.workspace).unwrap_or(source);
+        let rel = self.relativize(source);
         let parent = rel.parent().unwrap_or_else(|| Path::new(""));
         let file_stem = rel
             .file_name()
@@ -163,7 +185,7 @@ impl CacheLayout {
     /// RequestEvent / Load types) and produce duplicate-declaration
     /// noise.
     pub fn kit_overlay_path(&self, source: &Path) -> PathBuf {
-        let rel = source.strip_prefix(&self.workspace).unwrap_or(source);
+        let rel = self.relativize(source);
         self.svelte_dir.join(rel)
     }
 
@@ -196,7 +218,7 @@ impl CacheLayout {
     /// reference `./Foo.svelte` pick up the overlay's types without
     /// our emit having to rewrite their specifiers.
     pub fn ambient_path(&self, source: &Path) -> PathBuf {
-        let rel = source.strip_prefix(&self.workspace).unwrap_or(source);
+        let rel = self.relativize(source);
         let parent = rel.parent().unwrap_or_else(|| Path::new(""));
         let file_stem = rel
             .file_name()

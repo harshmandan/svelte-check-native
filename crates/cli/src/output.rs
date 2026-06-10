@@ -37,7 +37,6 @@ pub(crate) fn print_diagnostics(
     output_format: &str,
     color: ColorMode,
     files_checked: usize,
-    elapsed: std::time::Duration,
     threshold: &str,
 ) {
     let now_ms = std::time::SystemTime::now()
@@ -52,8 +51,22 @@ pub(crate) fn print_diagnostics(
         .iter()
         .filter(|d| matches!(d.severity, svn_typecheck::Severity::Warning))
         .count();
-    let files_with_problems: std::collections::HashSet<_> =
-        diagnostics.iter().map(|d| &d.source_path).collect();
+    // Upstream counts a file as "with problems" only when it has an
+    // Error or Warning — Hint/suggestion-only files don't count
+    // (index.ts increments fileCountWithProblems on Error/Warning).
+    // Hints reach us only under `--include-suggestions`; without this
+    // gate a hint-only file would inflate FILES_WITH_PROBLEMS / the
+    // "in N files" phrasing.
+    let files_with_problems: std::collections::HashSet<_> = diagnostics
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.severity,
+                svn_typecheck::Severity::Error | svn_typecheck::Severity::Warning
+            )
+        })
+        .map(|d| &d.source_path)
+        .collect();
     let use_color = color.use_color();
 
     match output_format {
@@ -79,13 +92,7 @@ pub(crate) fn print_diagnostics(
         }
         "human" => {
             print_human(workspace, diagnostics, false, use_color, threshold);
-            print_human_summary(
-                errors,
-                warnings,
-                files_with_problems.len(),
-                elapsed,
-                use_color,
-            );
+            print_human_summary(errors, warnings, files_with_problems.len(), use_color);
         }
         // human-verbose is the default
         _ => {
@@ -96,13 +103,7 @@ pub(crate) fn print_diagnostics(
             println!("Getting Svelte diagnostics...");
             println!();
             print_human(workspace, diagnostics, true, use_color, threshold);
-            print_human_summary(
-                errors,
-                warnings,
-                files_with_problems.len(),
-                elapsed,
-                use_color,
-            );
+            print_human_summary(errors, warnings, files_with_problems.len(), use_color);
         }
     }
 }
@@ -115,7 +116,13 @@ fn print_machine(
     verbose: bool,
     threshold: &str,
 ) {
-    println!("{now_ms} START \"{}\"", workspace.display());
+    // JSON-escape the workspace path (mirrors upstream's
+    // `START ${JSON.stringify(workspaceDir)}`) so a path containing a
+    // quote or backslash doesn't break machine-output parsers.
+    let ws = serde_json::to_string(&workspace.display().to_string()).unwrap_or_else(|_| {
+        format!("\"{}\"", workspace.display())
+    });
+    println!("{now_ms} START {ws}");
     for d in diagnostics {
         if !passes_threshold(d.severity, threshold) {
             continue;
@@ -197,6 +204,23 @@ fn print_machine_completed(
     );
 }
 
+/// Emit a machine-output `FAILURE` line for a fatal check error,
+/// mirroring upstream's `MachineFriendlyWriter.failure`
+/// (`FAILURE ${JSON.stringify(err.message)}`). Machine consumers key
+/// off this line; without it a crash looks like a silent stop. No-op
+/// for human formats (the caller prints to stderr there).
+pub(crate) fn print_machine_failure(output_format: &str, message: &str) {
+    if output_format != "machine" && output_format != "machine-verbose" {
+        return;
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let msg = serde_json::to_string(message).unwrap_or_else(|_| format!("\"{message}\""));
+    println!("{now_ms} FAILURE {msg}");
+}
+
 /// `human` / `human-verbose` body — per-diagnostic block.
 fn print_human(
     workspace: &Path,
@@ -215,9 +239,12 @@ fn print_human(
             .strip_prefix(workspace)
             .unwrap_or(&d.source_path);
         let filename = rel.display().to_string();
-        // Path that IDEs turn into clickable links.
+        // Path that IDEs turn into clickable links. Use the platform
+        // separator between workspace and file (upstream uses `sep`), so
+        // Windows links resolve.
         println!(
-            "{workspace_display}/{}:{}:{}",
+            "{workspace_display}{}{}:{}:{}",
+            std::path::MAIN_SEPARATOR,
             paint(&filename, "32", color),
             d.line,
             d.column,
@@ -232,47 +259,49 @@ fn print_human(
         // span is empty (zero-width markers still get visualized).
         let span = d.end_column.saturating_sub(d.column);
         let span = if span == 0 { Some(1) } else { Some(span) };
+        // Upstream prints the diagnostic SOURCE (`(svelte)` / `(js)` /
+        // `(css)`), not the code — `${message} (${diagnostic.source})`.
+        let source = d.source.as_str();
         if verbose {
             // Code frame: try to read the source file and emit a short
             // excerpt around the diagnostic line, with a caret pointer.
             let frame = format_code_frame(&d.source_path, d.line, d.column, span);
-            // `Display for DiagnosticCode` already prefixes numeric
-            // codes with `TS`; printing `(TS{code})` would double-up
-            // for TS errors AND attach a wrong `TS` to slug codes.
-            // Just print `(<code>)` and let Display do the right thing.
             if frame.is_empty() {
-                println!("{label}: {} ({})", d.message, d.code);
+                println!("{label}: {} ({source})", d.message);
             } else {
                 println!(
-                    "{label}: {} ({})\n{}",
+                    "{label}: {} ({source})\n{}",
                     d.message,
-                    d.code,
                     paint(&frame, "36", color),
                 );
             }
         } else {
-            println!("{label}: {} ({})", d.message, d.code);
+            println!("{label}: {} ({source})", d.message);
         }
         println!();
     }
 }
 
-fn print_human_summary(
-    errors: usize,
-    warnings: usize,
-    files: usize,
-    elapsed: std::time::Duration,
-    color: bool,
-) {
+fn print_human_summary(errors: usize, warnings: usize, files: usize, color: bool) {
+    // Mirror upstream's completion line (writers.ts): a `====` rule
+    // when any file has problems, then `svelte-check found …`, with the
+    // `in N files` clause present ONLY when files > 0 and NO elapsed
+    // time (use `--timings` for that). Pre-fix we always printed
+    // `in N files` and an elapsed suffix upstream doesn't emit.
+    if files > 0 {
+        println!("====================================");
+    }
+    let in_files = if files > 0 {
+        format!(" in {files} file{}", if files == 1 { "" } else { "s" })
+    } else {
+        String::new()
+    };
     let parts = format!(
-        "svelte-check found {} error{} and {} warning{} in {} file{} in {:.1}s",
+        "svelte-check found {} error{} and {} warning{}{in_files}",
         errors,
         if errors == 1 { "" } else { "s" },
         warnings,
         if warnings == 1 { "" } else { "s" },
-        files,
-        if files == 1 { "" } else { "s" },
-        elapsed.as_secs_f64(),
     );
     if errors > 0 {
         println!("{}", paint(&parts, "31", color));

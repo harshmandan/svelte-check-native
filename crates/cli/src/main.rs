@@ -25,7 +25,7 @@ use collisions::rewrite_svelte_imports_for_collisions;
 use discovery::{
     discover_relevant_files, discover_svelte_files, path_is_under_node_modules,
 };
-use output::print_diagnostics;
+use output::{print_diagnostics, print_machine_failure};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -1319,7 +1319,11 @@ fn run_typecheck(
         ) {
             Ok(out) => (out.diagnostics, out.extended_diagnostics),
             Err(err) => {
-                eprintln!("svelte-check-native: type-check failed: {err}");
+                let message = format!("type-check failed: {err}");
+                eprintln!("svelte-check-native: {message}");
+                // Machine consumers key off a FAILURE line; emit one so
+                // a fatal check error isn't a silent stop on stdout.
+                print_machine_failure(output_format, &message);
                 return ExitCode::from(2);
             }
         }
@@ -1502,7 +1506,6 @@ fn run_typecheck(
         output_format,
         color,
         files_for_completed,
-        phase_start.elapsed(),
         threshold,
     );
 

@@ -686,7 +686,15 @@ impl<'src> TemplateParser<'src> {
         let is_void = is_void_element(&name);
         let children = if self_closing || is_void {
             Fragment::default()
-        } else if name.eq_ignore_ascii_case("style") {
+        } else if name.eq_ignore_ascii_case("style") || name.eq_ignore_ascii_case("script") {
+            // Raw-text both `style` AND nested `script` (e.g. a JSON-LD
+            // `<script type="application/ld+json">` in `<svelte:head>`).
+            // Svelte's parser blanks `<script>` bodies verbatim
+            // (svelte2tsx htmlxparser `blankVerbatimContent`); without
+            // this, `{...}` in a JSON-LD block parses as a mustache
+            // interpolation and fires phantom diagnostics. `textarea`/
+            // `title` are NOT raw-text — Svelte interpolates mustaches
+            // inside them.
             self.parse_raw_text_children_until(&name, tag_start, open_tag_end)?
         } else {
             self.parse_children_until(&name, tag_start, open_tag_end)?

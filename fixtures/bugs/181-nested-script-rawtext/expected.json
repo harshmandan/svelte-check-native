@@ -1,0 +1,5 @@
+{
+    "emit_contains": ["(title)"],
+    "emit_not_contains": ["@context", "schema.org", "Acme"],
+    "_note": "Review M1: the template parser raw-texted only `style`, not nested `script`. A JSON-LD `<script type=\"application/ld+json\">{...}</script>` inside `<svelte:head>` had its `{...}` parsed as a mustache interpolation, emitting the JSON object as an expression into the template-check function and firing phantom diagnostics. Svelte blanks `<script>` bodies verbatim (svelte2tsx htmlxparser blankVerbatimContent). Now `script` is raw-texted like `style`: the JSON-LD body is ignored and the real `{title}` interpolation still emits."
+}

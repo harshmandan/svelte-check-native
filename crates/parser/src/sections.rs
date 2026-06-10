@@ -599,70 +599,44 @@ fn parse_lang_attr(attrs: &[ScriptAttr], errors: &mut Vec<ParseError>) -> Script
     }
 }
 
-/// Skip past a balanced `{…}` mustache block at `from`, returning
-/// the index just past the matching `}`. Understands enough JS
-/// lexical structure to not get fooled by braces / quotes inside
-/// strings, template literals, or comments:
+/// Skip past a balanced `{…}` mustache block whose opening `{` is at
+/// `from`, returning the index just past the matching `}` (or the
+/// source length on EOF / unterminated input).
 ///
-/// - `'…'`, `"…"`, `` `…` `` respect backslash escapes; embedded
-///   braces don't count.
-/// - `// … \n` and `/* … */` are skipped entirely, so an apostrophe
-///   inside `// don't` doesn't start a phantom string.
+/// Delegates to the canonical [`crate::mustache::find_mustache_end`] so
+/// the document-level section walk and the attribute-value scan share
+/// ONE lexical grammar. The previous hand-rolled scanner here lacked
+/// regex-literal and template-`${}` handling that `find_mustache_end`
+/// has, so `{x.replace(/}/g, '')}` ended the mustache early at the `}`
+/// inside the regex and desynced the section/template-run boundaries.
 ///
-/// On EOF, returns the source length.
+/// `bytes` is always the full source (valid UTF-8, since it originates
+/// from a `&str`), so offsets passed to `find_mustache_end` are
+/// absolute and reconstruction via `from_utf8` is infallible in
+/// practice.
 fn scan_past_mustache(bytes: &[u8], from: u32) -> u32 {
-    let mut i = from as usize + 1;
-    let mut depth: u32 = 1;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                // Line comment — scan to end of line (or EOF).
-                i += 2;
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                // Block comment — scan to `*/`.
-                i += 2;
-                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    i += 1;
-                }
-                i = (i + 2).min(bytes.len());
-            }
-            b'\\' if i + 1 < bytes.len() => {
-                i += 2;
-                continue;
-            }
-            b'"' | b'\'' | b'`' => {
-                let quote = bytes[i];
-                i += 1;
-                while i < bytes.len() && bytes[i] != quote {
-                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
-                }
-                if i < bytes.len() {
-                    i += 1;
-                }
-            }
-            b'{' => {
-                depth += 1;
-                i += 1;
-            }
-            b'}' => {
-                depth -= 1;
-                i += 1;
-                if depth == 0 {
-                    return i as u32;
-                }
-            }
-            _ => i += 1,
+    // A Svelte close-block tag — `{/if}`, `{/each}`, `{/await}`,
+    // `{/key}`, `{/snippet}` — begins with `/` and contains no
+    // expression. `find_mustache_end` would read that leading `/` as a
+    // regex-literal opener and over-scan to EOF. Svelte reserves `{/`
+    // for close tags (a mustache can't legitimately begin with a regex
+    // literal), so scan a close tag with a plain brace search instead.
+    if bytes.get(from as usize + 1) == Some(&b'/') {
+        let mut i = from as usize + 1;
+        while i < bytes.len() && bytes[i] != b'}' {
+            i += 1;
         }
+        return ((i + 1) as u32).min(bytes.len() as u32);
     }
-    bytes.len() as u32
+    let Ok(source) = std::str::from_utf8(bytes) else {
+        return bytes.len() as u32;
+    };
+    match crate::mustache::find_mustache_end(source, from + 1) {
+        // find_mustache_end returns the offset OF the `}`; we return
+        // the index just past it.
+        Some(close) => close + 1,
+        None => bytes.len() as u32,
+    }
 }
 
 /// Skip past `<NAME … >` or `<NAME … />` starting at `from`. Returns
@@ -1220,6 +1194,19 @@ let x: number = 1;
         // mustache, inner `{` is an object literal. Depth counter
         // correctly unwinds both.
         let src = "<div use:dndzone={{ dragDisabled: !x, items: [1, 2] }}>y</div>\n\
+                   <style>p{}</style>";
+        let doc = parse_ok(src);
+        assert!(doc.style.is_some());
+    }
+
+    #[test]
+    fn mustache_with_regex_containing_brace() {
+        // `/}/ ` — a regex literal whose body is a `}` — must not end
+        // the mustache early. The old hand-rolled section scanner had no
+        // regex awareness and closed at the `}` inside the regex,
+        // desyncing the section walk so the trailing `<style>` was
+        // missed. Now unified on find_mustache_end.
+        let src = "<div title={x.replace(/}/g, '')}>y</div>\n\
                    <style>p{}</style>";
         let doc = parse_ok(src);
         assert!(doc.style.is_some());

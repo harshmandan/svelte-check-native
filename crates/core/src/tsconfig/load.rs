@@ -31,7 +31,10 @@
 //! - `paths`: REPLACED entirely if child specifies it (not per-key merge).
 //! - `rootDirs`: REPLACED if child specifies non-empty.
 //! - `typeRoots` / `types`: REPLACED if child specifies (even empty).
-//! - `include`, `exclude`, `files`, `references`: REPLACED if child specifies.
+//! - `include`, `exclude`, `files`: REPLACED if child specifies.
+//! - `references`: NOT inherited — TS reads it only from the config
+//!   being loaded, never from an extended parent. Always taken from the
+//!   leaf (even when empty).
 //! - Final config's `path` is set to the entry file (the leaf of the chain).
 
 use std::collections::HashSet;
@@ -258,16 +261,27 @@ fn resolve_relative_extends(reference: &str, config_dir: &Path) -> Result<PathBu
         config_dir.join(reference)
     };
 
-    // If there's no extension, try `.json` first.
-    if candidate.extension().is_none() {
-        let with_json = candidate.with_extension("json");
+    // Try the literal path first (covers `./base.json` and the rare
+    // extensionless file). TypeScript then APPENDS `.json` — note
+    // append, not replace — to any reference that doesn't already end
+    // in `.json`: `./tsconfig.base` resolves `tsconfig.base.json`, not
+    // `tsconfig.json`. We key off the literal `.json` suffix like TS,
+    // NOT `Path::extension()`: a dotted basename such as
+    // `tsconfig.base` has `extension() == Some("base")`, so an
+    // extension-presence check would skip the append and fail to find
+    // `tsconfig.base.json` (a common monorepo convention).
+    // `with_extension("json")` is also wrong here — it would *replace*,
+    // turning `tsconfig.base` into `tsconfig.json`.
+    if candidate.is_file() {
+        return Ok(candidate);
+    }
+    if !reference.ends_with(".json") {
+        let mut with_json = candidate.into_os_string();
+        with_json.push(".json");
+        let with_json = PathBuf::from(with_json);
         if with_json.is_file() {
             return Ok(with_json);
         }
-    }
-
-    if candidate.is_file() {
-        return Ok(candidate);
     }
 
     Err(LoadError::ExtendsNotFound {
@@ -365,9 +379,12 @@ fn merge_into(base: &mut TsConfigFile, child: TsConfigFile) {
     if child.files.is_some() {
         base.files = child.files;
     }
-    if !child.references.is_empty() {
-        base.references = child.references;
-    }
+    // `references` is NOT inherited through `extends` — TypeScript reads
+    // it only from the config actually being loaded, never from an
+    // extended parent. The leaf is merged last (see load_recursive), so
+    // always taking the child's value (even when empty) yields exactly
+    // the leaf's references and drops any a parent declared.
+    base.references = child.references;
 }
 
 fn merge_compiler_options(co: &mut CompilerOptions, cc: CompilerOptions) {
@@ -483,6 +500,47 @@ mod tests {
 
         let cfg = load(&ts).unwrap();
         assert_eq!(cfg.compiler_options.strict, Some(true));
+    }
+
+    #[test]
+    fn load_with_dotted_basename_extends_appends_json() {
+        // extends: "./tsconfig.base" must resolve "tsconfig.base.json"
+        // (APPEND .json), not "tsconfig.json" (which `with_extension`
+        // would wrongly produce). A common monorepo convention.
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("tsconfig.base.json");
+        let decoy = tmp.path().join("tsconfig.json");
+        let ts = tmp.path().join("app.tsconfig.json");
+        write(&base, r#"{ "compilerOptions": { "strict": true } }"#);
+        // A `tsconfig.json` decoy with a conflicting value: if the
+        // resolver replaced the extension instead of appending, it would
+        // pick this up and `strict` would be false.
+        write(&decoy, r#"{ "compilerOptions": { "strict": false } }"#);
+        write(&ts, r#"{ "extends": "./tsconfig.base" }"#);
+
+        let cfg = load(&ts).unwrap();
+        assert_eq!(cfg.compiler_options.strict, Some(true));
+    }
+
+    #[test]
+    fn references_not_inherited_through_extends() {
+        // TS reads `references` only from the config being loaded, never
+        // from an extended parent.
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("base.json");
+        let ts = tmp.path().join("tsconfig.json");
+        write(
+            &base,
+            r#"{ "references": [{ "path": "./packages/a" }] }"#,
+        );
+        write(&ts, r#"{ "extends": "./base.json" }"#);
+
+        let cfg = load(&ts).unwrap();
+        assert!(
+            cfg.references.is_empty(),
+            "references from an extended parent must not be inherited, got {:?}",
+            cfg.references
+        );
     }
 
     #[test]

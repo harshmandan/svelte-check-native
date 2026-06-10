@@ -23,7 +23,7 @@ use rayon::prelude::*;
 
 use collisions::rewrite_svelte_imports_for_collisions;
 use discovery::{
-    build_glob_set, discover_relevant_files, discover_svelte_files, path_is_under_node_modules,
+    discover_relevant_files, discover_svelte_files, path_is_under_node_modules,
 };
 use output::print_diagnostics;
 
@@ -308,8 +308,8 @@ fn main() -> ExitCode {
         return ExitCode::from(0);
     }
 
-    let tsconfig = match resolve_tsconfig(&workspace, cli.tsconfig.as_deref()) {
-        Ok(p) => p,
+    let (tsconfig, escaped_solution) = match resolve_tsconfig(&workspace, cli.tsconfig.as_deref()) {
+        Ok(pair) => pair,
         Err(msg) => {
             eprintln!("svelte-check-native: {msg}");
             return ExitCode::from(2);
@@ -322,8 +322,13 @@ fn main() -> ExitCode {
     // (`@org/types`, workspace-scoped deps) fails from the wrong
     // directory. The overlay cache, kit-file discovery, and diagnostic
     // path-relativization all follow workspace.
+    //
+    // Gated on `escaped_solution`: an explicit `--tsconfig` pointing
+    // into a subdirectory must NOT relocate the workspace — that would
+    // silently change the discovery root and the `<N> FILES`
+    // denominator. Upstream keeps workspace and tsconfig independent.
     let (workspace, solution_root_tsconfig) = match tsconfig.parent() {
-        Some(dir) if dir != workspace && dir.starts_with(&workspace) => {
+        Some(dir) if escaped_solution && dir != workspace && dir.starts_with(&workspace) => {
             eprintln!(
                 "svelte-check-native: redirected workspace to {} (parent of {}) — original looked like a TS project-references solution",
                 dir.display(),
@@ -897,7 +902,16 @@ fn parse_compiler_warnings(
 /// our overlay can't inherit useful `paths` / `baseUrl` / resolution
 /// settings from one, so extending it leaves every `$lib/*` import
 /// unresolved. Common root-of-monorepo case in SvelteKit apps.
-fn resolve_tsconfig(workspace: &Path, explicit: Option<&Path>) -> Result<PathBuf, String> {
+/// Returns `(tsconfig_path, escaped_solution)`. `escaped_solution` is
+/// `true` only when the resolved path is a sub-project we redirected to
+/// from a project-references *solution* config — the one case where the
+/// caller should also relocate the workspace. An explicit `--tsconfig`
+/// pointing at an ordinary config returns `false`, so the workspace
+/// stays put (upstream keeps workspace and tsconfig independent).
+fn resolve_tsconfig(
+    workspace: &Path,
+    explicit: Option<&Path>,
+) -> Result<(PathBuf, bool), String> {
     let candidate: PathBuf = if let Some(p) = explicit {
         let resolved = if p.is_absolute() {
             p.to_path_buf()
@@ -924,7 +938,10 @@ fn resolve_tsconfig(workspace: &Path, explicit: Option<&Path>) -> Result<PathBuf
             )
         })?
     };
-    Ok(escape_solution_tsconfig(&candidate).unwrap_or(candidate))
+    match escape_solution_tsconfig(&candidate) {
+        Some(escaped) => Ok((escaped, true)),
+        None => Ok((candidate, false)),
+    }
 }
 
 /// If `candidate` is a solution-style tsconfig, try to redirect to a
@@ -1035,28 +1052,33 @@ fn run_typecheck(
     // firing a cascade of "Cannot find module
     // '$lib/…'" errors because the root tsconfig's `$lib` alias
     // points at the wrong tree for those files.
-    let project_scope = svn_core::tsconfig::load(tsconfig).ok().map(|tc| {
+    let project_scope = svn_core::tsconfig::load_chain(tsconfig).ok().map(|chain| {
+        // Resolve include/exclude/files against the config that DECLARES
+        // them (TS semantics; leaf wins), producing absolute patterns —
+        // the same rule the overlay builder uses. Previously discovery
+        // resolved the *flattened* patterns against the workspace via a
+        // leading-`../`-stripping heuristic, which disagreed with the
+        // overlay for configs declared outside the workspace root.
+        let include = discovery::build_glob_set_absolute(
+            &discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref()),
+        );
+        let exclude = discovery::build_glob_set_absolute(
+            &discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.exclude.as_deref()),
+        );
         // Files explicitly listed in tsconfig's `files` field bypass
         // both `include` glob matching AND `exclude` filtering (TS
         // spec: https://www.typescriptlang.org/tsconfig/#exclude —
         // "A file specified by exclude can still become part of your
         // codebase due to … being specified in the files list").
-        // Resolve each entry against the tsconfig's directory so a
-        // `"./Index.svelte"` in /path/to/app/tsconfig.json becomes
-        // /path/to/app/Index.svelte.
-        let tsconfig_dir = tsconfig.parent().unwrap_or(Path::new("."));
-        let explicit_files: std::collections::HashSet<PathBuf> = tc
-            .files
-            .iter()
-            .flatten()
-            .map(|p| tsconfig_dir.join(p))
-            .filter_map(|p| dunce::canonicalize(&p).ok().or(Some(p)))
-            .collect();
-        (
-            build_glob_set(workspace, tc.include.as_deref()),
-            build_glob_set(workspace, tc.exclude.as_deref()),
-            explicit_files,
-        )
+        // Canonicalized because the matcher compares against canonical
+        // walker paths.
+        let explicit_files: std::collections::HashSet<PathBuf> =
+            discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.files.as_deref())
+                .into_iter()
+                .map(PathBuf::from)
+                .filter_map(|p| dunce::canonicalize(&p).ok().or(Some(p)))
+                .collect();
+        (include, exclude, explicit_files)
     });
     let in_project_scope = |path: &Path| -> bool {
         let Some((include, exclude, files)) = &project_scope else {
@@ -1083,9 +1105,11 @@ fn run_typecheck(
         if include.is_none() && !files.is_empty() {
             return false;
         }
-        let rel = path.strip_prefix(workspace).unwrap_or(path);
-        let included = include.as_ref().is_none_or(|set| set.is_match(rel));
-        let excluded = exclude.as_ref().is_some_and(|set| set.is_match(rel));
+        // Patterns are now absolute (resolved against the declaring
+        // config's dir), so match the canonical absolute walker path
+        // directly — no workspace-relativization needed.
+        let included = include.as_ref().is_none_or(|set| set.is_match(path));
+        let excluded = exclude.as_ref().is_some_and(|set| set.is_match(path));
         included && !excluded
     };
     let (svelte_files_raw, kit_files_raw, runes_modules_raw, user_scripts_raw) =

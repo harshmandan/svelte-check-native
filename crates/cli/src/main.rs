@@ -627,9 +627,16 @@ fn emit_native_svelte_warnings(
     diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
     seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
     workspace: &Path,
+    broken: &std::collections::HashSet<PathBuf>,
 ) {
     let compat = svn_lint::detect_for_workspace(workspace);
-    let per_file = svn_lint::lint_batch(svelte_sources.iter().cloned(), compat);
+    // Skip files with a fatal parse error — their AST is garbage, so
+    // lint output would be noise. They already carry a syntax error.
+    let lintable = svelte_sources
+        .iter()
+        .filter(|(p, _)| !broken.contains(p))
+        .cloned();
+    let per_file = svn_lint::lint_batch(lintable, compat);
 
     for (path, warnings) in per_file {
         for w in warnings {
@@ -662,6 +669,93 @@ fn emit_native_svelte_warnings(
                 code_description_url: href,
             });
         }
+    }
+}
+
+/// Surface fatal Svelte **parse** errors as error diagnostics.
+///
+/// The default `native` mode's emit and lint passes recover from and
+/// discard parser errors, so a syntactically broken `.svelte` file
+/// would otherwise check clean — or emit baffling TS diagnostics from a
+/// garbage overlay. Upstream's `svelte/compiler` throws on these and
+/// reports a single `source: "svelte"` error per file
+/// (`getDiagnostics.ts::createParserErrorDiagnostic`). We mirror that:
+/// one error at the first fatal parse error, recording the file in
+/// `broken` so the caller can drop tsgo's noise for it (its overlay is
+/// garbage) — leaving only the syntax error, as upstream does.
+///
+/// Only `native` mode calls this; `bridge` mode gets the real compiler
+/// errors (with upstream-accurate codes) straight from `compile_batch`.
+fn emit_native_parse_errors(
+    svelte_sources: &[(PathBuf, String)],
+    diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
+    broken: &mut std::collections::HashSet<PathBuf>,
+) {
+    for (path, source) in svelte_sources {
+        let (doc, section_errors) = svn_parser::parse_sections(source);
+        let (_fragment, template_errors) =
+            svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+        // First fatal error wins — mirrors upstream's single compiler
+        // throw (it bails on the first syntax error it hits).
+        let Some(err) = section_errors
+            .iter()
+            .chain(template_errors.iter())
+            .find(|e| is_fatal_parse_error(e))
+        else {
+            continue;
+        };
+        let pm = svn_core::PositionMap::new(source);
+        let (start, end) = pm.range_positions(err.range());
+        broken.insert(path.clone());
+        diagnostics.push(svn_typecheck::CheckDiagnostic {
+            source_path: path.clone(),
+            // PositionMap is 0-based (line, UTF-16 char); CheckDiagnostic
+            // is 1-based across the board.
+            line: start.line.saturating_add(1),
+            column: start.character.saturating_add(1),
+            end_line: end.line.saturating_add(1),
+            end_column: end.character.saturating_add(1),
+            severity: svn_typecheck::Severity::Error,
+            code: svn_typecheck::DiagnosticCode::Slug(parse_error_code(err).to_string()),
+            message: err.to_string(),
+            source: svn_typecheck::DiagnosticSource::Svelte,
+            code_description_url: None,
+        });
+    }
+}
+
+/// Whether a [`svn_parser::ParseError`] is a genuine user syntax error
+/// (upstream's compiler would throw) versus an internal-limitation
+/// marker we must not surface as a user diagnostic.
+fn is_fatal_parse_error(err: &svn_parser::ParseError) -> bool {
+    use svn_parser::ParseError as E;
+    // `UnsupportedBlock` flags a construct THIS build can't parse yet —
+    // an internal gap, not malformed user input. Everything else is a
+    // real syntax error (unterminated tag/mustache/comment, duplicate
+    // script/style, mismatched close, malformed open, unknown
+    // svelte:* element, bad script context/lang).
+    !matches!(err, E::UnsupportedBlock { .. })
+}
+
+/// A stable kebab-case slug per parse-error variant, used as the
+/// diagnostic `code`. These are best-effort identifiers for our native
+/// reimplementation; `bridge` mode emits upstream's exact compiler
+/// codes instead.
+fn parse_error_code(err: &svn_parser::ParseError) -> &'static str {
+    use svn_parser::ParseError as E;
+    match err {
+        E::UnterminatedTag { .. } => "unterminated-tag",
+        E::DuplicateScript { .. } => "duplicate-script",
+        E::DuplicateStyle { .. } => "duplicate-style",
+        E::MalformedOpenTag { .. } => "malformed-open-tag",
+        E::UnknownScriptContext { .. } => "unknown-script-context",
+        E::UnknownScriptLang { .. } => "unknown-script-lang",
+        E::UnterminatedComment { .. } => "unterminated-comment",
+        E::UnterminatedMustache { .. } => "unterminated-mustache",
+        E::UnterminatedElement { .. } => "unterminated-element",
+        E::MismatchedClosingTag { .. } => "mismatched-closing-tag",
+        E::UnknownSvelteElement { .. } => "unknown-svelte-element",
+        E::UnsupportedBlock { .. } => "unsupported-block",
     }
 }
 
@@ -1149,6 +1243,10 @@ fn run_typecheck(
     // first so `--compiler-warnings code:severity` reclassifications
     // win.
     let mark = std::time::Instant::now();
+    // Files with a fatal Svelte parse error (native mode). Their tsgo
+    // overlay is garbage, so we drop tsgo's diagnostics for them below
+    // and report only the syntax error.
+    let mut broken_files: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     if sources.svelte {
         svelte_sources.truncate(svelte_sources_in_scope_end);
 
@@ -1160,12 +1258,17 @@ fn run_typecheck(
 
         let run_native = matches!(svelte_warnings_mode, SvelteWarningsMode::Native);
         if run_native {
+            // Surface fatal syntax errors first; broken files are then
+            // skipped by the lint pass and have their tsgo noise dropped
+            // below, so each shows only its parse error (as upstream).
+            emit_native_parse_errors(&svelte_sources, &mut diagnostics, &mut broken_files);
             emit_native_svelte_warnings(
                 &svelte_sources,
                 compiler_overrides,
                 &mut diagnostics,
                 &mut seen,
                 workspace,
+                &broken_files,
             );
         }
 
@@ -1211,6 +1314,17 @@ fn run_typecheck(
                 }
             }
         }
+    }
+    // Drop tsgo's diagnostics for files we flagged with a fatal parse
+    // error — their overlay was generated from a recovered (garbage)
+    // AST, so any TS diagnostic on them is noise. Upstream reports only
+    // the parse error for such files. The Svelte-source parse error
+    // itself is retained.
+    if !broken_files.is_empty() {
+        diagnostics.retain(|d| {
+            matches!(d.source, svn_typecheck::DiagnosticSource::Svelte)
+                || !broken_files.contains(&d.source_path)
+        });
     }
     let t_compiler = mark.elapsed();
 

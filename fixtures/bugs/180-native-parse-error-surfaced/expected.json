@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Broken.svelte",
+            "line": 4,
+            "column": 9,
+            "code": "unterminated-mustache"
+        }
+    ],
+    "_note": "Review H4: in default `native` mode the emit/lint passes recover from and discard Svelte parser errors, so a syntactically broken `.svelte` file checked clean (or leaked confusing TS noise from a garbage overlay). `<p>Hello {name</p>` has an unterminated mustache. Upstream's svelte/compiler throws and reports a single `source: \"svelte\"` error (getDiagnostics.ts::createParserErrorDiagnostic); we now mirror that — emit_native_parse_errors surfaces the first fatal ParseError as an error diagnostic and drops tsgo's diagnostics for the file so only the syntax error shows."
+}

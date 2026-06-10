@@ -32,10 +32,13 @@ use output::print_diagnostics;
     name = "svelte-check-native",
     version,
     about = "CLI-only type checker for Svelte 5+ projects. Powered by tsgo.",
-    long_about = "svelte-check-native — type-check Svelte 5+ components.\n\n\
-                  Svelte 4 syntax (export let, $:, <slot>, on:event) is not\n\
-                  supported. tsgo (@typescript/native-preview) must be installed\n\
-                  in the project's node_modules, or pointed at via TSGO_BIN."
+    long_about = "svelte-check-native — type-check Svelte components.\n\n\
+                  Both Svelte 4 (export let, $:, <slot>, on:event) and Svelte 5\n\
+                  (runes) syntax are supported. tsgo (@typescript/native-preview)\n\
+                  must be installed in the project's node_modules, or pointed at\n\
+                  via TSGO_BIN. A tsconfig/jsconfig is required (mirrors\n\
+                  `svelte-check --tsgo`); --no-tsconfig and watch mode are not\n\
+                  supported."
 )]
 struct Cli {
     /// Workspace root to scan. Defaults to current working directory.
@@ -48,6 +51,32 @@ struct Cli {
     /// `--workspace` looking for one.
     #[arg(long)]
     tsconfig: Option<PathBuf>,
+
+    /// Upstream's tsconfig-less mode. Recognised so it isn't a generic
+    /// parse error, but NOT supported: like `svelte-check --tsgo`
+    /// (which we mirror), a tsconfig/jsconfig is required — upstream's
+    /// own tsgo path rejects `--no-tsconfig` (index.ts:441). Passing it
+    /// exits 2 with a clear message rather than a clap error.
+    #[arg(long = "no-tsconfig", default_value_t = false)]
+    no_tsconfig: bool,
+
+    /// Files/folders to ignore (comma-separated, relative to workspace).
+    /// Upstream only honors this with `--no-tsconfig`; since we don't
+    /// support that mode, `--ignore` is recognised but rejected with
+    /// upstream's coupling message rather than a generic clap error.
+    #[arg(long)]
+    ignore: Option<String>,
+
+    /// Watch mode. Out of scope (use an external watcher like
+    /// watchexec). Recognised so it's a clear rejection, not a clap
+    /// parse error.
+    #[arg(long, default_value_t = false)]
+    watch: bool,
+
+    /// Watch-mode screen-clear toggle. Out of scope along with
+    /// `--watch`; recognised only to give a clear rejection.
+    #[arg(long = "preserveWatchOutput", default_value_t = false)]
+    preserve_watch_output: bool,
 
     /// Output format. Accepted values match upstream svelte-check.
     /// Default is `human-verbose` interactively, or `machine` when
@@ -182,6 +211,38 @@ struct Cli {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    // Reject recognised-but-unsupported upstream flags with a clear
+    // message instead of a generic clap parse error. Watch mode is out
+    // of scope (CLAUDE.md — use an external watcher). `--no-tsconfig`
+    // and `--ignore` are tsconfig-less-mode surface that upstream's own
+    // tsgo path rejects (a tsconfig is required), and we mirror
+    // `svelte-check --tsgo`.
+    if cli.watch || cli.preserve_watch_output {
+        eprintln!(
+            "svelte-check-native: watch mode is not supported. Run an external \
+             watcher (e.g. `watchexec -- svelte-check-native`) instead."
+        );
+        return ExitCode::from(2);
+    }
+    if cli.no_tsconfig {
+        eprintln!(
+            "svelte-check-native: --no-tsconfig is not supported. A tsconfig/\
+             jsconfig is required (this mirrors `svelte-check --tsgo`, whose \
+             tsgo path also requires one)."
+        );
+        return ExitCode::from(2);
+    }
+    if cli.ignore.is_some() {
+        // Upstream: `--ignore` only takes effect with `--no-tsconfig`
+        // (options.ts:88). Since we don't support that mode, `--ignore`
+        // can never apply — surface upstream's exact constraint.
+        eprintln!(
+            "svelte-check-native: --ignore only has an effect when using \
+             --no-tsconfig, which is not supported (a tsconfig is required)."
+        );
+        return ExitCode::from(2);
+    }
 
     // Coding-agent CLIs set marker env vars on spawned subprocesses so child
     // tools can adapt their output. Upstream svelte-check honors CLAUDECODE=1;
@@ -824,9 +885,10 @@ fn parse_compiler_warnings(
     out
 }
 
-/// Resolve the user's tsconfig path. Honors `--tsconfig`, `--no-tsconfig`,
-/// and otherwise walks up from the workspace looking for `tsconfig.json`
-/// then `jsconfig.json`.
+/// Resolve the user's tsconfig path. Honors `--tsconfig` and otherwise
+/// walks up from the workspace looking for `tsconfig.json` then
+/// `jsconfig.json`. (`--no-tsconfig` is rejected up front in `main` —
+/// a tsconfig is required, mirroring `svelte-check --tsgo`.)
 ///
 /// When the resolved tsconfig is a TS project-references solution
 /// (`files: []` + no `include` + non-empty `references`), redirect to a

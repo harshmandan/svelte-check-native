@@ -178,3 +178,33 @@ fn threshold_error_keeps_warning_count_and_fail_on_warnings() {
         "--fail-on-warnings must exit 1 even with --threshold error. stdout:\n{out}"
     );
 }
+
+/// Recognised-but-unsupported upstream flags exit 2 with a clear,
+/// actionable message — not a generic clap "unexpected argument" error.
+#[test]
+fn unsupported_flags_rejected_cleanly() {
+    let bin = env!("CARGO_BIN_EXE_svelte-check-native");
+    let cases: &[(&[&str], &str)] = &[
+        (&["--no-tsconfig"], "--no-tsconfig is not supported"),
+        (&["--ignore", "dist"], "--ignore only has an effect"),
+        (&["--watch"], "watch mode is not supported"),
+        (&["--preserveWatchOutput"], "watch mode is not supported"),
+    ];
+    for (args, needle) in cases {
+        let out = Command::new(bin)
+            .args(*args)
+            .args(["--workspace", "/tmp"])
+            .output()
+            .expect("binary should run");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{args:?} should exit 2. stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(needle),
+            "{args:?} should print {needle:?}. stderr:\n{stderr}"
+        );
+    }
+}

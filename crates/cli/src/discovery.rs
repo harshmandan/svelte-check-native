@@ -81,7 +81,10 @@ pub(crate) fn discover_relevant_files_with_settings(
     let mut user_scripts = Vec::new();
     for e in WalkDir::new(workspace)
         .into_iter()
-        .filter_entry(|e| !is_excluded_dir(e.path()))
+        // depth 0 is the workspace root itself — never prune it, even
+        // if its basename is hidden or `node_modules` (the user pointed
+        // us at it deliberately). Pruning the root yields zero files.
+        .filter_entry(|e| e.depth() == 0 || !is_excluded_dir(e.path()))
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
     {
@@ -205,21 +208,28 @@ pub(crate) fn build_glob_set_absolute(patterns: &[String]) -> Option<globset::Gl
 }
 
 
-/// Hard-coded directory names the discovery walker never descends
-/// into. Covers npm/yarn/pnpm/bun caches, build outputs, version-
-/// control metadata, and our own cache directory. Anything starting
-/// with `.` is skipped too (treats hidden directories as out of
-/// scope, matching upstream svelte-check's behaviour and the rare
-/// real-world workspace where `.something` is meaningful).
+/// Directory names the discovery walker never descends into.
+///
+/// Matches upstream svelte-check's `findFiles` exactly (utils.ts): it
+/// prunes only `node_modules` and hidden (`.`-prefixed) directories —
+/// the latter covers `.git`, `.svelte-kit`, and our `.svelte-check`
+/// cache. We deliberately do NOT exclude `dist`/`target`: upstream
+/// descends into them, and a project that ships checkable `.svelte`
+/// sources under `dist/` must see the same `<N> FILES` denominator
+/// (the project's stated parity bar). Our per-component basename check
+/// is also more robust than upstream's full-path `includes('/.')`,
+/// which breaks workspaces nested under a hidden ancestor.
+///
+/// NOTE: callers must NOT apply this to the walk's ROOT entry — a
+/// workspace whose own basename starts with `.` (or is literally
+/// `node_modules`) is a legitimate target and pruning it discovers
+/// zero files. Gate on `entry.depth() == 0` at the call site.
 pub(crate) fn is_excluded_dir(path: &Path) -> bool {
     let name = match path.file_name().and_then(|s| s.to_str()) {
         Some(n) => n,
         None => return false,
     };
-    matches!(
-        name,
-        "node_modules" | ".git" | ".svelte-kit" | ".svelte-check" | "target" | "dist"
-    ) || name.starts_with('.')
+    name == "node_modules" || name.starts_with('.')
 }
 
 #[cfg(test)]
@@ -242,6 +252,21 @@ mod tests {
         assert!(!path_is_under_node_modules(Path::new(
             "/app/src/routes/+page.svelte"
         )));
+    }
+
+    #[test]
+    fn excluded_dirs_match_upstream_node_modules_and_hidden_only() {
+        // Pruned: node_modules + any hidden dir (covers .git/.svelte-kit/
+        // .svelte-check).
+        assert!(is_excluded_dir(Path::new("/app/node_modules")));
+        assert!(is_excluded_dir(Path::new("/app/.git")));
+        assert!(is_excluded_dir(Path::new("/app/.svelte-kit")));
+        assert!(is_excluded_dir(Path::new("/app/.svelte-check")));
+        // NOT pruned: dist/target — upstream descends into them, so we
+        // must too (FILES-denominator parity).
+        assert!(!is_excluded_dir(Path::new("/app/dist")));
+        assert!(!is_excluded_dir(Path::new("/app/target")));
+        assert!(!is_excluded_dir(Path::new("/app/src")));
     }
 
     #[test]

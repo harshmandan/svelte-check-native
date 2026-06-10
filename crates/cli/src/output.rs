@@ -19,6 +19,18 @@ use std::path::Path;
 
 use crate::ColorMode;
 
+/// Whether a diagnostic clears the `--threshold` bar for *display*.
+/// `error` shows only errors; `warning` (the default) shows everything.
+/// Summary counts are computed independently of this — the threshold is
+/// a print-time filter only (mirrors upstream's `diagnosticFilter`).
+fn passes_threshold(severity: svn_typecheck::Severity, threshold: &str) -> bool {
+    if threshold == "error" {
+        matches!(severity, svn_typecheck::Severity::Error)
+    } else {
+        true
+    }
+}
+
 pub(crate) fn print_diagnostics(
     workspace: &Path,
     diagnostics: &[svn_typecheck::CheckDiagnostic],
@@ -26,6 +38,7 @@ pub(crate) fn print_diagnostics(
     color: ColorMode,
     files_checked: usize,
     elapsed: std::time::Duration,
+    threshold: &str,
 ) {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -45,7 +58,7 @@ pub(crate) fn print_diagnostics(
 
     match output_format {
         "machine-verbose" => {
-            print_machine(workspace, diagnostics, now_ms, true);
+            print_machine(workspace, diagnostics, now_ms, true, threshold);
             print_machine_completed(
                 now_ms,
                 files_checked,
@@ -55,7 +68,7 @@ pub(crate) fn print_diagnostics(
             );
         }
         "machine" => {
-            print_machine(workspace, diagnostics, now_ms, false);
+            print_machine(workspace, diagnostics, now_ms, false, threshold);
             print_machine_completed(
                 now_ms,
                 files_checked,
@@ -65,7 +78,7 @@ pub(crate) fn print_diagnostics(
             );
         }
         "human" => {
-            print_human(workspace, diagnostics, false, use_color);
+            print_human(workspace, diagnostics, false, use_color, threshold);
             print_human_summary(
                 errors,
                 warnings,
@@ -82,7 +95,7 @@ pub(crate) fn print_diagnostics(
             println!("Loading svelte-check in workspace: {}", workspace.display());
             println!("Getting Svelte diagnostics...");
             println!();
-            print_human(workspace, diagnostics, true, use_color);
+            print_human(workspace, diagnostics, true, use_color, threshold);
             print_human_summary(
                 errors,
                 warnings,
@@ -100,9 +113,13 @@ fn print_machine(
     diagnostics: &[svn_typecheck::CheckDiagnostic],
     now_ms: u128,
     verbose: bool,
+    threshold: &str,
 ) {
     println!("{now_ms} START \"{}\"", workspace.display());
     for d in diagnostics {
+        if !passes_threshold(d.severity, threshold) {
+            continue;
+        }
         let rel = d
             .source_path
             .strip_prefix(workspace)
@@ -186,9 +203,13 @@ fn print_human(
     diagnostics: &[svn_typecheck::CheckDiagnostic],
     verbose: bool,
     color: bool,
+    threshold: &str,
 ) {
     let workspace_display = workspace.display().to_string();
     for d in diagnostics {
+        if !passes_threshold(d.severity, threshold) {
+            continue;
+        }
         let rel = d
             .source_path
             .strip_prefix(workspace)

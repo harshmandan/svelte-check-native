@@ -336,12 +336,22 @@ fn main() -> ExitCode {
         }
     };
 
+    // Validate the threshold value. Upstream warns and falls back to
+    // "warning" rather than hard-failing (options.ts::getThreshold).
+    let threshold = match cli.threshold.as_str() {
+        "error" | "warning" => cli.threshold.as_str(),
+        other => {
+            eprintln!("svelte-check-native: invalid threshold \"{other}\", using \"warning\" instead");
+            "warning"
+        }
+    };
+
     run_typecheck(
         &workspace,
         solution_root_tsconfig.as_deref(),
         &tsconfig,
         &output,
-        &cli.threshold,
+        threshold,
         cli.fail_on_warnings,
         diagnostic_sources,
         &compiler_warnings,
@@ -1364,11 +1374,13 @@ fn run_typecheck(
         });
     }
 
-    // `--threshold error` drops warnings entirely (mirrors upstream).
-    if threshold == "error" {
-        diagnostics.retain(|d| matches!(d.severity, svn_typecheck::Severity::Error));
-    }
-
+    // NOTE: `--threshold error` is a PRINT-TIME filter only — applied
+    // per-diagnostic inside `print_diagnostics`. The counts and exit
+    // code below are computed from the FULL set, mirroring upstream
+    // (the COMPLETED line reports the true warning count and
+    // `--fail-on-warnings` still fires). Filtering here instead would
+    // zero out `warning_count` and make `--threshold error
+    // --fail-on-warnings` exit 0 with warnings present.
     let error_count = diagnostics
         .iter()
         .filter(|d| matches!(d.severity, svn_typecheck::Severity::Error))
@@ -1405,6 +1417,7 @@ fn run_typecheck(
         color,
         files_for_completed,
         phase_start.elapsed(),
+        threshold,
     );
 
     // `--tsgo-diagnostics` block — printed to stderr so machine-output

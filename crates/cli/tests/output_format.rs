@@ -100,3 +100,81 @@ fn explicit_output_machine_verbose_wins_over_claudecode_default() {
     );
     let _ = has_json; // silence the unused-var lint in the no-error case
 }
+
+/// `--threshold error` is a PRINT-TIME filter only: it suppresses the
+/// per-diagnostic WARNING lines but must NOT zero out the COMPLETED
+/// warning count or the `--fail-on-warnings` exit decision. (Pre-fix,
+/// the filter ran before counting, so `--threshold error
+/// --fail-on-warnings` exited 0 with warnings present — a false-clean.)
+#[test]
+fn threshold_error_keeps_warning_count_and_fail_on_warnings() {
+    let bin = env!("CARGO_BIN_EXE_svelte-check-native");
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    // Build a workspace INSIDE the repo so tsgo discovery walks up to
+    // the repo's node_modules. A `<img>` without `alt` fires the
+    // `a11y_missing_attribute` native warning — a warning, no error.
+    let repo_root = crate_dir.join("../..").canonicalize().unwrap();
+    let tmp = tempfile::tempdir_in(&repo_root).expect("tempdir in repo");
+    // tempfile names dirs `.tmpXXXX` (hidden); discovery prunes hidden
+    // roots, so use a non-hidden child as the workspace.
+    let work = tmp.path().join("ws");
+    std::fs::create_dir(&work).unwrap();
+    std::fs::write(work.join("A.svelte"), "<img src=\"x.png\">\n").unwrap();
+    std::fs::write(
+        work.join("tsconfig.json"),
+        r#"{ "compilerOptions": { "strict": true, "moduleResolution": "bundler",
+            "module": "esnext", "target": "esnext", "skipLibCheck": true },
+            "include": ["**/*"] }"#,
+    )
+    .unwrap();
+
+    let ws = work.to_str().unwrap().to_owned();
+    let tsconfig = work.join("tsconfig.json");
+    let tsconfig = tsconfig.to_str().unwrap().to_owned();
+    let run = |extra: &[&str]| {
+        let mut args = vec![
+            "--workspace",
+            ws.as_str(),
+            "--tsconfig",
+            tsconfig.as_str(),
+            "--output",
+            "machine",
+        ];
+        args.extend_from_slice(extra);
+        Command::new(bin)
+            .args(&args)
+            .env("CLAUDECODE", "")
+            .env("GEMINI_CLI", "")
+            .env("CODEX_CI", "")
+            .output()
+            .expect("binary should run")
+    };
+
+    // Baseline: a warning is present and reported.
+    let base = run(&[]);
+    let base_out = String::from_utf8_lossy(&base.stdout);
+    assert!(
+        base_out.contains("1 WARNINGS"),
+        "expected a warning in baseline run. stdout:\n{base_out}"
+    );
+
+    // `--threshold error --fail-on-warnings`: the WARNING *line* is
+    // suppressed, but COMPLETED still reports 1 WARNINGS and the exit
+    // code is 1 (fail-on-warnings saw the true count).
+    let filtered = run(&["--threshold", "error", "--fail-on-warnings"]);
+    let out = String::from_utf8_lossy(&filtered.stdout);
+    assert!(
+        !out.lines().any(|l| l.contains(" WARNING ")),
+        "individual WARNING lines should be filtered by --threshold error. stdout:\n{out}"
+    );
+    assert!(
+        out.contains("1 WARNINGS"),
+        "COMPLETED must still report the true warning count. stdout:\n{out}"
+    );
+    assert_eq!(
+        filtered.status.code(),
+        Some(1),
+        "--fail-on-warnings must exit 1 even with --threshold error. stdout:\n{out}"
+    );
+}

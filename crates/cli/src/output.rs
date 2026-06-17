@@ -283,7 +283,9 @@ fn print_human(
 
 fn print_human_summary(errors: usize, warnings: usize, files: usize, color: bool) {
     // Mirror upstream's completion line (writers.ts): a `====` rule
-    // when any file has problems, then `svelte-check found …`, with the
+    // when any file has problems, then `svelte-check-native found …`
+    // (we brand the human summary; machine output stays byte-compatible
+    // with upstream for editor integrations), with the
     // `in N files` clause present ONLY when files > 0 and NO elapsed
     // time (use `--timings` for that). Pre-fix we always printed
     // `in N files` and an elapsed suffix upstream doesn't emit.
@@ -296,7 +298,7 @@ fn print_human_summary(errors: usize, warnings: usize, files: usize, color: bool
         String::new()
     };
     let parts = format!(
-        "svelte-check found {} error{} and {} warning{}{in_files}",
+        "svelte-check-native found {} error{} and {} warning{}{in_files}",
         errors,
         if errors == 1 { "" } else { "s" },
         warnings,

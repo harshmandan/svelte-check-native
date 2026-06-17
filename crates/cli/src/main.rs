@@ -708,10 +708,12 @@ fn emit_native_svelte_warnings(
     let compat = svn_lint::detect_for_workspace(workspace);
     // Skip files with a fatal parse error — their AST is garbage, so
     // lint output would be noise. They already carry a syntax error.
+    // Pass borrowed (path, source) pairs — `lint_file` only reads them,
+    // so cloning the whole corpus's source text here was pure waste.
     let lintable = svelte_sources
         .iter()
         .filter(|(p, _)| !broken.contains(p))
-        .cloned();
+        .map(|(p, s)| (p.as_path(), s.as_str()));
     let per_file = svn_lint::lint_batch(lintable, compat);
 
     for (path, warnings) in per_file {
@@ -779,44 +781,60 @@ fn emit_native_compile_errors(
     diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
     broken: &mut std::collections::HashSet<PathBuf>,
 ) {
-    for (path, source) in svelte_sources {
-        let (doc, section_errors) = svn_parser::parse_sections(source);
-        let (fragment, template_errors) =
-            svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
-        let pm = svn_core::PositionMap::new(source);
+    // Per-file parse + checks are pure compute with no shared mutable
+    // state, so fan out over rayon and merge the results (this pass runs
+    // over the whole corpus and was otherwise the one serial parse on
+    // the critical path). `collect` preserves source order, so the
+    // merged `diagnostics` stay in the same order as the old serial loop.
+    let per_file: Vec<(Vec<svn_typecheck::CheckDiagnostic>, Option<PathBuf>)> = svelte_sources
+        .par_iter()
+        .map(|(path, source)| {
+            let mut local: Vec<svn_typecheck::CheckDiagnostic> = Vec::new();
+            let (doc, section_errors) = svn_parser::parse_sections(source);
+            let (fragment, template_errors) =
+                svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+            let pm = svn_core::PositionMap::new(source);
 
-        // (1) Parse/syntax errors. First fatal error wins — mirrors
-        // upstream's single compiler throw (it bails on the first
-        // syntax error it hits). A broken AST is garbage, so we skip
-        // the structural checks below for this file.
-        if let Some(err) = section_errors
-            .iter()
-            .chain(template_errors.iter())
-            .find(|e| is_fatal_parse_error(e))
-        {
-            let (start, end) = pm.range_positions(err.range());
-            broken.insert(path.clone());
-            diagnostics.push(svn_typecheck::CheckDiagnostic {
-                source_path: path.clone(),
-                // PositionMap is 0-based (line, UTF-16 char);
-                // CheckDiagnostic is 1-based across the board.
-                line: start.line.saturating_add(1),
-                column: start.character.saturating_add(1),
-                end_line: end.line.saturating_add(1),
-                end_column: end.character.saturating_add(1),
-                severity: svn_typecheck::Severity::Error,
-                code: svn_typecheck::DiagnosticCode::Slug(parse_error_code(err).to_string()),
-                message: err.to_string(),
-                source: svn_typecheck::DiagnosticSource::Svelte,
-                code_description_url: None,
-            });
-            continue;
+            // (1) Parse/syntax errors. First fatal error wins — mirrors
+            // upstream's single compiler throw (it bails on the first
+            // syntax error it hits). A broken AST is garbage, so we skip
+            // the structural checks below and flag the file broken.
+            if let Some(err) = section_errors
+                .iter()
+                .chain(template_errors.iter())
+                .find(|e| is_fatal_parse_error(e))
+            {
+                let (start, end) = pm.range_positions(err.range());
+                local.push(svn_typecheck::CheckDiagnostic {
+                    source_path: path.clone(),
+                    // PositionMap is 0-based (line, UTF-16 char);
+                    // CheckDiagnostic is 1-based across the board.
+                    line: start.line.saturating_add(1),
+                    column: start.character.saturating_add(1),
+                    end_line: end.line.saturating_add(1),
+                    end_column: end.character.saturating_add(1),
+                    severity: svn_typecheck::Severity::Error,
+                    code: svn_typecheck::DiagnosticCode::Slug(parse_error_code(err).to_string()),
+                    message: err.to_string(),
+                    source: svn_typecheck::DiagnosticSource::Svelte,
+                    code_description_url: None,
+                });
+                return (local, Some(path.clone()));
+            }
+
+            // (2) Structural analyze-phase errors on the clean AST. The
+            // root template fragment is not a legal const-tag host (its
+            // grand-parent is the document Root) — start disallowed.
+            check_const_placement(&fragment.nodes, false, &pm, path, &mut local);
+            (local, None)
+        })
+        .collect();
+
+    for (local, broken_path) in per_file {
+        diagnostics.extend(local);
+        if let Some(path) = broken_path {
+            broken.insert(path);
         }
-
-        // (2) Structural analyze-phase errors on the clean AST. The root
-        // template fragment is not a legal const-tag host (its
-        // grand-parent is the document Root) — start disallowed.
-        check_const_placement(&fragment.nodes, false, &pm, path, diagnostics);
     }
 }
 

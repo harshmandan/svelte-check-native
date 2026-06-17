@@ -71,9 +71,11 @@ pub fn lint_file(
     compat: CompatFeatures,
 ) -> Vec<Warning> {
     let mut ctx = LintContext::new(source);
-    ctx.runes = runes.unwrap_or_else(|| crate::walk::infer_runes_mode(source, path));
     ctx.compat = compat;
-    crate::walk::walk(source, &mut ctx);
+    // `walk` resolves runes mode from the document it parses (reusing
+    // that parse) — pass the caller's hint through rather than running
+    // a separate `infer_runes_mode` parse here.
+    crate::walk::walk(source, path, runes, &mut ctx);
     ctx.take_warnings()
 }
 
@@ -82,18 +84,20 @@ pub fn lint_file(
 /// Returns `(path, warnings)` pairs in arbitrary order. Callers sort/
 /// flatten as needed for display. `compat` is applied to every file
 /// in the batch.
-pub fn lint_batch<I>(inputs: I, compat: CompatFeatures) -> Vec<(PathBuf, Vec<Warning>)>
+pub fn lint_batch<'a, I>(inputs: I, compat: CompatFeatures) -> Vec<(PathBuf, Vec<Warning>)>
 where
-    I: IntoIterator<Item = (PathBuf, String)>,
+    I: IntoIterator<Item = (&'a Path, &'a str)>,
     I::IntoIter: Send,
 {
     use rayon::iter::{IntoParallelIterator, ParallelIterator};
-    let items: Vec<(PathBuf, String)> = inputs.into_iter().collect();
+    // Items borrow their source — only the output path is owned (cloned
+    // once per file, cheap). Avoids copying every file's source text.
+    let items: Vec<(&Path, &str)> = inputs.into_iter().collect();
     items
         .into_par_iter()
         .map(|(path, source)| {
-            let warnings = lint_file(&source, &path, None, compat);
-            (path, warnings)
+            let warnings = lint_file(source, path, None, compat);
+            (path.to_path_buf(), warnings)
         })
         .collect()
 }

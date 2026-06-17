@@ -469,9 +469,10 @@ pub(crate) fn has_strict_events_attr(doc: &svn_parser::Document<'_>) -> bool {
 }
 
 /// Infer Svelte 5 runes mode from the document source. Mirrors
-/// `svn_lint::walk::infer_runes_mode` (intentionally duplicated rather
-/// than dep'ing on lint — emit needs the signal with no circular dep
-/// in the other direction).
+/// svn-lint's runes resolution (`runes_from_filename` +
+/// `scan_doc_for_rune_call` in `walk.rs`) — intentionally duplicated
+/// rather than dep'ing on lint, so emit gets the signal with no
+/// circular dep in the other direction.
 ///
 /// Looks for any rune call (`$state(…)`, `$props(…)`, `$derived(…)`,
 /// `$effect(…)`, `$bindable(…)`, `$inspect(…)`, `$host(…)`) or a

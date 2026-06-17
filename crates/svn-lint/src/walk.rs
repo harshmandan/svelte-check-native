@@ -13,12 +13,13 @@ use crate::codes::Code;
 use crate::context::{CustomElementInfo, LintContext};
 use crate::messages;
 
-/// Infer whether a file uses runes. Upstream heuristic:
-/// - `.svelte.js` / `.svelte.ts` → runes mode
+/// Runes-mode resolution (see `walk`, which calls these on the
+/// `Document` it already parsed). Upstream heuristic:
+/// - `.svelte.js` / `.svelte.ts` → runes mode (`runes_from_filename`)
 /// - `<svelte:options runes={…}>` → explicit override (resolved later
-///   in the template walk)
-/// - Any rune CALL (`$state(…)`, `$derived(…)`, …) anywhere in the
-///   source → runes mode
+///   in the template walk, in `walk`)
+/// - Any rune CALL (`$state(…)`, `$derived(…)`, …) in a script body
+///   → runes mode (`scan_doc_for_rune_call`)
 ///
 /// The call-shape check is critical: a bare substring match for
 /// `$props` (etc.) false-positives on Svelte-4 ambients like
@@ -30,34 +31,30 @@ use crate::messages;
 /// call-forms; the `.` between name and `(` means a simple `rune(`
 /// check would miss them. Covered by allowing optional `.WORD` before
 /// the paren.
-pub fn infer_runes_mode(source: &str, path: &Path) -> bool {
+///
+/// Runes-mode shortcut from the filename alone: `.svelte.js` /
+/// `.svelte.ts` modules are always runes mode. No parse needed.
+fn runes_from_filename(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if name.ends_with(".svelte.js") || name.ends_with(".svelte.ts") {
-        return true;
-    }
-    // Only the script body content can contain real rune calls — a
-    // commented-out `// $state(0)` example in the SAME script body
-    // would still false-positive a raw byte scan, so we run the scan
-    // inside a state machine that skips comments and string literals
-    // (line, block, single, double, template). HTML content in the
-    // template / comment block can also contain rune-shaped text but
-    // the chance of `$state(` literally appearing there is low; we
-    // still scope the scan to script bodies via parse_sections to
-    // skip the template noise entirely.
-    let (doc, _errors) = parse_sections(source);
-    let mut scripts: Vec<&str> = Vec::new();
-    if let Some(s) = &doc.module_script {
-        scripts.push(s.content);
-    }
-    if let Some(s) = &doc.instance_script {
-        scripts.push(s.content);
-    }
-    for content in scripts {
-        if scan_script_for_rune_call(content) {
-            return true;
-        }
-    }
-    false
+    name.ends_with(".svelte.js") || name.ends_with(".svelte.ts")
+}
+
+/// Whether any rune is *called* in the module or instance script body
+/// of an already-parsed document.
+///
+/// A commented-out `// $state(0)` example in the SAME script body would
+/// false-positive a raw byte scan, so `scan_script_for_rune_call` runs
+/// a state machine that skips comments and string literals (line,
+/// block, single, double, template). HTML content in the template /
+/// comment block can also contain rune-shaped text but the chance of
+/// `$state(` literally appearing there is low; we scope the scan to
+/// script bodies (which `parse_sections` already isolated) to skip the
+/// template noise entirely.
+fn scan_doc_for_rune_call(doc: &svn_parser::Document<'_>) -> bool {
+    [doc.module_script.as_ref(), doc.instance_script.as_ref()]
+        .into_iter()
+        .flatten()
+        .any(|s| scan_script_for_rune_call(s.content))
 }
 
 /// Find the byte offset of the `}` that closes a `${…}` interpolation
@@ -267,10 +264,17 @@ fn scan_script_for_rune_call(source: &str) -> bool {
 ///
 /// Template parsing happens inline via `svn-parser`. Script parsing
 /// happens later (Phase A's JS-side rules need the oxc AST).
-pub fn walk(source: &str, ctx: &mut LintContext<'_>) {
+pub fn walk(source: &str, path: &Path, runes: Option<bool>, ctx: &mut LintContext<'_>) {
     let (doc, _errors) = parse_sections(source);
 
     let (fragment, _parse_errors) = parse_all_template_runs(source, &doc.template.text_runs);
+
+    // Resolve runes mode from the document we just parsed: an explicit
+    // caller hint wins, else the `.svelte.{js,ts}` filename shortcut,
+    // else a rune-call scan over the parsed script bodies. Doing it
+    // here (rather than a pre-walk `infer_runes_mode`) reuses this
+    // parse instead of running a second `parse_sections` per file.
+    ctx.runes = runes.unwrap_or_else(|| runes_from_filename(path) || scan_doc_for_rune_call(&doc));
 
     // `<svelte:options runes>` / `<svelte:options runes={true}>` /
     // `<svelte:options runes={false}>` explicit override beats the
@@ -613,11 +617,18 @@ fn walk_fragment_impl(
 mod runes_inference_tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-    use super::infer_runes_mode;
     use std::path::PathBuf;
 
     fn p(name: &str) -> PathBuf {
         PathBuf::from(name)
+    }
+
+    /// Exercises the same decomposition `walk()` uses (filename
+    /// shortcut, then a rune-call scan over the parsed document), so
+    /// these tests cover the production runes-resolution path.
+    fn infer_runes_mode(source: &str, path: &std::path::Path) -> bool {
+        super::runes_from_filename(path)
+            || super::scan_doc_for_rune_call(&svn_parser::parse_sections(source).0)
     }
 
     #[test]

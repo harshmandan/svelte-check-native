@@ -6,6 +6,46 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.7]
+
+Patch release. Closes a parity gap where a fatal Svelte compile error
+went undetected, brands the human summary line, and lands an
+output-preserving pipeline perf pass. Lint-validator coverage holds
+steady at 125 / 125 enforced fixtures passing.
+
+### Fixed
+
+- **`const_tag_invalid_placement` is now detected** (gh#30). A
+  `{@const}` placed outside its allowed host — e.g. inside a plain
+  `<a>` rather than as the immediate child of the enclosing
+  `{#each}` — is a fatal error the real Svelte compiler (and
+  upstream `svelte-check`) throw during analysis. The default
+  `native` mode skips that phase, so such a file previously checked
+  clean. We now mirror upstream's allow-list exactly: a `{@const}`
+  is legal only as the immediate child of a block (`{#if}` /
+  `{:else if}` / `{:else}` / `{#each}` / `{:then}` / `{:catch}` /
+  `{#key}` / `{#snippet}`), a component, `<svelte:fragment>` /
+  `<svelte:boundary>` / `<svelte:component>`, or a plain element /
+  `<svelte:element>` carrying a `slot` attribute.
+
+### Changed
+
+- **Human summary line now reads `svelte-check-native found …`** so
+  it's clear which checker ran. Machine / machine-verbose output is
+  unchanged — byte-compatible with upstream for editor integrations.
+
+### Performance
+
+- **Fewer redundant per-file parses.** The lint pass parsed each
+  `.svelte` file twice (runes inference + the rule walk); runes mode
+  is now resolved from the document the walk already parses. The
+  native compile-error pass (parse errors + `{@const}` placement) was
+  the one serial full-corpus parse on the critical path and now fans
+  out over rayon. And the lint batch no longer copies every file's
+  source text before borrowing it. All three are diagnostic-preserving:
+  the strict `ls_diagnostics` multiset gate, `emit_snapshots`, and the
+  c4/c5 control rigs produce byte-identical output.
+
 ## [0.8.6]
 
 Patch release. Closes four upstream parity bugs in the lint /

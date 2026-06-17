@@ -28,8 +28,10 @@
 //!
 //! Public entry points:
 //!
-//! - [`lint_file`] — run the full warning pass on one file.
-//! - [`lint_batch`] — parallel over many files (rayon).
+//! - [`lint_file`] — run the full warning pass on one file (parses
+//!   internally).
+//! - [`lint_parsed`] — run the pass on an already-parsed document,
+//!   reusing the caller's parse + position map.
 
 mod a11y_constants;
 mod aria_data;
@@ -49,7 +51,7 @@ mod scope_types;
 mod scope_util;
 mod walk;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub use codes::{CODES, Code};
 pub use compat::{CompatFeatures, SvelteVersion, detect_for_workspace};
@@ -79,25 +81,25 @@ pub fn lint_file(
     ctx.take_warnings()
 }
 
-/// Batch entry: lint many files in parallel.
+/// Run the warning pass on an ALREADY-PARSED document.
 ///
-/// Returns `(path, warnings)` pairs in arbitrary order. Callers sort/
-/// flatten as needed for display. `compat` is applied to every file
-/// in the batch.
-pub fn lint_batch<'a, I>(inputs: I, compat: CompatFeatures) -> Vec<(PathBuf, Vec<Warning>)>
-where
-    I: IntoIterator<Item = (&'a Path, &'a str)>,
-    I::IntoIter: Send,
-{
-    use rayon::iter::{IntoParallelIterator, ParallelIterator};
-    // Items borrow their source — only the output path is owned (cloned
-    // once per file, cheap). Avoids copying every file's source text.
-    let items: Vec<(&Path, &str)> = inputs.into_iter().collect();
-    items
-        .into_par_iter()
-        .map(|(path, source)| {
-            let warnings = lint_file(source, path, None, compat);
-            (path.to_path_buf(), warnings)
-        })
-        .collect()
+/// The CLI's fused native pass parses each `.svelte` file once — for
+/// both fatal-compile-error detection and this lint walk — and builds
+/// one [`PositionMap`](svn_core::PositionMap) per file. This entry lets
+/// it hand the parse (`doc` + `fragment`) and the map straight in,
+/// instead of [`lint_file`] re-parsing and re-indexing the source.
+/// `runes`/`compat` behave as in [`lint_file`].
+pub fn lint_parsed<'src>(
+    doc: &svn_parser::Document<'_>,
+    fragment: &svn_parser::ast::Fragment,
+    source: &'src str,
+    positions: svn_core::PositionMap<'src>,
+    path: &Path,
+    runes: Option<bool>,
+    compat: CompatFeatures,
+) -> Vec<Warning> {
+    let mut ctx = LintContext::with_positions(source, positions);
+    ctx.compat = compat;
+    crate::walk::walk_parsed(doc, fragment, source, path, runes, &mut ctx);
+    ctx.take_warnings()
 }

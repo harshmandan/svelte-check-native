@@ -84,9 +84,17 @@ pub struct LintContext<'src> {
 
 impl<'src> LintContext<'src> {
     pub fn new(source: &'src str) -> Self {
+        Self::with_positions(source, PositionMap::new(source))
+    }
+
+    /// Like [`new`], but reuses a [`PositionMap`] the caller already
+    /// built for `source` (e.g. the fused native pass builds one map
+    /// per file and shares it across the const-placement check and the
+    /// lint walk). Saves a redundant full-source line-index scan.
+    pub fn with_positions(source: &'src str, positions: PositionMap<'src>) -> Self {
         Self {
             source,
-            positions: PositionMap::new(source),
+            positions,
             warnings: Vec::new(),
             ignore_stack: Vec::new(),
             runes: false,

@@ -266,21 +266,34 @@ fn scan_script_for_rune_call(source: &str) -> bool {
 /// happens later (Phase A's JS-side rules need the oxc AST).
 pub fn walk(source: &str, path: &Path, runes: Option<bool>, ctx: &mut LintContext<'_>) {
     let (doc, _errors) = parse_sections(source);
-
     let (fragment, _parse_errors) = parse_all_template_runs(source, &doc.template.text_runs);
+    walk_parsed(&doc, &fragment, source, path, runes, ctx);
+}
 
+/// Walk an ALREADY-PARSED `.svelte` document — the body of [`walk`]
+/// after the parse. Lets a caller that already holds `(doc, fragment)`
+/// (e.g. the fused native compile-error + lint pass in the CLI) run the
+/// rule set without re-parsing the source.
+pub fn walk_parsed(
+    doc: &svn_parser::Document<'_>,
+    fragment: &Fragment,
+    source: &str,
+    path: &Path,
+    runes: Option<bool>,
+    ctx: &mut LintContext<'_>,
+) {
     // Resolve runes mode from the document we just parsed: an explicit
     // caller hint wins, else the `.svelte.{js,ts}` filename shortcut,
     // else a rune-call scan over the parsed script bodies. Doing it
     // here (rather than a pre-walk `infer_runes_mode`) reuses this
     // parse instead of running a second `parse_sections` per file.
-    ctx.runes = runes.unwrap_or_else(|| runes_from_filename(path) || scan_doc_for_rune_call(&doc));
+    ctx.runes = runes.unwrap_or_else(|| runes_from_filename(path) || scan_doc_for_rune_call(doc));
 
     // `<svelte:options runes>` / `<svelte:options runes={true}>` /
     // `<svelte:options runes={false}>` explicit override beats the
     // substring heuristic. Upstream: phase 2-analyze resolves this
     // from `root.options`.
-    if let Some(explicit) = find_runes_option(&fragment, source) {
+    if let Some(explicit) = find_runes_option(fragment, source) {
         ctx.runes = explicit;
     }
 
@@ -295,7 +308,7 @@ pub fn walk(source: &str, path: &Path, runes: Option<bool>, ctx: &mut LintContex
     // warning. `tag-custom-element-options-true` sets
     // `customElement: true` via `_config.js`; `upstream_validator`
     // already skips that fixture via the `_config.js` escape.
-    if let Some((attr_range, has_props_option)) = find_custom_element_option(&fragment, source) {
+    if let Some((attr_range, has_props_option)) = find_custom_element_option(fragment, source) {
         ctx.emit(
             Code::options_missing_custom_element,
             messages::options_missing_custom_element(),
@@ -310,8 +323,8 @@ pub fn walk(source: &str, path: &Path, runes: Option<bool>, ctx: &mut LintContex
     // in the template, not just in a script helper" to rules like
     // `non_reactive_update`.
     ctx.scope_tree = Some(crate::scope::build_with_template_and_runes(
-        &doc,
-        Some(&fragment),
+        doc,
+        Some(fragment),
         source,
         ctx.runes,
         ctx.compat,
@@ -319,12 +332,12 @@ pub fn walk(source: &str, path: &Path, runes: Option<bool>, ctx: &mut LintContex
 
     // <script>-attribute rules (script_unknown_attribute,
     // script_context_deprecated).
-    crate::rules::script_rules::visit_document(&doc, ctx);
+    crate::rules::script_rules::visit_document(doc, ctx);
 
     // <script>-body (JS/TS AST) rules: perf_avoid_inline_class,
     // perf_avoid_nested_class, reactive_declaration_invalid_placement,
     // ...
-    crate::rules::script_ast_rules::visit_document(&doc, ctx);
+    crate::rules::script_ast_rules::visit_document(doc, ctx);
 
     // Phase-C binding-driven rules (non_reactive_update,
     // state_referenced_locally). Run AFTER script ast rules so
@@ -332,7 +345,7 @@ pub fn walk(source: &str, path: &Path, runes: Option<bool>, ctx: &mut LintContex
     crate::rules::binding_rules::visit(ctx);
 
     let mut ancestors: Vec<String> = Vec::new();
-    walk_fragment_impl(&fragment, ctx, None, &mut ancestors, false);
+    walk_fragment_impl(fragment, ctx, None, &mut ancestors, false);
 
     // element_implicitly_closed — source-level tag scanner. Runs
     // after the AST walk so it sits in a predictable output position.

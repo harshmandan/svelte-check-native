@@ -693,34 +693,139 @@ fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Opti
     Some(format!("{base}{}", code.replace('-', "_")))
 }
 
-/// Run the native Rust compile-warning pass on every in-scope
-/// Svelte source and push the result into `diagnostics`. Dedups by
-/// `(code, path, start-line, start-col)` so calling this alongside
-/// the bridge in `both` mode doesn't double-report.
-fn emit_native_svelte_warnings(
+/// Run the native Svelte diagnostics — fatal compile errors AND lint
+/// warnings — over every in-scope source, from a SINGLE parse per file.
+///
+/// Both concerns run after tsgo and previously parsed the corpus
+/// independently (two `parse_sections` + two `parse_all_template_runs`
+/// + two `PositionMap` builds per file). They share one parse here:
+///
+/// 1. **Fatal parse/syntax errors** (`is_fatal_parse_error`). The emit
+///    and lint passes recover from and discard these, so a syntactically
+///    broken file would check clean — or leak baffling TS noise from a
+///    garbage overlay. Upstream throws and reports a single
+///    `source: "svelte"` error per file
+///    (`getDiagnostics.ts::createParserErrorDiagnostic`); we mirror that
+///    — first fatal error wins — record the file in `broken` so the
+///    caller drops tsgo's noise for it, and skip the checks below (the
+///    AST is garbage, as the old lint pass did via the broken filter).
+///
+/// 2. **Structural analyze-phase errors** on the clean AST
+///    (`check_const_placement`, …) — `svelte/compiler` `2-analyze`
+///    visitors like a misplaced `{@const}` (gh#30). NOT marked broken:
+///    svelte2tsx still produces a usable overlay, so tsgo runs and
+///    reports independently.
+///
+/// 3. **Lint warnings** via [`svn_lint::lint_parsed`], reusing this
+///    file's parse and position map.
+///
+/// Diagnostics are merged in the original two-phase emission order (all
+/// fatal/structural diagnostics first, then all warnings, both in source
+/// order) so output stays byte-identical to the two separate passes.
+///
+/// Only `native` mode calls this; `bridge` mode gets the real compiler
+/// errors (with upstream-accurate codes) straight from `compile_batch`.
+fn emit_native_svelte_diagnostics(
     svelte_sources: &[(PathBuf, String)],
     compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
     diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
     seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
     workspace: &Path,
-    broken: &std::collections::HashSet<PathBuf>,
+    broken: &mut std::collections::HashSet<PathBuf>,
 ) {
     let compat = svn_lint::detect_for_workspace(workspace);
-    // Skip files with a fatal parse error — their AST is garbage, so
-    // lint output would be noise. They already carry a syntax error.
-    // Pass borrowed (path, source) pairs — `lint_file` only reads them,
-    // so cloning the whole corpus's source text here was pure waste.
-    let lintable = svelte_sources
-        .iter()
-        .filter(|(p, _)| !broken.contains(p))
-        .map(|(p, s)| (p.as_path(), s.as_str()));
-    let per_file = svn_lint::lint_batch(lintable, compat);
 
-    for (path, warnings) in per_file {
+    /// One file's native diagnostics, all derived from its single parse.
+    struct PerFile {
+        path: PathBuf,
+        /// Fatal-parse + structural (const-placement) diagnostics.
+        diags: Vec<svn_typecheck::CheckDiagnostic>,
+        /// Set when a fatal parse error made the AST unusable.
+        broken: bool,
+        /// Lint warnings (empty for broken files — they're skipped).
+        warnings: Vec<svn_lint::Warning>,
+    }
+
+    // Per-file work is pure compute with no shared mutable state — fan
+    // out over rayon. `collect` preserves source order for the merge.
+    let per_file: Vec<PerFile> = svelte_sources
+        .par_iter()
+        .map(|(path, source)| {
+            let (doc, section_errors) = svn_parser::parse_sections(source);
+            let (fragment, template_errors) =
+                svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+            let pm = svn_core::PositionMap::new(source);
+
+            // (1) Fatal parse/syntax error → broken; skip every later
+            // check (the AST is garbage). First fatal error wins.
+            if let Some(err) = section_errors
+                .iter()
+                .chain(template_errors.iter())
+                .find(|e| is_fatal_parse_error(e))
+            {
+                let (start, end) = pm.range_positions(err.range());
+                return PerFile {
+                    path: path.clone(),
+                    diags: vec![svn_typecheck::CheckDiagnostic {
+                        source_path: path.clone(),
+                        // PositionMap is 0-based (line, UTF-16 char);
+                        // CheckDiagnostic is 1-based across the board.
+                        line: start.line.saturating_add(1),
+                        column: start.character.saturating_add(1),
+                        end_line: end.line.saturating_add(1),
+                        end_column: end.character.saturating_add(1),
+                        severity: svn_typecheck::Severity::Error,
+                        code: svn_typecheck::DiagnosticCode::Slug(
+                            parse_error_code(err).to_string(),
+                        ),
+                        message: err.to_string(),
+                        source: svn_typecheck::DiagnosticSource::Svelte,
+                        code_description_url: None,
+                    }],
+                    broken: true,
+                    warnings: Vec::new(),
+                };
+            }
+
+            // (2) Structural analyze-phase errors on the clean AST. The
+            // root template fragment is not a legal const-tag host (its
+            // grand-parent is the document Root) — start disallowed.
+            let mut diags = Vec::new();
+            check_const_placement(&fragment.nodes, false, &pm, path, &mut diags);
+
+            // (3) Lint warnings — reuse the parse and the position map
+            // (no second parse_sections / line-index scan per file).
+            let warnings = svn_lint::lint_parsed(&doc, &fragment, source, pm, path, None, compat);
+
+            PerFile {
+                path: path.clone(),
+                diags,
+                broken: false,
+                warnings,
+            }
+        })
+        .collect();
+
+    // Phase 1: all fatal/structural diagnostics + broken flags, in
+    // source order — matches the old compile-error pass's emission slot.
+    let mut warning_files: Vec<(PathBuf, Vec<svn_lint::Warning>)> = Vec::new();
+    for pf in per_file {
+        diagnostics.extend(pf.diags);
+        if pf.broken {
+            broken.insert(pf.path);
+        } else if !pf.warnings.is_empty() {
+            warning_files.push((pf.path, pf.warnings));
+        }
+    }
+
+    // Phase 2: all warnings, in source order — matches the old lint
+    // pass's emission slot. Dedups by `(code, path, line, col)` so
+    // `--svelte-warnings=both` doesn't double-report against the bridge.
+    for (path, warnings) in warning_files {
         for w in warnings {
             let code = w.code.as_str().to_string();
-            // Apply user `--compiler-warnings` reclassification.
-            // Default severity from our lint pass is Warning.
+            // Apply user `--compiler-warnings` reclassification. Default
+            // severity from our lint pass is Warning.
             let severity = apply_compiler_override(
                 &code,
                 svn_svelte_compiler::Severity::Warning,
@@ -746,94 +851,6 @@ fn emit_native_svelte_warnings(
                 source: svn_typecheck::DiagnosticSource::Svelte,
                 code_description_url: href,
             });
-        }
-    }
-}
-
-/// Surface the fatal compile diagnostics upstream's `svelte/compiler`
-/// throws but our default `native` mode (emit + lint only, no analyze
-/// phase) would otherwise miss. One parse per file, then each fatal
-/// check in turn:
-///
-/// 1. **Parse/syntax errors** (`is_fatal_parse_error`). The emit and
-///    lint passes recover from and discard these, so a syntactically
-///    broken file would check clean — or leak baffling TS noise from a
-///    garbage overlay. Upstream throws and reports a single
-///    `source: "svelte"` error per file
-///    (`getDiagnostics.ts::createParserErrorDiagnostic`); we mirror
-///    that — first fatal error wins — and record the file in `broken`
-///    so the caller drops tsgo's noise for it (its overlay is garbage).
-///
-/// 2. **Structural analyze-phase errors** on files that parsed cleanly
-///    (`check_const_placement`, …). These come from
-///    `svelte/compiler`'s `2-analyze` visitors, e.g. a `{@const}`
-///    parked outside a legal host (gh#30). Unlike a parse error we do
-///    NOT mark the file broken: svelte2tsx still produces a usable
-///    overlay, so tsgo runs and reports independently — matching
-///    upstream's separate compiler-error and TS plugins. New structural
-///    errors are added as further checks in this block, NOT as new
-///    top-level passes (they'd each re-parse every file).
-///
-/// Only `native` mode calls this; `bridge` mode gets the real compiler
-/// errors (with upstream-accurate codes) straight from `compile_batch`.
-fn emit_native_compile_errors(
-    svelte_sources: &[(PathBuf, String)],
-    diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
-    broken: &mut std::collections::HashSet<PathBuf>,
-) {
-    // Per-file parse + checks are pure compute with no shared mutable
-    // state, so fan out over rayon and merge the results (this pass runs
-    // over the whole corpus and was otherwise the one serial parse on
-    // the critical path). `collect` preserves source order, so the
-    // merged `diagnostics` stay in the same order as the old serial loop.
-    let per_file: Vec<(Vec<svn_typecheck::CheckDiagnostic>, Option<PathBuf>)> = svelte_sources
-        .par_iter()
-        .map(|(path, source)| {
-            let mut local: Vec<svn_typecheck::CheckDiagnostic> = Vec::new();
-            let (doc, section_errors) = svn_parser::parse_sections(source);
-            let (fragment, template_errors) =
-                svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
-            let pm = svn_core::PositionMap::new(source);
-
-            // (1) Parse/syntax errors. First fatal error wins — mirrors
-            // upstream's single compiler throw (it bails on the first
-            // syntax error it hits). A broken AST is garbage, so we skip
-            // the structural checks below and flag the file broken.
-            if let Some(err) = section_errors
-                .iter()
-                .chain(template_errors.iter())
-                .find(|e| is_fatal_parse_error(e))
-            {
-                let (start, end) = pm.range_positions(err.range());
-                local.push(svn_typecheck::CheckDiagnostic {
-                    source_path: path.clone(),
-                    // PositionMap is 0-based (line, UTF-16 char);
-                    // CheckDiagnostic is 1-based across the board.
-                    line: start.line.saturating_add(1),
-                    column: start.character.saturating_add(1),
-                    end_line: end.line.saturating_add(1),
-                    end_column: end.character.saturating_add(1),
-                    severity: svn_typecheck::Severity::Error,
-                    code: svn_typecheck::DiagnosticCode::Slug(parse_error_code(err).to_string()),
-                    message: err.to_string(),
-                    source: svn_typecheck::DiagnosticSource::Svelte,
-                    code_description_url: None,
-                });
-                return (local, Some(path.clone()));
-            }
-
-            // (2) Structural analyze-phase errors on the clean AST. The
-            // root template fragment is not a legal const-tag host (its
-            // grand-parent is the document Root) — start disallowed.
-            check_const_placement(&fragment.nodes, false, &pm, path, &mut local);
-            (local, None)
-        })
-        .collect();
-
-    for (local, broken_path) in per_file {
-        diagnostics.extend(local);
-        if let Some(path) = broken_path {
-            broken.insert(path);
         }
     }
 }
@@ -1515,20 +1532,17 @@ fn run_typecheck(
 
         let run_native = matches!(svelte_warnings_mode, SvelteWarningsMode::Native);
         if run_native {
-            // Fatal compile diagnostics first: syntax errors (the file
-            // is then marked broken — skipped by the lint pass and its
-            // tsgo noise dropped below, so each shows only its parse
-            // error, as upstream) plus analyze-phase structural errors
-            // like gh#30's const placement (not broken — tsgo still
-            // runs). One parse per file.
-            emit_native_compile_errors(&svelte_sources, &mut diagnostics, &mut broken_files);
-            emit_native_svelte_warnings(
+            // Fatal compile diagnostics (syntax errors → marked broken so
+            // their tsgo noise is dropped below; analyze-phase structural
+            // errors like gh#30's const placement → not broken, tsgo still
+            // runs) AND lint warnings, all from a single parse per file.
+            emit_native_svelte_diagnostics(
                 &svelte_sources,
                 compiler_overrides,
                 &mut diagnostics,
                 &mut seen,
                 workspace,
-                &broken_files,
+                &mut broken_files,
             );
         }
 

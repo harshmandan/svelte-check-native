@@ -81,6 +81,16 @@ pub struct ScopeTree {
     /// The ignore-stack snapshot at each candidate's site — mirrors
     /// `UnresolvedRef::ignored` / `Reference::ignored`.
     pub custom_element_props_ignored: Vec<Option<Vec<SmolStr>>>,
+    /// Non-runes `export` facts harvested from the instance script's
+    /// top level during its single parse (in `build_script_inner`),
+    /// consumed by `promote_non_runes_exports` — which used to re-parse
+    /// the whole instance script just to find these. `idents` are names
+    /// from `export let/var …` (promoted to props unconditionally);
+    /// `specs` are `export { local as alias }` pairs (promoted only when
+    /// `local` resolves to a `Var`/`Let` binding, with `alias` applied
+    /// when it differs from `local`).
+    nonrunes_export_idents: Vec<SmolStr>,
+    nonrunes_export_specs: Vec<(SmolStr, Option<SmolStr>)>,
 }
 
 impl ScopeTree {
@@ -148,7 +158,7 @@ pub fn build_with_template_and_runes(
 ) -> ScopeTree {
     let mut tree = build_with_template(doc, fragment, source);
     if !runes {
-        promote_non_runes_exports(&mut tree, doc);
+        promote_non_runes_exports(&mut tree);
     }
     populate_compat_gated_fields(&mut tree, compat);
     tree
@@ -173,59 +183,34 @@ fn populate_compat_gated_fields(tree: &mut ScopeTree, compat: crate::compat::Com
     }
 }
 
-fn promote_non_runes_exports(tree: &mut ScopeTree, doc: &Document<'_>) {
-    let Some(script) = &doc.instance_script else {
-        return;
-    };
-    let alloc = oxc_allocator::Allocator::default();
-    let parsed = parse_script_body(&alloc, script.content, script.lang);
-    for stmt in &parsed.program.body {
-        let Statement::ExportNamedDeclaration(end) = stmt else {
+/// Promote Svelte-4 `export` declarations in the instance script to
+/// `BindableProp` bindings. Consumes the export facts harvested during
+/// the instance-script parse (`TreeBuilder::build_script_inner`) — no
+/// re-parse. Runs only on the non-runes path.
+fn promote_non_runes_exports(tree: &mut ScopeTree) {
+    // `export let/var …` — promoted unconditionally (the `const`
+    // exclusion was already applied at collection time).
+    for name in std::mem::take(&mut tree.nonrunes_export_idents) {
+        promote_to_bindable_prop(tree, tree.instance_root, &name);
+    }
+    // `export { local as alias }` — promote only when `local` resolves
+    // to a `Var`/`Let` binding; apply the alias when present (it was
+    // recorded only when it differs from the local name).
+    for (local, alias) in std::mem::take(&mut tree.nonrunes_export_specs) {
+        let Some(bid) = tree.resolve(tree.instance_root, &local) else {
             continue;
         };
-        if let Some(oxc_ast::ast::Declaration::VariableDeclaration(v)) = &end.declaration {
-            // `export const` doesn't become a prop.
-            if matches!(v.kind, oxc_ast::ast::VariableDeclarationKind::Const) {
-                continue;
-            }
-            for d in &v.declarations {
-                for name in idents_in_pattern(&d.id) {
-                    promote_to_bindable_prop(tree, tree.instance_root, &name);
-                }
-            }
-        } else if end.declaration.is_none() {
-            for spec in &end.specifiers {
-                use oxc_ast::ast::ModuleExportName;
-                let local = match &spec.local {
-                    ModuleExportName::IdentifierName(id) => id.name.as_str(),
-                    ModuleExportName::IdentifierReference(id) => id.name.as_str(),
-                    ModuleExportName::StringLiteral(_) => continue,
-                };
-                let Some(bid) = tree.resolve(tree.instance_root, local) else {
-                    continue;
-                };
-                let b = &tree.bindings[bid.0 as usize];
-                if matches!(
-                    b.declaration_kind,
-                    DeclarationKind::Var | DeclarationKind::Let
-                ) {
-                    promote_to_bindable_prop(tree, tree.instance_root, local);
-                    let exported = match &spec.exported {
-                        ModuleExportName::IdentifierName(id) => Some(id.name.as_str()),
-                        ModuleExportName::IdentifierReference(id) => Some(id.name.as_str()),
-                        ModuleExportName::StringLiteral(_) => None,
-                    };
-                    if let Some(alias) = exported
-                        && alias != local
-                    {
-                        tree.bindings[bid.0 as usize].prop_alias = Some(SmolStr::from(alias));
-                    }
-                }
+        let is_var_let = matches!(
+            tree.bindings[bid.0 as usize].declaration_kind,
+            DeclarationKind::Var | DeclarationKind::Let
+        );
+        if is_var_let {
+            promote_to_bindable_prop(tree, tree.instance_root, &local);
+            if let Some(alias) = alias {
+                tree.bindings[bid.0 as usize].prop_alias = Some(alias);
             }
         }
     }
-    drop(parsed);
-    drop(alloc);
 }
 
 fn promote_to_bindable_prop(tree: &mut ScopeTree, root: ScopeId, name: &str) {
@@ -343,6 +328,10 @@ struct TreeBuilder {
     /// snapshot so `// svelte-ignore` leading comments are honoured.
     custom_element_props_candidates: Vec<Range>,
     custom_element_props_ignored: Vec<Option<Vec<SmolStr>>>,
+    /// Non-runes instance-script `export` facts, collected during the
+    /// instance parse (see the matching `ScopeTree` fields).
+    nonrunes_export_idents: Vec<SmolStr>,
+    nonrunes_export_specs: Vec<(SmolStr, Option<SmolStr>)>,
 }
 
 struct PendingRef {
@@ -405,6 +394,8 @@ impl TreeBuilder {
             pending_updates: Vec::new(),
             custom_element_props_candidates: Vec::new(),
             custom_element_props_ignored: Vec::new(),
+            nonrunes_export_idents: Vec::new(),
+            nonrunes_export_specs: Vec::new(),
         }
     }
 
@@ -1125,6 +1116,49 @@ impl TreeBuilder {
         if !leading_ignores.is_empty() {
             walker.ignore_frames.pop();
         }
+        // Harvest non-runes `export` facts from the instance script's
+        // top level while `parsed` is still alive — so the later
+        // `promote_non_runes_exports` pass reads owned `SmolStr` facts
+        // instead of re-parsing the entire instance body. Names only;
+        // the resolve / `Var|Let` gate runs later against the built
+        // tree. Mirrors the old re-parse's statement matching exactly.
+        if is_instance {
+            for stmt in &parsed.program.body {
+                let Statement::ExportNamedDeclaration(end) = stmt else {
+                    continue;
+                };
+                if let Some(oxc_ast::ast::Declaration::VariableDeclaration(v)) = &end.declaration {
+                    // `export const` doesn't become a prop.
+                    if matches!(v.kind, oxc_ast::ast::VariableDeclarationKind::Const) {
+                        continue;
+                    }
+                    for d in &v.declarations {
+                        for name in idents_in_pattern(&d.id) {
+                            self.nonrunes_export_idents.push(SmolStr::from(name));
+                        }
+                    }
+                } else if end.declaration.is_none() {
+                    for spec in &end.specifiers {
+                        use oxc_ast::ast::ModuleExportName;
+                        let local = match &spec.local {
+                            ModuleExportName::IdentifierName(id) => id.name.as_str(),
+                            ModuleExportName::IdentifierReference(id) => id.name.as_str(),
+                            ModuleExportName::StringLiteral(_) => continue,
+                        };
+                        let exported = match &spec.exported {
+                            ModuleExportName::IdentifierName(id) => Some(id.name.as_str()),
+                            ModuleExportName::IdentifierReference(id) => Some(id.name.as_str()),
+                            ModuleExportName::StringLiteral(_) => None,
+                        };
+                        // Record the alias only when it differs from the
+                        // local — matches the old `alias != local` gate.
+                        let alias = exported.filter(|a| *a != local).map(SmolStr::from);
+                        self.nonrunes_export_specs
+                            .push((SmolStr::from(local), alias));
+                    }
+                }
+            }
+        }
         // oxc types borrow from `alloc`; keep it alive until the walk
         // finishes. Nothing we stash below borrows from it.
         drop(parsed);
@@ -1200,6 +1234,8 @@ impl TreeBuilder {
             unresolved_refs: unresolved,
             custom_element_props_candidates: self.custom_element_props_candidates,
             custom_element_props_ignored: self.custom_element_props_ignored,
+            nonrunes_export_idents: self.nonrunes_export_idents,
+            nonrunes_export_specs: self.nonrunes_export_specs,
         }
     }
 }

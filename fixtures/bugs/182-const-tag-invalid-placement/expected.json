@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Bad.svelte",
+            "line": 6,
+            "column": 2,
+            "code": "const_tag_invalid_placement"
+        }
+    ],
+    "_note": "gh#30: a `{@const}` parked inside a plain `<a>` (not the immediate child of the enclosing `{#each}`) is a fatal compile error upstream's svelte/compiler throws during the analyze phase (2-analyze/visitors/ConstTag.js → e.const_tag_invalid_placement). Default `native` mode never runs that phase — our emit-only path produced a valid-ish overlay and the file checked clean (0 errors), while real `svelte-check` / `vite-plugin-svelte` reject it. emit_native_const_placement_errors now mirrors upstream's allow-list exactly: a `{@const}` is legal only as the immediate child of a block ({#if}/{:else if}/{:else}/{#each}/{:then}/{:catch}/{#key}/{#snippet}), a component, `<svelte:fragment|boundary|component>`, or a plain element / `<svelte:element>` carrying a `slot` attribute. Bad.svelte fires the error at the `{` of the tag (0-based line 6, col 2); Good.svelte places the same `{@const}` directly under `{#each}` and must stay clean — guarding against a false positive on valid placement. The file is NOT marked broken (unlike a parse error), so tsgo still runs and reports independently, matching upstream's separate compiler-error and TS plugins."
+}

@@ -1,4 +1,17 @@
 {
-    "clean": true,
-    "_note": "`{@const}` tags need inline emission in the template-check body so TS narrowing can see the inferred type. A `{@const [a, { b }, ...rest] = ...}` pattern also needs each introduced binding voided so TS6133 doesn't fire on bindings the user only happens to reference on a subset of arms."
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 12,
+            "column": 0,
+            "code": "const_tag_invalid_placement"
+        },
+        {
+            "file": "input.svelte",
+            "line": 24,
+            "column": 0,
+            "code": "const_tag_invalid_placement"
+        }
+    ],
+    "_note": "This fixture's two `{@const}` tags sit at the TOP LEVEL of the template (not inside any block/component/named-slot host), which upstream's svelte/compiler rejects as a fatal `const_tag_invalid_placement` — verified directly against `svelte/compiler@5`. So the original `clean: true` expectation diverged from real `svelte-check`; gh#30's native placement check now surfaces both errors. The fixture is retained because its emit-shape value is unchanged: the matching `emit_snapshots/bugs/59-at-const-inline-narrow` snapshot still locks that a `{@const}` emits inline as `const k = shape.kind` (so TS narrowing sees the discriminant) and that destructured `{@const [a, { b }, ...rest] = ...}` bindings are each voided against TS6133. Asserting EXACTLY these two errors (and no TS noise) also confirms the inline emit still type-checks end-to-end — a regression in narrowing would add TS diagnostics beyond the two const errors and fail this gate."
 }

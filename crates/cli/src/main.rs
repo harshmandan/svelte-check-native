@@ -800,6 +800,163 @@ fn emit_native_parse_errors(
     }
 }
 
+/// Surface the fatal `const_tag_invalid_placement` compile error.
+///
+/// `{@const}` is only legal as the immediate child of a block, a
+/// component, or a named-slot host. Upstream's `svelte/compiler`
+/// throws on a misplaced one during the analyze phase
+/// (`2-analyze/visitors/ConstTag.js`); our default `native` mode never
+/// runs that phase, so a `{@const}` parked inside a plain element (the
+/// gh#30 repro) would otherwise check clean. We mirror upstream's
+/// `e.const_tag_invalid_placement(node)` exactly: same code, same
+/// message, same position (the `{` of the tag).
+///
+/// Unlike a parse error we do NOT mark the file `broken`: upstream's
+/// svelte2tsx still produces a usable overlay for a misplaced const,
+/// so tsgo's diagnostics stay (the const-error plugin and the TS
+/// plugin report independently). Files already flagged with a fatal
+/// parse error are skipped — their AST is garbage.
+fn emit_native_const_placement_errors(
+    svelte_sources: &[(PathBuf, String)],
+    diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
+    broken: &std::collections::HashSet<PathBuf>,
+) {
+    for (path, source) in svelte_sources {
+        if broken.contains(path) {
+            continue;
+        }
+        let (doc, _section_errors) = svn_parser::parse_sections(source);
+        let (fragment, _template_errors) =
+            svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+        let pm = svn_core::PositionMap::new(source);
+        // The root template fragment is not a legal const-tag host
+        // (its grand-parent is the document Root) — start disallowed.
+        check_const_placement(&fragment.nodes, false, &pm, path, diagnostics);
+    }
+}
+
+/// Recursively validate `{@const}` placement in a fragment. `allowed`
+/// is whether a const tag sitting *directly* in this fragment is legal
+/// — i.e. whether the node that owns this fragment is one of upstream's
+/// permitted grand-parents.
+fn check_const_placement(
+    nodes: &[svn_parser::ast::Node],
+    allowed: bool,
+    pm: &svn_core::PositionMap<'_>,
+    path: &Path,
+    diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
+) {
+    use svn_parser::ast::{InterpolationKind, Node, SvelteElementKind};
+
+    for node in nodes {
+        match node {
+            Node::Interpolation(i) if i.kind == InterpolationKind::AtConst => {
+                if !allowed {
+                    let (start, end) = pm.range_positions(i.range);
+                    diagnostics.push(svn_typecheck::CheckDiagnostic {
+                        source_path: path.to_path_buf(),
+                        line: start.line.saturating_add(1),
+                        column: start.character.saturating_add(1),
+                        end_line: end.line.saturating_add(1),
+                        end_column: end.character.saturating_add(1),
+                        severity: svn_typecheck::Severity::Error,
+                        code: svn_typecheck::DiagnosticCode::Slug(
+                            "const_tag_invalid_placement".to_string(),
+                        ),
+                        message: CONST_TAG_INVALID_PLACEMENT_MSG.to_string(),
+                        source: svn_typecheck::DiagnosticSource::Svelte,
+                        code_description_url: Some(
+                            "https://svelte.dev/e/const_tag_invalid_placement".to_string(),
+                        ),
+                    });
+                }
+            }
+            // Plain elements / `<svelte:element>` host a const only when
+            // they carry a `slot` attribute (named-slot fill).
+            Node::Element(el) => {
+                check_const_placement(
+                    &el.children.nodes,
+                    has_slot_attr(&el.attributes),
+                    pm,
+                    path,
+                    diagnostics,
+                );
+            }
+            // Components always host const tags.
+            Node::Component(c) => {
+                check_const_placement(&c.children.nodes, true, pm, path, diagnostics);
+            }
+            Node::SvelteElement(se) => {
+                // `<svelte:fragment>`, `<svelte:boundary>` and
+                // `<svelte:component>` are permitted hosts; a
+                // `<svelte:element>` is only when it carries `slot`.
+                // Everything else (`<svelte:self>`, window/head/…) is
+                // not — matching upstream's allow-list.
+                let child_allowed = match se.kind {
+                    SvelteElementKind::Fragment
+                    | SvelteElementKind::Boundary
+                    | SvelteElementKind::Component => true,
+                    SvelteElementKind::Element => has_slot_attr(&se.attributes),
+                    _ => false,
+                };
+                check_const_placement(&se.children.nodes, child_allowed, pm, path, diagnostics);
+            }
+            Node::IfBlock(b) => {
+                check_const_placement(&b.consequent.nodes, true, pm, path, diagnostics);
+                for arm in &b.elseif_arms {
+                    check_const_placement(&arm.body.nodes, true, pm, path, diagnostics);
+                }
+                if let Some(alt) = &b.alternate {
+                    check_const_placement(&alt.nodes, true, pm, path, diagnostics);
+                }
+            }
+            Node::EachBlock(b) => {
+                check_const_placement(&b.body.nodes, true, pm, path, diagnostics);
+                if let Some(alt) = &b.alternate {
+                    check_const_placement(&alt.nodes, true, pm, path, diagnostics);
+                }
+            }
+            Node::AwaitBlock(b) => {
+                if let Some(pending) = &b.pending {
+                    check_const_placement(&pending.nodes, true, pm, path, diagnostics);
+                }
+                if let Some(then) = &b.then_branch {
+                    check_const_placement(&then.body.nodes, true, pm, path, diagnostics);
+                }
+                if let Some(catch) = &b.catch_branch {
+                    check_const_placement(&catch.body.nodes, true, pm, path, diagnostics);
+                }
+            }
+            Node::KeyBlock(b) => {
+                check_const_placement(&b.body.nodes, true, pm, path, diagnostics);
+            }
+            Node::SnippetBlock(b) => {
+                check_const_placement(&b.body.nodes, true, pm, path, diagnostics);
+            }
+            Node::Text(_) | Node::Comment(_) | Node::Interpolation(_) => {}
+        }
+    }
+}
+
+/// Upstream's `const_tag_invalid_placement` message, verbatim
+/// (`svelte/compiler` errors.js), including the trailing docs URL.
+const CONST_TAG_INVALID_PLACEMENT_MSG: &str = "`{@const}` must be the immediate child of `{#snippet}`, `{#if}`, `{:else if}`, `{:else}`, `{#each}`, `{:then}`, `{:catch}`, `<svelte:fragment>`, `<svelte:boundary>` or `<Component>`\nhttps://svelte.dev/e/const_tag_invalid_placement";
+
+/// Whether an attribute list carries a `slot` attribute — the marker
+/// that lets a plain element / `<svelte:element>` host a `{@const}`
+/// (named-slot fill). Mirrors upstream's `a.type === 'Attribute' &&
+/// a.name === 'slot'`: plain, shorthand and `slot={…}` expression
+/// forms all count; spreads and directives do not.
+fn has_slot_attr(attributes: &[svn_parser::ast::Attribute]) -> bool {
+    use svn_parser::ast::Attribute;
+    attributes.iter().any(|a| match a {
+        Attribute::Plain(p) => p.name == "slot",
+        Attribute::Expression(e) => e.name == "slot",
+        Attribute::Shorthand(s) => s.name == "slot",
+        Attribute::Spread(_) | Attribute::Directive(_) => false,
+    })
+}
+
 /// Whether a [`svn_parser::ParseError`] is a genuine user syntax error
 /// (upstream's compiler would throw) versus an internal-limitation
 /// marker we must not surface as a user diagnostic.
@@ -1359,6 +1516,9 @@ fn run_typecheck(
             // skipped by the lint pass and have their tsgo noise dropped
             // below, so each shows only its parse error (as upstream).
             emit_native_parse_errors(&svelte_sources, &mut diagnostics, &mut broken_files);
+            // Fatal analyze-phase compile errors upstream throws but our
+            // emit-only native path otherwise misses (gh#30).
+            emit_native_const_placement_errors(&svelte_sources, &mut diagnostics, &broken_files);
             emit_native_svelte_warnings(
                 &svelte_sources,
                 compiler_overrides,

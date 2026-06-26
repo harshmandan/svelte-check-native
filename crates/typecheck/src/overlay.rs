@@ -1038,10 +1038,11 @@ mod tests {
     }
 
     #[test]
-    fn build_overlay_substitutes_configdir_to_declaring_files_dir() {
+    fn build_overlay_substitutes_configdir_to_entry_dir() {
         // Base config uses `${configDir}` for both baseUrl and rootDirs;
         // the user extends it from a DIFFERENT directory. Overlay must
-        // resolve the placeholder against the BASE's dir, not the user's.
+        // resolve the placeholder against the ENTRY (user/project) dir —
+        // TS semantics: a shared base resolves into the consuming project.
         let tmp = tempdir().unwrap();
         let ws = tmp.path().canonicalize().unwrap();
         let base_dir = ws.join("configs");
@@ -1070,28 +1071,27 @@ mod tests {
 
         let opts = &overlay["compilerOptions"];
 
-        // ${configDir} in rootDirs resolves to the base's dir.
+        // ${configDir} in rootDirs resolves to the ENTRY (project) dir.
         let root_dirs: Vec<&str> = opts["rootDirs"]
             .as_array()
             .unwrap()
             .iter()
             .map(|v| v.as_str().unwrap())
             .collect();
-        let expected_types = base_dir.join("types").to_string_lossy().into_owned();
+        let expected_types = project_dir.join("types").to_string_lossy().into_owned();
         assert!(
             root_dirs.iter().any(|r| *r == expected_types),
             "expected ${{configDir}}-resolved rootDirs entry {expected_types:?}, got {root_dirs:?}",
         );
-        // Must NOT resolve against the user's dir.
-        let wrong_types = project_dir.join("types").to_string_lossy().into_owned();
+        // Must NOT resolve against the base config's own dir.
+        let wrong_types = base_dir.join("types").to_string_lossy().into_owned();
         assert!(
             !root_dirs.iter().any(|r| *r == wrong_types),
-            "${{configDir}} wrongly resolved to user's dir: {wrong_types:?}",
+            "${{configDir}} wrongly resolved to base's dir: {wrong_types:?}",
         );
 
-        // Paths: relative `./local/lib` resolves against base's baseUrl
-        // (which itself is ${configDir}/src → base_dir/src). Absolute
-        // `${configDir}/abs-target` resolves to base_dir/abs-target.
+        // Absolute `${configDir}/abs-target` resolves to the ENTRY dir:
+        // project_dir/abs-target.
         let paths = opts["paths"].as_object().unwrap();
         let abs_values: Vec<&str> = paths["$abs"]
             .as_array()
@@ -1099,7 +1099,10 @@ mod tests {
             .iter()
             .map(|v| v.as_str().unwrap())
             .collect();
-        let expected_abs = base_dir.join("abs-target").to_string_lossy().into_owned();
+        let expected_abs = project_dir
+            .join("abs-target")
+            .to_string_lossy()
+            .into_owned();
         assert!(
             abs_values.iter().any(|v| *v == expected_abs),
             "${{configDir}}-in-paths not resolved correctly: {abs_values:?}",

@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Regression lock for upstream language-tools #3032 (component references in snippet hoistability). A root {#snippet} that references an INSTANCE-scope component (`Icon`, destructured from $props()) must NOT be hoisted to module scope — there `Icon` is out of scope. Upstream's periscopic-based analyze originally missed component references (<Icon/>) so such snippets got wrongly hoisted; #3032 added collectSnippetComponentGlobals to fix it. Our overlay never hoists snippets to module scope (they emit inline in the instance $$render body where Icon is visible), so the bug cannot manifest — this fixture pins that: zero errors. Mirrors upstream's module-snippet-component-instance-reference.v5."
+}

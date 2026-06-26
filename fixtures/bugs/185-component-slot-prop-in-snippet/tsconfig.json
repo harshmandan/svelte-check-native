@@ -1,0 +1,5 @@
+{
+    "extends": "../_shared/tsconfig.base.json",
+    "compilerOptions": { "allowArbitraryExtensions": true },
+    "include": ["**/*"]
+}

@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Upstream language-tools #3030 (#2992): a prop named `slot` on a component used INSIDE a Svelte 5 {#snippet} (here `<ButtonBadge slot=\"badge\">`, where ButtonBadge declares `slot?: string`) must type-check clean — the snippet breaks the parent-component slot chain so `slot=` is a regular prop, not a legacy slot assignment to the enclosing <Button>. Mirrors upstream's component-slot-prop-in-snippet.v5 (expectedv2.json == []). Our overlay reaches the same clean result; the narrow wrong-typed-slot false-negative is tracked in notes/DEFERRED.md."
+}

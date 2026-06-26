@@ -1816,40 +1816,42 @@ fn is_bindable_call(expr: &Expression<'_>) -> bool {
 /// $props()` is the canonical "no real default" pattern, and binding
 /// the prop type to `null` is almost always wrong.
 fn infer_default_type(expr: &Expression<'_>) -> Option<SmolStr> {
+    // `$bindable(default)` / `$bindable()` — upstream runs the ladder on
+    // `$bindable`'s first argument (or `any` when absent). Checked on the
+    // RAW expression, matching upstream's `ts.isCallExpression` test (no
+    // paren unwrap).
+    if let Expression::CallExpression(call) = expr
+        && matches!(&call.callee, Expression::Identifier(id) if id.name == "$bindable")
+    {
+        return call
+            .arguments
+            .first()
+            .and_then(|a| a.as_expression())
+            .and_then(infer_default_type);
+    }
+    // Mirror upstream svelte2tsx's exact default-type ladder
+    // (ExportedNames.ts:335-355). ONLY these forms map to a concrete
+    // type; everything else widens to `any` (caller emits `any`).
+    //
+    // We previously recognised MORE than upstream — template literals
+    // and bigint as `string`/`number`, function expressions as
+    // `Function`, and unwrapped parentheses — which made us STRICTER
+    // (e.g. `let { x = `a` } = $props()` typed `x` as `string`, firing a
+    // false TS2322 on a non-string value upstream accepts). Those now
+    // fall through to `any`, matching upstream.
     match expr {
-        Expression::StringLiteral(_) | Expression::TemplateLiteral(_) => {
-            Some(SmolStr::new_static("string"))
-        }
-        Expression::NumericLiteral(_) | Expression::BigIntLiteral(_) => {
-            Some(SmolStr::new_static("number"))
-        }
+        Expression::StringLiteral(_) => Some(SmolStr::new_static("string")),
+        Expression::NumericLiteral(_) => Some(SmolStr::new_static("number")),
         Expression::BooleanLiteral(_) => Some(SmolStr::new_static("boolean")),
-        // `null` and `undefined` defaults: widen to `any` (upstream
-        // `getTypeForDefault` does the same — these are placeholder
-        // defaults, not assertions about the real type).
-        Expression::NullLiteral(_) => None,
-        Expression::Identifier(id) if id.name == "undefined" => None,
-        Expression::ArrayExpression(_) => Some(SmolStr::new_static("any[]")),
+        // Identifier (not `undefined`) → `typeof <name>` (upstream
+        // ExportedNames.ts:346-348). `null` / `undefined` are placeholder
+        // defaults that widen to `any`.
+        Expression::Identifier(id) if id.name != "undefined" => {
+            Some(SmolStr::from(format!("typeof {}", id.name)))
+        }
+        Expression::ArrowFunctionExpression(_) => Some(SmolStr::new_static("Function")),
         Expression::ObjectExpression(_) => Some(SmolStr::new_static("Record<string, any>")),
-        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
-            Some(SmolStr::new_static("Function"))
-        }
-        Expression::CallExpression(call) => {
-            // `$bindable()` and `$bindable(default)` — recurse on the
-            // first arg when present, otherwise unknown.
-            let is_bindable = matches!(
-                &call.callee,
-                Expression::Identifier(id) if id.name == "$bindable",
-            );
-            if is_bindable {
-                call.arguments
-                    .first()
-                    .and_then(|a| a.as_expression().and_then(infer_default_type))
-            } else {
-                None
-            }
-        }
-        Expression::ParenthesizedExpression(p) => infer_default_type(&p.expression),
+        Expression::ArrayExpression(_) => Some(SmolStr::new_static("any[]")),
         _ => None,
     }
 }
@@ -1868,6 +1870,46 @@ mod tests {
             .into_iter()
             .map(|p| p.local_name.to_string())
             .collect()
+    }
+
+    /// default_type_text of the single prop in `let { x = DEFAULT } = $props();`.
+    fn default_type(default_expr: &str) -> Option<String> {
+        let alloc = Allocator::default();
+        let src = format!("let {{ x = {default_expr} }} = $props();");
+        let parsed = parse_script_body(&alloc, &src, ScriptLang::Ts);
+        PropsInfo::build(&parsed.program, &src)
+            .destructures
+            .into_iter()
+            .find(|p| p.local_name == "x")
+            .and_then(|p| p.default_type_text.map(|t| t.to_string()))
+    }
+
+    #[test]
+    fn default_type_matches_upstream_ladder() {
+        // Concrete-type forms (upstream ExportedNames.ts:335-355).
+        assert_eq!(default_type("'s'").as_deref(), Some("string"));
+        assert_eq!(default_type("1").as_deref(), Some("number"));
+        assert_eq!(default_type("true").as_deref(), Some("boolean"));
+        assert_eq!(default_type("{}").as_deref(), Some("Record<string, any>"));
+        assert_eq!(default_type("[]").as_deref(), Some("any[]"));
+        assert_eq!(default_type("() => {}").as_deref(), Some("Function"));
+        // Identifier → `typeof <name>` (matches upstream `g?: typeof foo`).
+        assert_eq!(default_type("foo").as_deref(), Some("typeof foo"));
+        // $bindable recurses on its arg.
+        assert_eq!(default_type("$bindable(1)").as_deref(), Some("number"));
+        assert_eq!(default_type("$bindable()"), None);
+    }
+
+    #[test]
+    fn default_type_widens_extra_forms_to_any_like_upstream() {
+        // Forms upstream does NOT recognise — must widen to `any` (None),
+        // not a narrower type (which would be STRICTER → false TS2322).
+        assert_eq!(default_type("`tpl`"), None); // template literal
+        assert_eq!(default_type("10n"), None); // bigint
+        assert_eq!(default_type("function () {}"), None); // function expression
+        assert_eq!(default_type("(0)"), None); // parenthesized (no unwrap)
+        assert_eq!(default_type("null"), None);
+        assert_eq!(default_type("undefined"), None);
     }
 
     #[test]

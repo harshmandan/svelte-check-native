@@ -249,12 +249,21 @@ fn classify_and_rewrite(
                     // "redeclare block-scoped variable". Treat as
                     // re-assignment.
                     if declared.contains(&SmolStr::from(name)) || name.starts_with('$') {
-                        // Re-assignment: drop the `$:` label, keep the
-                        // assignment statement as-is. Emit `NAME = EXPR;`.
+                        // Re-assignment: drop the `$:` label but still wrap
+                        // the RHS in the invalidate thunk — `NAME =
+                        // __svn_invalidate(() => (EXPR));`. The thunk is the
+                        // load-bearing part (not the `let`): it makes TS's
+                        // flow analysis lazy so a forward reference in EXPR
+                        // (e.g. `$: value = normalize(value)` with `const
+                        // normalize` declared LATER — a common Svelte-4
+                        // idiom) doesn't fire TS2448/TS2454. Mirrors
+                        // upstream's `$: NAME = __sveltets_2_invalidate(()
+                        // => EXPR)` for both the declared-name and
+                        // `$`-prefixed-store cases.
                         return Edit {
                             start: full_start,
                             end: full_end,
-                            replacement: format!("{name} = {rhs};"),
+                            replacement: format!("{name} = __svn_invalidate(() => ({rhs}));"),
                         };
                     } else {
                         // Declaration: `$: NAME = EXPR` introduces a

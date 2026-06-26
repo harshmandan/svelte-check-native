@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A reactive RE-assignment `$: value = normalize(value)` whose RHS forward-references a later declaration (`const normalize` below) must type-check clean. Emitting the bare `value = normalize(value);` fires TS2448 (used before declaration). Wrap the RHS in the invalidate thunk — `value = __svn_invalidate(() => (normalize(value)));` — so TS flow analysis is lazy, mirroring upstream `$: NAME = __sveltets_2_invalidate(() => EXPR)`. Found by the upstream audit."
+}

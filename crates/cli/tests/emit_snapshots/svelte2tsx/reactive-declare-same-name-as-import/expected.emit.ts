@@ -7,7 +7,7 @@ async function $$render_c3f76d3e() {
 let b = __svn_invalidate(() => (7)); void b;
 
 let a = /** @type {any} */ (null);
-a = 5;
+a = __svn_invalidate(() => (5));
     ;(async () => {
         // template type-check body (incremental)
     });

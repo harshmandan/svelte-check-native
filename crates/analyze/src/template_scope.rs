@@ -1009,11 +1009,20 @@ pub fn extract_at_const_bindings(interp: &svn_parser::Interpolation, source: &st
     let Some(body) = source.get(start..end) else {
         return Vec::new();
     };
-    // Bare identifier fast path: leading run of identifier chars.
+    // Bare identifier fast path: leading run of identifier chars. Bytes
+    // >= 0x80 are UTF-8 bytes of a non-ASCII identifier char (`café`);
+    // consume them so a Unicode `{@const}` name isn't truncated (e.g.
+    // `caf` for `café`) — a truncated shadow name would mis-resolve a
+    // later slot-attr reference. The run stays char-aligned (a char's
+    // bytes are all >= 0x80 and consumed together), so `&body[..p]` is
+    // valid UTF-8.
     let bytes = body.as_bytes();
     let mut p = 0usize;
     while p < bytes.len()
-        && (bytes[p].is_ascii_alphanumeric() || bytes[p] == b'_' || bytes[p] == b'$')
+        && (bytes[p].is_ascii_alphanumeric()
+            || bytes[p] == b'_'
+            || bytes[p] == b'$'
+            || bytes[p] >= 0x80)
     {
         p += 1;
     }

@@ -50,6 +50,18 @@ struct Cli {
     #[arg(long)]
     tsconfig: Option<PathBuf>,
 
+    /// Path to a `svelte.config` / `vite.config` file, for projects whose
+    /// config has a non-standard name or location. Relative paths resolve
+    /// against `--workspace`. When given, it overrides the walk-up
+    /// discovery of a Svelte config (and disables nested config lookup),
+    /// mirroring upstream svelte-check's `--config` (added in #3031 /
+    /// #3066). Only the Svelte-config surface we already consume
+    /// (`warningFilter`, `kit.files`) is read; vite-config parsing beyond
+    /// that is out of scope, so a `vite.config` path is accepted but only
+    /// its embedded Svelte settings (if statically resolvable) take effect.
+    #[arg(long)]
+    config: Option<PathBuf>,
+
     /// Upstream's tsconfig-less mode. Recognised so it isn't a generic
     /// parse error, but NOT supported: like `svelte-check --tsgo`
     /// (which we mirror), a tsconfig/jsconfig is required — upstream's
@@ -368,7 +380,30 @@ fn main() -> ExitCode {
     // found and parseable, both feed downstream — warningFilter
     // augments --compiler-warnings at the filter stage; kit.files
     // paths drive the discovery walker's hooks/params recognition.
-    let svelte_config_summary = match svelte_config::find_svelte_config(&workspace) {
+    // `--config` overrides the walk-up discovery of a Svelte config
+    // (upstream svelte-check #3031 / #3066). When given, resolve it
+    // against the workspace and require it to exist (invocation error,
+    // exit 2 — mirrors upstream's `getConfig` throw); otherwise fall
+    // back to discovery.
+    let svelte_config_path = match cli.config.as_deref() {
+        Some(p) => {
+            let resolved = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                workspace.join(p)
+            };
+            if !resolved.is_file() {
+                eprintln!(
+                    "svelte-check-native: could not find config file at {}",
+                    resolved.display()
+                );
+                return ExitCode::from(2);
+            }
+            Some(resolved)
+        }
+        None => svelte_config::find_svelte_config(&workspace),
+    };
+    let svelte_config_summary = match svelte_config_path {
         Some(cfg) => {
             let summary = svelte_config::analyse(&cfg);
             if summary.warning_filter_plan.partial {
@@ -1769,6 +1804,39 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
 mod tests {
     use super::*;
     use svn_typecheck::Severity;
+
+    // ---- CLI flag surface ----
+
+    #[test]
+    fn config_flag_is_parsed() {
+        // `--config <path>` (upstream #3031/#3066) is accepted and
+        // captured for Svelte-config override.
+        let cli = Cli::try_parse_from(["svelte-check-native", "--config", "my.svelte.config.js"])
+            .expect("--config should parse");
+        assert_eq!(
+            cli.config.as_deref(),
+            Some(Path::new("my.svelte.config.js"))
+        );
+    }
+
+    #[test]
+    fn tsgo_flag_is_accepted_as_noop() {
+        // We are definitionally tsgo-powered; `--tsgo` is accepted for
+        // drop-in compat but selects nothing.
+        let cli = Cli::try_parse_from(["svelte-check-native", "--tsgo"]).expect("--tsgo parses");
+        assert!(cli.tsgo);
+    }
+
+    #[test]
+    fn tsgo_experimental_api_flag_is_rejected() {
+        // No tsgo engine-selection variants: since tsgo is the only
+        // engine, `--tsgo-experimental-api` carries no parity value and
+        // is not a recognised flag.
+        assert!(
+            Cli::try_parse_from(["svelte-check-native", "--tsgo-experimental-api"]).is_err(),
+            "--tsgo-experimental-api should not be a recognised flag"
+        );
+    }
 
     // ---- parse_diagnostic_sources ----
 

@@ -9,7 +9,7 @@
 
 </div>
 
-Blazing fast CLI type-checker for **Svelte** projects. Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check) — compatible flags, byte-identical diagnostics, same exit codes. Single Rust binary, powered by [tsgo](https://github.com/microsoft/typescript-go), incremental via `tsbuildinfo`. Built for AI agents, CI/CD, and pre-commit hooks that actually stay enabled.
+Blazing fast CLI type-checker for **Svelte** projects. Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check) — compatible flags, byte-identical diagnostics, same exit codes. Single Rust binary, powered by [`tsgo`](https://github.com/microsoft/typescript-go), incremental via `tsbuildinfo`. Built for AI agents, CI/CD, and pre-commit hooks that actually stay enabled.
 
 Not an LSP, CSS linter, or formatter.
 

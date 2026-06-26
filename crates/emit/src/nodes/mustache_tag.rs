@@ -10,7 +10,7 @@
 //! doesn't reach this dispatcher.
 
 use crate::emit_buffer::EmitBuffer;
-use crate::nodes::const_tag::emit_at_const_if_any;
+use crate::nodes::const_tag::{emit_at_const_if_any, emit_declaration_tag};
 use crate::nodes::debug_tag::emit_debug_tag;
 use crate::nodes::raw_mustache_tag::emit_raw_html;
 use crate::nodes::render_tag::emit_render_tag;
@@ -34,6 +34,7 @@ pub(crate) fn emit_interpolation(
     match interp.kind {
         Expression => emit_plain_expression(buf, source, interp, depth),
         AtConst => emit_at_const_if_any(buf, source, interp, depth),
+        DeclConst | DeclLet => emit_declaration_tag(buf, source, interp, depth),
         AtHtml => emit_raw_html(buf, source, interp, depth),
         AtRender => emit_render_tag(buf, source, interp, depth),
         AtDebug => emit_debug_tag(buf, source, interp, depth),

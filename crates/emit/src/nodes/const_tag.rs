@@ -35,6 +35,54 @@ pub(crate) fn emit_at_const_if_any(
     if interp.kind != svn_parser::InterpolationKind::AtConst {
         return;
     }
+    emit_declaration(buf, source, interp, depth, "const", MapMode::LineVerbatim);
+}
+
+/// How the declaration body is mapped back to source for diagnostics.
+enum MapMode {
+    /// Line-level mapping (`append_verbatim`). Column is passed through
+    /// unchanged. Used by `{@const}`, whose diagnostics typically fire
+    /// downstream (in a `{#if}` the const narrows) rather than on the
+    /// const line itself.
+    LineVerbatim,
+    /// Token (column-precise) mapping (`append_with_source`). Used by
+    /// declaration tags, whose diagnostics fire directly on the
+    /// declaration (annotation/initialiser mismatches), so the reported
+    /// column must land on the user's `{const …}` / `{let …}` text.
+    TokenPrecise,
+}
+
+/// Emit a Svelte 5 declaration tag (`{const …}` / `{let …}`) inline as a
+/// real `const <decl>;` / `let <decl>;` statement in the current
+/// template-check scope. The `let` form keeps the binding mutable so
+/// later reassignments in the same scope type-check. Mirrors upstream
+/// svelte2tsx's `htmlxtojsx_v2/nodes/DeclarationTag.ts`, which strips the
+/// braces and leaves the `const`/`let` declaration verbatim.
+pub(crate) fn emit_declaration_tag(
+    buf: &mut EmitBuffer,
+    source: &str,
+    interp: &svn_parser::Interpolation,
+    depth: usize,
+) {
+    let keyword = match interp.kind {
+        svn_parser::InterpolationKind::DeclConst => "const",
+        svn_parser::InterpolationKind::DeclLet => "let",
+        _ => return,
+    };
+    emit_declaration(buf, source, interp, depth, keyword, MapMode::TokenPrecise);
+}
+
+/// Shared core for `{@const}` and declaration-tag emission. Emits
+/// `INDENT<keyword> <body>;` followed by a `void` of each introduced
+/// binding (suppresses TS6133 on an otherwise-unused declaration).
+fn emit_declaration(
+    buf: &mut EmitBuffer,
+    source: &str,
+    interp: &svn_parser::Interpolation,
+    depth: usize,
+    keyword: &str,
+    map_mode: MapMode,
+) {
     let body_start = interp.expression_range.start as usize;
     let body_end = interp.expression_range.end as usize;
     let Some(body_raw) = source.get(body_start..body_end) else {
@@ -45,15 +93,22 @@ pub(crate) fn emit_at_const_if_any(
         return;
     }
     let indent = "    ".repeat(depth);
-    // The body is emitted via `append_verbatim` so diagnostics
-    // landing inside a multi-line body map back to the source
-    // line tsgo reported. Use the UNTRIMMED body + full
-    // expression_range so count_newlines(text) matches
-    // count_newlines(source_slice) — trim-dropped leading whitespace
-    // would desync the entry's source mapping by one line.
+    // The body is emitted verbatim (UNTRIMMED + full expression_range)
+    // so the mapped text byte range matches the source slice exactly —
+    // trim-dropped leading whitespace would desync the entry by a column
+    // (token mode) or a line (line mode).
     buf.push_str(&indent);
-    buf.push_str("const ");
-    buf.append_verbatim(body_raw, source, interp.expression_range);
+    buf.push_str(keyword);
+    buf.push(' ');
+    match map_mode {
+        // Diagnostics inside a multi-line body map back to the source
+        // line tsgo reported.
+        MapMode::LineVerbatim => buf.append_verbatim(body_raw, source, interp.expression_range),
+        // Column-precise: a token-map entry lets a diagnostic on the
+        // declaration's name / annotation / initialiser land on the
+        // exact source column.
+        MapMode::TokenPrecise => buf.append_with_source(body_raw, interp.expression_range),
+    }
     buf.push_str(";\n");
     let body = trimmed;
 

@@ -693,12 +693,21 @@ fn walk_node_inner<V: TemplateScopeVisitor>(node: &Node, source: &str, visitor: 
             walk_fragment_inner(&b.body, source, visitor);
             visitor.leave_scope(ScopeKind::Snippet);
         }
-        Node::Interpolation(i) if i.kind == svn_parser::InterpolationKind::AtConst => {
+        Node::Interpolation(i)
+            if matches!(
+                i.kind,
+                svn_parser::InterpolationKind::AtConst
+                    | svn_parser::InterpolationKind::DeclConst
+                    | svn_parser::InterpolationKind::DeclLet
+            ) =>
+        {
             // Walker emits the FULL bound-names list (handles both
             // bare-identifier and destructure forms — see
             // `extract_at_const_bindings`) AND the full expression
             // range (used by lint to re-parse for initialiser
-            // walking and binding declarations).
+            // walking and binding declarations). Svelte 5 declaration
+            // tags (`{const}` / `{let}`) introduce template-scope
+            // bindings exactly like `{@const}`, so they share this arm.
             let names = extract_at_const_bindings(i, source);
             visitor.visit_at_const(&names, i.expression_range);
         }

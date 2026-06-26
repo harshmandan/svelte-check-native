@@ -105,6 +105,10 @@ pub struct Text {
 ///   the body after the directive keyword + whitespace, so `{@const
 ///   foo = 1}` has `expression_range` covering `foo = 1` (not
 ///   `@const foo = 1`).
+/// - For [`InterpolationKind::DeclConst`] / [`InterpolationKind::DeclLet`]:
+///   the body after the `const`/`let` keyword + whitespace, so `{let
+///   foo: number = 1}` has `expression_range` covering `foo: number = 1`
+///   (not `let foo: number = 1`).
 #[derive(Debug, Clone)]
 pub struct Interpolation {
     /// What kind of `{…}` this is — plain expression or one of
@@ -128,6 +132,18 @@ pub enum InterpolationKind {
     /// produces a real `const <pattern> = <expr>;` at the current
     /// template-check block so TS pins the inferred type.
     AtConst,
+    /// `{const NAME = EXPR}` — Svelte 5 declaration tag (no `@`).
+    /// Behaves like [`InterpolationKind::AtConst`] for type-checking —
+    /// emit produces a real `const <decl>;` inline — but the syntax is
+    /// the bare `{const …}` form and (unlike `{@const}`) it is freely
+    /// placeable anywhere in markup, so it is NOT subject to the
+    /// `{@const}` parent-placement restriction. Mirrors upstream
+    /// svelte2tsx's `htmlxtojsx_v2/nodes/DeclarationTag.ts`.
+    DeclConst,
+    /// `{let NAME = EXPR}` — Svelte 5 declaration tag. Like
+    /// [`InterpolationKind::DeclConst`] but emits a mutable `let <decl>;`
+    /// so reassignments later in the same scope type-check.
+    DeclLet,
     /// `{@html EXPR}` — raw-HTML interpolation. Emit produces a bare
     /// `(EXPR);` expression statement so tsgo type-checks the
     /// expression against the surrounding scope (catches TS2304 on

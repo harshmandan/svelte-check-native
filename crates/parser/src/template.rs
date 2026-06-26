@@ -115,6 +115,32 @@ impl<'src> TemplateParser<'src> {
         find_mustache_end(self.scanner.source(), expr_start).filter(|&end| end < self.fragment_end)
     }
 
+    /// Peek for a Svelte 5 declaration-tag opener at the current `{`:
+    /// `{const`/`{let` followed by a word boundary. Returns the kind and
+    /// the keyword byte length (`5` for `const`, `3` for `let`) on a
+    /// match, else `None` (in which case the `{…}` is a plain expression
+    /// — `{constant}`, `{letter}`, etc.). Mirrors the Svelte compiler's
+    /// `/(?:let|const)\b/y` in `phases/1-parse/state/tag.js`: the keyword
+    /// must not run into a longer identifier.
+    fn peek_declaration_tag(&self) -> Option<(InterpolationKind, u32)> {
+        let src = self.scanner.source();
+        let after_brace = (self.scanner.pos() + 1) as usize;
+        let rest = src.get(after_brace..)?;
+        let (kind, kw_len) = if rest.starts_with("const") {
+            (InterpolationKind::DeclConst, 5usize)
+        } else if rest.starts_with("let") {
+            (InterpolationKind::DeclLet, 3usize)
+        } else {
+            return None;
+        };
+        // Word boundary: the byte after the keyword must not continue an
+        // identifier (so `{constant}` / `{letter}` stay plain expressions).
+        match rest.as_bytes().get(kw_len).copied() {
+            Some(b) if b.is_ascii_alphanumeric() || b == b'_' || b == b'$' => None,
+            _ => Some((kind, kw_len as u32)),
+        }
+    }
+
     /// Parse a sequence of nodes until a stop condition is hit. Returns the
     /// parsed nodes and *why* parsing stopped.
     ///
@@ -190,6 +216,48 @@ impl<'src> TemplateParser<'src> {
                             _ => InterpolationKind::AtTag,
                         };
                         // Skip whitespace after the keyword.
+                        while p < end as usize && bytes[p].is_ascii_whitespace() {
+                            p += 1;
+                        }
+                        let expr_range = Range::new(p as u32, end);
+                        self.scanner.set_pos(end + 1);
+                        nodes.push(Node::Interpolation(Interpolation {
+                            kind,
+                            expression_range: expr_range,
+                            range: Range::new(start, end + 1),
+                        }));
+                    }
+                    None => {
+                        self.errors.push(ParseError::UnterminatedMustache {
+                            range: Range::new(start, self.fragment_end),
+                        });
+                        self.scanner.set_pos(self.fragment_end);
+                    }
+                }
+                continue;
+            }
+
+            // Svelte 5 declaration tag: `{const …}` / `{let …}` (bare,
+            // no `@`). Distinguished from a plain `{constant}` /
+            // `{letter}` expression by requiring a word boundary after
+            // the keyword. Mirrors the Svelte compiler's
+            // `/(?:let|const)\b/y` (phases/1-parse/state/tag.js). Unlike
+            // `{@const}`, a declaration tag is freely placeable, so it
+            // carries no parent-placement restriction.
+            //
+            // Modelled as an `Interpolation` whose `expression_range`
+            // covers the declaration body after the keyword + whitespace
+            // (e.g. `foo: number = 1` for `{let foo: number = 1}`), the
+            // same convention `{@const}` uses — emit prepends the right
+            // keyword and the analyze pass reuses `extract_at_const_bindings`.
+            if let Some((kind, kw_len)) = self.peek_declaration_tag() {
+                let start = self.scanner.pos();
+                match self.find_mustache_end_in_fragment(self.scanner.pos() + 1) {
+                    Some(end) => {
+                        let src = self.scanner.source();
+                        let bytes = src.as_bytes();
+                        // Skip whitespace after the `const`/`let` keyword.
+                        let mut p = (start + 1 + kw_len) as usize;
                         while p < end as usize && bytes[p].is_ascii_whitespace() {
                             p += 1;
                         }

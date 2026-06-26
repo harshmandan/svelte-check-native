@@ -67,6 +67,17 @@ pub fn find_store_refs(program: &oxc_ast::ast::Program<'_>, source: &str) -> Vec
 /// letting callers union module-script and instance-script bindings
 /// (a `$store` reference in instance can resolve to a binding declared
 /// in `<script module>`).
+///
+/// Like [`crate::template_refs`], this is a deliberate lightweight JS
+/// tokenizer rather than a full oxc walk: it runs over the whole script
+/// for every component and only needs to find `$<ident>` tokens, so it
+/// skips strings / comments / template-literal statics and collects the
+/// rest, intersecting with `bound` so a false positive that isn't an
+/// actual binding is dropped. Known lenient edge: regex literals are not
+/// recognised (the division-vs-regex ambiguity isn't worth a byte-level
+/// heuristic), so a `$<boundname>` inside a regex body could be
+/// mis-collected — rare, and only when the regex contains the literal
+/// name of a real top-level binding.
 pub fn find_store_refs_with_bindings(source: &str, bound: &HashSet<String>) -> Vec<SmolStr> {
     if bound.is_empty() {
         return Vec::new();
@@ -204,7 +215,7 @@ pub fn find_store_refs_with_bindings(source: &str, bound: &HashSet<String>) -> V
         // we don't match the `$` in the middle of `foo$bar`.
         if i > 0 {
             let prev = bytes[i - 1];
-            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' {
+            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' || prev >= 0x80 {
                 i += 1;
                 continue;
             }
@@ -215,17 +226,22 @@ pub fn find_store_refs_with_bindings(source: &str, bound: &HashSet<String>) -> V
         if j >= bytes.len() {
             break;
         }
-        // First char of identifier (after `$`) must be alpha or `_`.
+        // First char of identifier (after `$`) must be alpha, `_`, or a
+        // non-ASCII (UTF-8) letter byte — JS identifiers admit Unicode, so
+        // a `$café` store reference must be read in full (else it truncates
+        // to `$caf`, which never matches the real `café` binding).
         let first = bytes[j];
-        if !(first.is_ascii_alphabetic() || first == b'_') {
+        if !(first.is_ascii_alphabetic() || first == b'_' || first >= 0x80) {
             i += 1;
             continue;
         }
         j += 1;
         while j < bytes.len() {
             let b = bytes[j];
-            // JS identifier-continuation chars: alphanumeric, `_`, `$`.
-            if b.is_ascii_alphanumeric() || b == b'_' || b == b'$' {
+            // JS identifier-continuation chars: alphanumeric, `_`, `$`, or
+            // UTF-8 continuation/lead bytes (>= 0x80). The run stays
+            // char-aligned, so `&source[name_start..j]` is valid UTF-8.
+            if b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80 {
                 j += 1;
             } else {
                 break;
@@ -567,6 +583,16 @@ mod tests {
         let src = "let parent$ = null;\nconst x = $parent$;";
         let r = refs(src);
         assert!(r.iter().any(|s| s == "$parent$"));
+    }
+
+    #[test]
+    fn unicode_store_name_recognized() {
+        // `$café` must read the full Unicode name and match the binding —
+        // an ASCII-only scan would truncate to `$caf` and miss it.
+        let src = "let café = null;\nconst x = $café;";
+        assert!(refs(src).iter().any(|s| s == "$café"));
+        let src2 = "let 日本語 = null;\nconst y = $日本語;";
+        assert!(refs(src2).iter().any(|s| s == "$日本語"));
     }
 
     #[test]

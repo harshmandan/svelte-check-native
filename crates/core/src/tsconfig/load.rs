@@ -71,7 +71,15 @@ pub enum LoadError {
 /// Load and fully resolve a tsconfig, following the extends chain.
 pub fn load(entry: impl AsRef<Path>) -> Result<TsConfigFile, LoadError> {
     let mut seen = HashSet::new();
-    load_recursive(entry.as_ref(), &mut seen)
+    let mut merged = load_recursive(entry.as_ref(), &mut seen)?;
+    // `${configDir}` resolves against the ENTRY config's directory for the
+    // whole merged result — run once, at the end, so an inherited
+    // placeholder from a different-directory base config resolves into the
+    // consuming project (matches TS). `merged.path` is the entry's
+    // canonical path, so `config_dir()` is the entry dir.
+    let entry_dir = merged.config_dir().to_path_buf();
+    substitute_config_dir(&mut merged, &entry_dir);
+    Ok(merged)
 }
 
 /// Walk the extends chain and return every parsed + `${configDir}`-
@@ -97,6 +105,13 @@ pub fn load_chain(entry: impl AsRef<Path>) -> Result<Vec<TsConfigFile>, LoadErro
         source,
     })?;
 
+    // `${configDir}` in ANY file of the chain resolves against the ENTRY
+    // config's directory (TS semantics), not each file's own dir.
+    let entry_dir = entry_canon
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+
     let mut out: Vec<TsConfigFile> = Vec::new();
     let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut queue: VecDeque<PathBuf> = VecDeque::from([entry_canon]);
@@ -110,7 +125,7 @@ pub fn load_chain(entry: impl AsRef<Path>) -> Result<Vec<TsConfigFile>, LoadErro
             Err(_) => continue,
         };
         file.path = path.clone();
-        substitute_config_dir(&mut file);
+        substitute_config_dir(&mut file, &entry_dir);
 
         let parent_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
         for ext_ref in &file.extends {
@@ -141,10 +156,11 @@ fn load_recursive(path: &Path, seen: &mut HashSet<PathBuf>) -> Result<TsConfigFi
 
     let mut file = parse_file(&canonical)?;
     // parse_file stored the uncanonicalized path; overwrite with the canonical
-    // one so $configDir resolves correctly even if the user passed a relative
-    // entry path.
+    // one. `${configDir}` substitution is deliberately NOT done here —
+    // placeholders are left literal through the extends merge and resolved
+    // once against the ENTRY dir in `load` (TS semantics; see
+    // `substitute_config_dir`).
     file.path = canonical.clone();
-    substitute_config_dir(&mut file);
 
     let parent_dir = canonical
         .parent()
@@ -173,8 +189,18 @@ fn load_recursive(path: &Path, seen: &mut HashSet<PathBuf>) -> Result<TsConfigFi
 
 // ===== ${configDir} substitution =========================================
 
-fn substitute_config_dir(file: &mut TsConfigFile) {
-    let dir = file.config_dir().to_string_lossy().into_owned();
+/// Substitute every `${configDir}` placeholder against `entry_dir` — the
+/// directory of the ROOT config the user is compiling, NOT the directory
+/// of whichever file in the extends chain wrote the placeholder. This is
+/// TypeScript's design intent: a shared base config (e.g. in
+/// `node_modules` or a sibling `configs/`) writes `"baseUrl":
+/// "${configDir}/src"` and it must resolve into the CONSUMING project.
+/// (`parseJsonConfigFileContentWorker` runs the substitution once at the
+/// end on the fully-merged options with `basePath` = the root config's
+/// dir; the extends merge leaves the placeholder literal so the final
+/// substitution wins.)
+fn substitute_config_dir(file: &mut TsConfigFile, entry_dir: &Path) {
+    let dir = entry_dir.to_string_lossy().into_owned();
 
     let sub = |s: &mut String| {
         if s.contains("${configDir}") {
@@ -605,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn config_dir_substitution_in_parent_uses_parent_dir() {
+    fn config_dir_substitution_in_parent_uses_entry_dir() {
         let tmp = tempdir().unwrap();
         let base_dir = tmp.path().join("configs");
         let child_dir = tmp.path().join("project");
@@ -615,8 +641,9 @@ mod tests {
         let base = base_dir.join("base.json");
         let ts = child_dir.join("tsconfig.json");
 
-        // Parent's ${configDir} should resolve to the PARENT's dir, not the
-        // child's.
+        // A base config's ${configDir} resolves to the ENTRY (child) dir,
+        // NOT the base's own dir — TS semantics: a shared base resolves
+        // into the consuming project.
         write(
             &base,
             r#"{ "compilerOptions": { "rootDirs": ["${configDir}/src"] } }"#,
@@ -624,7 +651,7 @@ mod tests {
         write(&ts, r#"{ "extends": "../configs/base.json" }"#);
 
         let cfg = load(&ts).unwrap();
-        let expected = base_dir.canonicalize().unwrap().join("src");
+        let expected = child_dir.canonicalize().unwrap().join("src");
         assert_eq!(
             cfg.compiler_options.root_dirs,
             vec![expected.to_str().unwrap()]
@@ -835,7 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn load_chain_substitutes_config_dir_per_file() {
+    fn load_chain_substitutes_config_dir_against_entry_dir() {
         let tmp = tempdir().unwrap();
         let base_dir = tmp.path().join("configs");
         let child_dir = tmp.path().join("project");
@@ -850,9 +877,9 @@ mod tests {
         write(&ts, r#"{ "extends": "../configs/base.json" }"#);
 
         let chain = load_chain(&ts).unwrap();
-        // Parent's rootDirs should have ${configDir} resolved against
-        // base's dir, not child's.
-        let expected = base_dir.canonicalize().unwrap().join("src");
+        // A base config's ${configDir} resolves against the ENTRY (child)
+        // dir, not the base's own dir (TS semantics).
+        let expected = child_dir.canonicalize().unwrap().join("src");
         let base_entry = chain
             .iter()
             .find(|f| f.path.ends_with("base.json"))

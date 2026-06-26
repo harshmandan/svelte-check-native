@@ -6,6 +6,52 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0]
+
+Minor release. Adds support for Svelte 5 declaration tags and a
+`--config` flag, bumps the reviewed upstream `language-tools` pin to
+`32556dbf` (svelte-check@4.4.x), and routinely bumps oxc to 0.135.
+Lint-validator coverage holds steady at 125 / 125 enforced fixtures
+passing.
+
+### Added
+
+- **Svelte 5 declaration tags `{const x = y}` / `{let x = y}`**
+  (mirrors upstream language-tools #3033). Bare declaration tags —
+  distinct from `{@const}` and freely placeable anywhere in markup —
+  now parse and emit as real `const` / `let` declarations in the
+  template-check scope, with type annotations preserved and
+  column-precise diagnostics. A `{let label: number = …}` whose
+  initialiser violates the annotation now fires TS2322 at the exact
+  source column, matching upstream's `declaration-tag.v5` fixture
+  byte-for-byte.
+- **`--config <path>`** (upstream #3031 / #3066). Override Svelte-config
+  discovery with an explicit `svelte.config` / `vite.config` path for
+  projects whose config has a non-standard name or location. Resolves
+  against the workspace; a missing path exits 2.
+
+### Changed
+
+- **Upstream `language-tools` pin bumped to `32556dbf`**
+  (svelte-check@4.4.x). Beyond declaration tags, this locks parity —
+  via upstream's own fixtures — for snippet hoistability with component
+  references (#3032), a prop named `slot` inside Svelte 5 snippets
+  (#3030), and array binding holes in destructured exports (#3058). All
+  three were already at parity; they are now covered by the upstream
+  corpus directly.
+- **`--tsgo-experimental-api` is accepted as a no-op.** Upstream
+  svelte-check's `test-sanity.js` (our `upstream_sanity` parity gate)
+  exercises this flag and expects identical output; svelte-check-native
+  always type-checks with tsgo, so it produces the same diagnostics.
+  Passing it prints a one-line, warning-colored stderr nudge that it
+  isn't needed.
+
+### Dependencies
+
+- oxc 0.129 → 0.135, serde_json → 1.0.150, memchr → 2.8.2, plus the
+  cargo-deny GitHub Action bump. The oxc jump compiles and behaves
+  identically — our exhaustive AST matches still gate the upgrade.
+
 ## [0.8.7]
 
 Patch release. Closes a parity gap where a fatal Svelte compile error

@@ -66,6 +66,7 @@ pub use store::{
     collect_typed_uninit_lets, find_store_refs, find_store_refs_with_bindings,
 };
 pub use template_refs::find_template_refs;
+pub use template_scope::extract_at_const_bindings;
 pub use void_refs::VoidRefRegistry;
 pub use walker::{
     BindDirective, BindThisTarget, BubbledComponentEvent, BubbledDomEvent, BubbledDomEventScope,

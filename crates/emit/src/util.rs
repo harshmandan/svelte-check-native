@@ -106,6 +106,8 @@ pub(crate) fn render_class_name(render_fn_name: &str) -> SmolStr {
 /// - `T extends Array<U>, U` → `T, U` (bracket depth tracked so the
 ///   inner `U` doesn't get counted as a separator)
 /// - `T = string` → `T`
+/// - `const T extends X` / `in T` / `out U` → `T` / `T` / `U`
+///   (declaration-only modifiers stripped — see [`strip_tp_modifiers`])
 pub(crate) fn generic_arg_names(generics: &str) -> String {
     // Output is a strict subset of `generics` (drops constraints /
     // defaults, keeps names + commas). Pre-size to input length so
@@ -131,7 +133,7 @@ pub(crate) fn generic_arg_names(generics: &str) -> String {
         }
         let at_depth_zero = depth_angle == 0 && depth_paren == 0 && depth_bracket == 0;
         if at_depth_zero && b == b',' {
-            let trimmed = current_name.trim();
+            let trimmed = strip_tp_modifiers(&current_name);
             if !trimmed.is_empty() {
                 if !out.is_empty() {
                     out.push_str(", ");
@@ -167,7 +169,7 @@ pub(crate) fn generic_arg_names(generics: &str) -> String {
         }
         i += 1;
     }
-    let trimmed = current_name.trim();
+    let trimmed = strip_tp_modifiers(&current_name);
     if !trimmed.is_empty() {
         if !out.is_empty() {
             out.push_str(", ");
@@ -175,6 +177,26 @@ pub(crate) fn generic_arg_names(generics: &str) -> String {
         out.push_str(trimmed);
     }
     out
+}
+
+/// Strip a leading type-parameter DECLARATION modifier (`const`, `in`,
+/// `out`) from a parameter name segment. These are legal only in the
+/// declaration list (`<const T>`, `<in T>`, `<out U>`); at an
+/// instantiation site (`typeof foo<T, U>`) only the bare name is valid.
+/// Upstream uses `param.name.getText()`, which never includes them.
+fn strip_tp_modifiers(name: &str) -> &str {
+    let mut s = name.trim();
+    // At most one of these realistically applies, but loop harmlessly.
+    loop {
+        let rest = s
+            .strip_prefix("const ")
+            .or_else(|| s.strip_prefix("in "))
+            .or_else(|| s.strip_prefix("out "));
+        match rest {
+            Some(r) => s = r.trim_start(),
+            None => return s,
+        }
+    }
 }
 
 /// Extract the `generics=` attribute value from the instance `<script>`
@@ -456,4 +478,28 @@ pub(crate) fn is_simple_js_identifier(s: &str) -> bool {
         return false;
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+#[cfg(test)]
+mod generic_arg_names_tests {
+    use super::generic_arg_names;
+
+    #[test]
+    fn strips_constraints_and_defaults() {
+        assert_eq!(generic_arg_names("T extends string, U = number"), "T, U");
+    }
+
+    #[test]
+    fn strips_declaration_modifiers() {
+        // `const` / `in` / `out` are declaration-only; instantiation
+        // sites take the bare name (upstream `param.name.getText()`).
+        assert_eq!(generic_arg_names("const T extends readonly string[]"), "T");
+        assert_eq!(generic_arg_names("in T, out U"), "T, U");
+        assert_eq!(generic_arg_names("const T"), "T");
+    }
+
+    #[test]
+    fn plain_names_unchanged() {
+        assert_eq!(generic_arg_names("T, U, V"), "T, U, V");
+    }
 }

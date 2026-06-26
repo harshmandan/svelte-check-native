@@ -468,11 +468,14 @@ mod tests {
     #[test]
     fn reassignment_drops_label() {
         // `count` declared earlier → `$: count = ...` is a re-assignment.
+        // The `$:` label drops but the RHS is wrapped in __svn_invalidate
+        // so a forward reference in EXPR doesn't fire TS2448.
         let src = "let count = 0;\n$: count = count + 1;";
         let got = ts(src);
         assert!(
-            got.contains("let count = 0;") && got.contains("count = count + 1;"),
-            "both statements preserved: {got:?}",
+            got.contains("let count = 0;")
+                && got.contains("count = __svn_invalidate(() => (count + 1));"),
+            "both statements preserved with invalidate wrap: {got:?}",
         );
         assert!(
             !got.contains("$:"),
@@ -606,7 +609,7 @@ mod tests {
         let src = "let x = 0;\n$: x = x + 1;\n$: y = x * 2;";
         let got = ts(src);
         assert!(
-            got.contains("x = x + 1;") && !got.contains("$: x ="),
+            got.contains("x = __svn_invalidate(() => (x + 1));") && !got.contains("$: x ="),
             "x reassignment: {got:?}",
         );
         assert!(

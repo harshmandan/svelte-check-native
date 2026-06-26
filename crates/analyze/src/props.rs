@@ -1303,6 +1303,68 @@ fn scan_expression_for_dispatched_names(
                 }
             }
         }
+        // Descend through expression-OPERATOR positions so a `dispatch(…)`
+        // call anywhere in a compound expression is found — not just as a
+        // bare statement or inside a function body. Upstream visits every
+        // CallExpression in the script via a whole-AST `forEachChild`
+        // walk, so it records the event name regardless of position; the
+        // common top-level idiom `isValid && dispatch('submit')` (a
+        // LogicalExpression statement) was previously dropped here.
+        Expression::LogicalExpression(e) => {
+            let mut go = |x| {
+                scan_expression_for_dispatched_names(x, dispatcher_locals, literal_vars, seen, out)
+            };
+            go(&e.left);
+            go(&e.right);
+        }
+        Expression::BinaryExpression(e) => {
+            let mut go = |x| {
+                scan_expression_for_dispatched_names(x, dispatcher_locals, literal_vars, seen, out)
+            };
+            go(&e.left);
+            go(&e.right);
+        }
+        Expression::ConditionalExpression(e) => {
+            let mut go = |x| {
+                scan_expression_for_dispatched_names(x, dispatcher_locals, literal_vars, seen, out)
+            };
+            go(&e.test);
+            go(&e.consequent);
+            go(&e.alternate);
+        }
+        Expression::SequenceExpression(e) => {
+            for x in &e.expressions {
+                scan_expression_for_dispatched_names(x, dispatcher_locals, literal_vars, seen, out);
+            }
+        }
+        Expression::ParenthesizedExpression(e) => scan_expression_for_dispatched_names(
+            &e.expression,
+            dispatcher_locals,
+            literal_vars,
+            seen,
+            out,
+        ),
+        Expression::AwaitExpression(e) => scan_expression_for_dispatched_names(
+            &e.argument,
+            dispatcher_locals,
+            literal_vars,
+            seen,
+            out,
+        ),
+        Expression::UnaryExpression(e) => scan_expression_for_dispatched_names(
+            &e.argument,
+            dispatcher_locals,
+            literal_vars,
+            seen,
+            out,
+        ),
+        Expression::AssignmentExpression(e) => scan_expression_for_dispatched_names(
+            &e.right,
+            dispatcher_locals,
+            literal_vars,
+            seen,
+            out,
+        ),
         _ => {}
     }
 }
@@ -1910,6 +1972,37 @@ mod tests {
         assert_eq!(default_type("(0)"), None); // parenthesized (no unwrap)
         assert_eq!(default_type("null"), None);
         assert_eq!(default_type("undefined"), None);
+    }
+
+    fn dispatched_names(src: &str) -> Vec<String> {
+        let alloc = Allocator::default();
+        let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
+        find_dispatched_event_names(&parsed.program)
+    }
+
+    #[test]
+    fn dispatch_found_in_operator_positions() {
+        // `dispatch(…)` in a compound expression (not just a bare call or
+        // inside a function body) must still register the event name —
+        // upstream visits every CallExpression regardless of position.
+        let setup = "import { createEventDispatcher } from 'svelte';\nconst dispatch = createEventDispatcher();\n";
+        // top-level `cond && dispatch('e')` (LogicalExpression statement)
+        assert_eq!(
+            dispatched_names(&format!("{setup}ok && dispatch('submit');")),
+            vec!["submit"]
+        );
+        // ternary
+        assert_eq!(
+            dispatched_names(&format!("{setup}ok ? dispatch('yes') : dispatch('no');")),
+            vec!["yes", "no"]
+        );
+        // inside a function body, in an operator position
+        assert_eq!(
+            dispatched_names(&format!(
+                "{setup}function h() {{ ok && dispatch('inner'); }}"
+            )),
+            vec!["inner"]
+        );
     }
 
     #[test]

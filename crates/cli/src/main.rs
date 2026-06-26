@@ -148,6 +148,16 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     tsgo: bool,
 
+    /// Use tsgo via its experimental in-process API (upstream #3036 /
+    /// #3067). No-op for us — our pipeline already drives tsgo directly,
+    /// so this produces output identical to the default path. Accepted
+    /// (not rejected) because upstream svelte-check's own `test-sanity.js`
+    /// — which we reuse byte-for-byte as the `upstream_sanity` parity gate
+    /// — exercises this flag and expects the same diagnostics as without
+    /// it. Dropping it broke that gate at the 32556dbf pin.
+    #[arg(long = "tsgo-experimental-api", default_value_t = false)]
+    tsgo_experimental_api: bool,
+
     /// Force ANSI colors.
     #[arg(long, default_value_t = false)]
     color: bool,
@@ -252,6 +262,24 @@ fn main() -> ExitCode {
              --no-tsconfig, which is not supported (a tsconfig is required)."
         );
         return ExitCode::from(2);
+    }
+    if cli.tsgo_experimental_api {
+        // Accepted for drop-in compat (upstream's test-sanity.js passes
+        // it), but redundant: there's no alternate engine to select.
+        // Printed in warning yellow (33) — same color the tool uses for
+        // WARNING diagnostics — honoring --color/--no-color; Auto checks
+        // stderr since the notice goes there.
+        let color = match resolve_color_mode(cli.color, cli.no_color) {
+            ColorMode::Always => true,
+            ColorMode::Never => false,
+            ColorMode::Auto => std::io::IsTerminal::is_terminal(&std::io::stderr()),
+        };
+        let msg = "svelte-check-native: --tsgo-experimental-api isn't needed — svelte-check-native always type-checks with tsgo.";
+        if color {
+            eprintln!("\x1b[33m{msg}\x1b[0m");
+        } else {
+            eprintln!("{msg}");
+        }
     }
 
     // Coding-agent CLIs set marker env vars on spawned subprocesses so child
@@ -1828,14 +1856,14 @@ mod tests {
     }
 
     #[test]
-    fn tsgo_experimental_api_flag_is_rejected() {
-        // No tsgo engine-selection variants: since tsgo is the only
-        // engine, `--tsgo-experimental-api` carries no parity value and
-        // is not a recognised flag.
-        assert!(
-            Cli::try_parse_from(["svelte-check-native", "--tsgo-experimental-api"]).is_err(),
-            "--tsgo-experimental-api should not be a recognised flag"
-        );
+    fn tsgo_experimental_api_flag_is_accepted_as_noop() {
+        // Upstream svelte-check's `test-sanity.js` (our `upstream_sanity`
+        // gate) runs the binary with `--tsgo-experimental-api` and
+        // expects identical output. We always use tsgo, so it's a no-op
+        // accept that produces the same diagnostics as the default path.
+        let cli = Cli::try_parse_from(["svelte-check-native", "--tsgo-experimental-api"])
+            .expect("--tsgo-experimental-api should parse");
+        assert!(cli.tsgo_experimental_api);
     }
 
     // ---- parse_diagnostic_sources ----

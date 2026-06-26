@@ -1,0 +1,5 @@
+{
+    "emit_contains": ["greet: typeof greet"],
+    "emit_not_contains": ["=> string"],
+    "_note": "An exported function with a defaulted param + return annotation must emit `greet: typeof greet` in the exports slot, NOT a reconstructed function-type literal `(name = \"world\") => string` (parameter initializers are illegal in a TS type literal). Mirrors upstream handleExportFunctionOrClass → createReturnElementsType (`typeof <name>`). The reconstructed form is currently filtered (synthesized return-type region) so it produced no user error, but it was invalid TS and diverged from upstream. Found by the upstream audit."
+}

@@ -40,32 +40,23 @@ pub(crate) fn collect_export_type_infos(
         Declaration::FunctionDeclaration(f) => {
             let Some(id) = &f.id else { return };
             let name = SmolStr::from(id.name.as_str());
-            // When the declaration has an explicit return-type annotation,
-            // extract the literal signature so consumers see the user's
-            // declared shape verbatim. Without an annotation, leave
-            // `type_source = None` so build_exports_object falls back to
-            // `typeof <name>` — TS infers the return type from the body
-            // (function decls are hoisted in $$render's scope). Mirrors
-            // upstream svelte2tsx's `createReturnElementsType` (`typeof
-            // ${key}` when no explicit type).
-            let type_source = f.return_type.as_deref().map(|rt| {
-                let type_params = f
-                    .type_parameters
-                    .as_deref()
-                    .map(|tp| {
-                        let span = GetSpan::span(tp);
-                        content[span.start as usize..span.end as usize].to_string()
-                    })
-                    .unwrap_or_default();
-                let params_span = GetSpan::span(f.params.as_ref());
-                let params_text = &content[params_span.start as usize..params_span.end as usize];
-                let rt_span = GetSpan::span(&rt.type_annotation);
-                let ret_type = &content[rt_span.start as usize..rt_span.end as usize];
-                format!("{type_params}{params_text} => {ret_type}")
-            });
+            // Always `type_source = None` so build_exports_object emits
+            // `typeof <name>` — the function decl is hoisted in $$render's
+            // scope, so the reference resolves and TS reads the full
+            // (declared or inferred) signature. Mirrors upstream
+            // svelte2tsx's `handleExportFunctionOrClass` (adds the export
+            // with NO `type`) → `createReturnElementsType` emits `typeof
+            // ${key}`.
+            //
+            // We previously reconstructed a function-type literal
+            // (`{params} => {ret}`) when the decl had a return annotation.
+            // That is invalid TS the moment a parameter carries a default
+            // (`(name = "world") => string` — parameter initializers are
+            // illegal in a type literal) and diverges from upstream for no
+            // benefit; `typeof <name>` already conveys the full signature.
             out.push(ExportedLocalInfo {
                 name,
-                type_source,
+                type_source: None,
                 is_let: false,
                 has_init: true,
             });

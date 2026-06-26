@@ -1,6 +1,6 @@
 //! Rules that fire on `<svelte:*>` special elements.
 
-use svn_parser::ast::{SvelteElement, SvelteElementKind};
+use svn_parser::ast::{AttrValuePart, Attribute, SvelteElement, SvelteElementKind};
 
 use crate::codes::Code;
 use crate::context::LintContext;
@@ -39,6 +39,39 @@ pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[String]
     // other svelte:* kinds (component/self/window/document/body/
     // head/options/fragment/boundary) aren't rendered elements.
     if se.kind == SvelteElementKind::Element {
+        // svelte_element_invalid_this: `<svelte:element this="div">` (or
+        // `this="h{n}"`) — `this` should be a single `{expression}`, not a
+        // string / text-with-interpolation. Mirrors upstream's
+        // `!is_expression_attribute(this)` warning (1-parse/state/element.js).
+        if let Some(this_attr) = se.attributes.iter().find(|a| match a {
+            Attribute::Plain(p) => p.name == "this",
+            Attribute::Expression(e) => e.name == "this",
+            Attribute::Shorthand(s) => s.name == "this",
+            _ => false,
+        }) {
+            let is_expression = match this_attr {
+                Attribute::Expression(_) | Attribute::Shorthand(_) => true,
+                Attribute::Plain(p) => matches!(
+                    p.value.as_ref(),
+                    Some(v) if v.parts.len() == 1
+                        && matches!(v.parts[0], AttrValuePart::Expression { .. })
+                ),
+                _ => false,
+            };
+            if !is_expression {
+                let r = match this_attr {
+                    Attribute::Plain(p) => p.range,
+                    Attribute::Expression(e) => e.range,
+                    Attribute::Shorthand(s) => s.range,
+                    _ => se.range,
+                };
+                ctx.emit(
+                    Code::svelte_element_invalid_this,
+                    messages::svelte_element_invalid_this(),
+                    r,
+                );
+            }
+        }
         crate::rules::a11y_rules::visit_dynamic(se, ctx, ancestors);
     }
 }

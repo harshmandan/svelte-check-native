@@ -14,7 +14,9 @@
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::ClassBody;
-use oxc_ast::ast::{Expression, LabeledStatement, NewExpression, Statement};
+use oxc_ast::ast::{
+    Declaration, Expression, ForStatementInit, LabeledStatement, NewExpression, Statement,
+};
 use smol_str::SmolStr;
 use svn_core::Range;
 use svn_parser::document::{Document, ScriptSection};
@@ -210,10 +212,85 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
                 self.visit_expr(&i.test);
             }
             Statement::ForStatement(f) => {
+                if let Some(init) = &f.init {
+                    match init {
+                        ForStatementInit::VariableDeclaration(vd) => {
+                            for d in &vd.declarations {
+                                if let Some(i) = &d.init {
+                                    self.visit_expr(i);
+                                }
+                            }
+                        }
+                        other => {
+                            if let Some(e) = other.as_expression() {
+                                self.visit_expr(e);
+                            }
+                        }
+                    }
+                }
+                if let Some(t) = &f.test {
+                    self.visit_expr(t);
+                }
+                if let Some(u) = &f.update {
+                    self.visit_expr(u);
+                }
                 self.visit_stmt(&f.body);
             }
-            Statement::WhileStatement(w) => self.visit_stmt(&w.body),
-            Statement::DoWhileStatement(d) => self.visit_stmt(&d.body),
+            Statement::ForInStatement(f) => {
+                self.visit_expr(&f.right);
+                self.visit_stmt(&f.body);
+            }
+            Statement::ForOfStatement(f) => {
+                self.visit_expr(&f.right);
+                self.visit_stmt(&f.body);
+            }
+            Statement::SwitchStatement(s) => {
+                self.visit_expr(&s.discriminant);
+                for case in &s.cases {
+                    if let Some(t) = &case.test {
+                        self.visit_expr(t);
+                    }
+                    for st in &case.consequent {
+                        self.visit_stmt(st);
+                    }
+                }
+            }
+            Statement::ThrowStatement(t) => {
+                self.check_legacy_component_creation(&t.argument);
+                self.visit_expr(&t.argument);
+            }
+            Statement::WhileStatement(w) => {
+                self.visit_expr(&w.test);
+                self.visit_stmt(&w.body);
+            }
+            Statement::DoWhileStatement(d) => {
+                self.visit_stmt(&d.body);
+                self.visit_expr(&d.test);
+            }
+            // Exported declarations descend into their bodies / inits.
+            // (An exported decl is always at module top level, so it can
+            // never trip perf_avoid_nested_class itself — only nested
+            // constructs inside it matter.)
+            Statement::ExportNamedDeclaration(e) => match &e.declaration {
+                Some(Declaration::VariableDeclaration(vd)) => {
+                    for d in &vd.declarations {
+                        if let Some(i) = &d.init {
+                            self.visit_expr(i);
+                        }
+                    }
+                }
+                Some(Declaration::FunctionDeclaration(f)) => {
+                    self.function_depth += 1;
+                    if let Some(body) = &f.body {
+                        for s in &body.statements {
+                            self.visit_stmt(s);
+                        }
+                    }
+                    self.function_depth -= 1;
+                }
+                Some(Declaration::ClassDeclaration(c)) => self.visit_class_body(&c.body),
+                _ => {}
+            },
             Statement::TryStatement(t) => {
                 for s in &t.block.body {
                     self.visit_stmt(s);
@@ -310,6 +387,43 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
             Expression::BinaryExpression(b) => {
                 self.visit_expr(&b.left);
                 self.visit_expr(&b.right);
+            }
+            Expression::LogicalExpression(l) => {
+                self.visit_expr(&l.left);
+                self.visit_expr(&l.right);
+            }
+            Expression::ConditionalExpression(c) => {
+                self.visit_expr(&c.test);
+                self.visit_expr(&c.consequent);
+                self.visit_expr(&c.alternate);
+            }
+            Expression::SequenceExpression(s) => {
+                for e in &s.expressions {
+                    self.visit_expr(e);
+                }
+            }
+            Expression::AwaitExpression(a) => self.visit_expr(&a.argument),
+            Expression::UnaryExpression(u) => self.visit_expr(&u.argument),
+            Expression::ArrayExpression(a) => {
+                for el in &a.elements {
+                    if let Some(e) = el.as_expression() {
+                        self.visit_expr(e);
+                    }
+                }
+            }
+            Expression::ObjectExpression(o) => {
+                for prop in &o.properties {
+                    if let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(op) = prop {
+                        self.visit_expr(&op.value);
+                    } else if let oxc_ast::ast::ObjectPropertyKind::SpreadProperty(sp) = prop {
+                        self.visit_expr(&sp.argument);
+                    }
+                }
+            }
+            Expression::StaticMemberExpression(m) => self.visit_expr(&m.object),
+            Expression::ComputedMemberExpression(m) => {
+                self.visit_expr(&m.object);
+                self.visit_expr(&m.expression);
             }
             _ => {}
         }

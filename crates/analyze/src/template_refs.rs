@@ -27,12 +27,21 @@
 //! hundreds of expressions each).
 //!
 //! Here we use a simple JS tokenizer: skip strings, template literals,
-//! regex literals, and comments; collect every identifier not preceded
-//! by `.` or `?.` (so `obj.prop` only yields `obj`, not `prop`). The
-//! scanner is intentionally lenient — it may collect a few false
-//! positives (e.g. a property key in `{ key: value }`), but consumers
-//! always intersect with the script's declared bindings, so a name not
-//! actually in scope just gets dropped.
+//! and comments; collect every identifier not preceded by `.` or `?.`
+//! (so `obj.prop` only yields `obj`, not `prop`). The scanner is
+//! intentionally lenient — it may collect a few false positives (e.g. a
+//! property key in `{ key: value }`), but consumers always intersect
+//! with the script's declared bindings, so a name not actually in scope
+//! just gets dropped.
+//!
+//! Known lenient edge: regex literals are NOT specially recognised (the
+//! division-vs-regex ambiguity isn't worth a byte-level heuristic here).
+//! A regex whose body contains a quote can desync the string scanner and
+//! cause a few later identifiers to be skipped — i.e. it can MISS a ref,
+//! which only risks the safe direction (a redundant TS6133 the binding
+//! intersection usually still covers because the name appears elsewhere
+//! in the template too). Identifiers inside the regex body itself are
+//! never collected, so no over-suppression results.
 //!
 //! Reserved words and the auto-subscribe `$store` syntax are filtered
 //! out at the byte-scanner level (we only collect names that look like
@@ -262,17 +271,31 @@ fn is_valid_ident(s: &str) -> bool {
 
 #[inline]
 fn is_ident_start(c: char) -> bool {
-    c.is_ascii_alphabetic() || c == '_' || c == '$'
+    // Unicode-aware: JS identifiers admit non-ASCII letters (`let café`),
+    // so a Unicode-named binding used only in the template must still be
+    // collected — otherwise it fires a false TS6133. `is_alphabetic` is a
+    // lenient approximation of `ID_Start`; the downstream binding
+    // intersection discards anything not actually in scope.
+    c.is_alphabetic() || c == '_' || c == '$'
 }
 
 #[inline]
 fn is_ident_continue(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '$'
+    c.is_alphanumeric() || c == '_' || c == '$'
 }
 
-/// JS-ish reserved words and built-ins that should never be voided as
-/// references. Excludes `this` etc. — those aren't valid identifiers
-/// anyway, but explicit filtering keeps intent clear.
+/// JS RESERVED words that can never be a user identifier, so a token
+/// matching one is never a real value reference.
+///
+/// CONTEXTUAL keywords (`as`, `async`, `from`, `of`, `satisfies`, `get`,
+/// `set`, …) are deliberately NOT filtered: they are legal identifiers
+/// (`let from = url; {from}` is valid Svelte), so filtering them dropped
+/// a real template ref and produced a false TS6133 ("declared but never
+/// read") — stricter than upstream. The downstream intersection with the
+/// script's declared bindings already discards any collected token that
+/// isn't actually in scope, so collecting a contextual keyword that
+/// happens NOT to be a binding is harmless; filtering one that IS a
+/// binding is not.
 fn is_keyword(s: &str) -> bool {
     matches!(
         s,
@@ -286,8 +309,6 @@ fn is_keyword(s: &str) -> bool {
             | "new"
             | "instanceof"
             | "in"
-            | "of"
-            | "as"
             | "let"
             | "const"
             | "var"
@@ -300,7 +321,6 @@ fn is_keyword(s: &str) -> bool {
             | "return"
             | "yield"
             | "await"
-            | "async"
             | "delete"
             | "throw"
             | "try"
@@ -316,16 +336,15 @@ fn is_keyword(s: &str) -> bool {
             | "super"
             | "import"
             | "export"
-            | "from"
-            | "satisfies"
     )
 }
 
 /// Byte-scan an expression range, collecting root identifiers.
 ///
 /// Skips string literals, template literals (recursing into `${...}`),
-/// regex literals, and comments. Suppresses identifiers preceded by `.`
-/// or `?.` so `obj.prop` only yields `obj`.
+/// and comments. Suppresses identifiers preceded by `.` or `?.` so
+/// `obj.prop` only yields `obj`. Regex literals are not specially
+/// handled — see the module-level "Known lenient edge" note.
 fn extract_idents(source: &str, range: Range, seen: &mut HashSet<SmolStr>, out: &mut Vec<SmolStr>) {
     let Some(slice) = source.get(range.start as usize..range.end as usize) else {
         return;
@@ -412,12 +431,15 @@ fn extract_idents(source: &str, range: Range, seen: &mut HashSet<SmolStr>, out: 
             after_dot = false;
             continue;
         }
-        // Identifier-like start.
-        if b.is_ascii_alphabetic() || b == b'_' || b == b'$' {
+        // Identifier-like start. Bytes >= 0x80 are UTF-8 lead/continuation
+        // bytes of a non-ASCII identifier char (e.g. `café`); consume the
+        // whole run so the resulting `&slice[start..i]` stays char-aligned
+        // and valid UTF-8.
+        if b.is_ascii_alphabetic() || b == b'_' || b == b'$' || b >= 0x80 {
             let start = i;
             while i < bytes.len() {
                 let c = bytes[i];
-                if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' {
+                if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80 {
                     i += 1;
                 } else {
                     break;
@@ -483,6 +505,35 @@ mod tests {
     #[test]
     fn member_access_only_collects_root() {
         assert_eq!(refs_in("<p>{user.name}</p>"), vec!["user"]);
+    }
+
+    #[test]
+    fn contextual_keywords_are_collected_as_identifiers() {
+        // `from`, `of`, `as`, `async`, `satisfies` are contextual
+        // keywords — legal identifiers. They must be collected so a
+        // script binding used only in the template isn't falsely TS6133.
+        assert_eq!(refs_in("<p>{from}</p>"), vec!["from"]);
+        assert_eq!(refs_in("<p>{of}</p>"), vec!["of"]);
+        assert_eq!(refs_in("<p>{as}</p>"), vec!["as"]);
+        assert_eq!(refs_in("<p>{async}</p>"), vec!["async"]);
+        assert_eq!(refs_in("<p>{satisfies}</p>"), vec!["satisfies"]);
+    }
+
+    #[test]
+    fn true_reserved_words_still_filtered() {
+        // Genuine reserved words can't be identifiers, so they're never refs.
+        assert!(refs_in("<p>{typeof x}</p>").iter().all(|r| r != "typeof"));
+        assert!(refs_in("<p>{null}</p>").is_empty());
+    }
+
+    #[test]
+    fn unicode_identifiers_are_collected() {
+        // Non-ASCII identifiers (`café`, `日本語`) are valid JS names; a
+        // Unicode-named binding used only in the template must be voided.
+        assert_eq!(refs_in("<p>{café}</p>"), vec!["café"]);
+        assert_eq!(refs_in("<p>{日本語}</p>"), vec!["日本語"]);
+        // member access still only collects the (Unicode) root.
+        assert_eq!(refs_in("<p>{café.name}</p>"), vec!["café"]);
     }
 
     #[test]

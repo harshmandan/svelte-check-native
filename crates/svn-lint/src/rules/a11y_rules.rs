@@ -140,18 +140,26 @@ fn check_element(
     // a11y_missing_content: empty heading (h1-h6) with no textual
     // content. Silenced by aria-hidden="true" (which then fires
     // a11y_hidden instead).
-    if !is_dynamic && A11Y_REQUIRED_CONTENT.contains(&name) && !has_spread {
-        let aria_hidden_true = attribute_map.get("aria-hidden").and_then(|a| match a {
-            Attribute::Plain(p) => get_static_text_value(p),
-            _ => None,
-        }) == Some("true");
-        if aria_hidden_true {
-            // a11y_hidden fires at the aria-hidden attribute range.
-            if let Some(Attribute::Plain(p)) = attribute_map.get("aria-hidden") {
-                let msg = messages::a11y_hidden(name);
-                ctx.emit(Code::a11y_hidden, msg, p.range);
-            }
-        } else if !has_text_content(children) {
+    if !is_dynamic && A11Y_REQUIRED_CONTENT.contains(&name) {
+        // a11y_hidden: ANY `aria-hidden` attribute on a heading (h1-h6),
+        // value-INDEPENDENT and independent of content/spread. Upstream
+        // fires this in the per-attribute loop purely on the attribute's
+        // name, decoupled from a11y_missing_content — so even
+        // `<h1 aria-hidden="false">` and `<h1 aria-hidden={x}>` warn.
+        if let Some(attr) = attribute_map.get("aria-hidden").copied() {
+            let attr_range = match attr {
+                Attribute::Plain(p) => p.range,
+                Attribute::Expression(e) => e.range,
+                _ => range,
+            };
+            let msg = messages::a11y_hidden(name);
+            ctx.emit(Code::a11y_hidden, msg, attr_range);
+        }
+        // a11y_missing_content: empty heading. Upstream gates on
+        // !has_spread (its is_labelled / contenteditable conditions are
+        // not modeled here) — but NOT on aria-hidden, so an empty
+        // `<h1 aria-hidden>` fires BOTH warnings.
+        if !has_spread && !has_text_content(children) {
             let msg = messages::a11y_missing_content(name);
             ctx.emit(Code::a11y_missing_content, msg, range);
         }

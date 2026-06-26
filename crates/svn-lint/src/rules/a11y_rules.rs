@@ -448,7 +448,7 @@ fn check_element(
                             let matches_nested =
                                 Some(role_word) == a11y_nested_implicit_semantics(name);
                             let in_section_or_article =
-                                ancestors.iter().any(|a| a == "section" || a == "article");
+                                nearest_element_ancestor_is(ancestors, &["section", "article"]);
                             if matches_nested && !in_section_or_article {
                                 let msg = messages::a11y_no_redundant_roles(role_word);
                                 ctx.emit(Code::a11y_no_redundant_roles, msg, p.range);
@@ -462,9 +462,10 @@ fn check_element(
                 ctx.emit(Code::a11y_accesskey, msg, p.range);
             }
             "autofocus" => {
-                // Silence on `<dialog autofocus>` or when nested
-                // inside a `<dialog>`.
-                if name != "dialog" && !ancestors.iter().any(|a| a == "dialog") {
+                // Silence on `<dialog autofocus>` or when the NEAREST
+                // element ancestor is a `<dialog>` (upstream `is_parent`,
+                // nearest-ancestor only — not any ancestor).
+                if name != "dialog" && !nearest_element_ancestor_is(ancestors, &["dialog"]) {
                     let msg = messages::a11y_autofocus();
                     ctx.emit(Code::a11y_autofocus, msg, p.range);
                 }
@@ -1482,6 +1483,18 @@ fn aria_hidden_is_truthy(attr: Option<&Attribute>) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether the NEAREST element ancestor's tag is in `names`. Mirrors
+/// upstream's `is_parent(path, elements)`, which walks up and returns at
+/// the FIRST element ancestor (`elements.includes(name)`) — it does NOT
+/// scan the whole chain. Our `ancestors` holds only RegularElement names
+/// (Component / SvelteElement / snippet boundaries reset it, matching
+/// upstream's path reset), so the nearest element ancestor is `last()`.
+fn nearest_element_ancestor_is(ancestors: &[String], names: &[&str]) -> bool {
+    ancestors
+        .last()
+        .is_some_and(|a| names.contains(&a.as_str()))
 }
 
 fn get_static_text_value(p: &svn_parser::ast::PlainAttr) -> Option<&str> {

@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 5, "column": 22, "code": 2304 }
+    ],
+    "_note": "Single-line {@const} must surface in-expression tsgo errors (here TS2304 on `nonexistentRef`). Pre-fix, {@const} emitted via append_verbatim (line-map), which records a mapping ONLY for multi-line bodies — so a single-line {@const} dropped its diagnostics entirely (under-report vs upstream). Fixed by emitting the declaration body via append_with_source (token-precise map), the same path declaration tags use. Found by the upstream audit."
+}

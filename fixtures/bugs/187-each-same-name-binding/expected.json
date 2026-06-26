@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "{#each items as items} (iterable and item named the same) must type-check clean. Emitting `for (const items of __svn_each_items(items))` directly fires TS2448/TS7022 (for-of binding shadows the iterable ref → used-before-declaration). Mirror upstream EachBlock.ts arrayAndItemVarTheSame: bind the iterable to a temp wrapper block first. Found by the upstream audit."
+}

@@ -60,15 +60,32 @@ pub(crate) fn emit_each_block(
         .as_ref()
         .and_then(|c| c.index_range)
         .and_then(|r| source.get(r.start as usize..r.end as usize));
-    let _ = write!(
-        buf,
-        "{indent}for (const {binding_text} of __svn_each_items("
-    );
+    // `{#each items as items}` names the iterable and the item the same.
+    // Emitting `for (const items of __svn_each_items(items))` directly
+    // fires TS2448 / TS7022 — the for-of binding shadows the iterable
+    // reference, so `items` is "used before its declaration". Mirror
+    // upstream EachBlock.ts's `arrayAndItemVarTheSame` path: bind the
+    // iterable to a temp in a wrapper block first, then iterate the temp.
+    // (The temp is block-scoped, so nested same-name each blocks shadow
+    // cleanly rather than colliding.)
+    let same_name = b.as_clause.is_some() && !expr_text.is_empty() && binding_text == expr_text;
+    if same_name {
+        let _ = write!(buf, "{indent}{{ const __svn_each_arr = __svn_each_items(");
+    } else {
+        let _ = write!(
+            buf,
+            "{indent}for (const {binding_text} of __svn_each_items("
+        );
+    }
     match expr_source_range {
         Some(r) => buf.append_with_source(expr_text, r),
         None => buf.push_str(expr_text),
     }
-    let _ = writeln!(buf, ")) {{");
+    if same_name {
+        let _ = writeln!(buf, "); for (const {binding_text} of __svn_each_arr) {{");
+    } else {
+        let _ = writeln!(buf, ")) {{");
+    }
     if let Some(ix) = index_binding {
         if emit_is_ts() {
             let _ = writeln!(buf, "{indent}    const {ix}: number = 0;");
@@ -87,6 +104,10 @@ pub(crate) fn emit_each_block(
         let _ = writeln!(buf, "{indent}    void {ix};");
     }
     let _ = writeln!(buf, "{indent}}}");
+    if same_name {
+        // Close the `arrayAndItemVarTheSame` wrapper block.
+        let _ = writeln!(buf, "{indent}}}");
+    }
 
     if let Some(alt) = &b.alternate {
         emit_template_body(buf, source, alt, depth, insts, action_counter);

@@ -3,8 +3,9 @@
 async function $$render_a82beb00() {
     ;(async () => {
         // template type-check body (incremental)
-        for (const items of __svn_each_items(items)) {
+        { const __svn_each_arr = __svn_each_items(items); for (const items of __svn_each_arr) {
             void items;
+        }
         }
     });
     return { props: /** @type {any} */({}) };

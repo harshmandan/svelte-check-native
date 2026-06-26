@@ -305,7 +305,25 @@ fn synthesize_props_type_from_export_let(
     program: &oxc_ast::ast::Program<'_>,
     source: &str,
 ) -> Option<String> {
-    let in_runes_mode = source_uses_runes(source);
+    // In runes mode, component props come SOLELY from the `$props()`
+    // binding pattern; every named / const / function / class export is
+    // exposed through the Exports type, NEVER Props. Mirror upstream
+    // svelte2tsx's `handle$propsRune` (ExportedNames.ts), which derives
+    // props only from `$props()` and routes exports via
+    // `createExportsStr`. Returning early keeps ALL export forms out of
+    // the synthesized Props shape.
+    //
+    // Previously only the `export function` / `export class` branches
+    // were gated on `!in_runes_mode`, so `export const reset = …` and
+    // `export { x as y }` leaked into Props as settable props in runes
+    // mode — and because Shape 4 fires whenever the `$props()`
+    // destructure is untyped, the synthesized export-shape could even
+    // shadow the real `$props()` props. (`runes-only-export.v5` pins the
+    // intended behaviour: `props: Record<string, never>`,
+    // `exports: { foo: typeof foo }`.)
+    if source_uses_runes(source) {
+        return None;
+    }
     let mut parts: Vec<String> = Vec::new();
     for stmt in &program.body {
         let Statement::ExportNamedDeclaration(export_decl) = stmt else {
@@ -324,30 +342,23 @@ fn synthesize_props_type_from_export_let(
         // shape (`createReturnElements(names, …)` enumerates ALL
         // exports for the non-`$$Props` path), with optional `?:`
         // markers since the consumer may omit them.
-        //
-        // Runes mode is excluded: `runes-only-export.v5` ships
-        // `let x = $state(); export function foo()` with upstream's
-        // `props: Record<string, never>`, `exports: { foo: typeof foo }`
-        // — exports go through Exports, not props.
-        if !in_runes_mode {
-            if let Some(Declaration::FunctionDeclaration(f)) = &export_decl.declaration
-                && let Some(id) = &f.id
-            {
-                parts.push(format!(
-                    "{}?: typeof {};",
-                    id.name.as_str(),
-                    id.name.as_str()
-                ));
-            }
-            if let Some(Declaration::ClassDeclaration(c)) = &export_decl.declaration
-                && let Some(id) = &c.id
-            {
-                parts.push(format!(
-                    "{}?: typeof {};",
-                    id.name.as_str(),
-                    id.name.as_str()
-                ));
-            }
+        if let Some(Declaration::FunctionDeclaration(f)) = &export_decl.declaration
+            && let Some(id) = &f.id
+        {
+            parts.push(format!(
+                "{}?: typeof {};",
+                id.name.as_str(),
+                id.name.as_str()
+            ));
+        }
+        if let Some(Declaration::ClassDeclaration(c)) = &export_decl.declaration
+            && let Some(id) = &c.id
+        {
+            parts.push(format!(
+                "{}?: typeof {};",
+                id.name.as_str(),
+                id.name.as_str()
+            ));
         }
         // `export { name as alias, ... }` specifier form. Svelte 4
         // components use this to expose a local under a JS reserved
@@ -2089,6 +2100,35 @@ mod tests {
         // through the Exports field, NOT props (matches
         // `runes-only-export.v5`'s `props: Record<string, never>`).
         let src = "let x = $state();\nexport function helper() {}";
+        assert_eq!(props_type(src), None);
+    }
+
+    #[test]
+    fn export_const_skipped_in_runes_mode() {
+        // Runes mode: `export const reset = …` is an EXPORT, not a prop.
+        // Pre-fix, the var-decl branch ran unconditionally and made
+        // `reset` a settable prop. Mirrors upstream's runes handling
+        // (props from $props() only; exports via the Exports type).
+        let src = "let count = $state(0);\nexport const reset = () => { count = 0; };";
+        assert_eq!(props_type(src), None);
+    }
+
+    #[test]
+    fn export_const_does_not_shadow_props_destructure_in_runes_mode() {
+        // The dangerous case: an untyped `$props()` destructure leaves
+        // `type_text` None, so pre-fix Shape 4 synthesised `{ foo?: any }`
+        // from the export and overrode the real props. Post-fix the
+        // export contributes nothing, so the $props() destructure path
+        // owns the props (type_text stays None here).
+        let src = "let { a } = $props();\nexport const foo = 1;";
+        assert_eq!(props_type(src), None);
+    }
+
+    #[test]
+    fn export_specifier_skipped_in_runes_mode() {
+        // `export { local as alias }` is the Svelte-4 reserved-name
+        // idiom; in runes mode it's an export, never a prop.
+        let src = "let count = $state(0);\nconst cls = '';\nexport { cls as class };";
         assert_eq!(props_type(src), None);
     }
 

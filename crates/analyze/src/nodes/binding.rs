@@ -5,62 +5,12 @@ use svn_parser::{Attribute, Directive, DirectiveValue};
 
 use crate::nodes::attribute::literal_attr_value;
 use crate::nodes::destructure::simple_identifier_in;
-use crate::walker::{
-    BindThisCheck, BindThisTarget, Counters, DomBinding, DomBindingExpression, TemplateSummary,
-};
-
-/// v0.3 Item 8 extended: record `bind:value={EXPR}` sites with a
-/// context-aware target type resolved from the element tag + literal
-/// `type="..."` sibling attribute. Pushes a `DomBinding` entry so the
-/// existing Item 6 emit path handles the assignment-direction check
-/// + source-map post-scan uniformly.
-///
-/// Dispatch matrix:
-/// - `<input type="number">` / `<input type="range">` → `number`
-/// - `<input type="file">`   → SKIP (`bind:files` is the typed path)
-/// - `<input>` any other / no type attribute → `string`
-/// - `<textarea>` → `string`
-/// - other tags (including `<select>`) → SKIP (upstream dispatches
-///   via `svelteHTML.createElement` ambient typing; we don't have
-///   that wired in, so staying silent matches upstream's "pass"
-///   behavior at typecheck level on these cases).
-///
-/// `bind:group` is intentionally NOT recorded — upstream widens the
-/// target to `any` (`__sveltets_2_any(null)`), we simply skip the
-/// check entirely which has the same observable no-error outcome.
-pub(crate) fn collect_bind_value_bindings(
-    attrs: &[Attribute],
-    tag_name: &str,
-    summary: &mut TemplateSummary,
-) {
-    let Some(ty) = resolve_bind_value_type(tag_name, attrs) else {
-        return;
-    };
-    for attr in attrs {
-        let Attribute::Directive(d) = attr else {
-            continue;
-        };
-        if d.kind != svn_parser::DirectiveKind::Bind || d.name.as_str() != "value" {
-            continue;
-        }
-        let expression = match &d.value {
-            Some(svn_parser::DirectiveValue::Expression {
-                expression_range, ..
-            }) => DomBindingExpression::Range(*expression_range),
-            None => DomBindingExpression::Identifier(d.name.clone()),
-            _ => continue,
-        };
-        summary.dom_bindings.push(DomBinding {
-            expression,
-            type_annotation: ty,
-        });
-    }
-}
+use crate::walker::{BindThisTarget, Counters, TemplateSummary};
 
 /// Dispatch the target type for a `bind:value` directive based on the
-/// element tag + literal `type="..."` sibling attribute. Shared by
-/// analyze (collection into `summary.dom_bindings`) and emit
-/// (inline contract-check generation) so both pipelines stay in sync.
+/// element tag + literal `type="..."` sibling attribute. Called by the
+/// emit side (`emit::nodes::binding::emit_element_bind_checks_inline`)
+/// which re-derives the bind checks inline from the element attributes.
 ///
 /// Returns `None` for tags / type-attr combinations we don't model:
 /// - `<input type="file" | "checkbox" | "radio">`: handled by
@@ -77,31 +27,6 @@ pub fn resolve_bind_value_type(tag_name: &str, attrs: &[Attribute]) -> Option<&'
         },
         "textarea" => Some("string"),
         _ => None,
-    }
-}
-
-/// v0.3 Item 7: record `bind:this={EXPR}` sites on DOM elements and
-/// `<svelte:element>` for emit's source-map post-scan. Emit pairs
-/// each entry with a `__svn_bind_this_check<TAG>(EXPR);` overlay
-/// occurrence and pushes a TokenMapEntry. Walk order matches emit
-/// order; pairing is N-th to N-th.
-pub(crate) fn collect_bind_this_checks(attrs: &[Attribute], summary: &mut TemplateSummary) {
-    for attr in attrs {
-        let Attribute::Directive(d) = attr else {
-            continue;
-        };
-        if d.kind != svn_parser::DirectiveKind::Bind || d.name.as_str() != "this" {
-            continue;
-        }
-        let Some(svn_parser::DirectiveValue::Expression {
-            expression_range, ..
-        }) = &d.value
-        else {
-            continue;
-        };
-        summary.bind_this_checks.push(BindThisCheck {
-            expression_range: *expression_range,
-        });
     }
 }
 
@@ -145,25 +70,6 @@ pub(crate) fn handle_bind_directive(
                     range: *expression_range,
                 });
             }
-            // If the binding name is in our DOM-binding type
-            // table (contentRect, contentBoxSize, buffered, …),
-            // record the value range + its target type so the
-            // emit can generate `<x> = __svn_any() as <TYPE>;`
-            // in the template-check body. Catches shapes like
-            // `<div bind:contentRect={rect}>` where `rect`'s
-            // declared type doesn't accept DOMRectReadOnly.
-            //
-            // This runs IN ADDITION to the bind-target record
-            // above — the same variable needs BOTH the
-            // definite-assignment `!` rewrite (assignment is
-            // hidden inside a lifecycle callback, flow analysis
-            // can't see it) AND the type-compatibility check.
-            if let Some(type_annotation) = crate::dom_binding::type_for(d.name.as_str()) {
-                summary.dom_bindings.push(DomBinding {
-                    expression: DomBindingExpression::Range(*expression_range),
-                    type_annotation,
-                });
-            }
         }
         None => {
             // Bare `bind:foo` is shorthand for `bind:foo={foo}` —
@@ -172,15 +78,6 @@ pub(crate) fn handle_bind_directive(
                 name: d.name.clone(),
                 range: d.range,
             });
-            // Also thread through the DOM-binding type check for
-            // bare shorthands like `<video bind:buffered>` which
-            // desugar to `bind:buffered={buffered}`.
-            if let Some(type_annotation) = crate::dom_binding::type_for(d.name.as_str()) {
-                summary.dom_bindings.push(DomBinding {
-                    expression: DomBindingExpression::Identifier(d.name.clone()),
-                    type_annotation,
-                });
-            }
         }
         _ => {}
     }

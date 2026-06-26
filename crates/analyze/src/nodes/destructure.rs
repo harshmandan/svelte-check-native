@@ -5,10 +5,6 @@
 use smol_str::SmolStr;
 use svn_core::Range;
 
-pub(crate) fn is_destructure(names: &[SmolStr]) -> bool {
-    names.len() > 1
-}
-
 /// Return the leading identifier of an expression source slice — the
 /// run of identifier-valid bytes from the start, before any `.`,
 /// `[`, `?.`, `(`, whitespace, or operator. For `item.id` returns

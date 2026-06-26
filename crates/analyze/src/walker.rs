@@ -34,32 +34,9 @@ pub struct TemplateSummary {
     /// `bind:this={x}` targets where `x` is a simple identifier — eligible
     /// for the definite-assignment rewrite.
     pub bind_this_targets: SmallVec<BindThisTarget, 2>,
-    /// DOM-element `bind:NAME={x}` directives on a narrow allowlist of
-    /// one-way-not-on-element bindings (`bind:contentRect`,
-    /// `bind:contentBoxSize`, etc. — see `dom_binding::type_for`).
-    /// These don't live on the element's own type, so upstream emits
-    /// `x = elem.NAME as <Type>` as an assertion. We emit a simpler
-    /// shape — `x = __svn_any() as <Type>` — which checks that the
-    /// binding target's declared type accepts the binding's value
-    /// type (TS2322 fires on `let rect: string; bind:contentRect={rect}`
-    /// because DOMRectReadOnly isn't assignable to string).
-    pub dom_bindings: Vec<DomBinding>,
-    /// `bind:this={EXPR}` sites on DOM elements — collected in
-    /// source/walk order for v0.3 Item 7's source-map post-scan to
-    /// pair 1:1 with `__svn_bind_this_check<TAG>(EXPR);` overlay
-    /// occurrences. Covers both simple-identifier and member-
-    /// expression forms. Component `bind:this` stays on
-    /// `ComponentInstantiation.bind_this_target` (different emit path).
-    pub bind_this_checks: Vec<BindThisCheck>,
     /// Number of `{#each}` blocks encountered. Emit uses this to allocate
     /// unique iteration helpers.
     pub each_block_count: usize,
-    /// Names introduced by `{@const NAME = expr}` template tags. These
-    /// are template-scope locals that don't exist in the script. Emit
-    /// declares each as `let NAME: any;` inside `__svn_tpl_check` so
-    /// downstream `{#if NAME.x}` / `{#each NAME as ...}` references
-    /// don't fire TS2304.
-    pub at_const_names: SmallVec<SmolStr, 4>,
     /// Each `<Component prop1=... prop2=... />` instantiation we found,
     /// with enough info for emit to generate a `satisfies
     /// ComponentProps<typeof Component>` type-check that catches
@@ -547,47 +524,6 @@ pub struct BindThisTarget {
     pub range: Range,
 }
 
-/// One `bind:this={EXPR}` site on a DOM element — recorded in walk
-/// order for v0.3 Item 7's post-scan source-map pass. EXPR can be
-/// a simple identifier (`myDivRef`), a member expression
-/// (`refs.input`), or any other lvalue expression. The emit pairs
-/// each entry with a `__svn_bind_this_check<TAG>(EXPR);` occurrence
-/// in the overlay.
-#[derive(Debug, Clone)]
-pub struct BindThisCheck {
-    /// Source range of the `={EXPR}` value — emit writes this
-    /// verbatim into the check call. TokenMapEntry maps the
-    /// overlay-side EXPR span back to this.
-    pub expression_range: Range,
-}
-
-/// One `bind:NAME={x}` site on a DOM element where NAME is in
-/// the one-way-not-on-element allowlist (e.g. `contentRect`,
-/// `contentBoxSize`). Emit uses this to generate the assignment
-/// type-check `__svn_any_as<TYPE>(x)`.
-#[derive(Debug, Clone)]
-pub struct DomBinding {
-    /// Either the user's `={expr}` range (when explicit) or a plain
-    /// identifier for the bare-shorthand form `bind:NAME` (which
-    /// desugars to `bind:NAME={NAME}`). Emit copies this into the
-    /// phantom helper call's argument slot.
-    pub expression: DomBindingExpression,
-    /// TypeScript type the phantom helper's generic uses (e.g.
-    /// `"DOMRectReadOnly"`). Comes from the per-binding table in
-    /// `dom_binding::type_for`.
-    pub type_annotation: &'static str,
-}
-
-#[derive(Debug, Clone)]
-pub enum DomBindingExpression {
-    /// Source range covering the user's `={expr}` value; emit reads
-    /// the source slice verbatim.
-    Range(Range),
-    /// Bare shorthand `bind:NAME` desugars to `bind:NAME={NAME}` —
-    /// the identifier to pass is the directive's own name.
-    Identifier(SmolStr),
-}
-
 /// Walk the template fragment, collecting synthesized-name registrations
 /// and bind-target metadata.
 ///
@@ -622,11 +558,6 @@ pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
 pub(crate) struct Counters {
     pub(crate) action_attrs: usize,
     pub(crate) bind_pair: usize,
-    /// Names seen from `{@const NAME = …}` interpolations during this
-    /// walk. Used to dedup before pushing into
-    /// `summary.at_const_names`; the same name declared twice in the
-    /// template (legal Svelte) emits a single `let NAME: any;`.
-    pub(crate) at_const_seen: std::collections::HashSet<SmolStr>,
 }
 
 /// Per-walk resolver stack — replaces the older shadow-stack-of-

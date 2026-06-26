@@ -40,7 +40,6 @@ pub mod jsdoc;
 pub mod model;
 pub mod nodes;
 pub mod props;
-pub mod rune;
 pub mod slot_attr_rewrite;
 pub mod store;
 pub mod template_refs;
@@ -62,7 +61,6 @@ pub use props::{
     find_untyped_dispatcher_local_names, has_event_dispatcher_call,
     has_inline_typed_dispatcher_members, root_type_name_of,
 };
-pub use rune::{RuneCall, RuneKind, find_runes};
 pub use store::{
     collect_top_level_bindings, collect_type_only_import_bindings, collect_typed_top_level_lets,
     collect_typed_uninit_lets, find_store_refs, find_store_refs_with_bindings,
@@ -70,8 +68,7 @@ pub use store::{
 pub use template_refs::find_template_refs;
 pub use void_refs::VoidRefRegistry;
 pub use walker::{
-    BindDirective, BindThisCheck, BindThisTarget, BubbledComponentEvent, BubbledDomEvent,
-    BubbledDomEventScope, ComponentInstantiation, DomBinding, DomBindingExpression,
-    OnEventDirective, PropShape, ResolvedSlotExpr, SlotAttr, SlotAttrExpr, SlotDef,
-    TemplateSummary, walk_template,
+    BindDirective, BindThisTarget, BubbledComponentEvent, BubbledDomEvent, BubbledDomEventScope,
+    ComponentInstantiation, OnEventDirective, PropShape, ResolvedSlotExpr, SlotAttr, SlotAttrExpr,
+    SlotDef, TemplateSummary, walk_template,
 };

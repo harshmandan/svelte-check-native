@@ -4,7 +4,6 @@
 use svn_parser::Element;
 
 use crate::nodes::attribute::{WalkCtx, walk_attributes};
-use crate::nodes::binding::{collect_bind_this_checks, collect_bind_value_bindings};
 use crate::nodes::event_handler::collect_bubbled_dom_events;
 use crate::nodes::let_directive::collect_slot_def;
 use crate::walker::{AnalyzeVisitor, BubbledDomEventScope};
@@ -18,8 +17,6 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, e: &Element) {
         &ctx,
         Some(e.name.as_str()),
     );
-    collect_bind_this_checks(&e.attributes, &mut v.summary);
-    collect_bind_value_bindings(&e.attributes, e.name.as_str(), &mut v.summary);
     collect_bubbled_dom_events(&e.attributes, BubbledDomEventScope::Element, &mut v.summary);
     // `<slot [name="X"] [attr=…]>`: capture for emit's `slots:`
     // literal. Walks the attrs and skips any whose expression

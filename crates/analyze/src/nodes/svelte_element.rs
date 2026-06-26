@@ -5,7 +5,6 @@ use smol_str::SmolStr;
 use svn_parser::{SvelteElement, SvelteElementKind};
 
 use crate::nodes::attribute::{WalkCtx, walk_attributes};
-use crate::nodes::binding::collect_bind_this_checks;
 use crate::nodes::event_handler::collect_bubbled_dom_events;
 use crate::nodes::inline_component::collect_instantiation_inner;
 use crate::walker::{AnalyzeVisitor, BubbledDomEventScope};
@@ -87,27 +86,6 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
             );
         }
         _ => {}
-    }
-    // `bind:this` types differently across the `<svelte:*>` family:
-    //
-    //   - `<svelte:element>`        → DOM HTMLElement target (current).
-    //   - `<svelte:component this>` → bound expr is a Component<…> ref.
-    //   - `<svelte:self bind:this>` → bound expr is an instance of THIS component.
-    //   - `<svelte:window/body/...>`→ no `bind:this` makes sense.
-    //   - `<svelte:boundary>`       → no `bind:this`.
-    //
-    // The DOM-element check (`__svn_bind_this_check<HTMLElement>`)
-    // wraps the bind expression with an HTMLElement-compatible
-    // target type. Emitting it for the component-instance kinds
-    // produces a wrong-shape diagnostic at the user's
-    // `bind:this={x}` site (component instance fails
-    // HTMLElement subtype check). Reviewer item #1a: gate the
-    // collection to ONLY the `Element` kind. `Component`,
-    // `SelfRef`, and `Boundary` `bind:this` get the proper
-    // component-instance check from the full instantiation port
-    // (#1b, deferred).
-    if matches!(s.kind, SvelteElementKind::Element) {
-        collect_bind_this_checks(&s.attributes, &mut v.summary);
     }
     // Bare `on:NAME` event-bubbling on `<svelte:body>` /
     // `<svelte:window>` / `<svelte:element>`. Each emits to a

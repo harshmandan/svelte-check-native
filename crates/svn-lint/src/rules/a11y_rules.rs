@@ -120,11 +120,14 @@ fn check_element(
     // "image"/"picture"/"photo" (word-boundary, case-insensitive).
     // Skipped when aria-hidden="true".
     if !is_dynamic && name == "img" {
-        let aria_hidden = attribute_map.get("aria-hidden").and_then(|a| match a {
-            Attribute::Plain(p) => get_static_text_value(p),
-            _ => None,
-        }) == Some("true");
-        if !aria_hidden
+        // Upstream: `if (alt && !aria_hidden && !has_spread)` where
+        // `aria_hidden = get_static_value(...)` is TRUE for the bare form
+        // and for ANY non-empty static string (so `aria-hidden="false"`
+        // and `aria-hidden` both suppress), and falsy only for absent /
+        // empty / dynamic. The `!has_spread` gate (a spread may inject
+        // aria-hidden) was also missing.
+        if !aria_hidden_is_truthy(attribute_map.get("aria-hidden").copied())
+            && !has_spread
             && let Some(Attribute::Plain(p)) = attribute_map.get("alt")
             && let Some(alt) = get_static_text_value(p)
             && contains_redundant_img_word(alt)
@@ -1457,6 +1460,22 @@ fn video_has_caption_track(frag: &Fragment) -> bool {
 /// the attribute is expression-valued or contains interpolations.
 /// For quoted empty values (`href=""`) the attribute value has zero
 /// parts — those resolve to `Some("")`.
+/// Mirror upstream's `!!get_static_value(attribute)` truthiness for an
+/// `aria-hidden` attribute: TRUE for the bare form (`aria-hidden`) and
+/// for any NON-EMPTY static string (including `"false"`), FALSE for an
+/// absent attribute, an empty string, or a dynamic `{expr}` value.
+fn aria_hidden_is_truthy(attr: Option<&Attribute>) -> bool {
+    match attr {
+        Some(Attribute::Plain(p)) => {
+            if p.value.is_none() {
+                return true; // bare `aria-hidden` == `true`
+            }
+            matches!(get_static_text_value(p), Some(s) if !s.is_empty())
+        }
+        _ => false,
+    }
+}
+
 fn get_static_text_value(p: &svn_parser::ast::PlainAttr) -> Option<&str> {
     let v = p.value.as_ref()?;
     if v.parts.is_empty() && v.quoted {

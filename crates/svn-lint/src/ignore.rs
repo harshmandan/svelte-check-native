@@ -227,32 +227,26 @@ pub fn parse_ignore_codes_public(rest: &str, runes: bool) -> Vec<SmolStr> {
 fn parse_ignore_codes(rest: &str, runes: bool) -> Vec<SmolStr> {
     let mut out = Vec::new();
     if runes {
-        // Split on commas.
+        // Split on commas. Must produce the SAME list as
+        // `parse_ignore_codes_emit`'s runes path (the authoritative one
+        // run during linting): an empty segment is skipped (not a parse
+        // stop), the token uses ASCII word-chars, and only KNOWN codes
+        // enter the suppression list — legacy/unknown codes are reported
+        // by the emit variant but do not suppress until renamed.
         for raw in rest.split(',') {
             let token = raw.trim();
-            if token.is_empty() {
-                break;
-            }
-            // Only word-ish chars.
             let code: String = token
                 .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '$')
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '$')
                 .collect();
             if code.is_empty() {
-                break;
+                continue;
             }
-            let mapped = if is_known_code(&code) {
-                code
-            } else if let Some(to) = legacy_rename(&code) {
-                to.to_string()
-            } else {
-                // Unknown — the `unknown_code` warning for this is
-                // emitted by `parse_ignore_codes_emit`, not here.
-                code.replace('-', "_")
-            };
-            let sm = SmolStr::new(&mapped);
-            if !out.contains(&sm) {
-                out.push(sm);
+            if is_known_code(&code) {
+                let sm = SmolStr::new(&code);
+                if !out.contains(&sm) {
+                    out.push(sm);
+                }
             }
         }
     } else {
@@ -312,7 +306,9 @@ fn fuzzymatch_known_code(input: &str) -> Option<&'static str> {
         .chain(IGNORABLE_RUNTIME_WARNINGS.iter().copied());
     for c in candidates {
         let sim = lev_similarity(&target, c);
-        if sim >= 0.7 && best.map(|(s, _)| sim > s).unwrap_or(true) {
+        // Upstream's fuzzymatch.js:12 gates on `> 0.7` (strict), so a
+        // typo scoring exactly 0.7 produces no suggestion.
+        if sim > 0.7 && best.map(|(s, _)| sim > s).unwrap_or(true) {
             best = Some((sim, c));
         }
     }

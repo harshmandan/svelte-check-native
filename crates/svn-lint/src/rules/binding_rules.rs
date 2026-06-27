@@ -214,28 +214,33 @@ fn has_script_leading_ignore(source: &str, decl_start: u32, code: &str, runes: b
         if line_start == 0 {
             return false;
         }
-        // Line before the current one: [prev_start, line_start - 1]
-        // (excluding the trailing \n).
-        let mut prev_end = line_start - 1;
-        if prev_end > 0 && bytes[prev_end] == b'\r' {
-            // skip \r of \r\n
+        // Previous line spans [prev_start, line_start - 1); `line_start
+        // - 1` is the `\n`, so trim it (and a preceding `\r` for CRLF)
+        // off the end before inspecting.
+        let mut prev_end = line_start - 1; // exclusive end (the `\n`)
+        if prev_end > 0 && bytes[prev_end - 1] == b'\r' {
             prev_end -= 1;
         }
-        let mut prev_start = prev_end;
+        let mut prev_start = if prev_end == 0 { 0 } else { prev_end };
         while prev_start > 0 && bytes[prev_start - 1] != b'\n' {
             prev_start -= 1;
         }
-        let raw = &source[prev_start..prev_end + 1];
-        let trimmed = raw.trim_start();
+        let raw = &source[prev_start..prev_end];
+        let trimmed = raw.trim();
         if trimmed.is_empty() {
             // Blank line — chain broken.
             return false;
         }
-        if let Some(rest) = trimmed.strip_prefix("//")
+        // Accept both `// svelte-ignore X` and a single-line
+        // `/* svelte-ignore X */` block comment immediately preceding.
+        let comment_body = trimmed
+            .strip_prefix("//")
+            .or_else(|| trimmed.strip_prefix("/*").map(|r| r.trim_end_matches("*/")));
+        if let Some(rest) = comment_body
             && let Some(body) = rest.trim_start().strip_prefix("svelte-ignore")
             && body.chars().next().is_some_and(char::is_whitespace)
         {
-            let codes = crate::ignore::parse_ignore_codes_public(body.trim_start(), runes);
+            let codes = crate::ignore::parse_ignore_codes_public(body.trim().trim_end(), runes);
             if codes.iter().any(|c| c == code) {
                 return true;
             }

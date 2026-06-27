@@ -6,7 +6,7 @@ async function $$render_a41317e5() {
         { svelteHTML.createElement("div", {});         }
         { svelteHTML.createElement("div", {});         }
         {
-            const error = undefined;
+            const error = __svn_any();
             { svelteHTML.createElement("div", {});                 (error);
             }
             void error;

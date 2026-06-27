@@ -23,9 +23,9 @@ async function $$render_7177a532() {
             void value;
         }); }
         {
-            const a = undefined;
-            const b = undefined;
-            const c = undefined;
+            const a = __svn_any();
+            const b = __svn_any();
+            const c = __svn_any();
             void a;
             void b;
             void c;
@@ -36,9 +36,9 @@ async function $$render_7177a532() {
             void value;
         }); }
         {
-            const a = undefined;
-            const b = undefined;
-            const c = undefined;
+            const a = __svn_any();
+            const b = __svn_any();
+            const c = __svn_any();
             void a;
             void b;
             void c;

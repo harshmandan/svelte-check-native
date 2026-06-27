@@ -593,15 +593,13 @@ pub fn split_imports(
     // `type ` / `interface ` to pick up the name.
     for &(start, end) in &hoist_spans {
         let span_text = &content[start..end];
-        let trimmed = span_text.trim_start_matches(|c: char| {
-            c == 'e'
-                || c == 'x'
-                || c == 'p'
-                || c == 'o'
-                || c == 'r'
-                || c == 't'
-                || c.is_whitespace()
-        });
+        // Peel an optional leading `export` keyword as a UNIT before the
+        // `type `/`interface ` match. A char-set strip ({e,x,p,o,r,t,ws})
+        // also eats the `t` of `type`, so `export type Foo` collapsed to
+        // `ype Foo` and the name was never registered (`export interface`
+        // happened to survive because `i` isn't in the set).
+        let trimmed = span_text.trim_start();
+        let trimmed = trimmed.strip_prefix("export").unwrap_or(trimmed).trim_start();
         for kw in ["type ", "interface "] {
             if let Some(rest) = trimmed.strip_prefix(kw) {
                 let ident: String = rest

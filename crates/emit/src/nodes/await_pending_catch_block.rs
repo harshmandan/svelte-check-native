@@ -9,7 +9,7 @@ use std::fmt::Write;
 use svn_parser::Fragment;
 
 use crate::emit_buffer::EmitBuffer;
-use crate::{all_identifiers, emit_is_ts, emit_template_body};
+use crate::{all_identifiers, emit_template_body};
 
 /// Walk `{:then v}` / `{:catch e}` body in a fresh lexical scope that
 /// declares the branch's context binding as `any`. Without the
@@ -44,13 +44,12 @@ pub(crate) fn emit_branch_with_binding(
     let idents = all_identifiers(binding_text);
     let indent = "    ".repeat(depth);
     let _ = writeln!(buf, "{indent}{{");
-    let is_ts = emit_is_ts();
+    // Upstream binds the catch error as `const <err> = __sveltets_2_any();`
+    // (AwaitPendingCatchBlock.ts:64) — no annotation, identical in JS/TS. The
+    // old JS path `= undefined` inferred type `undefined`, so any property
+    // access on the binding fired a spurious diagnostic in `.svelte.js` files.
     for ident in &idents {
-        if is_ts {
-            let _ = writeln!(buf, "{indent}    const {ident}: any = undefined;");
-        } else {
-            let _ = writeln!(buf, "{indent}    const {ident} = undefined;");
-        }
+        let _ = writeln!(buf, "{indent}    const {ident} = __svn_any();");
     }
     emit_template_body(buf, source, body, depth + 1, insts, action_counter);
     for ident in &idents {

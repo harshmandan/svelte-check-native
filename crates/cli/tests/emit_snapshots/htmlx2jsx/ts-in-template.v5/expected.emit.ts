@@ -74,7 +74,7 @@ async function $$render_43de206c() {
                 void result;
             }); }
             {
-                const error: any = undefined;
+                const error = __svn_any();
                 void error;
             }
             ;(item as string);

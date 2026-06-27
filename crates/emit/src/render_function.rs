@@ -268,12 +268,19 @@ pub(crate) fn emit_render_body_return(
         }
     };
     if generics.is_some() {
-        let Some(ty) = prop_type_source else {
-            return;
+        // When generics are declared but no Props source was discovered,
+        // fall back to `Record<string, never>` just like the no-generics
+        // path below — an early return here would leave the render fn body
+        // returnless, so the default-export projection
+        // (`Awaited<ReturnType<typeof $$render>>['props']`) would resolve
+        // to `void` and break every consumer.
+        let props_ty: String = match prop_type_source {
+            Some(ty) => ty.to_string(),
+            None => "Record<string, never>".to_string(),
         };
         let _ = write!(
             buf,
-            "    return {{ props: undefined as any as ({ty}), events: undefined as any as {events_field}, slots: ",
+            "    return {{ props: undefined as any as ({props_ty}), events: undefined as any as {events_field}, slots: ",
         );
         write_slots_field(buf.raw_string_mut());
         let _ = writeln!(

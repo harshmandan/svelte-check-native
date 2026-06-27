@@ -433,7 +433,12 @@ fn check_element(
                                     );
                                 }
                             }
-                            let matches_implicit = Some(role_word) == a11y_implicit_semantics(name);
+                            // Compare against the attribute-aware implicit
+                            // role (input/menuitem resolve by `type`), matching
+                            // upstream's `get_implicit_role(name, attribute_map)`
+                            // — the name-only table misses `<input type=text
+                            // role=textbox>` and similar.
+                            let matches_implicit = Some(role_word) == implicit_role;
                             let exempt_implicit = matches_implicit
                                 && (matches!(name, "ul" | "ol" | "li" | "menu")
                                     || (name == "a" && !attribute_map.contains_key("href")));

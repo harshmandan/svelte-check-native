@@ -12,7 +12,7 @@ async function $$render_88f50e2b() {
             void value;
         }); }
         {
-            const error = undefined;
+            const error = __svn_any();
             { svelteHTML.createElement("h1", {});                 (error);
             }
             void error;

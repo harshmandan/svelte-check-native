@@ -22,8 +22,8 @@ async function $$render_8b99b80f() {
             void value;
         }); }
         {
-            const a = undefined;
-            const rest = undefined;
+            const a = __svn_any();
+            const rest = __svn_any();
             void a;
             void rest;
         }
@@ -33,9 +33,9 @@ async function $$render_8b99b80f() {
             void value;
         }); }
         {
-            const a = undefined;
-            const b = undefined;
-            const rest = undefined;
+            const a = __svn_any();
+            const b = __svn_any();
+            const rest = __svn_any();
             void a;
             void b;
             void rest;

@@ -28,7 +28,7 @@ async function $$render_bdea4648() {
                 void hi;
             }); }
             {
-                const hello = undefined;
+                const hello = __svn_any();
                 (hello);
                 void hello;
             }
@@ -41,7 +41,7 @@ async function $$render_bdea4648() {
                     (hello);
                     (hello);
                     {
-                        const hello = undefined;
+                        const hello = __svn_any();
                         (hello);
                         void hello;
                     }
@@ -77,7 +77,7 @@ async function $$render_bdea4648() {
                     void bye;
                 }); }
                 {
-                    const hello = undefined;
+                    const hello = __svn_any();
                     if ((hello)) {
                         void [hello];
                         (hello);
@@ -96,7 +96,7 @@ async function $$render_bdea4648() {
                     void cool;
                 }); }
                 {
-                    const cool = undefined;
+                    const cool = __svn_any();
                     void cool;
                 }
                 { const $$_promise = (aPromise);
@@ -137,7 +137,7 @@ async function $$render_bdea4648() {
             void cool;
         }); }
         {
-            const cool = undefined;
+            const cool = __svn_any();
             if ((cool)) {
                 void [cool];
                 (cool);

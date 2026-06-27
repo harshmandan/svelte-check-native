@@ -33,7 +33,7 @@ async function $$render_e1dcebf1() {
             void box;
         }); }
         {
-            const box = undefined;
+            const box = __svn_any();
             const {area, volume} = calculate(box.width, box.height, constant);
             void area;
             void volume;

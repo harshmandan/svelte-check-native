@@ -10,8 +10,8 @@ async function $$render_4ce17e3b() {
             void error;
         }); }
         {
-            const message = undefined;
-            const code = undefined;
+            const message = __svn_any();
+            const code = __svn_any();
             void message;
             void code;
         }

@@ -9,7 +9,7 @@ async function $$render_9500b63a() {
             void value;
         }); }
         {
-            const err = undefined;
+            const err = __svn_any();
             void err;
         }
         { const $$_promise = (promise2);

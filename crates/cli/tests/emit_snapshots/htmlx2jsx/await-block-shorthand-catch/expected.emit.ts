@@ -4,7 +4,7 @@ async function $$render_e34b808e() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const error = undefined;
+            const error = __svn_any();
             void error;
         }
     });

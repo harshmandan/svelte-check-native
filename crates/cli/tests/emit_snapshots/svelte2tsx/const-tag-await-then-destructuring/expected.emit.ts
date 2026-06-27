@@ -34,8 +34,8 @@ async function $$render_6a482dcb() {
             void height;
         }); }
         {
-            const width = undefined;
-            const height = undefined;
+            const width = __svn_any();
+            const height = __svn_any();
             const {area, volume} = calculate(width, height, constant);
             void area;
             void volume;

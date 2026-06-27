@@ -10,9 +10,9 @@ async function $$render_406d5f3a() {
             void b;
         }); }
         {
-            const c = undefined;
-            const d = undefined;
-            const e = undefined;
+            const c = __svn_any();
+            const d = __svn_any();
+            const e = __svn_any();
             void c;
             void d;
             void e;

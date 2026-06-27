@@ -395,54 +395,11 @@ fn synthesize_props_type_from_export_let(
 /// the bare identifier `$state` from a non-rune `import { state as
 /// $state } from …` aliasing.
 fn source_uses_runes(source: &str) -> bool {
-    let bytes = source.as_bytes();
-    for marker in [
-        "$state",
-        "$derived",
-        "$effect",
-        "$props",
-        "$bindable",
-        "$inspect",
-        "$host",
-    ] {
-        let mbytes = marker.as_bytes();
-        let mut i = 0;
-        while let Some(rel) = bytes[i..].windows(mbytes.len()).position(|w| w == mbytes) {
-            let pos = i + rel;
-            // Reject `$$bindable` etc. — `$$` ambients aren't runes.
-            if pos.checked_sub(1).and_then(|p| bytes.get(p)).copied() == Some(b'$') {
-                i = pos + mbytes.len();
-                continue;
-            }
-            // Reject identifier suffix continuation (`$states`, `$propsX`).
-            let after_marker = pos + mbytes.len();
-            let mut after = after_marker;
-            if let Some(b) = bytes.get(after)
-                && (b.is_ascii_alphanumeric() || *b == b'_')
-            {
-                i = after;
-                continue;
-            }
-            // Walk past `.method` chains (`$state.raw`, `$derived.by`).
-            while bytes.get(after) == Some(&b'.') {
-                after += 1;
-                while after < bytes.len()
-                    && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_')
-                {
-                    after += 1;
-                }
-            }
-            // Skip whitespace then require `(`.
-            while after < bytes.len() && matches!(bytes[after], b' ' | b'\t') {
-                after += 1;
-            }
-            if bytes.get(after) == Some(&b'(') {
-                return true;
-            }
-            i = pos + mbytes.len();
-        }
-    }
-    false
+    // Delegate to the shared comment/string/template-aware scanner. The
+    // previous inline scan matched markers in raw bytes, so a `$state(`
+    // inside a `// comment` or a `"string"` literal falsely flipped the
+    // file into runes mode (suppressing Svelte-4 export-let prop synthesis).
+    svn_core::rune_scan::script_calls_rune(source)
 }
 
 /// Extract a single property from `export { local as alias }`. Looks up

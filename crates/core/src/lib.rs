@@ -31,6 +31,7 @@
 pub mod diagnostic;
 pub mod position;
 pub mod range;
+pub mod rune_scan;
 pub mod sveltekit;
 pub mod symbol;
 pub mod synth_names;

@@ -3,9 +3,18 @@
 async function $$render_bf9851b3() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("div", {});         }
-        { svelteHTML.createElement("div", {});         }
-        { svelteHTML.createElement("div", {});         }
+        { svelteHTML.createElement("div", {
+            "contenteditable": true,
+        });
+        }
+        { svelteHTML.createElement("div", {
+            "contenteditable": (contentEditable),
+        });
+        }
+        { svelteHTML.createElement("div", {
+            "contenteditable": (contenteditable),
+        });
+        }
     });
     return { props: /** @type {any} */({}) };
 }

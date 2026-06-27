@@ -492,6 +492,26 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
         );
     }
     let mut any = false;
+    // Attribute-name case-folding (upstream `transformAttributeCase`)
+    // applies only to static DOM elements that are NOT custom elements.
+    // A dynamic `<svelte:element this={expr}>` (non-literal tag) keeps
+    // names verbatim, as does a custom element — autonomous (`my-el`,
+    // tag contains `-`) or customized built-in (`<div is="x-y">`, an `is`
+    // attribute whose value contains `-`). Mirrors upstream's
+    // `Element.isCustomElement()` (Element.ts:263-275).
+    let is_custom_element = tag_name.contains('-')
+        || attributes.iter().any(|a| match a {
+            svn_parser::Attribute::Plain(p) if p.name.as_str() == "is" => p
+                .value
+                .as_ref()
+                .and_then(|v| v.parts.first())
+                .is_some_and(|part| match part {
+                    svn_parser::AttrValuePart::Text { content, .. } => content.contains('-'),
+                    _ => false,
+                }),
+            _ => false,
+        });
+    let should_lowercase = tag_literal && !is_custom_element;
     for attr in attributes {
         match attr {
             svn_parser::Attribute::Plain(p) => {
@@ -502,7 +522,7 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                     buf.push_str("\n");
                     any = true;
                 }
-                emit_plain(buf, source, p, depth + 1);
+                emit_plain(buf, source, p, depth + 1, should_lowercase);
             }
             svn_parser::Attribute::Expression(e) => {
                 if should_skip(e.name.as_str()) {
@@ -512,7 +532,7 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                     buf.push_str("\n");
                     any = true;
                 }
-                emit_expression(buf, source, e, depth + 1);
+                emit_expression(buf, source, e, depth + 1, should_lowercase);
             }
             svn_parser::Attribute::Shorthand(s) => {
                 if should_skip(s.name.as_str()) {
@@ -522,7 +542,7 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                     buf.push_str("\n");
                     any = true;
                 }
-                emit_shorthand(buf, source, s, depth + 1);
+                emit_shorthand(buf, source, s, depth + 1, should_lowercase);
             }
             svn_parser::Attribute::Spread(s) => {
                 // Bail-check first (skip empty / whitespace-only

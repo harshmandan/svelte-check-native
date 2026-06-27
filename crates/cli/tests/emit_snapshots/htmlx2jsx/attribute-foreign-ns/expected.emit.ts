@@ -8,8 +8,8 @@ async function $$render_2d42b761() {
             new __svn_C_0({ target: __svn_any(), props: {"attrName": "text", "attrCase": "text"} });
         }
         { svelteHTML.createElement("someelement", {
-            "attrName": `text`,
-            "attrCase": true,
+            "attrname": `text`,
+            "attrcase": true,
         });
         }
     });

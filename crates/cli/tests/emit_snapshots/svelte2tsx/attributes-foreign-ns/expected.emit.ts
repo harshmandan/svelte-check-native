@@ -4,8 +4,8 @@ async function $$render_6d186ca7() {
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("element", {
-            "someAttr": `hi`,
-            "someOtherAttribute": `there`,
+            "someattr": `hi`,
+            "someotherattribute": `there`,
         });
         }
         {

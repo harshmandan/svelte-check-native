@@ -18,10 +18,15 @@
 //! - [`diagnostic`] — `Diagnostic`, `Severity`, `DiagnosticSource`.
 //! - [`sveltekit`] — single source of truth for SvelteKit path
 //!   classification (route components, route scripts, hooks, params).
+//! - [`rune_scan`] — rune-scanning helper.
+//! - [`synth_names`] — the `__svn_*` synthesized-name helpers (architecture rule #6).
+//! - [`tsconfig`] — canonical `TsConfig`/`CompilerOptions` struct + loader
+//!   (architecture rule #4; re-exported below).
 //!
 //! ### Design notes
 //!
-//! - `Range` is the byte-offset interval type — name aligns with LSP.
+//! - `Range` is the byte-offset interval type — byte positions, not LSP
+//!   line/character positions.
 //! - `PositionMap` resolves byte offsets to line/col on demand; does not
 //!   conflate source-map-v3 mappings with line/col tables. Source maps
 //!   live in the `emit` crate where they're actually constructed.

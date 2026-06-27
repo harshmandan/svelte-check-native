@@ -9,9 +9,10 @@ use svn_core::Range;
 
 /// A parsed Svelte file.
 ///
-/// Borrows from the source string (`&'src`). Template AST is out of scope
-/// for the initial structural parser; it will live in [`Template::nodes`]
-/// once the template-level parser lands.
+/// Borrows from the source string (`&'src`). The structural parser records
+/// the template only as byte ranges (`Template::text_runs`); the template AST
+/// is produced separately by `parse_all_template_runs`, which turns those runs
+/// into an `ast::Fragment`.
 #[derive(Debug)]
 pub struct Document<'src> {
     /// The original source text. Every `Range` in the document is an offset
@@ -135,8 +136,9 @@ pub enum ScriptContext {
     Module,
 }
 
-/// The template region. `nodes` will be populated by a subsequent pass
-/// (template AST not included in the initial structural parser).
+/// The template region. The structural parser stores only `text_runs` — the
+/// byte ranges that belong to the template. The template AST is built later by
+/// `parse_all_template_runs`, which parses those runs into an `ast::Fragment`.
 #[derive(Debug, Default)]
 pub struct Template {
     /// Byte ranges in the source that belong to the template — the

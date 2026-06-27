@@ -21,7 +21,9 @@ use crate::ast::{
     SnippetBlock, ThenBranch,
 };
 use crate::error::ParseError;
-use crate::mustache::find_mustache_end;
+use crate::mustache::{
+    can_start_regex, find_mustache_end, skip_ascii_string, skip_regex_literal, skip_template_literal,
+};
 use crate::scanner::Scanner;
 
 /// What block terminator was found in a child fragment scan.
@@ -102,6 +104,13 @@ pub(crate) fn peek_and_consume_terminator(
                 scanner.skip_ascii_whitespace();
                 let cond_start = scanner.pos();
                 let end = find_matching_close_brace(scanner)?;
+                if end <= cond_start {
+                    errors.push(ParseError::MalformedOpenTag {
+                        range: Range::new(cond_start, end.max(cond_start)),
+                    });
+                    scanner.set_pos(start);
+                    return None;
+                }
                 let condition_range = Range::new(cond_start, end);
                 scanner.set_pos(end + 1);
                 Some(BlockTerminator::ElseIf { condition_range })
@@ -429,41 +438,91 @@ pub(crate) fn parse_snippet_header(
     scanner.advance_byte();
     let params_start = scanner.pos();
 
-    // Find matching `)`. String/char/template literals are skipped so a
-    // `)` inside a default-value string (`{#snippet s(a = ")")}`) doesn't
-    // close the params early.
-    let mut depth = 1;
-    while !scanner.eof() {
-        match scanner.peek_byte() {
-            Some(b'(') => depth += 1,
-            Some(b')') => {
-                depth -= 1;
-                if depth == 0 {
+    // Find matching `)`. Strings, char literals, template literals (with
+    // their `${...}` interpolations), regex literals, and comments are all
+    // skipped so a `)` inside any of them doesn't close the params early —
+    // mirroring `find_mustache_end`'s `}`-finding lexical tracking.
+    let bytes = scanner.source().as_bytes();
+    let mut i = params_start as usize;
+    let mut paren_depth: i32 = 1;
+    // Brace depth + template stack track `${...}` interpolations exactly as
+    // in `find_mustache_end`, so a `)` inside an interpolation is governed by
+    // its own balanced braces rather than the outer paren count.
+    let mut brace_depth: i32 = 0;
+    let mut template_brace_stack: Vec<i32> = Vec::new();
+    let mut close_paren: Option<usize> = None;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => {
+                paren_depth += 1;
+                i += 1;
+            }
+            b')' => {
+                paren_depth -= 1;
+                if paren_depth == 0 {
+                    close_paren = Some(i);
                     break;
                 }
+                i += 1;
             }
-            Some(q @ (b'"' | b'\'' | b'`')) => {
-                scanner.advance_char(); // past the opening quote
-                while !scanner.eof() {
-                    match scanner.peek_byte() {
-                        Some(b'\\') => {
-                            // Skip the backslash and the escaped char.
-                            scanner.advance_char();
-                            scanner.advance_char();
-                            continue;
-                        }
-                        Some(c) if c == q => break, // at the closing quote
-                        _ => scanner.advance_char(),
+            b'{' => {
+                brace_depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                brace_depth -= 1;
+                if let Some(&top) = template_brace_stack.last() {
+                    if brace_depth == top {
+                        // Returning from `${...}` into the template literal.
+                        template_brace_stack.pop();
+                        i += 1;
+                        i = skip_template_literal(
+                            bytes,
+                            i,
+                            &mut template_brace_stack,
+                            &mut brace_depth,
+                        )?;
+                        continue;
                     }
                 }
-                // Leave the scanner on the closing quote; the trailing
-                // advance_char below steps past it.
+                i += 1;
             }
-            _ => {}
+            b'"' => i = skip_ascii_string(bytes, i + 1, b'"')?,
+            b'\'' => i = skip_ascii_string(bytes, i + 1, b'\'')?,
+            b'`' => {
+                i = skip_template_literal(bytes, i + 1, &mut template_brace_stack, &mut brace_depth)?
+            }
+            b'/' => match bytes.get(i + 1).copied() {
+                Some(b'/') => {
+                    // Line comment to end of line.
+                    i += 2;
+                    while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
+                        i += 1;
+                    }
+                }
+                Some(b'*') => {
+                    // Block comment to `*/`.
+                    i += 2;
+                    while i + 1 < bytes.len() {
+                        if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                            i += 2;
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                _ if can_start_regex(bytes, params_start as usize, i) => {
+                    i = skip_regex_literal(bytes, i + 1)?;
+                }
+                _ => i += 1,
+            },
+            _ => i += 1,
         }
-        scanner.advance_char();
     }
-    let params_end = scanner.pos();
+    let params_end = close_paren
+        .map(|p| p as u32)
+        .unwrap_or(scanner.source().len() as u32);
+    scanner.set_pos(params_end);
     if scanner.peek_byte() != Some(b')') {
         errors.push(ParseError::MalformedOpenTag {
             range: Range::new(params_start, params_end),
@@ -525,6 +584,30 @@ fn find_token_at_depth_zero(src: &str, needle: &str) -> Option<usize> {
                     }
                 }
             }
+            b'/' => match bytes.get(i + 1).copied() {
+                Some(b'/') => {
+                    // Line comment to end of line. `//` is unambiguously a
+                    // comment in expression context (an empty `//` regex is
+                    // invalid), so no regex/division disambiguation is needed.
+                    i += 2;
+                    while i < bytes.len() && bytes[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                Some(b'*') => {
+                    // Block comment to `*/`. Leave `i` on the closing `/` so
+                    // the trailing `i += 1` steps past it.
+                    i += 2;
+                    while i + 1 < bytes.len() {
+                        if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                _ => {}
+            },
             _ => {}
         }
         i += 1;
@@ -564,6 +647,30 @@ fn find_char_at_depth_zero(src: &str, ch: u8) -> Option<usize> {
                     }
                 }
             }
+            b'/' => match bytes.get(i + 1).copied() {
+                Some(b'/') => {
+                    // Line comment to end of line. `//` is unambiguously a
+                    // comment in expression context (an empty `//` regex is
+                    // invalid), so no regex/division disambiguation is needed.
+                    i += 2;
+                    while i < bytes.len() && bytes[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                Some(b'*') => {
+                    // Block comment to `*/`. Leave `i` on the closing `/` so
+                    // the trailing `i += 1` steps past it.
+                    i += 2;
+                    while i + 1 < bytes.len() {
+                        if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                _ => {}
+            },
             _ => {}
         }
         i += 1;
@@ -695,6 +802,20 @@ mod tests {
     }
 
     #[test]
+    fn else_if_empty_condition_is_malformed() {
+        // `{:else if}` has no condition — must not produce an ElseIf.
+        let src = "{:else if}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let term = peek_and_consume_terminator(&mut scanner, &mut errors);
+        assert!(
+            !matches!(term, Some(BlockTerminator::ElseIf { .. })),
+            "got {term:?}"
+        );
+        assert!(!errors.is_empty(), "expected a malformed-open-tag error");
+    }
+
+    #[test]
     fn snippet_params_are_string_aware() {
         // `)` inside a default-value string must not close the params
         // early: `{#snippet s(a = ")")}`.
@@ -707,6 +828,36 @@ mod tests {
         };
         assert_eq!(name, "s");
         assert_eq!(params.slice(src), r#"a = ")""#);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn snippet_params_are_regex_aware() {
+        // `)` inside a regex literal must not close the params early.
+        let src = "s(a = /)/)}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let result = parse_snippet_header(&mut scanner, &mut errors);
+        let Some((name, params)) = result else {
+            panic!("expected a snippet header, errors: {errors:?}");
+        };
+        assert_eq!(name, "s");
+        assert_eq!(params.slice(src), "a = /)/");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn snippet_params_are_block_comment_aware() {
+        // `)` inside a block comment must not close the params early.
+        let src = "s(a /* ) */)}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let result = parse_snippet_header(&mut scanner, &mut errors);
+        let Some((name, params)) = result else {
+            panic!("expected a snippet header, errors: {errors:?}");
+        };
+        assert_eq!(name, "s");
+        assert_eq!(params.slice(src), "a /* ) */");
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
     }
 

@@ -719,7 +719,7 @@ impl<'src> TemplateParser<'src> {
         if !self
             .scanner
             .peek_byte()
-            .map(|b| b.is_ascii_alphabetic())
+            .map(|b| b.is_ascii_alphabetic() || b >= 0x80)
             .unwrap_or(false)
         {
             // Not a valid element start — record error, skip `<`.
@@ -730,7 +730,7 @@ impl<'src> TemplateParser<'src> {
         }
 
         while let Some(b) = self.scanner.peek_byte() {
-            if b.is_ascii_alphanumeric() || matches!(b, b':' | b'-' | b'_' | b'.') {
+            if b.is_ascii_alphanumeric() || b >= 0x80 || matches!(b, b':' | b'-' | b'_' | b'.') {
                 self.scanner.advance_byte();
             } else {
                 break;

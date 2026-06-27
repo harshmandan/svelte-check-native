@@ -64,6 +64,10 @@ phf = { version = "0.13", features = ["macros"] }
 smallvec = "2.0.0-alpha.12"
 # Tolerant JSON for tsconfig.json (comments + trailing commas).
 json5 = "1"
+# ECMAScript ID_Start / ID_Continue tables — exact Unicode identifier
+# classification for the destructure/typeof helpers (matches the JS
+# spec rather than the ASCII-only approximation).
+unicode-ident = "1"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

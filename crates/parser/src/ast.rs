@@ -150,11 +150,13 @@ pub enum InterpolationKind {
     /// typos, TS2339 on missing-property reads, etc.). Mirrors
     /// upstream svelte2tsx's `RawMustacheTag.ts`.
     AtHtml,
-    /// `{@render EXPR}` — snippet-render call (Svelte 5+). Emit
-    /// produces `__svn_ensure_snippet(EXPR);` so tsgo type-checks
-    /// EXPR's call arguments against the snippet's declared
-    /// `Snippet<[…]>` parameter shape, plus validates that EXPR
-    /// resolves to a snippet at all. Mirrors upstream's `RenderTag.ts`.
+    /// `{@render EXPR}` — snippet-render call (Svelte 5+). Emit produces a
+    /// bare `(EXPR);` expression statement so tsgo type-checks the snippet
+    /// call's arguments against the declared `Snippet<[…]>` parameter shape
+    /// (TS2304 on missing identifier, TS2554 on arity, TS2345 on arg type).
+    /// It does NOT currently assert that EXPR resolves to a snippet — that
+    /// would require a `__svn_ensure_snippet` ambient we don't yet declare
+    /// (see render_tag.rs header). Mirrors upstream's `RenderTag.ts`.
     AtRender,
     /// `{@debug a, b, …}` — debug interpolation. Emit produces one
     /// bare `(name);` per comma-separated identifier so tsgo
@@ -558,8 +560,11 @@ pub struct SnippetBlock {
 
 /// HTML "void" elements that have no closing tag.
 ///
-/// Per the WHATWG spec. Used to decide whether parsing an opening tag should
-/// eagerly close without looking for `</tag>`.
+/// Canonical list mirroring the Svelte compiler's `VOID_ELEMENT_NAMES` (16
+/// entries, including the obsolete `command`/`keygen`/`param`). Used to decide
+/// whether parsing an opening tag should eagerly close without looking for
+/// `</tag>`. This is the single source of truth: byte-slice callers wrap it
+/// via `str::from_utf8`.
 pub fn is_void_element(tag: &str) -> bool {
     matches!(
         tag,
@@ -567,12 +572,15 @@ pub fn is_void_element(tag: &str) -> bool {
             | "base"
             | "br"
             | "col"
+            | "command"
             | "embed"
             | "hr"
             | "img"
             | "input"
+            | "keygen"
             | "link"
             | "meta"
+            | "param"
             | "source"
             | "track"
             | "wbr"
@@ -581,13 +589,18 @@ pub fn is_void_element(tag: &str) -> bool {
 
 /// Does a tag name refer to a Svelte component (uppercase or dotted)?
 pub fn is_component_tag(name: &str) -> bool {
-    if name.contains('.') {
+    let Some(first) = name.chars().next() else {
+        return false;
+    };
+    // Unicode-uppercase start: always a component; dots permitted freely
+    // (mirrors upstream regex branch 1, `\p{Lu}[...\.]*`).
+    if first.is_uppercase() {
         return true;
     }
-    name.chars()
-        .next()
-        .map(|c| c.is_ascii_uppercase())
-        .unwrap_or(false)
+    // Otherwise only a well-formed dotted member chain (`ns.Comp`) is a
+    // component; bare/trailing/empty segments (`foo.`, `.foo`, `foo..bar`)
+    // are not (mirrors branch 2's `(?:\.ID_Continue+)+`).
+    name.contains('.') && name.split('.').all(|seg| !seg.is_empty())
 }
 
 #[cfg(test)]

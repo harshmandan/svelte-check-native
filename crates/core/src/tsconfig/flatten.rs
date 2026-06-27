@@ -125,11 +125,30 @@ pub fn flatten_references_from_chain(entry: &Path) -> Vec<FlattenedReference> {
     let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     let mut queue: std::collections::VecDeque<(String, PathBuf)> =
         std::collections::VecDeque::new();
+    // Enqueue-time dedupe keyed on the normalized ref target: skips a
+    // re-stat + re-parse for true duplicate targets of identical
+    // spelling (diamond-shaped ref graphs). `seen` (keyed on the
+    // resolved config_path) still backstops the dir/file-alias case,
+    // so the returned set and its first-occurrence order are unchanged.
+    let mut enqueued: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let push = |queue: &mut std::collections::VecDeque<(String, PathBuf)>,
+                enqueued: &mut std::collections::HashSet<PathBuf>,
+                raw: &str,
+                dir: &Path| {
+        let p = if Path::new(raw).is_absolute() {
+            PathBuf::from(raw)
+        } else {
+            dir.join(raw)
+        };
+        if enqueued.insert(normalize(&p)) {
+            queue.push_back((raw.to_string(), dir.to_path_buf()));
+        }
+    };
     // Seed with direct refs from every config in the entry's chain.
     for file in &chain {
         let dir = file.config_dir().to_path_buf();
         for reference in &file.references {
-            queue.push_back((reference.path.clone(), dir.clone()));
+            push(&mut queue, &mut enqueued, &reference.path, &dir);
         }
     }
     // Cap depth to keep pathological ref loops from running away.
@@ -155,7 +174,7 @@ pub fn flatten_references_from_chain(entry: &Path) -> Vec<FlattenedReference> {
             for rf in &ref_chain {
                 let dir = rf.config_dir().to_path_buf();
                 for reference in &rf.references {
-                    queue.push_back((reference.path.clone(), dir.clone()));
+                    push(&mut queue, &mut enqueued, &reference.path, &dir);
                 }
             }
         }
@@ -182,6 +201,12 @@ fn resolve_reference(raw_path: &str, declaring_dir: &Path) -> Option<FlattenedRe
     } else {
         return None;
     };
+    // Collapse `..`/`.` segments so the stored spelling is canonical:
+    // `config_path` backs the visited-set key in the caller and
+    // `project_dir` anchors include globs, so both must be free of
+    // redundant segments to dedupe and resolve consistently.
+    let config_path = normalize(&config_path);
+    let project_dir = normalize(&project_dir);
     if !config_path.is_file() {
         return None;
     }

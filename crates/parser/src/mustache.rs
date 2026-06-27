@@ -67,7 +67,7 @@ pub fn find_mustache_end(source: &str, expression_start: u32) -> Option<u32> {
                     Some(b'/') => {
                         // Line comment to end of line.
                         i += 2;
-                        while i < bytes.len() && bytes[i] != b'\n' {
+                        while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
                             i += 1;
                         }
                     }
@@ -104,7 +104,7 @@ pub fn find_mustache_end(source: &str, expression_start: u32) -> Option<u32> {
 /// into regex mode at expression starts and after punctuators/operators where
 /// division cannot validly appear, which covers Svelte block headers like
 /// `{#if /re/.test(x)}` without breaking ordinary `{a / b}` expressions.
-fn can_start_regex(bytes: &[u8], expression_start: usize, slash: usize) -> bool {
+pub(crate) fn can_start_regex(bytes: &[u8], expression_start: usize, slash: usize) -> bool {
     let Some(prev) = previous_significant_index(bytes, expression_start, slash) else {
         return true;
     };
@@ -217,14 +217,11 @@ fn keyword_before_slash_can_start_regex(
     let word = &bytes[start..=ident_end];
     word == b"return"
         || word == b"throw"
-        || word == b"yield"
         || word == b"case"
         || word == b"delete"
         || word == b"void"
         || word == b"typeof"
-        || word == b"await"
         || word == b"in"
-        || word == b"of"
         || word == b"instanceof"
 }
 
@@ -237,7 +234,7 @@ fn is_ascii_ident_continue(b: u8) -> bool {
 /// Character classes are tracked separately because `/` is literal inside
 /// `[...]`. Backslash escapes skip the escaped byte both inside and outside
 /// character classes. Flags after the closing slash are consumed too.
-fn skip_regex_literal(bytes: &[u8], start: usize) -> Option<usize> {
+pub(crate) fn skip_regex_literal(bytes: &[u8], start: usize) -> Option<usize> {
     let mut i = start;
     let mut in_class = false;
     while i < bytes.len() {
@@ -269,7 +266,7 @@ fn skip_regex_literal(bytes: &[u8], start: usize) -> Option<usize> {
 /// the character immediately after the opening quote; `quote` is the quote
 /// byte. Returns the offset of the character after the closing quote, or
 /// `None` on unterminated string.
-fn skip_ascii_string(bytes: &[u8], start: usize, quote: u8) -> Option<usize> {
+pub(crate) fn skip_ascii_string(bytes: &[u8], start: usize, quote: u8) -> Option<usize> {
     let mut i = start;
     while i < bytes.len() {
         match bytes[i] {
@@ -278,9 +275,8 @@ fn skip_ascii_string(bytes: &[u8], start: usize, quote: u8) -> Option<usize> {
                 // Escape: skip the backslash and whatever follows.
                 i += 2;
             }
-            b'\n' => {
-                // Raw newline ends a non-template string. Treat as terminated
-                // (caller will see the real syntax error from oxc later).
+            b'\n' | b'\r' => {
+                // Raw line terminator ends a non-template string.
                 return Some(i + 1);
             }
             _ => i += 1,
@@ -293,7 +289,7 @@ fn skip_ascii_string(bytes: &[u8], start: usize, quote: u8) -> Option<usize> {
 /// JS context — increments `outer_depth` and pushes the depth onto
 /// `template_stack`. Returns the offset after the closing backtick, or
 /// `None` on unterminated literal.
-fn skip_template_literal(
+pub(crate) fn skip_template_literal(
     bytes: &[u8],
     start: usize,
     template_stack: &mut Vec<i32>,
@@ -408,6 +404,8 @@ mod tests {
     fn division_after_identifier_is_not_regex_literal() {
         let src = "{a / b}";
         assert_eq!(end_of(src), Some((src.len() - 1) as u32));
+        // `of` is no longer treated as a regex-starting keyword.
+        assert_eq!(end_of("{of / 2}"), Some(7));
     }
 
     #[test]

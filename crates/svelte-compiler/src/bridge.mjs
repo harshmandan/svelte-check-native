@@ -8,8 +8,8 @@
 //   response: {"id": N, "warnings": [...], "error": "<optional>"}
 //
 // Each warning has `{code, message, start: {line, column}, end: {line,
-// column}}`. Lines and columns are 1-based, matching svelte/compiler's
-// own format.
+// column}}` where line is 1-based, column is 0-based (matching
+// svelte/compiler's locate-character output).
 //
 // The bridge is started once per `svelte-check-native` run; the Rust
 // side keeps the subprocess open and reuses it across all .svelte files
@@ -127,7 +127,7 @@ function serializeWarning(w) {
     code: w.code || 'unknown',
     message: w.message || '',
     severity: 'warning',
-    start: w.start || { line: 1, column: 1 },
-    end: w.end || w.start || { line: 1, column: 1 },
+    start: w.start || { line: 1, column: 0 },
+    end: w.end || w.start || { line: 1, column: 0 },
   }
 }

@@ -1,9 +1,12 @@
 //! Load a tsconfig with full `extends` chain resolution + `${configDir}`
 //! substitution + merging.
 //!
-//! This is the canonical entry point every consumer should use. Given a path
-//! to `tsconfig.json`, return a fully-merged [`TsConfigFile`] as if the user
-//! had written one giant flat config.
+//! Two views are offered. [`load`] is the fully-merged convenience view: it
+//! collapses the whole `extends` chain into one [`TsConfigFile`] with TS's
+//! replace-on-child semantics, as if the user had written one giant flat
+//! config. [`load_chain`] is the path-aware production path the overlay
+//! builder and CLI use: it returns each file in the chain unmerged, so
+//! callers can rebase relative paths against each file's own directory.
 //!
 //! ### Resolution
 //!
@@ -95,8 +98,9 @@ pub fn load(entry: impl AsRef<Path>) -> Result<TsConfigFile, LoadError> {
 ///
 /// Cycles and unreadable files are skipped silently — the function is
 /// best-effort, matching what the overlay builder's hand-rolled walk
-/// used to do. Hard errors (missing entry file, malformed entry) still
-/// surface via [`LoadError`].
+/// used to do. A missing entry file still surfaces via [`LoadError`]
+/// (the entry must canonicalize); everything reached through `extends`,
+/// including a malformed file, is skipped rather than raised.
 pub fn load_chain(entry: impl AsRef<Path>) -> Result<Vec<TsConfigFile>, LoadError> {
     use std::collections::VecDeque;
 
@@ -326,22 +330,7 @@ fn resolve_package_extends(reference: &str, start_dir: &Path) -> Result<PathBuf,
             let resolved = if let Some(sp) = subpath {
                 pkg_root.join(sp)
             } else {
-                // Prefer package.json's "tsconfig" field; else fall back to
-                // tsconfig.json at the package root.
-                let pkg_json_path = pkg_root.join("package.json");
-                if let Ok(contents) = std::fs::read_to_string(&pkg_json_path) {
-                    if let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(&contents) {
-                        if let Some(Value::String(ts)) = obj.get("tsconfig") {
-                            pkg_root.join(ts)
-                        } else {
-                            pkg_root.join("tsconfig.json")
-                        }
-                    } else {
-                        pkg_root.join("tsconfig.json")
-                    }
-                } else {
-                    pkg_root.join("tsconfig.json")
-                }
+                resolve_package_root_config(&pkg_root)
             };
             if resolved.is_file() {
                 return Ok(resolved);
@@ -357,6 +346,70 @@ fn resolve_package_extends(reference: &str, start_dir: &Path) -> Result<PathBuf,
         reference: reference.to_string(),
         from: start_dir.to_path_buf(),
     })
+}
+
+/// Resolve a bare package extends (no subpath) to the config file at the
+/// package root, reading the package's `package.json` once.
+///
+/// Resolution order:
+/// 1. `exports` — when present, resolve the `"."` entry and use it if it
+///    points at an existing `.json` file. This lets a package expose its
+///    config only through `exports`.
+/// 2. The legacy `"tsconfig"` field.
+/// 3. `tsconfig.json` at the package root (the default).
+///
+/// The `exports` step is additive: when `exports` is absent or does not
+/// resolve to an existing file, resolution falls through to the same
+/// `"tsconfig"`-then-`tsconfig.json` order as before.
+fn resolve_package_root_config(pkg_root: &Path) -> PathBuf {
+    let default = || pkg_root.join("tsconfig.json");
+    let Ok(contents) = std::fs::read_to_string(pkg_root.join("package.json")) else {
+        return default();
+    };
+    let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(&contents) else {
+        return default();
+    };
+
+    if let Some(exports) = obj.get("exports") {
+        if let Some(target) = resolve_dot_export(exports) {
+            let candidate = pkg_root.join(target);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+
+    if let Some(Value::String(ts)) = obj.get("tsconfig") {
+        return pkg_root.join(ts);
+    }
+    default()
+}
+
+/// Resolve the `"."` entry of a package.json `exports` value to a `.json`
+/// target. Handles the bare-string form (`"exports": "./tsconfig.json"`),
+/// the `{ ".": <target> }` subpath form, and condition objects. Only
+/// targets ending in `.json` are candidates.
+fn resolve_dot_export(exports: &Value) -> Option<&str> {
+    if let Value::String(s) = exports {
+        return s.ends_with(".json").then_some(s.as_str());
+    }
+    let obj = exports.as_object()?;
+    // Use the explicit `"."` subpath when present; otherwise treat the whole
+    // object as the condition map for `"."`.
+    let dot = obj.get(".").unwrap_or(exports);
+    resolve_export_target(dot)
+}
+
+/// Resolve one `exports` target, walking the conditions TS considers for
+/// JSON config resolution (`types`, `require`, `node`, then `default`).
+fn resolve_export_target(target: &Value) -> Option<&str> {
+    match target {
+        Value::String(s) => s.ends_with(".json").then_some(s.as_str()),
+        Value::Object(conds) => ["types", "require", "node", "default"]
+            .into_iter()
+            .find_map(|c| conds.get(c).and_then(resolve_export_target)),
+        _ => None,
+    }
 }
 
 /// Split a package-style extends reference into (package-name, subpath).

@@ -1037,6 +1037,7 @@ dependencies = [
  "smol_str",
  "svn-core",
  "svn-parser",
+ "unicode-ident",
 ]
 
 [[package]]

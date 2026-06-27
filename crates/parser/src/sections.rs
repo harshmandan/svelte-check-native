@@ -262,10 +262,15 @@ fn parse_opaque_section<'src>(
     tag_name: &'static str,
 ) -> Result<RawSection<'src>, ParseError> {
     let open_start = scanner.pos();
+    let (lead, close_tag_literal): (&'static str, &'static str) = match tag_name {
+        "script" => ("<script", "</script"),
+        "style" => ("<style", "</style"),
+        // parse_opaque_section is only ever called with "script"/"style".
+        _ => unreachable!("parse_opaque_section called with non-opaque tag"),
+    };
     // Eat `<tagname` (case-insensitive).
-    let lead = format!("<{tag_name}");
     debug_assert!(
-        scanner.starts_with_ignore_case(&lead),
+        scanner.starts_with_ignore_case(lead),
         "parse_opaque_section called with wrong tag"
     );
     scanner.advance(lead.len() as u32);
@@ -284,20 +289,14 @@ fn parse_opaque_section<'src>(
     }
 
     let content_start = open_end;
-    let close_tag_literal = format!("</{tag_name}");
 
     // Find the next `</tagname` (case-insensitive). For ASCII-only tag names
     // memchr::memmem::find is case-sensitive, so we do a manual scan.
-    let close_pos = match find_close_tag(scanner, &close_tag_literal) {
+    let close_pos = match find_close_tag(scanner, close_tag_literal) {
         Some(p) => p,
         None => {
-            let tag_name_static: &'static str = match tag_name {
-                "script" => "script",
-                "style" => "style",
-                _ => "unknown",
-            };
             return Err(ParseError::UnterminatedTag {
-                tag_name: tag_name_static,
+                tag_name,
                 range: Range::new(open_start, open_end),
             });
         }

@@ -137,7 +137,7 @@ pub struct CompilerOptions {
 /// we normalize to the canonical form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModuleResolution {
-    /// Classic `node` (aka `node10`).
+    /// Legacy `node` resolution (aka `node10`).
     Node,
     /// Node16 — CJS-vs-ESM via package type.
     Node16,

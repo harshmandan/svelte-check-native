@@ -352,10 +352,16 @@ fn parse_directive(
         return None;
     }
 
+    let after_name = scanner.pos();
+    scanner.skip_ascii_whitespace();
     let value = if scanner.peek_byte() == Some(b'=') {
         scanner.advance_byte();
+        scanner.skip_ascii_whitespace();
         Some(parse_directive_value(scanner, kind, errors)?)
     } else {
+        // Boolean directive — restore so the attr loop sees trailing
+        // whitespace exactly as before and the range doesn't extend over it.
+        scanner.set_pos(after_name);
         None
     };
 
@@ -424,7 +430,11 @@ fn parse_directive_value(
             let start = scanner.pos();
             let text_start = start;
             while let Some(b) = scanner.peek_byte() {
-                if b.is_ascii_whitespace() || matches!(b, b'>' | b'/') {
+                if b.is_ascii_whitespace() || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`') {
+                    break;
+                }
+                // A bare `/` is part of an unquoted value; only `/>` ends it.
+                if b == b'/' && scanner.peek_byte_at(1) == Some(b'>') {
                     break;
                 }
                 scanner.advance_char();
@@ -488,7 +498,7 @@ fn parse_attr_value(scanner: &mut Scanner<'_>, errors: &mut Vec<ParseError>) -> 
             let mut parts: Vec<AttrValuePart> = Vec::new();
             let mut chunk_start = start;
             while let Some(b) = scanner.peek_byte() {
-                if b.is_ascii_whitespace() || b == b'>' {
+                if b.is_ascii_whitespace() || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`') {
                     break;
                 }
                 // A bare `/` is part of an unquoted value (`href=/foo`,

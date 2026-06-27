@@ -10,10 +10,6 @@ pub struct Scanner<'src> {
     pos: u32,
 }
 
-// Several helpers here are designed for the upcoming template parser; the
-// structural parser uses only a subset. Allow dead_code at the impl level
-// so we can land the full API incrementally without warnings.
-#[allow(dead_code)]
 impl<'src> Scanner<'src> {
     pub fn new(source: &'src str) -> Self {
         Self {
@@ -113,17 +109,6 @@ impl<'src> Scanner<'src> {
         }
     }
 
-    /// Advance through `target` if it matches at the current position;
-    /// return true on match.
-    pub fn eat(&mut self, target: &str) -> bool {
-        if self.starts_with(target) {
-            self.pos += target.len() as u32;
-            true
-        } else {
-            false
-        }
-    }
-
     /// Find the byte position of the next occurrence of `needle` starting at
     /// or after `pos`. Returns the source-relative byte offset, or `None`.
     pub fn find(&self, needle: &[u8]) -> Option<u32> {
@@ -133,21 +118,6 @@ impl<'src> Scanner<'src> {
             return None;
         }
         memchr::memmem::find(&self.bytes[start..], needle).map(|off| (start + off) as u32)
-    }
-
-    /// Find the next occurrence of any of several needles; return the
-    /// earliest one together with its index into `needles`.
-    pub fn find_any(&self, needles: &[&[u8]]) -> Option<(u32, usize)> {
-        let mut earliest: Option<(u32, usize)> = None;
-        for (i, n) in needles.iter().enumerate() {
-            if let Some(p) = self.find(n) {
-                match earliest {
-                    Some((cur, _)) if cur <= p => {}
-                    _ => earliest = Some((p, i)),
-                }
-            }
-        }
-        earliest
     }
 }
 
@@ -200,15 +170,6 @@ mod tests {
     }
 
     #[test]
-    fn eat_consumes_match() {
-        let mut s = Scanner::new("<script>body");
-        assert!(s.eat("<script>"));
-        assert_eq!(s.pos(), 8);
-        assert_eq!(s.peek_byte(), Some(b'b'));
-        assert!(!s.eat("nope"));
-    }
-
-    #[test]
     fn skip_ascii_whitespace_stops_at_non_ws() {
         let mut s = Scanner::new("  \n\t hello");
         s.skip_ascii_whitespace();
@@ -232,11 +193,5 @@ mod tests {
         let s = Scanner::new("aaa</script>bbb");
         assert_eq!(s.find(b"</script>"), Some(3));
         assert_eq!(s.find(b"nope"), None);
-    }
-
-    #[test]
-    fn find_any_returns_earliest_with_index() {
-        let s = Scanner::new("first <style> then <script>");
-        assert_eq!(s.find_any(&[b"<script", b"<style"]), Some((6, 1)));
     }
 }

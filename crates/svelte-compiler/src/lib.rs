@@ -30,7 +30,8 @@
 //! Response: `{"id": N, "warnings": [...], "error": "<optional>"}\n`
 //!
 //! Each warning carries `{code, message, severity, start: {line,
-//! column}, end: {line, column}}` with 1-based positions.
+//! column}, end: {line, column}}` where line is 1-based, column is
+//! 0-based (matching svelte/compiler's locate-character output).
 
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
@@ -307,7 +308,7 @@ struct RawWarning {
 
 impl From<RawWarning> for CompilerDiagnostic {
     fn from(w: RawWarning) -> Self {
-        let start = w.start.unwrap_or(Position { line: 1, column: 1 });
+        let start = w.start.unwrap_or(Position { line: 1, column: 0 });
         let end = w.end.unwrap_or(start);
         let severity = match w.severity.as_deref() {
             Some("error") => Severity::Error,
@@ -422,14 +423,23 @@ fn locate_svelte_config(start: &Path) -> Option<PathBuf> {
 }
 
 /// Write the embedded bridge script to a stable temp location once per
-/// run. Reusing the same path across spawns lets node's module-resolver
-/// cache do its job (when we eventually pipeline workers).
+/// worker; atomic so concurrent spawns are safe. Reusing the same path
+/// across spawns lets node's module-resolver cache do its job (when we
+/// eventually pipeline workers).
 fn write_bridge_to_temp() -> std::io::Result<PathBuf> {
     let dir = std::env::temp_dir().join("svelte-check-native");
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("bridge.mjs");
-    // Always overwrite: keeps users in sync after a binary upgrade.
-    std::fs::write(&path, BRIDGE_JS)?;
+    // Write to a per-writer sibling, then atomically rename into place.
+    // rename(2) is atomic within a filesystem, so concurrent worker spawns
+    // never observe a half-written bridge.mjs.
+    let tmp = dir.join(format!(
+        "bridge.{}.{:?}.mjs",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::write(&tmp, BRIDGE_JS)?;
+    std::fs::rename(&tmp, &path)?;
     Ok(path)
 }
 

@@ -64,23 +64,31 @@ pub(crate) fn collect_export_type_infos(
         Declaration::VariableDeclaration(v) => {
             let is_let = matches!(v.kind, oxc_ast::ast::VariableDeclarationKind::Let);
             for d in &v.declarations {
-                // Only simple `name: T = ...` patterns — destructures
-                // and anonymous-binding cases we surface as `any`.
-                let BindingPattern::BindingIdentifier(id) = &d.id else {
-                    continue;
-                };
-                let name = SmolStr::from(id.name.as_str());
-                let type_source = d.type_annotation.as_deref().map(|ta| {
-                    let span = GetSpan::span(&ta.type_annotation);
-                    content[span.start as usize..span.end as usize].to_string()
-                });
                 let has_init = d.init.is_some();
-                out.push(ExportedLocalInfo {
-                    name,
-                    type_source,
-                    is_let,
-                    has_init,
-                });
+                match &d.id {
+                    // Simple `name: T = ...` — carry the annotation verbatim.
+                    BindingPattern::BindingIdentifier(id) => {
+                        let name = SmolStr::from(id.name.as_str());
+                        let type_source = d.type_annotation.as_deref().map(|ta| {
+                            let span = GetSpan::span(&ta.type_annotation);
+                            content[span.start as usize..span.end as usize].to_string()
+                        });
+                        out.push(ExportedLocalInfo {
+                            name,
+                            type_source,
+                            is_let,
+                            has_init,
+                        });
+                    }
+                    // Destructure (`export const { a, b } = obj`,
+                    // `export let [x, y] = arr`) — upstream's
+                    // addExportForBindingPattern (ExportedNames.ts:654-675)
+                    // recurses into each element and exports every leaf name.
+                    // Each leaf surfaces with `type_source = None` (→ `typeof
+                    // name`, resolving against the body-scoped local). Array
+                    // holes are skipped. Previously these pushed nothing.
+                    pat => collect_pattern_export_infos(pat, is_let, has_init, out),
+                }
             }
         }
         // `export class Foo {}` — surface as `any`. Classes exported
@@ -97,5 +105,47 @@ pub(crate) fn collect_export_type_infos(
             }
         }
         _ => {}
+    }
+}
+
+/// Recurse through a destructuring binding pattern, pushing one
+/// `ExportedLocalInfo` per leaf name. Mirrors upstream's
+/// `addExportForBindingPattern` (ExportedNames.ts:654-675): object/array
+/// patterns descend into their elements (and rest), array holes are
+/// skipped, and assignment-pattern defaults unwrap to their target.
+/// Every leaf carries `type_source = None` so the caller emits `typeof
+/// name`.
+fn collect_pattern_export_infos(
+    pat: &BindingPattern<'_>,
+    is_let: bool,
+    has_init: bool,
+    out: &mut Vec<ExportedLocalInfo>,
+) {
+    match pat {
+        BindingPattern::BindingIdentifier(id) => out.push(ExportedLocalInfo {
+            name: SmolStr::from(id.name.as_str()),
+            type_source: None,
+            is_let,
+            has_init,
+        }),
+        BindingPattern::ObjectPattern(op) => {
+            for prop in &op.properties {
+                collect_pattern_export_infos(&prop.value, is_let, has_init, out);
+            }
+            if let Some(rest) = &op.rest {
+                collect_pattern_export_infos(&rest.argument, is_let, has_init, out);
+            }
+        }
+        BindingPattern::ArrayPattern(ap) => {
+            for el in ap.elements.iter().flatten() {
+                collect_pattern_export_infos(el, is_let, has_init, out);
+            }
+            if let Some(rest) = &ap.rest {
+                collect_pattern_export_infos(&rest.argument, is_let, has_init, out);
+            }
+        }
+        BindingPattern::AssignmentPattern(ap) => {
+            collect_pattern_export_infos(&ap.left, is_let, has_init, out)
+        }
     }
 }

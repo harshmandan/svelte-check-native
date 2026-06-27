@@ -259,10 +259,14 @@ pub enum WalkNode<'a, 'b> {
 /// bodies, switch cases, try/catch/finally blocks, labeled-statement
 /// bodies, AND IIFE bodies embedded in expressions of expression
 /// statements / for-init/test/update / return arguments / if-tests
-/// etc. ExportNamedDeclaration's wrapped Variable/Function declarations
-/// surface as if they were direct `Statement::VariableDeclaration` /
-/// `Statement::FunctionDeclaration` (the closure sees the synthesised
-/// view through the same `&Statement` reference).
+/// etc. An `ExportNamedDeclaration` is surfaced as-is — the closure
+/// receives `WalkNode::Statement(Statement::ExportNamedDeclaration(ed))`
+/// and is responsible for unwrapping `ed.declaration` to reach the
+/// wrapped var/function declaration. The walker itself only descends
+/// *into* wrapped function bodies and scans wrapped var-init
+/// expressions for embedded IIFE statements; it does not re-surface the
+/// inner declaration as a `Statement::VariableDeclaration` /
+/// `Statement::FunctionDeclaration`.
 ///
 /// Visitation order: the parent statement is visited first, then its
 /// children in source order. Callers that need source-order

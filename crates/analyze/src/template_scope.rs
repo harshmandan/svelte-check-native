@@ -376,10 +376,15 @@ fn walk(
             let default_range = Range::new(start, end);
             for b in out.bindings.iter_mut().skip(before_len) {
                 b.has_default = true;
-                // Round-13 #4: store the default's range so the
-                // resolver can union its typeof-derived type into
-                // the projected leaf.
-                b.default_value_range = Some(default_range);
+                // Store the default's range so the resolver can union
+                // its typeof-derived type into the projected leaf.
+                // Innermost-wins: a leaf already carrying a default
+                // range came from a nested AssignmentPattern, whose
+                // default is the more specific one — don't overwrite it
+                // with this outer pattern's range.
+                if b.default_value_range.is_none() {
+                    b.default_value_range = Some(default_range);
+                }
             }
             out.default_value_ranges.push(default_range);
         }

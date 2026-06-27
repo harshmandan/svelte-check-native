@@ -1,10 +1,12 @@
 //! `SemanticModel` — aggregated analyze output for one Svelte file.
 //!
 //! Centralises the two pre-built analyze products (PropsInfo and
-//! TemplateSummary) so consumers that need both — emit's render
-//! function builder, the route-prop synth path, the lint pass — can
-//! accept a single `&SemanticModel` reference instead of threading
-//! each output as a separate argument.
+//! TemplateSummary) so that future consumers that need both —
+//! emit's render function builder, the route-prop synth path, the
+//! lint pass — can accept a single `&SemanticModel` reference
+//! instead of threading each output as a separate argument. None of
+//! those consumers is wired to it yet; this is the intended
+//! direction, not the current call graph.
 //!
 //! ## What lives here, and what doesn't
 //!
@@ -33,8 +35,8 @@ use crate::walker::TemplateSummary;
 /// Bundled analyze outputs for one component.
 ///
 /// Construct with [`SemanticModel::new`]; both fields are owned so
-/// the struct can be passed by value into emit and stay alive for
-/// the duration of the emission.
+/// the struct can eventually be passed by value to a consumer that
+/// needs to hold both outputs together.
 #[derive(Debug, Clone, Default)]
 pub struct SemanticModel {
     pub props: PropsInfo,

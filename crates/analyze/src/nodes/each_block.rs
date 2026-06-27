@@ -32,10 +32,9 @@ pub(crate) fn enter(v: &mut AnalyzeVisitor<'_>, bindings: &[BoundIdent], has_ind
             .get(r.start as usize..r.end as usize)
             .map(|s| s.trim().to_string())
     });
-    // Round-7 follow-up #3: destructured patterns now
-    // carry a `destructure_path` per leaf binding, so
-    // `{#each rows as { id }}` resolves `id` to the
-    // element's `['id']` slice. Mirrors upstream's
+    // Destructured patterns carry a `destructure_path` per
+    // leaf binding, so `{#each rows as { id }}` resolves `id`
+    // to the element's `['id']` slice. Mirrors upstream's
     // `((${destructuring}) => ${id})(__sveltets_2_unwrapArr(items))`
     // IIFE shape, but at TYPE level.
     for (i, b) in bindings.iter().enumerate() {
@@ -43,39 +42,36 @@ pub(crate) fn enter(v: &mut AnalyzeVisitor<'_>, bindings: &[BoundIdent], has_ind
             // Index — always `number`.
             Some(ResolvedSlotExpr::Type("number".to_string()))
         } else if let Some(items) = items_text.as_deref() {
-            // Round-12 follow-up #1: `typeof <items>` is
-            // only legal when `<items>` is a bare
-            // identifier or dotted member chain. For
-            // expressions that aren't directly typeof-able
-            // (calls, indexing, ternaries, etc.) build
-            // the items type via a typeof-safe stand-in:
+            // `typeof <items>` is only legal when `<items>`
+            // is a bare identifier or dotted member chain.
+            // For expressions that aren't directly typeof-able
+            // (calls, indexing, ternaries, etc.) build the
+            // items type via a typeof-safe stand-in:
             //   - call on typeof-safe callee →
             //     `ReturnType<typeof <callee>>`
-            //   - anything else → `any` (element type
-            //     becomes `any`, which is permissive but
-            //     parses cleanly; pre-fix produced a
-            //     parse-error like `typeof getRows()`).
-            // Round-14 #4: route through the
-            // `__SvnEachItem<T>` shim instead of an
-            // inline `T extends Iterable<infer U> ? U
+            //   - anything else → `any` (element type becomes
+            //     `any`, which is permissive but parses
+            //     cleanly; a raw `typeof getRows()` would be a
+            //     TS parse error).
+            // Route through the `__SvnEachItem<T>` shim instead
+            // of an inline `T extends Iterable<infer U> ? U
             // : never` projection. The shim has the
             // `0 extends 1 & T ? any` guard for
-            // `any`-preservation and an `ArrayLike`
-            // branch (so plain `{ length: N }` shapes
-            // resolve too), matching upstream's
-            // `__sveltets_2_each` distribution.
+            // `any`-preservation and an `ArrayLike` branch (so
+            // plain `{ length: N }` shapes resolve too),
+            // matching upstream's `__sveltets_2_each`
+            // distribution.
             let items_ty = items_typeof_expr(items);
             let element_ty = format!("__SvnEachItem<{items_ty}>");
-            // Round-15 #4: when the binding sits under an
-            // AssignmentPattern, switch to upstream's
-            // `((PATTERN) => name)(value)` IIFE shape
-            // (`slot.ts:117`). TypeScript evaluates the
-            // destructure with the actual default
-            // expression, so object / array / template-
-            // literal defaults preserve precise types
-            // instead of collapsing to `Exclude<…,
-            // undefined>` (or worse, leaking interpolated
-            // template syntax into a TS type position).
+            // When the binding sits under an AssignmentPattern,
+            // switch to upstream's `((PATTERN) => name)(value)`
+            // IIFE shape (`slot.ts`). TypeScript evaluates the
+            // destructure with the actual default expression,
+            // so object / array / template-literal defaults
+            // preserve precise types instead of collapsing to
+            // `Exclude<…, undefined>` (or worse, leaking
+            // interpolated template syntax into a TS type
+            // position).
             if b.has_default
                 && let Some(pat_range) = b.pattern_source_range
                 && let Some(pat_source) = v

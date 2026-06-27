@@ -2,10 +2,9 @@
 //! node kind, matching the emit-side `crates/emit/src/nodes/` layout
 //! file-for-file so a developer can navigate either side by basename.
 //!
-//! Scaffolded as part of `notes/TEMPLATE_WALKER_SPLIT.md` Step 0.
-//! Modules are currently empty — content migrates in over the
-//! subsequent commits described in that plan. Nothing in
-//! `template_walker.rs` has moved yet.
+//! Most node arms have migrated here from `template_walker.rs`;
+//! `animation.rs`, `if_else_block.rs`, and `transition.rs` are still
+//! stubs whose arms remain in `template_walker.rs`.
 
 pub mod action;
 pub mod animation;

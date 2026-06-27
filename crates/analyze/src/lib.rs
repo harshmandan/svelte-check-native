@@ -17,10 +17,12 @@
 //! aliases, prop locals) registers there; emit reads the registry
 //! once and writes a single consolidated `void (...)` block.
 //!
-//! In addition to the bundled outputs, the crate exports stateful
-//! accumulator helpers — `collect_top_level_bindings`,
-//! `find_store_refs_with_bindings`, `find_template_refs`,
-//! `collect_typed_uninit_lets`, `collect_typed_top_level_lets`.
+//! In addition to the bundled outputs, the crate exports several
+//! stateful accumulator helpers from `store`
+//! (`collect_top_level_bindings`, `collect_type_only_import_bindings`,
+//! `find_store_refs`, `find_store_refs_with_bindings`,
+//! `collect_typed_uninit_lets`, `collect_typed_top_level_lets`) plus
+//! `find_template_refs`.
 //! These are driven by emit at specific points in its flow (e.g.
 //! `collect_top_level_bindings` is called three times to union
 //! identifiers from module + instance + rewritten-instance
@@ -55,7 +57,8 @@ pub use model::SemanticModel;
 pub use nodes::attribute::literal_attr_value;
 pub use nodes::binding::resolve_bind_value_type;
 pub use props::{
-    PropInfo, PropsInfo, PropsSource, collect_inline_typed_dispatcher_member_names,
+    PropInfo, PropsInfo, PropsSource, collect_ctor_locals,
+    collect_inline_typed_dispatcher_member_names,
     contains_typeof_ref, find_dispatched_event_names, find_dispatcher_event_type_sources,
     find_dispatcher_local_names, find_typed_dispatcher_local_names,
     find_untyped_dispatcher_local_names, has_event_dispatcher_call,

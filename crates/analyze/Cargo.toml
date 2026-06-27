@@ -12,6 +12,7 @@ workspace = true
 svn-core = { path = "../core" }
 svn-parser = { path = "../parser" }
 smol_str.workspace = true
+unicode-ident.workspace = true
 indexmap.workspace = true
 smallvec.workspace = true
 oxc_allocator.workspace = true

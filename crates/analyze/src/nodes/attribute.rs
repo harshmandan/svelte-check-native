@@ -19,10 +19,8 @@ pub(crate) struct WalkCtx<'src> {
     pub(crate) source: &'src str,
 }
 
-/// Return the literal string value of a plain attribute `name="LITERAL"`,
-/// or None if the attribute is absent, quoted with an expression
-/// interpolation, or bound via `name={expr}`. Used for context-aware
-/// bind dispatch (`<input type="number" bind:value={...}>`).
+/// Iterate the attribute list, routing each `Directive` arm to
+/// `walk_directive`. Plain attributes carry no analyze logic here.
 pub(crate) fn walk_attributes(
     attrs: &[Attribute],
     summary: &mut TemplateSummary,
@@ -57,6 +55,10 @@ fn walk_directive(
     }
 }
 
+/// Return the literal string value of a plain attribute `name="LITERAL"`,
+/// or None if the attribute is absent, quoted with an expression
+/// interpolation, or bound via `name={expr}`. Used for context-aware
+/// bind dispatch (`<input type="number" bind:value={...}>`).
 pub fn literal_attr_value<'a>(attrs: &'a [Attribute], name: &str) -> Option<&'a str> {
     for attr in attrs {
         let Attribute::Plain(p) = attr else {

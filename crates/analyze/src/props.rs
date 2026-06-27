@@ -192,7 +192,7 @@ impl PropsInfo {
                 if !is_props_call_like(init) {
                     continue;
                 }
-                collect_from_binding(&declarator.id, &mut destructures);
+                collect_from_binding(&declarator.id, source, &mut destructures);
                 if type_text.is_some() {
                     continue;
                 }
@@ -263,19 +263,17 @@ impl PropsInfo {
 /// inline.
 pub fn root_type_name_of(ty: &str) -> Option<SmolStr> {
     let ty = ty.trim_start();
-    let bytes = ty.as_bytes();
-    if bytes.is_empty() {
+    let mut chars = ty.char_indices();
+    let (_, first) = chars.next()?;
+    if !(first.is_alphabetic() || first == '_' || first == '$') {
         return None;
     }
-    let first = bytes[0];
-    if !(first.is_ascii_alphabetic() || first == b'_' || first == b'$') {
-        return None;
-    }
-    let mut end = 0usize;
-    while end < bytes.len()
-        && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_' || bytes[end] == b'$')
-    {
-        end += 1;
+    let mut end = ty.len();
+    for (idx, c) in chars {
+        if !(c.is_alphanumeric() || c == '_' || c == '$') {
+            end = idx;
+            break;
+        }
     }
     Some(SmolStr::from(&ty[..end]))
 }
@@ -826,7 +824,7 @@ fn collect_dispatcher_locals_via_walker(
 /// would force dispatcher detection, event surface synthesis, and
 /// the iso default-export shape on a value that has no actual
 /// Svelte event semantics.
-fn collect_ctor_locals(program: &oxc_ast::ast::Program<'_>) -> std::collections::HashSet<String> {
+pub fn collect_ctor_locals(program: &oxc_ast::ast::Program<'_>) -> std::collections::HashSet<String> {
     use std::collections::HashSet;
     let mut ctor_locals: HashSet<String> = HashSet::new();
     for stmt in &program.body {
@@ -1239,6 +1237,14 @@ fn scan_expression_for_dispatched_names(
                         seen,
                         out,
                     );
+                } else if let oxc_ast::ast::Argument::SpreadElement(s) = a {
+                    scan_expression_for_dispatched_names(
+                        &s.argument,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
                 }
             }
         }
@@ -1322,6 +1328,113 @@ fn scan_expression_for_dispatched_names(
             seen,
             out,
         ),
+        // `{ key: dispatch('x'), [dispatch('k')]: v, ...spreadCall() }` —
+        // descend into property values, computed keys, and spread args.
+        Expression::ObjectExpression(o) => {
+            let mut go = |x| {
+                scan_expression_for_dispatched_names(x, dispatcher_locals, literal_vars, seen, out)
+            };
+            for prop in &o.properties {
+                match prop {
+                    oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) => {
+                        if p.computed
+                            && let Some(key_expr) = p.key.as_expression()
+                        {
+                            go(key_expr);
+                        }
+                        go(&p.value);
+                    }
+                    oxc_ast::ast::ObjectPropertyKind::SpreadProperty(s) => {
+                        go(&s.argument);
+                    }
+                }
+            }
+        }
+        // `[dispatch('x'), ...spreadCall()]` — elements and spread args.
+        Expression::ArrayExpression(a) => {
+            let mut go = |x| {
+                scan_expression_for_dispatched_names(x, dispatcher_locals, literal_vars, seen, out)
+            };
+            for elem in &a.elements {
+                if let Some(e) = elem.as_expression() {
+                    go(e);
+                } else if let oxc_ast::ast::ArrayExpressionElement::SpreadElement(s) = elem {
+                    go(&s.argument);
+                }
+            }
+        }
+        // `new Foo(dispatch('x'))` — callee and constructor args.
+        Expression::NewExpression(call) => {
+            scan_expression_for_dispatched_names(
+                &call.callee,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
+            for a in &call.arguments {
+                if let Some(e) = a.as_expression() {
+                    scan_expression_for_dispatched_names(
+                        e,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
+                } else if let oxc_ast::ast::Argument::SpreadElement(s) = a {
+                    scan_expression_for_dispatched_names(
+                        &s.argument,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
+                }
+            }
+        }
+        // `` `${dispatch('x')}` `` — template substitutions.
+        Expression::TemplateLiteral(t) => {
+            for e in &t.expressions {
+                scan_expression_for_dispatched_names(e, dispatcher_locals, literal_vars, seen, out);
+            }
+        }
+        // `` tag`${dispatch('x')}` `` — tag and template substitutions.
+        Expression::TaggedTemplateExpression(t) => {
+            scan_expression_for_dispatched_names(
+                &t.tag,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
+            for e in &t.quasi.expressions {
+                scan_expression_for_dispatched_names(e, dispatcher_locals, literal_vars, seen, out);
+            }
+        }
+        // `obj.prop` / `obj[dispatch('k')]` — object and computed key.
+        Expression::StaticMemberExpression(me) => scan_expression_for_dispatched_names(
+            &me.object,
+            dispatcher_locals,
+            literal_vars,
+            seen,
+            out,
+        ),
+        Expression::ComputedMemberExpression(me) => {
+            scan_expression_for_dispatched_names(
+                &me.object,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
+            scan_expression_for_dispatched_names(
+                &me.expression,
+                dispatcher_locals,
+                literal_vars,
+                seen,
+                out,
+            );
+        }
         _ => {}
     }
 }
@@ -1689,21 +1802,21 @@ fn expression_has_inline_typed_dispatcher(
     matches!(arg, oxc_ast::ast::TSType::TSTypeLiteral(lit) if !lit.members.is_empty())
 }
 
-fn collect_from_binding(pat: &BindingPattern<'_>, out: &mut Vec<PropInfo>) {
+fn collect_from_binding(pat: &BindingPattern<'_>, source: &str, out: &mut Vec<PropInfo>) {
     match pat {
         BindingPattern::ObjectPattern(obj) => {
             for prop in &obj.properties {
-                collect_from_object_property(prop, out);
+                collect_from_object_property(prop, source, out);
             }
             if let Some(rest) = &obj.rest {
-                collect_rest(&rest.argument, out, true);
+                collect_rest(&rest.argument, source, out, true);
             }
         }
         // `let [a, b, c] = $props()` isn't a valid Svelte pattern ($props
         // returns an object), but be defensive.
         BindingPattern::ArrayPattern(arr) => {
             for el in arr.elements.iter().flatten() {
-                collect_from_binding(el, out);
+                collect_from_binding(el, source, out);
             }
         }
         BindingPattern::BindingIdentifier(id) => {
@@ -1725,8 +1838,8 @@ fn collect_from_binding(pat: &BindingPattern<'_>, out: &mut Vec<PropInfo>) {
             // top-level entries flow through `collect_from_object_property`
             // which sets has_default itself.
             let before = out.len();
-            collect_from_binding(&asn.left, out);
-            let inferred = infer_default_type(&asn.right);
+            collect_from_binding(&asn.left, source, out);
+            let inferred = infer_default_type(&asn.right, source);
             let bindable = is_bindable_call(&asn.right);
             for entry in &mut out[before..] {
                 entry.has_default = true;
@@ -1741,7 +1854,7 @@ fn collect_from_binding(pat: &BindingPattern<'_>, out: &mut Vec<PropInfo>) {
     }
 }
 
-fn collect_from_object_property(prop: &BindingProperty<'_>, out: &mut Vec<PropInfo>) {
+fn collect_from_object_property(prop: &BindingProperty<'_>, source: &str, out: &mut Vec<PropInfo>) {
     // Shorthand `{ foo }` vs rename `{ foo: bar }` vs default-value
     // `{ foo = bar }` vs `{ foo: bar = baz }`. The local name lives in
     // `prop.value`; the prop key is `prop.key` (set when not shorthand);
@@ -1755,12 +1868,12 @@ fn collect_from_object_property(prop: &BindingProperty<'_>, out: &mut Vec<PropIn
     let (has_default, inferred_default, bindable) = match &prop.value {
         BindingPattern::AssignmentPattern(asn) => (
             true,
-            infer_default_type(&asn.right),
+            infer_default_type(&asn.right, source),
             is_bindable_call(&asn.right),
         ),
         _ => (false, None, false),
     };
-    collect_from_binding(&prop.value, out);
+    collect_from_binding(&prop.value, source, out);
     // Patch the entries this property added: their prop_key should
     // reflect the source property key (not the local name) for renames,
     // and `has_default` should propagate when this property carried the
@@ -1789,7 +1902,7 @@ fn collect_from_object_property(prop: &BindingProperty<'_>, out: &mut Vec<PropIn
     }
 }
 
-fn collect_rest(pat: &BindingPattern<'_>, out: &mut Vec<PropInfo>, is_rest: bool) {
+fn collect_rest(pat: &BindingPattern<'_>, source: &str, out: &mut Vec<PropInfo>, is_rest: bool) {
     match pat {
         BindingPattern::BindingIdentifier(id) => {
             let name = SmolStr::from(id.name.as_str());
@@ -1805,7 +1918,7 @@ fn collect_rest(pat: &BindingPattern<'_>, out: &mut Vec<PropInfo>, is_rest: bool
         }
         // Rest patterns holding further destructuring are allowed but
         // unusual; walk recursively.
-        other => collect_from_binding(other, out),
+        other => collect_from_binding(other, source, out),
     }
 }
 
@@ -1834,7 +1947,7 @@ fn is_bindable_call(expr: &Expression<'_>) -> bool {
 /// upstream's behaviour for the same reason: `let { x = null } =
 /// $props()` is the canonical "no real default" pattern, and binding
 /// the prop type to `null` is almost always wrong.
-fn infer_default_type(expr: &Expression<'_>) -> Option<SmolStr> {
+fn infer_default_type(expr: &Expression<'_>, source: &str) -> Option<SmolStr> {
     // `$bindable(default)` / `$bindable()` — upstream runs the ladder on
     // `$bindable`'s first argument (or `any` when absent). Checked on the
     // RAW expression, matching upstream's `ts.isCallExpression` test (no
@@ -1846,7 +1959,7 @@ fn infer_default_type(expr: &Expression<'_>) -> Option<SmolStr> {
             .arguments
             .first()
             .and_then(|a| a.as_expression())
-            .and_then(infer_default_type);
+            .and_then(|e| infer_default_type(e, source));
     }
     // Mirror upstream svelte2tsx's exact default-type ladder
     // (ExportedNames.ts:335-355). ONLY these forms map to a concrete
@@ -1859,6 +1972,12 @@ fn infer_default_type(expr: &Expression<'_>) -> Option<SmolStr> {
     // false TS2322 on a non-string value upstream accepts). Those now
     // fall through to `any`, matching upstream.
     match expr {
+        // `value as Foo` — upstream's ladder checks the cast first and
+        // uses the cast's type annotation verbatim. Listed before the
+        // literal arms so a cast around a literal keeps the asserted type.
+        Expression::TSAsExpression(t) => source
+            .get(t.type_annotation.span().start as usize..t.type_annotation.span().end as usize)
+            .map(SmolStr::from),
         Expression::StringLiteral(_) => Some(SmolStr::new_static("string")),
         Expression::NumericLiteral(_) => Some(SmolStr::new_static("number")),
         Expression::BooleanLiteral(_) => Some(SmolStr::new_static("boolean")),
@@ -1917,6 +2036,8 @@ mod tests {
         // $bindable recurses on its arg.
         assert_eq!(default_type("$bindable(1)").as_deref(), Some("number"));
         assert_eq!(default_type("$bindable()"), None);
+        // `value as Foo` uses the cast's type annotation verbatim.
+        assert_eq!(default_type("v as Foo").as_deref(), Some("Foo"));
     }
 
     #[test]
@@ -2418,5 +2539,7 @@ mod tests {
         assert_eq!(root_type_name_of("{ foo: string }"), None);
         assert_eq!(root_type_name_of("[string, number]"), None);
         assert_eq!(root_type_name_of(""), None);
+        // Non-ASCII identifier characters are part of the name, too.
+        assert_eq!(root_type_name_of("Über<T>").as_deref(), Some("Über"));
     }
 }

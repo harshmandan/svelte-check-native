@@ -16,35 +16,28 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, b: &svn_parser::AwaitBlock) {
 /// Reads `pending_await_promise_range` set by `visit_await_block`.
 pub(crate) fn enter_then(v: &mut AnalyzeVisitor<'_>, bindings: &[BoundIdent]) {
     let promise_range = v.pending_await_promise_range;
-    let promise_text = promise_range.and_then(|r| {
-        v.source
-            .get(r.start as usize..r.end as usize)
-            .map(|s| s.trim().to_string())
-    });
-    // Round-7 follow-up #3: destructured `{:then { x }}`
-    // resolves each leaf via the binding's
-    // `destructure_path`. Bare `{:then v}` keeps the
-    // unwrapped promise type directly (no path suffix).
+    // Unwrap the promise type once for every binding. Non-typeof-able
+    // promise expressions (calls, chains) fall back to a typeof-safe
+    // stand-in inside `items_typeof_expr`, so the promise becomes
+    // `Promise<any>` at worst, which `Awaited` unwraps to `any` — a bare
+    // `Awaited<typeof load()>` would otherwise be a parse error.
+    let unwrapped = promise_range
+        .and_then(|r| v.source.get(r.start as usize..r.end as usize))
+        .map(|p| {
+            let promise_ty = items_typeof_expr(p); // trims internally
+            format!("(Awaited<{promise_ty}>)")
+        });
+    // Destructured `{:then { x }}` resolves each leaf via the binding's
+    // `destructure_path`. Bare `{:then v}` keeps the unwrapped promise
+    // type directly (no path suffix).
     for b in bindings {
-        let resolved = promise_text.as_deref().map(|p| {
-            // Round-12 follow-up #1: same typeof-safety
-            // guard as the each-block path. For non-
-            // typeof-able promise expressions (calls,
-            // chains), use a typeof-safe stand-in — the
-            // promise itself becomes `Promise<any>` in
-            // the worst case, which Awaited unwraps to
-            // `any`. Pre-fix `Awaited<typeof load()>`
-            // was a parse error.
-            let promise_ty = items_typeof_expr(p);
-            let unwrapped = format!("(Awaited<{promise_ty}>)");
-            // Round-15 #4: switch to upstream's IIFE shape
-            // when the binding has a default — see
-            // each-block branch above for the rationale.
+        let resolved = unwrapped.as_deref().map(|unwrapped| {
+            // Switch to the IIFE shape when the binding has a default,
+            // matching the each-block branch.
             if b.has_default
                 && let Some(pat_range) = b.pattern_source_range
-                && let Some(pat_source) = v
-                    .source
-                    .get(pat_range.start as usize..pat_range.end as usize)
+                && let Some(pat_source) =
+                    v.source.get(pat_range.start as usize..pat_range.end as usize)
             {
                 return ResolvedSlotExpr::Value(format!(
                     "(({pat}) => {leaf})(undefined as any as ({unwrapped}))",
@@ -53,8 +46,8 @@ pub(crate) fn enter_then(v: &mut AnalyzeVisitor<'_>, bindings: &[BoundIdent]) {
                 ));
             }
             let projected = match b.destructure_path.as_deref() {
-                Some(path) => project_destructure_path(&unwrapped, path),
-                None => unwrapped,
+                Some(path) => project_destructure_path(unwrapped, path),
+                None => unwrapped.to_string(),
             };
             let default_t = b.default_value_range.and_then(|r| {
                 v.source

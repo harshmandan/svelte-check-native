@@ -2,6 +2,8 @@
 //! shared by the per-node passes. No direct upstream equivalent;
 //! upstream inlines these inside each node-handler file.
 
+use std::fmt::Write as _;
+
 use smol_str::SmolStr;
 use svn_core::Range;
 
@@ -17,17 +19,15 @@ use svn_core::Range;
 /// binding — bare-identifier check alone misses member-access /
 /// optional-chain / index-access shapes.
 pub(crate) fn leading_identifier(s: &str) -> Option<&str> {
-    let bytes = s.as_bytes();
-    let first = *bytes.first()?;
-    if !(first.is_ascii_alphabetic() || first == b'_' || first == b'$') {
+    let mut chars = s.char_indices();
+    let (_, first) = chars.next()?;
+    if !is_ident_start(first) {
         return None;
     }
-    let mut end = 1;
-    while end < bytes.len() {
-        let b = bytes[end];
-        if b.is_ascii_alphanumeric() || b == b'_' || b == b'$' {
-            end += 1;
-        } else {
+    let mut end = s.len();
+    for (i, c) in chars {
+        if !is_ident_continue(c) {
+            end = i;
             break;
         }
     }
@@ -90,13 +90,13 @@ pub(crate) fn is_typeof_safe_chain(s: &str) -> bool {
     let mut at_segment_start = true;
     for ch in s.chars() {
         if at_segment_start {
-            if !(ch.is_ascii_alphabetic() || ch == '_' || ch == '$') {
+            if !is_ident_start(ch) {
                 return false;
             }
             at_segment_start = false;
         } else if ch == '.' {
             at_segment_start = true;
-        } else if !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '$') {
+        } else if !is_ident_continue(ch) {
             return false;
         }
     }
@@ -173,7 +173,16 @@ pub(crate) fn default_typeof_expr(text: &str) -> Option<String> {
     // Literal-type passthroughs. These are valid TS types as-is
     // (`'fallback'` is the string-literal type, `1` is the numeric-
     // literal type, etc.).
-    if trimmed.starts_with('"') || trimmed.starts_with('\'') || trimmed.starts_with('`') {
+    if trimmed.starts_with('"') || trimmed.starts_with('\'') {
+        return Some(trimmed.to_string());
+    }
+    // A backtick template is a valid string-/template-literal TYPE only when it
+    // has no `${…}` interpolation. Interpolated text (`` `${y}px` ``) would read
+    // `y` as a TYPE reference (spurious TS2749); fall back to Exclude<…> instead.
+    if trimmed.starts_with('`') {
+        if trimmed.contains("${") {
+            return None;
+        }
         return Some(trimmed.to_string());
     }
     if trimmed == "true" || trimmed == "false" || trimmed == "null" || trimmed == "undefined" {
@@ -207,7 +216,7 @@ pub(crate) fn project_destructure_path(
         match seg {
             crate::template_scope::DestructureSeg::Key(k) => {
                 current.push('[');
-                current.push_str(&format!("{:?}", k.as_str()));
+                let _ = write!(current, "{:?}", k.as_str());
                 current.push(']');
             }
             crate::template_scope::DestructureSeg::ObjectRest { siblings } => {
@@ -310,12 +319,14 @@ pub(crate) fn simple_identifier_in(source: &str, range: Range) -> Option<SmolStr
 
 #[inline]
 fn is_ident_start(c: char) -> bool {
-    c.is_ascii_alphabetic() || c == '_' || c == '$'
+    // `_` is already covered by XID_Start; `$` is a JS-only carve-out.
+    unicode_ident::is_xid_start(c) || c == '_' || c == '$'
 }
 
 #[inline]
 fn is_ident_continue(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_' || c == '$'
+    // `$` is a JS-only carve-out (`_` is already a XID_Continue char).
+    unicode_ident::is_xid_continue(c) || c == '$'
 }
 
 /// Whether `s` is a valid bare JS identifier (no dots, no

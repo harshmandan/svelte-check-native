@@ -24,6 +24,22 @@
 
 use crate::PropsInfo;
 
+/// Find `tag` only where it ends at a JSDoc tag boundary — the next
+/// char must be whitespace, `{`, or end-of-string. Stops `@typedef`
+/// matching inside `@typedefs` and `@property` inside `@propertyName`.
+fn find_tag(haystack: &str, tag: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(rel) = haystack[from..].find(tag) {
+        let pos = from + rel;
+        match haystack[pos + tag.len()..].chars().next() {
+            None | Some('{') => return Some(pos),
+            Some(c) if c.is_whitespace() => return Some(pos),
+            _ => from = pos + tag.len(),
+        }
+    }
+    None
+}
+
 /// Scan a JS script for a JSDoc `@typedef {Object} Name` block and
 /// return the type name. Prefers a typedef named "Props" when
 /// multiple are present — the Svelte-4 / JS-Svelte convention that
@@ -32,7 +48,7 @@ use crate::PropsInfo;
 pub fn scan_jsdoc_typedef_name(script: &str) -> Option<String> {
     let mut first: Option<String> = None;
     let mut rest = script;
-    while let Some(pos) = rest.find("@typedef") {
+    while let Some(pos) = find_tag(rest, "@typedef") {
         let after = &rest[pos + "@typedef".len()..];
         let after = after.trim_start();
         let after = if let Some(stripped) = after.strip_prefix('{') {
@@ -92,7 +108,7 @@ pub fn scan_jsdoc_props_typedef_keys(script: &str) -> Option<Vec<String>> {
     let mut block_start: Option<usize> = None;
     let mut block_end: usize = 0;
     let mut consumed: usize = 0;
-    while let Some(pos) = rest.find("@typedef") {
+    while let Some(pos) = find_tag(rest, "@typedef") {
         let abs = consumed + pos;
         let after = &rest[pos + "@typedef".len()..];
         let after = after.trim_start();
@@ -136,7 +152,7 @@ pub fn scan_jsdoc_props_typedef_keys(script: &str) -> Option<Vec<String>> {
     let block = &script[start..block_end];
     let mut keys: Vec<String> = Vec::new();
     let mut cursor = block;
-    while let Some(p) = cursor.find("@property") {
+    while let Some(p) = find_tag(cursor, "@property") {
         cursor = &cursor[p + "@property".len()..];
         let trimmed = cursor.trim_start();
         let after_type = if let Some(stripped) = trimmed.strip_prefix('{') {

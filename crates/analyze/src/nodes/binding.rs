@@ -65,10 +65,7 @@ pub(crate) fn handle_bind_directive(
             // assignment rewrite so closures reading the variable
             // don't fire TS2454.
             if let Some(name) = simple_identifier_in(source, *expression_range) {
-                summary.bind_this_targets.push(BindThisTarget {
-                    name,
-                    range: *expression_range,
-                });
+                summary.bind_this_targets.push(BindThisTarget { name });
             }
         }
         None => {
@@ -76,7 +73,6 @@ pub(crate) fn handle_bind_directive(
             // same definite-assignment story as the explicit form.
             summary.bind_this_targets.push(BindThisTarget {
                 name: d.name.clone(),
-                range: d.range,
             });
         }
         _ => {}

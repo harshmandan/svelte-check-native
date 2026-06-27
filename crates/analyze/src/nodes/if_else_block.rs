@@ -1,6 +1,7 @@
 //! `{#if}` / `{:else if}` / `{:else}` analyze pass — mirrors
 //! upstream `htmlxtojsx_v2/nodes/IfElseBlock.ts`.
 //!
-//! Currently empty; the if-block `enter_scope` arm migrates from
-//! `template_walker.rs` per Step 3 of
-//! `notes/TEMPLATE_WALKER_SPLIT.md`.
+//! Currently empty: the if-block scope handling lives in
+//! `walker.rs` (`AnalyzeVisitor::enter_scope`) and `template_scope.rs`.
+//! This file is a layout placeholder mirroring the emit-side
+//! `crates/emit/src/nodes/` basename so the two trees stay navigable.

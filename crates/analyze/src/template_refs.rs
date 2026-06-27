@@ -41,7 +41,11 @@
 //! which only risks the safe direction (a redundant TS6133 the binding
 //! intersection usually still covers because the name appears elsewhere
 //! in the template too). Identifiers inside the regex body itself are
-//! never collected, so no over-suppression results.
+//! never collected, so no over-suppression results. The depth counter
+//! that locates the end of a `${...}` substitution inside a template
+//! literal skips string runs for the same reason — a brace living inside
+//! a string (e.g. `${ x === "}" ? a : b }`) would otherwise close the
+//! substitution early and miss the identifiers after it.
 //!
 //! Reserved words and the auto-subscribe `$store` syntax are filtered
 //! out at the byte-scanner level (we only collect names that look like
@@ -402,6 +406,19 @@ fn extract_idents(source: &str, range: Range, seen: &mut HashSet<SmolStr>, out: 
                     let mut depth = 1usize;
                     while i < bytes.len() {
                         match bytes[i] {
+                            // Skip string runs so a brace inside a string
+                            // (e.g. `${ x === "}" ? a : b }`) doesn't desync
+                            // the depth counter and end the substitution early.
+                            q @ (b'"' | b'\'') => {
+                                i += 1;
+                                while i < bytes.len() && bytes[i] != q {
+                                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                                        i += 2;
+                                    } else {
+                                        i += 1;
+                                    }
+                                }
+                            }
                             b'{' => depth += 1,
                             b'}' => {
                                 depth -= 1;
@@ -658,6 +675,16 @@ mod tests {
         let r = refs_in("<p>{`hello ${name} world`}</p>");
         assert!(r.contains(&"name".to_string()));
         assert!(!r.contains(&"hello".to_string()));
+    }
+
+    #[test]
+    fn template_literal_substitution_with_brace_in_string_walked() {
+        // A `}` inside a string within a `${...}` substitution must not
+        // close the substitution early; the identifiers after it are
+        // still collected.
+        let r = refs_in(r#"<p>{`${ x === "}" ? a : b }`}</p>"#);
+        assert!(r.contains(&"a".to_string()));
+        assert!(r.contains(&"b".to_string()));
     }
 
     #[test]

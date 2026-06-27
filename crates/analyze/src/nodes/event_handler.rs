@@ -1,5 +1,7 @@
 //! `on:` directive analyze pass — mirrors upstream
-//! `htmlxtojsx_v2/nodes/EventHandler.ts`.
+//! `svelte2tsx/nodes/event-handler.ts` (bubble collection + element
+//! event-map projection); the no-value bubble branch is also detected
+//! by `htmlxtojsx_v2/nodes/EventHandler.ts`.
 
 use svn_parser::{Attribute, DirectiveKind};
 
@@ -30,10 +32,13 @@ use crate::walker::{BubbledDomEvent, BubbledDomEventScope, TemplateSummary};
 /// WindowEventMap>` / `mapWindowEvent<K extends keyof
 /// HTMLBodyElementEventMap>` per `svelte-shims.d.ts:185-190`).
 ///
-/// `<svelte:document>` is intentionally NOT routed here — upstream's
-/// `event-handler.ts` doesn't handle it either. Component-bubbled
-/// events (`<Child on:foo>` no value) are handled via
-/// `TemplateSummary.has_bubbled_component_event`.
+/// `<svelte:document>` is intentionally NOT routed here. Upstream's
+/// `event-handler.ts` *does* register a bare handler on it, but its
+/// `getEventDefExpressionForNonComponent` switch has no `Document`
+/// case, so it falls through `default` and maps the event to
+/// `undefined` (a useless typing). We omit it deliberately: bare event
+/// forwarding on `<svelte:document>` is an exotic-to-invalid edge, and
+/// our `CustomEvent<any>` fallback is no worse in practice.
 pub(crate) fn collect_bubbled_dom_events(
     attrs: &[Attribute],
     scope: BubbledDomEventScope,

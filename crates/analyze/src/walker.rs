@@ -512,6 +512,19 @@ impl PropShape {
             | PropShape::TemplateLiteral { attr_range, .. } => *attr_range,
         }
     }
+
+    /// Prop name for the named variants; `None` for `Spread`.
+    pub fn name(&self) -> Option<&SmolStr> {
+        match self {
+            PropShape::Literal { name, .. }
+            | PropShape::Expression { name, .. }
+            | PropShape::Shorthand { name, .. }
+            | PropShape::BoolShorthand { name, .. }
+            | PropShape::GetSetBinding { name, .. }
+            | PropShape::TemplateLiteral { name, .. } => Some(name),
+            PropShape::Spread { .. } => None,
+        }
+    }
 }
 
 /// One `bind:this={x}` site where `x` is a simple identifier. Used
@@ -520,8 +533,6 @@ impl PropShape {
 pub struct BindThisTarget {
     /// The identifier name `x`.
     pub name: SmolStr,
-    /// Source range of the bind expression (the `x` part).
-    pub range: Range,
 }
 
 /// Walk the template fragment, collecting synthesized-name registrations
@@ -596,6 +607,19 @@ impl ResolverStack {
             .rev()
             .find(|(n, _)| n == name)
             .map(|(_, v)| v)
+    }
+    /// `lookup`, flattened into the shape the slot-attr rewriter wants:
+    /// `Some(Some(text))` for a resolved type/value cast,
+    /// `Some(None)` for a shadowed-but-unresolvable name, `None` when
+    /// the name isn't in scope. Collapses `ResolvedSlotExpr::Type` and
+    /// `::Value` to their inner string since the rewriter splices the
+    /// text regardless of which kind it was.
+    pub(crate) fn lookup_resolved(&self, name: &str) -> Option<Option<String>> {
+        self.lookup(name).map(|v| match v {
+            Some(ResolvedSlotExpr::Type(t)) => Some(t.clone()),
+            Some(ResolvedSlotExpr::Value(v)) => Some(v.clone()),
+            None => None,
+        })
     }
 }
 

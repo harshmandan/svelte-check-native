@@ -302,13 +302,9 @@ pub(crate) fn collect_instantiation_inner(
                 // in addition so the component-local emit can
                 // reference it.
                 //
-                // `bind:GETSET={getter, setter}` (Svelte 5's
-                // two-function bind form) is unmodeled here — the
-                // expression is a SequenceExpression, not a
-                // plain identifier. Fall through with no prop
-                // emission; upstream svelte2tsx uses a custom
-                // `__sveltets_2_get_set_binding` helper that we
-                // haven't ported yet.
+                // The `bind:NAME={getter, setter}` get/set form
+                // (`BindPair`) is handled by the dedicated branch
+                // below — it never reaches this `bind:this` arm.
                 if d.kind == svn_parser::DirectiveKind::Bind && d.name.as_str() == "this" {
                     if let Some(svn_parser::DirectiveValue::Expression {
                         expression_range, ..
@@ -337,15 +333,7 @@ pub(crate) fn collect_instantiation_inner(
                     // bind:value={x} />` — redundant but seen), drop
                     // the prior entry so the bind: expression is the
                     // final authority.
-                    props.retain(|p| match p {
-                        PropShape::BoolShorthand { name, .. }
-                        | PropShape::Literal { name, .. }
-                        | PropShape::Expression { name, .. }
-                        | PropShape::Shorthand { name, .. }
-                        | PropShape::GetSetBinding { name, .. }
-                        | PropShape::TemplateLiteral { name, .. } => name != &target,
-                        PropShape::Spread { .. } => true, // spreads pass through
-                    });
+                    props.retain(|p| p.name() != Some(&target));
                     // R-Conv #1: anchor diagnostics on the property
                     // NAME (`prop` in `bind:prop={…}`), not the
                     // whole `bind:prop={…}` slice. Upstream's LS
@@ -393,15 +381,7 @@ pub(crate) fn collect_instantiation_inner(
                 // explicit-expression arm above.
                 if d.kind == svn_parser::DirectiveKind::Bind && d.value.is_none() {
                     let target = d.name.clone();
-                    props.retain(|p| match p {
-                        PropShape::BoolShorthand { name, .. }
-                        | PropShape::Literal { name, .. }
-                        | PropShape::Expression { name, .. }
-                        | PropShape::Shorthand { name, .. }
-                        | PropShape::GetSetBinding { name, .. }
-                        | PropShape::TemplateLiteral { name, .. } => name != &target,
-                        PropShape::Spread { .. } => true,
-                    });
+                    props.retain(|p| p.name() != Some(&target));
                     // Bare `bind:NAME` is `bind:NAME={NAME}` — same
                     // widening trailer as the explicit form.
                     component_bind_widen_targets.push(target.clone());
@@ -448,15 +428,7 @@ pub(crate) fn collect_instantiation_inner(
                     }) = &d.value
                 {
                     let target = d.name.clone();
-                    props.retain(|p| match p {
-                        PropShape::BoolShorthand { name, .. }
-                        | PropShape::Literal { name, .. }
-                        | PropShape::Expression { name, .. }
-                        | PropShape::Shorthand { name, .. }
-                        | PropShape::GetSetBinding { name, .. }
-                        | PropShape::TemplateLiteral { name, .. } => name != &target,
-                        PropShape::Spread { .. } => true,
-                    });
+                    props.retain(|p| p.name() != Some(&target));
                     props.push(PropShape::GetSetBinding {
                         name: target.clone(),
                         getter_range: *getter_range,

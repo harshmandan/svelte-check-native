@@ -16,11 +16,10 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
     // overload; actions that require a narrower base will
     // TS2345 against HTMLElement, matching user intent.
     walk_attributes(&s.attributes, &mut v.summary, &mut v.counters, &ctx, None);
-    // Reviewer item #1b: `<svelte:component this={X}>` and
-    // `<svelte:self>` carry props / events / bindings just like
-    // a regular `<Component>` instantiation. Route through the
-    // same machinery with a synthetic `component_root` that emit
-    // recognises:
+    // `<svelte:component this={X}>` and `<svelte:self>` carry
+    // props / events / bindings just like a regular `<Component>`
+    // instantiation, so route them through the same machinery with
+    // a synthetic `component_root` that emit recognises:
     //   - SelfRef        → `__svn_self_default`
     //                       (resolves to the file's iso-component
     //                       interface via `__svn_create_component_any`)
@@ -95,19 +94,27 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
     // svelte2tsx `event-handler.ts:63-72` which routes these
     // through `__sveltets_2_mapBodyEvent` /
     // `__sveltets_2_mapWindowEvent` / `__sveltets_2_mapElementEvent`.
-    // `<svelte:document>` is intentionally skipped — upstream's
-    // `event-handler.ts` doesn't handle it either.
+    // `<svelte:document>` is intentionally omitted. Upstream's
+    // `event-handler.ts` has no dedicated Document arm, so its
+    // bubbled `on:NAME` falls to
+    // `getEventDefExpressionForNonComponent`'s default and the
+    // name is registered with an `undefined`-valued events entry.
+    // We skip it because that resolved type is `undefined` and the
+    // practical impact is immaterial; if exact surface parity is
+    // ever required, register the name with an `undefined` value
+    // (a no-payload variant) rather than a DocumentEventMap lookup,
+    // which would make us MORE specific than upstream.
     //
     // `<svelte:element>` reuses the regular-element scope
     // (`HTMLElementEventMap`) — the dynamic-tag form picks an
     // arbitrary HTML element at runtime, so the broadest DOM-event
-    // map matches what consumers see when bubbling. Closes c4
-    // false-positive on `<Button on:click={onSubmit}>` where Button
-    // forwards from `<svelte:element on:click>` and pre-fix the
-    // bubble was missed entirely (events fell through to
-    // `{[k:string]: CustomEvent<any>}` index sig, making
-    // `(e?: MouseEvent) => void` handlers fail TS2345 against the
-    // resolved `(e: CustomEvent<any>) => void` callback).
+    // map matches what consumers see when bubbling. Without this,
+    // a `<Button on:click={onSubmit}>` that forwards from
+    // `<svelte:element on:click>` loses the bubble — events fall
+    // through to the `{[k:string]: CustomEvent<any>}` index
+    // signature, making `(e?: MouseEvent) => void` handlers fail
+    // TS2345 against the resolved `(e: CustomEvent<any>) => void`
+    // callback.
     match s.kind {
         SvelteElementKind::Body => collect_bubbled_dom_events(
             &s.attributes,

@@ -202,8 +202,10 @@ pub enum ValueRewrite {
 ///
 /// On any unrecognised AST node containing identifiers (e.g. JSX),
 /// returns whatever was found in walked nodes (no panics, no partial
-/// rewrites). The walk is conservative: missing a rewrite always
-/// degrades to module-scope semantics, never to a wrong type.
+/// rewrites). The walk is conservative, but an un-walked shape leaks
+/// its identifiers to module scope: that may surface as a TS2304
+/// (unresolved name) or bind to the wrong module-level symbol — it is
+/// not guaranteed harmless.
 pub fn rewrite_slot_attr_expr_value(
     text: &str,
     lookup: &impl Fn(&str) -> Option<Option<String>>,
@@ -314,7 +316,8 @@ fn walk_value_expr(
         }
         Expression::ComputedMemberExpression(me) => {
             walk_value_expr(&me.object, lookup, shadowed, edits, bail, false);
-            walk_value_expr(&me.expression, lookup, shadowed, edits, bail, false);
+            // The computed key (`obj[item]`) is left verbatim to match
+            // upstream slot.ts, which only rewrites the object side.
         }
         Expression::CallExpression(call) => {
             walk_value_expr(&call.callee, lookup, shadowed, edits, bail, false);
@@ -426,7 +429,7 @@ fn walk_value_expr(
                 }
                 ChainElement::ComputedMemberExpression(me) => {
                     walk_value_expr(&me.object, lookup, shadowed, edits, bail, false);
-                    walk_value_expr(&me.expression, lookup, shadowed, edits, bail, false);
+                    // The computed key is left verbatim to match upstream slot.ts.
                 }
                 _ => {}
             }
@@ -480,11 +483,48 @@ fn walk_value_expr(
         Expression::TSTypeAssertion(t) => {
             walk_value_expr(&t.expression, lookup, shadowed, edits, bail, false);
         }
-        // Anything else (literals, JSX, tagged templates, sequences,
-        // assignment, await, yield, regex, etc.): skip without bailing.
-        // Identifiers that appear inside these unhandled shapes won't
-        // get rewritten — degrades to module-scope semantics, not a
-        // wrong type.
+        Expression::TSSatisfiesExpression(t) => {
+            walk_value_expr(&t.expression, lookup, shadowed, edits, bail, false);
+        }
+        Expression::NewExpression(new) => {
+            walk_value_expr(&new.callee, lookup, shadowed, edits, bail, false);
+            for arg in &new.arguments {
+                if let Some(arg_expr) = arg.as_expression() {
+                    walk_value_expr(arg_expr, lookup, shadowed, edits, bail, false);
+                }
+            }
+        }
+        Expression::TaggedTemplateExpression(tt) => {
+            walk_value_expr(&tt.tag, lookup, shadowed, edits, bail, false);
+            for e in &tt.quasi.expressions {
+                walk_value_expr(e, lookup, shadowed, edits, bail, false);
+            }
+        }
+        Expression::SequenceExpression(seq) => {
+            for e in &seq.expressions {
+                walk_value_expr(e, lookup, shadowed, edits, bail, false);
+            }
+        }
+        Expression::AwaitExpression(a) => {
+            walk_value_expr(&a.argument, lookup, shadowed, edits, bail, false);
+        }
+        Expression::YieldExpression(y) => {
+            if let Some(arg) = &y.argument {
+                walk_value_expr(arg, lookup, shadowed, edits, bail, false);
+            }
+        }
+        Expression::UpdateExpression(u) => {
+            // Only the inner expression of a TS-wrapped lvalue (`a!++`)
+            // is a rewritable reference; bare identifier / member lvalues
+            // are left alone so we never rewrite an assignment target.
+            if let Some(arg) = u.argument.get_expression() {
+                walk_value_expr(arg, lookup, shadowed, edits, bail, false);
+            }
+        }
+        // Anything else (literals, JSX, regex, etc.): skip without
+        // bailing. Identifiers that appear inside these genuinely
+        // identifier-free or unhandled shapes won't get rewritten —
+        // they leak to module scope.
         _ => {}
     }
 }
@@ -1082,10 +1122,9 @@ mod tests {
 
     #[test]
     fn value_walker_arrow_inner_left_alone() {
-        // Arrow body's `item` could refer to the lambda parameter
-        // (same name) — bailing out of the body is conservative.
-        // `items.map(item => item.x)` — the OUTER `items` (if shadowed)
-        // would be rewritten; the inner arrow body is left alone.
+        // The arrow body's `item` is the lambda parameter, which shadows
+        // the same-named template local — so it is left untouched. The
+        // OUTER `row` (not shadowed) IS rewritten.
         let ValueRewrite::Rewritten(out) =
             rewrite_slot_attr_expr_value("row.foo(item => item.x)", &r7_lookup)
         else {

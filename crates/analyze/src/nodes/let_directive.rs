@@ -1,7 +1,11 @@
-//! `let:` directive (slot-let) analyze pass — mirrors upstream
-//! `htmlxtojsx_v2/nodes/Let.ts`.
+//! Slot-let analyze pass — two upstream sources:
+//! `collect_slot_def` mirrors `svelte2tsx/nodes/slot.ts::handleSlot`
+//! (the `<slot>` definition site → `$$slot_def`); `enter` mirrors
+//! `htmlxtojsx_v2/nodes/Let.ts` + `slot.ts::getSingleSlotDef`
+//! (the `<Comp let:foo>` consumer site).
 
 use smol_str::SmolStr;
+use svn_core::Range;
 use svn_parser::Attribute;
 
 use crate::nodes::destructure::{
@@ -12,6 +16,84 @@ use crate::walker::{
     AnalyzeVisitor, ResolvedSlotExpr, ResolverStack, SlotAttr, SlotAttrExpr, SlotDef,
     TemplateSummary,
 };
+
+/// Resolve a single `{expression}` slot-attr value into a `SlotAttr`
+/// pushed onto `entries`. Shared by the `A::Expression` arm
+/// (`<slot foo={bar}>`) and the single-`{expr}` `A::Plain` value case.
+/// Mirrors the consumer-side expression resolution: shadow lookup +
+/// the slot-attr rewriter, verbatim-splice when no shadowed names are
+/// present, drop when a shadowed name can't be resolved.
+fn collect_expression_attr(
+    name: &SmolStr,
+    expression_range: Range,
+    source: &str,
+    shadow: &ResolverStack,
+    entries: &mut Vec<SlotAttr>,
+) {
+    let start = expression_range.start as usize;
+    let end = expression_range.end as usize;
+    let Some(text) = source.get(start..end) else {
+        return;
+    };
+    let trimmed = text.trim();
+    let lookup = |name: &str| shadow.lookup_resolved(name);
+    // Path 1 — leading-ident shadowed. Try the TYPE-level rewriter
+    // first (bare ident, member chain, computed member); it produces
+    // the cleanest emit shape. If the expression is in a richer shape
+    // the type-level rewriter doesn't handle (calls, ternaries, object
+    // literals, etc.), fall through to the value-level walker so the
+    // inner shadowed identifiers still get their typed casts. Bail if
+    // neither produces a result.
+    if let Some(head) = leading_identifier(trimmed)
+        && shadow.lookup(head).is_some()
+    {
+        if let Some(rewritten) =
+            crate::slot_attr_rewrite::rewrite_slot_attr_expr(trimmed, &lookup)
+        {
+            entries.push(SlotAttr::Prop {
+                name: name.clone(),
+                expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Type(rewritten)),
+            });
+            return;
+        }
+        if let crate::slot_attr_rewrite::ValueRewrite::Rewritten(rewritten) =
+            crate::slot_attr_rewrite::rewrite_slot_attr_expr_value(trimmed, &lookup)
+        {
+            entries.push(SlotAttr::Prop {
+                name: name.clone(),
+                expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Value(rewritten)),
+            });
+        }
+        return;
+    }
+    // Path 2 — leading-ident NOT shadowed (or no leading ident). Still
+    // walk the whole expression for INNER shadowed identifiers (e.g.
+    // `foo(item)`, `{ item }`, `fallback ?? item`,
+    // `items.map(item => item.x)`). Without this the shadowed
+    // identifier would leak verbatim to module scope; the value-level
+    // walker rewrites each inner shadowed leaf to its typed cast and
+    // splices the rest of the expression unchanged.
+    match crate::slot_attr_rewrite::rewrite_slot_attr_expr_value(trimmed, &lookup) {
+        crate::slot_attr_rewrite::ValueRewrite::Rewritten(rewritten) => {
+            entries.push(SlotAttr::Prop {
+                name: name.clone(),
+                expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Value(rewritten)),
+            });
+        }
+        crate::slot_attr_rewrite::ValueRewrite::NoEdits => {
+            // No shadowed identifiers anywhere — splice source verbatim.
+            entries.push(SlotAttr::Prop {
+                name: name.clone(),
+                expr: SlotAttrExpr::Range(expression_range),
+            });
+        }
+        crate::slot_attr_rewrite::ValueRewrite::Bailed => {
+            // Shadowed-but-unresolvable name somewhere in the
+            // expression — drop the attr (would emit module-scope
+            // identifiers that resolve to the wrong declaration).
+        }
+    }
+}
 
 /// Capture a `<slot [name="X"] [attr=…]>` site into
 /// `summary.slot_defs`. Skips attrs whose expression references a
@@ -59,6 +141,26 @@ pub(crate) fn collect_slot_def(
                         expr: SlotAttrExpr::Literal(content.to_string()),
                     });
                 } else if let Some(v) = &p.value
+                    && v.parts.len() == 1
+                    && let AttrValuePart::Expression {
+                        expression_range, ..
+                    } = &v.parts[0]
+                {
+                    // Single `{expr}` value (`<slot foo={bar}>`):
+                    // resolve the expression the same way component /
+                    // `let:` expression attrs do — shadow lookup + the
+                    // slot-attr rewriter, verbatim-splice when no
+                    // shadowed names are present. Multi-part
+                    // interpolations still fall to the `string` cast
+                    // below.
+                    collect_expression_attr(
+                        &p.name,
+                        *expression_range,
+                        source,
+                        shadow,
+                        &mut entries,
+                    );
+                } else if let Some(v) = &p.value
                     && !v.parts.is_empty()
                 {
                     entries.push(SlotAttr::Prop {
@@ -68,80 +170,7 @@ pub(crate) fn collect_slot_def(
                 }
             }
             A::Expression(e) => {
-                let start = e.expression_range.start as usize;
-                let end = e.expression_range.end as usize;
-                let Some(text) = source.get(start..end) else {
-                    continue;
-                };
-                let trimmed = text.trim();
-                let lookup = |name: &str| -> Option<Option<String>> {
-                    shadow.lookup(name).map(|v| match v {
-                        Some(ResolvedSlotExpr::Type(t)) => Some(t.clone()),
-                        Some(ResolvedSlotExpr::Value(v)) => Some(v.clone()),
-                        None => None,
-                    })
-                };
-                // Path 1 — leading-ident shadowed. Try the TYPE-level
-                // rewriter first (bare ident, member chain, computed
-                // member); it produces the cleanest emit shape. If
-                // the expression is in a richer shape the type-level
-                // rewriter doesn't handle (calls, ternaries, object
-                // literals, etc.), fall through to the value-level
-                // walker so the inner shadowed identifiers still get
-                // their typed casts. Bail if neither produces a result.
-                if let Some(head) = leading_identifier(trimmed)
-                    && shadow.lookup(head).is_some()
-                {
-                    if let Some(rewritten) =
-                        crate::slot_attr_rewrite::rewrite_slot_attr_expr(trimmed, &lookup)
-                    {
-                        entries.push(SlotAttr::Prop {
-                            name: e.name.clone(),
-                            expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Type(rewritten)),
-                        });
-                        continue;
-                    }
-                    if let crate::slot_attr_rewrite::ValueRewrite::Rewritten(rewritten) =
-                        crate::slot_attr_rewrite::rewrite_slot_attr_expr_value(trimmed, &lookup)
-                    {
-                        entries.push(SlotAttr::Prop {
-                            name: e.name.clone(),
-                            expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Value(rewritten)),
-                        });
-                    }
-                    continue;
-                }
-                // Path 2 — leading-ident NOT shadowed (or no leading
-                // ident). Round-7 follow-up #1: still walk the whole
-                // expression for INNER shadowed identifiers (e.g.
-                // `foo(item)`, `{ item }`, `fallback ?? item`,
-                // `items.map(item => item.x)`). Pre-fix native emitted
-                // these verbatim so the shadowed identifier leaked to
-                // module scope; the value-level walker rewrites each
-                // inner shadowed leaf to its typed cast and splices
-                // the rest of the expression unchanged.
-                match crate::slot_attr_rewrite::rewrite_slot_attr_expr_value(trimmed, &lookup) {
-                    crate::slot_attr_rewrite::ValueRewrite::Rewritten(rewritten) => {
-                        entries.push(SlotAttr::Prop {
-                            name: e.name.clone(),
-                            expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Value(rewritten)),
-                        });
-                    }
-                    crate::slot_attr_rewrite::ValueRewrite::NoEdits => {
-                        // No shadowed identifiers anywhere — splice
-                        // source verbatim.
-                        entries.push(SlotAttr::Prop {
-                            name: e.name.clone(),
-                            expr: SlotAttrExpr::Range(e.expression_range),
-                        });
-                    }
-                    crate::slot_attr_rewrite::ValueRewrite::Bailed => {
-                        // Shadowed-but-unresolvable name somewhere in
-                        // the expression — drop the attr (would emit
-                        // module-scope identifiers that resolve to
-                        // the wrong declaration).
-                    }
-                }
+                collect_expression_attr(&e.name, e.expression_range, source, shadow, &mut entries);
             }
             A::Shorthand(s) => {
                 if let Some(resolved) = shadow.lookup(s.name.as_str()) {
@@ -176,13 +205,7 @@ pub(crate) fn collect_slot_def(
                 if let Some(head) = leading_identifier(trimmed)
                     && shadow.lookup(head).is_some()
                 {
-                    let lookup = |name: &str| -> Option<Option<String>> {
-                        shadow.lookup(name).map(|v| match v {
-                            Some(ResolvedSlotExpr::Type(t)) => Some(t.clone()),
-                            Some(ResolvedSlotExpr::Value(v)) => Some(v.clone()),
-                            None => None,
-                        })
-                    };
+                    let lookup = |name: &str| shadow.lookup_resolved(name);
                     if let Some(rewritten) =
                         crate::slot_attr_rewrite::rewrite_slot_attr_expr(trimmed, &lookup)
                     {

@@ -32,6 +32,13 @@
 //! - `src/params/*.ts` param matchers.
 //! - `.js` route files (needs JSDoc annotation injection, a
 //!   separate code path).
+//! - `+server.ts` page-option / `load` / `actions` / `entries`
+//!   typing. The `ServerEndpoint` branch below only annotates HTTP
+//!   handler parameters; it intentionally skips page-option consts
+//!   (`ssr` / `csr` / `prerender` / `trailingSlash`), `load`,
+//!   `actions`, and `entries`. Upstream does inject those on
+//!   `+server.ts`, so this is a deliberate laxer-than-upstream
+//!   divergence for those degenerate cases.
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{BindingPattern, Declaration, Statement};
@@ -148,6 +155,13 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                 else {
                     continue;
                 };
+                // Upstream's findExports only registers single-declarator
+                // export const statements (declarations.length === 1); a
+                // multi-declarator list is ignored entirely, so skip it
+                // here to avoid injecting types upstream never would.
+                if var_decl.declarations.len() != 1 {
+                    continue;
+                }
                 for declarator in &var_decl.declarations {
                     if declarator.init.is_none() {
                         continue;
@@ -193,14 +207,37 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                         && declarator.type_annotation.is_none()
                         && let Some(init) = declarator.init.as_ref()
                     {
-                        // Unwrap `async`/`await`/parenthesized wrappers
-                        // around the arrow expression. Most users write
-                        // `async ({…}) => {…}` directly, but the parser
-                        // exposes that as ArrowFunctionExpression with
-                        // `async: true` — no unwrap needed.
-                        if let oxc_ast::ast::Expression::ArrowFunctionExpression(arrow) = init {
-                            let event_type = load_event_type(*is_layout, *is_server);
-                            collect_arrow_handler_insert(arrow, &event_type, &mut insertions);
+                        use oxc_ast::ast::Expression;
+                        match init {
+                            // Arrow-form `load` (`export const load =
+                            // async ({…}) => {…}`). The parser exposes
+                            // `async` as a flag on the arrow, so no
+                            // unwrap is needed for the common case.
+                            Expression::ArrowFunctionExpression(arrow) => {
+                                let event_type = load_event_type(*is_layout, *is_server);
+                                collect_arrow_handler_insert(arrow, &event_type, &mut insertions);
+                            }
+                            // Function-expression-form `load`
+                            // (`export const load = function ({…}) {…}`).
+                            Expression::FunctionExpression(func) => {
+                                let event_type = load_event_type(*is_layout, *is_server);
+                                collect_handler_insert(func, &event_type, &mut insertions);
+                            }
+                            // Already `satisfies`-wrapped — upstream
+                            // treats this as user-supplied typing, so
+                            // leave it alone to avoid double-wrapping.
+                            Expression::TSSatisfiesExpression(_) => {}
+                            // Non-function `load` value (e.g. a
+                            // re-exported imported loader). Mirror
+                            // upstream's `type:'var'` branch: wrap the
+                            // value in `(...) satisfies <...>Load` (the
+                            // bare `Load` type, not `LoadEvent`).
+                            _ => {
+                                let load_ty = load_satisfies_type(*is_layout, *is_server);
+                                let s = init.span();
+                                insertions.push((s.start as usize, "(".to_string()));
+                                insertions.push((s.end as usize, format!(") satisfies {load_ty}")));
+                            }
                         }
                     }
                 }
@@ -228,6 +265,16 @@ fn load_event_type(is_layout: bool, is_server: bool) -> String {
     let page_or_layout = if is_layout { "Layout" } else { "Page" };
     let server_infix = if is_server { "Server" } else { "" };
     format!("import('./$types.js').{page_or_layout}{server_infix}LoadEvent")
+}
+
+/// Bare `Load` type name (no `Event` suffix) for the non-function
+/// `load` `satisfies` wrap — mirrors upstream's `type:'var'` branch,
+/// which constrains the value against `(Page|Layout)(Server)?Load`
+/// rather than the parameter-level `LoadEvent`.
+fn load_satisfies_type(is_layout: bool, is_server: bool) -> String {
+    let page_or_layout = if is_layout { "Layout" } else { "Page" };
+    let server_infix = if is_server { "Server" } else { "" };
+    format!("import('./$types.js').{page_or_layout}{server_infix}Load")
 }
 
 /// SvelteKit page-option exports with fixed value-union types. Names

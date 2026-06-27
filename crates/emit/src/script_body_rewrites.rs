@@ -40,7 +40,7 @@ use crate::svelte4::compat::{
     widen_untyped_exports_jsdoc_in_place,
 };
 use crate::sveltekit;
-use svn_analyze::{collect_typed_top_level_lets, collect_typed_uninit_lets};
+use svn_analyze::collect_typed_top_level_lets;
 
 /// Apply the three post-body in-place rewrites: widen-untyped-exports →
 /// definite-assign → de-narrow-typed-literal-inits.
@@ -99,8 +99,6 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
     // reactive-touched) cover every legitimate "Svelte assigns
     // this at runtime" case; everything else is genuinely a
     // user-source order bug that should fire TS2454.
-    let _ = parsed_instance;
-    let _ = collect_typed_uninit_lets;
     let route_kind = sveltekit::route_kind(source_path);
     if emit_is_ts() {
         if let Some(s) = split {

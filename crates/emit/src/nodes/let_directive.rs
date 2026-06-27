@@ -268,12 +268,11 @@ pub(crate) fn emit_let_slot_destructure(
             buf.push_str(&d.pattern_text[d.name_byte_len..]);
         }
     }
-    let access = if slot_name == "default" {
-        format!(" }} = {inst_local}.$$slot_def.default; $$_$$;\n")
+    let _ = if slot_name == "default" {
+        writeln!(buf, " }} = {inst_local}.$$slot_def.default; $$_$$;")
     } else {
-        format!(" }} = {inst_local}.$$slot_def[\"{slot_name}\"]; $$_$$;\n")
+        writeln!(buf, " }} = {inst_local}.$$slot_def[\"{slot_name}\"]; $$_$$;")
     };
-    buf.push_str(&access);
     // `void <name>;` per let-binding suppresses TS6133 on names the
     // user's slot body doesn't reference. Without this the new
     // TokenMap entry on the destructure name surfaces 6133 at the

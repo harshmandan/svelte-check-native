@@ -370,7 +370,6 @@ pub(crate) fn emit_component_call(
     emit_on_event_calls(buf, source, inst, &inst_local, &inner);
     emit_component_bindings_post_check(buf, inst, &inst_local, &inner);
     emit_snippet_prop_destructure(buf, snippet_children, &inst_local, &inner);
-    let _ = indent;
 }
 
 /// Emit `const { name1, name2 } = __svn_inst_NN.$$prop_def;` after the
@@ -561,6 +560,10 @@ fn emit_on_event_calls(
             buf.push_str(", () => {});\n");
             continue;
         }
+        // `handler_range` is a parser-produced span over `source`, so
+        // direct slicing is in-bounds. There's no sensible partial
+        // fallback here — a missing range would emit `$on("event", ())`
+        // and break the overlay syntax.
         let expr = &source[ev.handler_range.start as usize..ev.handler_range.end as usize];
         buf.push_str(", (");
         buf.append_with_source(expr, ev.handler_range);
@@ -608,18 +611,20 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
                 buf.push_str("...__svn_css_prop({");
                 write_quoted_prop_key_with_source(buf, name, attr_range);
                 buf.push_str(": ");
-                write_js_string_literal(buf, value);
+                write_js_string_literal_to(buf, value);
                 buf.push_str("})");
                 return;
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);
             buf.push_str(": ");
-            write_js_string_literal(buf, value);
+            write_js_string_literal_to(buf, value);
         }
         svn_analyze::PropShape::Expression {
             name, expr_range, ..
         } => {
-            let expr = &source[expr_range.start as usize..expr_range.end as usize];
+            let expr = source
+                .get(expr_range.start as usize..expr_range.end as usize)
+                .unwrap_or("");
             if is_css_custom_prop_name(name) {
                 buf.push_str("...__svn_css_prop({");
                 write_quoted_prop_key_with_source(buf, name, attr_range);
@@ -666,7 +671,9 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             buf.push_str(": true");
         }
         svn_analyze::PropShape::Spread { expr_range, .. } => {
-            let expr = &source[expr_range.start as usize..expr_range.end as usize];
+            let expr = source
+                .get(expr_range.start as usize..expr_range.end as usize)
+                .unwrap_or("");
             buf.push_str("...(");
             buf.append_with_source(expr, *expr_range);
             buf.push_str(")");
@@ -677,6 +684,10 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             setter_range,
             ..
         } => {
+            // Both ranges are parser-produced spans over `source`, so
+            // direct slicing is in-bounds. There's no sensible partial
+            // fallback — a missing getter or setter range would emit a
+            // malformed `__svn_get_set_binding(...)` call.
             let getter = &source[getter_range.start as usize..getter_range.end as usize];
             let setter = &source[setter_range.start as usize..setter_range.end as usize];
             write_quoted_prop_key_with_source(buf, name, attr_range);
@@ -764,7 +775,7 @@ fn write_quoted_prop_key_with_source(
     attr_range: svn_core::Range,
 ) {
     let mut quoted = String::with_capacity(name.len() + 2);
-    write_js_string_literal_into_string(&mut quoted, name);
+    write_js_string_literal_to(&mut quoted, name);
     buf.append_with_source(&quoted, attr_range);
 }
 
@@ -913,49 +924,29 @@ fn write_object_key(buf: &mut EmitBuffer, name: &str) {
     if is_simple_js_identifier(name) {
         buf.push_str(name);
     } else {
-        write_js_string_literal(buf, name);
+        write_js_string_literal_to(buf, name);
     }
 }
 
 /// Write `value` as a JS double-quoted string literal, escaping the
-/// usual unsafe characters. Pure ASCII assumption — Svelte attribute
-/// values are decoded earlier in the pipeline.
-fn write_js_string_literal(buf: &mut EmitBuffer, value: &str) {
-    buf.push('"');
+/// usual unsafe characters. Generic over the `fmt::Write` sink so it
+/// serves both the `EmitBuffer` overlay stream and a plain `String`
+/// pre-format buffer (used by `write_quoted_prop_key_with_source` to
+/// hand a single chunk to `EmitBuffer::append_with_source`). Pure ASCII
+/// assumption — Svelte attribute values are decoded earlier in the
+/// pipeline.
+fn write_js_string_literal_to<W: core::fmt::Write>(out: &mut W, value: &str) {
+    let _ = out.write_char('"');
     for c in value.chars() {
-        match c {
-            '"' => buf.push_str("\\\""),
-            '\\' => buf.push_str("\\\\"),
-            '\n' => buf.push_str("\\n"),
-            '\r' => buf.push_str("\\r"),
-            '\t' => buf.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(buf, "\\u{:04x}", c as u32);
-            }
-            c => buf.push(c),
-        }
+        let _ = match c {
+            '"' => out.write_str("\\\""),
+            '\\' => out.write_str("\\\\"),
+            '\n' => out.write_str("\\n"),
+            '\r' => out.write_str("\\r"),
+            '\t' => out.write_str("\\t"),
+            c if (c as u32) < 0x20 => write!(out, "\\u{:04x}", c as u32),
+            c => out.write_char(c),
+        };
     }
-    buf.push('"');
-}
-
-/// String-builder twin of [`write_js_string_literal`] used by
-/// `write_quoted_prop_key_with_source`'s pre-format step. Escapes
-/// the value into a freshly-allocated `String` so the caller can
-/// hand it as a single chunk to `EmitBuffer::append_with_source`.
-fn write_js_string_literal_into_string(out: &mut String, value: &str) {
-    out.push('"');
-    for c in value.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
+    let _ = out.write_char('"');
 }

@@ -14,9 +14,11 @@ use crate::emit_buffer::EmitBuffer;
 
 /// Drop attributes that the svelte-jsx typings reject at the strict
 /// interface but real Svelte allows: `aria-*`, CSS custom properties,
-/// namespaced (`xml:lang`, `xlink:href`), the `this` directive on
-/// `<svelte:element>`, the `slot=""` directive, and React-style
-/// camelCase synonyms whose lowercase counterparts svelte-jsx declares.
+/// the `this` directive on `<svelte:element>`, the `slot=""` directive,
+/// and React-style camelCase synonyms whose lowercase counterparts
+/// svelte-jsx declares. Namespaced attributes (`xml:lang`,
+/// `xlink:href`) are NOT dropped — they flow through `createElement`
+/// with a quoted key so they reproduce upstream's diagnostics.
 ///
 /// `data-*` is NOT skipped — it's wrapped in `...__svn_empty({...})`
 /// at emit time so the value expression stays referenced (suppresses
@@ -29,9 +31,6 @@ pub(crate) fn should_skip(name: &str) -> bool {
         return true;
     }
     if name.starts_with("--") {
-        return true;
-    }
-    if name.contains(':') {
         return true;
     }
     if name == "this" {
@@ -166,9 +165,25 @@ pub(crate) fn emit_plain(
                 svn_parser::AttrValuePart::Text { content, .. } => {
                     // numberOnlyAttributes carve-out: emit bare number
                     // literal when the text parses as a number.
-                    if is_number_only_attr(name)
+                    //
+                    // Upstream's test is `!isNaN(Number(x))`, so reject
+                    // only the textual values Rust's `parse::<f64>`
+                    // accepts that JS `Number()` does not: the `nan` /
+                    // `inf` spellings and the lowercase `infinity`
+                    // form. JS does accept exactly-cased `Infinity`
+                    // (and signed variants), which become bare global
+                    // `Infinity` — keep those as numbers.
+                    let t = content.trim();
+                    let parses_as_number = t.parse::<f64>().is_ok()
+                        && !t.eq_ignore_ascii_case("nan")
+                        && !t.eq_ignore_ascii_case("inf")
+                        && (t == "Infinity"
+                            || t == "+Infinity"
+                            || t == "-Infinity"
+                            || !t.eq_ignore_ascii_case("infinity"));
+                    if is_number_only_attr(&name.to_ascii_lowercase())
                         && !content.is_empty()
-                        && content.trim().parse::<f64>().is_ok()
+                        && parses_as_number
                     {
                         buf.push_str(&indent);
                         buf.push_str(key_prefix);

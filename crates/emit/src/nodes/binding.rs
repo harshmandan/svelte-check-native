@@ -17,14 +17,24 @@ use crate::nodes::element::element_type_annotation;
 /// Emit a type-check line per `bind:NAME` directive on a DOM element.
 ///
 /// Shape: `{indent}EXPR = null as any as TYPE;` — direct assignment
-/// (NOT wrapped in a never-called lambda). Upstream svelte2tsx's
-/// `Binding.ts:86-146` emits the same direct form, which type-checks
-/// the LHS against the binding's value type AND narrows EXPR's flow
-/// type for subsequent uses. A `let x = $state<number>()` (type
-/// `number | undefined`) passed through `bind:clientWidth` then flows
-/// as `number` at the later `<Child {x}/>` site. The earlier lambda
-/// wrapper isolated the assignment from narrowing, producing spurious
-/// "possibly undefined" errors that upstream didn't.
+/// (NOT wrapped in a never-called lambda).
+///
+/// For upstream's ONE-WAY bindings (`bind:this`, `clientWidth`,
+/// `naturalHeight`, the ResizeObserver/media-list family) this matches
+/// upstream svelte2tsx's `appendOneWayBinding` direct form
+/// (`Binding.ts:86-136`), which checks TYPE assignable to EXPR.
+///
+/// For TWO-WAY bindings (`bind:value`, `bind:checked`, `bind:files`)
+/// this is a DELIBERATE deviation: upstream emits a widening lambda
+/// `() => EXPR = __sveltets_2_any(null);` (`Binding.ts:139-146`) that
+/// does NOT check the value, and runs the real check in the opposite
+/// direction via `addAttribute` (binding value assignable to the
+/// attribute type). Our direct form additionally narrows EXPR's flow
+/// type for subsequent uses — e.g. `let x = $state<number>()`
+/// (`number | undefined`) flows as `number` after `bind:clientWidth`
+/// at a later `<Child {x}/>` site. An earlier lambda wrapper on our
+/// side isolated the assignment from narrowing, producing spurious
+/// "possibly undefined" errors.
 ///
 /// Supports all DOM bind: variants under one loop:
 ///   - `bind:this` — TYPE = `HTMLElementTagNameMap['tag']` (or

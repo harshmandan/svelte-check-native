@@ -78,17 +78,17 @@ pub(crate) fn emit_bind_pair_declarations(
 /// in the outer scope as well would fire TS2304 (cannot find name)
 /// since the inner declarations aren't visible from the outer
 /// function.
-pub(crate) fn emit_void_block(
+pub(crate) fn emit_void_block<'a>(
     out: &mut String,
-    summary: &TemplateSummary,
-    store_refs: &[SmolStr],
-    bindable_prop_names: &[SmolStr],
-    template_refs: &[SmolStr],
-    exported_locals: &[SmolStr],
+    summary: &'a TemplateSummary,
+    store_refs: &'a [SmolStr],
+    bindable_prop_names: &'a [SmolStr],
+    template_refs: &'a [SmolStr],
+    exported_locals: &'a [SmolStr],
 ) {
-    let mut emitted: HashSet<String> = HashSet::new();
-    let mut emit = |out: &mut String, name: &str| {
-        if emitted.insert(name.to_string()) {
+    let mut emitted: HashSet<&'a str> = HashSet::new();
+    let mut emit = |out: &mut String, name: &'a str| {
+        if emitted.insert(name) {
             let _ = writeln!(out, "    void {name};");
         }
     };

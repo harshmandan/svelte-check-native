@@ -115,11 +115,11 @@ pub(crate) fn collect_ident_refs(text: &str) -> Vec<SmolStr> {
             continue;
         }
         // Identifier-like start.
-        if b.is_ascii_alphabetic() || b == b'_' || b == b'$' {
+        if b.is_ascii_alphabetic() || b == b'_' || b == b'$' || b >= 0x80 {
             let start = i;
             while i < bytes.len() {
                 let c = bytes[i];
-                if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' {
+                if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80 {
                     i += 1;
                 } else {
                     break;
@@ -218,20 +218,5 @@ fn is_ref_scan_keyword(s: &str) -> bool {
             | "symbol"
             | "object"
             | "bigint"
-            | "Array"
-            | "ReadonlyArray"
-            | "Record"
-            | "Partial"
-            | "Required"
-            | "Pick"
-            | "Omit"
-            | "Exclude"
-            | "Extract"
-            | "NonNullable"
-            | "Parameters"
-            | "ReturnType"
-            | "InstanceType"
-            | "Awaited"
-            | "Promise"
     )
 }

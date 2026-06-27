@@ -9,8 +9,6 @@
 //! 2. `grep -rn '// SVELTE-4-COMPAT' crates/emit/src/` — delete each
 //!    callsite and the surrounding dispatch.
 //! 3. Remove the `mod svelte4;` declaration in `lib.rs`.
-//!
-//! See `design/phase_g/DESIGN.md` for the full plan.
 
 pub mod compat;
 pub mod reactive;

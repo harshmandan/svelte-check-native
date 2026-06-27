@@ -25,12 +25,11 @@ use crate::process_instance_script_content::ExportedLocalInfo;
 /// Function / let / const with explicit annotations carry their
 /// annotation source text verbatim so consumers see the user's
 /// declared shape; un-annotated declarations fall back to `None`
-/// (caller emits `typeof <name>` / `any`).
+/// (caller emits `typeof <name>`).
 ///
-/// Class exports also fall back to `None`; surfacing an instance
-/// type from a class export needs `InstanceType<typeof ClassName>`,
-/// which requires a module-scope reference we don't have (the class
-/// body is body-scoped after the `export` prefix is stripped).
+/// Class exports also fall back to `None`, so the caller emits
+/// `typeof ClassName` — the constructor type. This matches upstream
+/// `handleExportFunctionOrClass` (`addExport` with no type).
 pub(crate) fn collect_export_type_infos(
     decl: &Declaration<'_>,
     content: &str,
@@ -91,9 +90,8 @@ pub(crate) fn collect_export_type_infos(
                 }
             }
         }
-        // `export class Foo {}` — surface as `any`. Classes exported
-        // from a component are rare and their instance shape requires
-        // body-scope reference we don't have at module scope.
+        // `export class Foo {}` — surface as `typeof <name>` (constructor
+        // type) — matches upstream `addExport` with no `type`.
         Declaration::ClassDeclaration(c) => {
             if let Some(id) = &c.id {
                 out.push(ExportedLocalInfo {

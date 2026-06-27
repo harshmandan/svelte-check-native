@@ -14,9 +14,12 @@
 //! to the overlay in the first place. See `lib.rs::emit_template_node`'s
 //! `Node::Comment(_)` arm: dispatcher no-op.
 //!
-//! `<!-- @hmr-keep -->` and `<!-- @component -->` (Svelte's recognised
-//! comment directives) aren't emit-layer concerns either — they're
-//! handled at parse / runtime stages.
+//! `<!-- @component -->` is consumed at the svelte2tsx transform stage —
+//! upstream's `nodes/ComponentDocumentation.ts` strips the tag and emits
+//! the text as a leading JSDoc on the default-export component (IDE hover
+//! only). It carries no type-check-surface effect, so we emit nothing.
+//! `<!-- @hmr-keep -->` is a compiler/HMR-runtime concern, likewise
+//! irrelevant to type checking.
 //!
 //! This file exists for parity navigation: a contributor familiar with
 //! upstream's `Comment.ts` should land here.

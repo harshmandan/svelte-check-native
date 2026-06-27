@@ -5,10 +5,12 @@
 //!
 //! **Status: NA — we use Rust's `anyhow::Error` chains directly.**
 //!
-//! Upstream's `error.ts` provides a small abstraction over JS exception
-//! shapes (collecting structured fields like file/line/column off
-//! caught errors so they can be surfaced as diagnostics). The shape is
-//! tied to JS's untyped error throwing.
+//! Upstream's `error.ts` provides `throwError`, a throw-with-position
+//! helper: its call sites (Generics, `processModuleScriptTag`) raise a
+//! JS exception carrying file/line/column so a downstream layer can turn
+//! it into a diagnostic. The shape is tied to JS's untyped error
+//! throwing. We don't throw — at each of those sites we produce a
+//! `Diagnostic::error(...)` directly instead.
 //!
 //! Our equivalent is Rust-idiomatic: each fallible function returns
 //! `Result<T, anyhow::Error>` (in CLI/library entry points) or
@@ -26,5 +28,6 @@
 //! | Exception → diagnostic conversion | each layer that produces diagnostics constructs them directly via `svn_core::diagnostic::Diagnostic::error(...)` / `::warning(...)` |
 //! | File/line/col attachment | structured into the `Diagnostic` shape itself; not derived from caught errors |
 //! | Top-level error formatting | CLI's `main()` prints `anyhow::Error` chains via the `Display` impl |
+//! | `positionAt` / `getLineOffsets` / `clamp` | `crates/core/src/position.rs` — `PositionMap` / `line_col_utf8` / line-starts binary search / clamp-to-end |
 //!
 //! This file is a navigational stub only.

@@ -52,7 +52,7 @@ pub(crate) fn emit_transition_directive(
     };
     // Compute the source range covering the directive NAME (after
     // `transition:` / `in:` / `out:`).
-    let prefix_len = (d.kind.as_str().len() + 1) as u32;
+    let prefix_len = d.kind.prefix_len_with_colon();
     let name_start = d.range.start + prefix_len;
     let name_end = name_start + name.len() as u32;
     let name_range = svn_core::Range::new(name_start, name_end);

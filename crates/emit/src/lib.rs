@@ -1039,12 +1039,6 @@ fn emit_document_with_render_name(
     } else {
         None
     };
-    let alias_in_render_body = alias_body.is_some();
-    if let Some(body) = alias_body.as_deref()
-        && !alias_in_render_body
-    {
-        let _ = writeln!(buf, "type $$ComponentProps = {body};");
-    }
     // After the alias decision, downstream code reads the EFFECTIVE
     // type text — either `$$ComponentProps` (when aliased) or the
     // original `props_info.type_text`. Carrying these as locals keeps
@@ -1064,7 +1058,7 @@ fn emit_document_with_render_name(
             let _ = writeln!(buf, "async function {render_name}() {{");
         }
     }
-    // Generic-scoped alias emission — see `alias_in_render_body` above.
+    // Generic-scoped alias emission — see the `alias_body` decision above.
     // Lives at the very top of the render body so the destructure
     // annotation rewrite (`: $$ComponentProps`) downstream can reference
     // it. The `T` in `<script generics="T">` is the render fn's binder
@@ -1077,7 +1071,6 @@ fn emit_document_with_render_name(
     // $$render>>['props']` which already projects the destructure's
     // declared type. Skipping the alias on JS is safe.
     if is_ts
-        && alias_in_render_body
         && let Some(body) = alias_body.as_deref()
     {
         let _ = writeln!(buf, "    type $$ComponentProps = {body};");

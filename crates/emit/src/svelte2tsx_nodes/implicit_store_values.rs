@@ -14,9 +14,9 @@
 //! to add definite-assignment / type-narrow scaffolding.
 //!
 //! Our equivalent lives in [`svn_analyze::find_store_refs_with_bindings`]
-//! (`crates/analyze/src/store.rs`). The walker collects `$NAME`
-//! sigils with the underlying binding's source span, the emit
-//! consumes the result via:
+//! (`crates/analyze/src/store.rs`). A lightweight source scanner collects
+//! `$NAME` sigils whose base name matches a top-level binding, returning a
+//! `Vec<SmolStr>` of base names; the emit consumes the result via:
 //!
 //! - [`crate::svelte4::compat::rewrite_definite_assignment_in_place`] —
 //!   adds `!` to the underlying `let NAME: Writable<T>;` declaration

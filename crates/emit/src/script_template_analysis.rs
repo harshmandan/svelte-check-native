@@ -95,16 +95,10 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
         .map(|p| p.local_name.clone())
         .collect();
 
-    let (prop_names, prop_type_source): (Vec<SmolStr>, Option<String>) =
+    let prop_type_source: Option<String> =
         if let (Some(_s), Some(instance), Some(parsed_orig)) =
             (split, &doc.instance_script, parsed_instance)
         {
-            let props: Vec<SmolStr> = props_info
-                .destructures
-                .iter()
-                .map(|p| p.local_name.clone())
-                .collect();
-
             // SvelteKit auto-typing: route components (+page.svelte,
             // +layout.svelte) with an untyped `$props()` pick up
             // `PageData` / `LayoutData` / `ActionData` from the file
@@ -114,7 +108,11 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
                 .map(|s| s.to_string())
                 .or_else(|| {
                     sveltekit::route_kind(source_path).and_then(|kind| {
-                        let names_borrow: Vec<&str> = props.iter().map(|s| s.as_str()).collect();
+                        let names_borrow: Vec<&str> = props_info
+                            .destructures
+                            .iter()
+                            .map(|p| p.local_name.as_str())
+                            .collect();
                         sveltekit::synthesize_route_props_type(kind, &names_borrow)
                     })
                 });
@@ -125,9 +123,9 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
                 let parsed_rw = parse_script_body(&alloc_rw, rewritten, instance.lang);
                 collect_top_level_bindings(&parsed_rw.program, &mut script_bindings);
             }
-            (props, ty)
+            ty
         } else {
-            (Vec::new(), None)
+            None
         };
 
     // Store auto-subscribe scan happens AFTER both module + instance
@@ -184,8 +182,8 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
     } else {
         let already: HashSet<&str> = store_refs
             .iter()
-            .chain(prop_names.iter())
             .map(|s| s.as_str())
+            .chain(props_info.destructures.iter().map(|p| p.local_name.as_str()))
             .collect();
         let mut tpl_voids = Vec::new();
         let mut tpl_stores = Vec::new();

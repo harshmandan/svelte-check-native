@@ -10,7 +10,7 @@
 //! bytes; we build a new overlay from scratch).
 //!
 //! This directory exists as a navigation aid for contributors familiar
-//! with upstream's layout: `htmlxtojsx_v2/utils/<X>.ts` lands here at
-//! `htmlxtojsx_utils/<x>.rs`.
+//! with upstream's layout: upstream's lone `htmlxtojsx_v2/utils/node-utils.ts`
+//! lands here at `htmlxtojsx_utils/node_utils.rs`.
 
 pub(crate) mod node_utils;

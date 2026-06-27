@@ -116,7 +116,7 @@ pub(crate) fn generic_arg_names(generics: &str) -> String {
     let mut depth_angle: i32 = 0;
     let mut depth_paren: i32 = 0;
     let mut depth_bracket: i32 = 0;
-    let mut current_name = String::new();
+    let mut current_name: Vec<u8> = Vec::new();
     let mut in_name = true;
     let bytes = generics.as_bytes();
     let mut i = 0;
@@ -133,7 +133,8 @@ pub(crate) fn generic_arg_names(generics: &str) -> String {
         }
         let at_depth_zero = depth_angle == 0 && depth_paren == 0 && depth_bracket == 0;
         if at_depth_zero && b == b',' {
-            let trimmed = strip_tp_modifiers(&current_name);
+            let s = std::str::from_utf8(&current_name).unwrap_or("");
+            let trimmed = strip_tp_modifiers(s);
             if !trimmed.is_empty() {
                 if !out.is_empty() {
                     out.push_str(", ");
@@ -156,7 +157,7 @@ pub(crate) fn generic_arg_names(generics: &str) -> String {
                         in_name = false;
                     }
                 }
-                current_name.push(b as char);
+                current_name.push(b);
                 i += 1;
                 continue;
             }
@@ -165,11 +166,12 @@ pub(crate) fn generic_arg_names(generics: &str) -> String {
                 i += 1;
                 continue;
             }
-            current_name.push(b as char);
+            current_name.push(b);
         }
         i += 1;
     }
-    let trimmed = strip_tp_modifiers(&current_name);
+    let s = std::str::from_utf8(&current_name).unwrap_or("");
+    let trimmed = strip_tp_modifiers(s);
     if !trimmed.is_empty() {
         if !out.is_empty() {
             out.push_str(", ");
@@ -401,6 +403,14 @@ fn synthesise_generics_from_dollar_generic(script: &str) -> Option<SmolStr> {
             }
             let constraint = script[arg_start..cursor].trim().to_string();
             cursor += 1; // past `>`
+            // A top-level comma means the user wrote `$$Generic<X, Y>`,
+            // which has no single-constraint meaning. Splicing it would
+            // emit malformed `A extends X, Y`. Upstream rejects this with
+            // a transform error; lacking that error path here, abort the
+            // whole synthesis so no malformed generic list is produced.
+            if has_top_level_comma(&constraint) {
+                return None;
+            }
             if constraint.is_empty() {
                 None
             } else {
@@ -419,6 +429,23 @@ fn synthesise_generics_from_dollar_generic(script: &str) -> Option<SmolStr> {
     } else {
         Some(SmolStr::from(params.join(", ")))
     }
+}
+
+/// True if `s` contains a comma outside any `<...>` nesting. Used to
+/// detect a multi-argument `$$Generic<X, Y>` whose span can't be spliced
+/// as a single constraint. Tracks angle-bracket depth so a nested
+/// `Map<X, Y>` does not false-positive.
+fn has_top_level_comma(s: &str) -> bool {
+    let mut depth: i32 = 0;
+    for b in s.bytes() {
+        match b {
+            b'<' => depth += 1,
+            b'>' => depth -= 1,
+            b',' if depth == 0 => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 #[inline]
@@ -501,5 +528,10 @@ mod generic_arg_names_tests {
     #[test]
     fn plain_names_unchanged() {
         assert_eq!(generic_arg_names("T, U, V"), "T, U, V");
+    }
+
+    #[test]
+    fn preserves_non_ascii_name_bytes() {
+        assert_eq!(generic_arg_names("Ψ extends number"), "Ψ");
     }
 }

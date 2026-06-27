@@ -6,12 +6,14 @@
 //!
 //! **Status: NA — we use oxc directly.**
 //!
-//! Upstream's `tsAst.ts` exports helpers like `findDefaultExport`,
-//! `getDeclaratorName`, generic AST-walk wrappers around the
-//! TypeScript Compiler API. They wrap TS's `node.kind` discriminator
-//! checks in friendlier names so the rest of the codebase can ask
-//! "is this a default export?" without typing
-//! `node.modifiers?.some(m => m.kind === SyntaxKind.DefaultKeyword)`.
+//! Upstream's `tsAst.ts` exports helpers like
+//! `isInterfaceOrTypeDeclaration`, `findExportKeyword`,
+//! `getVariableAtTopLevel`, and `getTopLevelImports` — thin wrappers
+//! around the TypeScript Compiler API. They wrap TS's `node.kind`
+//! discriminator checks in friendlier names so the rest of the
+//! codebase can ask "is this an interface or type alias?" without
+//! typing `node.kind === SyntaxKind.InterfaceDeclaration || node.kind
+//! === SyntaxKind.TypeAliasDeclaration`.
 //!
 //! Our equivalent is direct oxc usage. `oxc_ast::ast::Statement`,
 //! `oxc_ast::ast::Expression`, etc. are pattern-matchable Rust enums —
@@ -25,9 +27,9 @@
 //!
 //! | Upstream function | Our equivalent |
 //! |---|---|
-//! | `findDefaultExport(program)` | inline `program.body.iter().find_map(|s| matches!(s, Statement::ExportDefaultDeclaration(_)))` at each call site (used in `inline_component` and `props_emit`). |
-//! | `getDeclaratorName(decl)` | inline `BindingPatternKind::BindingIdentifier(id) => id.name.as_str()` pattern-match at each call site. |
-//! | `walk(node, visitor)` | oxc's visitor traits (`oxc_ast::Visit`) — we implement these per-walker rather than passing a callback. |
-//! | `isInterfaceDeclaration(node)` etc. | `matches!(stmt, Statement::TSInterfaceDeclaration(_))` and similar. |
+//! | `isInterfaceOrTypeDeclaration(node)` | `matches!(stmt, Statement::TSInterfaceDeclaration(_) \| Statement::TSTypeAliasDeclaration(_))` |
+//! | `findExportKeyword(node)` | match on `Statement::Export*` / `decl.declare` at the call site |
+//! | `getVariableAtTopLevel(sf, name)` | `program.body.iter().find_map(...)` over top-level `VariableDeclaration`s |
+//! | `getTopLevelImports(sf)` | `program.body.iter().filter(\|s\| matches!(s, Statement::ImportDeclaration(_)))` |
 //!
 //! This file is a navigational stub only.

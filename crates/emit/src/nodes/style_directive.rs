@@ -30,7 +30,7 @@ pub(crate) fn emit_style_directive(
         None => {
             let name_start =
                 d.range.start + svn_parser::DirectiveKind::Style.prefix_len_with_colon();
-            let name_end = name_start + d.name.len() as u32;
+            let name_end = d.range.end; // covers `|important` modifier span, matching upstream's [colon+1, style.end]
             let Some(name) = source.get(name_start as usize..name_end as usize) else {
                 return;
             };
@@ -39,6 +39,21 @@ pub(crate) fn emit_style_directive(
             let _ = writeln!(buf, ");");
         }
         Some(svn_parser::DirectiveValue::Quoted(av)) => {
+            if av.parts.is_empty() {
+                // Upstream routes a length-0 quoted value into the same branch as the
+                // `true` shorthand, emitting the slice [colon+1, directive-end] (`foo=""`).
+                // That references the property name as a binding, so an undeclared name
+                // fires TS2304 — mirror it instead of emitting nothing.
+                let name_start =
+                    d.range.start + svn_parser::DirectiveKind::Style.prefix_len_with_colon();
+                let end = av.range.end;
+                if let Some(slice) = source.get(name_start as usize..end as usize) {
+                    let _ = write!(buf, "{indent}__svn_ensure_type(String, Number, ");
+                    buf.append_with_source(slice, svn_core::Range::new(name_start, end));
+                    let _ = writeln!(buf, ");");
+                }
+                return;
+            }
             emit_template_literal(buf, source, av, indent);
         }
         Some(svn_parser::DirectiveValue::Expression {

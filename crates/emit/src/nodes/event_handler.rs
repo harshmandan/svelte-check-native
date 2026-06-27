@@ -18,7 +18,7 @@
 //!
 //! - DOM `on:event` is handled inline by `lib.rs::emit_template_node`
 //!   when walking `Node::Element`'s attribute list. The directive is
-//!   converted to an `onNAME` prop key during attribute emission in
+//!   converted to an `"on:NAME"` prop key during attribute emission in
 //!   `nodes/element.rs::emit_dom_element_open`.
 //! - Component `on:event` is handled by
 //!   `nodes/inline_component.rs::emit_on_event_calls`, which emits one

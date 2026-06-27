@@ -17,9 +17,11 @@ use crate::emit_buffer::EmitBuffer;
 /// Emit `{@debug a, b, …}` as one bare `(IDENT);` per comma-separated
 /// part so tsgo fires TS2304 on typo'd names.
 ///
-/// Top-level commas only — `{@debug obj.method(arg1, arg2)}` is one
-/// part (the call expression). Depth tracking matches `()`, `[]`, `{}`,
-/// `<>` so generic-arg commas inside `f<A, B>()` don't split.
+/// Top-level commas only — `{@debug a, b, c}` splits into three parts.
+/// Depth tracking matches `()`, `[]`, `{}`, `<>` so any commas nested in
+/// a (parse-error-only) non-identifier body wouldn't split. Svelte's
+/// parser restricts `{@debug}` to a comma-separated identifier list, so
+/// in practice every part is a bare name.
 pub(crate) fn emit_debug_tag(
     buf: &mut EmitBuffer,
     source: &str,
@@ -55,8 +57,11 @@ pub(crate) fn emit_debug_tag(
 }
 
 /// Split `body` on top-level commas, returning `(start, end)` byte
-/// offsets for each part. Depth tracking covers `() [] {} <>` so
-/// generic-arg commas don't split incorrectly.
+/// offsets for each part. Depth tracking over `() [] {}` keeps
+/// call/index/object-literal commas from splitting a body our lenient
+/// parser tolerates; Svelte's own `{@debug}` only permits bare
+/// identifiers, so this is defensive coverage. `<>` is included
+/// belt-and-braces and is not a correct bracket pair in general JS.
 fn split_top_level_commas(body: &str) -> Vec<(usize, usize)> {
     let mut out: Vec<(usize, usize)> = Vec::new();
     let bytes = body.as_bytes();

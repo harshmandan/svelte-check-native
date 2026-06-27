@@ -108,6 +108,9 @@ pub(crate) fn emit_snippet_const(
     }
     emit_template_body(buf, source, &s.body, body_depth, insts, action_counter);
     for ident in &idents {
+        if *ident == "__svn_each_unused" {
+            continue;
+        }
         let _ = writeln!(buf, "{body_i}void {ident};");
     }
     if is_ts {

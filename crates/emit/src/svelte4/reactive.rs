@@ -6,8 +6,13 @@
 //! | Shape | Example | Rewrite |
 //! |---|---|---|
 //! | Declaration | `$: b = count * 2` (b not yet declared) | `let b = $derived(count * 2)` |
-//! | Re-assignment | `$: count += 1` (count declared earlier) | `count += 1;` (drop label) |
-//! | Statement / block | `$: { … }`, `$: console.log(a)` | `{ $: … };` (plain block wrapper) |
+//! | Re-assignment | `$: count = total * 2` (count declared earlier) | `count = __svn_invalidate(() => (total * 2));` (drop label, thunk-wrap RHS) |
+//! | Statement / block | `$: { … }`, `$: console.log(a)`, `$: count += 1` | `{ $: … };` (plain block wrapper) |
+//!
+//! Compound assignments (`+=`, etc.) fall into the "Statement / block"
+//! row by construction: they fail the plain-`=` guard (upstream's
+//! `isAssignmentBinaryExpr`), so they are wrapped rather than
+//! thunk-rewritten.
 //!
 //! Why `$derived` and not `__sveltets_2_invalidate` (upstream's helper)?
 //! Our shim is a Svelte-5 world. `$derived<T>(expr: T): T` is already

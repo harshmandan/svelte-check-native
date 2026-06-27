@@ -23,7 +23,7 @@ use crate::nodes::render_tag::emit_render_tag;
 ///
 /// `{@const}` / `{@html}` / `{@render}` / `{@debug}` route to their
 /// dedicated handlers. Other `{@*}` tags (currently only the catch-all
-/// `AtTag` for forward-compat) are side-effect-only.
+/// `AtTag` for forward-compat) emit no overlay output.
 pub(crate) fn emit_interpolation(
     buf: &mut EmitBuffer,
     source: &str,

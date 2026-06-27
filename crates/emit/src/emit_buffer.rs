@@ -219,7 +219,7 @@ fn count_newlines(s: &str) -> u32 {
 }
 
 /// Return the 1-based line number of `byte_offset` in `source`.
-/// Mirrors `source_line_at` in `lib.rs` but is kept here so this
+/// Mirrors `source_line_at` in `util.rs` but is kept here so this
 /// module is self-contained.
 fn line_number_at(source: &str, byte_offset: u32) -> u32 {
     let cap = byte_offset as usize;

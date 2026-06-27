@@ -5,11 +5,12 @@
 //!
 //! **Status: not needed by our architecture.**
 //!
-//! Upstream uses this list to decide whether an `oncamelCase` attribute
-//! is a known DOM event handler (vs. a custom prop). The check is part
-//! of attribute-classification: if the attribute name appears in
-//! knownevents, it routes through the on-event handler path; otherwise
-//! it's treated as a regular attribute.
+//! Upstream historically used this list to decide whether an
+//! `oncamelCase` attribute is a known DOM event handler (vs. a custom
+//! prop). The check was part of attribute-classification: if the
+//! attribute name appeared in knownevents, it routed through the
+//! on-event handler path; otherwise it was treated as a regular
+//! attribute. The list is presently unreferenced in svelte2tsx.
 //!
 //! We don't need this distinction — our DOM-element emit (see
 //! [`crate::nodes::element::emit_dom_element_open`]) emits ALL

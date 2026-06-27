@@ -106,12 +106,18 @@ pub(crate) fn emit_template_check_fn(
     buf.push_str("    });\n");
 }
 
-/// Emit the class-wrapper's `return { props, events, slots, bindings,
-/// exports };` at the tail of `$$render_<hash>`'s body. Only fires when
-/// both generics and a Props type source are present (the gate
-/// `use_class_wrapper`) — a sibling `declare class __svn_Render_<hash>`
-/// later projects each of the five surfaces back out at module scope
-/// via `Awaited<ReturnType<typeof $$render<…>>>['<field>']`.
+/// Emit `$$render_<hash>`'s return statement at the tail of its body.
+/// Called unconditionally for every overlay shape; the body picks the
+/// branch:
+///   - JS overlay → `return { props: /** @type … */({}) }`.
+///   - generics declared → structured `{ props, events, slots,
+///     bindings, exports }` whose surfaces a sibling
+///     `declare class __svn_Render_<hash>` projects back out at module
+///     scope (the `use_class_wrapper` case).
+///   - Svelte-4 `interface $$Props` → props spread through
+///     `__svn_ensure_right_props<…>`.
+///   - plain (no generics) → structured return with the discovered
+///     Props type or `Record<string, never>` fallback.
 ///
 /// Using `undefined as any as <T>` (not `null as <T>`) so `<T>` can be
 /// a non-nullable type like `{ foo: string }` without firing TS2352.
@@ -412,11 +418,10 @@ fn build_bindings_field(props_info: &svn_analyze::PropsInfo) -> String {
 /// - Only `isLet` entries participate; `export const` / `export
 ///   function` go through the separate `exports` field.
 /// - Has-init → optional (`?:`); no-init → required (`:`).
-/// - Type source: declared annotation > `typeof <name>` for
-///   has-init-no-annotation > `any` for no-init-no-annotation.
-///   `typeof <name>` resolves inside the render-fn scope where the
-///   stripped-`export` `let X = …` lives, picking up the literal
-///   inferred type.
+/// - Type source: declared annotation > `typeof <name>` when there is
+///   no annotation. `typeof <name>` resolves inside the render-fn scope
+///   where the stripped-`export` `let X = …` lives, picking up the
+///   literal inferred type.
 ///
 /// Returns `{}` when no `export let`s exist — the
 /// `__svn_ensure_right_props<{}>` form upstream emits for
@@ -441,11 +446,10 @@ fn build_exported_lets_shape(infos: &[ExportedLocalInfo]) -> String {
         out.push_str(": ");
         match &info.type_source {
             Some(t) => out.push_str(t),
-            None if info.has_init => {
+            None => {
                 out.push_str("typeof ");
                 out.push_str(info.name.as_str());
             }
-            None => out.push_str("any"),
         }
     }
     out.push('}');

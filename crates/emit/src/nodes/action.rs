@@ -20,11 +20,13 @@ use crate::emit_buffer::EmitBuffer;
 /// (`{#each items as item, i}`'s `i`, `{@const}` declarations, snippet
 /// parameters) stay visible in the emitted TS.
 pub(crate) fn emit_legacy_action_attrs(out: &mut String, summary: &TemplateSummary, is_ts: bool) {
-    // Keep the old `__svn_action_attrs_N` void registration alive so
-    // external references (e.g. template spreads that consumed the
-    // action's declared `$$_attributes`) still resolve. The outer
-    // void_block emits `void __svn_action_attrs_N;` unconditionally;
-    // declaring the binding here avoids TS2304 at that reference site.
+    // Declare and self-void the legacy `__svn_action_attrs_N` bindings
+    // here, inside `__svn_tpl_check`, so external references (e.g.
+    // template spreads that consumed the action's declared
+    // `$$_attributes`) still resolve. `emit_void_block` deliberately
+    // skips these names in the outer scope — the declarations aren't
+    // visible there, so an outer `void __svn_action_attrs_N;` would
+    // fire TS2304.
     for name in summary.void_refs.names() {
         if name.starts_with("__svn_action_attrs_") {
             if is_ts {

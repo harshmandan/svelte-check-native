@@ -34,9 +34,9 @@
 /// Falls back to a single `__svn_each_unused` token when nothing
 /// identifier-shaped is found, so the emitted `void` line stays
 /// valid.
-pub(crate) fn all_identifiers(binding: &str) -> Vec<String> {
+pub(crate) fn all_identifiers(binding: &str) -> Vec<&str> {
     let bytes = binding.as_bytes();
-    let mut out: Vec<String> = Vec::new();
+    let mut out: Vec<&str> = Vec::with_capacity(binding.len() / 4 + 1);
     let mut i = 0;
     let mut depth_brace = 0usize; // tracks `{ ... }` for object key:value
     while i < bytes.len() {
@@ -115,11 +115,11 @@ pub(crate) fn all_identifiers(binding: &str) -> Vec<String> {
                     i += 1;
                 }
             }
-            _ if b.is_ascii_alphabetic() || b == b'_' || b == b'$' => {
+            _ if b.is_ascii_alphabetic() || b == b'_' || b == b'$' || b >= 0x80 => {
                 let start = i;
                 while i < bytes.len() {
                     let c = bytes[i];
-                    if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' {
+                    if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80 {
                         i += 1;
                     } else {
                         break;
@@ -142,7 +142,7 @@ pub(crate) fn all_identifiers(binding: &str) -> Vec<String> {
                     true
                 };
                 if take {
-                    out.push(name.to_string());
+                    out.push(name);
                 }
             }
             _ => {
@@ -151,7 +151,7 @@ pub(crate) fn all_identifiers(binding: &str) -> Vec<String> {
         }
     }
     if out.is_empty() {
-        out.push("__svn_each_unused".to_string());
+        out.push("__svn_each_unused");
     }
     out
 }

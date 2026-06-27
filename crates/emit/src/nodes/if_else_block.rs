@@ -58,7 +58,7 @@ pub(crate) fn emit_if_block(
     let main_cond = source
         .get(b.condition_range.start as usize..b.condition_range.end as usize)
         .unwrap_or("true")
-        .trim();
+        .trim_ascii();
     // R-Conv #20 (B2 #4): splice the condition with append_with_source
     // so any diagnostic firing on the condition expression
     // (TS2367 "comparison appears to be unintentional", TS18047
@@ -78,7 +78,7 @@ pub(crate) fn emit_if_block(
         let arm_cond = source
             .get(arm.condition_range.start as usize..arm.condition_range.end as usize)
             .unwrap_or("true")
-            .trim();
+            .trim_ascii();
         let _ = write!(buf, "{indent}}} else if ((");
         if arm_cond.is_empty() {
             buf.push_str("true");

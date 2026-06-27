@@ -124,6 +124,24 @@ fn try_process_let_statement(
         while s < bytes.len() {
             let c = bytes[s];
             match c {
+                b'"' | b'\'' | b'`' => {
+                    s = skip_string_literal(bytes, s, c);
+                    continue;
+                }
+                b'/' if bytes.get(s + 1).copied() == Some(b'/') => {
+                    while s < bytes.len() && bytes[s] != b'\n' {
+                        s += 1;
+                    }
+                    continue;
+                }
+                b'/' if bytes.get(s + 1).copied() == Some(b'*') => {
+                    let mut k = s + 2;
+                    while k + 1 < bytes.len() && !(bytes[k] == b'*' && bytes[k + 1] == b'/') {
+                        k += 1;
+                    }
+                    s = k.saturating_add(2).min(bytes.len());
+                    continue;
+                }
                 b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
                 b')' | b']' | b'}' => paren_depth -= 1,
                 b'>' => {
@@ -471,17 +489,22 @@ pub(crate) fn has_strict_events_attr(doc: &svn_parser::Document<'_>) -> bool {
 }
 
 /// Infer Svelte 5 runes mode from the document source. Mirrors
-/// svn-lint's runes resolution (`runes_from_filename` +
-/// `scan_doc_for_rune_call` in `walk.rs`) — intentionally duplicated
-/// rather than dep'ing on lint, so emit gets the signal with no
-/// circular dep in the other direction.
+/// svn-lint's `scan_doc_for_rune_call` (`walk.rs`) — intentionally
+/// duplicated rather than dep'ing on lint, so emit gets the signal
+/// with no circular dep in the other direction.
+///
+/// Emit only ever sees `.svelte` documents, so runes mode is inferred
+/// purely from rune-call markers in the source — there is no filename
+/// signal to consult here. The `.svelte.js` / `.svelte.ts` filename
+/// case is svn-lint's concern for the module files emit never
+/// transforms.
 ///
 /// Looks for any rune call (`$state(…)`, `$props(…)`, `$derived(…)`,
-/// `$effect(…)`, `$bindable(…)`, `$inspect(…)`, `$host(…)`) or a
-/// `.svelte.js` / `.svelte.ts` filename. Runes are always called, so
-/// requiring `(` after the name excludes the ambient `$$props` store
-/// pattern cheaply. Dotted variants (`$state.raw`, `$derived.by`) are
-/// matched by walking past the `.word` chain before the `(`.
+/// `$effect(…)`, `$bindable(…)`, `$inspect(…)`, `$host(…)`). Runes are
+/// always called, so requiring `(` after the name excludes the ambient
+/// `$$props` store pattern cheaply. Dotted variants (`$state.raw`,
+/// `$derived.by`) are matched by walking past the `.word` chain before
+/// the `(`.
 pub(crate) fn is_runes_mode(doc: &svn_parser::Document<'_>) -> bool {
     let source = doc.source;
     for marker in [
@@ -565,6 +588,33 @@ pub(crate) fn rewrite_void_sequence_to_array(out: &mut String) {
     let bytes = original.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
+        let c = bytes[i];
+        // Skip string / template literals and comments verbatim so a
+        // `void (a, b)` appearing inside `"…"` or `// …` isn't rewritten.
+        if matches!(c, b'"' | b'\'' | b'`') {
+            let end = skip_string_literal(bytes, i, c);
+            out.push_str(&original[i..end]);
+            i = end;
+            continue;
+        }
+        if c == b'/' && bytes.get(i + 1).copied() == Some(b'/') {
+            let start = i;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            out.push_str(&original[start..i]);
+            continue;
+        }
+        if c == b'/' && bytes.get(i + 1).copied() == Some(b'*') {
+            let start = i;
+            let mut k = i + 2;
+            while k + 1 < bytes.len() && !(bytes[k] == b'*' && bytes[k + 1] == b'/') {
+                k += 1;
+            }
+            i = k.saturating_add(2).min(bytes.len());
+            out.push_str(&original[start..i]);
+            continue;
+        }
         if let Some((kind, paren_open, paren_close)) = find_paren_sequence(bytes, i) {
             out.push_str(&original[i..paren_open]);
             if matches!(kind, SeqKind::ReactiveLabel) {
@@ -882,6 +932,10 @@ fn try_process_let_statement_for_denarrow(
                 continue;
             }
             match c {
+                b'"' | b'\'' | b'`' => {
+                    s = skip_string_literal(bytes, s, c);
+                    continue;
+                }
                 b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
                 b')' | b']' | b'}' => paren_depth -= 1,
                 b'>' => {
@@ -976,20 +1030,17 @@ pub(crate) fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document
         }
         out.push_str("    void $$restProps;\n");
     }
-    // `$$props` detection has to avoid `$$restProps` — the word
-    // boundary check: must not be preceded by `rest` (the only
-    // Svelte-4 form where $$props appears as a suffix).
-    if let Some(idx) = src.find("$$props") {
-        let prev = src.as_bytes().get(idx.saturating_sub(4)..idx);
-        let is_rest = matches!(prev, Some(b"rest"));
-        if !is_rest || src.matches("$$props").count() > src.matches("$$restProps").count() {
-            if is_ts {
-                out.push_str("    let $$props: Record<string, any> = {};\n");
-            } else {
-                out.push_str("    let $$props = /** @type {Record<string, any>} */ ({});\n");
-            }
-            out.push_str("    void $$props;\n");
+    // `$$props` detection is intentionally loose substring matching,
+    // consistent with the `$$slots` / `$$restProps` branches above. A
+    // spurious match just declares an unused local, which is harmless;
+    // a missed one would fire TS2304 across every reference.
+    if src.contains("$$props") {
+        if is_ts {
+            out.push_str("    let $$props: Record<string, any> = {};\n");
+        } else {
+            out.push_str("    let $$props = /** @type {Record<string, any>} */ ({});\n");
         }
+        out.push_str("    void $$props;\n");
     }
 }
 
@@ -1140,6 +1191,24 @@ fn try_process_let_statement_for_widening(
         while s < bytes.len() {
             let c = bytes[s];
             match c {
+                b'"' | b'\'' | b'`' => {
+                    s = skip_string_literal(bytes, s, c);
+                    continue;
+                }
+                b'/' if bytes.get(s + 1).copied() == Some(b'/') => {
+                    while s < bytes.len() && bytes[s] != b'\n' {
+                        s += 1;
+                    }
+                    continue;
+                }
+                b'/' if bytes.get(s + 1).copied() == Some(b'*') => {
+                    let mut k = s + 2;
+                    while k + 1 < bytes.len() && !(bytes[k] == b'*' && bytes[k + 1] == b'/') {
+                        k += 1;
+                    }
+                    s = k.saturating_add(2).min(bytes.len());
+                    continue;
+                }
                 b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
                 b')' | b']' | b'}' => paren_depth -= 1,
                 b'>' => {

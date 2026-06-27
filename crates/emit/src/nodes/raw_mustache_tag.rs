@@ -4,9 +4,10 @@
 //! `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/RawMustacheTag.ts`.
 //!
 //! Upstream emits the expression as a bare statement (`{@html foo}`
-//! becomes `;foo;`) so tsgo type-checks `foo` against the surrounding
-//! scope. We emit `(EXPR);` (paren-wrapped to protect against
-//! sequence-expression / assignment-looking shapes).
+//! becomes ` foo;` — the leading `{@html ` is overwritten with a space,
+//! the trailing `}` with `;`) so tsgo type-checks `foo` against the
+//! surrounding scope. We emit `(EXPR);` (paren-wrapped to protect
+//! against sequence-expression / assignment-looking shapes).
 
 use crate::emit_buffer::EmitBuffer;
 

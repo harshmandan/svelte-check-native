@@ -79,11 +79,11 @@ pub fn route_kind(path: &Path) -> Option<RouteKind> {
 /// only standardized in SvelteKit 2.16+; older projects that predate
 /// it fire TS2694 ("has no exported member 'PageProps'"). The
 /// user-defined-type fallback (`any`) is safe.
-pub fn kit_prop_decl(name: &str, kind: RouteKind) -> Option<String> {
+pub fn kit_prop_decl(name: &str, kind: RouteKind) -> Option<&'static str> {
     match (kind, name) {
-        (RouteKind::Page, "data") => Some("data: import('./$types.js').PageData".into()),
-        (RouteKind::Page, "form") => Some("form?: import('./$types.js').ActionData".into()),
-        (RouteKind::Layout, "data") => Some("data: import('./$types.js').LayoutData".into()),
+        (RouteKind::Page, "data") => Some("data: import('./$types.js').PageData"),
+        (RouteKind::Page, "form") => Some("form: import('./$types.js').ActionData"),
+        (RouteKind::Layout, "data") => Some("data: import('./$types.js').LayoutData"),
         // `children` is REQUIRED on layouts — SvelteKit always passes
         // a children snippet to layout components at runtime, so
         // `let { children } = $props()` followed by `{@render children()}`
@@ -91,7 +91,7 @@ pub fn kit_prop_decl(name: &str, kind: RouteKind) -> Option<String> {
         // svelte2tsx synthesis: emits `children: import('svelte').Snippet`
         // (no `?`). With `?:`, tsgo fires TS2722 "Cannot invoke an object
         // which is possibly 'undefined'" on the bare call.
-        (RouteKind::Layout, "children") => Some("children: import('svelte').Snippet".into()),
+        (RouteKind::Layout, "children") => Some("children: import('svelte').Snippet"),
         // `+error.svelte` doesn't receive props via $props(); its shape
         // comes from `page.error`. Leave it unannotated for now.
         _ => None,
@@ -117,10 +117,18 @@ pub fn kit_prop_decl(name: &str, kind: RouteKind) -> Option<String> {
 ///
 /// Returns `None` for names that aren't kit-auto-typed — the caller
 /// falls back to `: any` (our legacy widen).
+///
+/// `form` is intentionally gated to `RouteKind::Page` only. A layout's
+/// `$types` exports no `ActionData` symbol, so widening `form` on a
+/// layout would emit a `import('./$types.js').ActionData` reference that
+/// fires TS2694 ("has no exported member 'ActionData'"). An `export let
+/// form` on a layout is itself nonsensical — layouts don't receive form
+/// action data — so the `: any` fallback is the correct, parity-safe
+/// behavior there.
 pub fn kit_widen_type(name: &str, kind: RouteKind) -> Option<&'static str> {
     match (kind, name) {
         (RouteKind::Page, "data") => Some("import('./$types.js').PageData"),
-        (RouteKind::Page, "form") => Some("import('./$types.js').ActionData | undefined"),
+        (RouteKind::Page, "form") => Some("import('./$types.js').ActionData"),
         (RouteKind::Page, "snapshot") => Some("import('./$types.js').Snapshot | undefined"),
         (RouteKind::Layout, "data") => Some("import('./$types.js').LayoutData"),
         (RouteKind::Layout, "snapshot") => Some("import('./$types.js').Snapshot | undefined"),
@@ -214,7 +222,7 @@ mod tests {
     #[test]
     fn kit_prop_decl_page_data_required() {
         assert_eq!(
-            kit_prop_decl("data", RouteKind::Page).as_deref(),
+            kit_prop_decl("data", RouteKind::Page),
             Some("data: import('./$types.js').PageData")
         );
     }
@@ -222,15 +230,15 @@ mod tests {
     #[test]
     fn kit_prop_decl_page_form_optional() {
         assert_eq!(
-            kit_prop_decl("form", RouteKind::Page).as_deref(),
-            Some("form?: import('./$types.js').ActionData")
+            kit_prop_decl("form", RouteKind::Page),
+            Some("form: import('./$types.js').ActionData")
         );
     }
 
     #[test]
     fn kit_prop_decl_layout_data() {
         assert_eq!(
-            kit_prop_decl("data", RouteKind::Layout).as_deref(),
+            kit_prop_decl("data", RouteKind::Layout),
             Some("data: import('./$types.js').LayoutData")
         );
     }
@@ -241,7 +249,7 @@ mod tests {
         // runtime; making it optional fires TS2722 on `{@render
         // children()}`.
         assert_eq!(
-            kit_prop_decl("children", RouteKind::Layout).as_deref(),
+            kit_prop_decl("children", RouteKind::Layout),
             Some("children: import('svelte').Snippet")
         );
     }
@@ -265,7 +273,7 @@ mod tests {
             synthesize_route_props_type(RouteKind::Page, &["data", "form", "heading"]).unwrap();
         assert_eq!(
             ty,
-            "{ data: import('./$types.js').PageData; form?: import('./$types.js').ActionData; \
+            "{ data: import('./$types.js').PageData; form: import('./$types.js').ActionData; \
              heading?: any; }"
         );
     }

@@ -79,7 +79,10 @@ fn typeof_targets_inner(text: &str, require_keyof: bool) -> Vec<SmolStr> {
                     k += 1;
                 }
                 if k < bytes.len()
-                    && (bytes[k].is_ascii_alphabetic() || bytes[k] == b'_' || bytes[k] == b'$')
+                    && (bytes[k].is_ascii_alphabetic()
+                        || bytes[k] == b'_'
+                        || bytes[k] == b'$'
+                        || bytes[k] >= 0x80)
                 {
                     let start = k;
                     while k < bytes.len() && is_ident_byte(bytes[k]) {
@@ -98,5 +101,5 @@ fn typeof_targets_inner(text: &str, require_keyof: bool) -> Vec<SmolStr> {
 
 #[inline]
 fn is_ident_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80
 }

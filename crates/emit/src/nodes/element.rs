@@ -83,11 +83,15 @@ pub(crate) fn emit_element_node(
 ) {
     let dom_emit = dom_element_emit_enabled() && e.name.as_str() != "slot";
     let inner_depth = if dom_emit { depth + 1 } else { depth };
-    // R-Conv #20 (B2 #3): emit `<slot>` as
+    // Emit `<slot>` as
     // `__svn_create_slot("NAME", { ...attrs });` so each slot's name
     // checks against `keyof $$Slots` (TS2345) and its props check
     // against `$$Slots[Name]` (TS2322 / TS2353). Mirrors upstream
-    // svelte2tsx's `htmlxtojsx_v2/nodes/Slot.ts` shape. Emit BEFORE
+    // svelte2tsx's `htmlxtojsx_v2/nodes/Element.ts`
+    // (`getStartTransformation`, `case 'slot'`, building
+    // `__sveltets_createSlot(...)`); the `name` attribute itself is
+    // dropped from the props object by `Attribute.ts`'s
+    // `parent.type === 'Slot'` name-skip guard. Emit BEFORE
     // the children walk so slot fallback content type-checks
     // independently. The companion `const __svn_create_slot = …`
     // declaration lives at the top of the template-check fn body
@@ -697,9 +701,11 @@ pub(crate) fn emit_dom_element_close(buf: &mut EmitBuffer, depth: usize) {
 ///   - Element: `<svelte:element this={expr}>` — pass the `this`
 ///     expression verbatim as the first createElement arg so TS
 ///     checks the tag against IntrinsicElements keys.
-///   - SelfRef/Component/Boundary/missing-this: skip the
-///     createElement scope (not DOM elements). Open a bare
-///     `{ }` block so child emit still scopes locals correctly.
+///   - SelfRef/Component/missing-this: skip the createElement scope
+///     (not DOM elements). Open a bare `{ }` block so child emit
+///     still scopes locals correctly.
+///   - Boundary: never reaches this fn — the caller diverts
+///     `<svelte:boundary>` to a snippet-prop-aware path.
 pub(crate) fn emit_svelte_element_open(
     buf: &mut EmitBuffer,
     source: &str,
@@ -710,16 +716,11 @@ pub(crate) fn emit_svelte_element_open(
     use svn_parser::SvelteElementKind::*;
     let indent = "    ".repeat(depth);
     match s.kind {
-        Body | Head | Window | Document | Options | Fragment | Boundary => {
-            // `<svelte:boundary onerror={…}>` joins the createElement
-            // group: upstream svelte2tsx emits
-            // `svelteHTML.createElement("svelte:boundary", { onerror,
-            // failed })` so the boundary's `onerror` callback signature
-            // type-checks against svelte/elements'
-            // `'svelte:boundary': { onerror?, failed?, pending? }`
-            // shape. Pre-fix it fell through to the bare-scope branch
-            // below alongside SelfRef/Component, losing every
-            // boundary-prop check.
+        Body | Head | Window | Document | Options | Fragment => {
+            // `<svelte:body|head|window|document|options|fragment>` join
+            // the createElement group: literal `"svelte:<name>"` tag
+            // string so their directive/prop signatures type-check
+            // against svelte/elements' IntrinsicElements keys.
             let tag = format!("svelte:{}", s.kind.as_str());
             emit_dom_element_open(
                 buf,
@@ -730,6 +731,14 @@ pub(crate) fn emit_svelte_element_open(
                 depth,
                 action_indices,
             );
+        }
+        Boundary => {
+            // Unreachable: callers divert `<svelte:boundary>` to
+            // emit_dom_element_open_with_snippet_props before reaching
+            // here so the failed/pending snippets type against the
+            // createElement prop signature (see emit_svelte_element_node).
+            debug_assert!(false, "Boundary should be handled by the caller's inline path");
+            let _ = writeln!(buf, "{indent}{{");
         }
         Element => {
             // Find `this={expr}` among attributes.
@@ -805,7 +814,8 @@ pub(crate) fn element_type_annotation(tag_name: &str) -> String {
 ///   (TS2322 type-mismatch fires here).
 ///
 /// Mirrors upstream svelte2tsx's
-/// `htmlxtojsx_v2/nodes/Slot.ts::handleSlot` shape.
+/// `htmlxtojsx_v2/nodes/Element.ts` (`getStartTransformation`,
+/// `case 'slot'`, building `__sveltets_createSlot(...)`).
 fn emit_slot_check(buf: &mut EmitBuffer, source: &str, e: &svn_parser::Element, depth: usize) {
     use svn_parser::Attribute;
     let inner = "    ".repeat(depth + 1);

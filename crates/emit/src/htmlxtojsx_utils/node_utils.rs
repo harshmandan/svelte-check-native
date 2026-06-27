@@ -22,6 +22,11 @@
 //! | `sanitizePropName(name)` | partial — `crate::util::is_simple_js_identifier` covers the "is this a valid JS identifier?" question. Upstream's `sanitizePropName` additionally rewrites unsafe names to quoted strings; we handle the rewrite at each prop-emit site (e.g. `nodes::inline_component::write_object_key`). |
 //! | `transform(source, transformations: TransformationArray)` | NA — applies a list of MagicString operations in one pass. Our emit doesn't have a transformation-list step; we write directly into the buffer in order. |
 //! | `TransformationArray` (type alias) | NA — type alias for the bulk-mutation list shape. Not applicable. |
+//! | `getEnd(node)` | Returns the end offset of an expression, excluding any trailing type annotation (oxc carries these as `TSAsExpression` / `TSSatisfiesExpression` / `TSNonNullExpression` / a `typeAnnotation` field). We perform that "cut off the trailing type annotation" trim where we emit bind/each expression spans — `nodes::binding` and `nodes::each_block`. Consumed upstream in `Binding.ts` and `EachBlock.ts`. |
+//! | `isTypescriptNode(node)` | Companion predicate for `getEnd` — tests whether a node is one of the TS-only expression wrappers. Same handling: the type-annotation trim lives in `nodes::binding` and `nodes::each_block`. |
+//! | `isImplicitlyClosedBlock(end, block)` | NA — supports upstream's loose/error-recovery parsing of unterminated blocks. Loose parsing is out of scope for our emit. |
+//! | `isShortHandAttribute(attr)` | NA — shorthand attribute detection is handled at the attribute emit site via span comparison. |
+//! | `isQuote(str)` | NA — trivial single-character predicate. |
 //!
 //! ## Should we fold these into a real Rust module?
 //!

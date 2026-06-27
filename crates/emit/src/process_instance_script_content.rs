@@ -13,9 +13,13 @@
 //! - **`export * from 'mod'`** — TS1232
 //!
 //! All are hoisted to a module-level prelude. The original spans inside
-//! the script body are blanked with whitespace of the same byte length so
-//! line/column positions inside the body stay aligned for source-map
-//! mapping.
+//! the script body are blanked with whitespace of the same *byte* length so
+//! byte offsets inside the body stay aligned for source-map mapping. Column
+//! (UTF-16) positions also stay aligned for ASCII content; a blanked
+//! multibyte char expands to len_utf8() spaces, so columns of any live code
+//! that follows it on the same physical line drift right by one per multibyte
+//! char (latent — blanked spans are whole statements, rarely followed by live
+//! code on the same line).
 
 use std::collections::HashSet;
 
@@ -253,6 +257,10 @@ pub fn split_imports(
     // reference body locals via plain `typeof` stay body-scoped;
     // exported ones hoist (consumers need them at module scope).
     let mut pending_type_spans: Vec<(usize, usize, SmolStr, bool)> = Vec::new();
+    // Names of `export type` / `export interface` declarations hoisted
+    // verbatim (with their `export` keyword) — these bypass
+    // `pending_type_spans` and are merged into `hoisted_type_names` below.
+    let mut exported_hoisted_type_names: Vec<SmolStr> = Vec::new();
 
     for stmt in &parsed.program.body {
         match stmt {
@@ -297,12 +305,14 @@ pub fn split_imports(
                     // `export ` prefix and leave `type Foo = ...` in the
                     // function body — invisible to consumers and never
                     // re-exported by the overlay.
-                    if matches!(
-                        d,
-                        Declaration::TSTypeAliasDeclaration(_)
-                            | Declaration::TSInterfaceDeclaration(_)
-                    ) {
+                    let exported_type_name = match d {
+                        Declaration::TSTypeAliasDeclaration(t) => Some(t.id.name.as_str()),
+                        Declaration::TSInterfaceDeclaration(i) => Some(i.id.name.as_str()),
+                        _ => None,
+                    };
+                    if let Some(name) = exported_type_name {
                         hoist_spans.push(span);
+                        exported_hoisted_type_names.push(SmolStr::from(name));
                         continue;
                     }
                     // `export const/let/var/function/class` — strip just
@@ -587,33 +597,11 @@ pub fn split_imports(
         }
     }
 
-    // Also register any `export type` / `export interface` spans as
-    // hoisted — those went direct into hoist_spans without passing
-    // through pending_type_spans. Parse the first identifier after
-    // `type ` / `interface ` to pick up the name.
-    for &(start, end) in &hoist_spans {
-        let span_text = &content[start..end];
-        // Peel an optional leading `export` keyword as a UNIT before the
-        // `type `/`interface ` match. A char-set strip ({e,x,p,o,r,t,ws})
-        // also eats the `t` of `type`, so `export type Foo` collapsed to
-        // `ype Foo` and the name was never registered (`export interface`
-        // happened to survive because `i` isn't in the set).
-        let trimmed = span_text.trim_start();
-        let trimmed = trimmed.strip_prefix("export").unwrap_or(trimmed).trim_start();
-        for kw in ["type ", "interface "] {
-            if let Some(rest) = trimmed.strip_prefix(kw) {
-                let ident: String = rest
-                    .trim_start()
-                    .chars()
-                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
-                    .collect();
-                if !ident.is_empty() {
-                    hoisted_type_names.insert(SmolStr::from(ident));
-                }
-                break;
-            }
-        }
-    }
+    // `export type` / `export interface` declarations were hoisted
+    // verbatim above (with their `export` keyword), bypassing
+    // `pending_type_spans`. Their names were captured from the AST at the
+    // export arm; merge them so consumers' `import type` references resolve.
+    hoisted_type_names.extend(exported_hoisted_type_names);
 
     if hoist_spans.is_empty() && strip_keyword_spans.is_empty() && drop_spans.is_empty() {
         return SplitScript {
@@ -646,7 +634,6 @@ pub fn split_imports(
     // No source-line mapping for these — they're synthetic and tsgo is
     // expected to never fire a diagnostic on them (`any`-typed
     // placeholders).
-    let body_names_set: HashSet<SmolStr> = body_decl_names.iter().cloned().collect();
     let referenced: HashSet<SmolStr> = if body_names_set.is_empty() {
         HashSet::new()
     } else {

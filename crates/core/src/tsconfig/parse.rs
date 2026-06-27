@@ -174,9 +174,13 @@ fn take_string_or_array(obj: &mut Map<String, Value>, key: &str) -> Vec<String> 
     }
 }
 
-fn take_paths(obj: &mut Map<String, Value>) -> BTreeMap<String, Vec<String>> {
+fn take_paths(obj: &mut Map<String, Value>) -> Option<BTreeMap<String, Vec<String>>> {
+    // `None` when the `paths` key is absent (or non-object → ignored, as
+    // TS does); `Some(map)` (possibly empty) when present as an object —
+    // so an explicit `"paths": {}` is distinguishable from absent and can
+    // blank a parent's paths in an extends chain.
     let Some(Value::Object(entries)) = obj.remove("paths") else {
-        return BTreeMap::new();
+        return None;
     };
 
     let mut out = BTreeMap::new();
@@ -192,7 +196,7 @@ fn take_paths(obj: &mut Map<String, Value>) -> BTreeMap<String, Vec<String>> {
             out.insert(key, patterns);
         }
     }
-    out
+    Some(out)
 }
 
 fn take_module_resolution(obj: &mut Map<String, Value>) -> Option<ModuleResolution> {
@@ -315,7 +319,10 @@ mod tests {
         assert_eq!(co.skip_lib_check, Some(true));
         assert_eq!(co.base_url.as_deref(), Some("."));
         assert_eq!(
-            co.paths.get("$lib/*").map(|v| v.as_slice()),
+            co.paths
+                .as_ref()
+                .and_then(|p| p.get("$lib/*"))
+                .map(|v| v.as_slice()),
             Some(&["./src/lib/*".to_string()][..])
         );
         assert_eq!(co.root_dirs, vec!["./src", "./.svelte-kit"]);

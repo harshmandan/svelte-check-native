@@ -277,7 +277,13 @@ fn resolve_paths_bfs(chain: &[TsConfigFile]) -> std::collections::BTreeMap<Strin
             Some(b) => dir.join(b),
             None => dir.to_path_buf(),
         };
-        for (pattern, values) in &file.compiler_options.paths {
+        let Some(file_paths) = file.compiler_options.paths.as_ref() else {
+            continue;
+        };
+        if file_paths.is_empty() {
+            break; // explicit `{}` blanks parent paths (l103)
+        }
+        for (pattern, values) in file_paths {
             if out.contains_key(pattern) {
                 continue; // inner wins
             }

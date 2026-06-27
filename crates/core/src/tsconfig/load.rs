@@ -226,8 +226,10 @@ fn substitute_config_dir(file: &mut TsConfigFile, entry_dir: &Path) {
     let co = &mut file.compiler_options;
     sub_opt(&mut co.base_url);
     sub_vec(&mut co.root_dirs);
-    for vs in co.paths.values_mut() {
-        sub_vec(vs);
+    if let Some(p) = co.paths.as_mut() {
+        for vs in p.values_mut() {
+            sub_vec(vs);
+        }
     }
     sub_opt(&mut co.declaration_dir);
     sub_opt_vec(&mut co.type_roots);
@@ -508,7 +510,9 @@ fn merge_compiler_options(co: &mut CompilerOptions, cc: CompilerOptions) {
     if !cc.root_dirs.is_empty() {
         co.root_dirs = cc.root_dirs;
     }
-    if !cc.paths.is_empty() {
+    // `paths` is replaced-when-specified (TS never per-key merges); a
+    // child's explicit `Some` (even empty `{}`) blanks the parent's.
+    if cc.paths.is_some() {
         co.paths = cc.paths;
     }
 
@@ -736,8 +740,30 @@ mod tests {
 
         let cfg = load(&ts).unwrap();
         // Child's paths replaced parent's entirely.
-        assert_eq!(cfg.compiler_options.paths.len(), 1);
-        assert!(cfg.compiler_options.paths.contains_key("baz/*"));
+        let paths = cfg.compiler_options.paths.as_ref().unwrap();
+        assert_eq!(paths.len(), 1);
+        assert!(paths.contains_key("baz/*"));
+    }
+
+    #[test]
+    fn child_empty_paths_blanks_parent() {
+        // A child `"paths": {}` blanks the parent's paths (present-but-
+        // empty replaces, TS semantics).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("base.json"),
+            r#"{ "compilerOptions": { "paths": { "foo/*": ["./foo/*"] } } }"#,
+        )
+        .unwrap();
+        let ts = dir.path().join("tsconfig.json");
+        std::fs::write(
+            &ts,
+            r#"{ "extends": "./base.json", "compilerOptions": { "paths": {} } }"#,
+        )
+        .unwrap();
+        let cfg = load(&ts).unwrap();
+        let paths = cfg.compiler_options.paths.as_ref().unwrap();
+        assert!(paths.is_empty(), "child {{}} should blank parent: {paths:?}");
     }
 
     #[test]

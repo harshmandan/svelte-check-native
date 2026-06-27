@@ -1235,7 +1235,9 @@ fn escape_solution_tsconfig(candidate: &Path) -> Option<PathBuf> {
             Ok(c) => c,
             Err(_) => continue,
         };
-        let has_paths = chain.iter().any(|f| !f.compiler_options.paths.is_empty());
+        let has_paths = chain
+            .iter()
+            .any(|f| f.compiler_options.paths.as_ref().is_some_and(|p| !p.is_empty()));
         if !has_paths {
             continue;
         }

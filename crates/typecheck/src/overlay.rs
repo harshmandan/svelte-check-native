@@ -169,7 +169,20 @@ pub fn build(
             Some(b) => dir.join(b),
             None => dir.to_path_buf(),
         };
-        for (pattern, values) in &file.compiler_options.paths {
+        // `paths` is replace-when-specified (TS semantics). An explicit
+        // `"paths": {}` blanks any parent's paths, so stop walking the
+        // chain at the first config that declares an empty `paths`
+        // (l103); `None` (absent) keeps inheriting. For non-empty, keep
+        // the per-pattern first-wins union (a deliberate widening that
+        // lets path-mapped imports resolve when a child partially
+        // restates `paths`).
+        let Some(file_paths) = file.compiler_options.paths.as_ref() else {
+            continue;
+        };
+        if file_paths.is_empty() {
+            break;
+        }
+        for (pattern, values) in file_paths {
             if paths_accumulated.contains_key(pattern) {
                 continue; // inner wins per pattern
             }

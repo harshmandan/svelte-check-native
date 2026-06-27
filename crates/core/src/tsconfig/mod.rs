@@ -90,7 +90,11 @@ pub struct CompilerOptions {
     pub base_url: Option<String>,
     /// `paths`: key → array of path patterns. BTreeMap for deterministic
     /// iteration order (matters for overlay-generation reproducibility).
-    pub paths: BTreeMap<String, Vec<String>>,
+    /// `None` = the `paths` key was absent (inherit from a parent in an
+    /// extends chain); `Some` (possibly empty) = explicitly specified —
+    /// an explicit `"paths": {}` BLANKS the parent's paths (TS replaces
+    /// `paths` when specified, never per-key merges).
+    pub paths: Option<BTreeMap<String, Vec<String>>>,
     pub root_dirs: Vec<String>,
 
     pub allow_js: Option<bool>,

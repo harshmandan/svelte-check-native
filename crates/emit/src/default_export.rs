@@ -262,7 +262,12 @@ pub(crate) fn emit_default_export_declarations_ts(
     // {[index: string]: any}` ONLY when the child component uses
     // `$$props` / `$$restProps`. Scan the WHOLE document source — a
     // Svelte 4 component can spread `{...$$props}` in the TEMPLATE.
-    let uses_any_props = doc.source.contains("$$props") || doc.source.contains("$$restProps");
+    // Upstream gates this on `!uses$$Props && (uses$$props || uses$$restProps)`
+    // (index.ts:253): a declared `interface/type $$Props` is authoritative,
+    // so the AllProps index-signature widen is suppressed. Dropping the
+    // `!uses$$Props` term made us accept excess props upstream rejects.
+    let uses_any_props = (doc.source.contains("$$props") || doc.source.contains("$$restProps"))
+        && prop_ty_root_name.as_deref() != Some("$$Props");
     let has_slots = svelte4_style && has_slot;
     let widen_for = |base: &str| -> String {
         if !svelte4_style {

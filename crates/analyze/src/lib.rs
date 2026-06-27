@@ -41,6 +41,7 @@
 
 pub mod ast_walk;
 pub mod dom_binding;
+pub mod events;
 pub mod jsdoc;
 pub mod nodes;
 pub mod props;
@@ -57,14 +58,13 @@ pub use jsdoc::{
 };
 pub use nodes::attribute::literal_attr_value;
 pub use nodes::binding::resolve_bind_value_type;
-pub use props::{
-    PropInfo, PropsInfo, PropsSource, collect_ctor_locals,
-    collect_inline_typed_dispatcher_member_names,
-    contains_typeof_ref, find_dispatched_event_names, find_dispatcher_event_type_sources,
-    find_dispatcher_local_names, find_typed_dispatcher_local_names,
-    find_untyped_dispatcher_local_names, has_event_dispatcher_call,
-    has_inline_typed_dispatcher_members, root_type_name_of,
+pub use events::{
+    collect_ctor_locals, collect_inline_typed_dispatcher_member_names, find_dispatched_event_names,
+    find_dispatcher_event_type_sources, find_dispatcher_local_names,
+    find_typed_dispatcher_local_names, find_untyped_dispatcher_local_names,
+    has_event_dispatcher_call, has_inline_typed_dispatcher_members,
 };
+pub use props::{PropInfo, PropsInfo, PropsSource, contains_typeof_ref, root_type_name_of};
 pub use store::{
     collect_top_level_bindings, collect_type_only_import_bindings, collect_typed_top_level_lets,
     collect_typed_uninit_lets, find_store_refs, find_store_refs_with_bindings,

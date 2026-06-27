@@ -210,12 +210,20 @@ fn check_element(
     // <track kind="captions"> child. Skipped on aria-hidden="true"
     // or when src isn't set.
     if !is_dynamic && name == "video" {
-        let has_src = attribute_map.contains_key("src");
         let aria_hidden_true = attribute_map.get("aria-hidden").and_then(|a| match a {
             Attribute::Plain(p) => get_static_text_value(p),
             _ => None,
         }) == Some("true");
-        if has_src && !aria_hidden_true && !video_has_caption_track(children) {
+        // Upstream returns early on `muted`, `aria-hidden="true"`, OR a
+        // spread (which may carry src/muted we can't see statically) —
+        // missing the muted/spread guards made us fire where upstream
+        // doesn't (a11y/index.js:490).
+        if !attribute_map.contains_key("muted")
+            && !has_spread
+            && !aria_hidden_true
+            && attribute_map.contains_key("src")
+            && !video_has_caption_track(children)
+        {
             let msg = messages::a11y_media_has_caption();
             ctx.emit(Code::a11y_media_has_caption, msg, range);
         }
@@ -493,18 +501,15 @@ fn check_element(
                 // non-interactive element with no interactive role
                 // AND value is either dynamic (null) or >= 0. Fires
                 // at the element, not the attribute.
-                if !is_dynamic && !has_spread {
-                    let has_interactive_role = role_static_value
-                        .map(|r| {
-                            r.split_ascii_whitespace()
-                                .any(|w| INTERACTIVE_ROLES.contains(&w))
-                        })
-                        .unwrap_or(false);
+                // Upstream gates only on `!is_dynamic_element` (no spread
+                // gate), and `is_interactive_roles(role_static_value)`
+                // matches the WHOLE role string against the interactive set
+                // — a multi-token `role="button link"` is NOT interactive.
+                if !is_dynamic {
+                    let has_interactive_role =
+                        role_static_value.is_some_and(is_interactive_role);
                     let nonneg_tabindex = match get_static_text_value(p) {
-                        Some(s) => match s.parse::<i64>() {
-                            Ok(n) => n >= 0,
-                            Err(_) => false,
-                        },
+                        Some(s) => matches!(s.parse::<i64>(), Ok(n) if n >= 0),
                         None => true, // dynamic expression — treat as non-negative
                     };
                     if !is_interactive && !has_interactive_role && nonneg_tabindex {
@@ -521,8 +526,10 @@ fn check_element(
     // attribute that the element's resolved role doesn't support,
     // fire at the attribute. Implicit role fires the _implicit
     // variant with the element name appended to the message.
-    if !is_dynamic
-        && !has_spread
+    // Upstream's role-supports-aria-props (a11y/index.js:324) is NOT gated
+    // on is_dynamic_element — `<svelte:element this={..} role="..">` fires
+    // it too.
+    if !has_spread
         && let Some(role_val) = resolved_role
         && role_props(role_val).is_some()
     {
@@ -556,8 +563,8 @@ fn check_element(
     // a11y_no_noninteractive_element_interactions: non-interactive
     // element (or interactive role on non-interactive element with
     // no role at all) with a recommended interactive handler.
-    if !is_dynamic
-        && !has_spread
+    // Not gated on is_dynamic_element upstream (a11y/index.js:340).
+    if !has_spread
         && !is_hidden_from_screen_reader(name, &attribute_map)
         && !resolved_role.is_some_and(is_presentation_role)
     {
@@ -652,8 +659,9 @@ fn check_element(
     }
 
     // a11y_mouse_events_have_key_events: mouseover w/o focus,
-    // mouseout w/o blur.
-    if !is_dynamic && !has_spread {
+    // mouseout w/o blur. Not gated on is_dynamic_element upstream
+    // (a11y/index.js:376-382).
+    if !has_spread {
         if handlers.iter().any(|h| h == "mouseover") && !handlers.iter().any(|h| h == "focus") {
             let msg = messages::a11y_mouse_events_have_key_events("mouseover", "focus");
             ctx.emit(Code::a11y_mouse_events_have_key_events, msg, range);
@@ -665,8 +673,13 @@ fn check_element(
     }
 
     // a11y_missing_attribute — element-level table lookup. Runs on
-    // RegularElement only (svelte:element is dynamic).
-    if !is_dynamic && !has_spread {
+    // RegularElement only (svelte:element's node.name is "svelte:element",
+    // which hits the default arm and matches nothing). Upstream does NOT
+    // wrap the switch in has_spread; the spread gate applies only to the
+    // missing-attribute FALLBACKS — the `<a>` invalid-href VALUE check and
+    // the `<input>` autocomplete-valid check fire regardless of spread
+    // (a11y/index.js:404-410, 433).
+    if !is_dynamic {
         match name {
             "a" => {
                 // Upstream: check invalid-href-or-xlink:href values
@@ -684,7 +697,7 @@ fn check_element(
                         let msg = messages::a11y_invalid_attribute(val, p.name.as_str());
                         ctx.emit(Code::a11y_invalid_attribute, msg, p.range);
                     }
-                } else {
+                } else if !has_spread {
                     let id_truthy = static_nonempty(&attribute_map, "id");
                     let name_truthy = static_nonempty(&attribute_map, "name");
                     let aria_disabled = attribute_map.get("aria-disabled").and_then(|a| match a {
@@ -709,7 +722,7 @@ fn check_element(
                 // check — others are handled by
                 // `a11y_autocomplete_valid` / the role-based rules
                 // elsewhere.
-                if is_image {
+                if is_image && !has_spread {
                     let required: &[&str] = &["alt", "aria-label", "aria-labelledby"];
                     let has_any = required.iter().any(|w| attribute_map.contains_key(*w));
                     if !has_any {
@@ -749,7 +762,11 @@ fn check_element(
                 }
             }
             _ => {
-                if let Some(required) = a11y_required_attributes(name) {
+                // Generic missing-attribute fallback (img/area/object/…)
+                // is spread-gated upstream (warn_missing_attribute callers).
+                if !has_spread
+                    && let Some(required) = a11y_required_attributes(name)
+                {
                     let has_any = required
                         .iter()
                         .any(|want| attribute_map.contains_key(*want));
@@ -1454,20 +1471,22 @@ fn is_render_tag(source: &str, range: Range) -> bool {
 }
 
 fn video_has_caption_track(frag: &Fragment) -> bool {
-    for n in &frag.nodes {
-        if let Node::Element(el) = n
-            && el.name.as_str() == "track"
-        {
-            let kind = el.attributes.iter().find_map(|a| match a {
-                Attribute::Plain(p) if p.name.as_str() == "kind" => get_static_text_value(p),
-                _ => None,
-            });
-            if kind == Some("captions") {
-                return true;
-            }
+    // Upstream inspects only the FIRST `<track>` child (a11y/index.js:501)
+    // and treats a spread attribute on it as satisfying captions (it may
+    // carry `kind="captions"` statically-invisibly).
+    let Some(track) = frag.nodes.iter().find_map(|n| match n {
+        Node::Element(el) if el.name.as_str() == "track" => Some(el),
+        _ => None,
+    }) else {
+        return false;
+    };
+    track.attributes.iter().any(|a| match a {
+        Attribute::Spread(_) => true,
+        Attribute::Plain(p) if p.name.as_str() == "kind" => {
+            get_static_text_value(p) == Some("captions")
         }
-    }
-    false
+        _ => false,
+    })
 }
 
 /// Pulls the first plain-text value off an attribute. Returns None if

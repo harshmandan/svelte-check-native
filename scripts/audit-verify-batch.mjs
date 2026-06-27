@@ -2,10 +2,11 @@
 // yet have a verdict on disk, and print the Workflow args JSON for
 // scripts/audit-verify.workflow.js. Resumable by filesystem state.
 //
-// Usage: node scripts/audit-verify-batch.mjs <batchSize>
+// Usage: node scripts/audit-verify-batch.mjs <batchSize> [worklistPath]
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 
 const N = parseInt(process.argv[2] || '30', 10);
+const WORKLIST = process.argv[3] || '/tmp/medium-worklist.json';
 const DIR = 'notes/audit/active/verdicts';
 
 const UPSTREAM = {
@@ -19,7 +20,7 @@ const UPSTREAM = {
   'svelte-compiler': '.svelte-upstream/svelte/packages/svelte/src/compiler/',
 };
 
-const work = JSON.parse(readFileSync('/tmp/medium-worklist.json', 'utf8'));
+const work = JSON.parse(readFileSync(WORKLIST, 'utf8'));
 const pending = work.filter((f) => !existsSync(`${DIR}/${f.id}.md`));
 const batch = pending.slice(0, N);
 const argsObj = { findings: batch, verdictsDir: DIR, upstreamMap: UPSTREAM };

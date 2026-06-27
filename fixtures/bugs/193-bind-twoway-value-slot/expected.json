@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 8, "column": 37, "code": 2322 }
+    ],
+    "_note": "l003: two-way bind:checked/files check the bound value AGAINST the slot type (value→slot), matching upstream. `boolean | string` has a `string` arm the `boolean | null | undefined` slot rejects → TS2322. A `boolean | null` target is accepted (the slot is nullable). The old slot→value assignment direction missed the widened-union case."
+}

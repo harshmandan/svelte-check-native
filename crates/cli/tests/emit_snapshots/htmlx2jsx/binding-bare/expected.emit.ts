@@ -11,7 +11,8 @@ async function $$render_6ce80dfb() {
         { svelteHTML.createElement("input", {
             "type": `checkbox`,
         });
-            checked = /** @type {HTMLInputElement['checked']} */ (null);
+            { /** @type {[boolean | null | undefined]} */ const __svn_t = [checked]; void __svn_t; }
+            /*svn:ignore_start*/void (() => { checked = __svn_any(null); });/*svn:ignore_end*/
         }
         {
             const __svn_C_49 = __svn_ensure_component(Input);

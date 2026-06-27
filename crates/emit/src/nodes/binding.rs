@@ -164,6 +164,41 @@ pub(crate) fn emit_element_bind_checks_inline(
         if expr_text.is_empty() {
             continue;
         }
+        // Two-way bindings (`bind:checked` / `bind:files`): upstream
+        // (Binding.ts:139-201) checks the bound value AGAINST the slot
+        // type (value→slot) and emits a widening `() => EXPR = any` lambda.
+        // We reproduce both diagnostics:
+        //   1. A tuple-element check `const __svn_t: [<slot>] = [EXPR];`
+        //      fires TS2322 at the user's expression on a type mismatch —
+        //      same code, direction, and position as upstream's
+        //      createElement-property check. A tuple ELEMENT mismatch
+        //      reports at the element value (unlike an object-literal
+        //      property, which reports at the key, or an assignment, which
+        //      reports at the LHS — both synth positions that get dropped).
+        //      The nullable slot type is hardcoded so this works without
+        //      `svelte/elements` installed.
+        //   2. The ignore-wrapped, never-called widen lambda widens EXPR's
+        //      declared type. This replaces the one-way families'
+        //      slot→value assignment, which was laxer on widened-union
+        //      targets.
+        if let Some(slot) = svn_analyze::dom_binding::two_way_slot_type(name) {
+            buf.push_str(&indent);
+            if emit_is_ts() {
+                let _ = write!(buf, "{{ const __svn_t: [{slot}] = [");
+            } else {
+                let _ = write!(buf, "{{ /** @type {{[{slot}]}} */ const __svn_t = [");
+            }
+            match expr_source_range {
+                Some(range) => buf.append_with_source(&expr_text, range),
+                None => buf.push_str(&expr_text),
+            }
+            buf.push_str("]; void __svn_t; }\n");
+            buf.push_str(&indent);
+            buf.push_str("/*svn:ignore_start*/void (() => { ");
+            buf.push_str(&expr_text);
+            buf.push_str(" = __svn_any(null); });/*svn:ignore_end*/\n");
+            continue;
+        }
         buf.push_str(&indent);
         match expr_source_range {
             Some(range) => buf.append_with_source(&expr_text, range),

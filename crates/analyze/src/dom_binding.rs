@@ -50,6 +50,30 @@ pub fn is_element_native_oneway(binding_name: &str) -> bool {
     )
 }
 
+/// Two-way DOM bindings whose value is checked AGAINST the element's
+/// attribute slot (value→slot), mirroring upstream's "transformed to
+/// normal attributes" path (Binding.ts:139-201). Emit checks the bound
+/// value against [`two_way_slot_type`] and emits a widening lambda,
+/// instead of the slot→value assignment the one-way families use. `value`
+/// is dispatched via `resolve_bind_value_type`; `group` has its own
+/// upstream branch.
+pub fn is_two_way(binding_name: &str) -> bool {
+    two_way_slot_type(binding_name).is_some()
+}
+
+/// The element-attribute slot type a two-way binding's value must be
+/// assignable to (value→slot), nullable to match `svelte/elements`'
+/// `'bind:NAME'?: T | undefined | null` declarations. Hardcoded here
+/// (rather than read from `svelte/elements`) so the check works even
+/// when that package isn't installed in the type-check environment.
+pub fn two_way_slot_type(binding_name: &str) -> Option<&'static str> {
+    match binding_name {
+        "checked" => Some("boolean | null | undefined"),
+        "files" => Some("FileList | null | undefined"),
+        _ => None,
+    }
+}
+
 /// Return the TS type to assert for `bind:NAME`. `None` means the
 /// binding isn't one we model (a typo like `bind:foo`, or the
 /// bidirectional family we don't yet type-check).

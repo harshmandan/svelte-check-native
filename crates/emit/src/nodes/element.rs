@@ -208,7 +208,7 @@ pub(crate) fn emit_svelte_element_node(
         // `$$slot_def["X"]` and gets handled at the parent's child
         // walk via `try_emit_slot_let_consumer_open`. Skip the local
         // destructure here so we don't double-emit.
-        let has_slot_attr = svn_analyze::literal_attr_value(&s.attributes, "slot").is_some();
+        let has_slot_attr = svn_analyze::literal_attr_value(&s.attributes, "slot", source).is_some();
         let let_destructures = if has_slot_attr {
             Vec::new()
         } else {
@@ -506,7 +506,7 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                 .as_ref()
                 .and_then(|v| v.parts.first())
                 .is_some_and(|part| match part {
-                    svn_parser::AttrValuePart::Text { content, .. } => content.contains('-'),
+                    svn_parser::AttrValuePart::Text { range } => range.slice(source).contains('-'),
                     _ => false,
                 }),
             _ => false,

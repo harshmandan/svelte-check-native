@@ -102,8 +102,8 @@ fn emit_template_literal(
     let _ = write!(buf, "{indent}__svn_ensure_type(String, Number, `");
     for part in &av.parts {
         match part {
-            svn_parser::AttrValuePart::Text { content, .. } => {
-                for ch in content.chars() {
+            svn_parser::AttrValuePart::Text { range } => {
+                for ch in range.slice(source).chars() {
                     match ch {
                         '`' => buf.push_str("\\`"),
                         '\\' => buf.push_str("\\\\"),

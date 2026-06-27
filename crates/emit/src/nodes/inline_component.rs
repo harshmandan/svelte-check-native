@@ -86,7 +86,7 @@ pub(crate) fn emit_component_node(
     // walk depth (handled in the parent's loop via
     // `try_emit_slot_let_consumer_open`). Skipping here prevents a
     // double destructure / wrong access path.
-    let has_slot_attr = svn_analyze::literal_attr_value(&c.attributes, "slot").is_some();
+    let has_slot_attr = svn_analyze::literal_attr_value(&c.attributes, "slot", source).is_some();
     let let_destructures = if has_slot_attr {
         Vec::new()
     } else {
@@ -730,8 +730,8 @@ fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropSha
             buf.push_str(": `");
             for part in parts {
                 match part {
-                    svn_parser::AttrValuePart::Text { content, .. } => {
-                        for ch in content.chars() {
+                    svn_parser::AttrValuePart::Text { range } => {
+                        for ch in range.slice(source).chars() {
                             match ch {
                                 '`' => buf.push_str("\\`"),
                                 '\\' => buf.push_str("\\\\"),

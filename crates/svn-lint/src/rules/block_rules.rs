@@ -54,9 +54,10 @@ fn is_js_trim_ws(c: char) -> bool {
 /// whitespace-only Text node (upstream heuristic — matches "user
 /// hasn't started typing content yet").
 fn visit_block_fragment_for_empty(frag: &Fragment, ctx: &mut LintContext<'_>) {
+    let source = ctx.source;
     if frag.nodes.len() == 1
         && let Node::Text(t) = &frag.nodes[0]
-        && t.content.chars().all(is_js_trim_ws)
+        && t.range.slice(source).chars().all(is_js_trim_ws)
     {
         let msg = messages::block_empty();
         ctx.emit(Code::block_empty, msg, t.range);

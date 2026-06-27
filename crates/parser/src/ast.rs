@@ -88,7 +88,6 @@ impl Node {
 /// Plain text content. Includes whitespace.
 #[derive(Debug, Clone)]
 pub struct Text {
-    pub content: String,
     pub range: Range,
 }
 
@@ -173,8 +172,9 @@ pub enum InterpolationKind {
 /// `<!-- ... -->`
 #[derive(Debug, Clone)]
 pub struct Comment {
-    /// The comment body, excluding `<!--` and `-->`.
-    pub data: String,
+    /// Range of the comment body, excluding `<!--` and `-->`. (The `range`
+    /// field below includes the delimiters.)
+    pub data_range: Range,
     pub range: Range,
 }
 
@@ -275,7 +275,7 @@ pub struct AttrValue {
 #[derive(Debug, Clone)]
 pub enum AttrValuePart {
     /// Literal text chunk.
-    Text { content: String, range: Range },
+    Text { range: Range },
     /// `{expression}` interpolation.
     Expression {
         expression_range: Range,

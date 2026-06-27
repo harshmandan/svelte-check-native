@@ -478,10 +478,8 @@ fn parse_directive_value(
                 scanner.advance_char();
             }
             let end = scanner.pos();
-            let content = scanner.source()[text_start as usize..end as usize].to_string();
             Some(DirectiveValue::Quoted(AttrValue {
                 parts: vec![AttrValuePart::Text {
-                    content,
                     range: Range::new(text_start, end),
                 }],
                 range: Range::new(start, end),
@@ -550,10 +548,7 @@ fn parse_attr_value(scanner: &mut Scanner<'_>, errors: &mut Vec<ParseError>) -> 
                 if b == b'{' {
                     let text_end = scanner.pos();
                     if text_end > chunk_start {
-                        let content =
-                            scanner.source()[chunk_start as usize..text_end as usize].to_string();
                         parts.push(AttrValuePart::Text {
-                            content,
                             range: Range::new(chunk_start, text_end),
                         });
                     }
@@ -582,9 +577,7 @@ fn parse_attr_value(scanner: &mut Scanner<'_>, errors: &mut Vec<ParseError>) -> 
             }
             let end = scanner.pos();
             if end > chunk_start {
-                let content = scanner.source()[chunk_start as usize..end as usize].to_string();
                 parts.push(AttrValuePart::Text {
-                    content,
                     range: Range::new(chunk_start, end),
                 });
             }
@@ -594,7 +587,6 @@ fn parse_attr_value(scanner: &mut Scanner<'_>, errors: &mut Vec<ParseError>) -> 
             // matches.
             if parts.is_empty() {
                 parts.push(AttrValuePart::Text {
-                    content: String::new(),
                     range: Range::new(start, end),
                 });
             }
@@ -622,10 +614,7 @@ fn parse_quoted_value(
         if b == quote {
             let chunk_end = scanner.pos();
             if chunk_end > chunk_start {
-                let content =
-                    scanner.source()[chunk_start as usize..chunk_end as usize].to_string();
                 parts.push(AttrValuePart::Text {
-                    content,
                     range: Range::new(chunk_start, chunk_end),
                 });
             }
@@ -644,9 +633,7 @@ fn parse_quoted_value(
             // Expression part covering the body.
             let text_end = scanner.pos();
             if text_end > chunk_start {
-                let content = scanner.source()[chunk_start as usize..text_end as usize].to_string();
                 parts.push(AttrValuePart::Text {
-                    content,
                     range: Range::new(chunk_start, text_end),
                 });
             }
@@ -677,9 +664,7 @@ fn parse_quoted_value(
     // Unterminated string — consume to EOF and return what we have.
     let text_end = scanner.pos();
     if text_end > chunk_start {
-        let content = scanner.source()[chunk_start as usize..text_end as usize].to_string();
         parts.push(AttrValuePart::Text {
-            content,
             range: Range::new(chunk_start, text_end),
         });
     }
@@ -816,7 +801,8 @@ mod tests {
 
     #[test]
     fn plain_string_attr_double_quoted() {
-        let attrs = parse_ok(r#"class="foo""#);
+        let src = r#"class="foo""#;
+        let attrs = parse_ok(src);
         assert_eq!(attrs.len(), 1);
         let Attribute::Plain(a) = &attrs[0] else {
             panic!("expected Plain");
@@ -825,8 +811,8 @@ mod tests {
         let v = a.value.as_ref().unwrap();
         assert!(v.quoted);
         assert_eq!(v.parts.len(), 1);
-        if let AttrValuePart::Text { content, .. } = &v.parts[0] {
-            assert_eq!(content, "foo");
+        if let AttrValuePart::Text { range } = &v.parts[0] {
+            assert_eq!(range.slice(src), "foo");
         } else {
             panic!("expected Text");
         }
@@ -890,7 +876,7 @@ mod tests {
         let v = a.value.as_ref().expect("href should have a value");
         assert!(!v.quoted);
         // The single Text part covers the whole `/foo`.
-        let AttrValuePart::Text { range, .. } = &v.parts[0] else {
+        let AttrValuePart::Text { range } = &v.parts[0] else {
             panic!("expected Text part, got {:?}", v.parts);
         };
         assert_eq!(range.slice(src), "/foo");
@@ -905,7 +891,7 @@ mod tests {
             panic!("expected Plain, got {:?}", attrs[0]);
         };
         let v = a.value.as_ref().expect("value should be present");
-        let AttrValuePart::Text { range, .. } = &v.parts[0] else {
+        let AttrValuePart::Text { range } = &v.parts[0] else {
             panic!("expected Text part");
         };
         assert_eq!(range.slice("value=x/>"), "x");

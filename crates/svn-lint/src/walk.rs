@@ -463,11 +463,10 @@ fn find_runes_option(fragment: &Fragment, source: &str) -> Option<bool> {
                             None => true,
                             Some(v) => {
                                 if v.parts.len() == 1 {
-                                    if let svn_parser::ast::AttrValuePart::Text {
-                                        content, ..
-                                    } = &v.parts[0]
+                                    if let svn_parser::ast::AttrValuePart::Text { range } =
+                                        &v.parts[0]
                                     {
-                                        content.trim() != "false"
+                                        range.slice(source).trim() != "false"
                                     } else {
                                         true
                                     }
@@ -521,6 +520,7 @@ fn walk_fragment_impl(
     ancestors: &mut Vec<String>,
     inside_control_block: bool,
 ) {
+    let source = ctx.source;
     for node in &fragment.nodes {
         // Ignore-stack: pull any svelte-ignore comments immediately
         // preceding this node (in the same fragment). These scope
@@ -549,7 +549,7 @@ fn walk_fragment_impl(
             // Non-whitespace Text carries bidi warnings and needs
             // the ignore frame; whitespace-only Text is a neutral
             // carrier between the comment and its target element.
-            Node::Text(t) => t.content.chars().any(|c| !c.is_whitespace()),
+            Node::Text(t) => t.range.slice(source).chars().any(|c| !c.is_whitespace()),
             _ => false,
         };
         let ignores = if is_target {

@@ -31,7 +31,7 @@ pub fn visit_text(t: &Text, ctx: &mut LintContext<'_>) {
     // Walk contiguous runs of bidi-control chars — upstream fires
     // once per match (each match is a run of 1+ of these chars).
     let start_byte = t.range.start as usize;
-    let content = &t.content;
+    let content = t.range.slice(ctx.source);
     let mut chars = content.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
         if is_bidi_control(c) {

@@ -18,9 +18,13 @@ use crate::walker::{BindThisTarget, Counters, TemplateSummary};
 /// - `<select>`: target type depends on `<option>` values; not
 ///   statically resolvable without option inspection.
 /// - Other tags: `bind:value` isn't meaningful.
-pub fn resolve_bind_value_type(tag_name: &str, attrs: &[Attribute]) -> Option<&'static str> {
+pub fn resolve_bind_value_type(
+    tag_name: &str,
+    attrs: &[Attribute],
+    source: &str,
+) -> Option<&'static str> {
     match tag_name {
-        "input" => match literal_attr_value(attrs, "type") {
+        "input" => match literal_attr_value(attrs, "type", source) {
             Some("number") | Some("range") => Some("number"),
             Some("file") | Some("checkbox") | Some("radio") => None,
             _ => Some("string"),

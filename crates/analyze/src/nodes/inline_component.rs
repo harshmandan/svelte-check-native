@@ -34,7 +34,7 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, c: &Component) {
     //   - component name isn't a simple identifier (dotted
     //     forms like `UI.Dropdown` would need a different
     //     `typeof` shape; defer until a fixture proves it).
-    let has_slot_attr = literal_attr_value(&c.attributes, "slot").is_some();
+    let has_slot_attr = literal_attr_value(&c.attributes, "slot", v.source).is_some();
     if !has_slot_attr && is_simple_identifier(c.name.as_str()) {
         v.pending_let_owner = Some(LetOwnerInfo {
             component_root: c.name.clone(),
@@ -126,7 +126,7 @@ pub(crate) fn collect_instantiation_inner(
     let has_implicit_children = !has_let_directive
         && children.nodes.iter().any(|n| match n {
             Node::SnippetBlock(_) => false,
-            Node::Text(t) => !t.content.trim().is_empty(),
+            Node::Text(t) => !t.range.slice(source).trim().is_empty(),
             _ => true,
         });
     for attr in attributes {
@@ -153,10 +153,10 @@ pub(crate) fn collect_instantiation_inner(
                 };
                 // Single literal text part (no interpolations) — keep it.
                 if v.parts.len() == 1 {
-                    if let AttrValuePart::Text { content, .. } = &v.parts[0] {
+                    if let AttrValuePart::Text { range } = &v.parts[0] {
                         props.push(PropShape::Literal {
                             name: p.name.clone(),
-                            value: content.clone(),
+                            value: range.slice(source).to_string(),
                             attr_range: p.range,
                         });
                         continue;

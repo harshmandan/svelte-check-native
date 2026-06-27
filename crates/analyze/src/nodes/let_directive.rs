@@ -116,9 +116,9 @@ pub(crate) fn collect_slot_def(
             A::Plain(p) if p.name.as_str() == "name" => {
                 if let Some(v) = &p.value
                     && v.parts.len() == 1
-                    && let AttrValuePart::Text { content, .. } = &v.parts[0]
+                    && let AttrValuePart::Text { range } = &v.parts[0]
                 {
-                    slot_name = SmolStr::from(content.as_str());
+                    slot_name = SmolStr::from(range.slice(source));
                 }
             }
             A::Plain(p) => {
@@ -134,11 +134,11 @@ pub(crate) fn collect_slot_def(
                 // shorthand is still skipped.
                 if let Some(v) = &p.value
                     && v.parts.len() == 1
-                    && let AttrValuePart::Text { content, .. } = &v.parts[0]
+                    && let AttrValuePart::Text { range } = &v.parts[0]
                 {
                     entries.push(SlotAttr::Prop {
                         name: p.name.clone(),
-                        expr: SlotAttrExpr::Literal(content.to_string()),
+                        expr: SlotAttrExpr::Literal(range.slice(source).to_string()),
                     });
                 } else if let Some(v) = &p.value
                     && v.parts.len() == 1

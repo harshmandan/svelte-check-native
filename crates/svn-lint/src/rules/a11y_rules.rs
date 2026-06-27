@@ -85,6 +85,7 @@ fn check_element(
     ctx: &mut LintContext<'_>,
     ancestors: &[String],
 ) {
+    let source = ctx.source;
     // Collect attribute map + event handlers.
     let mut attribute_map: HashMap<String, &Attribute> = HashMap::new();
     let mut handlers: Vec<String> = Vec::new();
@@ -136,10 +137,10 @@ fn check_element(
         // and `aria-hidden` both suppress), and falsy only for absent /
         // empty / dynamic. The `!has_spread` gate (a spread may inject
         // aria-hidden) was also missing.
-        if !aria_hidden_is_truthy(attribute_map.get("aria-hidden").copied())
+        if !aria_hidden_is_truthy(attribute_map.get("aria-hidden").copied(), source)
             && !has_spread
             && let Some(Attribute::Plain(p)) = attribute_map.get("alt")
-            && let Some(alt) = get_static_text_value(p)
+            && let Some(alt) = get_static_text_value(p, source)
             && contains_redundant_img_word(alt)
         {
             let msg = messages::a11y_img_redundant_alt();
@@ -169,7 +170,7 @@ fn check_element(
         // !has_spread (its is_labelled / contenteditable conditions are
         // not modeled here) — but NOT on aria-hidden, so an empty
         // `<h1 aria-hidden>` fires BOTH warnings.
-        if !has_spread && !has_text_content(children) {
+        if !has_spread && !has_text_content(children, source) {
             let msg = messages::a11y_missing_content(name);
             ctx.emit(Code::a11y_missing_content, msg, range);
         }
@@ -202,11 +203,11 @@ fn check_element(
     {
         let is_labelled = has_labelling_attr(&attribute_map);
         let aria_hidden_true = attribute_map.get("aria-hidden").and_then(|a| match a {
-            Attribute::Plain(p) => get_static_text_value(p),
+            Attribute::Plain(p) => get_static_text_value(p, source),
             _ => None,
         }) == Some("true");
         let inert = attribute_map.contains_key("inert");
-        if !is_labelled && !aria_hidden_true && !inert && !has_text_content(children) {
+        if !is_labelled && !aria_hidden_true && !inert && !has_text_content(children, source) {
             let msg = messages::a11y_consider_explicit_label();
             ctx.emit(Code::a11y_consider_explicit_label, msg, range);
         }
@@ -221,7 +222,7 @@ fn check_element(
     // or when src isn't set.
     if !is_dynamic && name == "video" {
         let aria_hidden_true = attribute_map.get("aria-hidden").and_then(|a| match a {
-            Attribute::Plain(p) => get_static_text_value(p),
+            Attribute::Plain(p) => get_static_text_value(p, source),
             _ => None,
         }) == Some("true");
         // Upstream returns early on `muted`, `aria-hidden="true"`, OR a
@@ -232,7 +233,7 @@ fn check_element(
             && !has_spread
             && !aria_hidden_true
             && attribute_map.contains_key("src")
-            && !video_has_caption_track(children)
+            && !video_has_caption_track(children, source)
         {
             let msg = messages::a11y_media_has_caption();
             ctx.emit(Code::a11y_media_has_caption, msg, range);
@@ -254,7 +255,7 @@ fn check_element(
                 continue;
             }
             if let Node::Text(t) = n
-                && !has_non_whitespace_text(&t.content)
+                && !has_non_whitespace_text(t.range.slice(source))
             {
                 continue;
             }
@@ -281,16 +282,16 @@ fn check_element(
     // role_static_value` bookkeeping.
     let role_attr = attribute_map.get("role");
     let role_static_value = role_attr.and_then(|a| match a {
-        Attribute::Plain(p) => get_static_text_value(p),
+        Attribute::Plain(p) => get_static_text_value(p, source),
         _ => None,
     });
-    let implicit_role = get_implicit_role(name, &attribute_map);
+    let implicit_role = get_implicit_role(name, &attribute_map, source);
     let resolved_role = role_static_value.or(implicit_role);
     let is_implicit_role = role_attr.is_none() && implicit_role.is_some();
     let interactivity = if is_dynamic {
         Interactivity::Static
     } else {
-        element_interactivity(name, &attribute_map)
+        element_interactivity(name, &attribute_map, source)
     };
     let is_interactive = interactivity == Interactivity::Interactive;
     let is_non_interactive = interactivity == Interactivity::NonInteractive;
@@ -348,7 +349,7 @@ fn check_element(
                 // a11y_no_abstract_role / a11y_unknown_role /
                 // a11y_no_redundant_roles — all drive off the role's
                 // text value. Each word is evaluated separately.
-                if let Some(val) = get_static_text_value(p) {
+                if let Some(val) = get_static_text_value(p, source) {
                     for role_word in val.split_ascii_whitespace() {
                         if role_word.is_empty() {
                             continue;
@@ -370,7 +371,7 @@ fn check_element(
                             let get_attr = |attr_name: &str| -> AttrState<'_> {
                                 match attribute_map.get(attr_name) {
                                     None => AttrState::Absent,
-                                    Some(Attribute::Plain(p)) => match get_static_text_value(p) {
+                                    Some(Attribute::Plain(p)) => match get_static_text_value(p, source) {
                                         Some(s) => AttrState::Literal(s),
                                         None => AttrState::Dynamic,
                                     },
@@ -399,8 +400,8 @@ fn check_element(
                                 && is_static
                                 && is_interactive_role(role_word)
                                 && !is_presentation_role(role_word)
-                                && !has_disabled_attr(&attribute_map)
-                                && !is_hidden_from_screen_reader(name, &attribute_map)
+                                && !has_disabled_attr(&attribute_map, source)
+                                && !is_hidden_from_screen_reader(name, &attribute_map, source)
                                 && !attribute_map.contains_key("tabindex")
                                 && handlers.iter().any(|h| {
                                     crate::a11y_constants::is_interactive_handler(
@@ -500,7 +501,7 @@ fn check_element(
                 }
             }
             "tabindex" => {
-                if let Some(s) = get_static_text_value(p)
+                if let Some(s) = get_static_text_value(p, source)
                     && let Ok(n) = s.trim().parse::<f64>()
                     && n.is_finite()
                     && n > 0.0
@@ -519,7 +520,7 @@ fn check_element(
                 if !is_dynamic {
                     let has_interactive_role =
                         role_static_value.is_some_and(is_interactive_role);
-                    let nonneg_tabindex = match get_static_text_value(p) {
+                    let nonneg_tabindex = match get_static_text_value(p, source) {
                         Some(s) => matches!(s.parse::<i64>(), Ok(n) if n >= 0),
                         None => true, // dynamic expression — treat as non-negative
                     };
@@ -576,7 +577,7 @@ fn check_element(
     // no role at all) with a recommended interactive handler.
     // Not gated on is_dynamic_element upstream (a11y/index.js:340).
     if !has_spread
-        && !is_hidden_from_screen_reader(name, &attribute_map)
+        && !is_hidden_from_screen_reader(name, &attribute_map, source)
         && !resolved_role.is_some_and(is_presentation_role)
     {
         let has_contenteditable = attribute_map.contains_key("contenteditable");
@@ -607,7 +608,7 @@ fn check_element(
     // is the canonical case we need to catch.
     if !has_spread
         && (role_attr.is_none() || role_static_value.is_some())
-        && !is_hidden_from_screen_reader(name, &attribute_map)
+        && !is_hidden_from_screen_reader(name, &attribute_map, source)
         && !resolved_role.is_some_and(is_presentation_role)
         && !is_interactive
         && !role_static_value.is_some_and(is_interactive_role)
@@ -652,7 +653,7 @@ fn check_element(
     if !is_dynamic
         && !has_spread
         && handlers.iter().any(|h| h == "click")
-        && !is_hidden_from_screen_reader(name, &attribute_map)
+        && !is_hidden_from_screen_reader(name, &attribute_map, source)
         && !is_interactive
     {
         let is_presentation = resolved_role.is_some_and(is_presentation_role);
@@ -702,17 +703,17 @@ fn check_element(
                     .or_else(|| attribute_map.get("xlink:href"));
                 if let Some(a) = href_attr {
                     if let Attribute::Plain(p) = a
-                        && let Some(val) = get_static_text_value(p)
+                        && let Some(val) = get_static_text_value(p, source)
                         && (val.is_empty() || val == "#" || regex_js_prefix(val))
                     {
                         let msg = messages::a11y_invalid_attribute(val, p.name.as_str());
                         ctx.emit(Code::a11y_invalid_attribute, msg, p.range);
                     }
                 } else if !has_spread {
-                    let id_truthy = static_nonempty(&attribute_map, "id");
-                    let name_truthy = static_nonempty(&attribute_map, "name");
+                    let id_truthy = static_nonempty(&attribute_map, "id", source);
+                    let name_truthy = static_nonempty(&attribute_map, "name", source);
                     let aria_disabled = attribute_map.get("aria-disabled").and_then(|a| match a {
-                        Attribute::Plain(p) => get_static_text_value(p),
+                        Attribute::Plain(p) => get_static_text_value(p, source),
                         _ => None,
                     }) == Some("true");
                     if !id_truthy && !name_truthy && !aria_disabled {
@@ -725,7 +726,7 @@ fn check_element(
             "input" => {
                 let type_attr = attribute_map.get("type");
                 let type_value = type_attr.and_then(|a| match a {
-                    Attribute::Plain(p) => get_static_text_value(p),
+                    Attribute::Plain(p) => get_static_text_value(p, source),
                     _ => None,
                 });
                 let is_image = type_value == Some("image");
@@ -756,7 +757,7 @@ fn check_element(
                 if type_attr.is_some()
                     && let Some(Attribute::Plain(p)) = attribute_map.get("autocomplete")
                 {
-                    let state = classify_autocomplete_value(p);
+                    let state = classify_autocomplete_value(p, source);
                     if !is_valid_autocomplete(state) {
                         let display_value = match state {
                             AutocompleteValue::Bare => "true",
@@ -838,12 +839,15 @@ enum AutocompleteValue<'a> {
     Dynamic,
 }
 
-fn classify_autocomplete_value<'a>(p: &'a svn_parser::ast::PlainAttr) -> AutocompleteValue<'a> {
+fn classify_autocomplete_value<'a>(
+    p: &svn_parser::ast::PlainAttr,
+    source: &'a str,
+) -> AutocompleteValue<'a> {
     match p.value.as_ref() {
         None => AutocompleteValue::Bare,
         Some(v) if v.parts.is_empty() && v.quoted => AutocompleteValue::Literal(""),
         Some(v) if v.parts.len() == 1 => match &v.parts[0] {
-            AttrValuePart::Text { content, .. } => AutocompleteValue::Literal(content.as_str()),
+            AttrValuePart::Text { range } => AutocompleteValue::Literal(range.slice(source)),
             AttrValuePart::Expression { .. } => AutocompleteValue::Dynamic,
         },
         _ => AutocompleteValue::Dynamic,
@@ -919,11 +923,15 @@ enum Interactivity {
 
 /// Classify an element using the ARIA role schemas, matching
 /// upstream `element_interactivity`.
-fn element_interactivity(name: &str, attrs: &HashMap<String, &Attribute>) -> Interactivity {
+fn element_interactivity(
+    name: &str,
+    attrs: &HashMap<String, &Attribute>,
+    source: &str,
+) -> Interactivity {
     let get_attr = |attr_name: &str| -> AttrState<'_> {
         match attrs.get(attr_name) {
             None => AttrState::Absent,
-            Some(Attribute::Plain(p)) => match get_static_text_value(p) {
+            Some(Attribute::Plain(p)) => match get_static_text_value(p, source) {
                 Some(s) => AttrState::Literal(s),
                 None => AttrState::Dynamic,
             },
@@ -945,18 +953,22 @@ fn element_interactivity(name: &str, attrs: &HashMap<String, &Attribute>) -> Int
 /// Upstream `get_implicit_role`. For `<input>` / `<menuitem>` the
 /// role depends on the `type` attribute; for everything else we
 /// defer to [`a11y_implicit_semantics`].
-fn get_implicit_role(name: &str, attrs: &HashMap<String, &Attribute>) -> Option<&'static str> {
+fn get_implicit_role(
+    name: &str,
+    attrs: &HashMap<String, &Attribute>,
+    source: &str,
+) -> Option<&'static str> {
     if name == "menuitem" {
         return attrs.get("type").and_then(|a| match a {
             Attribute::Plain(p) => {
-                get_static_text_value(p).and_then(menuitem_type_to_implicit_role)
+                get_static_text_value(p, source).and_then(menuitem_type_to_implicit_role)
             }
             _ => None,
         });
     }
     if name == "input" {
         let type_str = attrs.get("type").and_then(|a| match a {
-            Attribute::Plain(p) => get_static_text_value(p),
+            Attribute::Plain(p) => get_static_text_value(p, source),
             _ => None,
         });
         return type_str.and_then(|ty| {
@@ -986,10 +998,14 @@ fn is_non_interactive_role(role: &str) -> bool {
 /// - `<input type="hidden">`
 /// - any `aria-hidden` attribute present with value `"true"` or a
 ///   dynamic value (null resolves to "assume hidden").
-fn is_hidden_from_screen_reader(name: &str, attrs: &HashMap<String, &Attribute>) -> bool {
+fn is_hidden_from_screen_reader(
+    name: &str,
+    attrs: &HashMap<String, &Attribute>,
+    source: &str,
+) -> bool {
     if name == "input"
         && attrs.get("type").is_some_and(|a| match a {
-            Attribute::Plain(p) => get_static_text_value(p) == Some("hidden"),
+            Attribute::Plain(p) => get_static_text_value(p, source) == Some("hidden"),
             _ => false,
         })
     {
@@ -997,7 +1013,7 @@ fn is_hidden_from_screen_reader(name: &str, attrs: &HashMap<String, &Attribute>)
     }
     match attrs.get("aria-hidden") {
         None => false,
-        Some(Attribute::Plain(p)) => match get_static_text_value(p) {
+        Some(Attribute::Plain(p)) => match get_static_text_value(p, source) {
             None => true, // bare `<div aria-hidden>` → hidden
             Some("true") => true,
             _ => false,
@@ -1037,9 +1053,9 @@ fn regex_js_prefix(s: &str) -> bool {
     rest.len() >= 11 && rest[..11].eq_ignore_ascii_case("javascript:")
 }
 
-fn static_nonempty(attrs: &HashMap<String, &Attribute>, key: &str) -> bool {
+fn static_nonempty(attrs: &HashMap<String, &Attribute>, key: &str, source: &str) -> bool {
     attrs.get(key).is_some_and(|a| match a {
-        Attribute::Plain(p) => get_static_text_value(p).is_some_and(|s| !s.is_empty()),
+        Attribute::Plain(p) => get_static_text_value(p, source).is_some_and(|s| !s.is_empty()),
         _ => false,
     })
 }
@@ -1094,11 +1110,11 @@ fn has_attribute_named(attrs: &[Attribute], name: &str) -> bool {
 /// to true for `<img alt>` and `<selectedcontent>`, and conservatively
 /// assumes anything non-element (Component / Interpolation / blocks)
 /// carries content to avoid false positives.
-fn has_text_content(frag: &Fragment) -> bool {
+fn has_text_content(frag: &Fragment, source: &str) -> bool {
     for n in &frag.nodes {
         match n {
             Node::Text(t) => {
-                if !has_non_whitespace_text(&t.content) {
+                if !has_non_whitespace_text(t.range.slice(source)) {
                     continue;
                 }
             }
@@ -1121,7 +1137,7 @@ fn has_text_content(frag: &Fragment) -> bool {
                 if el.name.as_str() == "slot" {
                     return true;
                 }
-                if !has_text_content(&el.children) {
+                if !has_text_content(&el.children, source) {
                     continue;
                 }
             }
@@ -1129,7 +1145,7 @@ fn has_text_content(frag: &Fragment) -> bool {
                 if has_attribute_named(&se.attributes, "popover") {
                     continue;
                 }
-                if !has_text_content(&se.children) {
+                if !has_text_content(&se.children, source) {
                     continue;
                 }
             }
@@ -1243,6 +1259,7 @@ fn validate_aria_value(
     def: &crate::a11y_constants::AriaPropDef,
     ctx: &mut LintContext<'_>,
 ) {
+    let source = ctx.source;
     // Determine a static-string value. None == dynamic → skip.
     let value: Option<&str> = match p.value.as_ref() {
         None => Some(""), // bare attribute `aria-level`
@@ -1251,7 +1268,7 @@ fn validate_aria_value(
                 Some("")
             } else if v.parts.len() == 1 {
                 match &v.parts[0] {
-                    AttrValuePart::Text { content, .. } => Some(content.as_str()),
+                    AttrValuePart::Text { range } => Some(range.slice(source)),
                     AttrValuePart::Expression { .. } => None,
                 }
             } else {
@@ -1404,12 +1421,12 @@ fn join_handler_list(handlers: &[&str]) -> String {
 
 /// Matches upstream `has_disabled_attribute` — both `disabled` and
 /// `aria-disabled="true"` count.
-fn has_disabled_attr(attrs: &HashMap<String, &Attribute>) -> bool {
+fn has_disabled_attr(attrs: &HashMap<String, &Attribute>, source: &str) -> bool {
     if attrs.contains_key("disabled") {
         return true;
     }
     attrs.get("aria-disabled").is_some_and(|a| match a {
-        Attribute::Plain(p) => get_static_text_value(p) == Some("true"),
+        Attribute::Plain(p) => get_static_text_value(p, source) == Some("true"),
         _ => false,
     })
 }
@@ -1472,7 +1489,7 @@ fn is_render_tag(source: &str, range: Range) -> bool {
         .is_some_and(|s| s.starts_with("{@render"))
 }
 
-fn video_has_caption_track(frag: &Fragment) -> bool {
+fn video_has_caption_track(frag: &Fragment, source: &str) -> bool {
     // Upstream inspects only the FIRST `<track>` child (a11y/index.js:501)
     // and treats a spread attribute on it as satisfying captions (it may
     // carry `kind="captions"` statically-invisibly).
@@ -1485,7 +1502,7 @@ fn video_has_caption_track(frag: &Fragment) -> bool {
     track.attributes.iter().any(|a| match a {
         Attribute::Spread(_) => true,
         Attribute::Plain(p) if p.name.as_str() == "kind" => {
-            get_static_text_value(p) == Some("captions")
+            get_static_text_value(p, source) == Some("captions")
         }
         _ => false,
     })
@@ -1499,13 +1516,13 @@ fn video_has_caption_track(frag: &Fragment) -> bool {
 /// `aria-hidden` attribute: TRUE for the bare form (`aria-hidden`) and
 /// for any NON-EMPTY static string (including `"false"`), FALSE for an
 /// absent attribute, an empty string, or a dynamic `{expr}` value.
-fn aria_hidden_is_truthy(attr: Option<&Attribute>) -> bool {
+fn aria_hidden_is_truthy(attr: Option<&Attribute>, source: &str) -> bool {
     match attr {
         Some(Attribute::Plain(p)) => {
             if p.value.is_none() {
                 return true; // bare `aria-hidden` == `true`
             }
-            matches!(get_static_text_value(p), Some(s) if !s.is_empty())
+            matches!(get_static_text_value(p, source), Some(s) if !s.is_empty())
         }
         _ => false,
     }
@@ -1523,7 +1540,7 @@ fn nearest_element_ancestor_is(ancestors: &[String], names: &[&str]) -> bool {
         .is_some_and(|a| names.contains(&a.as_str()))
 }
 
-fn get_static_text_value(p: &svn_parser::ast::PlainAttr) -> Option<&str> {
+fn get_static_text_value<'a>(p: &svn_parser::ast::PlainAttr, source: &'a str) -> Option<&'a str> {
     let v = p.value.as_ref()?;
     if v.parts.is_empty() && v.quoted {
         return Some("");
@@ -1532,7 +1549,7 @@ fn get_static_text_value(p: &svn_parser::ast::PlainAttr) -> Option<&str> {
         return None;
     }
     match &v.parts[0] {
-        AttrValuePart::Text { content, .. } => Some(content.as_str()),
+        AttrValuePart::Text { range } => Some(range.slice(source)),
         AttrValuePart::Expression { .. } => None,
     }
 }

@@ -61,6 +61,7 @@ pub fn collect_preceding_comment_ignores(
     target: &Node,
     ctx: &mut LintContext<'_>,
 ) -> Vec<SmolStr> {
+    let source = ctx.source;
     let mut result: Vec<SmolStr> = Vec::new();
     let Some(idx) = nodes.iter().position(|n| std::ptr::eq(n, target)) else {
         return result;
@@ -82,7 +83,7 @@ pub fn collect_preceding_comment_ignores(
             }
             Node::Text(t) => {
                 // Only whitespace-only text continues the chain.
-                if !t.content.chars().all(char::is_whitespace) {
+                if !t.range.slice(source).chars().all(char::is_whitespace) {
                     break;
                 }
             }
@@ -96,7 +97,9 @@ pub fn collect_preceding_comment_ignores(
 /// emit `legacy_code` / `unknown_code` for tokens that don't match a
 /// known warning code (runes mode only — upstream matches this).
 fn extract_from_comment(c: &Comment, ctx: &mut LintContext<'_>) -> Vec<SmolStr> {
-    let trimmed = c.data.trim_start();
+    let source = ctx.source;
+    let data = c.data_range.slice(source);
+    let trimmed = data.trim_start();
     let Some(rest) = trimmed.strip_prefix("svelte-ignore") else {
         return Vec::new();
     };
@@ -107,11 +110,11 @@ fn extract_from_comment(c: &Comment, ctx: &mut LintContext<'_>) -> Vec<SmolStr> 
     let rest_after_ws = &rest[ws.len_utf8()..];
 
     // Byte offset of `rest_after_ws` inside the source — the Comment
-    // body starts at `c.range.start + 4` (`<!--` is 4 bytes).
-    let comment_body_start = c.range.start + 4;
+    // body starts after the `<!--` delimiter.
+    let comment_body_start = c.data_range.start;
     // Offset within comment body where the trimmed "svelte-ignore "
     // prefix ends and the code list begins.
-    let prefix_len = (c.data.len() - rest_after_ws.len()) as u32;
+    let prefix_len = (data.len() - rest_after_ws.len()) as u32;
     let tokens_start = comment_body_start + prefix_len;
 
     parse_ignore_codes_emit(rest_after_ws, ctx, tokens_start)

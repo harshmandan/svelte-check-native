@@ -92,7 +92,8 @@ pub(crate) fn emit_children_with_let_bindings(
     // consumer expressions inside would all resolve to `any` and lose
     // strictness. Pass through to the children walk instead so the
     // outer destructure stays in scope.
-    let parent_destructured = svn_analyze::literal_attr_value(attributes, "slot").is_some();
+    let parent_destructured =
+        svn_analyze::literal_attr_value(attributes, "slot", source).is_some();
     if let_names.is_empty() || parent_destructured {
         emit_template_body(buf, source, children, depth, insts, action_counter);
         return;
@@ -312,7 +313,7 @@ pub(crate) fn child_is_slot_let_consumer(source: &str, node: &Node) -> bool {
     let Some(attrs) = slot_let_attrs(node) else {
         return false;
     };
-    if svn_analyze::literal_attr_value(attrs, "slot").is_none() {
+    if svn_analyze::literal_attr_value(attrs, "slot", source).is_none() {
         return false;
     }
     !collect_let_destructures(source, attrs).is_empty()
@@ -344,7 +345,7 @@ fn try_emit_slot_let_consumer_open(
     let Some(attrs) = slot_let_attrs(node) else {
         return false;
     };
-    let Some(slot_name) = svn_analyze::literal_attr_value(attrs, "slot") else {
+    let Some(slot_name) = svn_analyze::literal_attr_value(attrs, "slot", source) else {
         return false;
     };
     let lets = collect_let_destructures(source, attrs);

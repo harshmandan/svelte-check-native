@@ -72,7 +72,7 @@ pub(crate) fn emit_element_bind_checks_inline(
     // `type="..."` sibling attribute. Resolve once per element since
     // every `bind:value` on the same element dispatches to the same
     // target type.
-    let bind_value_type = svn_analyze::resolve_bind_value_type(tag_name, attributes);
+    let bind_value_type = svn_analyze::resolve_bind_value_type(tag_name, attributes, source);
     for attr in attributes {
         let svn_parser::Attribute::Directive(directive) = attr else {
             continue;

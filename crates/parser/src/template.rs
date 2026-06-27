@@ -638,9 +638,7 @@ impl<'src> TemplateParser<'src> {
             self.scanner.advance_char();
         }
         let end = self.scanner.pos();
-        let content = self.scanner.source()[start as usize..end as usize].to_string();
         Node::Text(Text {
-            content,
             range: Range::new(start, end),
         })
     }
@@ -667,19 +665,17 @@ impl<'src> TemplateParser<'src> {
                     range: Range::new(start, end),
                 });
                 self.scanner.set_pos(end);
-                let data = self.scanner.source()[body_start as usize..end as usize].to_string();
                 return Node::Comment(Comment {
-                    data,
+                    data_range: Range::new(body_start, end),
                     range: Range::new(start, end),
                 });
             }
         };
 
-        let data = self.scanner.source()[body_start as usize..body_end as usize].to_string();
         self.scanner.set_pos(body_end);
         self.scanner.advance(3); // past "-->"
         Node::Comment(Comment {
-            data,
+            data_range: Range::new(body_start, body_end),
             range: Range::new(start, self.scanner.pos()),
         })
     }
@@ -1007,11 +1003,12 @@ mod tests {
 
     #[test]
     fn plain_text() {
-        let frag = parse_ok("hello world");
+        let src = "hello world";
+        let frag = parse_ok(src);
         assert_eq!(frag.nodes.len(), 1);
         assert!(matches!(frag.nodes[0], Node::Text(_)));
         if let Node::Text(t) = &frag.nodes[0] {
-            assert_eq!(t.content, "hello world");
+            assert_eq!(t.range.slice(src), "hello world");
         }
     }
 
@@ -1038,12 +1035,13 @@ mod tests {
 
     #[test]
     fn html_comment() {
-        let frag = parse_ok("<!-- hi -->");
+        let src = "<!-- hi -->";
+        let frag = parse_ok(src);
         assert_eq!(frag.nodes.len(), 1);
         let Node::Comment(c) = &frag.nodes[0] else {
             panic!("expected Comment");
         };
-        assert_eq!(c.data, " hi ");
+        assert_eq!(c.data_range.slice(src), " hi ");
     }
 
     #[test]

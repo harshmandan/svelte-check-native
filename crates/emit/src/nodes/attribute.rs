@@ -250,7 +250,8 @@ pub(crate) fn emit_plain(
         }
         Some(v) if v.parts.len() == 1 => {
             match &v.parts[0] {
-                svn_parser::AttrValuePart::Text { content, .. } => {
+                svn_parser::AttrValuePart::Text { range } => {
+                    let content = range.slice(source);
                     // numberOnlyAttributes carve-out: emit bare number
                     // literal when the text parses as a number.
                     //
@@ -320,7 +321,8 @@ pub(crate) fn emit_plain(
             buf.push_str(": `");
             for part in &v.parts {
                 match part {
-                    svn_parser::AttrValuePart::Text { content, .. } => {
+                    svn_parser::AttrValuePart::Text { range } => {
+                        let content = range.slice(source);
                         let escaped = content.replace('\\', "\\\\").replace('`', "\\`");
                         buf.push_str(&escaped);
                     }

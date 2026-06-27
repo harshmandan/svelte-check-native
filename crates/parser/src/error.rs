@@ -69,4 +69,37 @@ impl ParseError {
             Self::UnsupportedBlock { range } => *range,
         }
     }
+
+    /// Whether this is a genuine user syntax error (upstream's compiler
+    /// would throw) versus an internal-limitation marker we must not
+    /// surface as a user diagnostic.
+    ///
+    /// `UnsupportedBlock` flags a construct this build can't parse yet —
+    /// an internal gap, not malformed user input. Everything else is a
+    /// real syntax error (unterminated tag/mustache/comment, duplicate
+    /// script/style, mismatched close, malformed open, unknown
+    /// `svelte:*` element, bad script context/lang).
+    pub fn is_fatal(&self) -> bool {
+        !matches!(self, Self::UnsupportedBlock { .. })
+    }
+
+    /// A stable kebab-case slug per variant, used as the diagnostic
+    /// `code`. Best-effort identifiers for our native reimplementation;
+    /// `bridge` mode emits upstream's exact compiler codes instead.
+    pub fn code_slug(&self) -> &'static str {
+        match self {
+            Self::UnterminatedTag { .. } => "unterminated-tag",
+            Self::DuplicateScript { .. } => "duplicate-script",
+            Self::DuplicateStyle { .. } => "duplicate-style",
+            Self::MalformedOpenTag { .. } => "malformed-open-tag",
+            Self::UnknownScriptContext { .. } => "unknown-script-context",
+            Self::UnknownScriptLang { .. } => "unknown-script-lang",
+            Self::UnterminatedComment { .. } => "unterminated-comment",
+            Self::UnterminatedMustache { .. } => "unterminated-mustache",
+            Self::UnterminatedElement { .. } => "unterminated-element",
+            Self::MismatchedClosingTag { .. } => "mismatched-closing-tag",
+            Self::UnknownSvelteElement { .. } => "unknown-svelte-element",
+            Self::UnsupportedBlock { .. } => "unsupported-block",
+        }
+    }
 }

@@ -1609,74 +1609,25 @@ pub(crate) fn emit_template_body(
         return;
     }
     let indent = "    ".repeat(depth);
-    let inner = "    ".repeat(depth + 1);
-    let body_indent = "    ".repeat(depth + 2);
     let _ = writeln!(buf, "{indent}{{");
-    let is_ts = emit_is_ts();
     for s in &snippets {
-        // Consolidated `const NAME = (params) => { <body> ... };` per
-        // snippet. The body is inlined here (instead of emitted via a
-        // separate `void ((params) => { … })` wrapper at the snippet's
-        // textual position) so the user's `(params)` declaration appears
-        // exactly once in the overlay. Without this consolidation,
-        // strict-mode `noImplicitAny` would fire twice on the same
-        // user-source span (once at the hoist arrow, once at the body
-        // wrapper) producing duplicate diagnostics. Mirrors upstream
-        // svelte2tsx's `SnippetBlock.ts:117-140` `const NAME = (params)
-        // => { async () => { <body> }; return __sveltets_2_any(0); };`
-        // shape — one arrow, one `(params)` site.
-        let params = source
-            .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
-            .unwrap_or("")
-            .trim();
-        // Empty-params snippet: skip the `(params)` site entirely so an
-        // unused-arrow-param lint doesn't fire on a synthetic empty
-        // signature, AND no identifier needs to be `void`'d. Matches
-        // the prior empty-params shape (`const NAME = () => null;`).
-        if params.is_empty() {
-            if is_ts {
-                let _ = writeln!(buf, "{inner}const {} = (): any => {{", s.name);
-            } else {
-                let _ = writeln!(buf, "{inner}const {} = () => {{", s.name);
-            }
-            emit_template_body(buf, source, &s.body, depth + 2, insts, action_counter);
-            if is_ts {
-                let _ = writeln!(buf, "{body_indent}return null as any;");
-            } else {
-                let _ = writeln!(buf, "{body_indent}return null;");
-            }
-            let _ = writeln!(buf, "{inner}}};");
-            let _ = writeln!(buf, "{inner}void {};", s.name);
-            continue;
-        }
-        // For TS overlays, append `: any` to each unannotated param so
-        // the body type-checks under `--strict` without
-        // `noImplicitAny` firing on every snippet param. For JS
-        // overlays, keep params verbatim — a TS-syntax annotation in
-        // a `.svn.js` file would override JSDoc / default-value
-        // inference flowing into both consumer callsites and the body.
-        let annotated = if is_ts {
-            crate::nodes::inline_component::annotate_snippet_params(params)
-        } else {
-            params.to_string()
-        };
-        let idents = all_identifiers(params);
-        if is_ts {
-            let _ = writeln!(buf, "{inner}const {} = ({annotated}): any => {{", s.name);
-        } else {
-            let _ = writeln!(buf, "{inner}const {} = ({annotated}) => {{", s.name);
-        }
-        emit_template_body(buf, source, &s.body, depth + 2, insts, action_counter);
-        for ident in &idents {
-            let _ = writeln!(buf, "{body_indent}void {ident};");
-        }
-        if is_ts {
-            let _ = writeln!(buf, "{body_indent}return null as any;");
-        } else {
-            let _ = writeln!(buf, "{body_indent}return null;");
-        }
-        let _ = writeln!(buf, "{inner}}};");
-        let _ = writeln!(buf, "{inner}void {};", s.name);
+        // Consolidated `const NAME = (params): any => { <body> ... };
+        // void NAME;` per snippet, hoisted to the top of this block so
+        // forward `{@render NAME()}` references resolve. The body is
+        // inlined here (instead of a separate `void ((params) => { … })`
+        // wrapper at the snippet's textual position) so the user's
+        // `(params)` declaration appears exactly once in the overlay,
+        // avoiding duplicate `noImplicitAny` diagnostics. Shape is
+        // single-sourced in `emit_snippet_const` and mirrors upstream
+        // svelte2tsx's `SnippetBlock.ts:117-140`.
+        crate::nodes::snippet_block::emit_snippet_const(
+            buf,
+            source,
+            s,
+            depth + 1,
+            insts,
+            action_counter,
+        );
     }
     for node in &fragment.nodes {
         // SnippetBlock bodies were inlined into their `const NAME = …`

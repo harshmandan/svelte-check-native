@@ -36,67 +36,85 @@ pub(crate) fn emit_snippet_block(
     insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
     action_counter: &mut usize,
 ) {
-    let indent = "    ".repeat(depth);
-    let params_text = source
-        .get(b.parameters_range.start as usize..b.parameters_range.end as usize)
+    // Emit the same consolidated `const NAME = (params): any => { … };
+    // void NAME;` declaration the hoist path in `emit_template_body`
+    // produces. The old shape here was a bare `{ void ((params) => {…}) }`
+    // wrapper that never DECLARED `NAME`, so a sibling `{@render NAME()}`
+    // fired a spurious TS2304. This path is reached when a snippet is
+    // emitted directly via `emit_template_node` (e.g. from
+    // `emit_children_with_let_bindings`) rather than through
+    // `emit_template_body`'s snippet-collection hoist.
+    emit_snippet_const(buf, source, b, depth, insts, action_counter);
+}
+
+/// Emit one `const NAME = (params): any => { <body> … return null as
+/// any; }; void NAME;` snippet declaration at `decl_depth`. Shared by
+/// both the `emit_template_body` hoist loop and `emit_snippet_block`, so
+/// the snippet shape is single-sourced and matches upstream svelte2tsx's
+/// `SnippetBlock.ts:117-140` (`const NAME = (params) => { … }`).
+pub(crate) fn emit_snippet_const(
+    buf: &mut EmitBuffer,
+    source: &str,
+    s: &SnippetBlock,
+    decl_depth: usize,
+    insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    action_counter: &mut usize,
+) {
+    let is_ts = emit_is_ts();
+    let decl = "    ".repeat(decl_depth);
+    let body_depth = decl_depth + 1;
+    let body_i = "    ".repeat(body_depth);
+    let params = source
+        .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
         .unwrap_or("")
         .trim();
-    // `{#snippet name()}` with an empty parameter list — skip the
-    // scope + placeholder binding entirely. `all_identifiers` never
-    // returns an empty vec (it falls back to `__svn_each_unused`),
-    // so we intercept the empty-params case before calling it.
-    if params_text.is_empty() {
-        emit_template_body(buf, source, &b.body, depth, insts, action_counter);
+    // Empty-params snippet: skip the `(params)` site entirely so an
+    // unused-arrow-param lint doesn't fire on a synthetic empty
+    // signature, AND no identifier needs to be `void`'d.
+    if params.is_empty() {
+        if is_ts {
+            let _ = writeln!(buf, "{decl}const {} = (): any => {{", s.name);
+        } else {
+            let _ = writeln!(buf, "{decl}const {} = () => {{", s.name);
+        }
+        emit_template_body(buf, source, &s.body, body_depth, insts, action_counter);
+        if is_ts {
+            let _ = writeln!(buf, "{body_i}return null as any;");
+        } else {
+            let _ = writeln!(buf, "{body_i}return null;");
+        }
+        let _ = writeln!(buf, "{decl}}};");
+        let _ = writeln!(buf, "{decl}void {};", s.name);
         return;
     }
-    // Open a fresh block, then reference the ORIGINAL params text
-    // inside an arrow function's signature — that keeps the user's
-    // type annotations (e.g. `MouseEventHandler<HTMLButtonElement>`)
-    // bound as references. Without this, types only used in a
-    // snippet parameter list (and never in the script body) fire
-    // TS6133 "declared but never read" on their import.
-    //
-    // We don't try to thread contextual typing through — top-level
-    // snippets have no parent satisfies target to flow from. Each
-    // user-named parameter gets re-declared inside the body as `const
-    // <name>: any` so the snippet body type-checks without depending
-    // on the arrow's inferred param types (which the `null as any`
-    // cast erases anyway).
-    // For TS overlays, append `: any` to each unannotated param so the
-    // body type-checks under `--strict` without `noImplicitAny` firing
-    // on every snippet param. For JS overlays, skip the annotation —
-    // a TS-syntax `name: any` annotation in a `.svn.js` file overrides
-    // both JSDoc `/**@type {…}*/name` annotations AND default-value
-    // inference (`name = 2` → `number`). The JSDoc-driven flow is what
-    // makes JS-svelte snippets reachable for diagnostics like TS2367 /
-    // TS2345 against typed params; forcing `: any` collapses the type
-    // back to `any` and silences both. Mirrors upstream svelte2tsx's
-    // behavior of preserving the user's params verbatim in JSDoc mode.
-    let annotated = if emit_is_ts() {
-        annotate_snippet_params(params_text)
+    // The arrow params are the binding introductions — their type
+    // annotations flow into the body (e.g. `{#snippet row(v: VideoState)}`
+    // gets `v: VideoState`), and any type imported solely for a snippet
+    // param annotation shows up as a reference, suppressing TS6133. For
+    // TS overlays append `: any` to each unannotated param so the body
+    // type-checks under `--strict` without `noImplicitAny` firing; for JS
+    // overlays keep params verbatim so JSDoc / default-value inference
+    // still flows.
+    let annotated = if is_ts {
+        annotate_snippet_params(params)
     } else {
-        params_text.to_string()
+        params.to_string()
     };
-    let idents = all_identifiers(params_text);
-    // Emit the body INSIDE a no-op arrow function expression whose
-    // params carry the user's type annotations. This serves two
-    // purposes simultaneously:
-    //   1. The arrow params are the binding introductions — their
-    //      type annotations flow into the body, so a snippet like
-    //      `{#snippet state(state: VideoState)}` gets `state: VideoState`
-    //      bindings rather than `state: any`.
-    //   2. Any type imported solely for a snippet param annotation
-    //      (e.g. `MouseEventHandler<HTMLButtonElement>`) shows up as
-    //      a reference in the emitted code, suppressing TS6133.
-    //
-    // We use a function *expression* (not a type) so default values
-    // and optional-after-required orderings remain legal.
-    let _ = writeln!(buf, "{indent}{{");
-    let _ = writeln!(buf, "{indent}    void (({annotated}) => {{");
-    emit_template_body(buf, source, &b.body, depth + 2, insts, action_counter);
-    for ident in &idents {
-        let _ = writeln!(buf, "{indent}        void {ident};");
+    let idents = all_identifiers(params);
+    if is_ts {
+        let _ = writeln!(buf, "{decl}const {} = ({annotated}): any => {{", s.name);
+    } else {
+        let _ = writeln!(buf, "{decl}const {} = ({annotated}) => {{", s.name);
     }
-    let _ = writeln!(buf, "{indent}    }});");
-    let _ = writeln!(buf, "{indent}}}");
+    emit_template_body(buf, source, &s.body, body_depth, insts, action_counter);
+    for ident in &idents {
+        let _ = writeln!(buf, "{body_i}void {ident};");
+    }
+    if is_ts {
+        let _ = writeln!(buf, "{body_i}return null as any;");
+    } else {
+        let _ = writeln!(buf, "{body_i}return null;");
+    }
+    let _ = writeln!(buf, "{decl}}};");
+    let _ = writeln!(buf, "{decl}void {};", s.name);
 }

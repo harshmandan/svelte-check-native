@@ -406,7 +406,12 @@ pub fn check(
             InputKind::Svelte | InputKind::SvelteAuxiliary => {
                 std::fs::read_to_string(&input.source_path).unwrap_or_default()
             }
-            InputKind::KitFile | InputKind::UserTsOverlay => input.generated_ts.clone(),
+            // Identity-map kinds preserve the original layout, so the
+            // overlay text doubles as the source view. The position
+            // helpers read `overlay_text` for both sides when
+            // `identity_map` is true, so there's no need to clone a
+            // second copy here.
+            InputKind::KitFile | InputKind::UserTsOverlay => String::new(),
         };
         let pug_template_ranges = filters::scan_pug_template_ranges(&source_text);
         let overlay_text = std::mem::take(&mut input.generated_ts);
@@ -584,16 +589,24 @@ pub fn check(
     // (verified against `pug` fixture's expected JSON which has
     // 2307×2 + 2322 only, no 6133/6192 on the same import lines).
     if include_suggestions {
-        let suppressed_lines: std::collections::HashSet<(PathBuf, u32)> = diagnostics
+        let mut suppressed: std::collections::HashMap<PathBuf, std::collections::HashSet<u32>> =
+            std::collections::HashMap::new();
+        for d in diagnostics
             .iter()
             .filter(|d| matches!(d.code, DiagnosticCode::Numeric(2305..=2307)))
-            .map(|d| (d.source_path.clone(), d.line))
-            .collect();
+        {
+            suppressed
+                .entry(d.source_path.clone())
+                .or_default()
+                .insert(d.line);
+        }
         diagnostics.retain(|d| {
             if !matches!(d.code, DiagnosticCode::Numeric(6133 | 6192 | 6196)) {
                 return true;
             }
-            !suppressed_lines.contains(&(d.source_path.clone(), d.line))
+            !suppressed
+                .get(&d.source_path)
+                .is_some_and(|lines| lines.contains(&d.line))
         });
     }
     Ok(CheckOutput {

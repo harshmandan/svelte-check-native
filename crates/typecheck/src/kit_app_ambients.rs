@@ -137,11 +137,11 @@ fn is_kit_project(workspace: &std::path::Path) -> bool {
     false
 }
 
-/// True when `node_modules/@sveltejs/kit/types/index.d.ts` (or one of
-/// the `$app/*.d.ts` files inside the kit package) is reachable from
-/// `workspace`. Walks up parent directories so monorepo setups with
-/// `@sveltejs/kit` at the root also count as "reachable" — same walk-
-/// up semantics as Node module resolution.
+/// True when `node_modules/@sveltejs/kit/src/runtime/app/` (the
+/// directory the `$app/*` path alias resolves to) exists and is
+/// reachable from `workspace`. Walks up parent directories so
+/// monorepo setups with `@sveltejs/kit` at the root also count as
+/// "reachable" — same walk-up semantics as Node module resolution.
 fn has_kit_app_types(workspace: &std::path::Path) -> bool {
     let mut cursor = workspace;
     loop {

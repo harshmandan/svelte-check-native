@@ -91,8 +91,15 @@ pub(crate) fn translate_position(
                     .source_byte_start
                     .saturating_add(overlay_offset)
                     .min(entry.source_byte_end.saturating_sub(1));
-                let (sl, sc) =
-                    byte_to_position(&data.source_line_starts, &data.source_text, source_byte);
+                // Identity-map kinds don't carry a separate source-text
+                // copy — the overlay text is the source view, so read the
+                // overlay-side line-starts/text for the UTF-16 conversion.
+                let (source_line_starts, source_text) = if data.identity_map {
+                    (&data.overlay_line_starts, &data.overlay_text)
+                } else {
+                    (&data.source_line_starts, &data.source_text)
+                };
+                let (sl, sc) = byte_to_position(source_line_starts, source_text, source_byte);
                 return Some((sl, sc));
             }
         }
@@ -151,8 +158,8 @@ pub(crate) fn find_tightest_token(map: &[TokenMapEntry], byte: u32) -> Option<To
 /// on the correct byte.
 ///
 /// Returns `None` when the line is past EOF. Columns past the end of
-/// the line clamp to the line's final byte (matches LSP server
-/// behaviour for over-shoots).
+/// the line clamp to the start of the next line (the same
+/// `nextLineOffset` clamp upstream's `offsetAt` applies to over-shoots).
 pub(crate) fn position_to_byte(
     line_starts: &[u32],
     text: &str,
@@ -191,9 +198,9 @@ pub(crate) fn position_to_byte(
         }
         units = units.saturating_add(ch.len_utf16());
     }
-    // Column overshoots the line's end — clamp to the last byte on
-    // this line (the newline, if any).
-    Some(next.saturating_sub(1).max(line_start))
+    // Column overshoots the line's end — clamp to the start of the next
+    // line (== upstream offsetAt's `nextLineOffset` clamp).
+    Some(next.max(line_start))
 }
 
 /// Convert a byte offset to a 1-based `(line, UTF-16 col)`.

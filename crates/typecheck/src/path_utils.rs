@@ -45,14 +45,15 @@ pub(crate) fn rewrite_external_imports(
     let mut i = 0;
     let mut copy_from = 0;
     while i < bytes.len() {
-        // Only ASCII quote bytes (`'` and `"`) are valid quote
-        // delimiters in JS/TS string literals — multi-byte UTF-8
+        // Only ASCII quote bytes (`'`, `"`, and backtick) are valid
+        // quote delimiters in JS/TS string/template literals —
+        // multi-byte UTF-8
         // characters can't BE quote delimiters, so the byte-level
         // search is sound. The ASCII assumption only governs
         // quote-detection; the slice-copy below preserves all bytes
         // verbatim, multi-byte chars included.
         let quote = bytes[i];
-        if (quote == b'\'' || quote == b'"')
+        if (quote == b'\'' || quote == b'"' || quote == b'`')
             && bytes.get(i + 1) == Some(&b'.')
             && bytes.get(i + 2) == Some(&b'.')
             && bytes.get(i + 3) == Some(&b'/')
@@ -70,6 +71,14 @@ pub(crate) fn rewrite_external_imports(
                 continue;
             }
             let specifier = &overlay_text[spec_start..j];
+            // A template literal with a `${...}` substitution is not a
+            // static string literal — rewriting it would corrupt the
+            // expression. Only no-substitution backtick literals are
+            // safe to treat as module specifiers.
+            if quote == b'`' && specifier.contains("${") {
+                i += 1;
+                continue;
+            }
             if let Some(rewritten) = compute_rewrite(specifier, source_dir, overlay_dir, workspace)
             {
                 // Copy verbatim from `copy_from` up to (and including)
@@ -129,6 +138,17 @@ fn is_in_import_context(bytes: &[u8], quote_pos: usize) -> bool {
         {
             return true;
         }
+        // `require("...")` — same shape as `import(`, matching `require`
+        // before the `(`.
+        if k >= b"require".len()
+            && &bytes[k - b"require".len()..k] == b"require"
+            && (k == b"require".len()
+                || !bytes[k - b"require".len() - 1].is_ascii_alphanumeric()
+                    && bytes[k - b"require".len() - 1] != b'_'
+                    && bytes[k - b"require".len() - 1] != b'$')
+        {
+            return true;
+        }
     }
     false
 }
@@ -141,15 +161,27 @@ fn compute_rewrite(
     overlay_dir: &Path,
     workspace: &Path,
 ) -> Option<String> {
-    if !specifier.starts_with("../") {
+    // Mirror upstream's `splitImportSpecifier`: a query (`?`) or hash
+    // (`#`) suffix is not part of the path and must survive the rewrite
+    // unchanged. Rewrite only the path part, then re-append the suffix.
+    let cut = specifier.find(['?', '#']);
+    let (path_part, suffix) = match cut {
+        Some(i) => (&specifier[..i], &specifier[i..]),
+        None => (specifier, ""),
+    };
+    if !path_part.starts_with("../") {
         return None;
     }
-    let target = lexical_normalise(&source_dir.join(specifier));
+    let target = lexical_normalise(&source_dir.join(path_part));
     if is_within(&target, workspace) {
         return None;
     }
-    let rewritten_path = path_relative(overlay_dir, &target)?;
-    let rewritten = rewritten_path.to_string_lossy().replace('\\', "/");
+    let rewritten_path = path_relative(overlay_dir, &target);
+    let rewritten = format!(
+        "{}{}",
+        rewritten_path.to_string_lossy().replace('\\', "/"),
+        suffix
+    );
     if rewritten == specifier {
         return None;
     }
@@ -158,7 +190,7 @@ fn compute_rewrite(
 
 /// Compute a relative path from `from_dir` to `to_path`, mirroring
 /// Node's `path.relative` semantics for our two-absolute-path inputs.
-pub(crate) fn path_relative(from_dir: &Path, to_path: &Path) -> Option<PathBuf> {
+pub(crate) fn path_relative(from_dir: &Path, to_path: &Path) -> PathBuf {
     let from = lexical_normalise(from_dir);
     let to = lexical_normalise(to_path);
     let from_components: Vec<_> = from.components().collect();
@@ -175,7 +207,7 @@ pub(crate) fn path_relative(from_dir: &Path, to_path: &Path) -> Option<PathBuf> 
     for component in &to_components[common_len..] {
         out.push(component);
     }
-    Some(out)
+    out
 }
 
 /// Is `target` inside `dir` lexically?

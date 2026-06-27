@@ -678,13 +678,6 @@ fn is_resolvable_types_entry(entry: &str, declaring_dir: &Path) -> bool {
         if candidate.is_file() {
             return true;
         }
-        let with_dts = candidate.with_extension(format!(
-            "{}.d.ts",
-            candidate.extension().and_then(|e| e.to_str()).unwrap_or(""),
-        ));
-        if with_dts.is_file() {
-            return true;
-        }
         let mut as_dts = candidate.clone();
         as_dts.as_mut_os_string().push(".d.ts");
         return as_dts.is_file();

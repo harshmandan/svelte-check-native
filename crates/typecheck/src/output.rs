@@ -60,18 +60,18 @@ pub fn parse(stdout: &str) -> Vec<RawDiagnostic> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < lines.len() {
-        if let Some(d) = parse_header(lines[i]) {
-            // Look up to 4 subsequent lines for an underline `~~~~`.
-            let mut span = None;
-            let upper = (i + 5).min(lines.len());
-            for ahead in lines.iter().take(upper).skip(i + 1) {
-                if let Some(len) = parse_underline(ahead) {
-                    span = Some(len);
-                    break;
+        if let Some(mut diagnostic) = parse_header(lines[i]) {
+            // No file path => no source context line; keep span = None.
+            if !diagnostic.file.as_os_str().is_empty() {
+                // Look up to 4 subsequent lines for an underline `~~~~`.
+                let upper = (i + 5).min(lines.len());
+                for ahead in lines.iter().take(upper).skip(i + 1) {
+                    if let Some(len) = parse_underline(ahead) {
+                        diagnostic.span_length = Some(len);
+                        break;
+                    }
                 }
             }
-            let mut diagnostic = d;
-            diagnostic.span_length = span;
             out.push(diagnostic);
         }
         i += 1;
@@ -183,7 +183,11 @@ fn parse_underline(line: &str) -> Option<u32> {
     let trimmed = line.trim_start();
     if trimmed.starts_with('~') {
         let count = trimmed.chars().take_while(|&c| c == '~').count();
-        Some(count as u32)
+        if trimmed[count..].trim().is_empty() {
+            Some(count as u32)
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -355,6 +359,25 @@ error TS18003: No inputs were found in config file '/x/tsconfig.json'. Specified
         assert_eq!(diags[0].severity, Severity::Warning);
         assert_eq!(diags[0].code, 9999);
         assert_eq!(diags[0].file, PathBuf::new());
+    }
+
+    #[test]
+    fn bare_form_does_not_latch_onto_following_underline() {
+        // A bare diagnostic immediately followed by a file-anchored one
+        // whose frame carries an underline must not borrow that span: a
+        // bare diagnostic has no source context line of its own.
+        let stdout = "\
+error TS18003: No inputs were found.
+src/foo.ts:1:5 - error TS2322: bad
+\x20\x201 const xy = 1;
+\x20\x20  ~~~~~~
+";
+        let diags = parse(stdout);
+        assert_eq!(diags.len(), 2);
+        assert_eq!(diags[0].code, 18003);
+        assert_eq!(diags[0].span_length, None);
+        assert_eq!(diags[1].code, 2322);
+        assert_eq!(diags[1].span_length, Some(6));
     }
 
     #[test]

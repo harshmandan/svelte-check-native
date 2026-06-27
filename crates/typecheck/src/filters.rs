@@ -191,16 +191,19 @@ pub(crate) fn is_in_ignore_region(regions: &[(u32, u32)], offset: u32) -> bool {
 /// filter at
 /// `language-tools/packages/language-server/src/plugins/typescript/features/DiagnosticsProvider.ts:663-700`.
 /// The upstream filter consults the language service to confirm the
-/// inner call's signature has exactly 3 non-optional parameters.
-/// We don't have a TS language service in our pipeline, so the check
-/// here is structural: if the bytes immediately preceding `offset`
-/// (after walking back through identifier characters) end with
-/// `__svn_ensure_transition(`, the diagnostic originates inside the
-/// wrapper. Less precise than upstream's signature lookup, but the
-/// false-positive surface is narrow — `__svn_ensure_transition` only
-/// wraps user-supplied transition function calls, and a user's
-/// function deliberately declared with > 3 params would fire TS2554
-/// either way (the 3-arg shape is the runtime contract).
+/// inner call's signature has exactly 3 non-optional parameters. When
+/// no language service is available upstream falls back to matching the
+/// diagnostic message text — the substring ` 3`, i.e. "Expected 3
+/// arguments". We have no TS language service in our pipeline, so the
+/// caller mirrors that no-language-service fallback: it pairs the
+/// message-text guard (` 3`) with this structural origin check. The
+/// check here only confirms the diagnostic originates inside the
+/// wrapper — if the bytes immediately preceding `offset` (after walking
+/// back through identifier characters) end with `__svn_ensure_transition(`.
+/// The wrapper only wraps user-supplied transition function calls, so
+/// the false-positive surface is narrow, and a user's function
+/// deliberately declared with > 3 params would fire TS2554 either way
+/// (the 3-arg shape is the runtime contract).
 pub(crate) fn is_overlay_in_ensure_transition_call(overlay: &str, offset: u32) -> bool {
     const PREFIX: &[u8] = b"__svn_ensure_transition(";
     let bytes = overlay.as_bytes();
@@ -264,6 +267,31 @@ pub fn scan_ignore_regions(overlay_text: &str) -> Vec<(u32, u32)> {
     regions
 }
 
+/// True when the compacted attribute span carries a `lang` attribute
+/// set to `pug`. The span has already had whitespace squeezed out, so a
+/// genuine `lang` attribute is preceded either by the span start or by a
+/// boundary byte (`>`, `/`, a quote, or another attribute's value). We
+/// reject a match whose preceding byte is an attribute-name character
+/// (`[A-Za-z0-9:_-]`) so `data-lang="pug"` / `xlang="pug"` don't trip the
+/// suppression while `lang="pug"` and `foo="x"lang="pug"` still do.
+fn lang_attr_is_pug(attrs_compact: &str) -> bool {
+    let b = attrs_compact.as_bytes();
+    for pat in ["lang=\"pug\"", "lang='pug'", "lang=pug"] {
+        let mut from = 0;
+        while let Some(rel) = attrs_compact[from..].find(pat) {
+            let idx = from + rel;
+            let boundary_ok = idx == 0
+                || !matches!(b[idx - 1],
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b':' | b'_' | b'-');
+            if boundary_ok {
+                return true;
+            }
+            from = idx + 1;
+        }
+    }
+    false
+}
+
 /// Scan `source_text` for top-level `<template lang="pug">…</template>`
 /// container ranges. Mirrors upstream's `extractTemplateTag` +
 /// `isRangeInTag(range, document.templateInfo)` filter at
@@ -308,9 +336,7 @@ pub fn scan_pug_template_ranges(source_text: &str) -> Vec<(u32, u32)> {
         let open_end = after_open + rel_gt + 1;
         let attrs = &source_text[after_open..open_end - 1];
         let attrs_compact: String = attrs.split_whitespace().collect::<Vec<_>>().join("");
-        let is_pug = attrs_compact.contains("lang=\"pug\"")
-            || attrs_compact.contains("lang='pug'")
-            || attrs_compact.contains("lang=pug");
+        let is_pug = lang_attr_is_pug(&attrs_compact);
         if !is_pug {
             cursor = open_end;
             continue;

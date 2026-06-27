@@ -51,10 +51,14 @@ pub enum RunError {
     Timeout(Duration),
 }
 
-/// tsc/tsgo exit-code semantics: `0` = no diagnostics, `1` =
-/// diagnostics reported (the normal "found errors" path). Any other
-/// code — or death by signal (`None`) — means tsgo itself failed to
-/// complete: a crash, OOM, or fatal error it couldn't recover from.
+/// tsc/tsgo exit-code semantics (`ExitStatus`): `0` = success, `1` =
+/// diagnostics reported with outputs skipped (the normal "found errors"
+/// path under our forced `noEmit`), `2` = diagnostics reported with outputs
+/// generated, `3`+ = invalid project / fatal. We force `noEmit` in the
+/// overlay, so a diagnostics run exits `1`, never `2`; treating `2` as
+/// abnormal is therefore safe (and the `diagnostics.is_empty()` guard at the
+/// call site keeps any stray code-2 run with diagnostics on the `Ok` path).
+/// `None` (death by signal) likewise means tsgo failed to complete.
 fn exited_abnormally(code: Option<i32>) -> bool {
     !matches!(code, Some(0) | Some(1))
 }
@@ -340,8 +344,9 @@ Total time:            1.237s
 
     #[test]
     fn other_codes_and_signals_are_abnormal() {
-        // A Go panic (code 2), a fatal config code, or death by signal
-        // (None) all mean tsgo failed to complete.
+        // Code 2 (diagnostics + outputs generated) never happens under forced
+        // noEmit, so we classify it as abnormal; code 3 (invalid project) and
+        // death by signal (None) are genuine failures.
         assert!(exited_abnormally(Some(2)));
         assert!(exited_abnormally(Some(3)));
         assert!(exited_abnormally(Some(139))); // 128 + SIGSEGV

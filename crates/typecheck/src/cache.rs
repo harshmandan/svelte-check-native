@@ -130,17 +130,6 @@ impl CacheLayout {
         self.generated_path_with_lang(source, true)
     }
 
-    /// Like [`generated_path`] but lets the caller pick the overlay's
-    /// extension based on the source's effective script language.
-    /// `is_ts = true` → `.svelte.svn.ts`; `is_ts = false` → `.svelte.svn.js`.
-    ///
-    /// Mirroring upstream svelte-check's incremental.ts: the overlay
-    /// extension is what tells tsgo whether to apply TS-strict
-    /// inference (empty array → `never[]`, null literal → `null`) or
-    /// JS-loose inference (both → `any` under `noImplicitAny: false`).
-    /// On JS-Svelte sources the user's tsconfig usually carries
-    /// `noImplicitAny: false`, and emitting a `.ts` overlay forces
-    /// strict inference that the user never opted into.
     /// Make `source` relative to the workspace for use as a cache-mirror
     /// suffix. When `source` is OUTSIDE the workspace (so `strip_prefix`
     /// fails), drop its root/prefix components so the result is still
@@ -163,6 +152,17 @@ impl CacheLayout {
             .collect()
     }
 
+    /// Like [`generated_path`] but lets the caller pick the overlay's
+    /// extension based on the source's effective script language.
+    /// `is_ts = true` → `.svelte.svn.ts`; `is_ts = false` → `.svelte.svn.js`.
+    ///
+    /// Mirroring upstream svelte-check's incremental.ts: the overlay
+    /// extension is what tells tsgo whether to apply TS-strict
+    /// inference (empty array → `never[]`, null literal → `null`) or
+    /// JS-loose inference (both → `any` under `noImplicitAny: false`).
+    /// On JS-Svelte sources the user's tsconfig usually carries
+    /// `noImplicitAny: false`, and emitting a `.ts` overlay forces
+    /// strict inference that the user never opted into.
     pub fn generated_path_with_lang(&self, source: &Path, is_ts: bool) -> PathBuf {
         let rel = self.relativize(source);
         let parent = rel.parent().unwrap_or_else(|| Path::new(""));
@@ -249,9 +249,9 @@ impl CacheLayout {
     ///
     /// Used by the diagnostic-mapping pass to translate tsgo's output
     /// filenames back to user-facing source paths. Handles the current
-    /// `.svelte.svn.ts` / `.d.svelte.ts` pair plus legacy
-    /// `.svelte.ts` and `++` shapes so a stale cache from an older
-    /// binary is tolerated.
+    /// `.svelte.svn.ts` / `.svelte.svn.js` overlay forms and the
+    /// `.d.svelte.ts` ambient; all other cache files (Kit mirrors) reverse
+    /// to the same basename.
     pub fn original_from_generated(&self, generated: &Path) -> Option<PathBuf> {
         let rel = generated.strip_prefix(&self.svelte_dir).ok()?;
         let parent = rel.parent().unwrap_or_else(|| Path::new(""));

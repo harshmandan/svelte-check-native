@@ -43,8 +43,8 @@ pub enum DiscoveryError {
     #[error(
         "could not find tsgo. Install `@typescript/native-preview` as a \
          devDependency, or set TSGO_BIN to an absolute path. Searched \
-         upward from {searched_from} for \
-         `node_modules/@typescript/native-preview/bin/tsgo.js`."
+         upward from {searched_from} for `@typescript/native-preview` \
+         (hoisted under node_modules, or isolated under .pnpm/.bun)."
     )]
     NotFound { searched_from: PathBuf },
 
@@ -62,7 +62,11 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
         let needs_node = path
             .extension()
             .and_then(|s| s.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("js") || ext.eq_ignore_ascii_case("cjs"))
+            .map(|ext| {
+                ext.eq_ignore_ascii_case("js")
+                    || ext.eq_ignore_ascii_case("cjs")
+                    || ext.eq_ignore_ascii_case("mjs")
+            })
             .unwrap_or(false);
         return Ok(TsgoBinary { path, needs_node });
     }

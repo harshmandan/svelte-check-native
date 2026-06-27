@@ -50,6 +50,14 @@ pub fn scan(source: &str, ctx: &mut LintContext<'_>) {
     let mut stack: Vec<Frame> = Vec::new();
     let mut i: usize = 0;
     let len = bytes.len();
+    // Mirrors upstream's `last_auto_closed_tag`: the name of the tag
+    // most recently auto-closed by a sibling open, plus the stack
+    // depth at that moment. A following explicit `</NAME>` for the
+    // same tag is suppressed (the auto-close already accounted for
+    // it), and the record is reset once we pop back above that depth
+    // so it can't over-suppress a later legitimate close.
+    let mut last_auto_closed: Option<SmolStr> = None;
+    let mut last_auto_closed_depth: usize = 0;
 
     while i < len {
         let b = bytes[i];
@@ -87,7 +95,14 @@ pub fn scan(source: &str, ctx: &mut LintContext<'_>) {
                     continue;
                 }
                 i = j + 1;
-                handle_close(&mut stack, &name, i as u32 - 1, ctx);
+                handle_close(
+                    &mut stack,
+                    &name,
+                    i as u32 - 1,
+                    &mut last_auto_closed,
+                    last_auto_closed_depth,
+                    ctx,
+                );
                 continue;
             }
             // Opening tag (or malformed `<`).
@@ -110,7 +125,13 @@ pub fn scan(source: &str, ctx: &mut LintContext<'_>) {
             let tag_name = name.clone();
 
             if is_regular {
-                handle_open(&mut stack, &tag_name, open_start, open_end as u32, ctx);
+                handle_open(
+                    &mut stack,
+                    &tag_name,
+                    &mut last_auto_closed,
+                    &mut last_auto_closed_depth,
+                    ctx,
+                );
             }
 
             i = open_end;
@@ -191,7 +212,6 @@ pub fn scan(source: &str, ctx: &mut LintContext<'_>) {
         }
         i += 1;
     }
-    let _ = ctx;
 }
 
 struct MustacheTag {
@@ -420,22 +440,26 @@ fn find_ci_bytes(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 fn handle_open(
     stack: &mut Vec<Frame>,
     name: &str,
-    open_start: u32,
-    open_end: u32,
+    last_auto_closed: &mut Option<SmolStr>,
+    last_auto_closed_depth: &mut usize,
     ctx: &mut LintContext<'_>,
 ) {
     if let Some(Frame::Open(parent)) = stack.last() {
         if closing_tag_omitted(parent.name.as_str(), Some(name)) {
+            let parent_name = parent.name.clone();
             let full = messages::element_implicitly_closed(
                 &format!("<{name}>"),
-                &format!("</{}>", parent.name),
+                &format!("</{parent_name}>"),
             );
             let range = Range::new(parent.open_start, parent.open_end);
             ctx.emit(Code::element_implicitly_closed, full, range);
             stack.pop();
+            // Record the auto-close so a following explicit `</NAME>`
+            // for the same tag is suppressed instead of firing again.
+            *last_auto_closed = Some(parent_name);
+            *last_auto_closed_depth = stack.len();
         }
     }
-    let _ = (open_start, open_end);
 }
 
 /// On a closing `</NAME>`: walk up the open-stack; each popped
@@ -457,7 +481,14 @@ fn handle_open(
 ///      out of scope for this warning). Firing
 ///      `element_implicitly_closed` on ancestors in that case is
 ///      a false positive for the same reason as (1).
-fn handle_close(stack: &mut Vec<Frame>, name: &str, _close_end: u32, ctx: &mut LintContext<'_>) {
+fn handle_close(
+    stack: &mut Vec<Frame>,
+    name: &str,
+    _close_end: u32,
+    last_auto_closed: &mut Option<SmolStr>,
+    last_auto_closed_depth: usize,
+    ctx: &mut LintContext<'_>,
+) {
     if !is_regular_name(name) {
         return;
     }
@@ -469,23 +500,33 @@ fn handle_close(stack: &mut Vec<Frame>, name: &str, _close_end: u32, ctx: &mut L
     if !has_match {
         return;
     }
+    // If this close matches the tag we just auto-closed via a sibling
+    // open, the warning was already emitted there — pop, but stay quiet.
+    let suppress = last_auto_closed.as_deref() == Some(name);
     while let Some(frame) = stack.pop() {
         match frame {
             Frame::Block => {
                 stack.push(Frame::Block);
-                return;
+                break;
             }
             Frame::Open(parent) => {
                 if parent.name.as_str() == name {
-                    return;
+                    break;
                 }
-                let full = messages::element_implicitly_closed(
-                    &format!("</{name}>"),
-                    &format!("</{}>", parent.name),
-                );
-                let range = Range::new(parent.open_start, parent.open_end);
-                ctx.emit(Code::element_implicitly_closed, full, range);
+                if !suppress {
+                    let full = messages::element_implicitly_closed(
+                        &format!("</{name}>"),
+                        &format!("</{}>", parent.name),
+                    );
+                    let range = Range::new(parent.open_start, parent.open_end);
+                    ctx.emit(Code::element_implicitly_closed, full, range);
+                }
             }
         }
+    }
+    // Once we've popped back above the depth where the auto-close
+    // happened, the record is stale and must not suppress later closes.
+    if stack.len() < last_auto_closed_depth {
+        *last_auto_closed = None;
     }
 }

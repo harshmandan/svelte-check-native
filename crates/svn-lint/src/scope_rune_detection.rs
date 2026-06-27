@@ -9,6 +9,7 @@
 use oxc_ast::ast::{BindingPattern, CallExpression, Expression};
 
 use crate::scope_types::{InitialKind, RuneCall};
+use crate::scope_util::unwrap_ts_wrappers;
 
 /// Matches upstream `utils.js::is_rune`. Keep in sync with the
 /// `RUNES` constant there.
@@ -57,7 +58,7 @@ pub(crate) fn state_rune_primitive_arg(e: &Expression<'_>) -> bool {
         c.arguments
             .first()
             .and_then(|a| a.as_expression())
-            .map(is_primitive_expr)
+            .map(|arg| is_primitive_expr(unwrap_ts_wrappers(arg)))
             .unwrap_or(true)
     } else {
         true
@@ -65,27 +66,27 @@ pub(crate) fn state_rune_primitive_arg(e: &Expression<'_>) -> bool {
 }
 
 pub(crate) fn detect_rune_call_from_call(c: &CallExpression<'_>) -> Option<RuneCall> {
-    let callee_name = match &c.callee {
-        Expression::Identifier(id) => id.name.as_str().to_string(),
+    Some(match &c.callee {
+        Expression::Identifier(id) => match id.name.as_str() {
+            "$state" => RuneCall::State,
+            "$derived" => RuneCall::Derived,
+            "$props" => RuneCall::Props,
+            "$bindable" => RuneCall::Bindable,
+            "$inspect" => RuneCall::Inspect,
+            "$host" => RuneCall::Host,
+            "$effect" => RuneCall::Effect,
+            _ => return None,
+        },
         Expression::StaticMemberExpression(m) => {
-            if let Expression::Identifier(o) = &m.object {
-                format!("{}.{}", o.name.as_str(), m.property.name.as_str())
-            } else {
+            let Expression::Identifier(o) = &m.object else {
                 return None;
+            };
+            match (o.name.as_str(), m.property.name.as_str()) {
+                ("$state", "raw") => RuneCall::StateRaw,
+                ("$derived", "by") => RuneCall::DerivedBy,
+                _ => return None,
             }
         }
-        _ => return None,
-    };
-    Some(match callee_name.as_str() {
-        "$state" => RuneCall::State,
-        "$state.raw" => RuneCall::StateRaw,
-        "$derived" => RuneCall::Derived,
-        "$derived.by" => RuneCall::DerivedBy,
-        "$props" => RuneCall::Props,
-        "$bindable" => RuneCall::Bindable,
-        "$inspect" => RuneCall::Inspect,
-        "$host" => RuneCall::Host,
-        "$effect" => RuneCall::Effect,
         _ => return None,
     })
 }
@@ -103,7 +104,7 @@ pub(crate) fn detect_bindable_default(pat: &BindingPattern<'_>) -> Option<bool> 
                         .arguments
                         .first()
                         .and_then(|a| a.as_expression())
-                        .map(is_primitive_expr)
+                        .map(|arg| is_primitive_expr(unwrap_ts_wrappers(arg)))
                         .unwrap_or(true);
                     Some(arg_is_primitive)
                 } else {

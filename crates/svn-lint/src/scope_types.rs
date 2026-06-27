@@ -20,9 +20,7 @@ pub struct ScopeId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BindingId(pub u32);
 
-/// Mirrors upstream `BindingKind` (`types/index.d.ts:275`). Only the
-/// variants we emit in walk-1 are represented; transform-only kinds
-/// are left out until a rule needs them.
+/// Mirrors upstream `BindingKind` in full (`types/index.d.ts`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BindingKind {
     /// Plain `var` / `let` / `const` / `function` / `class` / `import`.
@@ -202,10 +200,11 @@ pub struct Binding {
     /// in non-runes mode. Used by `export_let_unused` to filter out
     /// references that are just re-exports.
     pub prop_alias: Option<SmolStr>,
-    /// True if any `bind:*={expr}` template directive's expression
+    /// Number of `bind:*={expr}` template directives whose expression
     /// resolves to this binding as its base identifier. Drives
-    /// `bind_invalid_each_rest`.
-    pub has_bind_reference: bool,
+    /// `bind_invalid_each_rest`, which emits one diagnostic per
+    /// reference.
+    pub bind_reference_count: u32,
     /// Pre-computed answer to "does `state_referenced_locally` fire on
     /// this binding under the user's svelte version?" Folds the
     /// upstream-version compat gate (`state_locally_fires_on_props`,

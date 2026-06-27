@@ -143,6 +143,21 @@ fn find_interpolation_end(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+/// Whether `prev` (the byte immediately before a candidate rune marker)
+/// is a valid left boundary for the marker — i.e. the marker is not the
+/// tail of a longer identifier or member-access chain. Rejects
+/// identifier-continuation chars, `_`, `$` (the `$$props` ambient), and
+/// `.` (member access like `obj.$state`). `None` means start-of-input,
+/// which is always a boundary. Rejecting `.` on the LEFT does not
+/// regress `$state.raw(` — there the `.raw` chain is consumed to the
+/// RIGHT, so the left boundary of `$state` is unaffected.
+fn is_left_boundary(prev: Option<u8>) -> bool {
+    match prev {
+        None => true,
+        Some(c) => !(c == b'$' || c == b'_' || c == b'.' || c.is_ascii_alphanumeric()),
+    }
+}
+
 /// Scan a JS/TS script body for any call-form rune occurrence
 /// (`$state(`, `$derived(`, etc., or `$state.raw(` etc.). Skips line
 /// comments, block comments, single/double-quoted strings, and
@@ -232,10 +247,12 @@ fn scan_script_for_rune_call(source: &str) -> bool {
         // Try matching a rune marker at this code position.
         for marker in MARKERS {
             if bytes[i..].starts_with(marker) {
-                // Guard against `$$props` ambient: previous char must
-                // not be `$`.
+                // Guard against the marker being the tail of a longer
+                // identifier or member chain (the `$$props` ambient,
+                // `obj.$state`, `foo$state`, …): require a clean left
+                // boundary before the marker.
                 let prev = i.checked_sub(1).and_then(|p| bytes.get(p)).copied();
-                if prev != Some(b'$') {
+                if is_left_boundary(prev) {
                     let mut after = i + marker.len();
                     // Consume `.word` chains (`$state.raw`, etc.).
                     while bytes.get(after) == Some(&b'.') {

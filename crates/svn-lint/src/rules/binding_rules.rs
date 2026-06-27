@@ -321,10 +321,12 @@ fn bind_invalid_each_rest(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
         if binding.kind != BindingKind::Each || !binding.inside_rest {
             continue;
         }
-        if !binding.has_bind_reference {
+        if binding.bind_reference_count == 0 {
             continue;
         }
         let msg = messages::bind_invalid_each_rest(binding.name.as_str());
-        ctx.emit(Code::bind_invalid_each_rest, msg, binding.range);
+        for _ in 0..binding.bind_reference_count {
+            ctx.emit(Code::bind_invalid_each_rest, msg.clone(), binding.range);
+        }
     }
 }

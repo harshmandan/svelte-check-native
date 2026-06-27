@@ -44,7 +44,7 @@ use crate::scope_rune_detection::{
 };
 use crate::scope_util::{
     base_identifier, expression_from_default, expression_from_for_init,
-    expression_from_property_key, extract_base_ident, idents_in_pattern, statement_span_start,
+    expression_from_property_key, extract_base_ident, idents_in_pattern,
     strip_comment_delimiters, unwrap_ts_wrappers,
 };
 
@@ -111,15 +111,7 @@ impl ScopeTree {
 
     /// Resolve `name` starting from `from`, walking the parent chain.
     pub fn resolve(&self, from: ScopeId, name: &str) -> Option<BindingId> {
-        let mut cur = Some(from);
-        while let Some(sid) = cur {
-            let s = self.scope(sid);
-            if let Some(&bid) = s.declarations.get(name) {
-                return Some(bid);
-            }
-            cur = s.parent;
-        }
-        None
+        resolve_by_name(&self.scopes, from, name)
     }
 
     /// Like [`resolve`], but resolves against both the instance root
@@ -439,7 +431,7 @@ impl TreeBuilder {
             is_template_declaration: false,
             inside_rest: false,
             prop_alias: None,
-            has_bind_reference: false,
+            bind_reference_count: 0,
             fires_state_referenced_locally: false,
         });
         self.scopes[scope.0 as usize].declarations.insert(name, id);
@@ -776,7 +768,7 @@ impl TreeBuilder {
     /// upstream's scope walker (scope.js `BindDirective` pushes to
     /// `updates`). Also captures the bind's BASE identifier (even
     /// when the expression is a member chain like `rest[0]`) onto
-    /// the backing binding's `has_bind_reference` flag, for
+    /// the backing binding's `bind_reference_count`, for
     /// `bind_invalid_each_rest`.
     fn register_bind_update(&mut self, range: Range, ctx: &mut TemplateCtx<'_>) {
         let Some(raw) = ctx.source.get(range.start as usize..range.end as usize) else {
@@ -804,7 +796,7 @@ impl TreeBuilder {
         if let Some(base) = extract_base_ident(slice)
             && let Some(bid) = resolve_by_name(&self.scopes, ctx.scope, base)
         {
-            self.bindings[bid.0 as usize].has_bind_reference = true;
+            self.bindings[bid.0 as usize].bind_reference_count += 1;
         }
     }
 
@@ -1468,7 +1460,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     }
 
     fn visit_stmt(&mut self, stmt: &Statement<'_>) {
-        let pushed = self.push_leading_ignores(statement_span_start(stmt));
+        let pushed = self.push_leading_ignores(Some(stmt.span().start));
         self.visit_stmt_inner(stmt);
         if pushed {
             self.ignore_frames.pop();

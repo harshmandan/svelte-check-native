@@ -35,13 +35,11 @@ pub fn visit(
         //
         // Here `ancestors` is outer-to-inner and includes the parent
         // as the last element. Strip it for the ancestor pass.
-        let mut parent_check_fired = false;
         if let Some(parent) = parent_tag
             && let Some(msg) = crate::html5::is_tag_valid_with_parent(el.name.as_str(), parent)
         {
             let full = messages::node_invalid_placement_ssr(&msg);
             ctx.emit(Code::node_invalid_placement_ssr, full, el.range);
-            parent_check_fired = true;
         }
         if ancestors.len() > 1
             && let Some(parent_el) = ancestors.last()
@@ -53,17 +51,10 @@ pub fn visit(
             list.push(parent_el.as_str());
             for outer in ancestors.iter().rev().skip(1) {
                 list.push(outer.as_str());
-                if parent_check_fired {
-                    // Skip the first iteration — already handled by
-                    // the parent check. Continue accumulating but
-                    // don't refire on identical disallowed_children
-                    // hits already reported.
-                }
                 if let Some(msg) = crate::html5::is_tag_valid_with_ancestor(el.name.as_str(), &list)
                 {
                     let full = messages::node_invalid_placement_ssr(&msg);
                     ctx.emit(Code::node_invalid_placement_ssr, full, el.range);
-                    break;
                 }
             }
         }
@@ -182,13 +173,15 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
         AttrParent::RegularElement { .. } | AttrParent::SvelteElement
     );
     let fires_invalid_property_name = parent_is_regular_or_svelte;
+    let fires_attr_name_checks = !matches!(parent, AttrParent::OtherSvelte);
     match attr {
         Attribute::Plain(p) => {
             let name = p.name.as_str();
 
             // attribute_illegal_colon — upstream:
             // `attr.name.includes(':')` AND NOT xmlns:/xlink:/xml:
-            if name.contains(':')
+            if fires_attr_name_checks
+                && name.contains(':')
                 && !name.starts_with("xmlns:")
                 && !name.starts_with("xlink:")
                 && !name.starts_with("xml:")
@@ -198,7 +191,7 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
             }
 
             // attribute_avoid_is: `is="..."` on any element.
-            if name == "is" {
+            if parent_is_regular_or_svelte && name == "is" {
                 let msg = messages::attribute_avoid_is();
                 ctx.emit(Code::attribute_avoid_is, msg, p.range);
             }
@@ -256,7 +249,8 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
         }
         Attribute::Expression(e) => {
             let name = e.name.as_str();
-            if name.contains(':')
+            if fires_attr_name_checks
+                && name.contains(':')
                 && !name.starts_with("xmlns:")
                 && !name.starts_with("xlink:")
                 && !name.starts_with("xml:")

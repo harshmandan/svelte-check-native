@@ -8,7 +8,7 @@
 //! Encoding notes:
 //! - `ROLE_PROPS` stores each role's supported ARIA properties as a
 //!   `u64` bitmask, with bit index = position in
-//!   [`crate::a11y_constants::ARIA_PROPS`]. 48 aria props today,
+//!   [`crate::a11y_constants::ARIA_PROPS`]. 51 aria props today,
 //!   comfortably fits in `u64` (headroom for future expansion).
 //! - `INTERACTIVE_ELEMENT_SCHEMAS` / `NON_INTERACTIVE_ELEMENT_SCHEMAS`
 //!   encode element-role schema matches via `(tag name, attribute
@@ -79,6 +79,9 @@ pub fn is_non_interactive_element_schema<'a>(
 /// Matches a single schema. Attribute semantics:
 /// - `Some(val)` → attr must be present with literal value `val`
 /// - `None` → attr must be present (any value, including dynamic).
+/// - `Some("")` (empty string) degrades to presence-only, matching
+///   the upstream truthy guard that treats a falsy schema value the
+///   same as no required value.
 fn schema_matches<'a>(
     schema: &Schema,
     name: &str,
@@ -88,11 +91,15 @@ fn schema_matches<'a>(
         return false;
     }
     for (attr_name, expected) in schema.attrs {
+        // Empty-string schema value mirrors upstream's truthy guard
+        // (`schema_attribute.value && ...`): an empty value degrades to
+        // presence-only.
+        let expected = expected.filter(|w| !w.is_empty());
         match (get_attr(attr_name), expected) {
             (AttrState::Absent, _) => return false,
             (_, None) => {}
             (AttrState::Literal(v), Some(want)) => {
-                if v != *want {
+                if v != want {
                     return false;
                 }
             }

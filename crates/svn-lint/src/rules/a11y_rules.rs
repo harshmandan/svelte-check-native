@@ -66,6 +66,15 @@ pub fn visit_dynamic(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &
     );
 }
 
+/// Append an event-handler name only if it isn't already collected,
+/// mirroring the Set semantics upstream uses for the handler list
+/// (insertion order preserved, no duplicates).
+fn push_handler(handlers: &mut Vec<String>, event: String) {
+    if !handlers.contains(&event) {
+        handlers.push(event);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn check_element(
     name: &str,
@@ -84,21 +93,21 @@ fn check_element(
         match a {
             Attribute::Plain(p) => {
                 if let Some(event) = event_name(p.name.as_str()) {
-                    handlers.push(event.to_string());
+                    push_handler(&mut handlers, event.to_string());
                 } else {
                     attribute_map.insert(p.name.as_str().to_string(), a);
                 }
             }
             Attribute::Expression(e) => {
                 if let Some(event) = event_name(e.name.as_str()) {
-                    handlers.push(event.to_string());
+                    push_handler(&mut handlers, event.to_string());
                 } else {
                     attribute_map.insert(e.name.as_str().to_string(), a);
                 }
             }
             Attribute::Shorthand(s) => {
                 if let Some(event) = event_name(s.name.as_str()) {
-                    handlers.push(event.to_string());
+                    push_handler(&mut handlers, event.to_string());
                 } else {
                     attribute_map.insert(s.name.as_str().to_string(), a);
                 }
@@ -106,7 +115,7 @@ fn check_element(
             Attribute::Spread(_) => has_spread = true,
             Attribute::Directive(d) => {
                 if d.kind == DirectiveKind::On {
-                    handlers.push(d.name.as_str().to_string());
+                    push_handler(&mut handlers, d.name.as_str().to_string());
                 }
             }
         }
@@ -491,8 +500,9 @@ fn check_element(
             }
             "tabindex" => {
                 if let Some(s) = get_static_text_value(p)
-                    && let Ok(n) = s.parse::<i64>()
-                    && n > 0
+                    && let Ok(n) = s.trim().parse::<f64>()
+                    && n.is_finite()
+                    && n > 0.0
                 {
                     let msg = messages::a11y_positive_tabindex();
                     ctx.emit(Code::a11y_positive_tabindex, msg, p.range);
@@ -1091,7 +1101,6 @@ fn has_text_content(frag: &Fragment) -> bool {
                     continue;
                 }
             }
-            Node::Comment(_) => continue,
             Node::Element(el) => {
                 if has_attribute_named(&el.attributes, "popover") {
                     continue;
@@ -1318,20 +1327,16 @@ fn validate_aria_value(
             }
         }
         AriaType::TokenList => {
-            let all_ok = !lower.is_empty()
-                && lower
-                    .split(|c: char| c.is_whitespace())
-                    .filter(|s| !s.is_empty())
-                    .all(|tok| def.values.contains(&tok));
-            let empty_after_split = lower
-                .split(|c: char| c.is_whitespace())
-                .find(|s| !s.is_empty())
-                .is_none();
-            if empty_after_split
-                || !all_ok
-                || lower.split_whitespace().count() == 0
-                || has_trailing_ws_only_tok(&lower, def.values)
-            {
+            // Mirrors upstream `split(/\s+/).some(t => !values.includes(t))`:
+            // `""` splits to `[""]` (is_empty fires); a leading/trailing
+            // space yields an empty token (the starts/ends checks fire);
+            // internal runs of whitespace collapse so `"a  b"` validates
+            // like `"a b"`; any unknown token fires.
+            let fires = lower.is_empty()
+                || lower.starts_with(char::is_whitespace)
+                || lower.ends_with(char::is_whitespace)
+                || lower.split_whitespace().any(|t| !def.values.contains(&t));
+            if fires {
                 let list = quote_list(def.values);
                 let msg = messages::a11y_incorrect_aria_attribute_type_tokenlist(name, &list);
                 ctx.emit(
@@ -1352,10 +1357,6 @@ fn validate_aria_value(
             }
         }
     }
-}
-
-fn has_trailing_ws_only_tok(_s: &str, _values: &[&str]) -> bool {
-    false
 }
 
 fn quote_list(values: &[&str]) -> String {

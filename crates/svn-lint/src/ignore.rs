@@ -194,18 +194,19 @@ fn parse_ignore_codes_emit(
                 break;
             }
             let token = &rest[start..i];
-            let mapped = legacy_rename(token)
-                .map(str::to_string)
-                .unwrap_or_else(|| token.replace('-', "_"));
-            let sm = SmolStr::new(&mapped);
-            let should_also_push_raw = mapped != token;
-            if !out.contains(&sm) {
-                out.push(sm);
+            let raw = SmolStr::new(token);
+            if !out.contains(&raw) {
+                out.push(raw);
             }
-            if should_also_push_raw {
-                let raw = SmolStr::new(token);
-                if !out.contains(&raw) {
-                    out.push(raw);
+            if !is_known_code(token) {
+                let mapped = legacy_rename(token)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| token.replace('-', "_"));
+                if is_known_code(&mapped) {
+                    let sm = SmolStr::new(&mapped);
+                    if !out.contains(&sm) {
+                        out.push(sm);
+                    }
                 }
             }
         }
@@ -213,10 +214,11 @@ fn parse_ignore_codes_emit(
     out
 }
 
-/// Parse the tail of `svelte-ignore ` into a list of codes.
-/// - **runes mode**: strict, comma-separated; unknown codes get
-///   `legacy_code` / `unknown_code` warnings (Phase A will wire the
-///   fire points — stubbed as no-op for now).
+/// Parse the tail of `svelte-ignore ` into the list of suppression
+/// codes. Builds the code list only — it does NOT emit any diagnostics.
+/// The `legacy_code` / `unknown_code` warnings for unknown or renamed
+/// codes are emitted separately by `parse_ignore_codes_emit`.
+/// - **runes mode**: strict, comma-separated.
 /// - **legacy mode**: lax; any word-ish token is a code.
 pub fn parse_ignore_codes_public(rest: &str, runes: bool) -> Vec<SmolStr> {
     parse_ignore_codes(rest, runes)
@@ -244,7 +246,8 @@ fn parse_ignore_codes(rest: &str, runes: bool) -> Vec<SmolStr> {
             } else if let Some(to) = legacy_rename(&code) {
                 to.to_string()
             } else {
-                // Unknown — would fire `unknown_code`. For now skip.
+                // Unknown — the `unknown_code` warning for this is
+                // emitted by `parse_ignore_codes_emit`, not here.
                 code.replace('-', "_")
             };
             let sm = SmolStr::new(&mapped);
@@ -269,21 +272,23 @@ fn parse_ignore_codes(rest: &str, runes: bool) -> Vec<SmolStr> {
                 break;
             }
             let token = &rest[start..i];
-            let mapped = legacy_rename(token)
-                .map(str::to_string)
-                .unwrap_or_else(|| token.replace('-', "_"));
-            let sm = SmolStr::new(&mapped);
-            let should_also_push_raw = mapped != token;
-            if !out.contains(&sm) {
-                out.push(sm);
+            // Push the raw form so a user's legacy
+            // `<!-- svelte-ignore a11y-structure -->` ignores the legacy
+            // form (for upstream parity), then push the rewritten form too
+            // when it is a known code.
+            let raw = SmolStr::new(token);
+            if !out.contains(&raw) {
+                out.push(raw);
             }
-            // Also push the raw form so user's legacy `<!-- svelte-ignore a11y-structure -->`
-            // ignores BOTH the legacy form (for upstream parity) and
-            // the rewritten form.
-            if should_also_push_raw {
-                let raw = SmolStr::new(token);
-                if !out.contains(&raw) {
-                    out.push(raw);
+            if !is_known_code(token) {
+                let mapped = legacy_rename(token)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| token.replace('-', "_"));
+                if is_known_code(&mapped) {
+                    let sm = SmolStr::new(&mapped);
+                    if !out.contains(&sm) {
+                        out.push(sm);
+                    }
                 }
             }
         }

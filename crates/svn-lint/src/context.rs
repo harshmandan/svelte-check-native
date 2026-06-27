@@ -22,7 +22,7 @@ pub struct Warning {
     /// Rendered message (including docs URL line).
     pub message: String,
     pub range: Range,
-    /// 1-based line, 1-based column (UTF-16 code units).
+    /// 1-based line, 0-based column (UTF-16 code units); CLI adds +1 to column.
     pub start_line: u32,
     pub start_column: u32,
     pub end_line: u32,

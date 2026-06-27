@@ -10,10 +10,12 @@ pub fn is_void_element(tag: &str) -> bool {
             | "base"
             | "br"
             | "col"
+            | "command"
             | "embed"
             | "hr"
             | "img"
             | "input"
+            | "keygen"
             | "link"
             | "meta"
             | "param"
@@ -23,15 +25,13 @@ pub fn is_void_element(tag: &str) -> bool {
     )
 }
 
-/// SVG element names (for the self-closing-tag rule).
-///
-/// Transcribed from upstream `utils.js::is_svg` — deliberately
-/// narrower than the full SVG element set. Upstream EXCLUDES tags
-/// like `<a>`, `<audio>`, `<canvas>`, `<iframe>`, `<image>`,
-/// `<script>`, `<style>`, `<title>`, `<video>` which can appear
-/// inside SVG but are typically HTML. The self-closing-tag rule
-/// flags `<video … />` because the user most likely meant the HTML
-/// form, not the SVG context.
+/// SVG element names — mirrors upstream `is_svg` (`SVG_ELEMENTS` in
+/// `utils.js`) verbatim. Used by the self-closing-tag rule: a tag that is
+/// neither void, SVG, nor MathML and is written `<tag … />` triggers the
+/// `element_invalid_self_closing_tag` warning (RegularElement.js:220).
+/// Names like `<a>`, `<audio>`, `<canvas>`, `<iframe>`, `<script>`,
+/// `<style>`, `<title>`, `<video>` are absent simply because they are not
+/// in upstream `SVG_ELEMENTS`, not by any local exclusion.
 pub fn is_svg_element(tag: &str) -> bool {
     matches!(
         tag,
@@ -94,6 +94,10 @@ pub fn is_svg_element(tag: &str) -> bool {
             | "linearGradient"
             | "marker"
             | "mask"
+            | "mesh"
+            | "meshgradient"
+            | "meshpatch"
+            | "meshrow"
             | "metadata"
             | "missing-glyph"
             | "mpath"

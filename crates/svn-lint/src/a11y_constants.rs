@@ -335,7 +335,7 @@ pub const AUTOFILL_CONTACT_FIELD_NAME_TOKENS: &[&str] = &[
 pub const INVISIBLE_ELEMENTS: &[&str] = &["meta", "html", "script", "style"];
 
 /// Shape of an ARIA property's value-type constraint. Mirrors
-/// upstream `aria-query`'s `ariaPropsMap.js` (48 entries); vendored
+/// upstream `aria-query`'s `ariaPropsMap.js` (51 entries); vendored
 /// here so our linter stays dep-free.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AriaType {
@@ -373,7 +373,7 @@ pub fn aria_prop(name: &str) -> Option<&'static AriaPropDef> {
 const NONE: &[&str] = &[];
 
 /// All valid ARIA role names. Transcribed from `aria-query`'s
-/// `rolesMap` (147 entries including `doc-*` and `graphics-*`).
+/// `rolesMap` (139 entries including the `doc-*` extension roles).
 pub const ARIA_ROLES: &[&str] = &[
     "command",
     "composite",

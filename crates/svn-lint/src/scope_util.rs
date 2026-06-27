@@ -4,18 +4,17 @@
 //! `scope.rs` so the main scope walker reads as visitor logic
 //! rather than visitor logic + a bag of micro-helpers.
 
-use oxc_ast::ast::{BindingPattern, Expression, ForStatementInit, PropertyKey, Statement};
-use oxc_span::GetSpan;
+use oxc_ast::ast::{BindingPattern, Expression, ForStatementInit, PropertyKey};
 
 /// Flatten every binding identifier introduced by a destructure
 /// pattern. Used by both the script-walker (to declare each
 /// destructured name) and the export-let promotion pass (to gather
 /// names from `let { a, b } = …;` form).
-pub(crate) fn idents_in_pattern(pat: &BindingPattern<'_>) -> Vec<String> {
+pub(crate) fn idents_in_pattern<'a>(pat: &'a BindingPattern<'_>) -> Vec<&'a str> {
     let mut out = Vec::new();
-    fn go(pat: &BindingPattern<'_>, out: &mut Vec<String>) {
+    fn go<'a>(pat: &'a BindingPattern<'_>, out: &mut Vec<&'a str>) {
         match pat {
-            BindingPattern::BindingIdentifier(id) => out.push(id.name.to_string()),
+            BindingPattern::BindingIdentifier(id) => out.push(id.name.as_str()),
             BindingPattern::ObjectPattern(op) => {
                 for prop in &op.properties {
                     go(&prop.value, out);
@@ -100,12 +99,6 @@ pub(crate) fn strip_comment_delimiters(text: &str) -> Option<&str> {
     } else {
         None
     }
-}
-
-/// Extract the `span.start` of an arbitrary `Statement` — oxc doesn't
-/// expose a single uniform `span()` method, so we destructure.
-pub(crate) fn statement_span_start(stmt: &Statement<'_>) -> Option<u32> {
-    Some(stmt.span().start)
 }
 
 pub(crate) fn expression_from_for_init<'a>(

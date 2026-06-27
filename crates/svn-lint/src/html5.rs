@@ -25,81 +25,16 @@ enum Entry {
 /// Upstream `disallowed_children` table. Used by
 /// `is_tag_valid_with_parent` / `_ancestor`.
 fn disallowed_children(tag: &str) -> Option<Entry> {
-    // Items from autoclosing_children that have `descendant`:
     match tag {
-        "li" => Some(Entry::Direct(&["li"])),
-        "dt" => Some(Entry::Descendant {
-            descendants: &["dt", "dd"],
-            reset_by: &["dl"],
-        }),
-        "dd" => Some(Entry::Descendant {
-            descendants: &["dt", "dd"],
-            reset_by: &["dl"],
-        }),
-        "p" => Some(Entry::Descendant {
-            descendants: &[
-                "address",
-                "article",
-                "aside",
-                "blockquote",
-                "div",
-                "dl",
-                "fieldset",
-                "footer",
-                "form",
-                "h1",
-                "h2",
-                "h3",
-                "h4",
-                "h5",
-                "h6",
-                "header",
-                "hgroup",
-                "hr",
-                "main",
-                "menu",
-                "nav",
-                "ol",
-                "p",
-                "pre",
-                "section",
-                "table",
-                "ul",
-            ],
-            reset_by: &[],
-        }),
-        "rt" => Some(Entry::Descendant {
-            descendants: &["rt", "rp"],
-            reset_by: &[],
-        }),
-        "rp" => Some(Entry::Descendant {
-            descendants: &["rt", "rp"],
-            reset_by: &[],
-        }),
-        "optgroup" => Some(Entry::Descendant {
-            descendants: &["optgroup"],
-            reset_by: &[],
-        }),
-        "option" => Some(Entry::Descendant {
-            descendants: &["option", "optgroup"],
-            reset_by: &[],
-        }),
-        "thead" => Some(Entry::Only {
-            only: &["tr", "style", "script", "template"],
-        }),
-        "tbody" => Some(Entry::Only {
-            only: &["tr", "style", "script", "template"],
-        }),
-        "tfoot" => Some(Entry::Only {
+        // override autoclosing's Direct rows for table sections
+        "thead" | "tbody" | "tfoot" => Some(Entry::Only {
             only: &["tr", "style", "script", "template"],
         }),
         "tr" => Some(Entry::Only {
             only: &["th", "td", "style", "script", "template"],
         }),
-        "td" => Some(Entry::Direct(&["td", "th", "tr"])),
-        "th" => Some(Entry::Direct(&["td", "th", "tr"])),
 
-        // ... extras in disallowed_children beyond autoclosing_children:
+        // extras with no autoclosing counterpart
         "form" => Some(Entry::Descendant {
             descendants: &["form"],
             reset_by: &[],
@@ -135,7 +70,9 @@ fn disallowed_children(tag: &str) -> Option<Entry> {
         }),
         "frameset" => Some(Entry::Only { only: &["frame"] }),
         "#document" => Some(Entry::Only { only: &["html"] }),
-        _ => None,
+
+        // everything else inherits the autoclosing shared rows
+        _ => autoclosing(tag),
     }
 }
 

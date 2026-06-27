@@ -1,4 +1,4 @@
-//! Template walker — populates the SemanticModel from a parsed Fragment.
+//! Template walker — produces the `TemplateSummary` from a parsed Fragment.
 //!
 //! Single AST walk that visits every node and dispatches to the relevant
 //! collectors:

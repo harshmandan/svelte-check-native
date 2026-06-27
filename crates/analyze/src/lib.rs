@@ -27,11 +27,11 @@
 //! These are driven by emit at specific points in its flow (e.g.
 //! `collect_top_level_bindings` is called three times to union
 //! identifiers from module + instance + rewritten-instance
-//! programs). They join `SemanticModel` only when a second consumer
-//! needs the same accumulated set up-front — see `CLAUDE.md`'s
-//! "don't invent placeholder fields with no reader" rule. (Props and
-//! the template summary are passed to emit as separate arguments
-//! rather than wrapped together.)
+//! programs). They'd graduate to a shared semantic-model struct only
+//! when a second consumer needs the same accumulated set up-front —
+//! see `CLAUDE.md`'s "don't invent placeholder fields with no reader"
+//! rule. Today props and the template summary are passed to emit as
+//! separate arguments rather than wrapped together.
 //!
 //! All passes share a single `Visitor` walk of the AST. One pass,
 //! many collectors.

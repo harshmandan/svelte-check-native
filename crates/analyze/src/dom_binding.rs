@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(type_for("files"), Some("HTMLInputElement['files']"));
         // bind:value is context-aware (tag + `type` attribute); the
         // static `type_for` table returns None. Dispatch happens via
-        // `template_walker::resolve_bind_value_type(tag, attrs)`.
+        // `nodes::binding::resolve_bind_value_type(tag, attrs)`.
         assert_eq!(type_for("value"), None);
         // bind:group is intentionally skipped — upstream widens to any
         // (`__sveltets_2_any(null)`); we mirror by staying silent.

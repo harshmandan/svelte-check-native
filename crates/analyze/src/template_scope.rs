@@ -1,6 +1,6 @@
 //! Template-scope pattern primitive — shared between analyze and lint.
 //!
-//! Both `analyze::template_walker` and `svn-lint::scope` walk the same
+//! Both `analyze::walker` and `svn-lint::scope` walk the same
 //! kind of binding pattern (each-block context, snippet params, let
 //! directive payload, `{@const}` declarator) and reach the same
 //! conclusions about which identifiers are bound. Each round of bug
@@ -37,7 +37,7 @@
 //!
 //! ### Consumers
 //!
-//! - `analyze::template_walker::AnalyzeVisitor` — populates
+//! - `analyze::walker::AnalyzeVisitor` — populates
 //!   `TemplateSummary` (component instantiations, slot-defs, action
 //!   attrs, bind-this, `{@const}` shadow).
 //! - `svn-lint::scope::LintScopeVisitor` (Phase 4) — drives
@@ -396,7 +396,7 @@ fn walk(
 //
 // `walk_with_visitor` drives the recursion through Fragment/Node and
 // hands per-node + per-scope work to a `TemplateScopeVisitor` impl.
-// Both `analyze::template_walker::AnalyzeVisitor` and
+// Both `analyze::walker::AnalyzeVisitor` and
 // `svn-lint::scope::LintScopeVisitor` (Phase 4) consume it.
 // =====================================================================
 

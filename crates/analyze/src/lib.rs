@@ -1,6 +1,7 @@
 //! Semantic analysis passes over the Svelte AST.
 //!
-//! Two product-type outputs are bundled into [`SemanticModel`]:
+//! Two product-type outputs are produced and threaded independently
+//! through emit (no single bundling struct):
 //!
 //! - [`PropsInfo`] — Props-shape decision: type text, root name,
 //!   destructured locals, source kind. Built once per file from the
@@ -28,7 +29,9 @@
 //! identifiers from module + instance + rewritten-instance
 //! programs). They join `SemanticModel` only when a second consumer
 //! needs the same accumulated set up-front — see `CLAUDE.md`'s
-//! "don't invent placeholder fields with no reader" rule.
+//! "don't invent placeholder fields with no reader" rule. (Props and
+//! the template summary are passed to emit as separate arguments
+//! rather than wrapped together.)
 //!
 //! All passes share a single `Visitor` walk of the AST. One pass,
 //! many collectors.
@@ -39,7 +42,6 @@
 pub mod ast_walk;
 pub mod dom_binding;
 pub mod jsdoc;
-pub mod model;
 pub mod nodes;
 pub mod props;
 pub mod slot_attr_rewrite;
@@ -53,7 +55,6 @@ pub use ast_walk::{WalkNode, collect_function_body_stmts, walk_statement_descend
 pub use jsdoc::{
     scan_jsdoc_props_typedef_keys, scan_jsdoc_typedef_name, should_synthesise_js_props,
 };
-pub use model::SemanticModel;
 pub use nodes::attribute::literal_attr_value;
 pub use nodes::binding::resolve_bind_value_type;
 pub use props::{

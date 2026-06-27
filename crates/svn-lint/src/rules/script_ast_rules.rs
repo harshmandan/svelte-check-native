@@ -25,6 +25,7 @@ use svn_parser::parse_script_body;
 use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
+use crate::scope_util::strip_comment_delimiters;
 
 /// Entry point: parse both script sections and run JS-AST-dependent
 /// rules on them.
@@ -113,17 +114,6 @@ fn run_on_section(
 fn has_bidi_char(s: &str) -> bool {
     s.chars()
         .any(|c| matches!(c as u32, 0x202A..=0x202E | 0x2066..=0x2069))
-}
-
-/// Strip leading `//` or `/* */` delimiters from a raw comment source.
-fn strip_comment_delimiters(text: &str) -> Option<&str> {
-    if let Some(rest) = text.strip_prefix("//") {
-        Some(rest)
-    } else if let Some(rest) = text.strip_prefix("/*") {
-        Some(rest.trim_end_matches("*/"))
-    } else {
-        None
-    }
 }
 
 #[derive(Debug, Clone)]

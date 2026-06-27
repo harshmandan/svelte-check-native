@@ -1043,7 +1043,7 @@ fn has_slot_attr(attributes: &[svn_parser::ast::Attribute]) -> bool {
         Attribute::Plain(p) => p.name == "slot",
         Attribute::Expression(e) => e.name == "slot",
         Attribute::Shorthand(s) => s.name == "slot",
-        Attribute::Spread(_) | Attribute::Directive(_) => false,
+        Attribute::Spread(_) | Attribute::Directive(_) | Attribute::Comment(_) => false,
     })
 }
 

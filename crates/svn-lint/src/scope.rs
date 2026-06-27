@@ -520,6 +520,7 @@ impl TreeBuilder {
             Attribute::Spread(s) => {
                 self.walk_expr_range(s.expression_range, ctx, RefFlags::default());
             }
+            Attribute::Comment(_) => {}
             Attribute::Directive(d) => {
                 let flags = RefFlags {
                     is_bind_this: d.kind == DirectiveKind::Bind && d.name == "this",

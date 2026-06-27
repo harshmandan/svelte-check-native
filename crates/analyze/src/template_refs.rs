@@ -177,6 +177,7 @@ fn walk_attributes(
             Attribute::Shorthand(s) => push_ident(&s.name, seen, out),
             Attribute::Spread(s) => extract_idents(source, s.expression_range, seen, out),
             Attribute::Directive(d) => walk_directive(d, source, seen, out),
+            Attribute::Comment(_) => {}
         }
     }
 }

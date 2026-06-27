@@ -5,13 +5,34 @@ async function $$render_29958c69() {
     let x = $state();
     ;(async () => {
         // template type-check body (incremental)
-        (handler);
-        (params);
-        (element);
-        (...spread_props);
-        (handler);
-        (bound_prop);
-        (...spread_props);
+        /** @type {any} */ let __svn_action_attrs_0 = {};
+        void __svn_action_attrs_0;
+            const __svn_action_0 = __svn_ensure_action(action(__svn_map_element_tag('div'), (params)));
+        { svelteHTML.createElement("div", __svn_union(__svn_action_0), {
+            "foo": `bar`,
+            "x": true,
+            "baz": `qux`,
+            "on:click": (handler),
+            [Symbol("@attach")]: attachment,
+            ...spread_props,
+            "trailing": true,
+        });
+            __svn_ensure_transition(fade(__svn_map_element_tag('div')));
+            (flip(__svn_map_element_tag('div'), __svn_AnimationMove));
+            element = /** @type {HTMLElementTagNameMap['div']} */ (null);
+            void __svn_action_0;
+        }
+        {
+            const __svn_C_20b = __svn_ensure_component(Component);
+            const __svn_inst_20b = new __svn_C_20b({ target: __svn_any(), props: {"foo": "bar", "baz": "qux", ...(attachment), "prop": (bound_prop), ...(spread_props), "trailing": true} });
+            /*svn:ignore_start*/void (() => { bound_prop = __svn_any(null); });/*svn:ignore_end*/
+            __svn_inst_20b.$on("click", (handler));
+            __svn_inst_20b.$$bindings = 'prop';
+            {
+                const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item } = __svn_inst_20b.$$slot_def.default; $$_$$;
+                void item;
+            }
+        }
     });
     return { props: /** @type {any} */({}) };
 }

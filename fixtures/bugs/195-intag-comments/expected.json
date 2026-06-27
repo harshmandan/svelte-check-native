@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "l171 stage 1: `//` and `/* */` comments inside a start tag (a Svelte 5 feature) parse cleanly. Pre-fix the attribute scanner returned on the first `/` (treating `//` as `/>`), `finish_opening_tag` then failed to find `>` and pushed a fatal malformed-open-tag error that marked the whole file broken. Now the scanner consumes in-tag comments as Attribute::Comment nodes; the surrounding attributes/directives parse normally."
+}

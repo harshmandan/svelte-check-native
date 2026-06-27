@@ -200,6 +200,7 @@ pub(crate) fn collect_instantiation_inner(
                     attr_range: svn_core::Range::new(name_start, name_end),
                 });
             }
+            Attribute::Comment(_) => {}
             Attribute::Directive(d) => {
                 // `on:event={handler}` on a component emits as
                 // `$inst.$on("event", handler)` after construction

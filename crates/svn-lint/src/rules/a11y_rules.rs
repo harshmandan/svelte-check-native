@@ -113,6 +113,7 @@ fn check_element(
                 }
             }
             Attribute::Spread(_) => has_spread = true,
+            Attribute::Comment(_) => {}
             Attribute::Directive(d) => {
                 if d.kind == DirectiveKind::On {
                     push_handler(&mut handlers, d.name.as_str().to_string());

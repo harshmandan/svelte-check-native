@@ -30,8 +30,8 @@ use smol_str::SmolStr;
 use svn_core::Range;
 
 use crate::ast::{
-    AttrValue, AttrValuePart, Attribute, Directive, DirectiveKind, DirectiveValue, ExpressionAttr,
-    PlainAttr, ShorthandAttr, SpreadAttr,
+    AttrComment, AttrValue, AttrValuePart, Attribute, Directive, DirectiveKind, DirectiveValue,
+    ExpressionAttr, PlainAttr, ShorthandAttr, SpreadAttr,
 };
 use crate::error::ParseError;
 use crate::mustache::find_mustache_end;
@@ -56,7 +56,15 @@ pub fn parse_attributes(
         }
 
         match scanner.peek_byte() {
-            Some(b'>') | Some(b'/') | None => return attrs,
+            Some(b'>') | None => return attrs,
+            // `/` is the start of `/>` (self-close) UNLESS it begins an
+            // in-tag JS comment (`//` or `/* */`, a Svelte 5 feature).
+            Some(b'/') => match scanner.peek_byte_at(1) {
+                Some(b'/') | Some(b'*') => {
+                    attrs.push(Attribute::Comment(parse_intag_comment(scanner, fragment_end)));
+                }
+                _ => return attrs,
+            },
             Some(b'{') => {
                 if let Some(attr) = parse_brace_attribute(scanner, errors) {
                     attrs.push(attr);
@@ -71,6 +79,36 @@ pub fn parse_attributes(
                 }
             }
         }
+    }
+}
+
+/// Consume an in-tag JS comment (`//…` to end of line, or `/*…*/`),
+/// bounded by `fragment_end`. The scanner is positioned at the leading
+/// `/`.
+fn parse_intag_comment(scanner: &mut Scanner<'_>, fragment_end: u32) -> AttrComment {
+    let start = scanner.pos();
+    let block = scanner.peek_byte_at(1) == Some(b'*');
+    scanner.advance_byte(); // `/`
+    scanner.advance_byte(); // `/` or `*`
+    if block {
+        while scanner.pos() < fragment_end && !scanner.eof() {
+            if scanner.peek_byte() == Some(b'*') && scanner.peek_byte_at(1) == Some(b'/') {
+                scanner.advance_byte();
+                scanner.advance_byte();
+                break;
+            }
+            scanner.advance_byte();
+        }
+    } else {
+        // Line comment runs to the newline (not consumed — the loop's
+        // whitespace skip handles it).
+        while scanner.pos() < fragment_end && !scanner.eof() && scanner.peek_byte() != Some(b'\n') {
+            scanner.advance_byte();
+        }
+    }
+    AttrComment {
+        range: Range::new(start, scanner.pos()),
+        block,
     }
 }
 

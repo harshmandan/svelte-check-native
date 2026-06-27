@@ -548,6 +548,7 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                 }
                 emit_shorthand(buf, source, s, depth + 1, should_lowercase);
             }
+            svn_parser::Attribute::Comment(_) => {}
             svn_parser::Attribute::Spread(s) => {
                 // Bail-check first (skip empty / whitespace-only
                 // expressions) so the leading newline only flushes
@@ -952,6 +953,7 @@ fn emit_slot_check(buf: &mut EmitBuffer, source: &str, e: &svn_parser::Element, 
                 buf.append_with_source(expr, sp.expression_range);
                 buf.push_str(")");
             }
+            Attribute::Comment(_) => {}
             Attribute::Directive(_) => {
                 // Directives on `<slot>` (e.g. `let:`) are not slot
                 // props — they bind names from the parent's scope.

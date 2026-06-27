@@ -226,6 +226,18 @@ pub enum Attribute {
     /// `bind:foo`, `on:click`, `use:action`, `class:x`, `style:y`,
     /// `transition:name`, `in:name`, `out:name`, `animate:name`, `let:name`.
     Directive(Directive),
+    /// A `//` or `/* */` JS comment INSIDE a start tag (Svelte 5
+    /// feature, e.g. `<div // c\n transition:fade>`). `range` covers the
+    /// whole comment incl. delimiters; `block` distinguishes `/* */` from
+    /// `//`.
+    Comment(AttrComment),
+}
+
+/// An in-tag JS comment (`//` or `/* */`) between attributes.
+#[derive(Debug, Clone)]
+pub struct AttrComment {
+    pub range: Range,
+    pub block: bool,
 }
 
 impl Attribute {
@@ -236,6 +248,7 @@ impl Attribute {
             Self::Shorthand(a) => a.range,
             Self::Spread(a) => a.range,
             Self::Directive(a) => a.range,
+            Self::Comment(a) => a.range,
         }
     }
 }

@@ -175,7 +175,12 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
                         ScriptAstContext::Module => 0,
                         ScriptAstContext::Instance => 1,
                     };
-                    if self.function_depth > allowed {
+                    if self.function_depth > allowed
+                        && !self.has_leading_ignore(
+                            cls.span.start,
+                            Code::perf_avoid_nested_class.as_str(),
+                        )
+                    {
                         let range = self.abs_range(cls.span.start, cls.span.end);
                         let msg = messages::perf_avoid_nested_class();
                         self.ctx.emit(Code::perf_avoid_nested_class, msg, range);
@@ -329,7 +334,12 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
     fn visit_expr(&mut self, expr: &Expression<'_>) {
         match expr {
             Expression::StringLiteral(lit) => {
-                if has_bidi_char(&lit.value) {
+                if has_bidi_char(&lit.value)
+                    && !self.has_leading_ignore(
+                        lit.span.start,
+                        Code::bidirectional_control_characters.as_str(),
+                    )
+                {
                     let range = self.abs_range(lit.span.start, lit.span.end);
                     let msg = messages::bidirectional_control_characters();
                     self.ctx
@@ -339,7 +349,12 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
             Expression::TemplateLiteral(tl) => {
                 for q in &tl.quasis {
                     if let Some(cooked) = q.value.cooked.as_deref() {
-                        if has_bidi_char(cooked) {
+                        if has_bidi_char(cooked)
+                            && !self.has_leading_ignore(
+                                q.span.start,
+                                Code::bidirectional_control_characters.as_str(),
+                            )
+                        {
                             let range = self.abs_range(q.span.start, q.span.end);
                             let msg = messages::bidirectional_control_characters();
                             self.ctx
@@ -458,6 +473,7 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
         // a ClassExpression.
         if self.function_depth > 0
             && let Expression::ClassExpression(_) = &ne.callee
+            && !self.has_leading_ignore(ne.span.start, Code::perf_avoid_inline_class.as_str())
         {
             let range = self.abs_range(ne.span.start, ne.span.end);
             let msg = messages::perf_avoid_inline_class();
@@ -593,6 +609,12 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
                 if source.ends_with(".svelte")
         );
         if !matches {
+            return;
+        }
+        if self.has_leading_ignore(
+            ne.span.start,
+            crate::codes::Code::legacy_component_creation.as_str(),
+        ) {
             return;
         }
         let range = self.abs_range(ne.span.start, ne.span.end);

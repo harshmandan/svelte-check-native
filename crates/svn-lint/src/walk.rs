@@ -560,7 +560,14 @@ fn walk_fragment_impl(
                     ctx,
                     Some(el.name.as_str()),
                     ancestors,
-                    inside_control_block,
+                    // Reset: crossing a regular element means a control
+                    // block above it no longer sits between deeper nodes
+                    // and their nearest regular-element parent. This is
+                    // upstream's per-node `only_warn` for the parent check
+                    // (RegularElement.js:178-190) — a sticky bool fired
+                    // spurious node_invalid_placement_ssr on e.g.
+                    // `{#if x}<ul><p/></ul>{/if}`.
+                    false,
                 );
                 ancestors.pop();
             }

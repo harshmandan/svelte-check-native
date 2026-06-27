@@ -3,7 +3,7 @@
 async function $$render_6eeee409() {
 
            let data = /** @type {import('./$types.js').PageData} */ (/** @type {any} */ (null));
-           let form = /** @type {import('./$types.js').ActionData | undefined} */ (/** @type {any} */ (null));
+           let form = /** @type {import('./$types.js').ActionData} */ (/** @type {any} */ (null));
            const snapshot = {};
 
            let nope = /** @type {any} */ (null);

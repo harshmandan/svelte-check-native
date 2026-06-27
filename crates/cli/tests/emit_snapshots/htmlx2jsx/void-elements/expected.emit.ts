@@ -13,10 +13,10 @@ async function $$render_4c3314e4() {
         { svelteHTML.createElement("input", {});         }
         { svelteHTML.createElement("link", {});         }
         { svelteHTML.createElement("meta", {});         }
-        { svelteHTML.createElement("param", {});             { svelteHTML.createElement("source", {});             }
-            { svelteHTML.createElement("track", {});             }
-            { svelteHTML.createElement("wbr", {});             }
-        }
+        { svelteHTML.createElement("param", {});         }
+        { svelteHTML.createElement("source", {});         }
+        { svelteHTML.createElement("track", {});         }
+        { svelteHTML.createElement("wbr", {});         }
     });
     return { props: /** @type {any} */({}) };
 }

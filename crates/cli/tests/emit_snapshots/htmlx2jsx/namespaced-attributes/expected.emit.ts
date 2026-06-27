@@ -3,7 +3,10 @@
 async function $$render_31d2f31d() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("use", {});         }
+        { svelteHTML.createElement("use", {
+            "xlink:href": (test),
+        });
+        }
     });
     return { props: /** @type {any} */({}) };
 }

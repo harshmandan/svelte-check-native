@@ -3,7 +3,10 @@
 async function $$render_1043e2cd() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("a", {});         }
+        { svelteHTML.createElement("a", {
+            "sapper:prefetch": true,
+        });
+        }
     });
     return { props: /** @type {any} */({}) };
 }

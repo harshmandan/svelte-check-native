@@ -3,7 +3,7 @@
 async function $$render_f7f0c7ab() {
 
            let data = /** @type {import('./$types.js').PageData} */ (/** @type {any} */ (null));
-           let form = /** @type {import('./$types.js').ActionData | undefined} */ (/** @type {any} */ (null));
+           let form = /** @type {import('./$types.js').ActionData} */ (/** @type {any} */ (null));
            const snapshot = {};
     ;(async () => {
         // template type-check body (incremental)

@@ -58,7 +58,7 @@ pub(crate) fn rewrite_svelte_imports_for_collisions(
 
     let mut rewrites: Vec<(usize, usize, String)> = Vec::new();
     for stmt in &parsed.program.body {
-        let (literal_start, literal_end, spec_value) = match stmt {
+        let (_literal_start, literal_end, spec_value) = match stmt {
             Statement::ImportDeclaration(decl) => (
                 decl.source.span.start as usize,
                 decl.source.span.end as usize,
@@ -100,20 +100,9 @@ pub(crate) fn rewrite_svelte_imports_for_collisions(
         {
             continue;
         }
-        // Preserve the original quote style by replacing the WHOLE
-        // string literal (quotes included) — the literal's span
-        // covers exactly that range, and the source bytes at
-        // span.start tell us which quote char to emit.
-        let quote = source
-            .as_bytes()
-            .get(literal_start)
-            .copied()
-            .unwrap_or(b'"') as char;
-        rewrites.push((
-            literal_start,
-            literal_end,
-            format!("{quote}{spec_value}.svn.js{quote}"),
-        ));
+        // Insert `.svn.js` immediately before the closing quote, preserving
+        // the user's original literal bytes (quote style + any escapes) verbatim.
+        rewrites.push((literal_end - 1, literal_end - 1, ".svn.js".to_string()));
     }
     if rewrites.is_empty() {
         return None;

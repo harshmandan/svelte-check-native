@@ -8,7 +8,7 @@
 //! purpose of the binary) land once the emit + analyze + typecheck crates
 //! are wired together.
 
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 mod collisions;
 mod discovery;
@@ -296,13 +296,18 @@ fn main() -> ExitCode {
     let in_agent_cli = ["CLAUDECODE", "GEMINI_CLI", "CODEX_CI"]
         .iter()
         .any(|k| std::env::var(k).as_deref() == Ok("1"));
-    let output = cli.output.clone().unwrap_or_else(|| {
-        if in_agent_cli {
-            "machine".to_string()
-        } else {
-            "human-verbose".to_string()
-        }
-    });
+    const OUTPUT_FORMATS: [&str; 4] = ["human", "human-verbose", "machine", "machine-verbose"];
+    let output = cli
+        .output
+        .clone()
+        .filter(|o| OUTPUT_FORMATS.contains(&o.as_str()))
+        .unwrap_or_else(|| {
+            if in_agent_cli {
+                "machine".to_string()
+            } else {
+                "human-verbose".to_string()
+            }
+        });
 
     let workspace_arg = cli
         .workspace
@@ -693,10 +698,10 @@ fn parse_diagnostic_sources(spec: Option<&str>) -> Result<DiagnosticSources, Str
                 sources.css = true;
             }
             "" => {}
+            // Unknown entries are dropped silently, matching upstream's
+            // `.filter(s => diagnosticSources.includes(s))` (options.ts).
             other => {
-                eprintln!(
-                    "svelte-check-native: unknown --diagnostic-sources entry {other:?}; ignoring"
-                );
+                let _ = other;
             }
         }
     }
@@ -711,7 +716,6 @@ fn parse_diagnostic_sources(spec: Option<&str>) -> Result<DiagnosticSources, Str
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CompilerWarningOverride {
     Ignore,
-    Warning,
     Error,
 }
 
@@ -1085,7 +1089,6 @@ fn apply_compiler_override(
         .copied()
         .map(|o| match o {
             CompilerWarningOverride::Ignore => None,
-            CompilerWarningOverride::Warning => Some(svn_typecheck::Severity::Warning),
             CompilerWarningOverride::Error => Some(svn_typecheck::Severity::Error),
         })
         .unwrap_or_else(|| {
@@ -1114,16 +1117,10 @@ fn parse_compiler_warnings(
             );
             continue;
         };
-        let severity = match severity.trim().to_lowercase().as_str() {
-            "ignore" | "off" | "silent" => CompilerWarningOverride::Ignore,
-            "warning" | "warn" => CompilerWarningOverride::Warning,
+        let severity = match severity.trim() {
+            "ignore" => CompilerWarningOverride::Ignore,
             "error" => CompilerWarningOverride::Error,
-            other => {
-                eprintln!(
-                    "svelte-check-native: unknown --compiler-warnings severity {other:?}; ignoring entry"
-                );
-                continue;
-            }
+            _ => continue, // upstream drops unrecognized values
         };
         out.insert(code.trim().to_string(), severity);
     }

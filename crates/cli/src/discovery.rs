@@ -84,7 +84,9 @@ pub(crate) fn discover_relevant_files_with_settings(
         // depth 0 is the workspace root itself — never prune it, even
         // if its basename is hidden or `node_modules` (the user pointed
         // us at it deliberately). Pruning the root yields zero files.
-        .filter_entry(|e| e.depth() == 0 || !is_excluded_dir(e.path()))
+        .filter_entry(|e| {
+            e.depth() == 0 || !e.file_type().is_dir() || !is_excluded_dir(e.path())
+        })
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
     {
@@ -215,9 +217,9 @@ pub(crate) fn build_glob_set_absolute(patterns: &[String]) -> Option<globset::Gl
 /// cache. We deliberately do NOT exclude `dist`/`target`: upstream
 /// descends into them, and a project that ships checkable `.svelte`
 /// sources under `dist/` must see the same `<N> FILES` denominator
-/// (the project's stated parity bar). Our per-component basename check
-/// is also more robust than upstream's full-path `includes('/.')`,
-/// which breaks workspaces nested under a hidden ancestor.
+/// (the project's stated parity bar). Like upstream (post-#3034), we
+/// prune by directory NAME rather than full path, so a workspace
+/// nested under a hidden ancestor directory still discovers its files.
 ///
 /// NOTE: callers must NOT apply this to the walk's ROOT entry — a
 /// workspace whose own basename starts with `.` (or is literally

@@ -125,16 +125,17 @@ impl WarningFilterPlan {
 
 /// Locate the user's svelte config starting from `workspace` and
 /// walking up to the filesystem root. Recognises every extension
-/// upstream svelte-check accepts: `.js`, `.mjs`, `.cjs`, `.ts`.
+/// upstream svelte-check accepts: `.js`, `.cjs`, `.mjs`, `.ts`, `.mts`.
 /// Returns the first match in the order listed.
 pub fn find_svelte_config(workspace: &Path) -> Option<PathBuf> {
     let mut dir = workspace.to_path_buf();
     loop {
         for candidate in [
             "svelte.config.js",
-            "svelte.config.mjs",
             "svelte.config.cjs",
+            "svelte.config.mjs",
             "svelte.config.ts",
+            "svelte.config.mts",
         ] {
             let p = dir.join(candidate);
             if p.is_file() {
@@ -377,32 +378,42 @@ fn extract_warning_filter<'a>(
     for stmt in &program.body {
         if let Statement::VariableDeclaration(vd) = stmt {
             for d in &vd.declarations {
-                let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &d.id else {
-                    continue;
-                };
-                if let Some(init) = &d.init {
+                if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &d.id
+                    && let Some(init) = &d.init
+                {
                     named.insert(id.name.to_string(), init);
                 }
             }
         }
     }
     for stmt in &program.body {
-        if let Statement::ExportDefaultDeclaration(edd) = stmt {
-            let expr_opt: Option<&Expression<'_>> = match &edd.declaration {
-                ExportDefaultDeclarationKind::ObjectExpression(obj) => {
-                    return warning_filter_in_object(obj);
+        let Statement::ExportDefaultDeclaration(decl) = stmt else {
+            continue;
+        };
+        let expr = match &decl.declaration {
+            ExportDefaultDeclarationKind::Identifier(id) => {
+                match named.get(id.name.as_str()).copied() {
+                    Some(e) => e,
+                    None => continue,
                 }
-                ExportDefaultDeclarationKind::Identifier(id) => {
-                    named.get(id.name.as_str()).copied()
-                }
-                _ => None,
-            };
-            if let Some(e) = expr_opt
-                && let Expression::ObjectExpression(obj) = e
-                && let Some(f) = warning_filter_in_object(obj)
-            {
-                return Some(f);
             }
+            ExportDefaultDeclarationKind::ObjectExpression(obj) => {
+                return warning_filter_in_object(obj);
+            }
+            other => match other.as_expression() {
+                Some(e) => e,
+                None => continue,
+            },
+        };
+        let unwrapped = unwrap_config_wrapper(expr);
+        if let Expression::ObjectExpression(obj) = unwrapped {
+            return warning_filter_in_object(obj);
+        }
+        if let Expression::Identifier(id) = unwrapped
+            && let Some(target) = named.get(id.name.as_str()).copied()
+            && let Expression::ObjectExpression(obj) = unwrap_config_wrapper(target)
+        {
+            return warning_filter_in_object(obj);
         }
     }
     None
@@ -411,37 +422,16 @@ fn extract_warning_filter<'a>(
 /// Look up `compilerOptions.warningFilter` inside a top-level config
 /// object.
 fn warning_filter_in_object<'a>(obj: &'a ObjectExpression<'a>) -> Option<&'a Expression<'a>> {
-    for prop in &obj.properties {
-        let ObjectPropertyKind::ObjectProperty(p) = prop else {
-            continue;
-        };
-        let PropertyKey::StaticIdentifier(id) = &p.key else {
-            continue;
-        };
-        if id.name != "compilerOptions" {
-            continue;
-        }
-        // Unwrap `/** @type {...} */ ({...})` style casts.
-        let mut value = &p.value;
-        while let Expression::ParenthesizedExpression(px) = value {
-            value = &px.expression;
-        }
-        let Expression::ObjectExpression(inner) = value else {
-            continue;
-        };
-        for prop in &inner.properties {
-            let ObjectPropertyKind::ObjectProperty(pp) = prop else {
-                continue;
-            };
-            let PropertyKey::StaticIdentifier(iid) = &pp.key else {
-                continue;
-            };
-            if iid.name == "warningFilter" {
-                return Some(&pp.value);
-            }
-        }
+    let co = lookup_object_property(obj, "compilerOptions")?;
+    // Unwrap `/** @type {...} */ ({...})` style casts.
+    let mut value = co;
+    while let Expression::ParenthesizedExpression(px) = value {
+        value = &px.expression;
     }
-    None
+    let Expression::ObjectExpression(inner) = value else {
+        return None;
+    };
+    lookup_object_property(inner, "warningFilter")
 }
 
 /// Recognise `(w) => …` / `function (w) { … }` and pull the first

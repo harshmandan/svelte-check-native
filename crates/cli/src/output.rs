@@ -15,9 +15,36 @@
 //! formatted identically to upstream so existing wrappers parsing the
 //! prelude / completion lines keep working.
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use crate::ColorMode;
+
+/// Compute `target` relative to `base`, walking up with `..` segments
+/// when `target` is not a descendant of `base` (mirrors Node's
+/// `path.relative`). Both paths must be absolute and resolved — they are
+/// at every callsite here. Finds the common leading components, emits one
+/// `..` per remaining `base` component, then appends the remaining
+/// `target` components. The in-workspace common case yields the identical
+/// descendant-relative path a plain prefix-strip would; the out-of-base
+/// case (a `source_path` above the workspace) now produces a correct
+/// `../`-prefixed path instead of leaking the absolute path.
+fn relative_path(target: &Path, base: &Path) -> PathBuf {
+    let t: Vec<Component<'_>> = target.components().collect();
+    let b: Vec<Component<'_>> = base.components().collect();
+    let common = t
+        .iter()
+        .zip(b.iter())
+        .take_while(|(a, c)| a == c)
+        .count();
+    let mut rel = PathBuf::new();
+    for _ in common..b.len() {
+        rel.push("..");
+    }
+    for comp in &t[common..] {
+        rel.push(comp.as_os_str());
+    }
+    rel
+}
 
 /// Whether a diagnostic clears the `--threshold` bar for *display*.
 /// `error` shows only errors; `warning` (the default) shows everything.
@@ -126,10 +153,7 @@ fn print_machine(
         if !passes_threshold(d.severity, threshold) {
             continue;
         }
-        let rel = d
-            .source_path
-            .strip_prefix(workspace)
-            .unwrap_or(&d.source_path);
+        let rel = relative_path(&d.source_path, workspace);
         let type_label = match d.severity {
             svn_typecheck::Severity::Error => "ERROR",
             svn_typecheck::Severity::Warning => "WARNING",
@@ -233,10 +257,7 @@ fn print_human(
         if !passes_threshold(d.severity, threshold) {
             continue;
         }
-        let rel = d
-            .source_path
-            .strip_prefix(workspace)
-            .unwrap_or(&d.source_path);
+        let rel = relative_path(&d.source_path, workspace);
         let filename = rel.display().to_string();
         // Path that IDEs turn into clickable links. Use the platform
         // separator between workspace and file (upstream uses `sep`), so
@@ -450,6 +471,28 @@ mod tests {
             "caret line must not contain tabs when source is space-indented\nframe:\n{frame}",
         );
         assert!(caret_line.contains("^^^^^^^^^^^^^^"), "frame:\n{frame}");
+    }
+
+    #[test]
+    fn relative_path_descendant_matches_strip_prefix() {
+        let base = Path::new("/home/user/project");
+        let target = Path::new("/home/user/project/src/App.svelte");
+        assert_eq!(
+            relative_path(target, base),
+            Path::new("src/App.svelte"),
+        );
+    }
+
+    #[test]
+    fn relative_path_above_workspace_walks_up() {
+        // A `source_path` above the workspace must produce a
+        // `../`-prefixed path, not the leaked absolute path.
+        let base = Path::new("/home/user/project/app");
+        let target = Path::new("/home/user/project/shared/Lib.svelte");
+        assert_eq!(
+            relative_path(target, base),
+            Path::new("../shared/Lib.svelte"),
+        );
     }
 
     #[test]

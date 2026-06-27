@@ -3,7 +3,10 @@
 async function $$render_4e007725() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("a", {});         }
+        { svelteHTML.createElement("a", {
+            "sapper:noscroll": true,
+        });
+        }
     });
     return { props: /** @type {any} */({}) };
 }

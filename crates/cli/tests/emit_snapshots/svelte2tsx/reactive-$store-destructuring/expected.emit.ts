@@ -7,14 +7,14 @@ async function $$render_fa6a60ec() {
   let count3 = /** @type {any} */ (null);
   ;() => { $: ({ count3 } = $data) };
   let bla4 = /** @type {any} */ (null);
-  ;() => { $: ({ bla4, bla5 } = $data) };
+  let bla5; ({ bla4, bla5 } = __svn_invalidate(() => ($data))); void bla4; void bla5;
 
   let [ count ] = __svn_invalidate(() => ($data)); void count;
   let [ count2 ] = __svn_invalidate(() => ($data)); void count2;
   let count3 = /** @type {any} */ (null);
   ;() => { $: ([ count3 ] = $data) };
   let bla4 = /** @type {any} */ (null);
-  ;() => { $: ([ bla4, bla5 ] = $data) };
+  let bla5; ([ bla4, bla5 ] = __svn_invalidate(() => ($data))); void bla4; void bla5;
     ;(async () => {
         // template type-check body (incremental)
     });

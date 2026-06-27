@@ -108,10 +108,12 @@ fn try_process_let_statement(
         let name_end = p;
         let name = &bytes[name_start..name_end];
 
-        let mut s = name_end;
-        while s < bytes.len() && is_ascii_ws(bytes[s]) {
-            s += 1;
-        }
+        // Use the same continuation scan as the denarrow/widen twins: a
+        // blanket whitespace skip swallows across an ASI newline into the
+        // next statement, so a semicolon-free `let foo` preceding a typed
+        // declaration mis-detected its type-annotation boundary and the
+        // definite-assignment `!` was dropped (spurious TS2454).
+        let mut s = skip_to_decl_continuation(bytes, name_end);
         let has_type_annotation = s < bytes.len() && bytes[s] == b':';
         if has_type_annotation {
             s += 1;

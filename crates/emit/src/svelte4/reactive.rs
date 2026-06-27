@@ -304,9 +304,7 @@ fn classify_and_rewrite(
                 // fall through to Case 2 (block wrap) — we can't
                 // safely emit a fresh `let` for already-bound names.
                 let destructure_names = collect_destructure_names(&assign.left);
-                if !destructure_names.is_empty()
-                    && destructure_names.iter().all(|n| !declared.contains(n))
-                {
+                if !destructure_names.is_empty() {
                     let rhs_span = assign.right.span();
                     let rhs = &content[rhs_span.start as usize..rhs_span.end as usize];
                     let lhs_span = assign.left.span();
@@ -332,13 +330,41 @@ fn classify_and_rewrite(
                         .iter()
                         .map(|n| format!(" void {n};"))
                         .collect();
-                    return Edit {
-                        start: full_start,
-                        end: full_end,
-                        replacement: format!(
-                            "let {lhs_unwrap} = __svn_invalidate(() => ({rhs}));{voids}"
-                        ),
-                    };
+                    if destructure_names.iter().all(|n| !declared.contains(n)) {
+                        // Every name is fresh — declare AND initialise in one
+                        // `let { a, b } = expr;` (upstream's
+                        // hasOnlyImplicitTopLevelNames branch).
+                        return Edit {
+                            start: full_start,
+                            end: full_end,
+                            replacement: format!(
+                                "let {lhs_unwrap} = __svn_invalidate(() => ({rhs}));{voids}"
+                            ),
+                        };
+                    }
+                    let fresh: Vec<&SmolStr> = destructure_names
+                        .iter()
+                        .filter(|n| !declared.contains(*n))
+                        .collect();
+                    if !fresh.is_empty() {
+                        // Mixed: some names already declared. Mirror upstream
+                        // ImplicitTopLevelNames.modifyCode's `else` branch
+                        // (ImplicitTopLevelNames.ts:100-104) — declare only
+                        // the FRESH names with `let <n>;`, then keep the
+                        // invalidate-wrapped assignment. The old all-or-
+                        // nothing guard dropped this to the arrow wrap, which
+                        // never declared the fresh name → spurious TS18004 /
+                        // TS2304 on it in the template.
+                        let lets: String = fresh.iter().map(|n| format!("let {n}; ")).collect();
+                        return Edit {
+                            start: full_start,
+                            end: full_end,
+                            replacement: format!(
+                                "{lets}({lhs_unwrap} = __svn_invalidate(() => ({rhs})));{voids}"
+                            ),
+                        };
+                    }
+                    // All names already declared → fall through to Case 2.
                 }
             }
         }
@@ -553,13 +579,28 @@ mod tests {
     }
 
     #[test]
-    fn destructure_with_already_declared_name_falls_back_to_wrap() {
-        // If any destructured name is already a module-scope declaration,
-        // don't emit a fresh `let` (duplicate declaration). Fall back to
-        // block wrap, which preserves the assignment semantics.
+    fn destructure_with_already_declared_name_declares_only_fresh() {
+        // Mixed destructure: `a` already declared, `b` fresh. Upstream
+        // (ImplicitTopLevelNames.modifyCode `else`) declares only the fresh
+        // name with `let b;` and keeps the invalidate-wrapped assignment —
+        // we must NOT re-declare `a` and must NOT drop `b` (which the old
+        // arrow-wrap fallback did, firing spurious TS18004/TS2304 on `b`).
         let src = "let a = 0;\n$: ({ a, b } = question);";
         let got = ts(src);
         assert!(got.contains("let a = 0;"), "prior decl preserved: {got:?}");
+        assert!(
+            got.contains("let b; ({ a, b } = __svn_invalidate(() => (question)));"),
+            "declare only fresh name, keep assignment: {got:?}"
+        );
+    }
+
+    #[test]
+    fn destructure_with_all_declared_names_falls_back_to_wrap() {
+        // Every destructured name already declared — no fresh `let` to emit,
+        // so fall through to the arrow wrap (preserves assignment semantics
+        // without a duplicate declaration).
+        let src = "let a = 0;\nlet b = 0;\n$: ({ a, b } = question);";
+        let got = ts(src);
         assert!(
             got.contains(";() => { $: ({ a, b } = question); };"),
             "arrow wrap fallback: {got:?}"

@@ -12,8 +12,7 @@
 //! | Upstream | Our file | Notes |
 //! |---|---|---|
 //! | (half of) `ExportedNames.ts` | `exported_type_info.rs` | `collect_export_type_infos` — declaration → `ExportedLocalInfo` |
-//! | `HoistableInterfaces.ts` (typeof scan part) | `type_refs.rs` | `keyof_typeof_targets`, `typeof_targets` |
-//! | `InterfacesAndTypes.ts` | `ident_refs.rs` | `collect_ident_refs` — reference scanner for hoistability |
+//! | `HoistableInterfaces.ts` (`collectTypeDependencies`) + `InterfacesAndTypes.ts` | `type_deps.rs` | `collect_alias_deps` / `collect_interface_deps` / `collect_type_node_deps` — AST type-dependency walk for hoistability |
 //!
 //! ## Pointer-only stubs (logic lives elsewhere)
 //!
@@ -33,7 +32,7 @@
 //! | `handleImportDeclaration.ts` | inline in `process_instance_script_content::split_imports` |
 //! | `handleScopeAndResolveForSlot.ts` | inline in `nodes::let_directive` |
 //! | `handleTypeAssertion.ts` | inline in `process_instance_script_content` |
-//! | `HoistableInterfaces.ts` (decision logic) | inline in `process_instance_script_content::hoisted_type_names` (only the typeof scan was extracted) |
+//! | `HoistableInterfaces.ts` (decision logic) | inline in `process_instance_script_content::hoisted_type_names` (only the dependency walk was extracted to `type_deps.rs`) |
 //! | `ImplicitTopLevelNames.ts` | inline in `analyze::collect_top_level_bindings` |
 //! | `Scripts.ts` | inline in `process_instance_script_content` and `process_module_script_tag` |
 //! | `slot.ts` | overlaps with `nodes::let_directive::slot_let_attrs` etc. |
@@ -45,6 +44,5 @@ pub(crate) mod component_events;
 pub(crate) mod exported_names;
 pub(crate) mod exported_type_info;
 pub(crate) mod generics;
-pub(crate) mod ident_refs;
 pub(crate) mod implicit_store_values;
-pub(crate) mod type_refs;
+pub(crate) mod type_deps;

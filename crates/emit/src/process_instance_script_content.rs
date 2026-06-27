@@ -24,14 +24,16 @@
 use std::collections::HashSet;
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{BindingPattern, Declaration, ImportOrExportKind, Statement};
+use oxc_ast::ast::{
+    BindingPattern, Declaration, ImportOrExportKind, Statement, TSModuleDeclaration,
+    TSModuleDeclarationBody,
+};
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
 use svn_parser::{ScriptLang, parse_script_body};
 
 use crate::svelte2tsx_nodes::exported_type_info::collect_export_type_infos;
-use crate::svelte2tsx_nodes::ident_refs::collect_ident_refs;
-use crate::svelte2tsx_nodes::type_refs::{keyof_typeof_targets, typeof_targets};
+use crate::svelte2tsx_nodes::type_deps::{TypeDeps, collect_alias_deps, collect_interface_deps};
 
 /// `hoisted`: statements lifted to module top level (newline-joined).
 /// `body`: the original script content with hoisted spans blanked out.
@@ -89,6 +91,49 @@ pub struct ExportedLocalInfo {
     /// Always `true` for `export function` / `export class` (they're
     /// always defined at declaration site).
     pub has_init: bool,
+    /// Identifiers referenced by this export's type annotation (the
+    /// AST-walked equivalent of the old `collect_ident_refs` over the
+    /// annotation text). Empty when the declaration is un-annotated.
+    /// Used to seed `props_reachable`: a Svelte-4-style `export let
+    /// state: TypeFilter` contributes `TypeFilter` so the synthesized
+    /// module-scope Props references hoist alongside it.
+    pub annotation_idents: Vec<SmolStr>,
+}
+
+/// A `type`/`interface` declaration whose hoist decision is deferred
+/// until `body_decl_names` is fully populated (post-pass below). Carries
+/// the AST-walked dependency sets ([`TypeDeps`]) so the decision logic
+/// never re-scans the source slice.
+struct PendingType {
+    start: usize,
+    end: usize,
+    name: SmolStr,
+    deps: TypeDeps,
+}
+
+/// Collect type-dependency identifiers from a `namespace`/`module`
+/// block's top-level type aliases and interfaces, feeding the
+/// declare-const stub pass — the AST equivalent of scanning a hoisted
+/// namespace span. (Namespaces hoist verbatim; their nested type decls
+/// can reference body-local names that need a module-scope stub.)
+fn collect_module_block_type_idents(decl: &TSModuleDeclaration<'_>, out: &mut HashSet<SmolStr>) {
+    let Some(TSModuleDeclarationBody::TSModuleBlock(block)) = &decl.body else {
+        return;
+    };
+    for stmt in &block.body {
+        // Unwrap a bare or `export`-ed type alias / interface.
+        let decl: Option<&Declaration<'_>> = match stmt {
+            Statement::ExportNamedDeclaration(e) => e.declaration.as_ref(),
+            _ => stmt.as_declaration(),
+        };
+        match decl {
+            Some(Declaration::TSTypeAliasDeclaration(d)) => out.extend(collect_alias_deps(d).idents),
+            Some(Declaration::TSInterfaceDeclaration(d)) => {
+                out.extend(collect_interface_deps(d).idents)
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Split out every module-level statement (imports, exports of all
@@ -251,16 +296,22 @@ pub fn split_imports(
     let mut exported_locals: Vec<SmolStr> = Vec::new();
     let mut export_type_infos: Vec<ExportedLocalInfo> = Vec::new();
     // Type aliases / interfaces whose hoist decision is deferred until
-    // after body_decl_names is fully populated (post-pass below).
-    // Tuple: (span_start, span_end, declared_name).
-    // (start, end, name, is_exported). Non-exported types that
-    // reference body locals via plain `typeof` stay body-scoped;
-    // exported ones hoist (consumers need them at module scope).
-    let mut pending_type_spans: Vec<(usize, usize, SmolStr, bool)> = Vec::new();
+    // after body_decl_names is fully populated (post-pass below). Each
+    // carries its AST-walked dependency sets so the decision logic reads
+    // precomputed deps instead of re-scanning the byte slice.
+    let mut pending_type_spans: Vec<PendingType> = Vec::new();
     // Names of `export type` / `export interface` declarations hoisted
     // verbatim (with their `export` keyword) — these bypass
     // `pending_type_spans` and are merged into `hoisted_type_names` below.
     let mut exported_hoisted_type_names: Vec<SmolStr> = Vec::new();
+    // Broad identifier set referenced by every type-bearing declaration
+    // that gets hoisted to module scope (hoisted pending types + `export
+    // type`/`export interface` + namespace top-level type decls). Feeds
+    // the `declare const` stub pass below — the AST-walked equivalent of
+    // the old `collect_ident_refs(scan_text)` over the concatenated
+    // hoist spans. Value-shape hoists (imports, `export … from`) can't
+    // reference body locals, so they contribute nothing and are skipped.
+    let mut hoisted_type_idents: HashSet<SmolStr> = HashSet::new();
 
     for stmt in &parsed.program.body {
         match stmt {
@@ -305,14 +356,21 @@ pub fn split_imports(
                     // `export ` prefix and leave `type Foo = ...` in the
                     // function body — invisible to consumers and never
                     // re-exported by the overlay.
-                    let exported_type_name = match d {
-                        Declaration::TSTypeAliasDeclaration(t) => Some(t.id.name.as_str()),
-                        Declaration::TSInterfaceDeclaration(i) => Some(i.id.name.as_str()),
+                    let exported_type = match d {
+                        Declaration::TSTypeAliasDeclaration(t) => {
+                            Some((t.id.name.as_str(), collect_alias_deps(t)))
+                        }
+                        Declaration::TSInterfaceDeclaration(i) => {
+                            Some((i.id.name.as_str(), collect_interface_deps(i)))
+                        }
                         _ => None,
                     };
-                    if let Some(name) = exported_type_name {
+                    if let Some((name, deps)) = exported_type {
                         hoist_spans.push(span);
                         exported_hoisted_type_names.push(SmolStr::from(name));
+                        // `export type`/`export interface` always hoist, so
+                        // their deps always feed the declare-const stub pass.
+                        hoisted_type_idents.extend(deps.idents);
                         continue;
                     }
                     // `export const/let/var/function/class` — strip just
@@ -370,6 +428,9 @@ pub fn split_imports(
             // (TS1235 inside a function); hoist verbatim.
             Statement::TSModuleDeclaration(decl) => {
                 hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+                // Namespaces always hoist; feed their top-level type
+                // declarations' deps to the declare-const stub pass.
+                collect_module_block_type_idents(decl, &mut hoisted_type_idents);
             }
             // `type Foo = ...` and `interface Foo { ... }` — hoist so
             // the emitted default-export's `Component<Foo>` at module
@@ -391,23 +452,23 @@ pub fn split_imports(
             Statement::TSTypeAliasDeclaration(decl) => {
                 let hoist_safe = !has_generics || decl.type_parameters.is_some();
                 if hoist_safe {
-                    pending_type_spans.push((
-                        decl.span.start as usize,
-                        decl.span.end as usize,
-                        SmolStr::from(decl.id.name.as_str()),
-                        false, // not exported
-                    ));
+                    pending_type_spans.push(PendingType {
+                        start: decl.span.start as usize,
+                        end: decl.span.end as usize,
+                        name: SmolStr::from(decl.id.name.as_str()),
+                        deps: collect_alias_deps(decl),
+                    });
                 }
             }
             Statement::TSInterfaceDeclaration(decl) => {
                 let hoist_safe = !has_generics || decl.type_parameters.is_some();
                 if hoist_safe {
-                    pending_type_spans.push((
-                        decl.span.start as usize,
-                        decl.span.end as usize,
-                        SmolStr::from(decl.id.name.as_str()),
-                        false,
-                    ));
+                    pending_type_spans.push(PendingType {
+                        start: decl.span.start as usize,
+                        end: decl.span.end as usize,
+                        name: SmolStr::from(decl.id.name.as_str()),
+                        deps: collect_interface_deps(decl),
+                    });
                 }
             }
             _ => {}
@@ -511,28 +572,26 @@ pub fn split_imports(
     // synthesizes Props from these annotations at module scope, so
     // every referenced type must also be hoisted (otherwise TS2304).
     for info in &export_type_infos {
-        if let Some(ty) = &info.type_source {
-            for ident in collect_ident_refs(ty) {
-                if pending_type_spans.iter().any(|(_, _, n, _)| n == &ident) {
-                    props_reachable.insert(ident);
-                }
+        for ident in &info.annotation_idents {
+            if pending_type_spans.iter().any(|p| &p.name == ident) {
+                props_reachable.insert(ident.clone());
             }
         }
     }
     if !props_reachable.is_empty() {
         loop {
             let mut added = false;
-            for (start, end, name, _) in &pending_type_spans {
-                if !props_reachable.contains(name) {
+            for pending in &pending_type_spans {
+                if !props_reachable.contains(&pending.name) {
                     continue;
                 }
-                for ident in collect_ident_refs(&content[*start..*end]) {
+                for ident in &pending.deps.idents {
                     // Track any referenced type by name; the hoist
                     // walk below will hoist them.
-                    if pending_type_spans.iter().any(|(_, _, n, _)| n == &ident)
-                        && !props_reachable.contains(&ident)
+                    if pending_type_spans.iter().any(|p| &p.name == ident)
+                        && !props_reachable.contains(ident)
                     {
-                        props_reachable.insert(ident);
+                        props_reachable.insert(ident.clone());
                         added = true;
                     }
                 }
@@ -544,14 +603,15 @@ pub fn split_imports(
     }
 
     let mut must_stay_body: HashSet<SmolStr> = HashSet::new();
-    for (start, end, name, _is_exported) in &pending_type_spans {
+    for pending in &pending_type_spans {
         if body_names_set.is_empty() {
             continue;
         }
-        let type_src = &content[*start..*end];
         // Always stay-body: `keyof typeof <body-local>` (stubbed
         // `any` widens `keyof` to `string | number | symbol`).
-        let has_keyof_typeof = keyof_typeof_targets(type_src)
+        let has_keyof_typeof = pending
+            .deps
+            .keyof_typeof_refs
             .iter()
             .any(|n| body_names_set.contains(n));
         // Also stay-body: plain `typeof <body-local>` — UNLESS
@@ -560,25 +620,29 @@ pub fn split_imports(
         // scope). This catches local-only type aliases like
         // `type MomentDoc = typeof moments; function f(xs:
         // MomentDoc)` where the stub `any` loses all shape info.
-        let has_plain_typeof = !props_reachable.contains(name)
-            && typeof_targets(type_src)
+        let has_plain_typeof = !props_reachable.contains(&pending.name)
+            && pending
+                .deps
+                .typeof_refs
                 .iter()
                 .any(|n| body_names_set.contains(n));
         if has_keyof_typeof || has_plain_typeof {
-            must_stay_body.insert(name.clone());
+            must_stay_body.insert(pending.name.clone());
         }
     }
     loop {
         let mut added = false;
-        for (start, end, name, _) in &pending_type_spans {
-            if must_stay_body.contains(name) {
+        for pending in &pending_type_spans {
+            if must_stay_body.contains(&pending.name) {
                 continue;
             }
-            let refs_stay_body = collect_ident_refs(&content[*start..*end])
+            let refs_stay_body = pending
+                .deps
+                .idents
                 .iter()
                 .any(|n| must_stay_body.contains(n));
             if refs_stay_body {
-                must_stay_body.insert(name.clone());
+                must_stay_body.insert(pending.name.clone());
                 added = true;
             }
         }
@@ -590,10 +654,14 @@ pub fn split_imports(
     // for the hoist-decision logic. Types in that set bypass the
     // plain-typeof body-keep rule.
     let mut hoisted_type_names: HashSet<SmolStr> = HashSet::new();
-    for (start, end, name, _is_exported) in pending_type_spans {
-        if !must_stay_body.contains(&name) {
-            hoist_spans.push((start, end));
-            hoisted_type_names.insert(name);
+    for pending in pending_type_spans {
+        if !must_stay_body.contains(&pending.name) {
+            hoist_spans.push((pending.start, pending.end));
+            hoisted_type_names.insert(pending.name);
+            // This hoisted type's references feed the declare-const
+            // stub pass (replaces the old collect_ident_refs over the
+            // concatenated hoist spans).
+            hoisted_type_idents.extend(pending.deps.idents);
         }
     }
 
@@ -637,28 +705,19 @@ pub fn split_imports(
     let referenced: HashSet<SmolStr> = if body_names_set.is_empty() {
         HashSet::new()
     } else {
-        // Scan every HOISTED span (i.e. what we're actually about to
-        // emit to module scope) and find body-level name references.
-        // Only type-alias / interface / namespace / `export type`
-        // hoists can reference body locals in a TS sense; plain
-        // `import`/`export … from 'mod'` spans live in their own
-        // module-level namespace. Over-scanning is harmless — the
-        // intersection with `body_names_set` filters non-matches.
-        //
-        // Importantly, the pending-type-span pass above already
-        // REMOVED body-referencing type aliases from `hoist_spans`
-        // (they stay in body to preserve type identity). So this
-        // scan only finds names from types that the decision pass
-        // kept hoistable — ones where we're confident a `declare
-        // const` stub won't degrade a `typeof`/`keyof` into `any`.
-        let mut scan_text = String::new();
-        for &(start, end) in &hoist_spans {
-            scan_text.push_str(&content[start..end]);
-            scan_text.push('\n');
-        }
-        collect_ident_refs(&scan_text)
-            .into_iter()
-            .filter(|n| body_names_set.contains(n))
+        // `hoisted_type_idents` was accumulated (AST-walked) from every
+        // type-bearing decl actually hoisted to module scope: hoisted
+        // pending types (above), `export type`/`export interface`, and
+        // namespace top-level type decls. Only those can reference body
+        // locals in a TS sense; plain `import`/`export … from 'mod'`
+        // spans live in their own namespace and contribute nothing. The
+        // intersection with `body_names_set` keeps only body-level names.
+        // (Replaces the old `collect_ident_refs` byte-scan over the
+        // concatenated hoist spans.)
+        hoisted_type_idents
+            .iter()
+            .filter(|n| body_names_set.contains(*n))
+            .cloned()
             .collect()
     };
     // Emit stubs in original declaration order, to keep diffs stable.

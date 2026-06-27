@@ -6,6 +6,70 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.5]
+
+Parity-and-correctness release. A large sweep of upstream-divergence
+fixes from an exhaustive audit — binding type-checks, accessibility
+rules, reactive-statement handling, Unicode identifiers, and lint-rule
+gating — plus support for `compilerOptions.namespace: 'foreign'` and an
+internal reorganization of the analyze/cli crates. Lint-validator
+coverage holds at 125 / 125 enforced fixtures passing; both 1000-file
+mid-migration control rigs stay at parity with upstream
+`svelte-check --tsgo`.
+
+### Added
+
+- **`compilerOptions.namespace: 'foreign'`** support. When a
+  `svelte.config` selects the foreign namespace (custom-element /
+  non-HTML targets), attribute names are no longer lowercased — case is
+  preserved through emit, matching upstream svelte2tsx.
+
+### Fixed
+
+Binding diagnostics:
+
+- Two-way `bind:checked` / `bind:files` now type-check the bound value
+  against the slot type.
+- Element-native one-way bindings resolve their type by tag.
+- `bind:group` emits a widening reassignment instead of over-narrowing.
+
+Template / emit:
+
+- DOM attribute names lowercase to match upstream `transformAttributeCase`.
+- In-tag JS comments parse instead of raising a fatal parse error.
+- Single-line `{@const}` surfaces in-expression errors.
+- Unicode identifiers in `{@const}` bindings, store refs, and template
+  refs are no longer truncated.
+- Exported functions emit as `typeof name` rather than a reconstructed
+  signature; destructured export names surface in the Exports type;
+  props are no longer synthesized from exports in runes mode.
+
+Accessibility (svn-lint):
+
+- 40 missing `doc-*` / `graphics-*` non-interactive roles added.
+- `a11y_hidden`, `a11y_img_redundant_alt`, and several rule-gating
+  conditions aligned with upstream's exact firing (including
+  control-block flag reset at element boundaries and `svelte-ignore`
+  handling on script rules).
+
+Config / CLI:
+
+- `svelte.config` is discovered in the workspace directory only, not by
+  walking up to the filesystem root — mirrors upstream's
+  `traverse: false`, fixing ancestor-config leakage in monorepos.
+- `tsconfig` `paths` distinguishes an absent key from an explicit empty
+  one when merging chained configs.
+
+### Changed
+
+- **Internal reorganization (no behavior change).** The event-dispatcher
+  concern split out of `analyze/props.rs` into `events.rs` (mirroring
+  upstream's `ExportedNames.ts` / `ComponentEvents.ts` split);
+  Svelte-AST analysis (`{@const}`-placement validation, parse-error
+  mapping) moved out of the CLI binary into library crates; embedded-TS
+  byte scanners replaced with `oxc` AST walks; dead modules and empty
+  scaffold files removed.
+
 ## [0.9.0]
 
 Minor release. Adds support for Svelte 5 declaration tags and a

@@ -121,16 +121,28 @@ impl ScopeTree {
         self.resolve(self.instance_root, name)
     }
 
-    /// True when `name` is declared in *any* scope — module root,
-    /// instance root, or a template-side snippet / each-block scope.
-    /// Used by rules like `attribute_global_event_reference` that
-    /// only need to know "is this identifier bound somewhere?" at
-    /// the point of use, without threading the current template
-    /// scope through the rule signature.
-    pub fn is_declared_anywhere(&self, name: &str) -> bool {
-        self.scopes
-            .iter()
-            .any(|s| s.declarations.contains_key(name))
+    /// Innermost template scope whose recorded source range contains
+    /// `offset`, falling back to `instance_root`. This is the lexical
+    /// start point for resolving a reference at a given template
+    /// position — mirrors upstream's `scope.get` walking from the node's
+    /// own scope (svelte compiler shared/element.js). Script scopes have
+    /// `range == None` and never match; template byte offsets are
+    /// disjoint from script offsets anyway. The smallest-containing
+    /// scope wins (innermost).
+    pub fn innermost_template_scope_at(&self, offset: u32) -> ScopeId {
+        let mut best = self.instance_root;
+        let mut best_len = u32::MAX;
+        for (i, s) in self.scopes.iter().enumerate() {
+            if let Some(r) = s.range
+                && r.start <= offset
+                && offset < r.end
+                && (r.end - r.start) < best_len
+            {
+                best_len = r.end - r.start;
+                best = ScopeId(i as u32);
+            }
+        }
+        best
     }
 }
 
@@ -296,6 +308,10 @@ pub fn build_with_template(
         // instance-root bindings (important for
         // `state_referenced_locally`).
         let template_root = tree_builder.new_scope(Some(instance_root));
+        // Stamp the whole-fragment range so top-level template positions
+        // (e.g. a top-level `{@const}` declaration) resolve to
+        // `template_root` via `innermost_template_scope_at` (l275).
+        tree_builder.scopes[template_root.0 as usize].range = Some(frag.range);
         let lang = doc
             .instance_script
             .as_ref()
@@ -857,10 +873,15 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
         &mut self,
         kind: svn_analyze::template_scope::ScopeKind,
         bindings: &[svn_analyze::template_scope::BoundIdent],
+        scope_range: svn_core::Range,
     ) {
         use svn_analyze::template_scope::ScopeKind;
         let parent = self.ctx.scope;
         let child = self.builder.new_scope(Some(parent));
+        // Record the scope's lexical span so an on-event reference
+        // resolves against the element's scope, not the whole-file
+        // declaration set (l275).
+        self.builder.scopes[child.0 as usize].range = Some(scope_range);
         self.scope_stack.push(parent);
         self.ctx.scope = child;
 

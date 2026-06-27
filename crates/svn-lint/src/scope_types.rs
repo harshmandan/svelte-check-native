@@ -225,6 +225,12 @@ pub struct Scope {
     pub parent: Option<ScopeId>,
     pub function_depth: u32,
     pub declarations: HashMap<SmolStr, BindingId>,
+    /// Source span this scope lexically covers — `Some` only for template
+    /// block/snippet/let/await scopes (used by
+    /// `ScopeTree::innermost_template_scope_at` to resolve an on-event
+    /// reference against the element's lexical scope). `None` for script
+    /// scopes (module/instance root + JS function/block scopes).
+    pub range: Option<Range>,
 }
 
 impl Scope {
@@ -233,6 +239,7 @@ impl Scope {
             parent,
             function_depth,
             declarations: HashMap::new(),
+            range: None,
         }
     }
 }

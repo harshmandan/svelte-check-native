@@ -695,6 +695,7 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
         &mut self,
         kind: crate::template_scope::ScopeKind,
         bindings: &[crate::template_scope::BoundIdent],
+        _scope_range: svn_core::Range,
     ) {
         let mark = self.shadow.entries.len();
         match kind {

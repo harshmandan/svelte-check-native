@@ -440,7 +440,7 @@ pub trait TemplateScopeVisitor {
     /// Called when entering a scope-introducing block. `bindings`
     /// carries the identifiers the construct declares (per-pattern,
     /// in walk order).
-    fn enter_scope(&mut self, kind: ScopeKind, bindings: &[BoundIdent]) {}
+    fn enter_scope(&mut self, kind: ScopeKind, bindings: &[BoundIdent], scope_range: Range) {}
     fn leave_scope(&mut self, kind: ScopeKind) {}
 
     /// Visited at element entry, BEFORE recursion into children. The
@@ -616,6 +616,7 @@ fn walk_node_inner<V: TemplateScopeVisitor>(node: &Node, source: &str, visitor: 
                     has_index,
                 },
                 &bindings,
+                b.body.range,
             );
             // Key expression walks in the CHILD scope (key may
             // reference the each binding) but in the PARENT's
@@ -658,7 +659,7 @@ fn walk_node_inner<V: TemplateScopeVisitor>(node: &Node, source: &str, visitor: 
                 for default in &pb.default_value_ranges {
                     visitor.visit_expr(*default);
                 }
-                visitor.enter_scope(ScopeKind::AwaitThen, &pb.bindings);
+                visitor.enter_scope(ScopeKind::AwaitThen, &pb.bindings, t.body.range);
                 walk_fragment_inner(&t.body, source, visitor);
                 visitor.leave_scope(ScopeKind::AwaitThen);
             }
@@ -670,7 +671,7 @@ fn walk_node_inner<V: TemplateScopeVisitor>(node: &Node, source: &str, visitor: 
                 for default in &pb.default_value_ranges {
                     visitor.visit_expr(*default);
                 }
-                visitor.enter_scope(ScopeKind::AwaitCatch, &pb.bindings);
+                visitor.enter_scope(ScopeKind::AwaitCatch, &pb.bindings, c.body.range);
                 walk_fragment_inner(&c.body, source, visitor);
                 visitor.leave_scope(ScopeKind::AwaitCatch);
             }
@@ -694,7 +695,7 @@ fn walk_node_inner<V: TemplateScopeVisitor>(node: &Node, source: &str, visitor: 
             for default in &pb.default_value_ranges {
                 visitor.visit_expr(*default);
             }
-            visitor.enter_scope(ScopeKind::Snippet, &pb.bindings);
+            visitor.enter_scope(ScopeKind::Snippet, &pb.bindings, b.body.range);
             walk_fragment_inner(&b.body, source, visitor);
             visitor.leave_scope(ScopeKind::Snippet);
         }
@@ -756,7 +757,7 @@ fn walk_element_children<V: TemplateScopeVisitor>(
     if let_bindings.is_empty() {
         walk_fragment_inner(children, source, visitor);
     } else {
-        visitor.enter_scope(ScopeKind::LetDirective, &let_bindings);
+        visitor.enter_scope(ScopeKind::LetDirective, &let_bindings, children.range);
         walk_fragment_inner(children, source, visitor);
         visitor.leave_scope(ScopeKind::LetDirective);
     }

@@ -625,3 +625,47 @@ fn svelte_element_dynamic_this_with_onclick_respects_svelte_ignore() {
         "svelte-ignore must suppress the warning, got: {cs:?}"
     );
 }
+
+// ----------------------------------------------------------------
+// l275: attribute_global_event_reference resolves the on-event
+// identifier against the element's LEXICAL scope (upstream
+// shared/element.js `scope.get`), not the whole-file declaration set.
+// ----------------------------------------------------------------
+
+/// `{onclick}` where `onclick` is declared only in a non-enclosing
+/// each scope must FIRE — it's not in lexical scope at the button.
+#[test]
+fn global_event_ref_fires_when_binding_in_unrelated_scope() {
+    let src = "{#each a as onclick}{/each}\n<button {onclick}>x</button>\n";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"attribute_global_event_reference"),
+        "onclick declared only in a non-enclosing each scope must fire, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Reverse-legit guard: a button INSIDE the each (onclick IS in
+/// lexical scope) must NOT fire.
+#[test]
+fn global_event_ref_suppressed_when_binding_encloses_element() {
+    let src = "{#each a as onclick}<button {onclick}>x</button>{/each}\n";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"attribute_global_event_reference"),
+        "onclick in the enclosing each scope must suppress, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A top-level (instance/template-root) binding still suppresses.
+#[test]
+fn global_event_ref_suppressed_by_top_level_binding() {
+    let src = "<script lang=\"ts\">let onclick = () => {};</script>\n<button {onclick}>x</button>\n";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"attribute_global_event_reference"),
+        "top-level onclick must suppress, got: {:?}",
+        codes(&warnings)
+    );
+}

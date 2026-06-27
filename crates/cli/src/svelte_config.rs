@@ -157,6 +157,9 @@ pub fn find_svelte_config(workspace: &Path) -> Option<PathBuf> {
 pub struct SvelteConfigSummary {
     pub warning_filter_plan: WarningFilterPlan,
     pub kit_files_settings: KitFilesSettings,
+    /// `compilerOptions.namespace === 'foreign'` — preserve DOM
+    /// attribute-name case in emit (upstream `preserveAttributeCase`).
+    pub preserve_attribute_case: bool,
 }
 
 /// Read `svelte.config.js`, parse once, and return every recognised
@@ -191,7 +194,80 @@ pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
         apply_kit_files_overrides(files_obj, &mut summary.kit_files_settings);
     }
 
+    // namespace: 'foreign' → preserve attribute case.
+    summary.preserve_attribute_case = extract_preserve_attribute_case(&parsed.program);
+
     summary
+}
+
+/// Find the top-level config `ObjectExpression` in the default export,
+/// handling `export default {…}`, `const c = {…}; export default c`, and
+/// `defineConfig({…})` / `satisfies` wrappers. Mirrors the traversal in
+/// [`extract_warning_filter`].
+fn default_export_config_object<'a>(
+    program: &'a oxc_ast::ast::Program<'a>,
+) -> Option<&'a ObjectExpression<'a>> {
+    let mut named: std::collections::HashMap<String, &Expression<'_>> =
+        std::collections::HashMap::new();
+    for stmt in &program.body {
+        if let Statement::VariableDeclaration(vd) = stmt {
+            for d in &vd.declarations {
+                if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &d.id
+                    && let Some(init) = &d.init
+                {
+                    named.insert(id.name.to_string(), init);
+                }
+            }
+        }
+    }
+    for stmt in &program.body {
+        let Statement::ExportDefaultDeclaration(decl) = stmt else {
+            continue;
+        };
+        let expr = match &decl.declaration {
+            ExportDefaultDeclarationKind::Identifier(id) => {
+                match named.get(id.name.as_str()).copied() {
+                    Some(e) => e,
+                    None => continue,
+                }
+            }
+            ExportDefaultDeclarationKind::ObjectExpression(obj) => return Some(obj),
+            other => match other.as_expression() {
+                Some(e) => e,
+                None => continue,
+            },
+        };
+        let unwrapped = unwrap_config_wrapper(expr);
+        if let Expression::ObjectExpression(obj) = unwrapped {
+            return Some(obj);
+        }
+        if let Expression::Identifier(id) = unwrapped
+            && let Some(target) = named.get(id.name.as_str()).copied()
+            && let Expression::ObjectExpression(obj) = unwrap_config_wrapper(target)
+        {
+            return Some(obj);
+        }
+    }
+    None
+}
+
+/// `compilerOptions.namespace === 'foreign'` in the default-export config.
+fn extract_preserve_attribute_case(program: &oxc_ast::ast::Program<'_>) -> bool {
+    let Some(obj) = default_export_config_object(program) else {
+        return false;
+    };
+    let Some(co) = lookup_object_property(obj, "compilerOptions") else {
+        return false;
+    };
+    // Unwrap `/** @type {...} */ ({...})` style casts.
+    let mut value = co;
+    while let Expression::ParenthesizedExpression(px) = value {
+        value = &px.expression;
+    }
+    let Expression::ObjectExpression(inner) = value else {
+        return false;
+    };
+    lookup_string_property(inner, "namespace").as_deref() == Some("foreign")
 }
 
 /// Walk the program AST looking for `kit.files` inside the default
@@ -930,6 +1006,35 @@ mod tests {
         let path = dir.path().join(name);
         std::fs::write(&path, src).unwrap();
         analyse(&path).warning_filter_plan
+    }
+
+    fn preserve_case(src: &str) -> bool {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("svelte.config.mjs");
+        std::fs::write(&path, src).unwrap();
+        analyse(&path).preserve_attribute_case
+    }
+
+    #[test]
+    fn namespace_foreign_sets_preserve_case() {
+        assert!(preserve_case(
+            "export default { compilerOptions: { namespace: 'foreign' } };"
+        ));
+        // `const config = {...}; export default config;` shape.
+        assert!(preserve_case(
+            "const config = { compilerOptions: { namespace: 'foreign' } };\nexport default config;"
+        ));
+    }
+
+    #[test]
+    fn namespace_non_foreign_or_absent_does_not_preserve() {
+        assert!(!preserve_case("export default {};"));
+        assert!(!preserve_case(
+            "export default { compilerOptions: { namespace: 'html' } };"
+        ));
+        assert!(!preserve_case(
+            "export default { compilerOptions: {} };"
+        ));
     }
 
     #[test]

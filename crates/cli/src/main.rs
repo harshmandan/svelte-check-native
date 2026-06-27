@@ -456,6 +456,9 @@ fn main() -> ExitCode {
     };
     let warning_filter_plan = svelte_config_summary.warning_filter_plan;
     let kit_files_settings = svelte_config_summary.kit_files_settings;
+    // Set the project-wide preserve-attribute-case flag (svelte config
+    // `namespace: 'foreign'`) ONCE before any (parallel) emit reads it.
+    svn_emit::set_preserve_attribute_case(svelte_config_summary.preserve_attribute_case);
 
     let svelte_warnings_mode = match cli.svelte_warnings.as_str() {
         "bridge" => SvelteWarningsMode::Bridge,
@@ -1781,6 +1784,13 @@ fn run_typecheck(
 /// `--emit-ts` flow: discover `.svelte` files, parse, emit, print to stdout
 /// with file separators. Exits 0 unconditionally — debug-mode is best-effort.
 fn run_emit_ts(workspace: &Path) -> ExitCode {
+    // Honour svelte config `namespace: 'foreign'` (preserve attribute
+    // case) in the debug-emit path too, mirroring the check path.
+    if let Some(cfg) = svelte_config::find_svelte_config(workspace) {
+        svn_emit::set_preserve_attribute_case(
+            svelte_config::analyse(&cfg).preserve_attribute_case,
+        );
+    }
     let files = discover_svelte_files(workspace);
     if files.is_empty() {
         eprintln!(

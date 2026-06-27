@@ -511,7 +511,11 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                 }),
             _ => false,
         });
-    let should_lowercase = tag_literal && !is_custom_element;
+    // `namespace: 'foreign'` (svelte config) preserves ALL attribute
+    // case — upstream `transformAttributeCase` is gated on `!preserveCase`
+    // (htmlxtojsx_v2/index.ts:109). Mirror that here.
+    let should_lowercase =
+        tag_literal && !is_custom_element && !crate::preserve_attribute_case();
     for attr in attributes {
         match attr {
             svn_parser::Attribute::Plain(p) => {

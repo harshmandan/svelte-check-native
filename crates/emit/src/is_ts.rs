@@ -42,3 +42,24 @@ impl Drop for IsTsGuard {
 pub(crate) fn emit_is_ts() -> bool {
     EMIT_IS_TS.with(|c| c.get())
 }
+
+/// Project-wide "preserve attribute case" flag (svelte config
+/// `compilerOptions.namespace === 'foreign'`). Unlike `EMIT_IS_TS`
+/// (per-file, per-rayon-worker), this is a process global set ONCE by
+/// the CLI before parallel emit begins and only read afterward — so a
+/// plain atomic is race-free and visible to every rayon worker (a
+/// thread-local set on the main thread would not be). Default `false`
+/// (html namespace → lowercase DOM attribute names).
+static PRESERVE_ATTRIBUTE_CASE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Set the project-wide preserve-attribute-case flag. Call once before
+/// emit (from the CLI, after reading svelte.config). Idempotent.
+pub fn set_preserve_attribute_case(v: bool) {
+    PRESERVE_ATTRIBUTE_CASE.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Read the project-wide preserve-attribute-case flag.
+pub(crate) fn preserve_attribute_case() -> bool {
+    PRESERVE_ATTRIBUTE_CASE.load(std::sync::atomic::Ordering::Relaxed)
+}

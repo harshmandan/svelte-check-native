@@ -1675,7 +1675,8 @@ pub(crate) fn emit_template_node(
     }
 }
 
-pub(crate) use is_ts::{IsTsGuard, emit_is_ts};
+pub(crate) use is_ts::{IsTsGuard, emit_is_ts, preserve_attribute_case};
+pub use is_ts::set_preserve_attribute_case;
 pub(crate) use void_block::{emit_bind_pair_declarations, emit_void_block};
 
 pub(crate) use destructure_idents::all_identifiers;

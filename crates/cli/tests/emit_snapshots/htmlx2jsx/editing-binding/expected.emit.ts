@@ -3,7 +3,8 @@
 async function $$render_b80130f4() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("input", {});         }
+        { svelteHTML.createElement("input", {});             obj. = __svn_any(null);
+        }
         { svelteHTML.createElement("input", {});             obj. = /** @type {string} */ (null);
         }
         {

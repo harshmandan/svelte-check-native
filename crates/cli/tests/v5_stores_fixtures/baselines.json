@@ -116,6 +116,17 @@
                 }
             ]
         },
+        "binding-group-store": {
+            "reason": "No <script>, so `compile_options` is undeclared. l136 added the bind:group widening `$compile_options.generate = __svn_any(null)` (upstream Binding.ts:99-109); the reference to the undeclared store correctly fires TS2304 — same as upstream's transform under tsgo. Verbatim-emit fixture preserves the undeclared name.",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 47,
+                    "code": 2304
+                }
+            ]
+        },
         "store-destructuring": {
             "reason": "User code references `fromSomewhere()` without import. Verbatim emit preserves the unresolved name.",
             "expected_errors": [

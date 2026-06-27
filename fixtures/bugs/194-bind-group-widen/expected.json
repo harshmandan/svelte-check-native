@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "Mismatch.svelte", "line": 3, "column": 32, "code": 2304 }
+    ],
+    "_note": "l136: bind:group on <input> emits the upstream widening reassignment `EXPR = __svn_any(null)` (Binding.ts:99-109). It references the bound variable, so bind:group={undefinedGroup} fires TS2304 at the expression. Clean.svelte: a $store-valued target ($selected) and a plain local both widen cleanly (0 errors) — the $store subscribe decl is in scope."
+}

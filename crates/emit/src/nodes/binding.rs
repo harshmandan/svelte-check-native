@@ -81,6 +81,53 @@ pub(crate) fn emit_element_bind_checks_inline(
             continue;
         }
         let name = directive.name.as_str();
+        // `bind:group` on `<input>` — upstream Binding.ts:99-109 emits a
+        // widening reassignment `EXPR = __sveltets_2_any(null);`. It (a)
+        // references the bound variable (so `bind:group={typo}` fires
+        // TS2304) and (b) resets flow-narrowing of a single-write
+        // variable. `type_for("group")` is None, so this must run BEFORE
+        // the type dispatch below or the directive is dropped. The LHS is
+        // source-mapped so TS2304 lands on the user's expression; the RHS
+        // is `any` so no spurious TS2322. `$store`-valued targets work
+        // because the `let $store` subscribe decl is emitted at render-fn
+        // scope (lib.rs:1243), dominating this bind site.
+        if name == "group" && tag_name == "input" {
+            let (expr_text, expr_range): (std::borrow::Cow<'_, str>, Option<svn_core::Range>) =
+                match &directive.value {
+                    Some(svn_parser::DirectiveValue::Expression {
+                        expression_range, ..
+                    }) => {
+                        let Some(slice) = source
+                            .get(expression_range.start as usize..expression_range.end as usize)
+                        else {
+                            continue;
+                        };
+                        let trimmed = slice.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        let leading_ws = (slice.len() - slice.trim_start().len()) as u32;
+                        let start = expression_range.start + leading_ws;
+                        let end = start + trimmed.len() as u32;
+                        (
+                            std::borrow::Cow::Borrowed(trimmed),
+                            Some(svn_core::Range::new(start, end)),
+                        )
+                    }
+                    // Shorthand `bind:group` == `bind:group={group}`.
+                    None => (std::borrow::Cow::Borrowed(directive.name.as_str()), None),
+                    // get/set form: upstream handles group only in the
+                    // non-get-set branch — drop (matches prior behaviour).
+                    _ => continue,
+                };
+            buf.push_str(&indent);
+            match expr_range {
+                Some(r) => buf.append_with_source(&expr_text, r),
+                None => buf.push_str(&expr_text),
+            }
+            buf.push_str(" = __svn_any(null);\n");
+            continue;
+        }
         let ty: String = if name == "this" {
             element_type_annotation(tag_name)
         } else if name == "value" {

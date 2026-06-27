@@ -7,6 +7,7 @@ async function $$render_0d8a17fd() {
             "type": `radio`,
             "value": `Plain`,
         });
+            tortilla = __svn_any(null);
         }
     });
     return { props: /** @type {any} */({}) };

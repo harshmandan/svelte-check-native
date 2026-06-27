@@ -7,11 +7,13 @@ async function $$render_54ce17a1() {
             "type": `radio`,
             "value": `Plain`,
         });
+            group = __svn_any(null);
         }
         { svelteHTML.createElement("input", {
             "type": `radio`,
             "value": `Plain`,
         });
+            group = __svn_any(null);
         }
     });
     return { props: /** @type {any} */({}) };

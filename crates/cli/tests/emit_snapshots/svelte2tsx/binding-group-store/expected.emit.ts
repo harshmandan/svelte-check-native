@@ -8,6 +8,7 @@ async function $$render_4aa1e856() {
             "type": `radio`,
             "value": `dom`,
         });
+            $compile_options.generate = __svn_any(null);
         }
     });
     return { props: /** @type {any} */({}) };

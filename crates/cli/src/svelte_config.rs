@@ -123,29 +123,33 @@ impl WarningFilterPlan {
     }
 }
 
-/// Locate the user's svelte config starting from `workspace` and
-/// walking up to the filesystem root. Recognises every extension
-/// upstream svelte-check accepts: `.js`, `.cjs`, `.mjs`, `.ts`, `.mts`.
-/// Returns the first match in the order listed.
+/// Locate the user's svelte config in the `workspace` directory only.
+/// Recognises every extension upstream svelte-check accepts: `.js`,
+/// `.cjs`, `.mjs`, `.ts`, `.mts`. Returns the first match in the order
+/// listed.
+///
+/// Probes only the workspace directory — it does NOT ascend to parent
+/// directories. This mirrors upstream svelte-check, which loads the
+/// config with `loadConfig(workspacePath, { traverse: false })`
+/// (incremental.ts) — the `traverse: false` flag stops the loader at
+/// the workspace dir. Ascending would, in a monorepo whose sub-app has
+/// no local `svelte.config` but an ancestor does, apply that ancestor's
+/// `warningFilter` / `kit.files` where upstream applies defaults —
+/// shifting warning counts and Kit-file classification off parity.
 pub fn find_svelte_config(workspace: &Path) -> Option<PathBuf> {
-    let mut dir = workspace.to_path_buf();
-    loop {
-        for candidate in [
-            "svelte.config.js",
-            "svelte.config.cjs",
-            "svelte.config.mjs",
-            "svelte.config.ts",
-            "svelte.config.mts",
-        ] {
-            let p = dir.join(candidate);
-            if p.is_file() {
-                return Some(p);
-            }
-        }
-        if !dir.pop() {
-            return None;
+    for candidate in [
+        "svelte.config.js",
+        "svelte.config.cjs",
+        "svelte.config.mjs",
+        "svelte.config.ts",
+        "svelte.config.mts",
+    ] {
+        let p = workspace.join(candidate);
+        if p.is_file() {
+            return Some(p);
         }
     }
+    None
 }
 
 /// Bundle of every static-analysis result we extract from a
@@ -1013,6 +1017,26 @@ mod tests {
         let path = dir.path().join("svelte.config.mjs");
         std::fs::write(&path, src).unwrap();
         analyse(&path).preserve_attribute_case
+    }
+
+    #[test]
+    fn find_svelte_config_probes_workspace_only_not_ancestors() {
+        // Mirror upstream's `traverse: false`: a config in an ANCESTOR
+        // of the workspace must NOT be picked up. Layout:
+        //   root/svelte.config.js   (ancestor — must be ignored)
+        //   root/app/               (workspace — no config)
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("svelte.config.js"), "export default {};").unwrap();
+        let app = root.path().join("app");
+        std::fs::create_dir(&app).unwrap();
+
+        // Config-less workspace → None, even though an ancestor has one.
+        assert_eq!(find_svelte_config(&app), None);
+
+        // A config IN the workspace dir is found.
+        let local = app.join("svelte.config.js");
+        std::fs::write(&local, "export default {};").unwrap();
+        assert_eq!(find_svelte_config(&app), Some(local));
     }
 
     #[test]

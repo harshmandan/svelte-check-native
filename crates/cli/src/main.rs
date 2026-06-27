@@ -52,7 +52,7 @@ struct Cli {
 
     /// Path to a `svelte.config` / `vite.config` file, for projects whose
     /// config has a non-standard name or location. Relative paths resolve
-    /// against `--workspace`. When given, it overrides the walk-up
+    /// against `--workspace`. When given, it overrides the workspace-dir
     /// discovery of a Svelte config (and disables nested config lookup),
     /// mirroring upstream svelte-check's `--config` (added in #3031 /
     /// #3066). Only the Svelte-config surface we already consume
@@ -413,7 +413,7 @@ fn main() -> ExitCode {
     // found and parseable, both feed downstream — warningFilter
     // augments --compiler-warnings at the filter stage; kit.files
     // paths drive the discovery walker's hooks/params recognition.
-    // `--config` overrides the walk-up discovery of a Svelte config
+    // `--config` overrides the workspace-dir discovery of a Svelte config
     // (upstream svelte-check #3031 / #3066). When given, resolve it
     // against the workspace and require it to exist (invocation error,
     // exit 2 — mirrors upstream's `getConfig` throw); otherwise fall

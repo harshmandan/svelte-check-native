@@ -107,21 +107,27 @@ mechanical — delete the submodule and grep for the marker.
    per-concern structs that Phase 2 (emit) reads read-only. Never
    mutate these during emit. Never register new names during emit.
 
-   Analyze outputs today: `PropsInfo` (props.rs), `TemplateSummary`
-   (template walker, includes `SlotDef[]` for the slot-let port),
-   `VoidRefRegistry` (see rule #3), plus free-function helpers
+   Analyze outputs today: `PropsInfo` (props.rs, mirrors upstream
+   `ExportedNames.ts`), `TemplateSummary` (walker.rs, includes
+   `SlotDef[]` for the slot-let port), `VoidRefRegistry` (see rule #3),
+   plus free-function helpers — store/binding accumulators
    (`collect_top_level_bindings`, `find_store_refs`,
-   `find_template_refs`, `collect_typed_uninit_lets`,
+   `find_template_refs`, `collect_typed_uninit_lets`) and the
+   event-dispatcher concern in events.rs (mirrors upstream
+   `ComponentEvents.ts` / `event-handler.ts`:
    `find_dispatched_event_names`,
    `collect_inline_typed_dispatcher_member_names`,
-   `find_dispatcher_event_type_sources`).
+   `find_dispatcher_event_type_sources`). Props and events stay in
+   separate files because a component can have either, both, or neither.
    Shared infrastructure: `crates/analyze/src/ast_walk.rs` —
    `walk_statement_descend` + `WalkNode` enum is the canonical
    Statement descent; `collect_function_body_stmts` is the canonical
    Expression descent. See rule #1a.
-   Direction of travel is centralising into a single `SemanticModel`
-   as each concern gets its second consumer — don't invent placeholder
-   fields with no reader.
+   Props and the template summary are passed to emit as separate
+   arguments rather than wrapped in one bundle — don't invent a
+   centralising struct (or placeholder fields) with no reader. Should a
+   concern gain a second consumer that needs several outputs up-front, a
+   shared semantic-model struct can graduate then.
 
 3. **Single source of truth for synthesized-name registry.** Every name
    the emit crate creates (template-check wrapper, action attrs, bind

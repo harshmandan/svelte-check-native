@@ -66,7 +66,7 @@ crates in one process:
 | Crate             | What it does                                                                                    |
 | ----------------- | ----------------------------------------------------------------------------------------------- |
 | `parser`          | Parses `.svelte` source into a Svelte-5 AST (script + template).                                |
-| `analyze`         | Builds a `SemanticModel` — runes, prop shapes, bindings, scope — used by emit and lint.         |
+| `analyze`         | Semantic passes — runes, prop shapes, events, bindings, scope — feeding emit and lint.          |
 | `emit`            | Generates the `.svelte.ts` overlay tsgo will type-check. Imports rewritten so tsgo lands on it. |
 | `svn-lint`        | Native Rust port of `svelte/compiler`'s warning pass. Covers all known codes; no subprocess.    |
 | `svelte-compiler` | Fallback bridge to the user's `svelte/compiler` over a persistent `bun`/`node` worker pool.     |

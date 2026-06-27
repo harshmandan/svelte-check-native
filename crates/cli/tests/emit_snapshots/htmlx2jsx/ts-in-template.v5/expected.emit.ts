@@ -96,7 +96,7 @@ async function $$render_43de206c() {
                 const __svn_inst_392 = new __svn_C_392({ target: __svn_any(), props: {} });
                 x as any = __svn_inst_392;
             }
-            { svelteHTML.createElement("div", {});                 x as any = null as any as HTMLElement['clientWidth'];
+            { svelteHTML.createElement("div", {});                 x as any = (() => { const __svn_el = svelteHTML.createElement("div", {}); return __svn_el.clientWidth; })();
             }
         }
     });

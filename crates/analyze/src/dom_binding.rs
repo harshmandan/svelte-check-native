@@ -27,6 +27,29 @@
 //! intentionally NOT here — those need read-AND-write flow and are
 //! tracked in NEXT.md as deferred scope.
 
+/// Upstream's `oneWayBindingAttributes` set (Binding.ts:18-29) — the
+/// element-native one-way bindings whose property lives directly on the
+/// DOM element. Upstream emits `EXPR = element.NAME`, resolving against
+/// the element's tag-specific type, so a binding on the WRONG element
+/// (`bind:naturalWidth` on `<div>`) fires TS2339. Emit routes these
+/// through the tag-resolved createElement return rather than a hardcoded
+/// indexed-access type — see `crates/emit/src/nodes/binding.rs`.
+pub fn is_element_native_oneway(binding_name: &str) -> bool {
+    matches!(
+        binding_name,
+        "clientWidth"
+            | "clientHeight"
+            | "offsetWidth"
+            | "offsetHeight"
+            | "duration"
+            | "seeking"
+            | "ended"
+            | "readyState"
+            | "naturalWidth"
+            | "naturalHeight"
+    )
+}
+
 /// Return the TS type to assert for `bind:NAME`. `None` means the
 /// binding isn't one we model (a typo like `bind:foo`, or the
 /// bidirectional family we don't yet type-check).

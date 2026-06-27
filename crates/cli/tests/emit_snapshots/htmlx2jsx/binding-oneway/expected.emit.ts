@@ -6,20 +6,20 @@ async function $$render_6cdf582f() {
         { svelteHTML.createElement("div", {
             "type": `text`,
         });
-            width = /** @type {HTMLElement['clientWidth']} */ (null);
-            height = /** @type {HTMLElement['clientHeight']} */ (null);
-            offsetWidth = /** @type {HTMLElement['offsetWidth']} */ (null);
-            offsetHeight = /** @type {HTMLElement['offsetHeight']} */ (null);
+            width = (() => { const __svn_el = svelteHTML.createElement("div", {}); return __svn_el.clientWidth; })();
+            height = (() => { const __svn_el = svelteHTML.createElement("div", {}); return __svn_el.clientHeight; })();
+            offsetWidth = (() => { const __svn_el = svelteHTML.createElement("div", {}); return __svn_el.offsetWidth; })();
+            offsetHeight = (() => { const __svn_el = svelteHTML.createElement("div", {}); return __svn_el.offsetHeight; })();
         }
         { svelteHTML.createElement("video", {
             "src": (clip),
         });
-            duration = /** @type {HTMLMediaElement['duration']} */ (null);
+            duration = (() => { const __svn_el = svelteHTML.createElement("video", {}); return __svn_el.duration; })();
             buffered = /** @type {import('svelte/elements').SvelteMediaTimeRange[]} */ (null);
             seekable = /** @type {import('svelte/elements').SvelteMediaTimeRange[]} */ (null);
-            seeking = /** @type {HTMLMediaElement['seeking']} */ (null);
+            seeking = (() => { const __svn_el = svelteHTML.createElement("video", {}); return __svn_el.seeking; })();
             played = /** @type {import('svelte/elements').SvelteMediaTimeRange[]} */ (null);
-            ended = /** @type {HTMLMediaElement['ended']} */ (null);
+            ended = (() => { const __svn_el = svelteHTML.createElement("video", {}); return __svn_el.ended; })();
         }
     });
     return { props: /** @type {any} */({}) };

@@ -3,9 +3,9 @@
 async function $$render_13e7324c() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("div", {});             $compile_options = /** @type {HTMLElement['offsetHeight']} */ (null);
+        { svelteHTML.createElement("div", {});             $compile_options = (() => { const __svn_el = svelteHTML.createElement("div", {}); return __svn_el.offsetHeight; })();
         }
-        { svelteHTML.createElement("div", {});             $compile_options.foo = /** @type {HTMLElement['offsetHeight']} */ (null);
+        { svelteHTML.createElement("div", {});             $compile_options.foo = (() => { const __svn_el = svelteHTML.createElement("div", {}); return __svn_el.offsetHeight; })();
         }
         { svelteHTML.createElement("div", {});             $compile_options = /** @type {HTMLElementTagNameMap['div']} */ (null);
         }

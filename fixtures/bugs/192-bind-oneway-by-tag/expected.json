@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "l004: element-native one-way bind:NAME (clientWidth, naturalWidth) resolves through the tag-specific createElement return, matching upstream EXPR = element.NAME. Correct-typed targets on the right element type-check clean; custom/unknown tags fall back to any."
+}

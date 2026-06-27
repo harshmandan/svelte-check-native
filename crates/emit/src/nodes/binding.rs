@@ -179,6 +179,34 @@ pub(crate) fn emit_element_bind_checks_inline(
         let svelte_element_this_expr = (tag_name.is_empty() && name == "this")
             .then(|| svelte_element_tag_expr(attributes, source))
             .flatten();
+        // Element-native one-way bindings (clientWidth, naturalWidth, …)
+        // on a static tag resolve through the tag's createElement return,
+        // mirroring upstream's `EXPR = element.NAME` (Binding.ts:112-115):
+        // a binding on the wrong element (`bind:naturalWidth` on `<div>`)
+        // fires TS2339, and unknown/custom tags fall back to `any` via
+        // the createElement overload. Valid in both JS and TS overlays.
+        if svn_analyze::dom_binding::is_element_native_oneway(name) && !tag_name.is_empty() {
+            // Bind the element to a concrete-typed local first, then read
+            // the property off it. A concrete local (vs an inline
+            // `createElement(...).NAME`) stops TS's generic inference from
+            // escaping to the `any`-tag overload, so a binding on the
+            // WRONG element (`bind:naturalWidth` on `<div>`) fires TS2339
+            // like upstream's `EXPR = element.NAME` (Binding.ts:112-115).
+            // The property name is source-mapped to the `bind:NAME` span
+            // (`bind:` is 5 bytes) so that TS2339 surfaces at the user's
+            // directive rather than being dropped as unmapped synth code.
+            // `EXPR` was already appended above; complete the assignment.
+            let name_range = svn_core::Range::new(
+                directive.range.start + 5,
+                directive.range.start + 5 + name.len() as u32,
+            );
+            buf.push_str(" = (() => { const __svn_el = svelteHTML.createElement(\"");
+            buf.push_str(tag_name);
+            buf.push_str("\", {}); return __svn_el.");
+            buf.append_with_source(name, name_range);
+            buf.push_str("; })();\n");
+            continue;
+        }
         if emit_is_ts() {
             if let Some((tag_expr, tag_range)) = &svelte_element_this_expr {
                 buf.push_str(" = svelteHTML.createElement(");

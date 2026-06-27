@@ -1,0 +1,7 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 4, "column": 23, "code": 2322 },
+        { "file": "input.svelte", "line": 5, "column": 10, "code": 2339 }
+    ],
+    "_note": "l004: element-native one-way bindings resolve through the tag-bound element. `bind:clientWidth={s}` where s:string ← clientWidth (number) fires TS2322 at the bound expr; `bind:naturalWidth` on <div> (no such property) fires TS2339 at the directive name. Mirrors upstream's `EXPR = element.NAME` (Binding.ts:112-115)."
+}

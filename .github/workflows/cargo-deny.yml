@@ -54,7 +54,7 @@ jobs:
           - advisories
           - bans licenses sources
     steps:
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@v7.0.0
       - uses: EmbarkStudios/cargo-deny-action@v2.0.20
         with:
           command: check ${{ matrix.checks }}

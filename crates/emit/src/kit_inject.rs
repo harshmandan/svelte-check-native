@@ -14,7 +14,9 @@
 //! - `+server.ts` HTTP handlers (`GET` / `POST` / `PUT` / `PATCH` /
 //!   `DELETE` / `OPTIONS` / `HEAD` / `fallback`) — inject
 //!   `: import('./$types.js').RequestEvent` on the single untyped
-//!   parameter.
+//!   parameter, plus a return-type constraint (`Promise<Response>` for
+//!   `async`, else `Response | Promise<Response>`) when the handler has
+//!   no explicit return type, so returning a non-`Response` value fires.
 //! - `+page.ts` / `+layout.ts` / `+page.server.ts` /
 //!   `+layout.server.ts`:
 //!     - `load` function's first parameter gets
@@ -33,10 +35,10 @@
 //! - `.js` route files (needs JSDoc annotation injection, a
 //!   separate code path).
 //! - `+server.ts` page-option / `load` / `actions` / `entries`
-//!   typing. The `ServerEndpoint` branch below only annotates HTTP
-//!   handler parameters; it intentionally skips page-option consts
-//!   (`ssr` / `csr` / `prerender` / `trailingSlash`), `load`,
-//!   `actions`, and `entries`. Upstream does inject those on
+//!   typing. The `ServerEndpoint` branch below annotates HTTP
+//!   handler parameters and return types; it intentionally skips
+//!   page-option consts (`ssr` / `csr` / `prerender` / `trailingSlash`),
+//!   `load`, `actions`, and `entries`. Upstream does inject those on
 //!   `+server.ts`, so this is a deliberate laxer-than-upstream
 //!   divergence for those degenerate cases.
 
@@ -132,6 +134,7 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                         collect_handler_insert(
                             func,
                             "import('./$types.js').RequestEvent",
+                            true,
                             &mut insertions,
                         );
                     }
@@ -143,7 +146,7 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                             continue;
                         }
                         let event_type = load_event_type(*is_layout, *is_server);
-                        collect_handler_insert(func, &event_type, &mut insertions);
+                        collect_handler_insert(func, &event_type, false, &mut insertions);
                     }
                 }
             }
@@ -221,7 +224,7 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                             // (`export const load = function ({…}) {…}`).
                             Expression::FunctionExpression(func) => {
                                 let event_type = load_event_type(*is_layout, *is_server);
-                                collect_handler_insert(func, &event_type, &mut insertions);
+                                collect_handler_insert(func, &event_type, false, &mut insertions);
                             }
                             // Already `satisfies`-wrapped — upstream
                             // treats this as user-supplied typing, so
@@ -299,6 +302,7 @@ fn page_option_type(name: &str) -> Option<&'static str> {
 fn collect_handler_insert(
     func: &oxc_ast::ast::Function<'_>,
     event_type: &str,
+    inject_response_return: bool,
     insertions: &mut Vec<(usize, String)>,
 ) {
     if func.params.items.len() != 1 {
@@ -310,6 +314,28 @@ fn collect_handler_insert(
     }
     let insert_at = param.pattern.span().end as usize;
     insertions.push((insert_at, format!(": {event_type}")));
+
+    // `+server.ts` HTTP handlers additionally get a return-type
+    // constraint so a handler that returns a non-`Response` value is
+    // flagged (TS2322). Mirrors upstream svelte2tsx
+    // `helpers/sveltekit.ts::addTypeToFunction`, which — inside the same
+    // `parameters.length === 1 && !hasTypeDefinition` gate we already
+    // apply above — inserts a return annotation at the body-open brace
+    // when the handler has no explicit return type: `Promise<Response>`
+    // for an `async` handler, else `Response | Promise<Response>`.
+    // `load` functions do NOT get a return type (upstream's `load`
+    // branch injects only the parameter), hence the flag.
+    if inject_response_return
+        && func.return_type.is_none()
+        && let Some(body) = func.body.as_ref()
+    {
+        let return_type = if func.r#async {
+            "Promise<Response>"
+        } else {
+            "Response | Promise<Response>"
+        };
+        insertions.push((body.span.start as usize, format!(": {return_type} ")));
+    }
 }
 
 /// Arrow-function twin of [`collect_handler_insert`]. Used for
@@ -377,6 +403,54 @@ mod tests {
         let source = "export function POST(event) { return new Response(''); }";
         let got = inject(&server_path(), source).unwrap();
         assert!(got.contains("(event: import('./$types.js').RequestEvent)"));
+    }
+
+    #[test]
+    fn injects_async_return_type_on_server_handler() {
+        // Async handler → `Promise<Response>`, spliced before the body
+        // brace so `return 42` fires TS2322 (upstream parity, #2966).
+        let source = "export async function GET({ url }) { return 42; }";
+        let got = inject(&server_path(), source).unwrap();
+        assert!(
+            got.contains("({ url }: import('./$types.js').RequestEvent) : Promise<Response> {"),
+            "got: {got}"
+        );
+    }
+
+    #[test]
+    fn injects_sync_return_type_on_server_handler() {
+        // Sync handler → `Response | Promise<Response>`.
+        let source = "export function POST(event) { return new Response(''); }";
+        let got = inject(&server_path(), source).unwrap();
+        assert!(
+            got.contains(
+                "(event: import('./$types.js').RequestEvent) : Response | Promise<Response> {"
+            ),
+            "got: {got}"
+        );
+    }
+
+    #[test]
+    fn respects_explicit_server_handler_return_type() {
+        // User-declared return type → we don't add a second one. The
+        // param still gets `RequestEvent` (matches upstream's inner
+        // `!fn.node.type` guard).
+        let source = "export async function GET({ url }): Promise<Response> { return new Response(''); }";
+        let got = inject(&server_path(), source).unwrap();
+        assert!(got.contains("({ url }: import('./$types.js').RequestEvent)"));
+        // No injected return annotation duplicated onto the body brace.
+        assert!(!got.contains(") : Promise<Response> {"), "got: {got}");
+    }
+
+    #[test]
+    fn load_function_gets_no_return_type() {
+        // `load` on a route file gets only the parameter annotation;
+        // upstream's `load` branch never injects a return type.
+        let source = "export async function load({ url }) { return { ok: true }; }";
+        let got = inject(&page_path(), source).unwrap();
+        assert!(got.contains("PageLoadEvent"));
+        assert!(!got.contains("Promise<Response>"), "got: {got}");
+        assert!(!got.contains("Response | Promise<Response>"), "got: {got}");
     }
 
     #[test]

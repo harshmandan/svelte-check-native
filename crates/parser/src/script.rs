@@ -47,14 +47,17 @@ pub fn parse_script_body<'alloc>(
 
     let ParserReturn {
         program,
-        errors,
+        diagnostics,
         panicked,
         ..
     } = Parser::new(allocator, content, source_type).parse();
 
     ParsedScript {
         program,
-        errors,
+        // oxc 0.137 renamed `ParserReturn.errors` to `diagnostics`
+        // (a `Vec<OxcDiagnostic>` newtype); flatten back to the plain
+        // vec our `ParsedScript` exposes.
+        errors: diagnostics.into_vec(),
         is_typescript: lang == ScriptLang::Ts,
         panicked,
     }

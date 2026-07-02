@@ -55,7 +55,7 @@ indexmap = "2"
 # Compile-time perfect-hash maps for static lookup tables. Used in
 # svn-lint for ARIA prop / role tables (48 / 127 entries each)
 # called per-element-per-rule on the lint hot path.
-phf = { version = "0.13", features = ["macros"] }
+phf = { version = "0.14", features = ["macros"] }
 # Stack-inline storage for collections that are usually small. Used
 # in svn-analyze for TemplateSummary fields (bind:this targets,
 # {@const} names, use: directives, component instantiations) — in
@@ -98,11 +98,11 @@ semver = "1"
 # JS/TS parser. Architecture rule: embedded JS/TS is parsed once into
 # a real AST and walked structurally — never scanned character-by-
 # character. oxc is the only parser in the workspace for this reason.
-oxc_allocator = "0.135"
-oxc_ast = "0.135"
-oxc_diagnostics = "0.135"
-oxc_parser = "0.135"
-oxc_span = "0.135"
+oxc_allocator = "0.137"
+oxc_ast = "0.137"
+oxc_diagnostics = "0.137"
+oxc_parser = "0.137"
+oxc_span = "0.137"
 
 # Testing
 insta = { version = "1", features = ["yaml", "filters"] }

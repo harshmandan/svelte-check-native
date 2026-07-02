@@ -478,7 +478,8 @@ fn emit_document_with_render_name(
     // `createEventDispatcher<T>()` without opting into strict events —
     // narrowing those without opt-in produced 18 legitimate-but-new
     // errors on a Svelte-4 bench in the reverted commit 3c24f18.
-    let narrow_events = has_strict_events_decl || has_strict_events_attr(doc) || is_runes_mode(doc);
+    let narrow_events =
+        has_strict_events_decl || has_strict_events_attr(doc) || is_runes_mode(doc, fragment);
     // If the component doesn't already declare `$$Events` but opted in
     // via one of the other two triggers, pull the dispatcher's type
     // argument as the source for a synthesised `type $$Events = T;`.

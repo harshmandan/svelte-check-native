@@ -310,7 +310,7 @@ pub fn walk_parsed(
     // `<svelte:options runes={false}>` explicit override beats the
     // substring heuristic. Upstream: phase 2-analyze resolves this
     // from `root.options`.
-    if let Some(explicit) = find_runes_option(fragment, source) {
+    if let Some(explicit) = svn_parser::runes_option(fragment, source) {
         ctx.runes = explicit;
     }
 
@@ -445,63 +445,6 @@ fn object_expression_has_props_key(src: &str) -> bool {
         },
         _ => false,
     })
-}
-
-/// Scan the top-level fragment for `<svelte:options runes[={expr}]>`.
-fn find_runes_option(fragment: &Fragment, source: &str) -> Option<bool> {
-    for node in &fragment.nodes {
-        if let Node::SvelteElement(se) = node
-            && se.kind == SvelteElementKind::Options
-        {
-            for attr in &se.attributes {
-                match attr {
-                    Attribute::Plain(p) if p.name.as_str() == "runes" => {
-                        // `runes` as a bare attribute or `runes="…"`
-                        // evaluates truthily. Boolean literal text
-                        // values `"false"` → false.
-                        return Some(match &p.value {
-                            None => true,
-                            Some(v) => {
-                                if v.parts.len() == 1 {
-                                    if let svn_parser::ast::AttrValuePart::Text { range } =
-                                        &v.parts[0]
-                                    {
-                                        range.slice(source).trim() != "false"
-                                    } else {
-                                        true
-                                    }
-                                } else {
-                                    true
-                                }
-                            }
-                        });
-                    }
-                    Attribute::Shorthand(s) if s.name.as_str() == "runes" => {
-                        return Some(true);
-                    }
-                    Attribute::Expression(e) if e.name.as_str() == "runes" => {
-                        // `runes={expr}` — read the expression's source
-                        // bytes and recognise the literal `true` / `false`
-                        // forms. Anything else (variable refs, function
-                        // calls) → conservative truthy fallback. Without
-                        // the literal-false carve-out, opting out via
-                        // `runes={false}` was silently treated as opt-IN
-                        // and the file got linted under runes-mode rules.
-                        let start = e.expression_range.start as usize;
-                        let end = e.expression_range.end as usize;
-                        let trimmed = source.get(start..end).map(str::trim).unwrap_or("");
-                        return Some(match trimmed {
-                            "false" => false,
-                            "true" => true,
-                            _ => true,
-                        });
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    None
 }
 
 /// Recursively visit every template node, dispatching rules as we go.
@@ -764,13 +707,12 @@ mod runes_inference_tests {
 mod runes_options_tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-    use super::find_runes_option;
-    use svn_parser::{parse_all_template_runs, parse_sections};
+    use svn_parser::{parse_all_template_runs, parse_sections, runes_option};
 
     fn detect(src: &str) -> Option<bool> {
         let (doc, _) = parse_sections(src);
         let (fragment, _) = parse_all_template_runs(src, &doc.template.text_runs);
-        find_runes_option(&fragment, src)
+        runes_option(&fragment, src)
     }
 
     #[test]

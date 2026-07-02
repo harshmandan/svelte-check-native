@@ -485,7 +485,7 @@ fn should_emit_fn_component_shape(
     if generics.is_some() {
         return false;
     }
-    if !is_runes_mode(doc) {
+    if !is_runes_mode(doc, fragment) {
         return false;
     }
     if fragment_contains_slot(fragment) {

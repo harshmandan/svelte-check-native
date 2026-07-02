@@ -505,7 +505,18 @@ pub(crate) fn has_strict_events_attr(doc: &svn_parser::Document<'_>) -> bool {
 /// `$$props` store pattern cheaply. Dotted variants (`$state.raw`,
 /// `$derived.by`) are matched by walking past the `.word` chain before
 /// the `(`.
-pub(crate) fn is_runes_mode(doc: &svn_parser::Document<'_>) -> bool {
+pub(crate) fn is_runes_mode(
+    doc: &svn_parser::Document<'_>,
+    fragment: &svn_parser::Fragment,
+) -> bool {
+    // An explicit `<svelte:options runes>` / `runes={true}` forces runes
+    // ON — mirroring upstream svelte2tsx `ExportedNames.isRunesMode`,
+    // which OR-s the option in. `runes={false}` cannot force runes OFF
+    // here (the OR still yields runes when a `$props()`/`$state()` call
+    // is present), so only `Some(true)` participates.
+    if svn_parser::runes_option(fragment, doc.source) == Some(true) {
+        return true;
+    }
     let source = doc.source;
     for marker in [
         "$state",

@@ -253,6 +253,66 @@ impl Attribute {
     }
 }
 
+/// Resolve an explicit `<svelte:options runes={…}>` override, if present.
+///
+/// Returns `Some(true)` for a bare `runes` attribute, `runes={true}`,
+/// or a truthy `runes="…"` text value; `Some(false)` for `runes={false}`
+/// / `runes="false"`; `None` when no `<svelte:options runes>` appears.
+///
+/// This reads the AST rather than scanning source (project rule #1) and
+/// is the single source of truth for the override. Consumers apply their
+/// own policy on top: the compiler-side lint honors it in BOTH directions
+/// (mirroring svelte's `2-analyze` `root.options.runes`), while the
+/// svelte2tsx-side emit only lets it force runes ON (mirroring
+/// `ExportedNames.isRunesMode`, which OR-s the flag in and so cannot turn
+/// runes off in the presence of a `$props()`/`$state()` call).
+pub fn runes_option(fragment: &Fragment, source: &str) -> Option<bool> {
+    for node in &fragment.nodes {
+        if let Node::SvelteElement(se) = node
+            && se.kind == SvelteElementKind::Options
+        {
+            for attr in &se.attributes {
+                match attr {
+                    Attribute::Plain(p) if p.name.as_str() == "runes" => {
+                        // Bare `runes` or `runes="…"` evaluates truthily;
+                        // only the literal text `"false"` is opt-out.
+                        return Some(match &p.value {
+                            None => true,
+                            Some(v) => {
+                                if v.parts.len() == 1
+                                    && let AttrValuePart::Text { range } = &v.parts[0]
+                                {
+                                    range.slice(source).trim() != "false"
+                                } else {
+                                    true
+                                }
+                            }
+                        });
+                    }
+                    Attribute::Shorthand(s) if s.name.as_str() == "runes" => {
+                        return Some(true);
+                    }
+                    Attribute::Expression(e) if e.name.as_str() == "runes" => {
+                        // Recognise the literal `true` / `false` forms;
+                        // anything else (var refs, calls) is a conservative
+                        // truthy fallback.
+                        let start = e.expression_range.start as usize;
+                        let end = e.expression_range.end as usize;
+                        let trimmed = source.get(start..end).map(str::trim).unwrap_or("");
+                        return Some(match trimmed {
+                            "false" => false,
+                            "true" => true,
+                            _ => true,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    None
+}
+
 /// `name`, `name=value`, `name="value"`, `name='value'`.
 #[derive(Debug, Clone)]
 pub struct PlainAttr {

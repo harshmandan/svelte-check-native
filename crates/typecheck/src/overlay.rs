@@ -378,10 +378,14 @@ pub fn build(
         // we emit is absolute. Setting baseUrl had a real, hidden
         // cost: tsgo silently suppresses diagnostic emission for
         // files outside `baseUrl`'s tree AND, in some configurations,
-        // suppresses diagnostics on overlay files entirely. The TS5102
-        // deprecation that tsgo emits when paths is set without
-        // baseUrl is filtered as overlay noise in
-        // svn-typecheck::map_diagnostic.
+        // suppresses diagnostics on overlay files entirely.
+        //
+        // Note: if the USER's tsconfig sets `baseUrl`, tsgo fires a
+        // TS5102 attributed to our overlay (inherited via `extends`).
+        // That is user-caused and upstream `svelte-check --tsgo`
+        // surfaces it, so we surface it too — it is NOT filtered as
+        // overlay noise. Only structural overlay artifacts are dropped
+        // (see `filters::is_overlay_tsconfig_noise`).
     }
 
     // Pull the user's `include` patterns into our overlay so tsgo also

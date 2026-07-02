@@ -526,11 +526,12 @@ pub fn check(
     )?;
 
     // Step 4: map diagnostics back to source paths + apply line map.
-    // Drop diagnostics that are about our overlay tsconfig itself —
-    // those are noise from compiler options we set deliberately
-    // (e.g. TS5102 baseUrl deprecation; we filter rather than re-add
-    // baseUrl because doing so suppresses tsgo's diagnostic emission
-    // on our overlay files entirely).
+    // Drop only the STRUCTURAL noise our overlay tsconfig produces
+    // (artifacts of the generated `files` / rewritten `paths`); a
+    // compiler-option validation error attributed to the overlay is
+    // inherited from the user's tsconfig via `extends` and is surfaced,
+    // matching upstream `svelte-check --tsgo`. See
+    // `filters::is_overlay_tsconfig_noise`.
     let mut diagnostics: Vec<CheckDiagnostic> = run
         .diagnostics
         .into_iter()

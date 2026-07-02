@@ -11,8 +11,36 @@ use crate::cache::CacheLayout;
 use crate::output::RawDiagnostic;
 use crate::types::{CheckDiagnostic, IGNORE_END_MARKER, IGNORE_START_MARKER};
 
+/// TypeScript compiler-option validation codes. Every diagnostic in
+/// this family is about an option the USER declared (unknown / removed /
+/// deprecated / removed-value / bundler-module mismatch) — our overlay
+/// inherits the user's tsconfig via `extends` and never sets a removed
+/// or deprecated option itself, so when one of these lands on the
+/// overlay tsconfig it is inherited, user-caused, and upstream
+/// `svelte-check --tsgo` surfaces it. We surface it too. See
+/// [`is_overlay_tsconfig_noise`].
+///
+/// - `5023` unknown compiler option
+/// - `5095` `moduleResolution: bundler` requires a compatible `module`
+/// - `5101` option deprecated
+/// - `5102` option removed (e.g. `baseUrl`, `outFile`)
+/// - `5107` / `5108` / `5109` removed value for module / target /
+///   moduleResolution
+const USER_CONFIG_OPTION_CODES: &[u32] = &[5023, 5095, 5101, 5102, 5107, 5108, 5109];
+
 /// Filter for diagnostics that come from our own overlay tsconfig and
-/// represent intentional choices we've made — they're not user-actionable.
+/// are artifacts of our overlay's structure rather than user-actionable
+/// config errors.
+///
+/// The overlay `extends` the user's tsconfig, so any compiler-option
+/// validation error (`USER_CONFIG_OPTION_CODES`) that tsgo attributes to
+/// the overlay is actually inherited from the user's own tsconfig —
+/// upstream `svelte-check --tsgo` surfaces those (its overlay extends the
+/// user config the same way and it applies no overlay filtering), so we
+/// surface them too. We only drop OTHER overlay-tsconfig diagnostics,
+/// which are structural artifacts of our richer overlay (generated files
+/// listed in `files`, rewritten `paths`/`rootDirs`) that upstream's
+/// leaner overlay never produces and that aren't user-actionable.
 ///
 /// Robust against the path-shape tsgo emits: it formats diagnostic
 /// paths relative to its own cwd. We set tsgo's cwd to the workspace
@@ -22,6 +50,17 @@ use crate::types::{CheckDiagnostic, IGNORE_END_MARKER, IGNORE_START_MARKER};
 /// `/private/var` on macOS) and a final ends-with check on the unique
 /// `.svelte-check/tsconfig.json` suffix.
 pub(crate) fn is_overlay_tsconfig_noise(raw: &RawDiagnostic, layout: &CacheLayout) -> bool {
+    if !is_on_overlay_tsconfig(raw, layout) {
+        return false;
+    }
+    // Inherited user-config-option errors surface (parity with
+    // upstream); every other overlay-attributed diagnostic is our own
+    // structural noise and drops.
+    !USER_CONFIG_OPTION_CODES.contains(&raw.code)
+}
+
+/// True when `raw` is attributed to our overlay `tsconfig.json`.
+fn is_on_overlay_tsconfig(raw: &RawDiagnostic, layout: &CacheLayout) -> bool {
     let abs = if raw.file.is_absolute() {
         raw.file.clone()
     } else {

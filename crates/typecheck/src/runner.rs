@@ -84,8 +84,8 @@ pub struct RunOutput {
 /// root via `workspace.join()`. Without this, running the binary from a
 /// monorepo root with `--workspace ./apps/admin` produces phantom paths
 /// like `apps/admin/apps/admin/.svelte-check/tsconfig.json`, which
-/// breaks the overlay-noise filter and leaks intentional config-flag
-/// deprecations (e.g. TS5102 baseUrl) as user-visible errors.
+/// breaks the overlay-noise filter's path match so structural overlay
+/// artifacts leak as user-visible errors.
 ///
 /// When `extended_diagnostics` is true, `--extendedDiagnostics` is
 /// appended to tsgo's argv; the stats block tsgo emits after the last

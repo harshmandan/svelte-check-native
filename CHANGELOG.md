@@ -6,6 +6,53 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.6]
+
+Upstream-parity release closing four confirmed divergences found by
+auditing recent `sveltejs/language-tools` changes against our
+reimplementation, plus new support for reading Svelte/Kit settings from
+`vite.config`. Both 1000-file mid-migration control rigs stay at parity
+with upstream `svelte-check --tsgo`.
+
+### Added
+
+- **Read Svelte/Kit config from `vite.config`.** Since SvelteKit 2.62
+  (svelte/kit#15944) the `warningFilter`, `kit.files`, and
+  `compilerOptions.namespace` settings we consume can be passed inline
+  to the `sveltekit()` / `svelte()` Vite plugin instead of
+  `svelte.config.js`. We statically extract them from the plugin's
+  inline options object and prefer `vite.config` over `svelte.config`,
+  mirroring upstream `@sveltejs/load-config`. Discovery is
+  workspace-dir-only; `--config` accepts either file. When the options
+  aren't statically resolvable (bare `sveltekit()`, aliased import, or
+  computed argument) we fall back to `svelte.config.js` — so this only
+  ever adds correct extractions, never a wrong one.
+- **`<svelte:options runes>` honored by emit.** An explicit
+  `runes` / `runes={true}` option now forces runes mode even when a
+  component has no `$state`/`$props` call markers, matching upstream
+  svelte2tsx's `ExportedNames.isRunesMode`. Such components get the
+  callable `Component<>` default-export shape and narrowed events
+  instead of the legacy isomorphic shape.
+- **`+server.ts` handler return types.** SvelteKit endpoint handlers
+  (`GET`/`POST`/…/`fallback`) now get a return-type constraint —
+  `Promise<Response>` for `async`, `Response | Promise<Response>`
+  otherwise — so returning a non-`Response` value fires TS2322, matching
+  upstream (svelte2tsx #2966).
+- **In-tag `@ts-ignore` / `@ts-expect-error` comments** placed between
+  a start tag's attributes are now threaded into the overlay so the
+  directive suppresses the diagnostic on the following attribute
+  (svelte2tsx #2950).
+
+### Fixed
+
+- **Inherited config-option errors on the overlay tsconfig now
+  surface.** A removed/deprecated compiler option in the user's own
+  `tsconfig.json` (e.g. `outFile`, `baseUrl` → TS5102) was being
+  dropped along with our overlay's structural noise. Compiler-option
+  validation diagnostics attributed to the overlay are now surfaced —
+  they are inherited via `extends` and upstream `svelte-check --tsgo`
+  reports them — while genuine overlay-only artifacts stay filtered.
+
 ## [0.9.5]
 
 Parity-and-correctness release. A large sweep of upstream-divergence

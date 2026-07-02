@@ -152,6 +152,33 @@ pub fn find_svelte_config(workspace: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Probe the workspace dir for a `vite.config.*`. Same
+/// workspace-dir-only discipline as [`find_svelte_config`] (no ancestor
+/// traversal) — upstream loads config with `traverse: false`.
+///
+/// Since SvelteKit 2.62 (svelte/kit#15944) Svelte/Kit settings can be
+/// passed inline to the `sveltekit()` / `svelte()` Vite plugin instead
+/// of `svelte.config.js`, and upstream svelte-check reads them from
+/// there via `@sveltejs/load-config` (which runs Vite's `resolveConfig`
+/// and reads `plugin.api.options`). We can't run Vite, so we statically
+/// read the plugin's inline object literal — see [`analyse_vite_config`].
+pub fn find_vite_config(workspace: &Path) -> Option<PathBuf> {
+    for candidate in [
+        "vite.config.js",
+        "vite.config.ts",
+        "vite.config.mjs",
+        "vite.config.mts",
+        "vite.config.cjs",
+        "vite.config.cts",
+    ] {
+        let p = workspace.join(candidate);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 /// Bundle of every static-analysis result we extract from a
 /// `svelte.config.{js,mjs,cjs,ts}`. Single parse → one AST → both
 /// the warning-filter plan and the kit.files overrides run against
@@ -202,6 +229,112 @@ pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
     summary.preserve_attribute_case = extract_preserve_attribute_case(&parsed.program);
 
     summary
+}
+
+/// Static analysis of a `vite.config.*` — extract the Svelte/Kit
+/// settings passed inline to the `sveltekit()` / `svelte()` Vite plugin
+/// (SvelteKit 2.62+, svelte/kit#15944).
+///
+/// Returns `None` when the file is absent/unreadable/unparseable, or
+/// when no statically-resolvable plugin options object literal is
+/// present. That lets the caller fall back to `svelte.config.js`,
+/// mirroring upstream (`@sveltejs/load-config`), which uses the Vite
+/// plugin's `api.options` only when the plugin exposes them and
+/// otherwise loads `svelte.config.js`.
+///
+/// The extraction mirrors [`analyse`] but for the one structural
+/// difference documented in svelte/kit#15944: in the inline plugin form
+/// the `kit` fields spread to the TOP LEVEL of the options object, so
+/// `kit.files` in `svelte.config.js` becomes a top-level `files` here —
+/// matching upstream's `const { preprocess, compilerOptions, extensions,
+/// vitePlugin, ...kit } = pluginOptions` rest-destructure.
+/// `compilerOptions` keeps the same relative position, so warningFilter
+/// and namespace extraction are shared with the `svelte.config.js` path.
+pub fn analyse_vite_config(config_path: &Path) -> Option<SvelteConfigSummary> {
+    let source = std::fs::read_to_string(config_path).ok()?;
+    let source_type = SourceType::from_path(config_path).unwrap_or_default();
+    let alloc = Allocator::default();
+    let parser = Parser::new(&alloc, &source, source_type);
+    let parsed = parser.parse();
+
+    let (plugin_obj, is_kit) = find_vite_svelte_plugin_options(&parsed.program)?;
+
+    let mut summary = SvelteConfigSummary::default();
+
+    // warningFilter — `compilerOptions.warningFilter`, identical path.
+    if let Some(filter_expr) = warning_filter_in_object(plugin_obj) {
+        if let Some(param) = filter_param_name(filter_expr).map(str::to_string) {
+            summary.warning_filter_plan = analyse_filter_body(filter_expr, &param, &source);
+        } else {
+            summary.warning_filter_plan =
+                WarningFilterPlan::partial("could not determine filter parameter name");
+        }
+    }
+
+    // kit.files — only the SvelteKit plugin carries `files`, spread at
+    // the top level of the options object (not under a `kit` key).
+    if is_kit
+        && let Some(files) = lookup_object_property(plugin_obj, "files")
+        && let Expression::ObjectExpression(files_obj) = files
+    {
+        apply_kit_files_overrides(files_obj, &mut summary.kit_files_settings);
+    }
+
+    // namespace: 'foreign' → preserve attribute case.
+    summary.preserve_attribute_case = preserve_case_in_object(plugin_obj);
+
+    Some(summary)
+}
+
+/// Locate the inline options object passed to the `sveltekit(...)` /
+/// `svelte(...)` Vite plugin inside a `vite.config.*` program, and
+/// whether it is the SvelteKit plugin.
+///
+/// Prefers `sveltekit()` over `svelte()` (upstream reads the
+/// `vite-plugin-sveltekit-setup` plugin first, then falls back to the
+/// bare `vite-plugin-svelte` plugin). Returns `None` unless a plugin
+/// call has a statically-resolvable object-literal first argument — a
+/// bare `sveltekit()` (no args), an aliased import, or a computed
+/// argument yields `None`, so we never guess: the caller falls back to
+/// `svelte.config.js` exactly as upstream does when the plugin exposes
+/// no inline options.
+fn find_vite_svelte_plugin_options<'a>(
+    program: &'a oxc_ast::ast::Program<'a>,
+) -> Option<(&'a ObjectExpression<'a>, bool)> {
+    let root = default_export_config_object(program)?;
+    let Expression::ArrayExpression(plugins) = lookup_object_property(root, "plugins")? else {
+        return None;
+    };
+    let mut svelte_fallback: Option<&ObjectExpression<'_>> = None;
+    for element in &plugins.elements {
+        let Some(expr) = element.as_expression() else {
+            continue;
+        };
+        let Expression::CallExpression(call) = expr else {
+            continue;
+        };
+        let Expression::Identifier(callee) = &call.callee else {
+            continue;
+        };
+        let is_kit = match callee.name.as_str() {
+            "sveltekit" => true,
+            "svelte" => false,
+            _ => continue,
+        };
+        let Some(arg) = call.arguments.first().and_then(|a| a.as_expression()) else {
+            continue;
+        };
+        let Expression::ObjectExpression(obj) = unwrap_config_wrapper(arg) else {
+            continue;
+        };
+        if is_kit {
+            return Some((obj, true));
+        }
+        if svelte_fallback.is_none() {
+            svelte_fallback = Some(obj);
+        }
+    }
+    svelte_fallback.map(|obj| (obj, false))
 }
 
 /// Find the top-level config `ObjectExpression` in the default export,
@@ -257,9 +390,17 @@ fn default_export_config_object<'a>(
 
 /// `compilerOptions.namespace === 'foreign'` in the default-export config.
 fn extract_preserve_attribute_case(program: &oxc_ast::ast::Program<'_>) -> bool {
-    let Some(obj) = default_export_config_object(program) else {
-        return false;
-    };
+    default_export_config_object(program)
+        .map(preserve_case_in_object)
+        .unwrap_or(false)
+}
+
+/// `compilerOptions.namespace === 'foreign'` inside a config-root object.
+/// The `compilerOptions` key sits at the same relative position in a
+/// `svelte.config.js` default export and in a `sveltekit(...)` /
+/// `svelte(...)` Vite-plugin options object, so both config shapes reuse
+/// this helper.
+fn preserve_case_in_object(obj: &ObjectExpression<'_>) -> bool {
     let Some(co) = lookup_object_property(obj, "compilerOptions") else {
         return false;
     };
@@ -1017,6 +1158,114 @@ mod tests {
         let path = dir.path().join("svelte.config.mjs");
         std::fs::write(&path, src).unwrap();
         analyse(&path).preserve_attribute_case
+    }
+
+    fn vite_summary(src: &str) -> Option<SvelteConfigSummary> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vite.config.ts");
+        std::fs::write(&path, src).unwrap();
+        analyse_vite_config(&path)
+    }
+
+    #[test]
+    fn vite_sveltekit_inline_warning_filter() {
+        let s = vite_summary(
+            r#"
+import { sveltekit } from '@sveltejs/kit/vite';
+import { defineConfig } from 'vite';
+export default defineConfig({
+  plugins: [sveltekit({
+    compilerOptions: { warningFilter: (w) => w.code !== 'state_referenced_locally' }
+  })]
+});
+"#,
+        )
+        .expect("inline sveltekit options must be analysed");
+        assert!(!s.warning_filter_plan.partial);
+        assert_eq!(
+            s.warning_filter_plan.rules,
+            vec![DropRule::CodeEquals("state_referenced_locally".into())]
+        );
+    }
+
+    #[test]
+    fn vite_sveltekit_inline_kit_files_and_namespace() {
+        // In the inline plugin form the `kit` fields spread to the top
+        // level, so `files` sits beside `compilerOptions` (not under a
+        // `kit` key).
+        let s = vite_summary(
+            r#"
+import { sveltekit } from '@sveltejs/kit/vite';
+export default {
+  plugins: [sveltekit({
+    compilerOptions: { namespace: 'foreign' },
+    files: { params: 'src/lib/params' }
+  })]
+};
+"#,
+        )
+        .expect("inline sveltekit options must be analysed");
+        assert!(s.preserve_attribute_case);
+        assert_eq!(s.kit_files_settings.params_path, "src/lib/params");
+    }
+
+    #[test]
+    fn vite_bare_sveltekit_no_options_falls_back() {
+        // `sveltekit()` with no inline options → the plugin would load
+        // svelte.config.js at runtime; statically we can't, so we return
+        // None and the caller falls back to svelte.config.js.
+        assert!(
+            vite_summary(
+                "import { sveltekit } from '@sveltejs/kit/vite';\nexport default { plugins: [sveltekit()] };"
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn vite_plain_svelte_plugin_extracts_compiler_options_only() {
+        // Non-Kit project: the bare `svelte()` plugin carries
+        // compilerOptions but no `files`.
+        let s = vite_summary(
+            r#"
+import { svelte } from '@sveltejs/vite-plugin-svelte';
+export default {
+  plugins: [svelte({
+    compilerOptions: { namespace: 'foreign' },
+    files: { params: 'ignored' }
+  })]
+};
+"#,
+        )
+        .expect("inline svelte plugin options must be analysed");
+        assert!(s.preserve_attribute_case);
+        // `files` is a Kit-only concept — the bare svelte plugin's
+        // `files` (if any) is not read as kit.files.
+        assert_eq!(
+            s.kit_files_settings,
+            crate::svelte_config::KitFilesSettings::default()
+        );
+    }
+
+    #[test]
+    fn vite_no_svelte_plugin_returns_none() {
+        assert!(
+            vite_summary(
+                "import react from '@vitejs/plugin-react';\nexport default { plugins: [react()] };"
+            )
+            .is_none()
+        );
+        // No plugins array at all.
+        assert!(vite_summary("export default { server: { port: 3000 } };").is_none());
+    }
+
+    #[test]
+    fn find_vite_config_probes_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(find_vite_config(dir.path()), None);
+        let p = dir.path().join("vite.config.ts");
+        std::fs::write(&p, "export default {};").unwrap();
+        assert_eq!(find_vite_config(dir.path()), Some(p));
     }
 
     #[test]

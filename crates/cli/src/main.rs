@@ -418,42 +418,58 @@ fn main() -> ExitCode {
     // against the workspace and require it to exist (invocation error,
     // exit 2 — mirrors upstream's `getConfig` throw); otherwise fall
     // back to discovery.
-    let svelte_config_path = match cli.config.as_deref() {
-        Some(p) => {
-            let resolved = if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                workspace.join(p)
-            };
-            if !resolved.is_file() {
-                eprintln!(
-                    "svelte-check-native: could not find config file at {}",
-                    resolved.display()
-                );
-                return ExitCode::from(2);
-            }
-            Some(resolved)
+    // Resolve which config supplies the Svelte/Kit settings, preferring
+    // a `vite.config.*`'s inline `sveltekit()` / `svelte()` plugin
+    // options over `svelte.config.js` (SvelteKit 2.62+, svelte/kit#15944;
+    // mirrors upstream `@sveltejs/load-config`, which reads the Vite
+    // plugin's `api.options` first and only falls back to
+    // `svelte.config.js` when the plugin exposes no inline options).
+    let (analysed_config, svelte_config_summary): (
+        Option<PathBuf>,
+        svelte_config::SvelteConfigSummary,
+    ) = if let Some(p) = cli.config.as_deref() {
+        // `--config` names an explicit svelte.config OR vite.config file
+        // (upstream svelte-check #3031 / #3066). Require it to exist
+        // (exit 2, mirroring upstream's `getConfig` throw), then try the
+        // vite-plugin form first and fall back to the svelte.config form.
+        let resolved = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            workspace.join(p)
+        };
+        if !resolved.is_file() {
+            eprintln!(
+                "svelte-check-native: could not find config file at {}",
+                resolved.display()
+            );
+            return ExitCode::from(2);
         }
-        None => svelte_config::find_svelte_config(&workspace),
+        let summary = svelte_config::analyse_vite_config(&resolved)
+            .unwrap_or_else(|| svelte_config::analyse(&resolved));
+        (Some(resolved), summary)
+    } else if let Some((path, summary)) = svelte_config::find_vite_config(&workspace)
+        .and_then(|p| svelte_config::analyse_vite_config(&p).map(|s| (p, s)))
+    {
+        (Some(path), summary)
+    } else if let Some(path) = svelte_config::find_svelte_config(&workspace) {
+        let summary = svelte_config::analyse(&path);
+        (Some(path), summary)
+    } else {
+        (None, svelte_config::SvelteConfigSummary::default())
     };
-    let svelte_config_summary = match svelte_config_path {
-        Some(cfg) => {
-            let summary = svelte_config::analyse(&cfg);
-            if summary.warning_filter_plan.partial {
-                eprintln!(
-                    "svelte-check-native: partial `warningFilter` in {} — one or more branches couldn't be translated. Unrecognised: `{}`. Add `--compiler-warnings code:ignore,…` to cover the rest.",
-                    cfg.display(),
-                    summary
-                        .warning_filter_plan
-                        .unrecognised_excerpt
-                        .as_deref()
-                        .unwrap_or("?")
-                );
-            }
-            summary
-        }
-        None => svelte_config::SvelteConfigSummary::default(),
-    };
+    if let Some(cfg) = &analysed_config
+        && svelte_config_summary.warning_filter_plan.partial
+    {
+        eprintln!(
+            "svelte-check-native: partial `warningFilter` in {} — one or more branches couldn't be translated. Unrecognised: `{}`. Add `--compiler-warnings code:ignore,…` to cover the rest.",
+            cfg.display(),
+            svelte_config_summary
+                .warning_filter_plan
+                .unrecognised_excerpt
+                .as_deref()
+                .unwrap_or("?")
+        );
+    }
     let warning_filter_plan = svelte_config_summary.warning_filter_plan;
     let kit_files_settings = svelte_config_summary.kit_files_settings;
     // Set the project-wide preserve-attribute-case flag (svelte config

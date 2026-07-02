@@ -7,7 +7,9 @@ async function $$render_d9977a5c() {
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {
+            // a line comment
             "class": `foo`,
+            /* a block comment */
             ...__svn_empty({"data-x": (x)}),
         });
             __svn_ensure_transition(fade(__svn_map_element_tag('div')));

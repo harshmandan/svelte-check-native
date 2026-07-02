@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "In-tag `// @ts-expect-error` / `// @ts-ignore` comments (Svelte 5) are threaded verbatim into the createElement attrs object on their own line, so the directive suppresses the diagnostic on the attribute that follows. Mirrors upstream svelte2tsx's leading/trailing comment threading (htmlxtojsx_v2/nodes/Comment.ts, PR #2950). Here `@ts-expect-error` suppresses the deliberate TS2322 on `dir={flag}` (boolean vs string union); zero errors requires both that the comment reaches the overlay AND that the attribute genuinely errors (else TS2578 unused-directive would fire)."
+}

@@ -548,7 +548,28 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                 }
                 emit_shorthand(buf, source, s, depth + 1, should_lowercase);
             }
-            svn_parser::Attribute::Comment(_) => {}
+            svn_parser::Attribute::Comment(c) => {
+                // Thread an in-tag JS comment verbatim onto its own line
+                // inside the createElement attrs object, so a
+                // `// @ts-ignore` / `// @ts-expect-error` directive
+                // suppresses the diagnostic on the attribute that
+                // follows it (and, for `@ts-expect-error`, fires TS2578
+                // when nothing follows errs — both match tsgo natively
+                // once the comment reaches the overlay). Mirrors upstream
+                // svelte2tsx's leading/trailing comment threading
+                // (htmlxtojsx_v2/nodes/Comment.ts, PR #2950). Non-directive
+                // comments are inert, so emitting all in-tag comments is
+                // safe and keeps the attrs object shaped like upstream's.
+                if let Some(text) = source.get(c.range.start as usize..c.range.end as usize) {
+                    if !any {
+                        buf.push_str("\n");
+                        any = true;
+                    }
+                    buf.push_str(&"    ".repeat(depth + 1));
+                    buf.push_str(text);
+                    buf.push_str("\n");
+                }
+            }
             svn_parser::Attribute::Spread(s) => {
                 // Bail-check first (skip empty / whitespace-only
                 // expressions) so the leading newline only flushes

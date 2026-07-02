@@ -9,13 +9,24 @@ async function $$render_29958c69() {
         void __svn_action_attrs_0;
             const __svn_action_0 = __svn_ensure_action(action(__svn_map_element_tag('div'), (params)));
         { svelteHTML.createElement("div", __svn_union(__svn_action_0), {
+            // comment
             "foo": `bar`,
             "x": true,
+            // comment same line
+            /* another comment */
             "baz": `qux`,
+            // event handler comment
             "on:click": (handler),
+            // action comment
+            // transition comment
+            // animation comment
+            // attachment comment
             [Symbol("@attach")]: attachment,
+            // binding comment
+            // spread comment
             ...spread_props,
             "trailing": true,
+            // trailing comment same line
         });
             __svn_ensure_transition(fade(__svn_map_element_tag('div')));
             (flip(__svn_map_element_tag('div'), __svn_AnimationMove));

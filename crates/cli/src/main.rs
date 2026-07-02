@@ -53,12 +53,13 @@ struct Cli {
     /// Path to a `svelte.config` / `vite.config` file, for projects whose
     /// config has a non-standard name or location. Relative paths resolve
     /// against `--workspace`. When given, it overrides the workspace-dir
-    /// discovery of a Svelte config (and disables nested config lookup),
-    /// mirroring upstream svelte-check's `--config` (added in #3031 /
-    /// #3066). Only the Svelte-config surface we already consume
-    /// (`warningFilter`, `kit.files`) is read; vite-config parsing beyond
-    /// that is out of scope, so a `vite.config` path is accepted but only
-    /// its embedded Svelte settings (if statically resolvable) take effect.
+    /// discovery (and disables nested config lookup), mirroring upstream
+    /// svelte-check's `--config` (added in #3031 / #3066). For a
+    /// `vite.config`, the Svelte-config surface we consume
+    /// (`warningFilter`, `kit.files`, `namespace`) is read from the inline
+    /// `sveltekit()` / `svelte()` plugin options when statically
+    /// resolvable (SvelteKit 2.62+, svelte/kit#15944); otherwise it falls
+    /// back to the `svelte.config`-style default export.
     #[arg(long)]
     config: Option<PathBuf>,
 

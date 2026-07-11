@@ -99,9 +99,9 @@ function mainPackageJson(v) {
     optionalDependencies: Object.fromEntries(
       TARGETS.map((t) => [`${MAIN_PKG}-${t.npmPlatform}`, v]),
     ),
-    peerDependencies: { '@typescript/native-preview': '>=7.0.0-dev.0' },
+    peerDependencies: { typescript: '>=7.0.0' },
     peerDependenciesMeta: {
-      '@typescript/native-preview': { optional: false },
+      typescript: { optional: false },
     },
   };
 }

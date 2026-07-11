@@ -9,7 +9,7 @@
 
 </div>
 
-Blazing fast CLI type-checker for **Svelte** projects. Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check) — compatible flags, byte-identical diagnostics, same exit codes. Single Rust binary, powered by [`tsgo`](https://github.com/microsoft/typescript-go), incremental via `tsbuildinfo`. Built for AI agents, CI/CD, and pre-commit hooks that actually stay enabled.
+Blazing fast CLI type-checker for **Svelte** projects. Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check) — compatible flags, byte-identical diagnostics, same exit codes. Single Rust binary, powered by TypeScript 7's native `tsc`, incremental via `tsbuildinfo`. Built for AI agents, CI/CD, and pre-commit hooks that actually stay enabled.
 
 Not an LSP, CSS linter, or formatter.
 
@@ -34,11 +34,11 @@ Diagnostic counts match `svelte-check` with same flags.
 ## Install
 
 ```sh
-npm i -D svelte-check-native @typescript/native-preview
+npm i -D svelte-check-native typescript@^7.0.0
 ```
 
-`@typescript/native-preview` is the tsgo binary — required at check
-time, never imported at runtime.
+TypeScript 7 provides the native `tsc` binary required at check time;
+it is never imported at runtime.
 
 ## Use
 
@@ -67,10 +67,10 @@ crates in one process:
 | ----------------- | ----------------------------------------------------------------------------------------------- |
 | `parser`          | Parses `.svelte` source into a Svelte-5 AST (script + template).                                |
 | `analyze`         | Semantic passes — runes, prop shapes, events, bindings, scope — feeding emit and lint.          |
-| `emit`            | Generates the `.svelte.ts` overlay tsgo will type-check. Imports rewritten so tsgo lands on it. |
+| `emit`            | Generates the `.svelte.ts` overlay TypeScript will type-check. Imports rewritten so `tsc` lands on it. |
 | `svn-lint`        | Native Rust port of `svelte/compiler`'s warning pass. Covers all known codes; no subprocess.    |
 | `svelte-compiler` | Fallback bridge to the user's `svelte/compiler` over a persistent `bun`/`node` worker pool.     |
-| `typecheck`       | Owns the tsgo overlay tsconfig + the `tsbuildinfo` cache; invokes tsgo; maps diagnostics back.  |
+| `typecheck`       | Owns the TypeScript overlay tsconfig + the `tsbuildinfo` cache; invokes `tsc`; maps diagnostics back. |
 | `core`            | Shared types (spans, diagnostics, position maps) + the canonical `TsConfig` struct.             |
 | `cli`             | Entrypoint. Flag parsing, file discovery, output formatting, exit codes.                        |
 
@@ -97,8 +97,8 @@ Every flag not listed below behaves the same as `svelte-check`.
 - `--watch` / `--preserveWatchOutput` — use [`watchexec`](https://github.com/watchexec/watchexec)
   or your editor's file watcher externally.
 - `--no-tsconfig` — errors out. A tsconfig is required.
-- `--incremental` — always on. tsgo's `tsbuildinfo` handles it.
-- `--tsgo` — always on. Classic `tsc` is not wired up.
+- `--incremental` — always on. TypeScript's `tsbuildinfo` handles it.
+- `--tsgo` — always on. TypeScript 7's native `tsc` is used.
 - `--diagnostic-sources css` — accepted but no-op (a CSS language
   service isn't bundled). Roadmap below.
 
@@ -109,9 +109,10 @@ Output defaults to `machine` when run from a coding-agent CLI:
 
 ## Environment variables
 
-- `TSGO_BIN` — override tsgo discovery; accepts an absolute path to a
-  platform-native tsgo binary. Useful when `@typescript/native-preview`
-  isn't in `node_modules` (e.g. a monorepo where tsgo lives elsewhere).
+- `TSGO_BIN` — override TypeScript discovery; accepts an absolute path to
+  a platform-native `tsc` binary. The name is retained for compatibility.
+  Useful when `typescript` isn't in `node_modules` (e.g. a monorepo where
+  TypeScript lives elsewhere).
 - `SVN_BRIDGE_WORKERS` — number of `svelte/compiler` worker
   subprocesses. Default `cores/2`, capped at 8; tracks the perf-core
   count on Apple Silicon. Override if you hit IPC contention on very
@@ -123,7 +124,7 @@ Output defaults to `machine` when run from a coding-agent CLI:
 
 - `0` — no errors (and no warnings if `--fail-on-warnings`)
 - `1` — errors detected (or warnings with `--fail-on-warnings`)
-- `2` — invocation error (bad flag, missing tsconfig, tsgo not found)
+- `2` — invocation error (bad flag, missing tsconfig, TypeScript not found)
 
 ## Roadmap
 
@@ -146,9 +147,8 @@ Iterate `T` directly in the mapped-type key instead.
   / [`svelte-check`](https://github.com/sveltejs/language-tools/tree/master/packages/svelte-check)
   — transpiler + CLI whose output shape and flags we
   match. The `.v5` fixture corpus from `svelte2tsx` is our parity gate.
-- [tsgo](https://github.com/microsoft/typescript-go) — the Go-based
-  TypeScript compiler that does the actual type-checking. Shipped as
-  `@typescript/native-preview`.
+- [TypeScript 7](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/)
+  — the native compiler that does the actual type-checking.
 
 ## License
 

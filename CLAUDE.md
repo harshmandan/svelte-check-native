@@ -23,9 +23,10 @@ for the current scoreboard (`notes/ROADMAP.md`), open work
   all shipped in the v0.2 parity push. Parity gate: a 1000-file
   mid-migration SvelteKit workspace type-checks clean, tying upstream
   `svelte-check --tsgo` at 0 real errors.
-- **No bundled tsgo.** We discover the user's `@typescript/native-preview`
-  install in `node_modules`, preferring the platform-native binary over
-  the JS wrapper. `TSGO_BIN` env var is the override.
+- **No bundled TypeScript.** We discover the user's TypeScript 7 install in
+  `node_modules`, preferring the platform-native `tsc` binary over the JS
+  wrapper. Legacy `@typescript/native-preview` installs remain supported.
+  `TSGO_BIN` env var is the override.
 - **Upstream submodule:** `language-tools/` is a pinned submodule of
   `sveltejs/language-tools` — used as the source of truth for upstream's
   CLI behavior, the 63 `.v5` test fixtures from `svelte2tsx` that form

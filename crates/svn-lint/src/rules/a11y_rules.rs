@@ -90,6 +90,7 @@ fn check_element(
     let mut attribute_map: HashMap<String, &Attribute> = HashMap::new();
     let mut handlers: Vec<String> = Vec::new();
     let mut has_spread = false;
+    let mut has_contenteditable_binding = false;
     for a in attributes {
         match a {
             Attribute::Plain(p) => {
@@ -118,6 +119,13 @@ fn check_element(
             Attribute::Directive(d) => {
                 if d.kind == DirectiveKind::On {
                     push_handler(&mut handlers, d.name.as_str().to_string());
+                }
+                // Upstream `is_content_editable_binding` — a binding
+                // that supplies the element's textual content.
+                if d.kind == DirectiveKind::Bind
+                    && matches!(d.name.as_str(), "textContent" | "innerHTML" | "innerText")
+                {
+                    has_contenteditable_binding = true;
                 }
             }
         }
@@ -167,10 +175,15 @@ fn check_element(
             ctx.emit(Code::a11y_hidden, msg, attr_range);
         }
         // a11y_missing_content: empty heading. Upstream gates on
-        // !has_spread (its is_labelled / contenteditable conditions are
-        // not modeled here) — but NOT on aria-hidden, so an empty
-        // `<h1 aria-hidden>` fires BOTH warnings.
-        if !has_spread && !has_text_content(children, source) {
+        // !has_spread, !is_labelled (aria-label / aria-labelledby /
+        // title) and !has_contenteditable_binding — but NOT on
+        // aria-hidden, so an empty `<h1 aria-hidden>` fires BOTH
+        // warnings.
+        if !has_spread
+            && !has_labelling_attr(&attribute_map)
+            && !has_contenteditable_binding
+            && !has_text_content(children, source)
+        {
             let msg = messages::a11y_missing_content(name);
             ctx.emit(Code::a11y_missing_content, msg, range);
         }

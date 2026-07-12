@@ -62,3 +62,52 @@ fn static_role_still_fires_role_supports_aria_props() {
         codes(&warnings)
     );
 }
+
+// ----------------------------------------------------------------
+// a11y_missing_content: labelled or contenteditable-bound empty
+// headings are exempt (upstream `!is_labelled` +
+// `!has_contenteditable_binding` gates)
+// ----------------------------------------------------------------
+
+/// An empty heading with aria-label is labelled — upstream's
+/// `!is_labelled` gate suppresses a11y_missing_content.
+#[test]
+fn labelled_empty_heading_does_not_fire_missing_content() {
+    for src in [
+        r#"<h1 aria-label="Hello"></h1>"#,
+        r#"<h1 aria-labelledby="other"></h1>"#,
+        r#"<h1 title="Hello"></h1>"#,
+    ] {
+        let warnings = lint(src);
+        assert!(
+            !codes(&warnings).contains(&"a11y_missing_content"),
+            "labelled heading must not fire a11y_missing_content for {src}, got: {:?}",
+            codes(&warnings)
+        );
+    }
+}
+
+/// An empty heading whose content is supplied through a
+/// contenteditable binding (bind:innerHTML / bind:textContent /
+/// bind:innerText) is exempt.
+#[test]
+fn contenteditable_bound_heading_does_not_fire_missing_content() {
+    let src = "<script>let x = $state('');</script>\n<h1 contenteditable bind:innerHTML={x}></h1>";
+    let warnings = lint(src);
+    assert!(
+        !codes(&warnings).contains(&"a11y_missing_content"),
+        "contenteditable-bound heading must not fire, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Sanity: a bare empty heading still fires.
+#[test]
+fn bare_empty_heading_fires_missing_content() {
+    let warnings = lint("<h1></h1>");
+    assert!(
+        codes(&warnings).contains(&"a11y_missing_content"),
+        "empty heading must fire a11y_missing_content, got: {:?}",
+        codes(&warnings)
+    );
+}

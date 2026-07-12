@@ -324,15 +324,15 @@ fn check_element(
     for a in attributes {
         let Attribute::Plain(p) = a else { continue };
         let lower = p.name.as_str().to_ascii_lowercase();
-        // aria-activedescendant: fires when the element is non-
-        // interactive and has no tabindex (and isn't dynamic).
-        // Minimal interactivity check — deliberate subset until the
-        // ARIA role tables land in E.3.
+        // aria-activedescendant: fires when the element is not
+        // interactive per the shared role / AX-object schemas
+        // (upstream gates on the same `element_interactivity` result
+        // computed above) and has no tabindex (and isn't dynamic).
         if lower == "aria-activedescendant"
             && !is_dynamic
             && !has_spread
             && !attribute_map.contains_key("tabindex")
-            && !is_interactive_element_minimal(name, &attribute_map)
+            && !is_interactive
         {
             let msg = messages::a11y_aria_activedescendant_has_tabindex();
             ctx.emit(Code::a11y_aria_activedescendant_has_tabindex, msg, p.range);
@@ -1041,22 +1041,6 @@ fn is_hidden_from_screen_reader(
             _ => false,
         },
         Some(_) => true, // dynamic expression value — conservatively hidden
-    }
-}
-
-/// Minimal "is this element interactive by default?" classifier.
-/// Covers the subset relied on by
-/// `a11y_aria_activedescendant_has_tabindex` and a handful of other
-/// rules pending the full ARIA role table port (Phase E.3).
-fn is_interactive_element_minimal(name: &str, attrs: &HashMap<String, &Attribute>) -> bool {
-    match name {
-        "a" => attrs.contains_key("href") || attrs.contains_key("xlink:href"),
-        "audio" | "video" => attrs.contains_key("controls"),
-        "button" | "details" | "embed" | "iframe" | "img" | "input" | "keygen" | "label"
-        | "menu" | "menuitem" | "option" | "select" | "summary" | "textarea" | "tr" | "dialog" => {
-            true
-        }
-        _ => false,
     }
 }
 

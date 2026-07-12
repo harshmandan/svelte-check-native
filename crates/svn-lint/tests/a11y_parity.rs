@@ -155,3 +155,43 @@ fn dynamic_inert_does_not_suppress_consider_explicit_label() {
         codes(&warnings)
     );
 }
+
+// ----------------------------------------------------------------
+// a11y_aria_activedescendant_has_tabindex: gated on the schema-based
+// element interactivity (upstream `!is_interactive`)
+// ----------------------------------------------------------------
+
+/// img and label are NON-interactive per the role / AX-object schemas
+/// upstream consults, so aria-activedescendant without tabindex fires
+/// on them.
+#[test]
+fn activedescendant_fires_on_schema_non_interactive_elements() {
+    for src in [
+        r#"<img aria-activedescendant="x" src="x" alt="y" />"#,
+        r#"<label aria-activedescendant="x">hi <input /></label>"#,
+        r#"<div aria-activedescendant="x"></div>"#,
+    ] {
+        let warnings = lint(src);
+        assert!(
+            codes(&warnings).contains(&"a11y_aria_activedescendant_has_tabindex"),
+            "aria-activedescendant on a non-interactive element must fire for {src}, got: {:?}",
+            codes(&warnings)
+        );
+    }
+}
+
+/// Interactive elements (per the same schemas) are exempt.
+#[test]
+fn activedescendant_exempts_schema_interactive_elements() {
+    for src in [
+        r#"<input aria-activedescendant="x" />"#,
+        r#"<a href="/x" aria-activedescendant="x">y</a>"#,
+    ] {
+        let warnings = lint(src);
+        assert!(
+            !codes(&warnings).contains(&"a11y_aria_activedescendant_has_tabindex"),
+            "interactive element must not fire for {src}, got: {:?}",
+            codes(&warnings)
+        );
+    }
+}

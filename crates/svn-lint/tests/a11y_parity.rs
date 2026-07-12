@@ -195,3 +195,65 @@ fn activedescendant_exempts_schema_interactive_elements() {
         );
     }
 }
+
+// ----------------------------------------------------------------
+// Name-based attribute checks run on every attribute value shape:
+// upstream's loop only skips non-Attribute nodes, so name={expr} and
+// {shorthand} attributes reach the same checks as name="literal"
+// ----------------------------------------------------------------
+
+/// Each of these fires purely off the attribute NAME upstream — the
+/// expression/shorthand value must not gate the check.
+#[test]
+fn name_based_checks_fire_on_expression_and_shorthand_attributes() {
+    let cases: &[(&str, &str)] = &[
+        ("<input autofocus={true} />", "a11y_autofocus"),
+        ("<div accesskey={key}>x</div>", "a11y_accesskey"),
+        ("<div {accesskey}>x</div>", "a11y_accesskey"),
+        (
+            "<div aria-foobar={1}>x</div>",
+            "a11y_unknown_aria_attribute",
+        ),
+        ("<div scope={s}>x</div>", "a11y_misplaced_scope"),
+        (
+            "<div aria-activedescendant={x}>x</div>",
+            "a11y_aria_activedescendant_has_tabindex",
+        ),
+    ];
+    for (src, expected) in cases {
+        let warnings = lint(src);
+        assert!(
+            codes(&warnings).contains(expected),
+            "{expected} must fire for {src}, got: {:?}",
+            codes(&warnings)
+        );
+    }
+}
+
+/// A dynamic tabindex on a non-interactive element resolves to null
+/// upstream, which counts as "not known negative" — the
+/// no-noninteractive-tabindex warning fires.
+#[test]
+fn dynamic_tabindex_fires_no_noninteractive_tabindex() {
+    let src = "<div tabindex={i}>x</div>";
+    let warnings = lint(src);
+    assert!(
+        codes(&warnings).contains(&"a11y_no_noninteractive_tabindex"),
+        "dynamic tabindex on a div must fire, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Expression-valued aria-* attributes also reach the
+/// role-supports-aria-props loop (the check is name-based; only the
+/// role's support table matters).
+#[test]
+fn role_supports_aria_props_fires_on_expression_valued_aria_attr() {
+    let src = r#"<div role="article" aria-checked={true}>x</div>"#;
+    let warnings = lint(src);
+    assert!(
+        codes(&warnings).contains(&"a11y_role_supports_aria_props"),
+        "aria-checked={{expr}} on role=article must fire, got: {:?}",
+        codes(&warnings)
+    );
+}

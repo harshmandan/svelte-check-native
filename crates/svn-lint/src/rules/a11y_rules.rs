@@ -320,23 +320,22 @@ fn check_element(
     let is_non_interactive = interactivity == Interactivity::NonInteractive;
     let is_static = interactivity == Interactivity::Static;
 
-    // Per-attribute rules.
+    // Per-attribute rules. Upstream's loop skips only non-Attribute
+    // nodes (`if (attribute.type !== 'Attribute') continue`) — plain,
+    // expression-valued (`name={expr}`) and shorthand (`{name}`)
+    // attributes all reach the name-based checks. Value-driven checks
+    // use the static text value, which is None for the dynamic shapes
+    // (upstream `get_static_value` returns null).
     for a in attributes {
-        let Attribute::Plain(p) = a else { continue };
-        let lower = p.name.as_str().to_ascii_lowercase();
-        // aria-activedescendant: fires when the element is not
-        // interactive per the shared role / AX-object schemas
-        // (upstream gates on the same `element_interactivity` result
-        // computed above) and has no tabindex (and isn't dynamic).
-        if lower == "aria-activedescendant"
-            && !is_dynamic
-            && !has_spread
-            && !attribute_map.contains_key("tabindex")
-            && !is_interactive
-        {
-            let msg = messages::a11y_aria_activedescendant_has_tabindex();
-            ctx.emit(Code::a11y_aria_activedescendant_has_tabindex, msg, p.range);
-        }
+        let (attr_name, attr_range, plain): (&str, Range, Option<&svn_parser::ast::PlainAttr>) =
+            match a {
+                Attribute::Plain(p) => (p.name.as_str(), p.range, Some(p)),
+                Attribute::Expression(e) => (e.name.as_str(), e.range, None),
+                Attribute::Shorthand(s) => (s.name.as_str(), s.range, None),
+                _ => continue,
+            };
+        let lower = attr_name.to_ascii_lowercase();
+        let static_value = plain.and_then(|p| get_static_text_value(p, source));
 
         // aria-*: unknown-aria-attribute + invisible-element +
         // value-type validation.
@@ -347,7 +346,7 @@ fn check_element(
             // aria-* at all.
             if !is_dynamic && INVISIBLE_ELEMENTS.contains(&name) {
                 let msg = messages::a11y_aria_attributes(name);
-                ctx.emit(Code::a11y_aria_attributes, msg, p.range);
+                ctx.emit(Code::a11y_aria_attributes, msg, attr_range);
             }
             // a11y_unknown_aria_attribute: name after "aria-" must
             // be in the known attribute table. Suggest closest via
@@ -355,10 +354,32 @@ fn check_element(
             if !ARIA_ATTRIBUTES.contains(&aria_name) {
                 let suggestion = fuzzy_match(aria_name, ARIA_ATTRIBUTES);
                 let msg = messages::a11y_unknown_aria_attribute(aria_name, suggestion);
-                ctx.emit(Code::a11y_unknown_aria_attribute, msg, p.range);
-            } else if let Some(def) = aria_prop(lower.as_str()) {
-                // Static-value type validation.
+                ctx.emit(Code::a11y_unknown_aria_attribute, msg, attr_range);
+            } else if let Some(p) = plain
+                && let Some(def) = aria_prop(lower.as_str())
+            {
+                // Static-value type validation. Dynamic values resolve
+                // to null upstream and skip validation entirely.
                 validate_aria_value(p, &lower, def, ctx);
+            }
+
+            // aria-activedescendant: fires when the element is not
+            // interactive per the shared role / AX-object schemas
+            // (upstream gates on the same `element_interactivity`
+            // result computed above) and has no tabindex (and isn't
+            // dynamic).
+            if lower == "aria-activedescendant"
+                && !is_dynamic
+                && !has_spread
+                && !attribute_map.contains_key("tabindex")
+                && !is_interactive
+            {
+                let msg = messages::a11y_aria_activedescendant_has_tabindex();
+                ctx.emit(
+                    Code::a11y_aria_activedescendant_has_tabindex,
+                    msg,
+                    attr_range,
+                );
             }
         }
         match lower.as_str() {
@@ -367,23 +388,23 @@ fn check_element(
                 // (meta / html / script / style).
                 if !is_dynamic && INVISIBLE_ELEMENTS.contains(&name) {
                     let msg = messages::a11y_misplaced_role(name);
-                    ctx.emit(Code::a11y_misplaced_role, msg, p.range);
+                    ctx.emit(Code::a11y_misplaced_role, msg, attr_range);
                 }
                 // a11y_no_abstract_role / a11y_unknown_role /
                 // a11y_no_redundant_roles — all drive off the role's
                 // text value. Each word is evaluated separately.
-                if let Some(val) = get_static_text_value(p, source) {
+                if let Some(val) = static_value {
                     for role_word in val.split_ascii_whitespace() {
                         if role_word.is_empty() {
                             continue;
                         }
                         if ABSTRACT_ROLES.contains(&role_word) {
                             let msg = messages::a11y_no_abstract_role(role_word);
-                            ctx.emit(Code::a11y_no_abstract_role, msg, p.range);
+                            ctx.emit(Code::a11y_no_abstract_role, msg, attr_range);
                         } else if !ARIA_ROLES.contains(&role_word) {
                             let suggestion = fuzzy_match(role_word, ARIA_ROLES);
                             let msg = messages::a11y_unknown_role(role_word, suggestion);
-                            ctx.emit(Code::a11y_unknown_role, msg, p.range);
+                            ctx.emit(Code::a11y_unknown_role, msg, attr_range);
                         } else {
                             // a11y_role_has_required_aria_props: all
                             // of the role's requiredProps must be
@@ -415,7 +436,7 @@ fn check_element(
                                 let list = join_sequence_borrowed_and(&quoted);
                                 let msg =
                                     messages::a11y_role_has_required_aria_props(role_word, &list);
-                                ctx.emit(Code::a11y_role_has_required_aria_props, msg, p.range);
+                                ctx.emit(Code::a11y_role_has_required_aria_props, msg, attr_range);
                             }
                             // a11y_interactive_supports_focus: element is
                             // static AND role is interactive AND not
@@ -488,7 +509,7 @@ fn check_element(
                                     || (name == "a" && !attribute_map.contains_key("href")));
                             if matches_implicit && !exempt_implicit {
                                 let msg = messages::a11y_no_redundant_roles(role_word);
-                                ctx.emit(Code::a11y_no_redundant_roles, msg, p.range);
+                                ctx.emit(Code::a11y_no_redundant_roles, msg, attr_range);
                             }
                             // Upstream also checks nested_implicit
                             // semantics (header/footer → banner/
@@ -500,7 +521,7 @@ fn check_element(
                                 nearest_element_ancestor_is(ancestors, &["section", "article"]);
                             if matches_nested && !in_section_or_article {
                                 let msg = messages::a11y_no_redundant_roles(role_word);
-                                ctx.emit(Code::a11y_no_redundant_roles, msg, p.range);
+                                ctx.emit(Code::a11y_no_redundant_roles, msg, attr_range);
                             }
                         }
                     }
@@ -508,7 +529,7 @@ fn check_element(
             }
             "accesskey" => {
                 let msg = messages::a11y_accesskey();
-                ctx.emit(Code::a11y_accesskey, msg, p.range);
+                ctx.emit(Code::a11y_accesskey, msg, attr_range);
             }
             "autofocus" => {
                 // Silence on `<dialog autofocus>` or when the NEAREST
@@ -516,23 +537,23 @@ fn check_element(
                 // nearest-ancestor only — not any ancestor).
                 if name != "dialog" && !nearest_element_ancestor_is(ancestors, &["dialog"]) {
                     let msg = messages::a11y_autofocus();
-                    ctx.emit(Code::a11y_autofocus, msg, p.range);
+                    ctx.emit(Code::a11y_autofocus, msg, attr_range);
                 }
             }
             "scope" => {
                 if !is_dynamic && name != "th" {
                     let msg = messages::a11y_misplaced_scope();
-                    ctx.emit(Code::a11y_misplaced_scope, msg, p.range);
+                    ctx.emit(Code::a11y_misplaced_scope, msg, attr_range);
                 }
             }
             "tabindex" => {
-                if let Some(s) = get_static_text_value(p, source)
+                if let Some(s) = static_value
                     && let Ok(n) = s.trim().parse::<f64>()
                     && n.is_finite()
                     && n > 0.0
                 {
                     let msg = messages::a11y_positive_tabindex();
-                    ctx.emit(Code::a11y_positive_tabindex, msg, p.range);
+                    ctx.emit(Code::a11y_positive_tabindex, msg, attr_range);
                 }
                 // a11y_no_noninteractive_tabindex: tabindex on a
                 // non-interactive element with no interactive role
@@ -544,9 +565,9 @@ fn check_element(
                 // — a multi-token `role="button link"` is NOT interactive.
                 if !is_dynamic {
                     let has_interactive_role = role_static_value.is_some_and(is_interactive_role);
-                    let nonneg_tabindex = match get_static_text_value(p, source) {
+                    let nonneg_tabindex = match static_value {
                         Some(s) => matches!(s.parse::<i64>(), Ok(n) if n >= 0),
-                        None => true, // dynamic expression — treat as non-negative
+                        None => true, // dynamic or bare — treat as non-negative
                     };
                     if !is_interactive && !has_interactive_role && nonneg_tabindex {
                         let msg = messages::a11y_no_noninteractive_tabindex();
@@ -569,9 +590,16 @@ fn check_element(
         && let Some(role_val) = resolved_role
         && role_props(role_val).is_some()
     {
+        // Upstream iterates every collected Attribute regardless of
+        // value shape — `aria-*={expr}` fires the same as a literal.
         for a in attributes {
-            let Attribute::Plain(p) = a else { continue };
-            let lower = p.name.as_str().to_ascii_lowercase();
+            let (attr_name, attr_range) = match a {
+                Attribute::Plain(p) => (p.name.as_str(), p.range),
+                Attribute::Expression(e) => (e.name.as_str(), e.range),
+                Attribute::Shorthand(s) => (s.name.as_str(), s.range),
+                _ => continue,
+            };
+            let lower = attr_name.to_ascii_lowercase();
             if !lower.starts_with("aria-") {
                 continue;
             }
@@ -591,7 +619,7 @@ fn check_element(
                 } else {
                     Code::a11y_role_supports_aria_props
                 };
-                ctx.emit(code, msg, p.range);
+                ctx.emit(code, msg, attr_range);
             }
         }
     }

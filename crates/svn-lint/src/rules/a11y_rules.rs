@@ -205,21 +205,23 @@ fn check_element(
         }
     }
 
-    // a11y_consider_explicit_label: <button> / <a href> with no
+    // a11y_consider_explicit_label: every <a> / <button> with no
     // text content AND no aria-label / aria-labelledby / title.
-    // Skips when aria-hidden="true" or inert; upstream additionally
-    // allows `<button>` when content contains `<selectedcontent>`
-    // inside a select or a popover.
-    if !is_dynamic
-        && (name == "button" || (name == "a" && attribute_map.contains_key("href")))
-        && !has_spread
-    {
+    // Upstream runs this in the shared `case 'a': case 'button':`
+    // block BEFORE any href handling, so an <a> without href gets it
+    // too. Skips when aria-hidden="true" or when `inert` is
+    // statically present (`get_static_value(inert) !== null`: bare or
+    // literal value — a dynamic `inert={expr}` does NOT suppress).
+    if !is_dynamic && (name == "button" || name == "a") && !has_spread {
         let is_labelled = has_labelling_attr(&attribute_map);
         let aria_hidden_true = attribute_map.get("aria-hidden").and_then(|a| match a {
             Attribute::Plain(p) => get_static_text_value(p, source),
             _ => None,
         }) == Some("true");
-        let inert = attribute_map.contains_key("inert");
+        let inert = attribute_map.get("inert").is_some_and(|a| match a {
+            Attribute::Plain(p) => p.value.is_none() || get_static_text_value(p, source).is_some(),
+            _ => false,
+        });
         if !is_labelled && !aria_hidden_true && !inert && !has_text_content(children, source) {
             let msg = messages::a11y_consider_explicit_label();
             ctx.emit(Code::a11y_consider_explicit_label, msg, range);

@@ -111,3 +111,47 @@ fn bare_empty_heading_fires_missing_content() {
         codes(&warnings)
     );
 }
+
+// ----------------------------------------------------------------
+// a11y_consider_explicit_label: runs on every <a> / <button>,
+// href-independent; `inert` only suppresses when statically present
+// ----------------------------------------------------------------
+
+/// Upstream's shared `case 'a': case 'button':` block runs the
+/// explicit-label check before any href handling — an <a> without
+/// href still gets it.
+#[test]
+fn empty_anchor_without_href_fires_consider_explicit_label() {
+    let src = "<a onclick={() => 1}></a>";
+    let warnings = lint(src);
+    assert!(
+        codes(&warnings).contains(&"a11y_consider_explicit_label"),
+        "unlabelled empty <a> fires regardless of href, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A statically-present `inert` (bare or literal value) suppresses the
+/// check; upstream tests `get_static_value(inert) !== null`.
+#[test]
+fn static_inert_suppresses_consider_explicit_label() {
+    let warnings = lint("<button inert></button>");
+    assert!(
+        !codes(&warnings).contains(&"a11y_consider_explicit_label"),
+        "bare inert suppresses the label check, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A dynamic `inert={expr}` resolves to null upstream and does NOT
+/// suppress.
+#[test]
+fn dynamic_inert_does_not_suppress_consider_explicit_label() {
+    let src = "<script>let x = $state(false);</script>\n<button inert={x}></button>";
+    let warnings = lint(src);
+    assert!(
+        codes(&warnings).contains(&"a11y_consider_explicit_label"),
+        "dynamic inert must not suppress the label check, got: {:?}",
+        codes(&warnings)
+    );
+}

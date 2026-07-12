@@ -765,7 +765,17 @@ fn map_diagnostic(
                 None => return None,
             }
         }
-        None => (absolute_file, raw.line, raw.column),
+        // Not an overlay path. Diagnostics tsgo attributes to the
+        // kit-types mirror copies (`<cache>/svelte-kit/types/**`,
+        // possible under `skipLibCheck: false`) belong to the user's
+        // real `.svelte-kit/types/...` tree — upstream svelte-check
+        // reports them there because its program loads the user tree
+        // directly. The mirror rewrite never adds or removes lines, so
+        // positions pass through unchanged.
+        None => match layout.original_from_kit_types_mirror(&absolute_file) {
+            Some(orig) => (orig, raw.line, raw.column),
+            None => (absolute_file, raw.line, raw.column),
+        },
     };
     let span = raw.span_length.unwrap_or(0);
     Some(CheckDiagnostic {
@@ -1229,6 +1239,37 @@ mod tests {
                 .original_from_generated(Path::new("/elsewhere/X.ts"))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn kit_types_mirror_diagnostics_reattribute_to_user_svelte_kit_path() {
+        // With `skipLibCheck: false`, tsgo can report diagnostics
+        // (e.g. TS2344 constraint violations) against the kit-types
+        // MIRROR copies under `<cache>/svelte-kit/types/`. Upstream
+        // svelte-check reports the same diagnostic at the user's
+        // `.svelte-kit/types/...` path (it has no mirror), so ours must
+        // reverse-map instead of leaking the raw cache path.
+        let layout = CacheLayout::for_workspace("/proj");
+        let mirror_file = layout
+            .kit_types_mirror_dir()
+            .join("src/routes/foo/$types.d.ts");
+        let raw = RawDiagnostic {
+            file: mirror_file,
+            line: 12,
+            column: 30,
+            severity: Severity::Error,
+            code: 2344,
+            message: "Type 'X' does not satisfy the constraint".to_string(),
+            span_length: Some(1),
+        };
+        let mapped = map_diagnostic(raw, &layout, &HashMap::new()).expect("mapped");
+        assert_eq!(
+            mapped.source_path,
+            PathBuf::from("/proj/.svelte-kit/types/src/routes/foo/$types.d.ts")
+        );
+        // The mirror rewrite never adds/removes lines, so positions
+        // pass through unchanged.
+        assert_eq!((mapped.line, mapped.column), (12, 30));
     }
 
     // --- TokenMapEntry / translate_position coverage ------------------

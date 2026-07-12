@@ -274,6 +274,23 @@ impl CacheLayout {
         };
         Some(self.workspace.join(parent).join(original_name))
     }
+
+    /// Reverse the [`Self::kit_types_mirror_dir`] mapping — given a
+    /// path inside the cache's kit-types mirror, return the user's
+    /// real `.svelte-kit/types/...` path (or `None` if the input isn't
+    /// a mirror path).
+    ///
+    /// The mirror (see [`crate::kit_types_mirror`]) is a byte-level
+    /// copy of the user's `.svelte-kit/types/` tree with import chains
+    /// redirected into the cache; diagnostics tsgo attributes to a
+    /// mirror file (only possible under `skipLibCheck: false`) belong
+    /// to the user-tree original — upstream svelte-check reports them
+    /// there because its program loads the user tree directly. The
+    /// rewrite never adds or removes lines, so positions carry over.
+    pub fn original_from_kit_types_mirror(&self, generated: &Path) -> Option<PathBuf> {
+        let rel = generated.strip_prefix(self.kit_types_mirror_dir()).ok()?;
+        Some(self.workspace.join(".svelte-kit").join("types").join(rel))
+    }
 }
 
 /// Write a file only if `contents` differs from what's currently on disk.
@@ -428,6 +445,47 @@ mod tests {
         let layout = CacheLayout::for_workspace("/p");
         let outside = Path::new("/p/src/Foo.svelte");
         assert!(layout.original_from_generated(outside).is_none());
+    }
+
+    #[test]
+    fn kit_types_mirror_reverses_to_user_svelte_kit_tree() {
+        // Diagnostics tsgo attributes to the kit-types MIRROR copies
+        // (`<cache>/svelte-kit/types/**/*.d.ts`, written by
+        // `kit_types_mirror::sync_mirror`) must be re-attributed to the
+        // user's real `.svelte-kit/types/...` path — that's where
+        // upstream svelte-check reports them (its program loads the
+        // user tree directly; only we redirect through a cache mirror).
+        let layout = CacheLayout::for_workspace("/p");
+        let mirror = layout
+            .kit_types_mirror_dir()
+            .join("src/routes/foo/$types.d.ts");
+        assert_eq!(
+            layout.original_from_kit_types_mirror(&mirror),
+            Some(PathBuf::from(
+                "/p/.svelte-kit/types/src/routes/foo/$types.d.ts"
+            ))
+        );
+    }
+
+    #[test]
+    fn kit_types_mirror_reverse_rejects_non_mirror_paths() {
+        let layout = CacheLayout::for_workspace("/p");
+        // A regular overlay path is NOT a mirror path.
+        assert!(
+            layout
+                .original_from_kit_types_mirror(Path::new(
+                    "/p/.svelte-check/svelte/src/Foo.svelte.svn.ts"
+                ))
+                .is_none()
+        );
+        // Neither is the user's real .svelte-kit tree.
+        assert!(
+            layout
+                .original_from_kit_types_mirror(Path::new(
+                    "/p/.svelte-kit/types/src/routes/$types.d.ts"
+                ))
+                .is_none()
+        );
     }
 
     #[test]

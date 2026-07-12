@@ -228,21 +228,21 @@ pub(crate) fn is_in_ignore_region(regions: &[(u32, u32)], offset: u32) -> bool {
 ///
 /// Mirrors upstream svelte-check's `expectedTransitionThirdArgument`
 /// filter at
-/// `language-tools/packages/language-server/src/plugins/typescript/features/DiagnosticsProvider.ts:663-700`.
+/// `language-tools/packages/language-server/src/plugins/typescript/features/DiagnosticsProvider.ts:663-705`
+/// (and the typescript-go provider's variant at
+/// `plugins/typescript-go/features/DiagnosticsProvider.ts:1199-1230`).
 /// The upstream filter consults the language service to confirm the
 /// inner call's signature has exactly 3 non-optional parameters. When
 /// no language service is available upstream falls back to matching the
 /// diagnostic message text — the substring ` 3`, i.e. "Expected 3
 /// arguments". We have no TS language service in our pipeline, so the
-/// caller mirrors that no-language-service fallback: it pairs the
-/// message-text guard (` 3`) with this structural origin check. The
-/// check here only confirms the diagnostic originates inside the
-/// wrapper — if the bytes immediately preceding `offset` (after walking
-/// back through identifier characters) end with `__svn_ensure_transition(`.
-/// The wrapper only wraps user-supplied transition function calls, so
-/// the false-positive surface is narrow, and a user's function
-/// deliberately declared with > 3 params would fire TS2554 either way
-/// (the 3-arg shape is the runtime contract).
+/// caller mirrors that no-language-service fallback: it pairs
+/// [`is_expected_three_arguments_message`] with this structural origin
+/// check. The check here only confirms the diagnostic originates
+/// inside the wrapper — if the bytes immediately preceding `offset`
+/// (after walking back through identifier characters) end with
+/// `__svn_ensure_transition(`. The wrapper only wraps user-supplied
+/// transition function calls, so the false-positive surface is narrow.
 pub(crate) fn is_overlay_in_ensure_transition_call(overlay: &str, offset: u32) -> bool {
     const PREFIX: &[u8] = b"__svn_ensure_transition(";
     let bytes = overlay.as_bytes();
@@ -272,6 +272,22 @@ pub(crate) fn is_overlay_in_ensure_transition_call(overlay: &str, offset: u32) -
         return false;
     }
     &bytes[cursor - PREFIX.len()..cursor] == PREFIX
+}
+
+/// Does a TS2554 message describe the 3-argument transition contract
+/// (`Expected 3 arguments, but got 2.`)?
+///
+/// Mirrors upstream's no-language-service fallback in
+/// `expectedTransitionThirdArgument` verbatim — a `' 3'` substring
+/// match on the flattened message. The synthetic wrapper call site
+/// always passes exactly 2 args, so "but got 3" can never occur there
+/// and the loose substring cannot false-match. A transition function
+/// with 4+ required params produces "Expected 4 arguments, but got 2."
+/// — no ` 3` — so its genuine arity error surfaces, matching the
+/// typescript-go provider's exactly-3-non-optional-params signature
+/// check.
+pub(crate) fn is_expected_three_arguments_message(message: &str) -> bool {
+    message.contains(" 3")
 }
 
 /// Scan `overlay_text` for [`IGNORE_START_MARKER`] / [`IGNORE_END_MARKER`]

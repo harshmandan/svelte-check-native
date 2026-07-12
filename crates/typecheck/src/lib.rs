@@ -714,15 +714,23 @@ fn map_diagnostic(
                 return None;
             }
             // Drop TS2554 ("Expected N arguments") when the diagnostic
-            // originates inside `__svn_ensure_transition(...)`. The
+            // originates inside `__svn_ensure_transition(...)` AND its
+            // message describes the 3-argument transition contract. The
             // wrapper synthesises a 2-arg call to the user's transition
             // function; if the user declared the optional 3rd
-            // `_context` parameter as required, tsgo fires 2554 even
-            // though Svelte's runtime supplies the 3rd arg. Mirrors
-            // upstream svelte-check's `expectedTransitionThirdArgument`
-            // filter at `language-server/src/plugins/typescript/
-            // features/DiagnosticsProvider.ts:663-700`.
+            // `_context` parameter as required, tsgo fires "Expected 3
+            // arguments, but got 2" even though Svelte's runtime
+            // supplies the 3rd arg. A transition function with MORE
+            // required params ("Expected 4 arguments, …") is a genuine
+            // user error and surfaces. Mirrors upstream svelte-check's
+            // `expectedTransitionThirdArgument` filter
+            // (`language-server/src/plugins/typescript/features/
+            // DiagnosticsProvider.ts:663-705`; the typescript-go
+            // variant requires a resolved signature with exactly 3
+            // non-optional params) — we mirror its
+            // no-language-service message-text fallback.
             if raw.code == 2554
+                && filters::is_expected_three_arguments_message(&raw.message)
                 && let Some(offset) = position::overlay_byte_offset(data, raw.line, raw.column)
                 && filters::is_overlay_in_ensure_transition_call(&data.overlay_text, offset)
             {
@@ -1478,6 +1486,72 @@ mod tests {
         assert_eq!(mapped.line, 5, "line must follow the token span");
         assert_eq!(mapped.column, 5, "column must follow the token span");
         assert_eq!(mapped.end_column, 9, "end column = column + span_length");
+    }
+
+    /// Map fixture for the `__svn_ensure_transition` TS2554 filter
+    /// tests: an overlay whose only content is the synthetic 2-arg
+    /// wrapper call, with a token span on the inner callee so a
+    /// non-filtered diagnostic translates to a source position.
+    fn ensure_transition_map(gen_path: &str) -> HashMap<PathBuf, MapData> {
+        let overlay_text = "__svn_ensure_transition(fly)(__svn_any(), __svn_any());".to_string();
+        let source_text = "0123456789fly".to_string();
+        let overlay_line_starts = svn_emit::compute_line_starts(&overlay_text);
+        let source_line_starts = svn_emit::compute_line_starts(&source_text);
+        let mut m = HashMap::new();
+        m.insert(
+            PathBuf::from(gen_path),
+            MapData {
+                token_map: vec![TokenMapEntry {
+                    // `fly` in the overlay sits at bytes [24, 27).
+                    overlay_byte_start: 24,
+                    overlay_byte_end: 27,
+                    // Maps back to `fly` at source bytes [10, 13).
+                    source_byte_start: 10,
+                    source_byte_end: 13,
+                }],
+                overlay_line_starts,
+                source_line_starts,
+                overlay_text,
+                source_text,
+                ..Default::default()
+            },
+        );
+        m
+    }
+
+    #[test]
+    fn ts2554_in_ensure_transition_drops_only_the_three_argument_contract() {
+        // Upstream's expectedTransitionThirdArgument (typescript-go
+        // DiagnosticsProvider.ts:1199-1230) only filters TS2554 when
+        // the transition function's signature has exactly 3
+        // non-optional params — the `(node, params, options)` runtime
+        // contract where Svelte supplies the 3rd arg. A transition
+        // function with 4 required params fires a GENUINE arity error
+        // that upstream surfaces.
+        let gen_path = "/proj/.svelte-check/svelte/src/X.svelte.svn.ts";
+        let layout = CacheLayout::for_workspace("/proj");
+        let map = ensure_transition_map(gen_path);
+        let diag = |message: &str| RawDiagnostic {
+            file: PathBuf::from(gen_path),
+            line: 1,
+            column: 25, // 1-based col of `fly` (byte 24)
+            severity: Severity::Error,
+            code: 2554,
+            message: message.to_string(),
+            span_length: Some(3),
+        };
+        // 3-required-params contract: the synthetic 2-arg call site is
+        // the artefact — drop.
+        assert!(
+            map_diagnostic(diag("Expected 3 arguments, but got 2."), &layout, &map).is_none(),
+            "the (node, params, options) contract case must stay suppressed"
+        );
+        // 4-required-params: a real user error upstream reports — keep.
+        let kept = map_diagnostic(diag("Expected 4 arguments, but got 2."), &layout, &map);
+        assert!(
+            kept.is_some(),
+            "a transition fn with 4 required params fires a genuine TS2554"
+        );
     }
 
     #[test]

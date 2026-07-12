@@ -361,7 +361,7 @@ pub fn walk_parsed(
     // `ctx.scope_tree` is populated.
     crate::rules::binding_rules::visit(ctx);
 
-    let mut ancestors: Vec<String> = Vec::new();
+    let mut ancestors: Vec<Ancestor> = Vec::new();
     walk_fragment_impl(fragment, ctx, None, &mut ancestors, false);
 
     // element_implicitly_closed — source-level tag scanner. Runs
@@ -447,12 +447,35 @@ fn object_expression_has_props_key(src: &str) -> bool {
     })
 }
 
+/// One frame of the enclosing-node stack threaded through the
+/// template walk. Mirrors the slice of upstream's `context.path` that
+/// the ancestor-driven rules inspect: upstream's path never resets, so
+/// consumers see every enclosing node and apply their own skip/stop
+/// rules per node type.
+///
+/// Two consumers, two semantics:
+/// - a11y `is_parent` (autofocus-in-dialog, figcaption-in-figure,
+///   redundant header/footer roles) walks past `Boundary` frames and
+///   treats a `SvelteElement` frame as "unknown, play it safe" (true).
+/// - HTML tree-model placement checks stop at the first non-`Element`
+///   frame, exactly like upstream RegularElement.js breaks its
+///   ancestor scan at Component / SvelteElement / SnippetBlock.
+#[derive(Debug, Clone)]
+pub(crate) enum Ancestor {
+    /// A regular DOM element, carrying its tag name.
+    Element(String),
+    /// A `<svelte:element>` — renders as an unknown tag.
+    SvelteElement,
+    /// A Component or `{#snippet}` frame.
+    Boundary,
+}
+
 /// Recursively visit every template node, dispatching rules as we go.
 ///
 /// `parent_tag`: closest enclosing regular-element tag, for
 /// `is_tag_valid_with_parent` checks.
-/// `ancestors`: stack of enclosing regular-element tags (outer → inner),
-/// for `is_tag_valid_with_ancestor` checks.
+/// `ancestors`: stack of enclosing nodes (outer → inner) — see
+/// [`Ancestor`] for how each consumer interprets the frames.
 /// `inside_control_block`: true if we're currently inside an
 /// `{#if}`/`{#each}`/`{#await}`/`{#key}`. Only in that case does
 /// the placement warning fire (otherwise upstream errors).
@@ -460,7 +483,7 @@ fn walk_fragment_impl(
     fragment: &Fragment,
     ctx: &mut LintContext<'_>,
     parent_tag: Option<&str>,
-    ancestors: &mut Vec<String>,
+    ancestors: &mut Vec<Ancestor>,
     inside_control_block: bool,
 ) {
     let source = ctx.source;
@@ -514,7 +537,7 @@ fn walk_fragment_impl(
                     ancestors,
                     inside_control_block,
                 );
-                ancestors.push(el.name.to_string());
+                ancestors.push(Ancestor::Element(el.name.to_string()));
                 walk_fragment_impl(
                     &el.children,
                     ctx,
@@ -533,15 +556,22 @@ fn walk_fragment_impl(
             }
             Node::Component(comp) => {
                 crate::rules::component_rules::visit(comp, ctx);
-                // Components reset the ancestor chain — upstream
-                // breaks out when it sees a Component ancestor.
-                let mut empty_ancestors: Vec<String> = Vec::new();
-                walk_fragment_impl(&comp.children, ctx, None, &mut empty_ancestors, false);
+                // A Boundary frame: the HTML placement checks stop
+                // here (upstream RegularElement.js breaks at a
+                // Component ancestor), but the a11y is_parent walk
+                // continues past it — upstream's path never resets.
+                ancestors.push(Ancestor::Boundary);
+                walk_fragment_impl(&comp.children, ctx, None, ancestors, false);
+                ancestors.pop();
             }
             Node::SvelteElement(se) => {
                 crate::rules::svelte_element_rules::visit(se, ctx, ancestors);
-                let mut empty_ancestors: Vec<String> = Vec::new();
-                walk_fragment_impl(&se.children, ctx, None, &mut empty_ancestors, false);
+                // Placement checks stop here too, while the a11y
+                // is_parent walk answers "unknown tag — play it safe"
+                // for this frame.
+                ancestors.push(Ancestor::SvelteElement);
+                walk_fragment_impl(&se.children, ctx, None, ancestors, false);
+                ancestors.pop();
             }
             Node::IfBlock(b) => {
                 crate::rules::block_rules::visit_if(b, ctx);
@@ -577,9 +607,12 @@ fn walk_fragment_impl(
                 walk_fragment_impl(&b.body, ctx, parent_tag, ancestors, true);
             }
             Node::SnippetBlock(b) => {
-                // Snippets reset the ancestor chain.
-                let mut empty_ancestors: Vec<String> = Vec::new();
-                walk_fragment_impl(&b.body, ctx, parent_tag, &mut empty_ancestors, false);
+                // Snippet frames stop the placement checks (upstream
+                // breaks at SnippetBlock) but not the a11y is_parent
+                // walk.
+                ancestors.push(Ancestor::Boundary);
+                walk_fragment_impl(&b.body, ctx, parent_tag, ancestors, false);
+                ancestors.pop();
             }
             Node::Text(t) => {
                 crate::rules::text_rules::visit_text(t, ctx);

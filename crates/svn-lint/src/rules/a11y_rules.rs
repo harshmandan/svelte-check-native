@@ -34,9 +34,10 @@ use crate::aria_data::{
 use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
+use crate::walk::Ancestor;
 
 /// Entry for a `<RegularElement>`.
-pub fn visit_regular(el: &Element, ctx: &mut LintContext<'_>, ancestors: &[String]) {
+pub fn visit_regular(el: &Element, ctx: &mut LintContext<'_>, ancestors: &[Ancestor]) {
     check_element(
         el.name.as_str(),
         &el.attributes,
@@ -49,7 +50,7 @@ pub fn visit_regular(el: &Element, ctx: &mut LintContext<'_>, ancestors: &[Strin
 }
 
 /// Entry for a `<svelte:element>` dynamic element.
-pub fn visit_dynamic(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[String]) {
+pub fn visit_dynamic(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[Ancestor]) {
     // Upstream passes `node.name` (literally `"svelte:element"`) into
     // check_element regardless of what `this` resolves to. Most rules
     // bail on `is_dynamic`, but `a11y_no_static_element_interactions`
@@ -83,7 +84,7 @@ fn check_element(
     is_dynamic: bool,
     children: &svn_parser::ast::Fragment,
     ctx: &mut LintContext<'_>,
-    ancestors: &[String],
+    ancestors: &[Ancestor],
 ) {
     let source = ctx.source;
     // Collect attribute map + event handlers.
@@ -197,12 +198,9 @@ fn check_element(
     // The index-check is done at the parent level (in fragment
     // walking) because we need sibling order; parent-check can
     // fire here when we know our immediate parent is not <figure>.
-    if !is_dynamic && name == "figcaption" {
-        let parent_name = ancestors.last().map(String::as_str);
-        if parent_name != Some("figure") {
-            let msg = messages::a11y_figcaption_parent();
-            ctx.emit(Code::a11y_figcaption_parent, msg, range);
-        }
+    if !is_dynamic && name == "figcaption" && !is_parent(ancestors, &["figure"]) {
+        let msg = messages::a11y_figcaption_parent();
+        ctx.emit(Code::a11y_figcaption_parent, msg, range);
     }
 
     // a11y_consider_explicit_label: every <a> / <button> with no
@@ -518,7 +516,7 @@ fn check_element(
                             let matches_nested =
                                 Some(role_word) == a11y_nested_implicit_semantics(name);
                             let in_section_or_article =
-                                nearest_element_ancestor_is(ancestors, &["section", "article"]);
+                                is_parent(ancestors, &["section", "article"]);
                             if matches_nested && !in_section_or_article {
                                 let msg = messages::a11y_no_redundant_roles(role_word);
                                 ctx.emit(Code::a11y_no_redundant_roles, msg, attr_range);
@@ -532,10 +530,11 @@ fn check_element(
                 ctx.emit(Code::a11y_accesskey, msg, attr_range);
             }
             "autofocus" => {
-                // Silence on `<dialog autofocus>` or when the NEAREST
-                // element ancestor is a `<dialog>` (upstream `is_parent`,
-                // nearest-ancestor only — not any ancestor).
-                if name != "dialog" && !nearest_element_ancestor_is(ancestors, &["dialog"]) {
+                // Silence on `<dialog autofocus>` or when upstream's
+                // `is_parent` resolves a `<dialog>` ancestor (nearest
+                // element ancestor decides; boundary frames are
+                // skipped).
+                if name != "dialog" && !is_parent(ancestors, &["dialog"]) {
                     let msg = messages::a11y_autofocus();
                     ctx.emit(Code::a11y_autofocus, msg, attr_range);
                 }
@@ -1562,16 +1561,20 @@ fn aria_hidden_is_truthy(attr: Option<&Attribute>, source: &str) -> bool {
     }
 }
 
-/// Whether the NEAREST element ancestor's tag is in `names`. Mirrors
-/// upstream's `is_parent(path, elements)`, which walks up and returns at
-/// the FIRST element ancestor (`elements.includes(name)`) — it does NOT
-/// scan the whole chain. Our `ancestors` holds only RegularElement names
-/// (Component / SvelteElement / snippet boundaries reset it, matching
-/// upstream's path reset), so the nearest element ancestor is `last()`.
-fn nearest_element_ancestor_is(ancestors: &[String], names: &[&str]) -> bool {
-    ancestors
-        .last()
-        .is_some_and(|a| names.contains(&a.as_str()))
+/// Mirrors upstream's `is_parent(path, elements)`: walk the enclosing
+/// nodes from the innermost out; Component / snippet frames are
+/// skipped, a `<svelte:element>` frame returns true ("unknown, play it
+/// safe, so we don't warn"), and the FIRST regular-element frame
+/// decides by tag name — the rest of the chain is never scanned.
+fn is_parent(ancestors: &[Ancestor], names: &[&str]) -> bool {
+    for a in ancestors.iter().rev() {
+        match a {
+            Ancestor::SvelteElement => return true,
+            Ancestor::Element(n) => return names.contains(&n.as_str()),
+            Ancestor::Boundary => {}
+        }
+    }
+    false
 }
 
 fn get_static_text_value<'a>(p: &svn_parser::ast::PlainAttr, source: &'a str) -> Option<&'a str> {

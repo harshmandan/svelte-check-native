@@ -17,7 +17,7 @@ pub fn visit(
     el: &Element,
     ctx: &mut LintContext<'_>,
     parent_tag: Option<&str>,
-    ancestors: &[String],
+    ancestors: &[crate::walk::Ancestor],
     inside_control_block: bool,
 ) {
     // node_invalid_placement_ssr: fires when the HTML5 tree-model
@@ -30,27 +30,36 @@ pub fn visit(
         // don't both fire for the same disallowed pair. Upstream's
         // `RegularElement.js` runs the parent check once, then —
         // walking OUT through further regular-element ancestors —
-        // runs the ancestor check against an extending list. The
-        // direct parent is NOT re-checked via the ancestor path.
+        // runs the ancestor check against an extending list, and
+        // BREAKS at a Component / SvelteElement / SnippetBlock
+        // ancestor. The direct parent is NOT re-checked via the
+        // ancestor path.
         //
-        // Here `ancestors` is outer-to-inner and includes the parent
-        // as the last element. Strip it for the ancestor pass.
+        // `ancestors` is outer-to-inner; take the innermost run of
+        // regular-element frames (stopping at the first boundary,
+        // matching upstream's break), parent first.
         if let Some(parent) = parent_tag
             && let Some(msg) = crate::html5::is_tag_valid_with_parent(el.name.as_str(), parent)
         {
             let full = messages::node_invalid_placement_ssr(&msg);
             ctx.emit(Code::node_invalid_placement_ssr, full, el.range);
         }
-        if ancestors.len() > 1
-            && let Some(parent_el) = ancestors.last()
-        {
+        let element_chain: Vec<&str> = ancestors
+            .iter()
+            .rev()
+            .map_while(|a| match a {
+                crate::walk::Ancestor::Element(n) => Some(n.as_str()),
+                _ => None,
+            })
+            .collect();
+        if element_chain.len() > 1 {
             // Walk from innermost outer ancestor to outermost,
             // extending the list each step. Fire on first match.
             let mut list: Vec<&str> = Vec::new();
             // Start with parent (upstream ancestors[0]).
-            list.push(parent_el.as_str());
-            for outer in ancestors.iter().rev().skip(1) {
-                list.push(outer.as_str());
+            list.push(element_chain[0]);
+            for outer in &element_chain[1..] {
+                list.push(outer);
                 if let Some(msg) = crate::html5::is_tag_valid_with_ancestor(el.name.as_str(), &list)
                 {
                     let full = messages::node_invalid_placement_ssr(&msg);

@@ -257,3 +257,99 @@ fn role_supports_aria_props_fires_on_expression_valued_aria_attr() {
         codes(&warnings)
     );
 }
+
+// ----------------------------------------------------------------
+// is_parent-style ancestor checks walk past Component / snippet
+// boundaries and treat a <svelte:element> ancestor as "unknown, play
+// it safe" (upstream is_parent, a11y/index.js)
+// ----------------------------------------------------------------
+
+/// A <figcaption> whose nearest RegularElement ancestor (skipping the
+/// Component frame) is <figure> must not warn.
+#[test]
+fn figcaption_inside_component_under_figure_does_not_warn() {
+    let src = r#"<figure><Foo><figcaption>hi</figcaption></Foo><img src="a" alt="b"/></figure>"#;
+    let warnings = lint(src);
+    assert!(
+        !codes(&warnings).contains(&"a11y_figcaption_parent"),
+        "component frames are skipped when resolving the figure parent, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Same through a snippet boundary.
+#[test]
+fn figcaption_inside_snippet_under_figure_does_not_warn() {
+    let src = "<figure>{#snippet s()}<figcaption>c</figcaption>{/snippet}{@render s()}<img src=\"x\" alt=\"y\"/></figure>";
+    let warnings = lint(src);
+    assert!(
+        !codes(&warnings).contains(&"a11y_figcaption_parent"),
+        "snippet frames are skipped when resolving the figure parent, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A <svelte:element> ancestor could render as <figure> — upstream's
+/// is_parent returns true for it, suppressing the warning.
+#[test]
+fn figcaption_inside_svelte_element_does_not_warn() {
+    let src = "<script>let tag = $state('figure');</script>\n<svelte:element this={tag}><figcaption>x</figcaption></svelte:element>";
+    let warnings = lint(src);
+    assert!(
+        !codes(&warnings).contains(&"a11y_figcaption_parent"),
+        "a svelte:element ancestor plays it safe, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// autofocus inside a Component under <dialog>: the dialog ancestor is
+/// still visible past the component frame, so no warning.
+#[test]
+fn autofocus_inside_component_under_dialog_does_not_warn() {
+    let src = r#"<dialog><Foo><input autofocus /></Foo></dialog>"#;
+    let warnings = lint(src);
+    assert!(
+        !codes(&warnings).contains(&"a11y_autofocus"),
+        "dialog ancestor suppresses autofocus past the component frame, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// autofocus inside <svelte:element>: the ancestor may render as
+/// <dialog>, so upstream plays it safe and does not warn.
+#[test]
+fn autofocus_inside_svelte_element_does_not_warn() {
+    let src = "<script>let tag = $state('dialog');</script>\n<svelte:element this={tag}><input autofocus /></svelte:element>";
+    let warnings = lint(src);
+    assert!(
+        !codes(&warnings).contains(&"a11y_autofocus"),
+        "svelte:element ancestor plays it safe for autofocus, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Sanity: a figcaption whose nearest element ancestor is not figure
+/// still warns, and a bare autofocus still warns.
+#[test]
+fn ancestor_negative_cases_still_warn() {
+    let warnings = lint("<div><figcaption>x</figcaption></div>");
+    assert!(
+        codes(&warnings).contains(&"a11y_figcaption_parent"),
+        "figcaption under div must warn, got: {:?}",
+        codes(&warnings)
+    );
+    let warnings = lint("<input autofocus />");
+    assert!(
+        codes(&warnings).contains(&"a11y_autofocus"),
+        "bare autofocus must warn, got: {:?}",
+        codes(&warnings)
+    );
+    // The nearest RegularElement ancestor decides: a div between the
+    // figure and the figcaption still warns even through a component.
+    let warnings = lint("<figure><Foo><div><figcaption>x</figcaption></div></Foo></figure>");
+    assert!(
+        codes(&warnings).contains(&"a11y_figcaption_parent"),
+        "div is the nearest element ancestor, got: {:?}",
+        codes(&warnings)
+    );
+}

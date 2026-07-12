@@ -85,7 +85,7 @@ fn runes_prose_comment_fires_unknown_code_once() {
         codes(&warnings)
     );
     assert!(
-        unknown[0].message.contains("'this'"),
+        unknown[0].message.contains("`this`"),
         "the unknown_code warning names the first token, got: {}",
         unknown[0].message
     );

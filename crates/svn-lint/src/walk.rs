@@ -314,25 +314,22 @@ pub fn walk_parsed(
         ctx.runes = explicit;
     }
 
-    // `<svelte:options customElement={…}>` wiring — drives
-    // `options_missing_custom_element` (fires once for the attribute)
-    // and `custom_element_props_identifier` (fires in
-    // `binding_rules` per $props() identifier/rest candidate).
-    // Upstream: `2-analyze/index.js:468-471, 688-690` + the
-    // `VariableDeclarator.js:72-83` path. We don't receive compile
-    // options, so `custom_element_from_option` is always false and
-    // the attribute-presence alone triggers the missing-option
-    // warning. `tag-custom-element-options-true` sets
+    // `<svelte:options>` attribute warnings. Mirrors the loop over
+    // `root.options.attributes` at the end of upstream's analyze
+    // phase, which fires per attribute in source order:
+    //   - `accessors` / `immutable` are deprecated no-ops in runes
+    //     mode (`options_deprecated_accessors` / `_immutable`);
+    //   - `customElement` without the `customElement: true` compile
+    //     option fires `options_missing_custom_element` and drives
+    //     `custom_element_props_identifier` (fires in `binding_rules`
+    //     per $props() identifier/rest candidate, via the
+    //     `VariableDeclarator.js` path).
+    // We don't receive compile options, so `custom_element_from_option`
+    // is always false and the attribute's presence alone triggers the
+    // missing-option warning. `tag-custom-element-options-true` sets
     // `customElement: true` via `_config.js`; `upstream_validator`
     // already skips that fixture via the `_config.js` escape.
-    if let Some((attr_range, has_props_option)) = find_custom_element_option(fragment, source) {
-        ctx.emit(
-            Code::options_missing_custom_element,
-            messages::options_missing_custom_element(),
-            attr_range,
-        );
-        ctx.custom_element_info = Some(CustomElementInfo { has_props_option });
-    }
+    visit_svelte_options_attributes(fragment, source, ctx);
 
     // Build the scope tree once; Phase-C rules query it by binding
     // name from both the script walker and the template walker. The
@@ -369,42 +366,68 @@ pub fn walk_parsed(
     crate::rules::implicit_close::scan(source, ctx);
 }
 
-/// Scan the top-level fragment for `<svelte:options customElement={…}>`.
-/// Returns the attribute's full range (matches upstream's warning
-/// span: `customElement="..."` / `customElement={…}` including the
-/// name) and whether the literal object has a `props` key, when the
-/// value is an ObjectExpression. String / boolean values have no
-/// props option.
-fn find_custom_element_option(
-    fragment: &Fragment,
-    source: &str,
-) -> Option<(svn_core::Range, bool)> {
+/// Scan the top-level fragment for `<svelte:options>` and fire the
+/// per-attribute warnings in source order, mirroring upstream's
+/// `for (const attribute of root.options.attributes)` loop:
+/// `accessors` / `immutable` warn (in runes mode only) that the option
+/// is a deprecated no-op; `customElement` warns that the compile
+/// option is missing and records [`CustomElementInfo`]. Each warning
+/// spans the whole attribute (upstream passes the attribute node).
+/// The name check is name-only — the attribute's value shape and
+/// truthiness are irrelevant, so `accessors={false}` still warns.
+fn visit_svelte_options_attributes(fragment: &Fragment, source: &str, ctx: &mut LintContext<'_>) {
     for node in &fragment.nodes {
-        if let Node::SvelteElement(se) = node
-            && se.kind == SvelteElementKind::Options
-        {
-            for attr in &se.attributes {
-                match attr {
-                    Attribute::Plain(p) if p.name.as_str() == "customElement" => {
-                        // `customElement="name"` — string form. No props option.
-                        return Some((p.range, false));
-                    }
-                    Attribute::Expression(e) if e.name.as_str() == "customElement" => {
-                        // `customElement={expr}` — inspect the expression.
-                        let expr_src = source.get(
-                            e.expression_range.start as usize..e.expression_range.end as usize,
-                        );
-                        let has_props = expr_src
-                            .map(object_expression_has_props_key)
-                            .unwrap_or(false);
-                        return Some((e.range, has_props));
-                    }
-                    _ => {}
+        let Node::SvelteElement(se) = node else {
+            continue;
+        };
+        if se.kind != SvelteElementKind::Options {
+            continue;
+        }
+        for attr in &se.attributes {
+            let (attr_name, attr_range) = match attr {
+                Attribute::Plain(p) => (p.name.as_str(), p.range),
+                Attribute::Expression(e) => (e.name.as_str(), e.range),
+                Attribute::Shorthand(s) => (s.name.as_str(), s.range),
+                _ => continue,
+            };
+            match attr_name {
+                "accessors" if ctx.runes => {
+                    ctx.emit(
+                        Code::options_deprecated_accessors,
+                        messages::options_deprecated_accessors(),
+                        attr_range,
+                    );
                 }
+                "immutable" if ctx.runes => {
+                    ctx.emit(
+                        Code::options_deprecated_immutable,
+                        messages::options_deprecated_immutable(),
+                        attr_range,
+                    );
+                }
+                "customElement" => {
+                    // Whether the literal object value has a `props`
+                    // key — only the `customElement={{...}}` object
+                    // form can carry one; string / boolean / shorthand
+                    // forms have no props option.
+                    let has_props_option = match attr {
+                        Attribute::Expression(e) => source
+                            .get(e.expression_range.start as usize..e.expression_range.end as usize)
+                            .map(object_expression_has_props_key)
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+                    ctx.emit(
+                        Code::options_missing_custom_element,
+                        messages::options_missing_custom_element(),
+                        attr_range,
+                    );
+                    ctx.custom_element_info = Some(CustomElementInfo { has_props_option });
+                }
+                _ => {}
             }
         }
     }
-    None
 }
 
 /// Parse `expr` as a JS expression and return true iff it's an

@@ -286,7 +286,15 @@ fn check_element(
         _ => None,
     });
     let implicit_role = get_implicit_role(name, &attribute_map, source);
-    let resolved_role = role_static_value.or(implicit_role);
+    // Upstream: `role ? role_static_value : get_implicit_role(...)` —
+    // a role attribute that is PRESENT but dynamic resolves to None
+    // (the implicit role is NOT a fallback), which disables the
+    // role-driven checks below.
+    let resolved_role = if role_attr.is_some() {
+        role_static_value
+    } else {
+        implicit_role
+    };
     let is_implicit_role = role_attr.is_none() && implicit_role.is_some();
     let interactivity = if is_dynamic {
         Interactivity::Static
@@ -371,10 +379,12 @@ fn check_element(
                             let get_attr = |attr_name: &str| -> AttrState<'_> {
                                 match attribute_map.get(attr_name) {
                                     None => AttrState::Absent,
-                                    Some(Attribute::Plain(p)) => match get_static_text_value(p, source) {
-                                        Some(s) => AttrState::Literal(s),
-                                        None => AttrState::Dynamic,
-                                    },
+                                    Some(Attribute::Plain(p)) => {
+                                        match get_static_text_value(p, source) {
+                                            Some(s) => AttrState::Literal(s),
+                                            None => AttrState::Dynamic,
+                                        }
+                                    }
                                     Some(_) => AttrState::Dynamic,
                                 }
                             };
@@ -518,8 +528,7 @@ fn check_element(
                 // matches the WHOLE role string against the interactive set
                 // — a multi-token `role="button link"` is NOT interactive.
                 if !is_dynamic {
-                    let has_interactive_role =
-                        role_static_value.is_some_and(is_interactive_role);
+                    let has_interactive_role = role_static_value.is_some_and(is_interactive_role);
                     let nonneg_tabindex = match get_static_text_value(p, source) {
                         Some(s) => matches!(s.parse::<i64>(), Ok(n) if n >= 0),
                         None => true, // dynamic expression — treat as non-negative
@@ -776,9 +785,7 @@ fn check_element(
             _ => {
                 // Generic missing-attribute fallback (img/area/object/…)
                 // is spread-gated upstream (warn_missing_attribute callers).
-                if !has_spread
-                    && let Some(required) = a11y_required_attributes(name)
-                {
+                if !has_spread && let Some(required) = a11y_required_attributes(name) {
                     let has_any = required
                         .iter()
                         .any(|want| attribute_map.contains_key(*want));

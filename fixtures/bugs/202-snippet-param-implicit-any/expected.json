@@ -1,0 +1,7 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 5, "column": 14, "code": 7006 },
+        { "file": "input.svelte", "line": 6, "column": 26, "code": 7006 }
+    ],
+    "_note": "Top-level {#snippet} params splice VERBATIM with token-map coverage, mirroring upstream SnippetBlock.ts (params moved as-is with source mapping). Unannotated params therefore fire TS7006 under noImplicitAny exactly like upstream — previously each unannotated param was silently widened with an appended `: any`, which was laxer than upstream AND left the spliced range without a token-map anchor so param-list diagnostics were dropped. The `pair(a = 1 < 2, b)` case locks both the defaulted-param inference (`a` infers boolean, no TS7006) and the position mapping of the second param past a `<` comparison in the default expression."
+}

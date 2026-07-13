@@ -50,7 +50,7 @@ async function $$render_43de206c() {
                 return null as any;
             };
             void foo6;
-            const foo7 = (bar: any, baz: any = ''): any => {
+            const foo7 = (bar, baz = ''): any => {
                 void bar;
                 void baz;
                 return null as any;

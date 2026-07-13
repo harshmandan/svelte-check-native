@@ -9,13 +9,16 @@ async function $$render_9a2c7966() {
         }
     });
     void world;
-    return { props: /** @type {{ world?: typeof world; }} */({}) };
+    return { props: /** @type {{ world?: typeof world; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ world: typeof world; }} */ ({}) };
 }
 $$render_9a2c7966;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_9a2c7966>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_9a2c7966>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

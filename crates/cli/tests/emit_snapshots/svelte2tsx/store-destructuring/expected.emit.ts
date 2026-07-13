@@ -38,13 +38,16 @@ async function $$render_19e9402e() {
     void store3;
     void $store4;
     void store4;
-    return { props: /** @type {any} */({}) };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_19e9402e;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_19e9402e>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_19e9402e>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

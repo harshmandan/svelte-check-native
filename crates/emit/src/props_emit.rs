@@ -281,9 +281,16 @@ pub(crate) fn write_slots_field_type(
     out: &mut String,
     source: &str,
     slot_defs: &[svn_analyze::SlotDef],
+    is_ts: bool,
 ) {
     if slot_defs.is_empty() {
-        out.push_str("undefined as any as {}");
+        // JS overlays can't carry the `as` cast; a bare `{}` literal
+        // types identically for the empty-slots case.
+        out.push_str(if is_ts {
+            "undefined as any as {}"
+        } else {
+            "{}"
+        });
         return;
     }
     out.push_str("{ ");
@@ -306,7 +313,7 @@ pub(crate) fn write_slots_field_type(
                 svn_analyze::SlotAttr::Prop { name, expr } => {
                     out.push_str(name.as_str());
                     out.push_str(": ");
-                    write_slot_attr_expr(out, source, expr);
+                    write_slot_attr_expr(out, source, expr, is_ts);
                 }
                 svn_analyze::SlotAttr::Spread { expr } => {
                     // `<slot {...row}>` carries the spread's expression
@@ -316,7 +323,7 @@ pub(crate) fn write_slots_field_type(
                     // `...(undefined as any as (T))` — syntactically
                     // valid AND projects the right element shape.
                     out.push_str("...(");
-                    write_slot_attr_expr_inner(out, source, expr);
+                    write_slot_attr_expr_inner(out, source, expr, is_ts);
                     out.push(')');
                 }
             }
@@ -328,20 +335,45 @@ pub(crate) fn write_slots_field_type(
 
 /// Write a slot-attr expression value with the outer parens / cast
 /// shape per its variant: `Resolved::Type` becomes `undefined as any
-/// as (T)`; everything else is wrapped in `(…)`.
-fn write_slot_attr_expr(out: &mut String, source: &str, expr: &svn_analyze::SlotAttrExpr) {
+/// as (T)` (JS overlays: the JSDoc-cast equivalent); everything else
+/// is wrapped in `(…)`.
+fn write_slot_attr_expr(
+    out: &mut String,
+    source: &str,
+    expr: &svn_analyze::SlotAttrExpr,
+    is_ts: bool,
+) {
     if let svn_analyze::SlotAttrExpr::Resolved(svn_analyze::ResolvedSlotExpr::Type(t)) = expr {
-        out.push_str("undefined as any as (");
-        out.push_str(t);
-        out.push(')');
+        write_type_valued_expr(out, t, is_ts);
         return;
     }
     out.push('(');
-    write_slot_attr_expr_inner(out, source, expr);
+    write_slot_attr_expr_inner(out, source, expr, is_ts);
     out.push(')');
 }
 
-fn write_slot_attr_expr_inner(out: &mut String, source: &str, expr: &svn_analyze::SlotAttrExpr) {
+/// Emit an expression whose TYPE is `t` with no runtime value behind
+/// it: `undefined as any as (T)` in TS overlays, the JSDoc double-cast
+/// `/** @type {T} */ (/** @type {any} */ (null))` in JS overlays
+/// (single-cast `null → T` would fire TS2352 under strictNullChecks).
+fn write_type_valued_expr(out: &mut String, t: &str, is_ts: bool) {
+    if is_ts {
+        out.push_str("undefined as any as (");
+        out.push_str(t);
+        out.push(')');
+    } else {
+        out.push_str("/** @type {");
+        out.push_str(t);
+        out.push_str("} */ (/** @type {any} */ (null))");
+    }
+}
+
+fn write_slot_attr_expr_inner(
+    out: &mut String,
+    source: &str,
+    expr: &svn_analyze::SlotAttrExpr,
+    is_ts: bool,
+) {
     match expr {
         // Range form — slice the original source. A `get`
         // miss means the caller passed a source the walker
@@ -385,10 +417,9 @@ fn write_slot_attr_expr_inner(out: &mut String, source: &str, expr: &svn_analyze
             // wrote nothing — the spread emitted as `...()` (empty),
             // which is a syntax error inside an object literal.
             // Emit a typed cast so the spread becomes
-            // `...(undefined as any as (T))`.
-            out.push_str("undefined as any as (");
-            out.push_str(t);
-            out.push(')');
+            // `...(undefined as any as (T))` (JS: the JSDoc-cast
+            // equivalent).
+            write_type_valued_expr(out, t, is_ts);
         }
     }
 }

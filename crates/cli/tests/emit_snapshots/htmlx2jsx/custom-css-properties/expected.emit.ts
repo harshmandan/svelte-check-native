@@ -8,13 +8,16 @@ async function $$render_249aed4a() {
             new __svn_C_0({ target: __svn_any(), props: {...__svn_css_prop({"--custom-css-property1": ('hi')}), ...__svn_css_prop({"--custom-css-property2": "hi"}), "betweenprop": true, ...__svn_css_prop({"--custom-css-property3": `hi${jo}hi`}), ...__svn_css_prop({"--custom-css-property4": `hi${jo}hi`}), ...__svn_css_prop({"--custom-css-property5": `hi${jo}hi`}), ...__svn_css_prop({"--custom-css-property6": true})} });
         }
     });
-    return { props: /** @type {any} */({}) };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_249aed4a;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_249aed4a>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_249aed4a>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

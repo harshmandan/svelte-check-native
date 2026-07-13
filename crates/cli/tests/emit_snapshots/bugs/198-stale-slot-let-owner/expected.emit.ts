@@ -4,13 +4,16 @@ async function $$render_367eaaa4() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    return { props: /** @type {any} */({}) };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'x': { thing: ("hello") } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_367eaaa4;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_367eaaa4>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_367eaaa4>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
@@ -21,13 +24,16 @@ async function $$render_8872ef43() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    return { props: /** @type {any} */({}) };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { thing: (42) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_8872ef43;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_8872ef43>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_8872ef43>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
@@ -86,13 +92,16 @@ async function $$render_4836fa5b() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    return { props: /** @type {any} */({}) };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': {  } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_4836fa5b;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_4836fa5b>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_4836fa5b>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

@@ -15,13 +15,16 @@ async function $$render_1d4edb02() {
         // template type-check body (incremental)
     });
     void a;
-    return { props: /** @type {FOO} */({}) };
+    return { props: /** @type {FOO} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ a: typeof a; }} */ ({}) };
 }
 $$render_1d4edb02;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_1d4edb02>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_1d4edb02>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

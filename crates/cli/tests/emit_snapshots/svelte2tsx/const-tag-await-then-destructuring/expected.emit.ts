@@ -60,13 +60,16 @@ async function $$render_6a482dcb() {
     void calculate;
     void constant;
     void promise2;
-    return { props: /** @type {{ promise1?: typeof promise1; promise2?: typeof promise2; constant?: typeof constant; }} */({}) };
+    return { props: /** @type {{ promise1?: typeof promise1; promise2?: typeof promise2; constant?: typeof constant; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ promise1: typeof promise1; promise2: typeof promise2; constant: typeof constant; }} */ ({}) };
 }
 $$render_6a482dcb;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_6a482dcb>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_6a482dcb>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

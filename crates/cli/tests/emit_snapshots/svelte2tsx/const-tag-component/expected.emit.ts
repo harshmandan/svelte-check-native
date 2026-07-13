@@ -175,13 +175,16 @@ async function $$render_8a5774d3() {
     void box;
     void calculate;
     void constant;
-    return { props: /** @type {{ box?: typeof box; constant?: typeof constant; }} */({}) };
+    return { props: /** @type {{ box?: typeof box; constant?: typeof constant; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ box: typeof box; constant: typeof constant; }} */ ({}) };
 }
 $$render_8a5774d3;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_8a5774d3>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_8a5774d3>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

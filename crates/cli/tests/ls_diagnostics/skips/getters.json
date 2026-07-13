@@ -1,4 +1,0 @@
-{
-  "bucket": "overlay-counts",
-  "reason": "JS-mode component-with-getters.svelte now emits both the value and a matching `@typedef ReturnType<typeof X> X` (closing the TS2749 'D refers to value, not type' leg). However the JS render-fn returns only `{ props }`, not the full `{ props, exports, bindings, slots, events }` shape upstream emits. `Component<__SvnDefaultProps>` defaults Exports to `{}`, so `comp.bar` types as `any` (via the `& { $set?: any }` widening) and the expected TS2367 ('boolean'/'string' no-overlap) on `comp.bar === 'foo'` doesn't fire. Closing this requires extending the JS render-fn body to project all five render-result fields"
-}

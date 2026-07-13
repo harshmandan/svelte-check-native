@@ -21,13 +21,16 @@ const obj = {
     void b;
     void c;
     void g;
-    return { props: /** @type {any} */({}) };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ a: typeof a; b: typeof b; c: typeof c; g: typeof g; }} */ ({}) };
 }
 $$render_0de4bcd9;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_0de4bcd9>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_0de4bcd9>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

@@ -11,13 +11,16 @@ async function $$render_6a73bb59() {
     void a;
     void b;
     void c;
-    return { props: /** @type {{ a: any; b: any; c?: typeof c; }} */({}) };
+    return { props: /** @type {{ a: any; b: any; c?: typeof c; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ a: typeof a; b: typeof b; c: typeof c; }} */ ({}) };
 }
 $$render_6a73bb59;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_6a73bb59>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_6a73bb59>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

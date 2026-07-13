@@ -213,7 +213,32 @@ pub(crate) fn emit_render_body_return(
             Some(body) => format!("/** @type {{{body}}} */({{}})"),
             None => "/** @type {any} */({})".to_string(),
         };
-        let _ = writeln!(buf, "    return {{ props: {props_expr} }};");
+        // Full projection, JS-safe: upstream createRenderFunction.ts
+        // returns { props, exports, bindings, slots, events } for JS
+        // and TS alike. Without the exports field the default
+        // export's Exports projection resolves to `{}` and every
+        // instance member on a JS component widens to `any` at
+        // consumers, so misuse (e.g. comparing a boolean export
+        // against a string) goes undiagnosed. JSDoc casts replace
+        // the TS-only `undefined as any as T` shape — validated at
+        // design/js_render_full_projection/. `$$Events` / `$$Slots`
+        // interfaces are TS-only declarations, so the events field
+        // is always the lax index signature here and the slots
+        // field always the synthesised literal.
+        let exports_expr = match exports_object {
+            Some(o) => format!("/** @type {{{o}}} */ ({{}})"),
+            None => "{}".to_string(),
+        };
+        let bindings_field = build_bindings_field(props_info, false);
+        let _ = write!(
+            buf,
+            "    return {{ props: {props_expr}, events: /** @type {{{{ [evt: string]: CustomEvent<any> }}}} */ ({{}}), slots: ",
+        );
+        write_slots_field_type(buf.raw_string_mut(), doc.source, slot_defs, false);
+        let _ = writeln!(
+            buf,
+            ", bindings: {bindings_field}, exports: {exports_expr} }};"
+        );
         return;
     }
     // TS overlay path. Emit a structured return `{ props, events,
@@ -255,7 +280,7 @@ pub(crate) fn emit_render_body_return(
     //   - Svelte-4 mode: `string` — every `export let` /
     //     `export function` is bindable, so the iso ctor's
     //     `$$bindings?: string` accepts any name.
-    let bindings_field: String = build_bindings_field(props_info);
+    let bindings_field: String = build_bindings_field(props_info, true);
     // The `slots:` field literal is written straight into the emit
     // buffer at its splice site — see [`write_slots_field_type`] for
     // shape. Single-line output, so bypassing EmitBuffer's line
@@ -270,7 +295,7 @@ pub(crate) fn emit_render_body_return(
         if has_strict_slots_decl {
             out.push_str("undefined as any as $$Slots");
         } else {
-            write_slots_field_type(out, doc.source, slot_defs);
+            write_slots_field_type(out, doc.source, slot_defs, true);
         }
     };
     if generics.is_some() {
@@ -369,7 +394,12 @@ pub(crate) fn emit_render_body_return(
 ///   string`. Every `export let` / `export function` is bindable, so
 ///   the iso ctor's `$$bindings?: string` accepts any name and the
 ///   post-instance check stays silent.
-fn build_bindings_field(props_info: &svn_analyze::PropsInfo) -> String {
+///
+/// `is_ts` picks the lax-string spelling: JS overlays can't carry the
+/// `as` cast, so they emit the JSDoc equivalent `/** @type {string} */
+/// ('')` — same `string` field type. The runes-mode
+/// `__svn_$$bindings(...)` call is plain JS and shared by both modes.
+fn build_bindings_field(props_info: &svn_analyze::PropsInfo, is_ts: bool) -> String {
     let is_runes = matches!(
         props_info.source,
         svn_analyze::PropsSource::RuneAnnotation
@@ -377,7 +407,11 @@ fn build_bindings_field(props_info: &svn_analyze::PropsInfo) -> String {
             | svn_analyze::PropsSource::SynthesisedFromDestructure
     );
     if !is_runes {
-        return "undefined as any as string".to_string();
+        return if is_ts {
+            "undefined as any as string".to_string()
+        } else {
+            "/** @type {string} */ ('')".to_string()
+        };
     }
     // `local_only` leaves (nested-pattern `$bindable`s) never reach
     // upstream's bindings list — its loop only reads simple elements.

@@ -10,13 +10,16 @@ async function $$render_73f66a28() {
         { svelteHTML.createElement("h1", {});             ($$slots['dashed-name']);
         }
     });
-    return { props: /** @type {any} */({}) };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'foo': {  }, 'dashed-name': {  }, 'default': {  } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_73f66a28;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_73f66a28>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_73f66a28>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

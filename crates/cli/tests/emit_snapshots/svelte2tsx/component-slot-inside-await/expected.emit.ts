@@ -18,13 +18,16 @@ async function $$render_9500b63a() {
             void b;
         }); }
     });
-    return { props: /** @type {any} */({}) };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: /** @type {((Awaited<typeof promise>))} */ (/** @type {any} */ (null)) }, 'err': { err: /** @type {(any)} */ (/** @type {any} */ (null)) }, 'second': { a: /** @type {((Awaited<typeof promise2>)["b"])} */ (/** @type {any} */ (null)) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_9500b63a;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_9500b63a>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_9500b63a>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

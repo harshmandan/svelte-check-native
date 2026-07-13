@@ -7,13 +7,16 @@ async function $$render_80cbc11b() {
             void item;
         }
     });
-    return { props: /** @type {any} */({}) };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: /** @type {(__SvnEachItem<typeof items>)} */ (/** @type {any} */ (null)), b: ({ item: (undefined as any as (__SvnEachItem<typeof items>)) }), c: ({ item: 'abc' }.item), d: ({ item: (undefined as any as (__SvnEachItem<typeof items>)) }), e: ($item), f: ($item), ...(g), ...(/** @type {(__SvnEachItem<typeof items>)} */ (/** @type {any} */ (null))) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_80cbc11b;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_80cbc11b>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_80cbc11b>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

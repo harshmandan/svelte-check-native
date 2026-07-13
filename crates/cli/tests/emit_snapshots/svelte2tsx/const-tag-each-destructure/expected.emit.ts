@@ -38,13 +38,16 @@ async function $$render_f39ccf3a() {
     void boxes;
     void calculate;
     void constant;
-    return { props: /** @type {{ boxes?: typeof boxes; constant?: typeof constant; }} */({}) };
+    return { props: /** @type {{ boxes?: typeof boxes; constant?: typeof constant; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ boxes: typeof boxes; constant: typeof constant; }} */ ({}) };
 }
 $$render_f39ccf3a;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_f39ccf3a>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_f39ccf3a>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

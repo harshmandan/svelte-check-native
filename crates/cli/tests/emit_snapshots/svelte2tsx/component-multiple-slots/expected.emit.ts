@@ -12,13 +12,16 @@ async function $$render_47353b87() {
     void b;
     void d;
     void e;
-    return { props: /** @type {any} */({}) };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: (b) }, 'test': { c: (d), e: (e) }, 'abc-cde.113': {  } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_47353b87;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_47353b87>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_47353b87>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

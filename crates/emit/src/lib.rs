@@ -1195,14 +1195,14 @@ fn emit_document_with_render_name(
     // TS-only emission. JS overlays (`.svelte.svn.js`) can't carry
     // TS-only `type X = …` syntax — pure-JS parsers reject it, and
     // even tsgo's `allowJs` mode flags it as syntactically invalid
-    // when `checkJs` is on. The alias is dead code in JS overlays
-    // anyway: the JS render-fn return short-circuits to `{ props }`
-    // (no events field), and the JS default export is a JSDoc-typed
-    // `Component<__SvnDefaultProps>` with no events surface — so
-    // there's nothing for the alias to feed into. Skip on JS;
-    // strict event narrowing for JS overlays is a separate (larger)
-    // port that requires JSDoc-friendly equivalents of the
-    // mapped/conditional types this alias produces.
+    // when `checkJs` is on. The JS render-fn's events field is
+    // therefore always the lax `{ [evt: string]: CustomEvent<any> }`
+    // index signature (JSDoc-cast), never a reference to this alias,
+    // and the JS default export (`Component<Props, Exports>`) has no
+    // events channel to feed either. Skip on JS; strict event
+    // narrowing for JS overlays is a separate (larger) port that
+    // requires JSDoc-friendly equivalents of the mapped/conditional
+    // types this alias produces.
     if is_ts && let Some(body) = events_alias_body.as_deref() {
         let _ = writeln!(buf, "    type $$Events = {body};");
     }

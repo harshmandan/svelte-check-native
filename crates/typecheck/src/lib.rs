@@ -621,6 +621,11 @@ pub fn check(
     // inherited from the user's tsconfig via `extends` and is surfaced,
     // matching upstream `svelte-check --tsgo`. See
     // `filters::is_overlay_tsconfig_noise`.
+    //
+    // The overlay tsconfig's canonical path is resolved once here —
+    // the noise filter needs it per diagnostic, and a realpath walk
+    // per call adds up on diagnostic-heavy runs.
+    let canonical_overlay_tsconfig = dunce::canonicalize(&layout.overlay_tsconfig).ok();
     let mut diagnostics: Vec<CheckDiagnostic> = run
         .diagnostics
         .into_iter()
@@ -635,7 +640,9 @@ pub fn check(
             }
             d
         })
-        .filter(|d| !filters::is_overlay_tsconfig_noise(d, &layout))
+        .filter(|d| {
+            !filters::is_overlay_tsconfig_noise(d, &layout, canonical_overlay_tsconfig.as_deref())
+        })
         .filter_map(|d| map_diagnostic(d, &layout, &map_data, &excluded_kit_sources))
         .filter(|d| !filters::is_svelte4_reactive_noop_comma(d))
         .map(|mut d| {

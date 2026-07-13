@@ -49,8 +49,16 @@ const USER_CONFIG_OPTION_CODES: &[u32] = &[5023, 5095, 5101, 5102, 5107, 5108, 5
 /// canonicalized absolute path (handles symlinks like `/var` vs
 /// `/private/var` on macOS) and a final ends-with check on the unique
 /// `.svelte-check/tsconfig.json` suffix.
-pub(crate) fn is_overlay_tsconfig_noise(raw: &RawDiagnostic, layout: &CacheLayout) -> bool {
-    if !is_on_overlay_tsconfig(raw, layout) {
+/// `canonical_overlay_tsconfig` is `layout.overlay_tsconfig` resolved
+/// through `dunce::canonicalize` ONCE by the caller — the filter runs
+/// per raw diagnostic, and canonicalizing the same invariant path on
+/// every call is a full realpath syscall walk per diagnostic.
+pub(crate) fn is_overlay_tsconfig_noise(
+    raw: &RawDiagnostic,
+    layout: &CacheLayout,
+    canonical_overlay_tsconfig: Option<&Path>,
+) -> bool {
+    if !is_on_overlay_tsconfig(raw, layout, canonical_overlay_tsconfig) {
         return false;
     }
     // Inherited user-config-option errors surface (parity with
@@ -60,7 +68,21 @@ pub(crate) fn is_overlay_tsconfig_noise(raw: &RawDiagnostic, layout: &CacheLayou
 }
 
 /// True when `raw` is attributed to our overlay `tsconfig.json`.
-fn is_on_overlay_tsconfig(raw: &RawDiagnostic, layout: &CacheLayout) -> bool {
+fn is_on_overlay_tsconfig(
+    raw: &RawDiagnostic,
+    layout: &CacheLayout,
+    canonical_overlay_tsconfig: Option<&Path>,
+) -> bool {
+    // Basename short-circuit: every match below requires the final
+    // path component to agree — exact equality trivially; the
+    // canonicalized comparison because tsgo reports the very path we
+    // passed it (so no differently-named symlink can sit in between);
+    // and the last-resort fallback compares basenames explicitly.
+    // Diagnostics on overlay `.svn.ts` files — virtually all of them —
+    // return here without paying a realpath walk.
+    if raw.file.file_name() != layout.overlay_tsconfig.file_name() {
+        return false;
+    }
     let abs = if raw.file.is_absolute() {
         raw.file.clone()
     } else {
@@ -69,10 +91,7 @@ fn is_on_overlay_tsconfig(raw: &RawDiagnostic, layout: &CacheLayout) -> bool {
     if abs == layout.overlay_tsconfig {
         return true;
     }
-    if let (Ok(a), Ok(b)) = (
-        dunce::canonicalize(&abs),
-        dunce::canonicalize(&layout.overlay_tsconfig),
-    ) {
+    if let (Ok(a), Some(b)) = (dunce::canonicalize(&abs), canonical_overlay_tsconfig) {
         if a == b {
             return true;
         }

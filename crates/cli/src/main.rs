@@ -458,25 +458,22 @@ fn main() -> ExitCode {
     } else {
         (None, svelte_config::SvelteConfigSummary::default())
     };
-    if let Some(cfg) = &analysed_config
-        && svelte_config_summary.warning_filter_plan.partial
-    {
-        eprintln!(
-            "svelte-check-native: partial `warningFilter` in {} — one or more branches couldn't be translated. Unrecognised: `{}`. Add `--compiler-warnings code:ignore,…` to cover the rest.",
-            cfg.display(),
-            svelte_config_summary
-                .warning_filter_plan
-                .unrecognised_excerpt
-                .as_deref()
-                .unwrap_or("?")
-        );
+    if let Some(cfg) = &analysed_config {
+        warn_partial_warning_filter(cfg, &svelte_config_summary.warning_filter_plan);
     }
-    let warning_filter_plan = svelte_config_summary.warning_filter_plan;
-    // Config-forced runes mode (`compilerOptions.runes`) — upstream
-    // compiles every component with the config's compilerOptions, so a
-    // config-level boolean overrides per-file auto-detection in the
-    // native lint pass.
-    let svelte_config_runes = svelte_config_summary.runes;
+    // Per-file nearest-config resolution for warningFilter + runes
+    // (upstream resolves each document's config via upward search from
+    // the file's directory — nearest wins, no merging). The
+    // workspace-root resolution above is the fallback; an explicit
+    // `--config` pins it for every file.
+    let mut config_resolver = svelte_config::ConfigResolver::new(
+        workspace.clone(),
+        svelte_config::ResolvedConfig {
+            warning_filter_plan: svelte_config_summary.warning_filter_plan,
+            runes: svelte_config_summary.runes,
+        },
+        cli.config.is_some(),
+    );
     let kit_files_settings = svelte_config_summary.kit_files_settings;
     // Set the project-wide preserve-attribute-case flag (svelte config
     // `namespace: 'foreign'`) ONCE before any (parallel) emit reads it.
@@ -519,11 +516,24 @@ fn main() -> ExitCode {
         cli.tsgo_diagnostics,
         svelte_warnings_mode,
         cli.ignore_node_modules_warnings,
-        &warning_filter_plan,
-        svelte_config_runes,
+        &mut config_resolver,
         &kit_files_settings,
         cli.include_suggestions,
     )
+}
+
+/// Stderr notice for a `warningFilter` that only partially translated —
+/// shared by the workspace-root config and any nested configs the
+/// per-file resolver discovers.
+fn warn_partial_warning_filter(config_path: &Path, plan: &svelte_config::WarningFilterPlan) {
+    if !plan.partial {
+        return;
+    }
+    eprintln!(
+        "svelte-check-native: partial `warningFilter` in {} — one or more branches couldn't be translated. Unrecognised: `{}`. Add `--compiler-warnings code:ignore,…` to cover the rest.",
+        config_path.display(),
+        plan.unrecognised_excerpt.as_deref().unwrap_or("?")
+    );
 }
 
 /// How to source compile warnings. Drives the bridge-vs-native
@@ -824,7 +834,7 @@ fn emit_native_svelte_diagnostics(
     diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
     seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
     workspace: &Path,
-    config_runes: Option<bool>,
+    config_resolver: &svelte_config::ConfigResolver,
     broken: &mut std::collections::HashSet<PathBuf>,
 ) {
     let compat = svn_lint::detect_for_workspace(workspace);
@@ -909,8 +919,9 @@ fn emit_native_svelte_diagnostics(
 
             // (3) Lint warnings — reuse the parse and the position map
             // (no second parse_sections / line-index scan per file).
-            // `config_runes` carries svelte.config's compilerOptions.runes
-            // (config-forced mode); `None` keeps lint's auto-detection.
+            // The nearest config's compilerOptions.runes forces the
+            // mode; `None` keeps lint's auto-detection.
+            let config_runes = config_resolver.for_path(path).runes;
             let warnings =
                 svn_lint::lint_parsed(&doc, &fragment, source, pm, path, config_runes, compat);
 
@@ -1166,8 +1177,7 @@ fn run_typecheck(
     tsgo_diagnostics: bool,
     svelte_warnings_mode: SvelteWarningsMode,
     ignore_node_modules_warnings: bool,
-    warning_filter_plan: &svelte_config::WarningFilterPlan,
-    svelte_config_runes: Option<bool>,
+    config_resolver: &mut svelte_config::ConfigResolver,
     kit_files_settings: &svn_core::sveltekit::KitFilesSettings,
     include_suggestions: bool,
 ) -> ExitCode {
@@ -1300,6 +1310,14 @@ fn run_typecheck(
         .into_iter()
         .filter(|p| in_project_scope(p))
         .collect();
+    // Resolve each file's nearest svelte.config (warningFilter / runes)
+    // now, sequentially — the parallel lint pass below only does
+    // read-only lookups. Nested configs whose warningFilter didn't
+    // fully translate get the same stderr notice as the root config.
+    config_resolver.prime(svelte_files_all.iter());
+    for (cfg_path, plan) in config_resolver.nested_partial_configs() {
+        warn_partial_warning_filter(cfg_path, plan);
+    }
     let t_discovery = mark.elapsed();
 
     // Read every source up-front; we need the bytes for both the
@@ -1511,7 +1529,7 @@ fn run_typecheck(
                 &mut diagnostics,
                 &mut seen,
                 workspace,
-                svelte_config_runes,
+                config_resolver,
                 &mut broken_files,
             );
         }
@@ -1592,21 +1610,25 @@ fn run_typecheck(
         });
     }
 
-    // Tier 2: apply any drop rules we statically translated from the
-    // user's `svelte.config.js` `warningFilter`. Applies only to the
-    // Svelte diagnostic source — TS/JS diagnostics are tsgo's domain.
-    if !warning_filter_plan.rules.is_empty() || warning_filter_plan.constant.is_some() {
-        diagnostics.retain(|d| {
-            if !matches!(d.source, svn_typecheck::DiagnosticSource::Svelte) {
-                return true;
-            }
-            let code = match &d.code {
-                svn_typecheck::DiagnosticCode::Slug(s) => s.as_str(),
-                svn_typecheck::DiagnosticCode::Numeric(_) => "",
-            };
-            !warning_filter_plan.should_drop(code, Some(&d.source_path))
-        });
-    }
+    // Tier 2: apply the drop rules we statically translated from each
+    // file's NEAREST `svelte.config.js` `warningFilter` (per-document
+    // resolution, mirroring upstream's configLoader). Applies only to
+    // the Svelte diagnostic source — TS/JS diagnostics are tsgo's
+    // domain.
+    diagnostics.retain(|d| {
+        if !matches!(d.source, svn_typecheck::DiagnosticSource::Svelte) {
+            return true;
+        }
+        let plan = &config_resolver.for_path(&d.source_path).warning_filter_plan;
+        if plan.rules.is_empty() && plan.constant.is_none() {
+            return true;
+        }
+        let code = match &d.code {
+            svn_typecheck::DiagnosticCode::Slug(s) => s.as_str(),
+            svn_typecheck::DiagnosticCode::Numeric(_) => "",
+        };
+        !plan.should_drop(code, Some(&d.source_path))
+    });
 
     // NOTE: `--threshold error` is a PRINT-TIME filter only — applied
     // per-diagnostic inside `print_diagnostics`. The counts and exit

@@ -128,14 +128,17 @@ impl WarningFilterPlan {
 /// `.cjs`, `.mjs`, `.ts`, `.mts`. Returns the first match in the order
 /// listed.
 ///
-/// Probes only the workspace directory — it does NOT ascend to parent
-/// directories. This mirrors upstream svelte-check, which loads the
-/// config with `loadConfig(workspacePath, { traverse: false })`
-/// (incremental.ts) — the `traverse: false` flag stops the loader at
-/// the workspace dir. Ascending would, in a monorepo whose sub-app has
-/// no local `svelte.config` but an ancestor does, apply that ancestor's
-/// `warningFilter` / `kit.files` where upstream applies defaults —
-/// shifting warning counts and Kit-file classification off parity.
+/// Probes only the given directory — it does NOT ascend to parent
+/// directories. For the workspace-root `kit.files` resolution that
+/// mirrors upstream svelte-check, which loads the config with
+/// `loadConfig(workspacePath, { traverse: false })` (incremental.ts) —
+/// the `traverse: false` flag stops the loader at the workspace dir.
+/// Ascending would, in a monorepo whose sub-app has no local
+/// `svelte.config` but an ancestor does, apply that ancestor's
+/// `kit.files` where upstream applies defaults — shifting Kit-file
+/// classification off parity. Per-file `warningFilter` / `runes`
+/// resolution (which upstream DOES search per document) layers on top
+/// via [`ConfigResolver`], calling this per directory.
 pub fn find_svelte_config(workspace: &Path) -> Option<PathBuf> {
     for candidate in [
         "svelte.config.js",
@@ -196,6 +199,157 @@ pub struct SvelteConfigSummary {
     /// `runes: true` / `runes: false` FORCES the mode; `None` keeps the
     /// per-file auto-detection.
     pub runes: Option<bool>,
+}
+
+/// The per-file subset of a config — the settings upstream applies PER
+/// DOCUMENT (each document compiles with its own resolved config's
+/// `compilerOptions`).
+#[derive(Debug, Default, Clone)]
+pub struct ResolvedConfig {
+    pub warning_filter_plan: WarningFilterPlan,
+    /// `compilerOptions.runes` — see [`SvelteConfigSummary::runes`].
+    pub runes: Option<bool>,
+}
+
+/// Per-file nearest-config resolution for `warningFilter` / `runes`.
+///
+/// Upstream's language server resolves each document's Svelte config by
+/// searching UPWARD from the file's own directory (`Document.ts` →
+/// `configLoader.awaitConfig` → `searchConfigPathUpwards`): the nearest
+/// config wins outright — no merging between configs. We mirror that
+/// between each `.svelte` file and the workspace root; files with no
+/// nearer config fall back to the workspace-root resolution the CLI
+/// already performed (which covers the `--config` override and the
+/// vite-plugin-options fallback). We deliberately do NOT search above
+/// the workspace root.
+///
+/// An explicit `--config` pins that one config for every file —
+/// upstream documents that nested configs below it are ignored.
+///
+/// NOT resolved per-file on purpose: `kit.files` (upstream svelte-check
+/// loads it with `loadConfig(workspace, { traverse: false })`, so
+/// root-only IS parity) and `namespace: 'foreign'` (a process-wide emit
+/// flag today).
+///
+/// Resolution is memoized per DIRECTORY — O(dirs), not O(files ×
+/// depth). [`ConfigResolver::prime`] walks each file's ancestor chain
+/// once (filesystem probes + config analysis happen here, on one
+/// thread); [`ConfigResolver::for_path`] is a read-only lookup that the
+/// parallel lint pass can call concurrently.
+pub struct ConfigResolver {
+    workspace: PathBuf,
+    root: std::sync::Arc<ResolvedConfig>,
+    /// `--config` was given — every file resolves to `root`.
+    explicit: bool,
+    by_dir: std::collections::HashMap<PathBuf, std::sync::Arc<ResolvedConfig>>,
+    /// Below-root configs discovered during `prime`, keyed by config
+    /// path (a config shared by several directories is analysed once).
+    nested: Vec<(PathBuf, std::sync::Arc<ResolvedConfig>)>,
+}
+
+impl ConfigResolver {
+    pub fn new(workspace: PathBuf, root: ResolvedConfig, explicit_config: bool) -> Self {
+        Self {
+            workspace,
+            root: std::sync::Arc::new(root),
+            explicit: explicit_config,
+            by_dir: std::collections::HashMap::new(),
+            nested: Vec::new(),
+        }
+    }
+
+    /// Resolve (and memoize) the nearest config for every file's
+    /// directory chain. Call once, before any [`Self::for_path`] use.
+    pub fn prime<'a>(&mut self, files: impl IntoIterator<Item = &'a PathBuf>) {
+        if self.explicit {
+            // Everything resolves to the pinned config — skip the walk.
+            return;
+        }
+        for file in files {
+            if let Some(dir) = file.parent() {
+                self.resolve_dir(dir);
+            }
+        }
+    }
+
+    fn resolve_dir(&mut self, dir: &Path) -> std::sync::Arc<ResolvedConfig> {
+        if let Some(hit) = self.by_dir.get(dir) {
+            return hit.clone();
+        }
+        let resolved = if dir == self.workspace.as_path() || !dir.starts_with(&self.workspace) {
+            // The workspace root's own config was already resolved by
+            // the CLI (with --config / vite fallback) — reuse it rather
+            // than re-probing the root dir.
+            self.root.clone()
+        } else if let Some((cfg_path, summary)) = probe_dir_for_config(dir) {
+            if let Some((_, existing)) = self.nested.iter().find(|(p, _)| *p == cfg_path) {
+                existing.clone()
+            } else {
+                let rc = std::sync::Arc::new(ResolvedConfig {
+                    warning_filter_plan: summary.warning_filter_plan,
+                    runes: summary.runes,
+                });
+                self.nested.push((cfg_path, rc.clone()));
+                rc
+            }
+        } else {
+            match dir.parent() {
+                Some(parent) => self.resolve_dir(parent),
+                None => self.root.clone(),
+            }
+        };
+        self.by_dir.insert(dir.to_path_buf(), resolved.clone());
+        resolved
+    }
+
+    /// The nearest config for `path` — memo lookup with root fallback.
+    /// Read-only; safe from parallel workers after [`Self::prime`].
+    pub fn for_path(&self, path: &Path) -> &ResolvedConfig {
+        if self.explicit {
+            return &self.root;
+        }
+        let mut dir = path.parent();
+        while let Some(d) = dir {
+            if let Some(hit) = self.by_dir.get(d) {
+                return hit;
+            }
+            if d == self.workspace.as_path() {
+                break;
+            }
+            dir = d.parent();
+        }
+        &self.root
+    }
+
+    /// Below-root configs discovered during [`Self::prime`] whose
+    /// `warningFilter` only partially translated — the caller surfaces
+    /// the same stderr notice the root config gets.
+    pub fn nested_partial_configs(&self) -> impl Iterator<Item = (&Path, &WarningFilterPlan)> {
+        self.nested
+            .iter()
+            .filter(|(_, c)| c.warning_filter_plan.partial)
+            .map(|(p, c)| (p.as_path(), &c.warning_filter_plan))
+    }
+}
+
+/// Probe ONE directory for a Svelte/Vite config, mirroring the CLI's
+/// workspace-root precedence: an analysable `vite.config.*` (inline
+/// plugin options) wins, else a `svelte.config.*`, else a vite config
+/// with no readable options still ENDS the upward search — upstream's
+/// per-directory probe stops at any config file — contributing
+/// defaults.
+fn probe_dir_for_config(dir: &Path) -> Option<(PathBuf, SvelteConfigSummary)> {
+    let vite = find_vite_config(dir);
+    if let Some(p) = &vite
+        && let Some(s) = analyse_vite_config(p)
+    {
+        return Some((p.clone(), s));
+    }
+    if let Some(p) = find_svelte_config(dir) {
+        let s = analyse(&p);
+        return Some((p, s));
+    }
+    vite.map(|p| (p, SvelteConfigSummary::default()))
 }
 
 /// Read `svelte.config.js`, parse once, and return every recognised
@@ -1290,6 +1444,90 @@ export default {
         let local = app.join("svelte.config.js");
         std::fs::write(&local, "export default {};").unwrap();
         assert_eq!(find_svelte_config(&app), Some(local));
+    }
+
+    #[test]
+    fn config_resolver_nearest_config_wins_root_is_fallback() {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path().to_path_buf();
+        let app = root.join("packages/app");
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        std::fs::write(
+            app.join("svelte.config.js"),
+            "export default { compilerOptions: { runes: true, warningFilter: (w) => !w.code.startsWith('a11y_') } };",
+        )
+        .unwrap();
+
+        let mut resolver = ConfigResolver::new(root.clone(), ResolvedConfig::default(), false);
+        let nested_file = app.join("src/App.svelte");
+        let root_file = root.join("lib/Root.svelte");
+        resolver.prime([&nested_file, &root_file]);
+
+        // Nearest config (packages/app) wins for files under it…
+        let nested = resolver.for_path(&nested_file);
+        assert_eq!(nested.runes, Some(true));
+        assert!(
+            nested
+                .warning_filter_plan
+                .should_drop("a11y_missing_attribute", None)
+        );
+        // …and it REPLACES the root config outright (no merging).
+        let at_root = resolver.for_path(&root_file);
+        assert_eq!(at_root.runes, None);
+        assert!(
+            !at_root
+                .warning_filter_plan
+                .should_drop("a11y_missing_attribute", None)
+        );
+        // Unprimed paths fall back to the root config.
+        let stray = root.join("never/primed/X.svelte");
+        assert_eq!(resolver.for_path(&stray).runes, None);
+    }
+
+    #[test]
+    fn config_resolver_walks_up_to_nearest_ancestor_below_root() {
+        // Config sits at packages/app; the file is two levels deeper.
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path().to_path_buf();
+        let deep = root.join("packages/app/src/lib/deep");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(
+            root.join("packages/app/svelte.config.js"),
+            "export default { compilerOptions: { runes: true } };",
+        )
+        .unwrap();
+
+        let mut resolver = ConfigResolver::new(root, ResolvedConfig::default(), false);
+        let file = deep.join("Deep.svelte");
+        resolver.prime([&file]);
+        assert_eq!(resolver.for_path(&file).runes, Some(true));
+    }
+
+    #[test]
+    fn config_resolver_explicit_config_ignores_nested() {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path().to_path_buf();
+        let app = root.join("packages/app");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(
+            app.join("svelte.config.js"),
+            "export default { compilerOptions: { runes: true } };",
+        )
+        .unwrap();
+
+        // --config pins the root resolution for every file.
+        let mut resolver = ConfigResolver::new(
+            root,
+            ResolvedConfig {
+                warning_filter_plan: WarningFilterPlan::default(),
+                runes: Some(false),
+            },
+            true,
+        );
+        let file = app.join("App.svelte");
+        resolver.prime([&file]);
+        assert_eq!(resolver.for_path(&file).runes, Some(false));
     }
 
     fn summary_of(src: &str) -> SvelteConfigSummary {

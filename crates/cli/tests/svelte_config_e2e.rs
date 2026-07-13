@@ -98,3 +98,99 @@ fn config_runes_false_keeps_legacy_mode_lints_off() {
         "runes: false must not enable runes-only lints. stdout:\n{stdout}"
     );
 }
+/// Nearest-config-wins: a nested `packages/app/svelte.config.js`
+/// warningFilter applies to files under `packages/app`, while files
+/// outside it use the workspace-root config (here: none). Mirrors
+/// upstream's per-document upward search.
+#[test]
+fn nested_config_warning_filter_applies_to_nearest_files_only() {
+    // `<img src="x">` fires the a11y_missing_attribute warning (alt).
+    let component = r#"<img src="x" />"#;
+
+    let ws = tempfile::tempdir().expect("tempdir");
+    write(&ws.path().join("tsconfig.json"), "{}");
+    write(&ws.path().join("root/Root.svelte"), component);
+    write(&ws.path().join("packages/app/src/App.svelte"), component);
+    write(
+        &ws.path().join("packages/app/svelte.config.js"),
+        "export default { compilerOptions: { warningFilter: (w) => !w.code.startsWith('a11y_') } };",
+    );
+
+    let stdout = run_svelte_only(ws.path());
+    assert!(
+        stdout.contains("Root.svelte") && stdout.contains("a11y_missing_attribute"),
+        "root-level file has no config above it dropping a11y warnings. stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("App.svelte"),
+        "nested config's warningFilter must drop the nested file's a11y warning. stdout:\n{stdout}"
+    );
+}
+
+/// Nested configs also force runes per-file: the nested app pins
+/// `runes: true` while the sibling (using the root default) stays
+/// auto-detected legacy.
+#[test]
+fn nested_config_runes_applies_per_file() {
+    let component = "<script>let a = 1;</script><slot></slot>";
+
+    let ws = tempfile::tempdir().expect("tempdir");
+    write(&ws.path().join("tsconfig.json"), "{}");
+    write(&ws.path().join("legacy/Legacy.svelte"), component);
+    write(&ws.path().join("modern/Modern.svelte"), component);
+    write(
+        &ws.path().join("modern/svelte.config.js"),
+        "export default { compilerOptions: { runes: true } };",
+    );
+
+    let stdout = run_svelte_only(ws.path());
+    let fired: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains("slot_element_deprecated"))
+        .collect();
+    assert!(
+        fired.iter().all(|l| l.contains("Modern.svelte")) && !fired.is_empty(),
+        "only the nested-config file is runes-forced. stdout:\n{stdout}"
+    );
+}
+
+/// An explicit `--config` pins ONE config for every file — nested
+/// configs below it are ignored (upstream's documented `--config`
+/// semantics).
+#[test]
+fn explicit_config_flag_ignores_nested_configs() {
+    let component = r#"<img src="x" />"#;
+
+    let ws = tempfile::tempdir().expect("tempdir");
+    write(&ws.path().join("tsconfig.json"), "{}");
+    write(&ws.path().join("packages/app/src/App.svelte"), component);
+    // Nested config would drop a11y warnings…
+    write(
+        &ws.path().join("packages/app/svelte.config.js"),
+        "export default { compilerOptions: { warningFilter: (w) => !w.code.startsWith('a11y_') } };",
+    );
+    // …but --config points at a root config with no filter.
+    write(&ws.path().join("svelte.config.js"), "export default {};");
+
+    let bin = env!("CARGO_BIN_EXE_svelte-check-native");
+    let output = Command::new(bin)
+        .args([
+            "--workspace",
+            ws.path().to_str().unwrap(),
+            "--tsconfig",
+            ws.path().join("tsconfig.json").to_str().unwrap(),
+            "--config",
+            ws.path().join("svelte.config.js").to_str().unwrap(),
+            "--output",
+            "machine",
+            "--diagnostic-sources",
+            "svelte",
+        ])
+        .output()
+        .expect("binary should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("a11y_missing_attribute"),
+        "--config pins the explicit config; the nested filter must be ignored. stdout:\n{stdout}"
+    );
+}

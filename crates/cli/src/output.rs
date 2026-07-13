@@ -249,6 +249,12 @@ fn print_human(
     threshold: &str,
 ) {
     let workspace_display = workspace.display().to_string();
+    // Code-frame source memo. Diagnostics arrive grouped by file, so a
+    // one-entry cache turns N-diagnostics-per-file into one read per
+    // distinct file instead of one full read + line-split per
+    // diagnostic. `None` content records a failed read so we don't
+    // retry it per diagnostic either.
+    let mut frame_source: Option<(&Path, Option<String>)> = None;
     for d in diagnostics {
         if !passes_threshold(d.severity, threshold) {
             continue;
@@ -279,9 +285,22 @@ fn print_human(
         // `(css)`), not the code — `${message} (${diagnostic.source})`.
         let source = d.source.as_str();
         if verbose {
-            // Code frame: try to read the source file and emit a short
-            // excerpt around the diagnostic line, with a caret pointer.
-            let frame = format_code_frame(&d.source_path, d.line, d.column, span);
+            // Code frame: try to read the source file (through the
+            // per-file memo above) and emit a short excerpt around the
+            // diagnostic line, with a caret pointer.
+            if frame_source
+                .as_ref()
+                .is_none_or(|(p, _)| *p != d.source_path.as_path())
+            {
+                frame_source = Some((
+                    d.source_path.as_path(),
+                    std::fs::read_to_string(&d.source_path).ok(),
+                ));
+            }
+            let frame = match &frame_source {
+                Some((_, Some(source))) => render_code_frame(source, d.line, d.column, span),
+                _ => String::new(),
+            };
             if frame.is_empty() {
                 println!("{label}: {} ({source})", d.message);
             } else {
@@ -340,17 +359,7 @@ fn paint(text: &str, code: &str, color: bool) -> String {
     }
 }
 
-/// Read the source file and produce a short code frame around the
-/// (1-based) diagnostic line. Returns an empty string on read failure or
-/// out-of-range line numbers — caller falls back to no-frame output.
-fn format_code_frame(path: &Path, line: u32, column: u32, span_length: Option<u32>) -> String {
-    let Ok(source) = std::fs::read_to_string(path) else {
-        return String::new();
-    };
-    render_code_frame(&source, line, column, span_length)
-}
-
-/// Pure code-frame renderer — split out for testability. Takes the whole
+/// Pure code-frame renderer. Takes the whole
 /// file's text plus a 1-based (line, column) and produces a 3-line frame
 /// with the target line highlighted by a `^^^` caret underneath.
 ///

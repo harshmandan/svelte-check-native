@@ -9,7 +9,8 @@ async function $$render_cae62ddc() {
         // template type-check body (incremental)
     });
     void b;
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings('b'), exports: undefined as any as ({}) };
+    void c;
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings('b', 'c'), exports: undefined as any as ({}) };
 }
 $$render_cae62ddc;
 const __svn_component_default: import('svelte').Component<

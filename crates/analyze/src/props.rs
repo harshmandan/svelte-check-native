@@ -729,7 +729,11 @@ fn collect_rest(pat: &BindingPattern<'_>, source: &str, out: &mut Vec<PropInfo>,
 
 /// True when `expr` is a `$bindable(…)` call (with or without args).
 /// Walks through parenthesised wrappers so `($bindable())` still
-/// matches.
+/// matches, and through an `as`-cast so `$bindable('') as string` does
+/// too — upstream ExportedNames.ts's `handle$propsRune` unwraps the
+/// as-expression before matching `$bindable` (`if (ts.isAsExpression
+/// (call)) call = call.expression;`). No unwrap for `satisfies` or
+/// non-null `!` — upstream doesn't either.
 fn is_bindable_call(expr: &Expression<'_>) -> bool {
     match expr {
         Expression::CallExpression(call) => matches!(
@@ -737,6 +741,7 @@ fn is_bindable_call(expr: &Expression<'_>) -> bool {
             Expression::Identifier(id) if id.name == "$bindable",
         ),
         Expression::ParenthesizedExpression(p) => is_bindable_call(&p.expression),
+        Expression::TSAsExpression(a) => is_bindable_call(&a.expression),
         _ => false,
     }
 }
@@ -964,6 +969,28 @@ mod tests {
     #[test]
     fn prop_name_with_dollar_suffix() {
         assert_eq!(props("let { parent$ } = $props();"), vec!["parent$"]);
+    }
+
+    #[test]
+    fn bindable_through_as_cast() {
+        // `value = $bindable('') as string` — the as-cast wraps the
+        // $bindable call; the prop is still bindable. Upstream
+        // ExportedNames.ts's handle$propsRune unwraps the as-expression
+        // before matching `$bindable` (`if (ts.isAsExpression(call))
+        // call = call.expression;`), so `__sveltets_$$bindings` includes
+        // the prop. Without the unwrap, a consumer's `bind:value` fires
+        // a false TS2322 against the bindings literal union.
+        let alloc = Allocator::default();
+        let src = "let { value = $bindable('') as string, other = $bindable(0) } = $props();";
+        let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
+        let info = PropsInfo::build(&parsed.program, src);
+        let bindable: Vec<&str> = info
+            .destructures
+            .iter()
+            .filter(|p| p.is_bindable)
+            .map(|p| p.prop_key.as_str())
+            .collect();
+        assert_eq!(bindable, vec!["value", "other"]);
     }
 
     #[test]

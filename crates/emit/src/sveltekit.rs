@@ -58,7 +58,16 @@ pub type RouteKind = svn_core::sveltekit::RouteShape;
 pub fn route_kind(path: &Path) -> Option<RouteKind> {
     let kit = classify(path, &KitFilesSettings::default())?;
     match kit.role {
-        KitRole::RouteComponent { shape } => Some(shape),
+        // `@group` layout-breakout suffixes exist for `+page` /
+        // `+layout` only — SvelteKit has no `+error@x.svelte`. The
+        // centralised classifier still parses the group label off any
+        // route component, but upstream's `isKitErrorFile` requires
+        // the stem to be exactly `+error`, so a grouped error basename
+        // is NOT a Kit error file and gets no auto-typed props.
+        KitRole::RouteComponent { shape } => match shape {
+            RouteKind::Error if kit.group.is_some() => None,
+            shape => Some(shape),
+        },
         _ => None,
     }
 }
@@ -92,8 +101,13 @@ pub fn kit_prop_decl(name: &str, kind: RouteKind) -> Option<&'static str> {
         // (no `?`). With `?:`, tsgo fires TS2722 "Cannot invoke an object
         // which is possibly 'undefined'" on the bare call.
         (RouteKind::Layout, "children") => Some("children: import('svelte').Snippet"),
-        // `+error.svelte` doesn't receive props via $props(); its shape
-        // comes from `page.error`. Leave it unannotated for now.
+        // `+error.svelte` receives the error it renders as an `error`
+        // prop typed by the app-wide `App.Error` ambient interface
+        // (declared in the user's app.d.ts, defaulting to
+        // `{ message: string }` from @sveltejs/kit). Mirrors upstream
+        // svelte2tsx `ExportedNames.ts` `isKitErrorFile` handling.
+        // No `./$types.js` import here — App.Error is route-agnostic.
+        (RouteKind::Error, "error") => Some("error: App.Error"),
         _ => None,
     }
 }
@@ -220,6 +234,23 @@ mod tests {
     // below cover the emit-specific surface that reads `RouteKind`.
 
     #[test]
+    fn route_kind_rejects_grouped_error_basename() {
+        // `+error@x.svelte` isn't a Kit file (no `@` breakout for
+        // error routes) — upstream's `isKitErrorFile` requires the
+        // stem be exactly `+error`. Grouped pages/layouts stay
+        // recognized.
+        assert_eq!(route_kind(Path::new("src/routes/+error@x.svelte")), None);
+        assert_eq!(
+            route_kind(Path::new("src/routes/+error.svelte")),
+            Some(RouteKind::Error)
+        );
+        assert_eq!(
+            route_kind(Path::new("src/routes/(auth)/+page@(app).svelte")),
+            Some(RouteKind::Page)
+        );
+    }
+
+    #[test]
     fn kit_prop_decl_page_data_required() {
         assert_eq!(
             kit_prop_decl("data", RouteKind::Page),
@@ -309,8 +340,26 @@ mod tests {
     }
 
     #[test]
-    fn synth_error_route_returns_none() {
-        // `+error.svelte` has no auto-typed props in our mapping.
+    fn kit_prop_decl_error_route_error_prop() {
+        // `+error.svelte`'s `error` prop is typed by the app-wide
+        // `App.Error` ambient — no `./$types.js` import involved.
+        assert_eq!(
+            kit_prop_decl("error", RouteKind::Error),
+            Some("error: App.Error")
+        );
+    }
+
+    #[test]
+    fn synth_error_route_with_error_prop() {
+        let ty = synthesize_route_props_type(RouteKind::Error, &["error"]).unwrap();
+        assert_eq!(ty, "{ error: App.Error; }");
+    }
+
+    #[test]
+    fn synth_error_route_returns_none_without_error_prop() {
+        // Only `error` is auto-typed on error routes — `data` and
+        // friends are not Kit-injected there, so a destructure without
+        // `error` falls back to the caller's `any` path.
         assert_eq!(
             synthesize_route_props_type(RouteKind::Error, &["data"]),
             None

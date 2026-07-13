@@ -289,9 +289,11 @@ fn read_dir_sorted(dir: &Path) -> Vec<PathBuf> {
 ///
 /// - `input.svelte` — the conventional name for our bug fixtures and
 ///   most upstream samples.
-/// - `+page.svelte` / `+layout.svelte` — upstream's SvelteKit-autotypes
-///   samples (`*sveltekit-autotypes*`) put their Svelte source in a
-///   route-shaped basename instead.
+/// - `+page.svelte` / `+layout.svelte` / `+error.svelte` — the
+///   SvelteKit-autotypes samples (upstream's `*sveltekit-autotypes*`
+///   corpus and our route-autotyping bug fixtures) put their Svelte
+///   source in a route-shaped basename instead, because the basename
+///   itself is what triggers the auto-typing under test.
 ///
 /// Without route-svelte recognition, the seven `*sveltekit-autotypes*`
 /// samples in upstream's svelte2tsx corpus would silently fall through
@@ -301,6 +303,7 @@ fn has_input_svelte(dir: &Path) -> bool {
     dir.join("input.svelte").is_file()
         || dir.join("+page.svelte").is_file()
         || dir.join("+layout.svelte").is_file()
+        || dir.join("+error.svelte").is_file()
 }
 
 /// Run our binary with `--emit-ts` against a sample directory and

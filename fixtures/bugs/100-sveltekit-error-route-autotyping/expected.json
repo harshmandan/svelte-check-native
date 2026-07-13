@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Zero-config +error.svelte props (upstream language-tools d6536401, svelte-check 4.7.2). An untyped `let { error } = $props()` in +error.svelte gets `error: App.Error` injected into the synthesized $$ComponentProps, so `error.message` type-checks against the app-wide ambient App.Error interface (declared in app.d.ts) instead of collapsing to `any`. Black-box clean run proves the ambient resolves through tsgo end-to-end; the emit text itself is locked by the emit_snapshots copy of this fixture."
+}

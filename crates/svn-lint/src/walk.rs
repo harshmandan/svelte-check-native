@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use svn_parser::ast::{Attribute, Fragment, Node, SvelteElementKind};
-use svn_parser::{parse_all_template_runs, parse_sections};
+use svn_parser::{parse_all_template_runs, parse_script_body, parse_sections};
 
 use crate::codes::Code;
 use crate::context::{CustomElementInfo, LintContext};
@@ -331,6 +331,22 @@ pub fn walk_parsed(
     // already skips that fixture via the `_config.js` escape.
     visit_svelte_options_attributes(fragment, source, ctx);
 
+    // Parse each script body exactly once; the scope builder and the
+    // script-AST rules below both walk the same `Program`. The
+    // allocator is hoisted to this frame so the parsed ASTs outlive
+    // both consumers.
+    let script_alloc = oxc_allocator::Allocator::default();
+    let parsed_module = doc
+        .module_script
+        .as_ref()
+        .map(|s| parse_script_body(&script_alloc, s.content, s.lang));
+    let parsed_instance = doc
+        .instance_script
+        .as_ref()
+        .map(|s| parse_script_body(&script_alloc, s.content, s.lang));
+    let module_program = parsed_module.as_ref().map(|p| &p.program);
+    let instance_program = parsed_instance.as_ref().map(|p| &p.program);
+
     // Build the scope tree once; Phase-C rules query it by binding
     // name from both the script walker and the template walker. The
     // template walk here is what surfaces "identifier is referenced
@@ -342,6 +358,8 @@ pub fn walk_parsed(
         source,
         ctx.runes,
         ctx.compat,
+        module_program,
+        instance_program,
     ));
 
     // <script>-attribute rules (script_unknown_attribute,
@@ -351,7 +369,7 @@ pub fn walk_parsed(
     // <script>-body (JS/TS AST) rules: perf_avoid_inline_class,
     // perf_avoid_nested_class, reactive_declaration_invalid_placement,
     // ...
-    crate::rules::script_ast_rules::visit_document(doc, ctx);
+    crate::rules::script_ast_rules::visit_document(doc, module_program, instance_program, ctx);
 
     // Phase-C binding-driven rules (non_reactive_update,
     // state_referenced_locally). Run AFTER script ast rules so

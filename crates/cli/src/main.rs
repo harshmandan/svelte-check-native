@@ -1408,20 +1408,29 @@ fn run_typecheck(
         // `inject` returns `None` (no handlers matched), skip — the
         // file type-checks as the user wrote it and the original path
         // stays in tsgo's program via the normal `include` glob.
-        inputs.extend(kit_files.iter().filter_map(|file| {
-            let source = std::fs::read_to_string(file).ok()?;
-            let generated = svn_emit::kit_inject::inject(file, &source)?;
-            Some(svn_typecheck::CheckInput {
-                source_path: file.clone(),
-                generated_ts: generated,
-                line_map: Vec::new(),
-                token_map: Vec::new(),
-                overlay_line_starts: Vec::new(),
-                source_line_starts: Vec::new(),
-                kind: svn_typecheck::InputKind::KitFile,
-                is_ts_overlay: true,
-            })
-        }));
+        // Per-file read + oxc parse with no shared mutable state — fan
+        // out over rayon like the `.svelte` emit above. rayon's Vec
+        // collect preserves the caller's order, so `inputs` stays
+        // deterministic.
+        inputs.extend(
+            kit_files
+                .par_iter()
+                .filter_map(|file| {
+                    let source = std::fs::read_to_string(file).ok()?;
+                    let generated = svn_emit::kit_inject::inject(file, &source)?;
+                    Some(svn_typecheck::CheckInput {
+                        source_path: file.clone(),
+                        generated_ts: generated,
+                        line_map: Vec::new(),
+                        token_map: Vec::new(),
+                        overlay_line_starts: Vec::new(),
+                        source_line_starts: Vec::new(),
+                        kind: svn_typecheck::InputKind::KitFile,
+                        is_ts_overlay: true,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        );
 
         // User-`.ts`-overlay for the sibling-collision case: when a user
         // `.ts` file imports `./Foo.svelte` where `Foo.svelte.ts` exists
@@ -1444,22 +1453,39 @@ fn run_typecheck(
         // overlay; others pass through tsgo's regular include. Fast-path
         // skip when no runes modules were discovered.
         if !runes_modules_set.is_empty() {
-            let rewrite_candidates = user_script_files.iter().chain(runes_modules_set.iter());
-            inputs.extend(rewrite_candidates.filter_map(|file| {
-                let source = std::fs::read_to_string(file).ok()?;
-                let rewritten =
-                    rewrite_svelte_imports_for_collisions(file, &source, &runes_modules_set)?;
-                Some(svn_typecheck::CheckInput {
-                    source_path: file.clone(),
-                    generated_ts: rewritten,
-                    line_map: Vec::new(),
-                    token_map: Vec::new(),
-                    overlay_line_starts: Vec::new(),
-                    source_line_starts: Vec::new(),
-                    kind: svn_typecheck::InputKind::UserTsOverlay,
-                    is_ts_overlay: true,
-                })
-            }));
+            // Candidate order must be stable: it flows through `inputs`
+            // into the overlay tsconfig's exclude list, and HashSet
+            // iteration order isn't deterministic — sort the runes-
+            // module tail. Then fan out over rayon (read + oxc parse
+            // per file, no shared mutable state); the Vec collect
+            // preserves candidate order.
+            let mut runes_candidates: Vec<&PathBuf> = runes_modules_set.iter().collect();
+            runes_candidates.sort();
+            let rewrite_candidates: Vec<&PathBuf> =
+                user_script_files.iter().chain(runes_candidates).collect();
+            inputs.extend(
+                rewrite_candidates
+                    .par_iter()
+                    .filter_map(|file| {
+                        let source = std::fs::read_to_string(file).ok()?;
+                        let rewritten = rewrite_svelte_imports_for_collisions(
+                            file,
+                            &source,
+                            &runes_modules_set,
+                        )?;
+                        Some(svn_typecheck::CheckInput {
+                            source_path: (*file).clone(),
+                            generated_ts: rewritten,
+                            line_map: Vec::new(),
+                            token_map: Vec::new(),
+                            overlay_line_starts: Vec::new(),
+                            source_line_starts: Vec::new(),
+                            kind: svn_typecheck::InputKind::UserTsOverlay,
+                            is_ts_overlay: true,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            );
         }
     }
     let t_emit = mark.elapsed();

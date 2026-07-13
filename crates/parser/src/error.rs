@@ -38,6 +38,9 @@ pub enum ParseError {
     #[error("unterminated mustache expression (no matching `}}`)")]
     UnterminatedMustache { range: Range },
 
+    #[error("Unexpected end of input")]
+    UnexpectedEof { range: Range },
+
     #[error("unterminated <{name}> element (no matching </{name}>)")]
     UnterminatedElement { name: String, range: Range },
 
@@ -63,6 +66,7 @@ impl ParseError {
             Self::UnknownScriptLang { range, .. } => *range,
             Self::UnterminatedComment { range } => *range,
             Self::UnterminatedMustache { range } => *range,
+            Self::UnexpectedEof { range } => *range,
             Self::UnterminatedElement { range, .. } => *range,
             Self::MismatchedClosingTag { range, .. } => *range,
             Self::UnknownSvelteElement { range, .. } => *range,
@@ -96,6 +100,7 @@ impl ParseError {
             Self::UnknownScriptLang { .. } => "unknown-script-lang",
             Self::UnterminatedComment { .. } => "unterminated-comment",
             Self::UnterminatedMustache { .. } => "unterminated-mustache",
+            Self::UnexpectedEof { .. } => "unexpected-eof",
             Self::UnterminatedElement { .. } => "unterminated-element",
             Self::MismatchedClosingTag { .. } => "mismatched-closing-tag",
             Self::UnknownSvelteElement { .. } => "unknown-svelte-element",

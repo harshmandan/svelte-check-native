@@ -810,7 +810,17 @@ impl<'src> TemplateParser<'src> {
     /// Consume the closing delimiter and return `(self_closing, end_pos)`.
     fn finish_opening_tag(&mut self) -> Option<(bool, u32)> {
         self.scanner.skip_ascii_whitespace();
-        match self.scanner.peek_byte()? {
+        let Some(byte) = self.scanner.peek_byte() else {
+            // Source truncated inside the opening tag (`<div class="x"` at
+            // EOF). Upstream fires `unexpected_eof` here; silently
+            // propagating `None` would make the element — and everything
+            // it referenced — vanish with zero errors.
+            self.errors.push(ParseError::UnexpectedEof {
+                range: Range::new(self.scanner.pos(), self.scanner.pos()),
+            });
+            return None;
+        };
+        match byte {
             b'>' => {
                 self.scanner.advance_byte();
                 Some((false, self.scanner.pos()))
@@ -1233,6 +1243,24 @@ mod tests {
                 .slice("<p>{`hello ${name}!`}</p>")
                 .contains("`hello ${name}!`")
         );
+    }
+
+    #[test]
+    fn eof_inside_opening_tag_errors() {
+        // A file truncated inside an opening tag must report an error —
+        // upstream fires `unexpected_eof`. Previously the element (and
+        // everything it referenced) vanished with zero errors and the
+        // file "checked clean".
+        for src in ["<div class=\"x\"", "<div", "<div class=\"x\" id=\"y\""] {
+            let (frag, errors) = parse_template(src, Range::new(0, src.len() as u32));
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| matches!(e, ParseError::UnexpectedEof { .. })),
+                "expected UnexpectedEof for {src:?}, got {errors:?} (nodes: {:?})",
+                frag.nodes
+            );
+        }
     }
 
     #[test]

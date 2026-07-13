@@ -233,6 +233,21 @@ pub fn check(
         workspace,
         solution_root_tsconfig.map(|p| p.to_path_buf()),
     );
+
+    // Start the `.svelte-kit/types/` mirror sync (Step 1b) in the
+    // background right away. It depends only on the layout — it reads
+    // the USER's `.svelte-kit/types/` tree and writes the cache's
+    // `svelte-kit/types/` mirror, both disjoint from everything the
+    // Step-1 overlay fan-out touches (`svelte/` subtree) — so it can
+    // overlap the whole overlay-write pass instead of adding its
+    // serial walk (tens of milliseconds on large Kit route trees) to
+    // the pre-tsgo critical path. Joined right before the overlay
+    // tsconfig build consumes the result.
+    let kit_types_mirror_task = {
+        let layout = layout.clone();
+        std::thread::spawn(move || kit_types_mirror::sync_mirror(&layout))
+    };
+
     std::fs::create_dir_all(&layout.svelte_dir)?;
 
     // Ship the svelte type shims into the cache. Core (runes + helper
@@ -541,15 +556,21 @@ pub fn check(
     // for next run and doesn't break this one.
     gc_orphaned_overlays(&layout.svelte_dir, &written_paths);
 
-    // Step 1b: write the synthetic `.svelte-kit/types/` mirror so the
-    // `$types.d.ts` chain `'../(…/)src/routes/…/+page.js'` resolves
-    // through our typed Kit-file copies instead of the user's untyped
-    // source. Returns Some(mirror_dir) when the user actually has a
+    // Step 1b: collect the synthetic `.svelte-kit/types/` mirror the
+    // background thread has been writing since the top of `check` —
+    // it makes the `$types.d.ts` chain `'../(…/)src/routes/…/+page.js'`
+    // resolve through our typed Kit-file copies instead of the user's
+    // untyped source. Some(mirror_dir) when the user actually has a
     // svelte-kit-generated types tree (the common SvelteKit case),
     // None for non-Kit projects. The overlay builder uses this signal
     // to enable rootDirs priority + include-glob redirect; without it
     // the overlay degrades cleanly to today's behavior.
-    let kit_types_mirror = kit_types_mirror::sync_mirror(&layout)?;
+    let kit_types_mirror = match kit_types_mirror_task.join() {
+        Ok(result) => result?,
+        // Re-raise a mirror-thread panic on this thread, exactly as if
+        // `sync_mirror` had run inline here.
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
 
     // Step 1c: write fallback `$app/*` ambient-module declarations
     // when this is a Kit project (`.svelte-kit/types/` exists) but

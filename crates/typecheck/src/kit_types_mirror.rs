@@ -37,6 +37,7 @@
 
 use std::path::PathBuf;
 
+use rayon::prelude::*;
 use svn_core::sveltekit::{KitFilesSettings, user_source_needles};
 
 use crate::cache::{CacheLayout, write_if_changed};
@@ -50,6 +51,12 @@ use crate::cache::{CacheLayout, write_if_changed};
 /// overlay builder knows to enable the rootDirs priority + include-
 /// glob rewrite), or `None` if there's no user `.svelte-kit/types/`
 /// to mirror.
+///
+/// The per-file read+rewrite+compare body fans out over rayon — each
+/// file's work is independent (distinct mirror target paths, no shared
+/// mutable state), and large Kit route trees have a thousand-plus
+/// generated `.d.ts` files, so a serial pass costs tens of
+/// milliseconds of pure IO latency per run.
 pub fn sync_mirror(layout: &CacheLayout) -> std::io::Result<Option<PathBuf>> {
     let user_types_root = layout.workspace.join(".svelte-kit").join("types");
     if !user_types_root.is_dir() {
@@ -66,37 +73,42 @@ pub fn sync_mirror(layout: &CacheLayout) -> std::io::Result<Option<PathBuf>> {
     // settings need to be plumbed through this call site.
     let settings = KitFilesSettings::default();
     let needles = user_source_needles(&settings);
-    let mut wrote_any = false;
-    let mut written: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    for entry in walkdir::WalkDir::new(&user_types_root)
+    // Enumerate mirror candidates serially (directory traversal is
+    // ordering-sensitive in walkdir and cheap relative to the file
+    // IO), then fan the per-file work out.
+    //
+    // Mirror $types.d.ts files (the leaky ones) plus any sibling
+    // declaration files svelte-kit emits — they reference each
+    // other and the same path-rewrite is safe.
+    let candidates: Vec<PathBuf> = walkdir::WalkDir::new(&user_types_root)
         .into_iter()
         .filter_map(|e| e.ok())
-    {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let path = entry.path();
-        // Mirror $types.d.ts files (the leaky ones) plus any sibling
-        // declaration files svelte-kit emits — they reference each
-        // other and the same path-rewrite is safe.
-        if !path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.ends_with(".d.ts"))
-        {
-            continue;
-        }
-        let rel = match path.strip_prefix(&user_types_root) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        let content = std::fs::read_to_string(path)?;
-        let rewritten = rewrite_user_source_chain(&content, &needles);
-        let out = mirror_root.join(rel);
-        write_if_changed(&out, &rewritten)?;
-        written.insert(out);
-        wrote_any = true;
-    }
+        .filter(|entry| {
+            entry.file_type().is_file()
+                && entry
+                    .path()
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.ends_with(".d.ts"))
+        })
+        .map(|entry| entry.into_path())
+        .collect();
+    let written: std::collections::HashSet<PathBuf> = candidates
+        .into_par_iter()
+        .filter_map(|path| {
+            let rel = match path.strip_prefix(&user_types_root) {
+                Ok(r) => r,
+                Err(_) => return None,
+            };
+            let out = mirror_root.join(rel);
+            Some(std::fs::read_to_string(&path).and_then(|content| {
+                let rewritten = rewrite_user_source_chain(&content, &needles);
+                write_if_changed(&out, &rewritten)?;
+                Ok(out)
+            }))
+        })
+        .collect::<std::io::Result<_>>()?;
+    let wrote_any = !written.is_empty();
     // GC orphans. A deleted/renamed route leaves its `$types.d.ts`
     // in the cache mirror forever otherwise; tsgo's overlay program
     // then keeps consulting the stale typing instead of firing
@@ -165,9 +177,8 @@ fn find_user_source_segment(text: &str, needles: &[String]) -> Option<usize> {
     let bytes = text.as_bytes();
     let mut best: Option<usize> = None;
     for needle in needles {
-        let nb = needle.as_bytes();
         let mut i = 0usize;
-        while let Some(rel) = bytes[i..].windows(nb.len()).position(|w| w == nb) {
+        while let Some(rel) = text[i..].find(needle.as_str()) {
             let pos = i + rel;
             if pos >= 3 && &bytes[pos - 3..pos] == b"../" {
                 best = match best {
@@ -176,7 +187,7 @@ fn find_user_source_segment(text: &str, needles: &[String]) -> Option<usize> {
                 };
                 break; // earliest hit FOR THIS NEEDLE; later ones can't beat it
             }
-            i = pos + nb.len();
+            i = pos + needle.len();
         }
     }
     best

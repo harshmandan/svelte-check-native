@@ -1358,6 +1358,7 @@ fn run_typecheck(
     }
     let t_discovery = mark.elapsed();
 
+    let mark = std::time::Instant::now();
     // Read every source up-front; we need the bytes for both the
     // tsgo-typecheck path and the svelte/compiler bridge.
     //
@@ -1369,27 +1370,41 @@ fn run_typecheck(
     // Sources are held as `Arc<str>` so the typecheck crate's
     // `CheckInput` can share them (no disk re-read, no duplicate copy)
     // while this vec stays alive for the lint / bridge passes below.
+    //
+    // Reads fan out over rayon — 1000+ open/read/close round-trips on
+    // one thread are the largest serial pre-emit segment, and the pool
+    // is idle at this point anyway. The order-preserving `collect`
+    // plus the sequential fold below keep `svelte_sources` (and any
+    // read-error stderr lines) in exactly the input order the serial
+    // loop produced. The read is counted inside the `parse + analyze
+    // + emit` timing phase (the `mark` above) rather than falling
+    // untimed between phases.
+    let read_ordered = |files: &[PathBuf]| -> Vec<(PathBuf, std::io::Result<String>)> {
+        files
+            .par_iter()
+            .map(|file| (file.clone(), std::fs::read_to_string(file)))
+            .collect()
+    };
     let mut svelte_sources: Vec<(PathBuf, std::sync::Arc<str>)> =
         Vec::with_capacity(svelte_files.len() + svelte_files_aux.len());
-    for file in &svelte_files {
-        match std::fs::read_to_string(file) {
-            Ok(s) => svelte_sources.push((file.clone(), s.into())),
+    for (file, result) in read_ordered(&svelte_files) {
+        match result {
+            Ok(s) => svelte_sources.push((file, s.into())),
             Err(err) => {
                 eprintln!("failed to read {}: {err}", file.display());
             }
         }
     }
     let svelte_sources_in_scope_end = svelte_sources.len();
-    for file in &svelte_files_aux {
-        match std::fs::read_to_string(file) {
-            Ok(s) => svelte_sources.push((file.clone(), s.into())),
+    for (file, result) in read_ordered(&svelte_files_aux) {
+        match result {
+            Ok(s) => svelte_sources.push((file, s.into())),
             Err(err) => {
                 eprintln!("failed to read {}: {err}", file.display());
             }
         }
     }
 
-    let mark = std::time::Instant::now();
     // The whole parse → analyze → emit + kit-inject + collision-
     // rewrite pipeline only feeds tsgo. When --diagnostic-sources
     // excludes `js`, tsgo is skipped entirely, so this work would

@@ -39,7 +39,19 @@ use crate::scanner::Scanner;
 /// The returned [`Fragment`] has `range == range`.
 pub fn parse_template(source: &str, range: Range) -> (Fragment, Vec<ParseError>) {
     let mut parser = TemplateParser::new(source, range);
-    let (nodes, _stop) = parser.parse_fragment_until(None);
+    let mut nodes = Vec::new();
+    // A terminator surfacing at top level is a stray `{/...}` / `{:...}`
+    // with no open block — upstream fires block_unexpected_close /
+    // block_invalid_continuation_placement. Record the error and resume
+    // so the rest of the template isn't silently dropped.
+    loop {
+        let (mut more, stop) = parser.parse_fragment_until(None);
+        nodes.append(&mut more);
+        match stop {
+            None => break,
+            Some(term) => parser.push_stray_terminator_error(&term),
+        }
+    }
     (
         Fragment {
             nodes,
@@ -86,6 +98,11 @@ struct TemplateParser<'src> {
     fragment_range: Range,
     fragment_end: u32,
     errors: Vec<ParseError>,
+    /// Source span of the most recently consumed block terminator
+    /// (`{:...}` / `{/...}`). [`Self::parse_fragment_until`] records it as
+    /// it consumes the terminator so callers that receive one where none
+    /// is expected can report an accurately-positioned error.
+    last_terminator_range: Range,
 }
 
 impl<'src> TemplateParser<'src> {
@@ -97,7 +114,20 @@ impl<'src> TemplateParser<'src> {
             fragment_range: range,
             fragment_end: range.end,
             errors: Vec::new(),
+            last_terminator_range: Range::new(range.start, range.start),
         }
+    }
+
+    /// Report a block terminator that surfaced where no block is open —
+    /// at template top level or inside an element's children. Mirrors
+    /// upstream: a stray `{/...}` fires `block_unexpected_close`; a stray
+    /// `{:...}` fires `block_invalid_continuation_placement`.
+    fn push_stray_terminator_error(&mut self, term: &BlockTerminator) {
+        let range = self.last_terminator_range;
+        self.errors.push(match term {
+            BlockTerminator::Close { .. } => ParseError::UnexpectedBlockClose { range },
+            _ => ParseError::InvalidBlockContinuation { range },
+        });
     }
 
     fn at_fragment_end(&self) -> bool {
@@ -159,8 +189,10 @@ impl<'src> TemplateParser<'src> {
         while !self.at_fragment_end() {
             // Block-level terminator: `{:...}` or `{/...}`.
             if self.scanner.starts_with("{:") || self.scanner.starts_with("{/") {
+                let term_start = self.scanner.pos();
                 if let Some(term) = peek_and_consume_terminator(&mut self.scanner, &mut self.errors)
                 {
+                    self.last_terminator_range = Range::new(term_start, self.scanner.pos());
                     return (nodes, Some(term));
                 }
                 // Malformed terminator — error was recorded; advance to
@@ -854,7 +886,19 @@ impl<'src> TemplateParser<'src> {
         open_end: u32,
     ) -> Option<Fragment> {
         let children_start = self.scanner.pos();
-        let (children, _stop) = self.parse_fragment_until(Some(tag));
+        // A terminator surfacing here is a stray `{/...}` / `{:...}` inside
+        // an element with no open block (e.g. `<div>{:else}</div>`) —
+        // upstream errors. Report and resume so the element's remaining
+        // children and closing tag still parse.
+        let mut children = Vec::new();
+        loop {
+            let (mut more, stop) = self.parse_fragment_until(Some(tag));
+            children.append(&mut more);
+            match stop {
+                None => break,
+                Some(term) => self.push_stray_terminator_error(&term),
+            }
+        }
         let children_end = self.scanner.pos();
 
         // Consume the closing tag if present.
@@ -1242,6 +1286,87 @@ mod tests {
             i.expression_range
                 .slice("<p>{`hello ${name}!`}</p>")
                 .contains("`hello ${name}!`")
+        );
+    }
+
+    #[test]
+    fn stray_top_level_block_close_errors_and_parsing_resumes() {
+        // Upstream fires block_unexpected_close for `{/if}` with no open
+        // block. Previously the terminator was silently consumed and
+        // parsing STOPPED — everything after it was dropped with zero
+        // errors.
+        let src = "{/if}<div>{undeclared}</div>";
+        let (frag, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ParseError::UnexpectedBlockClose { .. })),
+            "expected UnexpectedBlockClose, got {errors:?}"
+        );
+        let err = errors
+            .iter()
+            .find(|e| matches!(e, ParseError::UnexpectedBlockClose { .. }))
+            .unwrap();
+        assert_eq!(err.range().slice(src), "{/if}");
+        // The rest of the template must still be parsed.
+        let Some(Node::Element(e)) = frag.nodes.first() else {
+            panic!("expected the div to survive, got {:?}", frag.nodes);
+        };
+        assert_eq!(e.name, "div");
+        assert!(matches!(e.children.nodes[0], Node::Interpolation(_)));
+    }
+
+    #[test]
+    fn stray_top_level_continuation_errors_and_parsing_resumes() {
+        // Upstream fires block_invalid_continuation_placement for a
+        // `{:...}` tag with no open block.
+        let src = "{:else}<p>after</p>";
+        let (frag, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ParseError::InvalidBlockContinuation { .. })),
+            "expected InvalidBlockContinuation, got {errors:?}"
+        );
+        assert!(
+            frag.nodes
+                .iter()
+                .any(|n| matches!(n, Node::Element(e) if e.name == "p")),
+            "expected the p to survive, got {:?}",
+            frag.nodes
+        );
+    }
+
+    #[test]
+    fn stray_continuation_inside_element_errors() {
+        // `<div>{:else}</div>` — upstream errors
+        // block_invalid_continuation_placement. Previously the `{:else}`
+        // was swallowed with zero errors.
+        let src = "<div>{:else}</div>";
+        let (frag, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ParseError::InvalidBlockContinuation { .. })),
+            "expected InvalidBlockContinuation, got {errors:?}"
+        );
+        // The element itself still parses and consumes its closing tag.
+        let Some(Node::Element(e)) = frag.nodes.first() else {
+            panic!("expected the div node, got {:?}", frag.nodes);
+        };
+        assert_eq!(e.name, "div");
+        assert_eq!(e.range.slice(src), src);
+    }
+
+    #[test]
+    fn stray_block_close_inside_element_errors() {
+        let src = "<div>{/if}</div>";
+        let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ParseError::UnexpectedBlockClose { .. })),
+            "expected UnexpectedBlockClose, got {errors:?}"
         );
     }
 

@@ -47,6 +47,14 @@ pub enum ParseError {
     #[error("mismatched closing tag, expected </{expected}>")]
     MismatchedClosingTag { expected: String, range: Range },
 
+    #[error("Unexpected block closing tag")]
+    UnexpectedBlockClose { range: Range },
+
+    #[error(
+        "{{:...}} block is invalid at this position (did you forget to close the preceding element or block?)"
+    )]
+    InvalidBlockContinuation { range: Range },
+
     #[error("unknown <svelte:{name}> element")]
     UnknownSvelteElement { name: String, range: Range },
 
@@ -69,6 +77,8 @@ impl ParseError {
             Self::UnexpectedEof { range } => *range,
             Self::UnterminatedElement { range, .. } => *range,
             Self::MismatchedClosingTag { range, .. } => *range,
+            Self::UnexpectedBlockClose { range } => *range,
+            Self::InvalidBlockContinuation { range } => *range,
             Self::UnknownSvelteElement { range, .. } => *range,
             Self::UnsupportedBlock { range } => *range,
         }
@@ -103,6 +113,8 @@ impl ParseError {
             Self::UnexpectedEof { .. } => "unexpected-eof",
             Self::UnterminatedElement { .. } => "unterminated-element",
             Self::MismatchedClosingTag { .. } => "mismatched-closing-tag",
+            Self::UnexpectedBlockClose { .. } => "block-unexpected-close",
+            Self::InvalidBlockContinuation { .. } => "block-invalid-continuation-placement",
             Self::UnknownSvelteElement { .. } => "unknown-svelte-element",
             Self::UnsupportedBlock { .. } => "unsupported-block",
         }

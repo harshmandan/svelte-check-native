@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 4,
+            "column": 0,
+            "code": "block-unexpected-close"
+        }
+    ],
+    "_note": "A stray `{/...}` with no open block is a hard compiler error upstream (block_unexpected_close, exit 1). parse_template used to discard the terminator returned by parse_fragment_until and STOP: the whole rest of the template was dropped with zero errors and exit 0, silently losing every template identifier reference after the stray tag. Now the error is reported and parsing resumes past it."
+}

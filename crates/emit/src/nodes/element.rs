@@ -188,7 +188,7 @@ pub(crate) fn emit_svelte_element_node(
             .nodes
             .iter()
             .filter_map(|n| match n {
-                svn_parser::Node::SnippetBlock(b) => Some(b),
+                svn_parser::Node::SnippetBlock(b) => Some(b.as_ref()),
                 _ => None,
             })
             .collect();
@@ -312,7 +312,7 @@ pub(crate) fn emit_svelte_element_node(
                     svn_parser::Node::SnippetBlock(b)
                         if b.name.as_str() == "failed" || b.name.as_str() == "pending" =>
                     {
-                        Some(b)
+                        Some(b.as_ref())
                     }
                     _ => None,
                 })

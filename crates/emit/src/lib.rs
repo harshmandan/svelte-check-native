@@ -1592,7 +1592,7 @@ pub(crate) fn emit_template_body(
         .nodes
         .iter()
         .filter_map(|n| match n {
-            Node::SnippetBlock(b) => Some(b),
+            Node::SnippetBlock(b) => Some(b.as_ref()),
             _ => None,
         })
         .collect();

@@ -505,14 +505,14 @@ impl<'src> TemplateParser<'src> {
             }
         }
 
-        Some(Node::IfBlock(build_if_block(
+        Some(Node::IfBlock(Box::new(build_if_block(
             condition_range,
             consequent,
             elseif_arms,
             alternate,
             block_start,
             self.scanner.pos(),
-        )))
+        ))))
     }
 
     fn parse_each_block(&mut self, block_start: u32) -> Option<Node> {
@@ -551,14 +551,14 @@ impl<'src> TemplateParser<'src> {
             }
         }
 
-        Some(Node::EachBlock(build_each_block(
+        Some(Node::EachBlock(Box::new(build_each_block(
             expr_range,
             as_clause,
             body,
             alternate,
             block_start,
             self.scanner.pos(),
-        )))
+        ))))
     }
 
     fn parse_await_block(&mut self, block_start: u32) -> Option<Node> {
@@ -647,14 +647,14 @@ impl<'src> TemplateParser<'src> {
             }
         }
 
-        Some(Node::AwaitBlock(build_await_block(
+        Some(Node::AwaitBlock(Box::new(build_await_block(
             expr_range,
             pending,
             then_branch,
             catch_branch,
             block_start,
             self.scanner.pos(),
-        )))
+        ))))
     }
 
     fn finish_await_block(&mut self, term: Option<BlockTerminator>, block_start: u32) {
@@ -685,12 +685,12 @@ impl<'src> TemplateParser<'src> {
                 });
             }
         }
-        Some(Node::KeyBlock(build_key_block(
+        Some(Node::KeyBlock(Box::new(build_key_block(
             expr_range,
             body,
             block_start,
             self.scanner.pos(),
-        )))
+        ))))
     }
 
     fn parse_snippet_block(&mut self, block_start: u32) -> Option<Node> {
@@ -709,13 +709,13 @@ impl<'src> TemplateParser<'src> {
                 });
             }
         }
-        Some(Node::SnippetBlock(build_snippet_block(
+        Some(Node::SnippetBlock(Box::new(build_snippet_block(
             name,
             params_range,
             body,
             block_start,
             self.scanner.pos(),
-        )))
+        ))))
     }
 
     fn parse_text(&mut self) -> Node {
@@ -859,13 +859,13 @@ impl<'src> TemplateParser<'src> {
             } else {
                 self.parse_children_until(&name, tag_start, open_tag_end)?
             };
-            return Some(Node::SvelteElement(SvelteElement {
+            return Some(Node::SvelteElement(Box::new(SvelteElement {
                 kind,
                 attributes,
                 children,
                 self_closing,
                 range: Range::new(tag_start, self.scanner.pos()),
-            }));
+            })));
         }
 
         if is_component_tag(&name) {
@@ -874,13 +874,13 @@ impl<'src> TemplateParser<'src> {
             } else {
                 self.parse_children_until(&name, tag_start, open_tag_end)?
             };
-            return Some(Node::Component(Component {
+            return Some(Node::Component(Box::new(Component {
                 name,
                 attributes,
                 children,
                 self_closing,
                 range: Range::new(tag_start, self.scanner.pos()),
-            }));
+            })));
         }
 
         // Normal HTML element.
@@ -901,13 +901,13 @@ impl<'src> TemplateParser<'src> {
             self.parse_children_until(&name, tag_start, open_tag_end)?
         };
 
-        Some(Node::Element(Element {
+        Some(Node::Element(Box::new(Element {
             name,
             attributes,
             children,
             self_closing: self_closing || is_void,
             range: Range::new(tag_start, self.scanner.pos()),
-        }))
+        })))
     }
 
     /// After [`parse_attributes`] returns, the scanner points at `>` or `/`.
@@ -1389,7 +1389,7 @@ mod tests {
             .nodes
             .iter()
             .filter_map(|n| match n {
-                Node::Element(e) if e.name == "li" => Some(e),
+                Node::Element(e) if e.name == "li" => Some(e.as_ref()),
                 _ => None,
             })
             .collect();

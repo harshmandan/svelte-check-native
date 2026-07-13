@@ -340,6 +340,13 @@ struct TreeBuilder {
     /// instance parse (see the matching `ScopeTree` fields).
     nonrunes_export_idents: Vec<SmolStr>,
     nonrunes_export_specs: Vec<(SmolStr, Option<SmolStr>)>,
+    /// Arena reused across the per-expression template mini-parses in
+    /// `walk_expr_range`. Templates carry hundreds of tiny `{expr}`
+    /// slices per file; constructing a fresh oxc Allocator for each
+    /// costs more than the parse itself, so one arena is taken out of
+    /// this slot per parse, `reset()` (which keeps its largest chunk),
+    /// and put back. `None` only while a parse is in flight.
+    expr_alloc: Option<oxc_allocator::Allocator>,
 }
 
 struct PendingRef {
@@ -404,6 +411,7 @@ impl TreeBuilder {
             custom_element_props_ignored: Vec::new(),
             nonrunes_export_idents: Vec::new(),
             nonrunes_export_specs: Vec::new(),
+            expr_alloc: None,
         }
     }
 
@@ -661,6 +669,23 @@ impl TreeBuilder {
         let Some(slice) = ctx.source.get(range.start as usize..range.end as usize) else {
             return;
         };
+        // Fast path: the dominant template-expression shape is a bare
+        // identifier (`{name}`, `bind:value={name}`, …). Parsing one
+        // with oxc yields exactly one Read-kind `PendingRef` with no
+        // closure/state/ignore flags — the same record the Shorthand
+        // fast path in `walk_template_attr` makes — so record it
+        // directly and skip the parser. Reserved words fall through
+        // to the parser: oxc treats them as literals (`true`, `null`,
+        // `this`) or rejects them (`let`, `await`, …), so they must
+        // not be recorded as identifier references.
+        if let Some((tok_start, token)) = bare_identifier(slice)
+            && !is_reserved_word(token)
+        {
+            let abs_start = range.start + tok_start as u32;
+            let tok_range = Range::new(abs_start, abs_start + token.len() as u32);
+            self.record_template_ref(token, tok_range, ctx, flags);
+            return;
+        }
         // Template expression slices that start with `{` are object
         // literals in Svelte's grammar (`use:foo={{ a: b }}`,
         // `style={{ x: y }}`), but at program-body level oxc parses
@@ -681,7 +706,9 @@ impl TreeBuilder {
         } else {
             (slice, 0)
         };
-        let alloc = oxc_allocator::Allocator::default();
+        // Reuse one arena across all of this builder's expression
+        // parses (see the `expr_alloc` field doc).
+        let mut alloc = self.expr_alloc.take().unwrap_or_default();
         let parsed = parse_script_body(&alloc, effective_slice, ctx.lang);
         let start_depth = self.scopes[ctx.scope.0 as usize].function_depth;
         let mut walker = ScriptWalker {
@@ -720,7 +747,8 @@ impl TreeBuilder {
             ctx.in_control_flow,
         );
         drop(parsed);
-        drop(alloc);
+        alloc.reset();
+        self.expr_alloc = Some(alloc);
     }
 
     /// Declare each identifier in a binding pattern (e.g. the body of
@@ -1357,6 +1385,87 @@ fn synthesize_store_subs(
     for i in all_moved.into_iter().rev() {
         unresolved.swap_remove(i);
     }
+}
+
+/// `Some((byte_offset_of_token, token))` when `slice` consists of
+/// exactly one ASCII identifier (`[A-Za-z_$][A-Za-z0-9_$]*`)
+/// surrounded only by ASCII whitespace. Anything else — operators,
+/// comments, unicode identifiers/whitespace — returns `None` so the
+/// caller falls through to a real parse.
+fn bare_identifier(slice: &str) -> Option<(usize, &str)> {
+    let bytes = slice.as_bytes();
+    let start = bytes.iter().position(|b| !b.is_ascii_whitespace())?;
+    if !(bytes[start].is_ascii_alphabetic() || matches!(bytes[start], b'_' | b'$')) {
+        return None;
+    }
+    let mut end = start + 1;
+    while end < bytes.len()
+        && (bytes[end].is_ascii_alphanumeric() || matches!(bytes[end], b'_' | b'$'))
+    {
+        end += 1;
+    }
+    if bytes[end..].iter().all(|b| b.is_ascii_whitespace()) {
+        Some((start, &slice[start..end]))
+    } else {
+        None
+    }
+}
+
+/// Words that do NOT parse as a plain identifier reference in module
+/// (strict-mode) code: ES keywords, literal keywords (`true`, `null`,
+/// `this`, …), strict-mode reserved words, and module-context `await`.
+/// The bare-identifier fast path must send these to the parser, which
+/// records no reference for them.
+fn is_reserved_word(token: &str) -> bool {
+    matches!(
+        token,
+        "await"
+            | "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "false"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "implements"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "interface"
+            | "let"
+            | "new"
+            | "null"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "return"
+            | "static"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+            | "yield"
+    )
 }
 
 fn resolve_by_name(scopes: &[Scope], from: ScopeId, name: &str) -> Option<BindingId> {

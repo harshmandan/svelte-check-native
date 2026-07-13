@@ -379,10 +379,12 @@ fn build_bindings_field(props_info: &svn_analyze::PropsInfo) -> String {
     if !is_runes {
         return "undefined as any as string".to_string();
     }
+    // `local_only` leaves (nested-pattern `$bindable`s) never reach
+    // upstream's bindings list — its loop only reads simple elements.
     let bindable: Vec<&svn_analyze::PropInfo> = props_info
         .destructures
         .iter()
-        .filter(|p| p.is_bindable)
+        .filter(|p| p.is_bindable && !p.local_only)
         .collect();
     if bindable.is_empty() {
         // Runes-mode component with no `$bindable()` props — emit

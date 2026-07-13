@@ -89,10 +89,12 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
         collect_top_level_bindings(&parsed.program, &mut script_bindings);
     }
 
+    // `local_only` leaves are excluded: upstream's `;prop;`-on-
+    // $bindable emission only fires for simple top-level elements.
     let bindable_prop_names: Vec<SmolStr> = props_info
         .destructures
         .iter()
-        .filter(|p| p.is_bindable)
+        .filter(|p| p.is_bindable && !p.local_only)
         .map(|p| p.local_name.clone())
         .collect();
 

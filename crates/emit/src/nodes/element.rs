@@ -208,7 +208,8 @@ pub(crate) fn emit_svelte_element_node(
         // `$$slot_def["X"]` and gets handled at the parent's child
         // walk via `try_emit_slot_let_consumer_open`. Skip the local
         // destructure here so we don't double-emit.
-        let has_slot_attr = svn_analyze::literal_attr_value(&s.attributes, "slot", source).is_some();
+        let has_slot_attr =
+            svn_analyze::literal_attr_value(&s.attributes, "slot", source).is_some();
         let let_destructures = if has_slot_attr {
             Vec::new()
         } else {
@@ -514,8 +515,7 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
     // `namespace: 'foreign'` (svelte config) preserves ALL attribute
     // case — upstream `transformAttributeCase` is gated on `!preserveCase`
     // (htmlxtojsx_v2/index.ts:109). Mirror that here.
-    let should_lowercase =
-        tag_literal && !is_custom_element && !crate::preserve_attribute_case();
+    let should_lowercase = tag_literal && !is_custom_element && !crate::preserve_attribute_case();
     for attr in attributes {
         match attr {
             svn_parser::Attribute::Plain(p) => {
@@ -783,7 +783,10 @@ pub(crate) fn emit_svelte_element_open(
             // emit_dom_element_open_with_snippet_props before reaching
             // here so the failed/pending snippets type against the
             // createElement prop signature (see emit_svelte_element_node).
-            debug_assert!(false, "Boundary should be handled by the caller's inline path");
+            debug_assert!(
+                false,
+                "Boundary should be handled by the caller's inline path"
+            );
             let _ = writeln!(buf, "{indent}{{");
         }
         Element => {

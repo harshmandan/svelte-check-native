@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "Upstream handle$propsRune's withUnknown: a non-simple $props() destructure element widens the synthesised $$ComponentProps with `& Record<string, any>` and contributes no prop key. Nested.svelte synthesises `{age: any} & Record<string, any>` (verified against upstream svelte2tsx: `type $$ComponentProps = { age: any } & Record<string, any>;`), AllNested.svelte bare `Record<string, any>`. The consumer's extra props therefore check clean — previously the closed `{user: any, age: any}` literal fired a false TS2353 on `extra` and invented `user`/`age` keys from nested leaves."
+}

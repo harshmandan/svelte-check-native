@@ -89,7 +89,7 @@ function mainPackageJson(v) {
     bugs: { url: `https://github.com/harshmandan/${MAIN_PKG}/issues` },
     repository: {
       type: 'git',
-      url: `https://github.com/harshmandan/${MAIN_PKG}.git`,
+      url: `git+https://github.com/harshmandan/${MAIN_PKG}.git`,
     },
     license: 'MIT',
     author: 'Harsh Mandan',
@@ -115,7 +115,7 @@ function platformPackageJson(target, v) {
     homepage: `https://github.com/harshmandan/${MAIN_PKG}`,
     repository: {
       type: 'git',
-      url: `https://github.com/harshmandan/${MAIN_PKG}.git`,
+      url: `git+https://github.com/harshmandan/${MAIN_PKG}.git`,
     },
     license: 'MIT',
     author: 'Harsh Mandan',

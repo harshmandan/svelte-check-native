@@ -99,16 +99,25 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
     // reactive-touched) cover every legitimate "Svelte assigns
     // this at runtime" case; everything else is genuinely a
     // user-source order bug that should fire TS2454.
+    // Every pass below splices bytes into the buffer AFTER the script
+    // body's byte-precise TokenMapEntry was pushed (and after the
+    // module script's). Each pass therefore returns its insertions and
+    // the token map is re-anchored immediately, so the map and the
+    // buffer never disagree — otherwise every diagnostic later in the
+    // script reverse-maps to the wrong column (or line, once a trailer
+    // lands inside the mapped span).
     let route_kind = sveltekit::route_kind(source_path);
     if emit_is_ts() {
         if let Some(s) = split {
-            widen_untyped_exported_props_in_place(
+            let edits = widen_untyped_exported_props_in_place(
                 buf.raw_string_mut(),
                 &s.exported_locals,
                 route_kind,
             );
+            buf.adjust_token_map_for_insertions(&edits);
         }
-        rewrite_definite_assignment_in_place(buf.raw_string_mut(), &def_assign_names);
+        let edits = rewrite_definite_assignment_in_place(buf.raw_string_mut(), &def_assign_names);
+        buf.adjust_token_map_for_insertions(&edits);
     } else {
         // JS overlay: a single inline-initializer rewrite replaces
         // both TS-mode passes. `let NAME;` → `let NAME = /** @type
@@ -116,7 +125,12 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
         // and definite-assign (no TS2454) semantics in a JSDoc-only
         // form — tsgo parses it cleanly under `.svelte.svn.js` without
         // firing TS8010.
-        widen_untyped_exports_jsdoc_in_place(buf.raw_string_mut(), &def_assign_names, route_kind);
+        let edits = widen_untyped_exports_jsdoc_in_place(
+            buf.raw_string_mut(),
+            &def_assign_names,
+            route_kind,
+        );
+        buf.adjust_token_map_for_insertions(&edits);
     }
     // SVELTE-4-COMPAT de-narrow: typed exported props with literal
     // initializers (`export let size: Size = 'medium'`) AND body-local
@@ -142,7 +156,8 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
                 }
             }
         }
-        denarrow_typed_exported_props_in_place(buf.raw_string_mut(), &denarrow_targets);
+        let edits = denarrow_typed_exported_props_in_place(buf.raw_string_mut(), &denarrow_targets);
+        buf.adjust_token_map_for_insertions(&edits);
     }
     // SVELTE-4-COMPAT: rewrite `void (a, b, c)` (the dependency-list
     // idiom for `$:` reactive blocks) to `void [a, b, c]`. The
@@ -154,5 +169,6 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
     // evaluate every expression and discard the result via `void`),
     // and the rewrite lives entirely in our type-check overlay so
     // user runtime is untouched.
-    rewrite_void_sequence_to_array(buf.raw_string_mut());
+    let edits = rewrite_void_sequence_to_array(buf.raw_string_mut());
+    buf.adjust_token_map_for_insertions(&edits);
 }

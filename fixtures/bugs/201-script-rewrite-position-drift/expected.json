@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 3, "column": 10, "code": 2322 }
+    ],
+    "_note": "Diagnostic positions must survive the post-body in-place rewrites. The script body's byte-precise token-map entry is pushed before the de-narrow trailer (` a = undefined as any;` after `let a: string | null = null;`) and the bind:this definite-assign `!` (`let el!: HTMLDivElement;`) are spliced into that span; the token map is re-anchored around each insertion, so the TS2322 on `const b: string = 1;` — which FOLLOWS both insertions — still maps to the declaration's exact source line/column (0-based 3:10, the `b` identifier). Pre-fix the 22-byte trailer shifted the reverse-mapped position onto the next line."
+}

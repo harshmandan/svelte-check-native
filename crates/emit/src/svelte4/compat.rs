@@ -31,9 +31,19 @@ use crate::util::{is_ascii_ws, is_horiz_ws, is_ident_byte, utf8_char_len};
 /// initializers (`let x = ...`) are already definitely assigned and don't
 /// need the `!`. Adding `!` to an initialized declaration is itself a TS
 /// error (TS1263).
-pub(crate) fn rewrite_definite_assignment_in_place(out: &mut String, target_names: &[SmolStr]) {
+///
+/// Returns the insertions performed as ascending `(position, length)`
+/// pairs in PRE-rewrite buffer coordinates (none of the inserted text
+/// contains a newline). Callers that hold position metadata computed
+/// against the pre-rewrite buffer (token-map byte spans) must re-anchor
+/// it with these — see `EmitBuffer::adjust_token_map_for_insertions`.
+pub(crate) fn rewrite_definite_assignment_in_place(
+    out: &mut String,
+    target_names: &[SmolStr],
+) -> Vec<(u32, u32)> {
+    let mut edits: Vec<(u32, u32)> = Vec::new();
     if target_names.is_empty() {
-        return;
+        return edits;
     }
     let original = std::mem::take(out);
     let bytes = original.as_bytes();
@@ -47,6 +57,7 @@ pub(crate) fn rewrite_definite_assignment_in_place(out: &mut String, target_name
             for pos in &insertions {
                 out.push_str(&original[cursor..*pos]);
                 out.push('!');
+                edits.push((*pos as u32, 1));
                 cursor = *pos;
             }
             out.push_str(&original[cursor..stmt_end]);
@@ -57,6 +68,7 @@ pub(crate) fn rewrite_definite_assignment_in_place(out: &mut String, target_name
             i += ch_len;
         }
     }
+    edits
 }
 
 /// At byte position `i`, try to recognize an entire `let …;` statement
@@ -597,7 +609,14 @@ pub(crate) fn is_runes_mode(
 /// single expression in parens). String / template / comment content
 /// inside the parens is skipped so a `,` inside a string doesn't
 /// trigger a false rewrite.
-pub(crate) fn rewrite_void_sequence_to_array(out: &mut String) {
+///
+/// Returns the insertions performed (the `void ` prefix on `$:` labels
+/// — the paren→bracket swaps are length-preserving and need no
+/// re-anchoring) as ascending `(position, length)` pairs in PRE-rewrite
+/// buffer coordinates, same contract as
+/// [`rewrite_definite_assignment_in_place`].
+pub(crate) fn rewrite_void_sequence_to_array(out: &mut String) -> Vec<(u32, u32)> {
+    let mut edits: Vec<(u32, u32)> = Vec::new();
     let original = std::mem::take(out);
     let bytes = original.as_bytes();
     let mut i = 0;
@@ -633,6 +652,7 @@ pub(crate) fn rewrite_void_sequence_to_array(out: &mut String) {
             out.push_str(&original[i..paren_open]);
             if matches!(kind, SeqKind::ReactiveLabel) {
                 out.push_str("void ");
+                edits.push((paren_open as u32, 5));
             }
             out.push('[');
             out.push_str(&original[paren_open + 1..paren_close]);
@@ -644,6 +664,7 @@ pub(crate) fn rewrite_void_sequence_to_array(out: &mut String) {
             i += ch_len;
         }
     }
+    edits
 }
 
 #[derive(Copy, Clone)]
@@ -843,9 +864,13 @@ fn skip_to_decl_continuation(bytes: &[u8], mut s: usize) -> usize {
     s
 }
 
-pub(crate) fn denarrow_typed_exported_props_in_place(out: &mut String, target_names: &[SmolStr]) {
+pub(crate) fn denarrow_typed_exported_props_in_place(
+    out: &mut String,
+    target_names: &[SmolStr],
+) -> Vec<(u32, u32)> {
+    let mut edits: Vec<(u32, u32)> = Vec::new();
     if target_names.is_empty() {
-        return;
+        return edits;
     }
     let original = std::mem::take(out);
     let bytes = original.as_bytes();
@@ -856,6 +881,7 @@ pub(crate) fn denarrow_typed_exported_props_in_place(out: &mut String, target_na
         {
             out.push_str(&original[i..stmt_end]);
             if !matched_names.is_empty() {
+                let before = out.len();
                 if !out.ends_with(';') {
                     out.push(';');
                 }
@@ -864,6 +890,7 @@ pub(crate) fn denarrow_typed_exported_props_in_place(out: &mut String, target_na
                     out.push_str(name);
                     out.push_str(" = undefined as any;");
                 }
+                edits.push((stmt_end as u32, (out.len() - before) as u32));
             }
             i = stmt_end;
         } else {
@@ -872,6 +899,7 @@ pub(crate) fn denarrow_typed_exported_props_in_place(out: &mut String, target_na
             i += ch_len;
         }
     }
+    edits
 }
 
 /// Declarator scanner matched to `try_process_let_statement_*` twins.
@@ -1083,9 +1111,10 @@ pub(crate) fn widen_untyped_exports_jsdoc_in_place(
     out: &mut String,
     target_names: &[SmolStr],
     route_kind: Option<sveltekit::RouteKind>,
-) {
+) -> Vec<(u32, u32)> {
+    let mut edits: Vec<(u32, u32)> = Vec::new();
     if target_names.is_empty() {
-        return;
+        return edits;
     }
     let original = std::mem::take(out);
     let bytes = original.as_bytes();
@@ -1097,6 +1126,7 @@ pub(crate) fn widen_untyped_exports_jsdoc_in_place(
             let mut cursor = i;
             for (pos, name) in &insertions {
                 out.push_str(&original[cursor..*pos]);
+                let before = out.len();
                 let kit_type = route_kind.and_then(|k| sveltekit::kit_widen_type(name, k));
                 match kit_type {
                     Some(ty) => {
@@ -1108,6 +1138,7 @@ pub(crate) fn widen_untyped_exports_jsdoc_in_place(
                         out.push_str(" = /** @type {any} */ (null)");
                     }
                 }
+                edits.push((*pos as u32, (out.len() - before) as u32));
                 cursor = *pos;
             }
             out.push_str(&original[cursor..stmt_end]);
@@ -1118,15 +1149,17 @@ pub(crate) fn widen_untyped_exports_jsdoc_in_place(
             i += ch_len;
         }
     }
+    edits
 }
 
 pub(crate) fn widen_untyped_exported_props_in_place(
     out: &mut String,
     target_names: &[SmolStr],
     route_kind: Option<sveltekit::RouteKind>,
-) {
+) -> Vec<(u32, u32)> {
+    let mut edits: Vec<(u32, u32)> = Vec::new();
     if target_names.is_empty() {
-        return;
+        return edits;
     }
     let original = std::mem::take(out);
     let bytes = original.as_bytes();
@@ -1143,6 +1176,7 @@ pub(crate) fn widen_untyped_exported_props_in_place(
                     .unwrap_or("any");
                 out.push_str(": ");
                 out.push_str(widen_type);
+                edits.push((*pos as u32, (2 + widen_type.len()) as u32));
                 cursor = *pos;
             }
             out.push_str(&original[cursor..stmt_end]);
@@ -1153,6 +1187,7 @@ pub(crate) fn widen_untyped_exported_props_in_place(
             i += ch_len;
         }
     }
+    edits
 }
 
 /// Declarator scanner twin of `try_process_let_statement`. The

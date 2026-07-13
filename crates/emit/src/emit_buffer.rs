@@ -195,6 +195,93 @@ impl EmitBuffer {
         self.overlay_line = 1 + count_newlines(&self.out);
     }
 
+    /// Re-anchor token-map entries after an in-place rewrite spliced
+    /// bytes into the buffer via `raw_string_mut()`.
+    ///
+    /// `insertions` are ascending `(position, length)` pairs in the
+    /// PRE-insertion buffer coordinates — the coordinate space every
+    /// existing entry was recorded in. Without this fix-up, an
+    /// insertion inside or before an already-mapped span makes every
+    /// later diagnostic reverse-map to the wrong column (or line),
+    /// because position translation interpolates byte offsets inside
+    /// the span.
+    ///
+    /// Per entry:
+    /// - entirely before the first insertion → unchanged;
+    /// - at/after an insertion point → shifted right by the inserted
+    ///   length (an insertion AT the start lands before the entry);
+    /// - spanning an insertion point:
+    ///   - a 1:1 verbatim entry (overlay span length == source span
+    ///     length, e.g. the script-body entry) is SPLIT at the point
+    ///     so both halves keep their exact byte-for-byte overlay →
+    ///     source correspondence;
+    ///   - a non-1:1 entry (synthesized text anchored to a source
+    ///     range) just grows by the inserted length — it's a single
+    ///     anchor, not a positional map, so splitting has nothing to
+    ///     preserve.
+    ///
+    /// The line map needs no adjustment: it's line-based and the
+    /// in-place rewrites never insert newlines (their insertion-length
+    /// accounting would drift the buffer's line counter otherwise —
+    /// callers own that invariant).
+    pub fn adjust_token_map_for_insertions(&mut self, insertions: &[(u32, u32)]) {
+        if insertions.is_empty() || self.token_map.is_empty() {
+            return;
+        }
+        let mut adjusted: Vec<TokenMapEntry> =
+            Vec::with_capacity(self.token_map.len() + insertions.len());
+        for entry in &self.token_map {
+            let one_to_one = entry.overlay_byte_end - entry.overlay_byte_start
+                == entry.source_byte_end - entry.source_byte_start;
+            // Segment the entry at each insertion strictly inside it
+            // (1:1 entries only). Each segment is (overlay_start,
+            // overlay_end, source_start) in pre-insertion coordinates.
+            let mut segments: Vec<(u32, u32, u32)> = Vec::new();
+            let mut seg_start = entry.overlay_byte_start;
+            let mut seg_src = entry.source_byte_start;
+            if one_to_one {
+                for &(pos, _) in insertions {
+                    if pos > seg_start && pos < entry.overlay_byte_end {
+                        segments.push((seg_start, pos, seg_src));
+                        seg_src += pos - seg_start;
+                        seg_start = pos;
+                    }
+                }
+            }
+            segments.push((seg_start, entry.overlay_byte_end, seg_src));
+            for (start, end, src_start) in segments {
+                // Shift by everything inserted at or before the
+                // segment's start; the segment interior holds no
+                // insertion point (guaranteed by the split above for
+                // 1:1 entries), so start and end shift together. A
+                // non-1:1 entry keeps its start shift but its end
+                // additionally absorbs interior insertions (the
+                // entry grows over them).
+                let shift: u32 = insertions
+                    .iter()
+                    .take_while(|&&(pos, _)| pos <= start)
+                    .map(|&(_, len)| len)
+                    .sum();
+                let end_shift: u32 = insertions
+                    .iter()
+                    .take_while(|&&(pos, _)| pos < end || pos <= start)
+                    .map(|&(_, len)| len)
+                    .sum();
+                adjusted.push(TokenMapEntry {
+                    overlay_byte_start: start + shift,
+                    overlay_byte_end: end + end_shift,
+                    source_byte_start: src_start,
+                    source_byte_end: if one_to_one {
+                        src_start + (end - start)
+                    } else {
+                        entry.source_byte_end
+                    },
+                });
+            }
+        }
+        self.token_map = adjusted;
+    }
+
     /// Consume the buffer and return its parts.
     pub fn finish(self) -> (String, Vec<LineMapEntry>, Vec<TokenMapEntry>) {
         (self.out, self.line_map, self.token_map)
@@ -366,6 +453,117 @@ mod tests {
         let (_, lm, tm) = buf.finish();
         assert!(lm.is_empty());
         assert!(tm.is_empty());
+    }
+
+    #[test]
+    fn adjust_insertions_splits_one_to_one_entry() {
+        // Verbatim script-body entry: overlay [10, 30) ↔ source
+        // [100, 120). An 8-byte insertion at overlay byte 20 must
+        // split it so bytes before 20 keep their mapping and bytes
+        // after map from source 110 onward (shifted right by 8).
+        let mut buf = EmitBuffer::with_capacity(0);
+        buf.push_token_map(TokenMapEntry {
+            overlay_byte_start: 10,
+            overlay_byte_end: 30,
+            source_byte_start: 100,
+            source_byte_end: 120,
+        });
+        buf.adjust_token_map_for_insertions(&[(20, 8)]);
+        let (_, _, tm) = buf.finish();
+        assert_eq!(tm.len(), 2);
+        assert_eq!(
+            tm[0],
+            TokenMapEntry {
+                overlay_byte_start: 10,
+                overlay_byte_end: 20,
+                source_byte_start: 100,
+                source_byte_end: 110,
+            }
+        );
+        assert_eq!(
+            tm[1],
+            TokenMapEntry {
+                overlay_byte_start: 28,
+                overlay_byte_end: 38,
+                source_byte_start: 110,
+                source_byte_end: 120,
+            }
+        );
+    }
+
+    #[test]
+    fn adjust_insertions_shifts_entry_after_point() {
+        // Entry fully after the insertion shifts; entry fully before
+        // is untouched; insertion exactly at an entry's end doesn't
+        // move that end.
+        let mut buf = EmitBuffer::with_capacity(0);
+        buf.push_token_map(TokenMapEntry {
+            overlay_byte_start: 0,
+            overlay_byte_end: 5,
+            source_byte_start: 40,
+            source_byte_end: 45,
+        });
+        buf.push_token_map(TokenMapEntry {
+            overlay_byte_start: 5,
+            overlay_byte_end: 9,
+            source_byte_start: 50,
+            source_byte_end: 54,
+        });
+        buf.adjust_token_map_for_insertions(&[(5, 3)]);
+        let (_, _, tm) = buf.finish();
+        assert_eq!(tm[0].overlay_byte_start, 0);
+        assert_eq!(tm[0].overlay_byte_end, 5);
+        assert_eq!(tm[1].overlay_byte_start, 8);
+        assert_eq!(tm[1].overlay_byte_end, 12);
+        assert_eq!(tm[1].source_byte_start, 50);
+    }
+
+    #[test]
+    fn adjust_insertions_grows_anchor_entry() {
+        // Non-1:1 entry (synthesized text anchored to a source range):
+        // an interior insertion grows the overlay span, source range
+        // unchanged — it's an anchor, not a positional map.
+        let mut buf = EmitBuffer::with_capacity(0);
+        buf.push_token_map(TokenMapEntry {
+            overlay_byte_start: 10,
+            overlay_byte_end: 20,
+            source_byte_start: 100,
+            source_byte_end: 103,
+        });
+        buf.adjust_token_map_for_insertions(&[(15, 4)]);
+        let (_, _, tm) = buf.finish();
+        assert_eq!(tm.len(), 1);
+        assert_eq!(
+            tm[0],
+            TokenMapEntry {
+                overlay_byte_start: 10,
+                overlay_byte_end: 24,
+                source_byte_start: 100,
+                source_byte_end: 103,
+            }
+        );
+    }
+
+    #[test]
+    fn adjust_insertions_multiple_points_accumulate() {
+        // Two insertions inside one 1:1 entry: three segments, each
+        // shifted by the total length inserted before it.
+        let mut buf = EmitBuffer::with_capacity(0);
+        buf.push_token_map(TokenMapEntry {
+            overlay_byte_start: 0,
+            overlay_byte_end: 30,
+            source_byte_start: 0,
+            source_byte_end: 30,
+        });
+        buf.adjust_token_map_for_insertions(&[(10, 2), (20, 5)]);
+        let (_, _, tm) = buf.finish();
+        assert_eq!(tm.len(), 3);
+        assert_eq!((tm[0].overlay_byte_start, tm[0].overlay_byte_end), (0, 10));
+        assert_eq!((tm[1].overlay_byte_start, tm[1].overlay_byte_end), (12, 22));
+        assert_eq!((tm[2].overlay_byte_start, tm[2].overlay_byte_end), (27, 37));
+        assert_eq!(tm[1].source_byte_start, 10);
+        assert_eq!(tm[2].source_byte_start, 20);
+        assert_eq!(tm[2].source_byte_end, 30);
     }
 
     #[test]

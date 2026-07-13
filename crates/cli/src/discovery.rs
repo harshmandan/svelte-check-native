@@ -84,9 +84,7 @@ pub(crate) fn discover_relevant_files_with_settings(
         // depth 0 is the workspace root itself — never prune it, even
         // if its basename is hidden or `node_modules` (the user pointed
         // us at it deliberately). Pruning the root yields zero files.
-        .filter_entry(|e| {
-            e.depth() == 0 || !e.file_type().is_dir() || !is_excluded_dir(e.path())
-        })
+        .filter_entry(|e| e.depth() == 0 || !e.file_type().is_dir() || !is_excluded_dir(e.path()))
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
     {
@@ -182,6 +180,12 @@ where
 /// expands to a recursive `/**/*` — TS treats `"src"` as "all files
 /// under src/", whereas globset would read it as a literal name match.
 /// Unparseable patterns are dropped (TS tolerates minor config typos).
+///
+/// Compiled with `literal_separator(true)` to match TypeScript's
+/// wildcard rules: `*` and `?` match within a single path segment and
+/// never cross a `/`; only `**` descends into subdirectories. globset's
+/// default would let `src/*` match the whole `src/` subtree, scoping
+/// files in (or excluding files from) the project that tsc would not.
 pub(crate) fn build_glob_set_absolute(patterns: &[String]) -> Option<globset::GlobSet> {
     if patterns.is_empty() {
         return None;
@@ -198,7 +202,10 @@ pub(crate) fn build_glob_set_absolute(patterns: &[String]) -> Option<globset::Gl
                 p.push_str("**/*");
             }
         }
-        if let Ok(glob) = globset::Glob::new(&p) {
+        if let Ok(glob) = globset::GlobBuilder::new(&p)
+            .literal_separator(true)
+            .build()
+        {
             builder.add(glob);
             any = true;
         }
@@ -280,6 +287,31 @@ mod tests {
             normalize_lexical(Path::new("/ws/./a/./b")),
             PathBuf::from("/ws/a/b")
         );
+    }
+
+    #[test]
+    fn glob_star_never_crosses_a_directory_separator() {
+        // TypeScript's include/exclude wildcard rules: `*` and `?` match
+        // within one path segment only; only `**` descends. globset's
+        // default lets `*` cross `/`, which would scope `src/*` over the
+        // whole subtree.
+        let set = build_glob_set_absolute(&["/ws/src/*".to_string()]).expect("glob set");
+        assert!(set.is_match(Path::new("/ws/src/Foo.svelte")));
+        assert!(!set.is_match(Path::new("/ws/src/lib/deep/Foo.svelte")));
+
+        let stories =
+            build_glob_set_absolute(&["/ws/src/*.stories.svelte".to_string()]).expect("glob set");
+        assert!(stories.is_match(Path::new("/ws/src/A.stories.svelte")));
+        assert!(!stories.is_match(Path::new("/ws/src/nested/A.stories.svelte")));
+
+        let single = build_glob_set_absolute(&["/ws/src/?.svelte".to_string()]).expect("glob set");
+        assert!(single.is_match(Path::new("/ws/src/A.svelte")));
+        assert!(!single.is_match(Path::new("/ws/src/a/b.svelte")));
+
+        // `**` still crosses directories.
+        let rec = build_glob_set_absolute(&["/ws/src/**/*.svelte".to_string()]).expect("glob set");
+        assert!(rec.is_match(Path::new("/ws/src/lib/deep/Foo.svelte")));
+        assert!(rec.is_match(Path::new("/ws/src/Foo.svelte")));
     }
 
     #[test]

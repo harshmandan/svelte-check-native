@@ -6,6 +6,18 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.2]
+
+### Fixed
+
+- **`npm install` no longer ERESOLVE-fails in projects holding
+  `typescript` 6.** npm range-checks optional peer dependencies that
+  are present in the tree, so 1.0.1's `typescript: ">=7.0.0"` peer
+  made the wrapper uninstallable next to a TS6 toolchain — the exact
+  mixed setup (TS6 for the build, tsgo for checking) the discovery
+  version gate exists to support. The peer range is now `*`; engine
+  fitness (7+) is enforced at check time by discovery.
+
 ## [1.0.1]
 
 Support for stable TypeScript 7 as the check engine (#34, thanks

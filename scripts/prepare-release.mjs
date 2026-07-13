@@ -100,13 +100,18 @@ function mainPackageJson(v) {
       TARGETS.map((t) => [`${MAIN_PKG}-${t.npmPlatform}`, v]),
     ),
     // Either engine satisfies the runtime requirement (discovery
-    // prefers native-preview, accepts typescript 7+). Both peers are
-    // optional so that installs carrying only one of them — e.g. a
-    // tsgo-only project, or a stable-TS7-only project — don't get
-    // unresolved-peer warnings. Discovery errors at check time when
-    // neither is present.
+    // prefers typescript 7+, falls back to native-preview). Both
+    // peers are optional so single-engine installs don't get
+    // unresolved-peer warnings — and the typescript range is `*`, not
+    // `>=7`, because npm range-checks optional peers that ARE
+    // installed: a `>=7` range makes `npm install` ERESOLVE-fail in
+    // any project holding typescript 6 for its own toolchain, exactly
+    // the mixed setup the runtime version gate exists to support.
+    // Engine fitness (7+) is enforced at check time by discovery,
+    // which skips typescript <7 and errors clearly when no engine is
+    // present.
     peerDependencies: {
-      typescript: '>=7.0.0',
+      typescript: '*',
       '@typescript/native-preview': '>=7.0.0-dev.0',
     },
     peerDependenciesMeta: {

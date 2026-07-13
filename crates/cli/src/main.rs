@@ -796,12 +796,16 @@ fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Opti
     Some(format!("{base}{}", code.replace('-', "_")))
 }
 
-/// Run the native Svelte diagnostics — fatal compile errors AND lint
-/// warnings — over every in-scope source, from a SINGLE parse per file.
+/// Native Svelte diagnostics — fatal compile errors AND lint warnings
+/// — for every in-scope source, from a SINGLE parse per file. In the
+/// default flow that parse IS the emit fan-out's parse (the fused
+/// closure in `run_typecheck` calls [`native_diagnostics_for_parsed`]
+/// on the artifacts it already has); [`collect_native_diagnostics`]
+/// exists for the tsgo-skipped flow (`--diagnostic-sources` without
+/// `js`), where no emit fan-out runs and the corpus is parsed here
+/// instead.
 ///
-/// Both concerns run after tsgo and previously parsed the corpus
-/// independently (two `parse_sections` + two `parse_all_template_runs`
-/// + two `PositionMap` builds per file). They share one parse here:
+/// Per file the shared computation covers:
 ///
 /// 1. **Fatal parse/syntax errors** (`ParseError::is_fatal`). The emit
 ///    and lint passes recover from and discard these, so a syntactically
@@ -822,118 +826,152 @@ fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Opti
 /// 3. **Lint warnings** via [`svn_lint::lint_parsed`], reusing this
 ///    file's parse and position map.
 ///
-/// Diagnostics are merged in the original two-phase emission order (all
-/// fatal/structural diagnostics first, then all warnings, both in source
-/// order) so output stays byte-identical to the two separate passes.
+/// Diagnostics are merged by [`merge_native_diagnostics`] in the
+/// original two-phase emission order (all fatal/structural diagnostics
+/// first, then all warnings, both in source order) so output stays
+/// byte-identical to the historical separate passes.
 ///
-/// Only `native` mode calls this; `bridge` mode gets the real compiler
-/// errors (with upstream-accurate codes) straight from `compile_batch`.
-fn emit_native_svelte_diagnostics(
-    svelte_sources: &[(PathBuf, std::sync::Arc<str>)],
-    compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
-    diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
-    seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
-    workspace: &Path,
-    config_resolver: &svelte_config::ConfigResolver,
-    broken: &mut std::collections::HashSet<PathBuf>,
-) {
-    let compat = svn_lint::detect_for_workspace(workspace);
+/// Only `native` mode computes these; `bridge` mode gets the real
+/// compiler errors (with upstream-accurate codes) straight from
+/// `compile_batch`.
+struct NativeFileDiagnostics {
+    path: PathBuf,
+    /// Fatal-parse + structural (const-placement) diagnostics.
+    diags: Vec<svn_typecheck::CheckDiagnostic>,
+    /// Set when a fatal parse error made the AST unusable.
+    broken: bool,
+    /// Lint warnings (empty for broken files — they're skipped).
+    warnings: Vec<svn_lint::Warning>,
+}
 
-    /// One file's native diagnostics, all derived from its single parse.
-    struct PerFile {
-        path: PathBuf,
-        /// Fatal-parse + structural (const-placement) diagnostics.
-        diags: Vec<svn_typecheck::CheckDiagnostic>,
-        /// Set when a fatal parse error made the AST unusable.
-        broken: bool,
-        /// Lint warnings (empty for broken files — they're skipped).
-        warnings: Vec<svn_lint::Warning>,
+/// One file's native diagnostics from an ALREADY-PARSED document —
+/// the emit fan-out hands its own parse artifacts in so each file is
+/// parsed once per run, total.
+#[allow(clippy::too_many_arguments)]
+fn native_diagnostics_for_parsed(
+    path: &Path,
+    source: &str,
+    doc: &svn_parser::Document<'_>,
+    fragment: &svn_parser::ast::Fragment,
+    section_errors: &[svn_parser::ParseError],
+    template_errors: &[svn_parser::ParseError],
+    config_resolver: &svelte_config::ConfigResolver,
+    compat: svn_lint::CompatFeatures,
+) -> NativeFileDiagnostics {
+    let pm = svn_core::PositionMap::new(source);
+
+    // (1) Fatal parse/syntax error → broken; skip every later
+    // check (the AST is garbage). First fatal error wins.
+    if let Some(err) = section_errors
+        .iter()
+        .chain(template_errors.iter())
+        .find(|e| e.is_fatal())
+    {
+        let (start, end) = pm.range_positions(err.range());
+        return NativeFileDiagnostics {
+            path: path.to_path_buf(),
+            diags: vec![svn_typecheck::CheckDiagnostic {
+                source_path: path.to_path_buf(),
+                // PositionMap is 0-based (line, UTF-16 char);
+                // CheckDiagnostic is 1-based across the board.
+                line: start.line.saturating_add(1),
+                column: start.character.saturating_add(1),
+                end_line: end.line.saturating_add(1),
+                end_column: end.character.saturating_add(1),
+                severity: svn_typecheck::Severity::Error,
+                code: svn_typecheck::DiagnosticCode::Slug(err.code_slug().to_string()),
+                message: err.to_string(),
+                source: svn_typecheck::DiagnosticSource::Svelte,
+                code_description_url: None,
+            }],
+            broken: true,
+            warnings: Vec::new(),
+        };
     }
 
+    // (2) Structural analyze-phase errors on the clean AST. The
+    // root template fragment is not a legal const-tag host (its
+    // grand-parent is the document Root) — start disallowed.
+    let mut placement_errs = Vec::new();
+    svn_analyze::check_const_placement(&fragment.nodes, false, &mut placement_errs);
+    let diags: Vec<svn_typecheck::CheckDiagnostic> = placement_errs
+        .into_iter()
+        .map(|e| {
+            let (start, end) = pm.range_positions(e.range);
+            svn_typecheck::CheckDiagnostic {
+                source_path: path.to_path_buf(),
+                line: start.line.saturating_add(1),
+                column: start.character.saturating_add(1),
+                end_line: end.line.saturating_add(1),
+                end_column: end.character.saturating_add(1),
+                severity: svn_typecheck::Severity::Error,
+                code: svn_typecheck::DiagnosticCode::Slug(
+                    "const_tag_invalid_placement".to_string(),
+                ),
+                message: svn_analyze::CONST_TAG_INVALID_PLACEMENT_MSG.to_string(),
+                source: svn_typecheck::DiagnosticSource::Svelte,
+                code_description_url: Some(
+                    "https://svelte.dev/e/const_tag_invalid_placement".to_string(),
+                ),
+            }
+        })
+        .collect();
+
+    // (3) Lint warnings — reuse the parse and the position map
+    // (no second parse_sections / line-index scan per file).
+    // The nearest config's compilerOptions.runes forces the
+    // mode; `None` keeps lint's auto-detection.
+    let config_runes = config_resolver.for_path(path).runes;
+    let warnings = svn_lint::lint_parsed(doc, fragment, source, pm, path, config_runes, compat);
+
+    NativeFileDiagnostics {
+        path: path.to_path_buf(),
+        diags,
+        broken: false,
+        warnings,
+    }
+}
+
+/// Standalone parse + native-diagnostics pass for flows where the emit
+/// fan-out didn't run (tsgo skipped via `--diagnostic-sources`). The
+/// default flow computes the same per-file results inside the emit
+/// fan-out from its single parse.
+fn collect_native_diagnostics(
+    svelte_sources: &[(PathBuf, std::sync::Arc<str>)],
+    config_resolver: &svelte_config::ConfigResolver,
+    compat: svn_lint::CompatFeatures,
+) -> Vec<NativeFileDiagnostics> {
     // Per-file work is pure compute with no shared mutable state — fan
     // out over rayon. `collect` preserves source order for the merge.
-    let per_file: Vec<PerFile> = svelte_sources
+    svelte_sources
         .par_iter()
         .map(|(path, source)| {
             let (doc, section_errors) = svn_parser::parse_sections(source);
             let (fragment, template_errors) =
                 svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
-            let pm = svn_core::PositionMap::new(source);
-
-            // (1) Fatal parse/syntax error → broken; skip every later
-            // check (the AST is garbage). First fatal error wins.
-            if let Some(err) = section_errors
-                .iter()
-                .chain(template_errors.iter())
-                .find(|e| e.is_fatal())
-            {
-                let (start, end) = pm.range_positions(err.range());
-                return PerFile {
-                    path: path.clone(),
-                    diags: vec![svn_typecheck::CheckDiagnostic {
-                        source_path: path.clone(),
-                        // PositionMap is 0-based (line, UTF-16 char);
-                        // CheckDiagnostic is 1-based across the board.
-                        line: start.line.saturating_add(1),
-                        column: start.character.saturating_add(1),
-                        end_line: end.line.saturating_add(1),
-                        end_column: end.character.saturating_add(1),
-                        severity: svn_typecheck::Severity::Error,
-                        code: svn_typecheck::DiagnosticCode::Slug(err.code_slug().to_string()),
-                        message: err.to_string(),
-                        source: svn_typecheck::DiagnosticSource::Svelte,
-                        code_description_url: None,
-                    }],
-                    broken: true,
-                    warnings: Vec::new(),
-                };
-            }
-
-            // (2) Structural analyze-phase errors on the clean AST. The
-            // root template fragment is not a legal const-tag host (its
-            // grand-parent is the document Root) — start disallowed.
-            let mut placement_errs = Vec::new();
-            svn_analyze::check_const_placement(&fragment.nodes, false, &mut placement_errs);
-            let diags: Vec<svn_typecheck::CheckDiagnostic> = placement_errs
-                .into_iter()
-                .map(|e| {
-                    let (start, end) = pm.range_positions(e.range);
-                    svn_typecheck::CheckDiagnostic {
-                        source_path: path.clone(),
-                        line: start.line.saturating_add(1),
-                        column: start.character.saturating_add(1),
-                        end_line: end.line.saturating_add(1),
-                        end_column: end.character.saturating_add(1),
-                        severity: svn_typecheck::Severity::Error,
-                        code: svn_typecheck::DiagnosticCode::Slug(
-                            "const_tag_invalid_placement".to_string(),
-                        ),
-                        message: svn_analyze::CONST_TAG_INVALID_PLACEMENT_MSG.to_string(),
-                        source: svn_typecheck::DiagnosticSource::Svelte,
-                        code_description_url: Some(
-                            "https://svelte.dev/e/const_tag_invalid_placement".to_string(),
-                        ),
-                    }
-                })
-                .collect();
-
-            // (3) Lint warnings — reuse the parse and the position map
-            // (no second parse_sections / line-index scan per file).
-            // The nearest config's compilerOptions.runes forces the
-            // mode; `None` keeps lint's auto-detection.
-            let config_runes = config_resolver.for_path(path).runes;
-            let warnings =
-                svn_lint::lint_parsed(&doc, &fragment, source, pm, path, config_runes, compat);
-
-            PerFile {
-                path: path.clone(),
-                diags,
-                broken: false,
-                warnings,
-            }
+            native_diagnostics_for_parsed(
+                path,
+                source,
+                &doc,
+                &fragment,
+                &section_errors,
+                &template_errors,
+                config_resolver,
+                compat,
+            )
         })
-        .collect();
+        .collect()
+}
 
+/// Merge per-file native diagnostics into the output vec in the
+/// two-phase emission order documented on [`NativeFileDiagnostics`].
+fn merge_native_diagnostics(
+    per_file: Vec<NativeFileDiagnostics>,
+    compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
+    diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
+    seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
+    broken: &mut std::collections::HashSet<PathBuf>,
+) {
     // Phase 1: all fatal/structural diagnostics + broken flags, in
     // source order — matches the old compile-error pass's emission slot.
     let mut warning_files: Vec<(PathBuf, Vec<svn_lint::Warning>)> = Vec::new();
@@ -1359,20 +1397,48 @@ fn run_typecheck(
     // The svelte/compiler bridge below still runs (it consumes
     // `svelte_sources`, not `inputs`).
     let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::new();
+    // Native Svelte diagnostics (fatal parse errors + lint warnings).
+    // Decided up front because the default flow computes them INSIDE
+    // the emit fan-out below, from the same parse that feeds emit —
+    // one parse per file per run. The results are tiny (diagnostics
+    // only, no ASTs retained), so holding them across the tsgo phase
+    // costs nothing; they merge into the output after tsgo, in the
+    // same slot as before.
+    let run_native = sources.svelte && matches!(svelte_warnings_mode, SvelteWarningsMode::Native);
+    let native_compat = run_native.then(|| svn_lint::detect_for_workspace(workspace));
+    let config_resolver_ref: &svelte_config::ConfigResolver = config_resolver;
+    let mut native_results: Vec<Option<NativeFileDiagnostics>> = Vec::new();
     if sources.js {
         // Per-file parse → analyze → emit is pure compute with no shared
         // mutable state (each iteration owns its own oxc Allocator inside
         // the called functions). rayon distributes across the thread pool
-        // and `collect_into_vec` preserves source order so the resulting
-        // `inputs` matches `svelte_sources` index-for-index.
-        inputs.reserve(svelte_sources.len());
-        svelte_sources
+        // and the order-preserving `unzip` keeps the resulting `inputs`
+        // matching `svelte_sources` index-for-index.
+        let (emitted_inputs, natives): (Vec<_>, Vec<_>) = svelte_sources
             .par_iter()
             .enumerate()
             .map(|(idx, (file, source))| {
-                let (doc, _parse_errors) = svn_parser::parse_sections(source);
-                let (fragment, _template_errors) =
+                let (doc, section_errors) = svn_parser::parse_sections(source);
+                let (fragment, template_errors) =
                     svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+                // Fused native pass: derive fatal/lint diagnostics from
+                // THIS parse instead of re-parsing the corpus after
+                // tsgo. Only in-scope sources are linted — the aux tail
+                // exists solely for tsgo's import-following.
+                let native = native_compat
+                    .filter(|_| idx < svelte_sources_in_scope_end)
+                    .map(|compat| {
+                        native_diagnostics_for_parsed(
+                            file,
+                            source,
+                            &doc,
+                            &fragment,
+                            &section_errors,
+                            &template_errors,
+                            config_resolver_ref,
+                            compat,
+                        )
+                    });
                 let summary = svn_analyze::walk_template(&fragment, source);
                 // Overlay extension mirrors upstream svelte-check's
                 // `isTsSvelte(text)` per-file dispatch
@@ -1391,7 +1457,7 @@ fn run_typecheck(
                 } else {
                     svn_typecheck::InputKind::SvelteAuxiliary
                 };
-                svn_typecheck::CheckInput {
+                let input = svn_typecheck::CheckInput {
                     source_path: file.clone(),
                     source: source.clone(),
                     generated_ts: emitted.typescript,
@@ -1401,9 +1467,12 @@ fn run_typecheck(
                     source_line_starts: emitted.source_line_starts,
                     kind,
                     is_ts_overlay: is_ts,
-                }
+                };
+                (input, native)
             })
-            .collect_into_vec(&mut inputs);
+            .unzip();
+        inputs = emitted_inputs;
+        native_results = natives;
 
         // Kit files (`+server.ts`, `+page.ts`, hooks, params): run them
         // through the inject pass to splice in `$types` imports so the
@@ -1549,19 +1618,29 @@ fn run_typecheck(
         let mut seen: std::collections::HashSet<(String, PathBuf, u32, u32)> =
             std::collections::HashSet::new();
 
-        let run_native = matches!(svelte_warnings_mode, SvelteWarningsMode::Native);
         if run_native {
             // Fatal compile diagnostics (syntax errors → marked broken so
             // their tsgo noise is dropped below; analyze-phase structural
             // errors like gh#30's const placement → not broken, tsgo still
             // runs) AND lint warnings, all from a single parse per file.
-            emit_native_svelte_diagnostics(
-                &svelte_sources,
+            let per_file: Vec<NativeFileDiagnostics> = if sources.js {
+                // Already computed inside the emit fan-out from its
+                // parse; the aux tail's `None`s flatten away and
+                // in-scope source order is preserved.
+                native_results.into_iter().flatten().collect()
+            } else {
+                // tsgo (and with it the emit fan-out) was skipped —
+                // parse here instead. Invariant: `native_compat` is
+                // Some whenever `run_native` is true.
+                let compat =
+                    native_compat.unwrap_or_else(|| svn_lint::detect_for_workspace(workspace));
+                collect_native_diagnostics(&svelte_sources, config_resolver, compat)
+            };
+            merge_native_diagnostics(
+                per_file,
                 compiler_overrides,
                 &mut diagnostics,
                 &mut seen,
-                workspace,
-                config_resolver,
                 &mut broken_files,
             );
         }

@@ -18,7 +18,7 @@ rust-version = "1.95"
 license = "MIT"
 repository = "https://github.com/harshmandan/svelte-check-native"
 authors = ["Harsh Mandan <harshsinghmandan@gmail.com>"]
-version = "1.0.0"
+version = "1.0.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -98,11 +98,11 @@ semver = "1"
 # JS/TS parser. Architecture rule: embedded JS/TS is parsed once into
 # a real AST and walked structurally — never scanned character-by-
 # character. oxc is the only parser in the workspace for this reason.
-oxc_allocator = "0.137"
-oxc_ast = "0.137"
-oxc_diagnostics = "0.137"
-oxc_parser = "0.137"
-oxc_span = "0.137"
+oxc_allocator = "0.139"
+oxc_ast = "0.139"
+oxc_diagnostics = "0.139"
+oxc_parser = "0.139"
+oxc_span = "0.139"
 
 # Testing
 insta = { version = "1", features = ["yaml", "filters"] }

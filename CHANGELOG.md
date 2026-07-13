@@ -6,6 +6,40 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.1]
+
+Support for stable TypeScript 7 as the check engine (#34, thanks
+@maxffarrell), with a version gate that keeps mixed-version projects
+safe.
+
+### Added
+
+- **Stable `typescript` 7+ as the check engine.** TypeScript 7 ships
+  on the standard `typescript` package with the native `tsc` binary
+  (`@typescript/typescript-<platform>` optionalDependencies).
+  Discovery prefers it — platform-native binary first, then the
+  `bin/tsc` wrapper — with `@typescript/native-preview` (tsgo) as the
+  fallback for projects that haven't moved yet. `TSGO_BIN` override
+  unchanged.
+
+### Fixed
+
+- **`typescript` 6 and below is never picked up as the engine.** The
+  `typescript` package's `bin/tsc` below 7 is the JavaScript compiler,
+  and nearly every workspace has typescript 5/6 installed for its own
+  toolchain. Discovery gates the package on `version >= 7` (hoisted,
+  pnpm/bun store, and `diff-emit` probe paths alike), so a project can
+  keep `typescript@6` for its build while type-checking with tsgo.
+- The npm wrapper now declares both engines as **optional** peer
+  dependencies, so single-engine installs (tsgo-only or stable-only)
+  don't get unresolved-peer warnings.
+
+### Changed
+
+- Dependency refresh: oxc 0.137 → 0.139 (parser-side perf: AST nodes
+  allocated directly in the arena, faster JSX-name parsing; no
+  behavior change — emit snapshots byte-identical).
+
 ## [1.0.0]
 
 First stable release. The CLI surface, output formats, exit codes, and

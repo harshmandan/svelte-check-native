@@ -1167,6 +1167,7 @@ dependencies = [
  "blake3",
  "camino",
  "dunce",
+ "rayon",
  "semver",
  "serde",
  "serde_json",

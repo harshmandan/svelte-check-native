@@ -49,7 +49,7 @@ const LEGACY_RENAMES: &[(&str, &str)] = &[
     ("unused-export-let", "export_let_unused"),
 ];
 
-/// Walk the siblings of `target` in `nodes`, collecting any
+/// Walk the siblings preceding index `idx` in `nodes`, collecting any
 /// `svelte-ignore` codes found in preceding `Comment` nodes (with
 /// intervening `Text` allowed — whitespace or not). Stops at any
 /// non-Comment / non-Text sibling. Mirrors the upstream analyze
@@ -60,13 +60,10 @@ const LEGACY_RENAMES: &[(&str, &str)] = &[
 /// for pushing into `LintContext::ignore_stack`.
 pub fn collect_preceding_comment_ignores(
     nodes: &[Node],
-    target: &Node,
+    idx: usize,
     ctx: &mut LintContext<'_>,
 ) -> Vec<SmolStr> {
     let mut result: Vec<SmolStr> = Vec::new();
-    let Some(idx) = nodes.iter().position(|n| std::ptr::eq(n, target)) else {
-        return result;
-    };
     if idx == 0 {
         return result;
     }

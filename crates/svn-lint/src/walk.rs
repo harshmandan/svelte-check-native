@@ -510,7 +510,7 @@ fn walk_fragment_impl(
     inside_control_block: bool,
 ) {
     let source = ctx.source;
-    for node in &fragment.nodes {
+    for (idx, node) in fragment.nodes.iter().enumerate() {
         // Ignore-stack: pull any svelte-ignore comments immediately
         // preceding this node (in the same fragment). These scope
         // the ignore to this one node and its subtree — mirror
@@ -542,7 +542,7 @@ fn walk_fragment_impl(
             _ => false,
         };
         let ignores = if is_target {
-            crate::ignore::collect_preceding_comment_ignores(&fragment.nodes, node, ctx)
+            crate::ignore::collect_preceding_comment_ignores(&fragment.nodes, idx, ctx)
         } else {
             Vec::new()
         };

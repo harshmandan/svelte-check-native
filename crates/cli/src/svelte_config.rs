@@ -724,6 +724,16 @@ fn analyse_block<'a>(block: &'a FunctionBody<'a>, param: &str, source: &str) -> 
 /// Walk a block body. Model: accumulate DropRules from each `if (X)
 /// return false;` clause, and record `const ignore = [...]` arrays so
 /// a trailing `return !ignore.includes(w.code)` can resolve them.
+///
+/// Keep-style `if (COND) return true;` statements can't be modelled
+/// (we only translate drop rules), and they SHIELD everything after
+/// them: at runtime the keep-if executes first, so a warning matching
+/// both the keep-if and a later drop source is KEPT — translating that
+/// later drop would over-suppress. Once a keep-if is seen, any
+/// subsequent drop source (drop-if, blocklist return, keep-expr
+/// return, or a `return false` default, which drops everything the
+/// keep-ifs don't keep) degrades the plan to partial/unknown —
+/// conservative keep-all with the stderr notice, never over-drop.
 fn analyse_block_stmt<'a>(
     stmts: &'a [Statement<'a>],
     param: &str,
@@ -734,6 +744,9 @@ fn analyse_block_stmt<'a>(
         std::collections::HashMap::new();
     let mut partial = false;
     let mut excerpt: Option<String> = None;
+    // Source text of the first keep-if seen — doubles as the "a keep-if
+    // shields later drops" flag and as the partial-notice excerpt.
+    let mut keep_if: Option<String> = None;
     for stmt in stmts {
         match stmt {
             Statement::VariableDeclaration(vd) => {
@@ -742,14 +755,27 @@ fn analyse_block_stmt<'a>(
                 }
             }
             Statement::IfStatement(is) => match classify_if(is, param) {
-                IfOutcome::DropWhenCondTrue(mut inner) => rules.append(&mut inner),
+                IfOutcome::DropWhenCondTrue(mut inner) => {
+                    if keep_if.is_some() {
+                        partial = true;
+                        if excerpt.is_none() {
+                            excerpt = keep_if.clone();
+                        }
+                    } else {
+                        rules.append(&mut inner);
+                    }
+                }
                 IfOutcome::Unhandled => {
                     partial = true;
                     if excerpt.is_none() {
                         excerpt = Some(source_slice(source, is.span.start, is.span.end));
                     }
                 }
-                IfOutcome::NoEffect => {}
+                IfOutcome::NoEffect => {
+                    if keep_if.is_none() {
+                        keep_if = Some(source_slice(source, is.span.start, is.span.end));
+                    }
+                }
             },
             Statement::ReturnStatement(ret) => {
                 if let Some(arg) = &ret.argument {
@@ -761,18 +787,32 @@ fn analyse_block_stmt<'a>(
                             constant: None,
                             unrecognised_excerpt: excerpt,
                         };
-                        // Only a `return true` default matters
-                        // semantically (drop-rules collected above);
-                        // `return false` default drops everything not
-                        // already explicitly kept — we don't model
-                        // keep-rules, so treat as unknown.
+                        // A `return false` default drops everything not
+                        // explicitly kept. With no keep-ifs there IS
+                        // nothing kept — the filter is constant-false
+                        // (drop all; any drop-ifs above are a subset).
+                        // With keep-ifs the kept subset is unmodelled →
+                        // unknown, keep-all + notice.
                         if !b {
-                            out.constant = Some(false);
+                            if let Some(k) = keep_if {
+                                out.partial = true;
+                                if out.unrecognised_excerpt.is_none() {
+                                    out.unrecognised_excerpt = Some(k);
+                                }
+                            } else {
+                                out.constant = Some(false);
+                            }
                         }
                         return out;
                     }
-                    // `return !ignore.includes(w.code)` shape.
-                    if let Some(drops) = try_blocklist_return(arg, param, &arrays) {
+                    if keep_if.is_some() {
+                        // Preceding keep-if shields this return's drops.
+                        partial = true;
+                        if excerpt.is_none() {
+                            excerpt = keep_if.clone();
+                        }
+                    } else if let Some(drops) = try_blocklist_return(arg, param, &arrays) {
+                        // `return !ignore.includes(w.code)` shape.
                         rules.extend(drops);
                     } else {
                         // Re-evaluate as a keep-expr.
@@ -1406,6 +1446,124 @@ export default {
         );
         assert_eq!(p.constant, Some(false));
         assert!(p.should_drop("anything", None));
+    }
+
+    #[test]
+    fn allowlist_keep_if_then_return_false_is_unknown_not_constant() {
+        // `if (COND) return true; return false;` keeps COND-matching
+        // warnings at runtime. We don't model keep-rules, so the plan
+        // must fall back to unknown (partial, keep everything) — NOT
+        // constant-false, which would drop the warnings the user's
+        // filter explicitly keeps.
+        let p = plan(
+            r#"
+export default {
+  compilerOptions: {
+    warningFilter: (w) => {
+      if (w.code.startsWith('a11y_')) return true;
+      return false;
+    }
+  }
+};
+"#,
+        );
+        assert_eq!(p.constant, None);
+        assert!(p.partial);
+        assert!(p.rules.is_empty());
+        assert!(!p.should_drop("a11y_click_events_have_key_events", None));
+        // Conservative: unknown filters keep everything (stderr notice
+        // + --compiler-warnings escape hatch), never over-drop.
+        assert!(!p.should_drop("css_unused_selector", None));
+    }
+
+    #[test]
+    fn drop_if_then_return_false_stays_constant_false() {
+        // With only drop-ifs before it, a trailing `return false`
+        // genuinely drops every warning — the collected rules are a
+        // subset of "drop all", so constant-false is exact.
+        let p = plan(
+            r#"
+export default {
+  compilerOptions: {
+    warningFilter: (w) => {
+      if (w.code === 'x') return false;
+      return false;
+    }
+  }
+};
+"#,
+        );
+        assert_eq!(p.constant, Some(false));
+        assert!(p.should_drop("anything", None));
+    }
+
+    #[test]
+    fn drop_if_after_keep_if_is_shielded_and_partial() {
+        // `if (A) return true; if (B) return false; return true;` — a
+        // warning matching BOTH A and B is kept at runtime (A executes
+        // first), so translating B into a drop rule would over-drop.
+        let p = plan(
+            r#"
+export default {
+  compilerOptions: {
+    warningFilter: (w) => {
+      if (w.code.startsWith('a11y_')) return true;
+      if (w.code === 'css_unused_selector') return false;
+      return true;
+    }
+  }
+};
+"#,
+        );
+        assert!(p.partial);
+        assert!(p.rules.is_empty());
+        assert!(!p.should_drop("css_unused_selector", None));
+    }
+
+    #[test]
+    fn drop_if_before_keep_if_keeps_the_drop_rule() {
+        // Drops that precede the first keep-if execute before it at
+        // runtime, so they translate exactly.
+        let p = plan(
+            r#"
+export default {
+  compilerOptions: {
+    warningFilter: (w) => {
+      if (w.code === 'css_unused_selector') return false;
+      if (w.code.startsWith('a11y_')) return true;
+      return true;
+    }
+  }
+};
+"#,
+        );
+        assert!(!p.partial);
+        assert_eq!(
+            p.rules,
+            vec![DropRule::CodeEquals("css_unused_selector".into())]
+        );
+    }
+
+    #[test]
+    fn blocklist_return_after_keep_if_is_shielded_and_partial() {
+        // `if (A) return true; return !ignore.includes(w.code);` — the
+        // keep-if shields ignore-list members matching A.
+        let p = plan(
+            r#"
+export default {
+  compilerOptions: {
+    warningFilter: (w) => {
+      if (w.code.startsWith('a11y_')) return true;
+      const ignore = ['a11y_no_static_element_interactions', 'css_unused_selector'];
+      return !ignore.includes(w.code);
+    }
+  }
+};
+"#,
+        );
+        assert!(p.partial);
+        assert!(p.rules.is_empty());
+        assert!(!p.should_drop("a11y_no_static_element_interactions", None));
     }
 
     #[test]

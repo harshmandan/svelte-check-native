@@ -241,38 +241,76 @@ struct Wait {
 /// status and could block forever on a hung tsgo.
 fn wait_with_timeout(mut child: Child, timeout: Duration) -> std::io::Result<Wait> {
     // Drain the pipes concurrently — `output()`'s job, but we need the
-    // child handle for try_wait/kill, so we do it by hand.
+    // child handle for try_wait/kill, so we do it by hand. Each reader
+    // additionally signals pipe-EOF over a channel: process exit closes
+    // the child's pipe ends, so EOF is the event that wakes the wait
+    // loop below the moment tsgo finishes. A fixed-interval poll here
+    // used to round every tsgo run up to the next 50ms boundary.
+    let (eof_tx, eof_rx) = std::sync::mpsc::channel::<()>();
     let mut child_stdout = child.stdout.take();
     let mut child_stderr = child.stderr.take();
-    let stdout_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(s) = child_stdout.as_mut() {
-            let _ = s.read_to_end(&mut buf);
-        }
-        buf
-    });
+    let stdout_reader = {
+        let eof_tx = eof_tx.clone();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(s) = child_stdout.as_mut() {
+                let _ = s.read_to_end(&mut buf);
+            }
+            let _ = eof_tx.send(());
+            buf
+        })
+    };
     let stderr_reader = std::thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(s) = child_stderr.as_mut() {
             let _ = s.read_to_end(&mut buf);
         }
+        let _ = eof_tx.send(());
         buf
     });
 
+    // Interval at which the deadline stays live even when the child
+    // produces no pipe events (hung without closing its pipes). Only
+    // bounds how LATE a timeout kill can fire, not how fast a normal
+    // exit is observed — that's the EOF wakeup.
+    const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
     let deadline = Instant::now().checked_add(timeout);
     let mut timed_out = false;
+    let mut pipes_eof = false;
     let status = loop {
-        match child.try_wait()? {
-            Some(status) => break status,
-            None => {
-                if let Some(deadline) = deadline
-                    && Instant::now() >= deadline
-                {
-                    let _ = child.kill();
-                    timed_out = true;
-                    break child.wait()?;
-                }
-                std::thread::sleep(Duration::from_millis(50));
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if let Some(deadline) = deadline
+            && Instant::now() >= deadline
+        {
+            let _ = child.kill();
+            timed_out = true;
+            break child.wait()?;
+        }
+        if pipes_eof {
+            // Both pipes hit EOF but the child isn't reapable yet.
+            // Normally exit is imminent (EOF is a consequence of the
+            // process tearing down), so this fine-grained poll runs
+            // once or twice. A child that closed its pipes early and
+            // kept running degrades to a 1ms poll bounded by the
+            // deadline above.
+            std::thread::sleep(Duration::from_millis(1));
+        } else {
+            // Sleep until a pipe reaches EOF or the poll interval
+            // elapses, whichever comes first. Disconnection means
+            // both reader threads finished (their senders dropped) —
+            // every subsequent wakeup comes from the branch above.
+            let interval = match deadline {
+                Some(d) => d
+                    .saturating_duration_since(Instant::now())
+                    .min(POLL_INTERVAL),
+                None => POLL_INTERVAL,
+            };
+            match eof_rx.recv_timeout(interval) {
+                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => pipes_eof = true,
             }
         }
     };

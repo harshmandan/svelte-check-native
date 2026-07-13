@@ -532,7 +532,10 @@ pub(crate) fn is_runes_mode(
         let mut i = 0;
         while let Some(rel) = bytes[i..].windows(mbytes.len()).position(|w| w == mbytes) {
             let pos = i + rel;
-            if pos.checked_sub(1).and_then(|p| bytes.get(p)).copied() == Some(b'$') {
+            // Identifier tails (`$$props`, `my$state`) and member-access
+            // property names (`api.$state(0)`, `this?.$props()`) are not
+            // rune usages — shared guard with svn_core's rune scan.
+            if svn_core::rune_scan::rune_marker_is_shadowed_at(bytes, pos) {
                 i = pos + mbytes.len();
                 continue;
             }
@@ -1288,5 +1291,42 @@ fn try_process_let_statement_for_widening(
             b'\n' => return Some((s, insertions)),
             _ => return Some((s, insertions)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use super::is_runes_mode;
+
+    fn runes(source: &str) -> bool {
+        let (doc, _) = svn_parser::parse_sections(source);
+        let (fragment, _) = svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+        is_runes_mode(&doc, &fragment)
+    }
+
+    #[test]
+    fn plain_rune_call_flips_runes_mode() {
+        assert!(runes("<script>let x = $state(0);</script>"));
+        assert!(runes("<script>let x = $derived.by(() => 1);</script>"));
+    }
+
+    #[test]
+    fn member_call_rune_names_stay_legacy() {
+        // A store lib method literally named `$state` is a property
+        // access, not a rune — the component keeps its Svelte-4
+        // default-export shape and events strictness.
+        assert!(!runes(
+            "<script>export let value; const s = api.$state(0);</script>"
+        ));
+        assert!(!runes("<script>this.$props();</script>"));
+        assert!(!runes("<script>obj?.$state(0);</script>"));
+        assert!(!runes("<script>const x = my$state(0);</script>"));
+    }
+
+    #[test]
+    fn options_attr_forces_runes() {
+        assert!(runes("<svelte:options runes /><script>let x = 1;</script>"));
     }
 }

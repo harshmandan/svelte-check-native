@@ -12,6 +12,69 @@ use crate::output::Severity;
 use crate::runner::RunError;
 use svn_emit::{LineMapEntry, TokenMapEntry};
 
+/// Text that is either retained in memory or lazily read from a file
+/// on first use.
+///
+/// The diagnostic mapper needs each overlay's emit-space text only for
+/// files that actually receive diagnostics — on a clean run, never.
+/// Holding every overlay string across the tsgo subprocess phase would
+/// keep a full copy of the generated corpus in RSS exactly while tsgo
+/// itself peaks in memory, so the common case defers to a disk read of
+/// the already-written overlay ([`crate::check`] decides per input
+/// whether the on-disk bytes are emit-space; see `overlay_disk_text`).
+#[derive(Debug, Clone, Default)]
+pub struct LazyText {
+    /// File to read on first access. `None` when the text was provided
+    /// eagerly (retained emit text, tests, `Default`).
+    path: Option<PathBuf>,
+    text: std::sync::OnceLock<String>,
+}
+
+impl LazyText {
+    /// Text known up front — stays in memory.
+    pub fn eager(text: String) -> Self {
+        let cell = std::sync::OnceLock::new();
+        // Invariant: set() on a freshly-created cell cannot fail.
+        let _ = cell.set(text);
+        Self {
+            path: None,
+            text: cell,
+        }
+    }
+
+    /// Text to be read from `path` on first access.
+    pub fn on_disk(path: PathBuf) -> Self {
+        Self {
+            path: Some(path),
+            text: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The text, loading it on first access. A vanished or unreadable
+    /// file yields the empty string — diagnostics against that file
+    /// then fail their map lookups and drop, the same posture the
+    /// eager `read_to_string(..).unwrap_or_default()` source-side load
+    /// used to take.
+    pub fn get(&self) -> &str {
+        self.text.get_or_init(|| match &self.path {
+            Some(p) => std::fs::read_to_string(p).unwrap_or_default(),
+            None => String::new(),
+        })
+    }
+}
+
+impl From<String> for LazyText {
+    fn from(text: String) -> Self {
+        Self::eager(text)
+    }
+}
+
+impl From<&str> for LazyText {
+    fn from(text: &str) -> Self {
+        Self::eager(text.to_string())
+    }
+}
+
 /// Per-file mapping data the diagnostic mapper needs to translate a
 /// tsgo `(line, column)` back to a source `(line, column)`.
 ///
@@ -24,11 +87,14 @@ pub struct MapData {
     pub token_map: Vec<TokenMapEntry>,
     pub overlay_line_starts: Vec<u32>,
     pub source_line_starts: Vec<u32>,
-    /// Overlay text. Required because tsgo emits 1-based UTF-16
-    /// column counts (LSP convention) and we need the actual line
-    /// contents to convert UTF-16 column → byte offset. Pure ASCII
-    /// lines treat both as equivalent; non-ASCII lines diverge.
-    pub overlay_text: String,
+    /// Overlay text in EMIT space. Required because tsgo emits 1-based
+    /// UTF-16 column counts (LSP convention) and we need the actual
+    /// line contents to convert UTF-16 column → byte offset. Pure
+    /// ASCII lines treat both as equivalent; non-ASCII lines diverge.
+    /// Lazy: usually re-read from the on-disk overlay on the first
+    /// diagnostic hit for the file (see [`LazyText`]); retained in
+    /// memory only when the on-disk copy is not emit-space.
+    pub overlay_text: LazyText,
     /// Source `.svelte` text. Same UTF-16-vs-byte conversion need on
     /// the source side: we map a matched token-map's source byte
     /// range back to a (line, UTF-16-column) for the user-facing

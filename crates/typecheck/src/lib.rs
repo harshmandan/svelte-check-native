@@ -43,7 +43,7 @@ pub use output::{RawDiagnostic, Severity, parse as parse_output};
 pub use runner::{RunError, run as run_tsgo};
 pub use types::{
     CheckDiagnostic, CheckError, CheckInput, CheckOutput, DiagnosticCode, DiagnosticSource,
-    IGNORE_END_MARKER, IGNORE_START_MARKER, InputKind, MapData,
+    IGNORE_END_MARKER, IGNORE_START_MARKER, InputKind, LazyText, MapData,
 };
 
 /// Svelte type shims — single source of truth for everything we ship
@@ -209,6 +209,10 @@ fn gc_orphaned_overlays(svelte_dir: &Path, written_paths: &std::collections::Has
 /// been written to the cache — the bridge phase that runs after this call
 /// can hold ~100 MB of bun heaps; we don't also want to keep a duplicate
 /// of every overlay TS in our own RSS waiting to be GC'd at end-of-fn.
+/// The diagnostic mapper reloads overlay text lazily from the cache for
+/// the (typically few) files that actually receive diagnostics; only
+/// overlays whose on-disk copy diverges from emit space stay in memory
+/// (see [`emit_space_overlay_text`]).
 ///
 /// Returns mapped diagnostics + the count of files in tsgo's program
 /// (used for the COMPLETED line's `<N> FILES` denominator so it
@@ -273,7 +277,9 @@ pub fn check(
     let mut written_paths: std::collections::HashSet<PathBuf> =
         std::collections::HashSet::with_capacity(inputs.len() * 2);
     // `inputs` is consumed here — `generated_ts` and `line_map` move out
-    // of each `CheckInput` and the string drops at end of iteration.
+    // of each `CheckInput` and the string usually drops at end of
+    // iteration (retained only when the disk copy isn't emit-space —
+    // see `emit_space_overlay_text`).
     for mut input in inputs {
         let gen_path = match input.kind {
             InputKind::Svelte | InputKind::SvelteAuxiliary => {
@@ -294,19 +300,24 @@ pub fn check(
             let sibling = layout.generated_path_with_lang(&input.source_path, !input.is_ts_overlay);
             let _ = std::fs::remove_file(&sibling);
         }
-        // The DISK copy gets the external-import rewrite; the in-memory
-        // emit text stays untouched so `MapData` below is built
-        // entirely in emit space. See [`overlay_disk_text`] for the
-        // space invariant.
+        // The DISK copy gets the external-import rewrite; everything
+        // the diagnostic mapper reads stays in emit space. See
+        // [`overlay_disk_text`] for the space invariant and
+        // [`emit_space_overlay_text`] for how the emit text is either
+        // dropped here (lazily reloadable from the identical disk
+        // copy) or retained (rewrite changed bytes).
         let disk_text = overlay_disk_text(&input, &gen_path, &layout.workspace);
         write_if_changed(
             &gen_path,
             disk_text.as_deref().unwrap_or(&input.generated_ts),
         )?;
-        // Free the rewritten copy immediately — the rest of the loop
-        // body only needs the emit text, and this loop deliberately
-        // avoids holding duplicate overlay strings (see fn docs).
-        drop(disk_text);
+        // Scanned from the emit text before it moves below.
+        let ignore_regions = scan_ignore_regions(&input.generated_ts);
+        let overlay_text = emit_space_overlay_text(
+            std::mem::take(&mut input.generated_ts),
+            disk_text,
+            &gen_path,
+        );
         written_paths.insert(gen_path.clone());
 
         match input.kind {
@@ -384,7 +395,6 @@ pub fn check(
             }
         }
 
-        let ignore_regions = scan_ignore_regions(&input.generated_ts);
         // Source text for the position mapper. For Svelte / Aux
         // overlays the source is the user's `.svelte` file — shared
         // via `Arc` with the caller's in-memory corpus, so no disk
@@ -405,7 +415,6 @@ pub fn check(
             InputKind::KitFile | InputKind::UserTsOverlay => std::sync::Arc::from(""),
         };
         let pug_template_ranges = filters::scan_pug_template_ranges(&source_text);
-        let overlay_text = std::mem::take(&mut input.generated_ts);
         map_data.insert(
             gen_path.clone(),
             MapData {
@@ -661,6 +670,31 @@ fn overlay_disk_text(input: &CheckInput, gen_path: &Path, workspace: &Path) -> O
     ))
 }
 
+/// The emit-space overlay text handle the diagnostic mapper reads,
+/// chosen so that no overlay string is retained across the tsgo phase
+/// unless correctness requires it:
+///
+/// - When the on-disk copy is byte-identical to the emit text — no
+///   rewrite ran ([`overlay_disk_text`] returned `None` for kit /
+///   user-ts kinds) or the external-import rewrite was a no-op (the
+///   overwhelmingly common case) — the emit string drops here and the
+///   mapper lazily reloads the identical bytes from `gen_path` on the
+///   first diagnostic hit for the file.
+/// - When the rewrite changed bytes, the disk copy is rewrite-space
+///   and reloading it would desynchronize every offset-based probe
+///   (see the invariant on [`overlay_disk_text`]) — the emit text is
+///   retained in memory for just those files.
+fn emit_space_overlay_text(
+    emit_text: String,
+    disk_text: Option<String>,
+    gen_path: &Path,
+) -> LazyText {
+    match disk_text {
+        Some(rewritten) if rewritten != emit_text => LazyText::eager(emit_text),
+        _ => LazyText::on_disk(gen_path.to_path_buf()),
+    }
+}
+
 /// `excluded_kit_sources` is the set of original (lexically
 /// normalised, absolute) source paths that received a kit / user-ts
 /// mirror overlay. Diagnostics tsgo attributes to those originals are
@@ -742,7 +776,7 @@ fn map_diagnostic(
             // typescript/features/DiagnosticsProvider.ts:476-495`.
             if raw.code == 7028
                 && let Some(offset) = position::overlay_byte_offset(data, raw.line, raw.column)
-                && filters::is_overlay_dollar_reactive_label(&data.overlay_text, offset)
+                && filters::is_overlay_dollar_reactive_label(data.overlay_text.get(), offset)
             {
                 return None;
             }
@@ -785,7 +819,7 @@ fn map_diagnostic(
             if (raw.code == 1117 || raw.code == 2300)
                 && position::translate_line(&data.line_map, raw.line).is_none()
                 && let Some(offset) = position::overlay_byte_offset(data, raw.line, raw.column)
-                && filters::is_overlay_attribute_key(&data.overlay_text, offset)
+                && filters::is_overlay_attribute_key(data.overlay_text.get(), offset)
             {
                 return None;
             }
@@ -808,7 +842,7 @@ fn map_diagnostic(
             if raw.code == 2554
                 && filters::is_expected_three_arguments_message(&raw.message)
                 && let Some(offset) = position::overlay_byte_offset(data, raw.line, raw.column)
-                && filters::is_overlay_in_ensure_transition_call(&data.overlay_text, offset)
+                && filters::is_overlay_in_ensure_transition_call(data.overlay_text.get(), offset)
             {
                 return None;
             }
@@ -1001,7 +1035,7 @@ mod tests {
         let data = MapData {
             // line 1 = "line1" (5 bytes + newline = 6), line 2 = "line2".
             overlay_line_starts: vec![0, 6, 11],
-            overlay_text: "line1\nline2".to_string(),
+            overlay_text: "line1\nline2".into(),
             ..Default::default()
         };
         // (1, 1) == byte 0 (start of line 1).
@@ -1571,7 +1605,7 @@ mod tests {
             }],
             // Overlay: "aa\nBBBBBB\ncc" → starts [0, 3, 10, 12].
             overlay_line_starts: vec![0, 3, 10, 12],
-            overlay_text: "aa\nBBBBBB\ncc".to_string(),
+            overlay_text: "aa\nBBBBBB\ncc".into(),
             // Source: line 5 starts at byte 40. Byte 44 is line 5 col
             // 5 (0-offset 4 from line start → 1-based col 5). Provide
             // a 60-byte filler text so byte_to_position can count
@@ -1652,7 +1686,7 @@ mod tests {
                     source_byte_end: 48,
                 }],
                 overlay_line_starts: vec![0, 3, 10, 12],
-                overlay_text: "aa\nBBBBBB\ncc".to_string(),
+                overlay_text: "aa\nBBBBBB\ncc".into(),
                 source_line_starts: vec![0, 10, 20, 30, 40, 50, 60],
                 source_text: "0123456789".repeat(6).into(),
                 ..Default::default()
@@ -1696,7 +1730,7 @@ mod tests {
                 }],
                 overlay_line_starts,
                 source_line_starts,
-                overlay_text,
+                overlay_text: overlay_text.into(),
                 source_text: source_text.into(),
                 ..Default::default()
             },
@@ -1806,7 +1840,7 @@ mod tests {
                     source_start_line: 2,
                 }],
                 overlay_line_starts,
-                overlay_text: emit_text,
+                overlay_text: emit_text.into(),
                 ..Default::default()
             },
         );
@@ -1857,7 +1891,7 @@ mod tests {
                     source_start_line: 2,
                 }],
                 overlay_line_starts,
-                overlay_text,
+                overlay_text: overlay_text.into(),
                 ..Default::default()
             },
         );
@@ -1916,7 +1950,7 @@ mod tests {
                 }],
                 overlay_line_starts,
                 source_line_starts,
-                overlay_text,
+                overlay_text: overlay_text.into(),
                 source_text: source_text.into(),
                 ..Default::default()
             },
@@ -1935,6 +1969,44 @@ mod tests {
             map_diagnostic(raw, &layout, &m, &HashSet::new()).is_none(),
             "duplicate element-attribute keys are emit artefacts and must stay suppressed"
         );
+    }
+
+    #[test]
+    fn lazy_text_reads_from_disk_on_first_access_then_caches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("overlay.svn.ts");
+        std::fs::write(&path, "const x: number = 1;\n").unwrap();
+        let lazy = LazyText::on_disk(path.clone());
+        assert_eq!(lazy.get(), "const x: number = 1;\n");
+        // First access latches the text — a later delete can't lose it.
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(lazy.get(), "const x: number = 1;\n");
+    }
+
+    #[test]
+    fn lazy_text_missing_file_yields_empty() {
+        let lazy = LazyText::on_disk(PathBuf::from("/nonexistent/overlay.svn.ts"));
+        assert_eq!(lazy.get(), "");
+    }
+
+    #[test]
+    fn emit_space_overlay_text_retains_only_when_rewrite_changed_bytes() {
+        // Deliberately nonexistent path: a lazy handle resolves to ""
+        // here, a retained emit text resolves to itself — which makes
+        // the retention decision observable.
+        let gen_path = Path::new("/nonexistent/Foo.svelte.svn.ts");
+        // No rewrite ran (kit / user-ts kinds): disk copy IS the emit
+        // text, so lazy reload is emit-space-correct.
+        let t = emit_space_overlay_text("emit".to_string(), None, gen_path);
+        assert_eq!(t.get(), "");
+        // No-op rewrite: identical bytes, lazy reload still correct.
+        let t = emit_space_overlay_text("emit".to_string(), Some("emit".to_string()), gen_path);
+        assert_eq!(t.get(), "");
+        // Rewrite changed bytes: the disk copy is rewrite-space, so
+        // the emit text must be retained in memory.
+        let t =
+            emit_space_overlay_text("emit".to_string(), Some("rewritten".to_string()), gen_path);
+        assert_eq!(t.get(), "emit");
     }
 
     #[test]

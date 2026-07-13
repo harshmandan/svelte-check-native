@@ -25,7 +25,12 @@ pub(crate) fn overlay_byte_offset(data: &MapData, line: u32, column: u32) -> Opt
     // would otherwise miss markers when emit-synthesised scaffolding
     // contains multi-byte chars — rare today, but the conversion
     // costs nothing on ASCII-only lines).
-    position_to_byte(&data.overlay_line_starts, &data.overlay_text, line, column)
+    position_to_byte(
+        &data.overlay_line_starts,
+        data.overlay_text.get(),
+        line,
+        column,
+    )
 }
 
 /// Translate an overlay line into a source line via the line map.
@@ -76,7 +81,7 @@ pub(crate) fn translate_position(
     if !data.token_map.is_empty() && !data.overlay_line_starts.is_empty() {
         if let Some(byte) = position_to_byte(
             &data.overlay_line_starts,
-            &data.overlay_text,
+            data.overlay_text.get(),
             overlay_line,
             overlay_col,
         ) {
@@ -95,7 +100,7 @@ pub(crate) fn translate_position(
                 // copy — the overlay text is the source view, so read the
                 // overlay-side line-starts/text for the UTF-16 conversion.
                 let (source_line_starts, source_text): (&[u32], &str) = if data.identity_map {
-                    (&data.overlay_line_starts, &data.overlay_text)
+                    (&data.overlay_line_starts, data.overlay_text.get())
                 } else {
                     (&data.source_line_starts, &data.source_text)
                 };

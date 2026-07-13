@@ -22,7 +22,8 @@ use crate::ast::{
 };
 use crate::error::ParseError;
 use crate::mustache::{
-    can_start_regex, find_mustache_end, skip_ascii_string, skip_regex_literal, skip_template_literal,
+    can_start_regex, find_mustache_end, skip_ascii_string, skip_regex_literal,
+    skip_template_literal,
 };
 use crate::scanner::Scanner;
 
@@ -230,13 +231,16 @@ pub(crate) fn parse_each_header(
     }
 
     let header = &scanner.source()[header_start as usize..header_end as usize];
-    // Find top-level ` as ` token.
-    let as_pos = find_token_at_depth_zero(header, " as ");
+    // Find the top-level `as` keyword. Any whitespace run (spaces, tabs,
+    // newlines) may surround it — upstream parses the iterable with
+    // `read_expression`, then `allow_whitespace()` + `match('as')`.
+    let as_pos = find_keyword_at_depth_zero(header, "as");
 
     let (expression_range, as_clause) = match as_pos {
         Some(p) => {
-            let expr_end = header_start + p as u32;
-            let clause_start = expr_end + 4; // past " as "
+            // Trim the whitespace run before `as` off the expression.
+            let expr_end = skip_ws_end(header, 0, p as u32) + header_start;
+            let clause_start = header_start + p as u32 + 2; // past `as`
             let clause_str = &scanner.source()[clause_start as usize..header_end as usize];
             let clause = parse_each_as_clause(clause_str, clause_start);
             (Range::new(header_start, expr_end), Some(clause))
@@ -490,7 +494,12 @@ pub(crate) fn parse_snippet_header(
             b'"' => i = skip_ascii_string(bytes, i + 1, b'"')?,
             b'\'' => i = skip_ascii_string(bytes, i + 1, b'\'')?,
             b'`' => {
-                i = skip_template_literal(bytes, i + 1, &mut template_brace_stack, &mut brace_depth)?
+                i = skip_template_literal(
+                    bytes,
+                    i + 1,
+                    &mut template_brace_stack,
+                    &mut brace_depth,
+                )?
             }
             b'/' => match bytes.get(i + 1).copied() {
                 Some(b'/') => {
@@ -543,6 +552,86 @@ pub(crate) fn parse_snippet_header(
 }
 
 // ===== Lexical helpers ===================================================
+
+/// Find a standalone keyword (`as` / `then` / `catch`) at depth 0
+/// (outside strings / template literals / nested parens / brackets /
+/// braces / comments). The keyword matches only when preceded by at
+/// least one whitespace byte and followed by whitespace or the end of
+/// `src` — mirroring upstream's `read_expression`, `allow_whitespace()`,
+/// `match(keyword)` sequence, which accepts any whitespace run (spaces,
+/// tabs, CR/LF) around the keyword, not just single spaces. Returns the
+/// byte offset of the keyword itself.
+fn find_keyword_at_depth_zero(src: &str, keyword: &str) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let kw = keyword.as_bytes();
+    let mut i = 0;
+    let mut depth: i32 = 0;
+
+    while i < bytes.len() {
+        if depth == 0
+            && i > 0
+            && bytes[i - 1].is_ascii_whitespace()
+            && bytes[i..].starts_with(kw)
+            && bytes
+                .get(i + kw.len())
+                .is_none_or(|b| b.is_ascii_whitespace())
+        {
+            return Some(i);
+        }
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'"' | b'\'' => {
+                let q = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != q {
+                    if bytes[i] == b'\\' {
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'`' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'`' {
+                    if bytes[i] == b'\\' {
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'/' => match bytes.get(i + 1).copied() {
+                Some(b'/') => {
+                    // Line comment to end of line. `//` is unambiguously a
+                    // comment in expression context (an empty `//` regex is
+                    // invalid), so no regex/division disambiguation is needed.
+                    i += 2;
+                    while i < bytes.len() && bytes[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                Some(b'*') => {
+                    // Block comment to `*/`. Leave `i` on the closing `/` so
+                    // the trailing `i += 1` steps past it.
+                    i += 2;
+                    while i + 1 < bytes.len() {
+                        if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
 
 /// Find a token at depth 0 (outside strings / template literals / nested
 /// parens / brackets / braces / comments). Searches for `needle` as a
@@ -869,6 +958,72 @@ mod tests {
             find_token_at_depth_zero("foo(a as b) as c", " as "),
             Some(11)
         );
+    }
+
+    #[test]
+    fn find_keyword_at_depth_zero_whitespace_variants() {
+        // Any whitespace run around the keyword matches — upstream does
+        // read_expression + allow_whitespace + match(keyword).
+        assert_eq!(find_keyword_at_depth_zero("foo as bar", "as"), Some(4));
+        assert_eq!(find_keyword_at_depth_zero("foo\nas bar", "as"), Some(4));
+        assert_eq!(find_keyword_at_depth_zero("foo\tas\tbar", "as"), Some(4));
+        assert_eq!(find_keyword_at_depth_zero("foo\r\nas bar", "as"), Some(5));
+        assert_eq!(find_keyword_at_depth_zero("foo  as\n bar", "as"), Some(5));
+        // Keyword at end of src (no binding after it).
+        assert_eq!(find_keyword_at_depth_zero("p then", "then"), Some(2));
+        // Not a standalone keyword: part of an identifier.
+        assert_eq!(find_keyword_at_depth_zero("foo aster", "as"), None);
+        assert_eq!(find_keyword_at_depth_zero("foo.as bar", "as"), None);
+        // Inside parens: depth != 0, skip to the top-level one.
+        assert_eq!(
+            find_keyword_at_depth_zero("foo(a as b)\nas c", "as"),
+            Some(12)
+        );
+        // Inside a string: skipped.
+        assert_eq!(find_keyword_at_depth_zero("\"x as y\" as z", "as"), Some(9));
+    }
+
+    #[test]
+    fn each_header_accepts_newline_around_as() {
+        // `{#each items\nas item}` is valid Svelte — the as-clause must
+        // not be silently dropped when the whitespace isn't a single
+        // space.
+        for src in [
+            "items\nas item}",
+            "items\tas\titem}",
+            "items\r\nas item}",
+            "items \n as item}",
+        ] {
+            let mut scanner = Scanner::new(src);
+            let mut errors = Vec::new();
+            let Some((expr, clause)) = parse_each_header(&mut scanner, &mut errors) else {
+                panic!("expected each header for {src:?}, errors: {errors:?}");
+            };
+            assert_eq!(expr.slice(src), "items", "expression for {src:?}");
+            let clause = clause.unwrap_or_else(|| panic!("as-clause dropped for {src:?}"));
+            assert_eq!(
+                clause.context_range.slice(src),
+                "item",
+                "context for {src:?}"
+            );
+            assert!(
+                errors.is_empty(),
+                "unexpected errors for {src:?}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_header_multiline_expression_with_as() {
+        let src = "getItems(\n  a,\n  b\n)\nas item, i (item.id)}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (expr, clause) = parse_each_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(expr.slice(src), "getItems(\n  a,\n  b\n)");
+        let clause = clause.expect("as-clause present");
+        assert_eq!(clause.context_range.slice(src), "item");
+        assert_eq!(clause.index_range.map(|r| r.slice(src)), Some("i"));
+        assert_eq!(clause.key_range.map(|r| r.slice(src)), Some("item.id"));
     }
 
     #[test]

@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "The each header's `as` keyword may be surrounded by any whitespace (newline/tab/CRLF), not just single spaces — upstream parses the iterable with read_expression, then allow_whitespace + match('as'). A newline before `as` used to silently drop the as-clause, leaving `item` unbound and treating `items\\nas item` as the iterable expression (phantom TS1005 errors)."
+}

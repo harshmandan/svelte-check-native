@@ -1302,6 +1302,18 @@ mod tests {
     }
 
     #[test]
+    fn each_block_with_newline_before_as() {
+        let src = "{#each items\nas item}<b>{item}</b>{/each}";
+        let frag = parse_ok(src);
+        let Node::EachBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        assert_eq!(b.expression_range.slice(src), "items");
+        let clause = b.as_clause.as_ref().expect("as-clause parsed");
+        assert_eq!(clause.context_range.slice(src), "item");
+    }
+
+    #[test]
     fn each_block_without_as_clause() {
         // Svelte allows `{#each items}` with no binding (iterate N times,
         // discard the item). Parser must distinguish this from the more

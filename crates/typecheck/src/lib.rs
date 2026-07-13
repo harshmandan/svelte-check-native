@@ -294,28 +294,19 @@ pub fn check(
             let sibling = layout.generated_path_with_lang(&input.source_path, !input.is_ts_overlay);
             let _ = std::fs::remove_file(&sibling);
         }
-        // Rewrite `../`-starting imports that point outside the
-        // workspace so they resolve from the OVERLAY's location, not
-        // the source's. Mirrors upstream svelte2tsx's
-        // `helpers/rewriteExternalImports.ts`. The overlay lives
-        // under `<workspace>/node_modules/.cache/svelte-check-native/
-        // svelte/...` whereas the source lives at
-        // `<workspace>/src/...`; a Svelte component that imports a
-        // sibling-package file via `../../../sibling/src/lib/foo.ts`
-        // (Threlte/xr → Threlte/extras pattern) would resolve from
-        // the SOURCE dir but fail from the overlay dir, since the
-        // path traversal stops inside the cache. The rewrite changes
-        // the specifier string only — line/column counts unchanged
-        // so source-map data stays valid.
-        if matches!(input.kind, InputKind::Svelte | InputKind::SvelteAuxiliary) {
-            input.generated_ts = path_utils::rewrite_external_imports(
-                &input.generated_ts,
-                &input.source_path,
-                &gen_path,
-                &layout.workspace,
-            );
-        }
-        write_if_changed(&gen_path, &input.generated_ts)?;
+        // The DISK copy gets the external-import rewrite; the in-memory
+        // emit text stays untouched so `MapData` below is built
+        // entirely in emit space. See [`overlay_disk_text`] for the
+        // space invariant.
+        let disk_text = overlay_disk_text(&input, &gen_path, &layout.workspace);
+        write_if_changed(
+            &gen_path,
+            disk_text.as_deref().unwrap_or(&input.generated_ts),
+        )?;
+        // Free the rewritten copy immediately — the rest of the loop
+        // body only needs the emit text, and this loop deliberately
+        // avoids holding duplicate overlay strings (see fn docs).
+        drop(disk_text);
         written_paths.insert(gen_path.clone());
 
         match input.kind {
@@ -614,6 +605,50 @@ pub fn check(
         diagnostics,
         extended_diagnostics: run.extended_diagnostics,
     })
+}
+
+/// Overlay text to write to the cache for `input`, or `None` when the
+/// emit text goes to disk unchanged (kit / user-ts mirror kinds).
+///
+/// For Svelte overlays this applies the cross-workspace import
+/// rewrite (`path_utils::rewrite_external_imports`): `../`-starting
+/// specifiers that resolve outside the workspace are re-based onto
+/// the overlay's cache directory, because the overlay lives under
+/// `<workspace>/node_modules/.cache/svelte-check-native/svelte/...`
+/// while the source lives at `<workspace>/src/...` — a component
+/// importing a sibling-package file via `../../../sibling/src/lib/foo`
+/// (Threlte/xr → Threlte/extras pattern) resolves from the SOURCE dir
+/// but fails from the overlay dir. Mirrors upstream svelte2tsx's
+/// `helpers/rewriteExternalImports.ts`.
+///
+/// INVARIANT — the rewrite exists ONLY in the on-disk copy. Everything
+/// the diagnostic mapper reads (`MapData`: `overlay_text`,
+/// `overlay_line_starts`, `token_map` byte spans, `ignore_regions`)
+/// stays in EMIT space, i.e. the text exactly as the emitter produced
+/// it, with the byte-offset tables emit computed for it. A rewritten
+/// specifier usually changes byte length, so mixing spaces — e.g.
+/// scanning ignore regions from the rewritten text while resolving
+/// diagnostic positions through emit-computed line starts — silently
+/// desynchronizes every offset-based probe downstream of the changed
+/// import (ignore regions, the TS7028 / TS1117 / TS2554 byte scans).
+/// The two texts stay position-compatible for mapping because the
+/// rewrite never adds or removes lines and never touches bytes outside
+/// a specifier string, so a tsgo `(line, column)` reported against the
+/// disk text lands on the same content in the emit-space text. (The
+/// one incompressible exception — a column after a rewritten specifier
+/// on the same physical line — only arises for mid-expression dynamic
+/// `import()` of an external path and was equally untranslatable
+/// before the disk/emit split.)
+fn overlay_disk_text(input: &CheckInput, gen_path: &Path, workspace: &Path) -> Option<String> {
+    if !matches!(input.kind, InputKind::Svelte | InputKind::SvelteAuxiliary) {
+        return None;
+    }
+    Some(path_utils::rewrite_external_imports(
+        &input.generated_ts,
+        &input.source_path,
+        gen_path,
+        workspace,
+    ))
 }
 
 fn map_diagnostic(
@@ -1606,6 +1641,84 @@ mod tests {
             kept.is_some(),
             "a transition fn with 4 required params fires a genuine TS2554"
         );
+    }
+
+    #[test]
+    fn offset_filters_read_emit_space_after_external_import_rewrite() {
+        // The external-import rewrite changes specifier byte lengths,
+        // so it must never leak into the space the offset-based
+        // filters probe. `overlay_disk_text` produces the rewritten
+        // text for the cache write; MapData keeps the emit-space text
+        // and offsets. tsgo's (line, column) against the disk text
+        // resolves identically against the emit-space text because
+        // the rewrite preserves line structure.
+        let layout = CacheLayout::for_workspace("/ws");
+        let emit_text =
+            "import { util } from '../../ext/util';\n;() => { $: util(); };\n".to_string();
+        let source_path = PathBuf::from("/ws/src/Foo.svelte");
+        let gen_path = layout.generated_path_with_lang(&source_path, true);
+        let input = CheckInput {
+            source_path,
+            generated_ts: emit_text.clone(),
+            line_map: Vec::new(),
+            token_map: Vec::new(),
+            overlay_line_starts: Vec::new(),
+            source_line_starts: Vec::new(),
+            kind: InputKind::Svelte,
+            is_ts_overlay: true,
+        };
+        let disk = overlay_disk_text(&input, &gen_path, Path::new("/ws"))
+            .expect("svelte overlays produce a disk text");
+        // The specifier resolves outside the workspace, so the disk
+        // copy rewrites it — with a different byte length.
+        assert_ne!(disk, emit_text);
+        assert_ne!(disk.len(), emit_text.len());
+        // Invariant the position math relies on: the rewrite never
+        // adds or removes lines.
+        assert_eq!(disk.lines().count(), emit_text.lines().count());
+        // The input's emit text is untouched — MapData is built from
+        // it, so every offset consumer stays in emit space.
+        assert_eq!(input.generated_ts, emit_text);
+
+        // A TS7028 on the `$:` label AFTER the rewritten import, at
+        // the position tsgo reports against the DISK text, must still
+        // be recognized by the emit-space filter probe.
+        let disk_line2 = disk.lines().nth(1).expect("two lines");
+        let dollar_col = disk_line2.find("$:").expect("$: on line 2") as u32 + 1;
+        let overlay_line_starts = svn_emit::compute_line_starts(&emit_text);
+        let mut m = HashMap::new();
+        m.insert(
+            gen_path.clone(),
+            MapData {
+                // Line 2 is verbatim user code — without the filter
+                // the diagnostic would map through and surface.
+                line_map: vec![LineMapEntry {
+                    overlay_start_line: 2,
+                    overlay_end_line: 3,
+                    source_start_line: 2,
+                }],
+                overlay_line_starts,
+                overlay_text: emit_text,
+                ..Default::default()
+            },
+        );
+        let diag = |code: u32| RawDiagnostic {
+            file: gen_path.clone(),
+            line: 2,
+            column: dollar_col,
+            severity: Severity::Error,
+            code,
+            message: "x".to_string(),
+            span_length: Some(1),
+        };
+        assert!(
+            map_diagnostic(diag(7028), &layout, &m).is_none(),
+            "the reactive-label filter must still fire after a length-changing rewrite"
+        );
+        // Control: a non-filtered code at the same position translates
+        // normally, proving the drop above came from the filter.
+        let kept = map_diagnostic(diag(2322), &layout, &m).expect("mapped");
+        assert_eq!((kept.line, kept.column), (2, dollar_col));
     }
 
     #[test]

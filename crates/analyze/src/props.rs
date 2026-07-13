@@ -403,9 +403,14 @@ fn source_uses_runes(source: &str) -> bool {
 /// Extract a single property from `export { local as alias }`. Looks up
 /// `local` in the program's top-level `let`/`const`/`var` declarations
 /// to pick up its type annotation and initializer (which decides the
-/// optional marker). When `local` can't be found or has no annotation,
-/// the prop is typed `any`. The alias becomes the public key so
-/// consumers write `<Foo {alias}=...>`.
+/// optional marker). When `local` has no annotation but does have an
+/// initializer, the prop is typed `typeof <local>` so TS enforces the
+/// initializer-inferred type — mirrors upstream svelte2tsx's
+/// `createReturnElementsType` fallback (`<alias>?: typeof <local>`),
+/// which makes `class={123}` fire TS2322 against `let className = ''`.
+/// When `local` can't be found or has neither annotation nor
+/// initializer, the prop is typed `any`. The alias becomes the public
+/// key so consumers write `<Foo {alias}=...>`.
 fn append_prop_from_export_specifier(
     spec: &oxc_ast::ast::ExportSpecifier<'_>,
     program: &oxc_ast::ast::Program<'_>,
@@ -424,7 +429,19 @@ fn append_prop_from_export_specifier(
     };
     let (ty_text, has_init) = find_local_type_and_init(program, source, local);
     let optional_marker = if has_init { "?" } else { "" };
-    let ty_src = ty_text.unwrap_or("any");
+    // Same annotated / initialized / bare ladder as
+    // `append_props_from_var_decl`: annotation verbatim, else
+    // `typeof <local>` when an initializer exists (body-scope
+    // reference — module-scope consumers must project through
+    // `Awaited<ReturnType<typeof $$render>>['props']`, flagged via
+    // `contains_typeof_ref`), else `any`.
+    let ty_src = ty_text.map(ToOwned::to_owned).unwrap_or_else(|| {
+        if has_init {
+            format!("typeof {local}")
+        } else {
+            "any".to_string()
+        }
+    });
     out.push(format!("{alias}{optional_marker}: {ty_src};"));
 }
 
@@ -1193,6 +1210,30 @@ mod tests {
     fn export_specifier_missing_init_marks_required() {
         let src = "let n: number;\nexport { n as count };";
         assert_eq!(props_type(src).as_deref(), Some("{ count: number; }"));
+    }
+
+    #[test]
+    fn export_specifier_unannotated_with_init_uses_typeof_local() {
+        // `let className = ''; export { className as class };` — no
+        // annotation, but the initializer infers `string`. Upstream's
+        // createReturnElementsType falls back to `typeof <local>` when
+        // no type was recorded, so a consumer passing `class={123}`
+        // fires TS2322. Collapsing to `any` here silently accepted it.
+        let src = "let className = \"\";\nexport { className as class };";
+        assert_eq!(
+            props_type(src).as_deref(),
+            Some("{ class?: typeof className; }")
+        );
+    }
+
+    #[test]
+    fn export_specifier_unannotated_without_init_stays_any() {
+        // No annotation AND no initializer: `typeof x` at a bare
+        // `let x;` site adds nothing (there is no inferred type to
+        // enforce), so keep the `any` fallback — same rule as the
+        // `export let` path above.
+        let src = "let x;\nexport { x as y };";
+        assert_eq!(props_type(src).as_deref(), Some("{ y: any; }"));
     }
 
     #[test]

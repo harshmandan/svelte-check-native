@@ -34,7 +34,7 @@ async function $$render_031ccee2() {
     void RenameFoo;
     void renamebar;
     void renamebaz;
-    return { props: /** @type {{ name1?: any; name2: any; renamed1?: any; renamed2: any; Foo: any; bar: any; baz?: any; RenamedFoo: any; renamedbar: any; renamedbaz?: any; }} */({}) };
+    return { props: /** @type {{ name1?: typeof name1; name2: any; renamed1?: typeof rename1; renamed2: any; Foo: any; bar: any; baz?: typeof baz; RenamedFoo: any; renamedbar: any; renamedbaz?: typeof renamebaz; }} */({}) };
 }
 $$render_031ccee2;
 /**

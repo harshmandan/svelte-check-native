@@ -14,7 +14,7 @@ async function $$render_ef638edf() {
     });
     void name;
     void name2;
-    return { props: /** @type {{ name3?: any; name4?: any; }} */({}) };
+    return { props: /** @type {{ name3?: typeof name; name4?: typeof name2; }} */({}) };
 }
 $$render_ef638edf;
 /**

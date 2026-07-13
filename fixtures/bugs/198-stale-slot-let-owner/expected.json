@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "A component without let: directives must not become the pending let-owner: `<Foo />` followed by `<Bar slot=\"x\" let:thing>` previously typed `thing` from Foo's default slot (`__SvnComponentSlots<typeof Foo>[\"default\"][\"thing\"]`) because the unconsumed stash leaked to the next let-scope. The consumer-wrapper let:thing is deliberately unresolved, so the forwarded `a={thing}` slot attr drops from the slots literal (emit snapshot locks `{ 'default': { } }`) and the file checks clean."
+}

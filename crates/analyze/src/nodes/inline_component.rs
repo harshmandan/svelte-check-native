@@ -27,6 +27,16 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, c: &Component) {
     // resolve `let:foo` bindings to
     // `__SvnComponentSlots<typeof Comp>['default']['foo']`.
     // Skip when:
+    //   - the component has no `let:` directive at all. The stash
+    //     is consumed by the `enter_scope(LetDirective, …)` the
+    //     walker fires for THIS component's children immediately
+    //     after this visit — and that scope only exists when a
+    //     `let:` directive is present. Stashing without one would
+    //     leave the owner pending, and a LATER let-scope on an
+    //     unrelated node would `take()` it and type its bindings
+    //     from the wrong component. Upstream derives the owner
+    //     from the actual enclosing component (slot.ts
+    //     `getSingleSlotDef`), never a sibling.
     //   - `slot="X"` attr present (consumer-wrapper case —
     //     the let-bindings then target the PARENT's slot,
     //     not this component's; current resolver lacks
@@ -34,8 +44,12 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, c: &Component) {
     //   - component name isn't a simple identifier (dotted
     //     forms like `UI.Dropdown` would need a different
     //     `typeof` shape; defer until a fixture proves it).
+    let has_let_directive = c
+        .attributes
+        .iter()
+        .any(|a| matches!(a, Attribute::Directive(d) if d.kind == svn_parser::DirectiveKind::Let));
     let has_slot_attr = literal_attr_value(&c.attributes, "slot", v.source).is_some();
-    if !has_slot_attr && is_simple_identifier(c.name.as_str()) {
+    if has_let_directive && !has_slot_attr && is_simple_identifier(c.name.as_str()) {
         v.pending_let_owner = Some(LetOwnerInfo {
             component_root: c.name.clone(),
             slot_name: SmolStr::new("default"),

@@ -255,9 +255,9 @@ async function ensureOurOverlay() {
 }
 
 function runTsgo(cfgPath) {
-    // Map this host's (platform, arch) to TypeScript 7's platform-package
-    // suffix. Mirrors what svn_typecheck::discovery picks at runtime;
-    // retain the preview suffixes as a fallback for older installs.
+    // Map this host's (platform, arch) to the native platform-package
+    // suffixes. Mirrors svn_typecheck::discovery: stable TypeScript 7
+    // preferred, native-preview (tsgo) as the fallback.
     const suffixes = (() => {
         const p = process.platform;
         const a = process.arch;
@@ -283,19 +283,30 @@ function runTsgo(cfgPath) {
         }
     }
     if (!tsc) {
-        // JS-wrapper fallback; requires node to invoke.
+        // Stable `typescript` wrapper, gated to 7+: below that,
+        // `bin/tsc` is the JavaScript compiler, and every bench
+        // workspace has some typescript 5/6 installed for its own
+        // toolchain — probing with it would be the wrong engine.
         const out = spawnSync(
             'find',
             [workspace, '-path', '*typescript/bin/tsc', '-type', 'f'],
             { encoding: 'utf8' },
         );
-        const hit = (out.stdout || '').split('\n').filter(Boolean)[0];
-        if (hit) {
-            tsc = hit;
-            needsNode = true;
+        for (const hit of (out.stdout || '').split('\n').filter(Boolean)) {
+            try {
+                const pkg = JSON.parse(readFileSync(join(dirname(hit), '../package.json'), 'utf8'));
+                if (parseInt(String(pkg.version).split('.')[0], 10) >= 7) {
+                    tsc = hit;
+                    needsNode = true;
+                    break;
+                }
+            } catch {
+                // unreadable manifest → can't identify the engine; skip
+            }
         }
     }
     if (!tsc) {
+        // tsgo JS-wrapper fallback; requires node to invoke.
         const out = spawnSync(
             'find',
             [workspace, '-path', '*native-preview/bin/tsgo.js', '-type', 'f'],

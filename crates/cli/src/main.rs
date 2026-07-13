@@ -29,12 +29,13 @@ use output::{print_diagnostics, print_machine_failure};
 #[command(
     name = "svelte-check-native",
     version,
-    about = "CLI-only type checker for Svelte 5+ projects. Powered by TypeScript 7.",
+    about = "CLI-only type checker for Svelte 5+ projects. Powered by TypeScript's native compiler.",
     long_about = "svelte-check-native — type-check Svelte components.\n\n\
                   Both Svelte 4 (export let, $:, <slot>, on:event) and Svelte 5\n\
-                  (runes) syntax are supported. TypeScript 7 must be installed\n\
-                  in the project's node_modules, or pointed at\n\
-                  via TSGO_BIN. A tsconfig/jsconfig is required (mirrors\n\
+                  (runes) syntax are supported. A native TypeScript compiler —\n\
+                  typescript 7+ (preferred) or @typescript/native-preview (tsgo)\n\
+                  — must be installed in the project's node_modules, or pointed\n\
+                  at via TSGO_BIN. A tsconfig/jsconfig is required (mirrors\n\
                   `svelte-check --tsgo`); --no-tsconfig and watch mode are not\n\
                   supported."
 )]

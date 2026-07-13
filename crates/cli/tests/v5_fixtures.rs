@@ -47,9 +47,9 @@ fn v5_fixtures_suite() {
     // ourselves and pass via TSGO_BIN so the binary doesn't fail in
     // discovery (which would silently inflate the pass-count).
     let tsgo = locate_local_tsgo(&crate_dir).expect(
-        "could not locate the workspace's local tsgo install. \
-         Run `npm install` at the repo root to install \
-         typescript@^7.0.0.",
+        "could not locate the workspace's local native TypeScript \
+         compiler. Run `npm install` at the repo root to install \
+         @typescript/native-preview and typescript@^7.",
     );
 
     let output = match Command::new("node")

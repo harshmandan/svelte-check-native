@@ -38,7 +38,11 @@ npm i -D svelte-check-native typescript@^7.0.0
 ```
 
 TypeScript 7 provides the native `tsc` binary required at check time;
-it is never imported at runtime.
+it is never imported at runtime. `@typescript/native-preview` (tsgo,
+the nightly channel) works too, as the fallback when `typescript` 7+
+isn't installed — so you can keep `typescript@6` for your own
+toolchain and check with tsgo. TypeScript 6 and below is never used
+as the check engine.
 
 ## Use
 
@@ -109,9 +113,9 @@ Output defaults to `machine` when run from a coding-agent CLI:
 
 ## Environment variables
 
-- `TSGO_BIN` — override TypeScript discovery; accepts an absolute path to
-  a platform-native `tsc` binary. The name is retained for compatibility.
-  Useful when `typescript` isn't in `node_modules` (e.g. a monorepo where
+- `TSGO_BIN` — override discovery; accepts an absolute path to a
+  platform-native `tsgo`/`tsc` binary or JS wrapper. Useful when
+  neither engine package is in `node_modules` (e.g. a monorepo where
   TypeScript lives elsewhere).
 - `SVN_BRIDGE_WORKERS` — number of `svelte/compiler` worker
   subprocesses. Default `cores/2`, capped at 8; tracks the perf-core

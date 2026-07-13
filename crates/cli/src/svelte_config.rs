@@ -191,6 +191,11 @@ pub struct SvelteConfigSummary {
     /// `compilerOptions.namespace === 'foreign'` — preserve DOM
     /// attribute-name case in emit (upstream `preserveAttributeCase`).
     pub preserve_attribute_case: bool,
+    /// `compilerOptions.runes` boolean literal. Upstream compiles every
+    /// component with the config's compilerOptions, so a config-level
+    /// `runes: true` / `runes: false` FORCES the mode; `None` keeps the
+    /// per-file auto-detection.
+    pub runes: Option<bool>,
 }
 
 /// Read `svelte.config.js`, parse once, and return every recognised
@@ -227,6 +232,10 @@ pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
 
     // namespace: 'foreign' → preserve attribute case.
     summary.preserve_attribute_case = extract_preserve_attribute_case(&parsed.program);
+
+    // compilerOptions.runes — config-forced runes mode.
+    summary.runes =
+        default_export_config_object(&parsed.program).and_then(|obj| runes_in_object(obj));
 
     summary
 }
@@ -282,6 +291,10 @@ pub fn analyse_vite_config(config_path: &Path) -> Option<SvelteConfigSummary> {
 
     // namespace: 'foreign' → preserve attribute case.
     summary.preserve_attribute_case = preserve_case_in_object(plugin_obj);
+
+    // compilerOptions.runes — same relative position as in
+    // `svelte.config.js`.
+    summary.runes = runes_in_object(plugin_obj);
 
     Some(summary)
 }
@@ -427,24 +440,41 @@ fn extract_preserve_attribute_case(program: &oxc_ast::ast::Program<'_>) -> bool 
         .unwrap_or(false)
 }
 
-/// `compilerOptions.namespace === 'foreign'` inside a config-root object.
-/// The `compilerOptions` key sits at the same relative position in a
+/// The `compilerOptions` object inside a config-root object, unwrapping
+/// `/** @type {...} */ ({...})` style parenthesised casts. The
+/// `compilerOptions` key sits at the same relative position in a
 /// `svelte.config.js` default export and in a `sveltekit(...)` /
-/// `svelte(...)` Vite-plugin options object, so both config shapes reuse
-/// this helper.
-fn preserve_case_in_object(obj: &ObjectExpression<'_>) -> bool {
-    let Some(co) = lookup_object_property(obj, "compilerOptions") else {
-        return false;
-    };
-    // Unwrap `/** @type {...} */ ({...})` style casts.
-    let mut value = co;
+/// `svelte(...)` Vite-plugin options object, so every compiler-option
+/// extractor shares this helper.
+fn compiler_options_in_object<'a>(
+    obj: &'a ObjectExpression<'a>,
+) -> Option<&'a ObjectExpression<'a>> {
+    let mut value = lookup_object_property(obj, "compilerOptions")?;
     while let Expression::ParenthesizedExpression(px) = value {
         value = &px.expression;
     }
-    let Expression::ObjectExpression(inner) = value else {
-        return false;
-    };
-    lookup_string_property(inner, "namespace").as_deref() == Some("foreign")
+    match value {
+        Expression::ObjectExpression(inner) => Some(inner),
+        _ => None,
+    }
+}
+
+/// `compilerOptions.namespace === 'foreign'` inside a config-root object.
+fn preserve_case_in_object(obj: &ObjectExpression<'_>) -> bool {
+    compiler_options_in_object(obj)
+        .and_then(|co| lookup_string_property(co, "namespace"))
+        .as_deref()
+        == Some("foreign")
+}
+
+/// `compilerOptions.runes` boolean literal inside a config-root object.
+/// Non-literal values (env-dependent expressions, identifiers) yield
+/// `None` — auto-detection stays in charge rather than guessing.
+fn runes_in_object(obj: &ObjectExpression<'_>) -> Option<bool> {
+    match lookup_object_property(compiler_options_in_object(obj)?, "runes")? {
+        Expression::BooleanLiteral(b) => Some(b.value),
+        _ => None,
+    }
 }
 
 /// `kit.files` inside the exported config object. Export-shape
@@ -586,16 +616,7 @@ fn extract_warning_filter<'a>(
 /// Look up `compilerOptions.warningFilter` inside a top-level config
 /// object.
 fn warning_filter_in_object<'a>(obj: &'a ObjectExpression<'a>) -> Option<&'a Expression<'a>> {
-    let co = lookup_object_property(obj, "compilerOptions")?;
-    // Unwrap `/** @type {...} */ ({...})` style casts.
-    let mut value = co;
-    while let Expression::ParenthesizedExpression(px) = value {
-        value = &px.expression;
-    }
-    let Expression::ObjectExpression(inner) = value else {
-        return None;
-    };
-    lookup_object_property(inner, "warningFilter")
+    lookup_object_property(compiler_options_in_object(obj)?, "warningFilter")
 }
 
 /// Recognise `(w) => …` / `function (w) { … }` and pull the first
@@ -1269,6 +1290,49 @@ export default {
         let local = app.join("svelte.config.js");
         std::fs::write(&local, "export default {};").unwrap();
         assert_eq!(find_svelte_config(&app), Some(local));
+    }
+
+    fn summary_of(src: &str) -> SvelteConfigSummary {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("svelte.config.mjs");
+        std::fs::write(&path, src).unwrap();
+        analyse(&path)
+    }
+
+    #[test]
+    fn compiler_options_runes_boolean_extracted() {
+        assert_eq!(
+            summary_of("export default { compilerOptions: { runes: true } };").runes,
+            Some(true)
+        );
+        assert_eq!(
+            summary_of("export default { compilerOptions: { runes: false } };").runes,
+            Some(false)
+        );
+        // Absent → auto-detect.
+        assert_eq!(
+            summary_of("export default { compilerOptions: {} };").runes,
+            None
+        );
+        assert_eq!(summary_of("export default {};").runes, None);
+        // Non-literal (can't be evaluated statically) → auto-detect.
+        assert_eq!(
+            summary_of("const flag = true;\nexport default { compilerOptions: { runes: flag } };")
+                .runes,
+            None
+        );
+    }
+
+    #[test]
+    fn vite_inline_plugin_runes_extracted() {
+        let s = vite_summary(
+            r#"
+import { sveltekit } from '@sveltejs/kit/vite';
+export default { plugins: [sveltekit({ compilerOptions: { runes: true } })] };
+"#,
+        )
+        .expect("inline sveltekit options must be analysed");
+        assert_eq!(s.runes, Some(true));
     }
 
     fn analyse_cjs(src: &str) -> SvelteConfigSummary {

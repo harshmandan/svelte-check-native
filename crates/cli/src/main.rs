@@ -472,6 +472,11 @@ fn main() -> ExitCode {
         );
     }
     let warning_filter_plan = svelte_config_summary.warning_filter_plan;
+    // Config-forced runes mode (`compilerOptions.runes`) — upstream
+    // compiles every component with the config's compilerOptions, so a
+    // config-level boolean overrides per-file auto-detection in the
+    // native lint pass.
+    let svelte_config_runes = svelte_config_summary.runes;
     let kit_files_settings = svelte_config_summary.kit_files_settings;
     // Set the project-wide preserve-attribute-case flag (svelte config
     // `namespace: 'foreign'`) ONCE before any (parallel) emit reads it.
@@ -515,6 +520,7 @@ fn main() -> ExitCode {
         svelte_warnings_mode,
         cli.ignore_node_modules_warnings,
         &warning_filter_plan,
+        svelte_config_runes,
         &kit_files_settings,
         cli.include_suggestions,
     )
@@ -818,6 +824,7 @@ fn emit_native_svelte_diagnostics(
     diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
     seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
     workspace: &Path,
+    config_runes: Option<bool>,
     broken: &mut std::collections::HashSet<PathBuf>,
 ) {
     let compat = svn_lint::detect_for_workspace(workspace);
@@ -902,7 +909,10 @@ fn emit_native_svelte_diagnostics(
 
             // (3) Lint warnings — reuse the parse and the position map
             // (no second parse_sections / line-index scan per file).
-            let warnings = svn_lint::lint_parsed(&doc, &fragment, source, pm, path, None, compat);
+            // `config_runes` carries svelte.config's compilerOptions.runes
+            // (config-forced mode); `None` keeps lint's auto-detection.
+            let warnings =
+                svn_lint::lint_parsed(&doc, &fragment, source, pm, path, config_runes, compat);
 
             PerFile {
                 path: path.clone(),
@@ -1157,6 +1167,7 @@ fn run_typecheck(
     svelte_warnings_mode: SvelteWarningsMode,
     ignore_node_modules_warnings: bool,
     warning_filter_plan: &svelte_config::WarningFilterPlan,
+    svelte_config_runes: Option<bool>,
     kit_files_settings: &svn_core::sveltekit::KitFilesSettings,
     include_suggestions: bool,
 ) -> ExitCode {
@@ -1500,6 +1511,7 @@ fn run_typecheck(
                 &mut diagnostics,
                 &mut seen,
                 workspace,
+                svelte_config_runes,
                 &mut broken_files,
             );
         }

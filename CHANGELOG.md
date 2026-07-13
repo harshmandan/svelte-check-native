@@ -6,6 +6,83 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0]
+
+First stable release. The CLI surface, output formats, exit codes, and
+diagnostic parity with upstream `svelte-check --tsgo` have been stable
+across the 0.8–0.9 line; 1.0.0 marks them as the supported contract.
+Scoreboard at release: both 1000-file mid-migration control rigs at
+per-diagnostic parity with upstream, 125/125 enforced upstream lint
+validator fixtures passing, 53/78 upstream LS diagnostic fixtures
+strict-passing, upstream sanity suite 10/10.
+
+### Added
+
+- **Zero-config `+error.svelte` props** (upstream parity, svelte-check
+  4.7.2). An untyped `let { error } = $props()` in a `+error.svelte`
+  route gets `error: App.Error` injected into the synthesized props
+  shape, typed by the app-wide ambient interface from `app.d.ts` /
+  `@sveltejs/kit`. Basenames with an `@group` suffix are excluded,
+  matching upstream's exact-stem rule.
+- **Svelte-4 auto-closed elements.** The template parser now closes
+  open HTML elements per the compiler's `closing_tag_omitted` table
+  (`<li>`, `<td>`, `<p>`, …) instead of requiring explicit close tags,
+  matching upstream's parse of legacy markup.
+- **Doctype-shaped tags** are parsed and stripped from the overlay
+  instead of tripping the template walker.
+- **Parse-error reporting** for stray block terminators (`{/if}` with
+  no open block) and sources that end inside an opening tag — both
+  previously stopped the parse silently.
+- **JS-mode overlays project the full render-result surface**
+  (`props`/`events`/`slots`/`bindings`/`exports`), closing the
+  `.svelte + <script>` (non-TS) gap with TS-mode component typing.
+- **Runes-mode deprecation warnings** for `<svelte:options accessors>`
+  and `<svelte:options immutable>`, mirroring the compiler.
+
+### Changed
+
+- **Large performance batch.** Source reads, overlay writes, cache
+  writes, and kit-inject/collision passes all fan out over rayon; the
+  check session is split-phase so overlays are written inside the emit
+  fan-out; diagnostics buffer through one locked stdout writer; the
+  tsgo wait loop wakes on pipe EOF instead of a 50 ms poll; hot
+  template scans ride memchr; script bodies parse once and share the
+  program across lint consumers. Control-rig medians (cold/warm):
+  c4 2.84 s / 1.30 s, c5 4.32 s / 1.77 s — roughly 10–20% faster warm
+  than the 0.9.x line.
+- Dependency refresh: oxc 0.135 → 0.137, phf 0.14, camino 1.2, and
+  anyhow 1.0.103 (RUSTSEC-2026-0190).
+
+### Fixed
+
+- Emit parity: synthesized `$$ComponentProps` widens for non-simple
+  `$props()` destructure elements; unannotated export-specifier props
+  type as `typeof <local>`; `$bindable` detection unwraps `as`-casts;
+  rune store-exclusion is contextual like upstream; slot-let owners
+  are stashed only for components with `let:` directives; top-level
+  snippet params splice verbatim with token-map coverage; `{#each}` /
+  `{#await}` headers accept any whitespace around `as` / `then` /
+  `catch`.
+- Config resolution: `warningFilter` / `runes` resolve per file with
+  nearest-config-wins semantics; CommonJS `module.exports` config
+  files load; an allowlist `warningFilter` no longer collapses to
+  drop-all; tsconfig `include`/`exclude`/`files` follow TS `extends`
+  precedence; tsconfig globs no longer cross path separators.
+- Diagnostic mapping: kit-types mirror diagnostics re-attribute to the
+  user's `.svelte-kit` tree; diagnostics on injected kit-original
+  sources drop; the duplicate-key filter is restricted to synthesized
+  template positions; transition TS2554 is only dropped for the
+  3-argument contract.
+- A11y lint pass: ancestor checks walk past component / snippet /
+  `svelte:element` frames; name-based attribute checks run on
+  expression and shorthand attributes; dynamic `role` disables
+  role-supports-aria-props; labelled and contenteditable-bound
+  headings are exempt from `a11y_missing_content`; href-less anchors
+  get `a11y_consider_explicit_label`; `svelte-ignore` comment parsing
+  matches upstream's comma and text-sibling rules.
+- CLI: the `COMPLETED FILES` denominator matches upstream exactly;
+  member calls named like runes no longer flip a file into runes mode.
+
 ## [0.9.6]
 
 Upstream-parity release closing four confirmed divergences found by

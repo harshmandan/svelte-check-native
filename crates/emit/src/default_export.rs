@@ -70,9 +70,21 @@ pub(crate) fn emit_default_export_declarations_js(buf: &mut EmitBuffer, render_n
         buf,
         "/**\n * @typedef {{Awaited<ReturnType<typeof {render_name}>>['props']}} __SvnDefaultProps\n */"
     );
+    // Project the render return's `exports` surface into `Component`'s
+    // second type parameter — `ReturnType<Component<P, X>>` is
+    // `{ $on?; $set? } & X`, so instance members (`export function` /
+    // `export const` / accessors) type precisely at consumers instead
+    // of widening to `any` through the default `Exports = {}`.
+    // Mirrors upstream, whose JS path feeds createExportsStr()'s
+    // exports field into the isomorphic-component projection. Shape
+    // validated at design/js_render_full_projection/.
     let _ = writeln!(
         buf,
-        "/** @type {{import('svelte').Component<__SvnDefaultProps>}} */"
+        "/**\n * @typedef {{Awaited<ReturnType<typeof {render_name}>>['exports']}} __SvnDefaultExports\n */"
+    );
+    let _ = writeln!(
+        buf,
+        "/** @type {{import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>}} */"
     );
     let _ = writeln!(
         buf,

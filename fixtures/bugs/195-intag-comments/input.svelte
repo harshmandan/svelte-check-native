@@ -1,6 +1,10 @@
 <script lang="ts">
   let x = 0;
-  function fade(_n: Node, _o: object) { return {}; }
+  // Params optional: a bare `transition:fade` emits a one-argument
+  // call, so a required second parameter fires a genuine TS2554 that
+  // upstream also reports — this fixture locks in-tag comment
+  // parsing, not transition arity.
+  function fade(_n: Node, _o?: object) { return {}; }
 </script>
 
 <!-- In-tag JS comments (Svelte 5) must not break parsing. Pre-fix the

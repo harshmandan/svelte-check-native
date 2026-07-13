@@ -7,13 +7,16 @@ async function $$render_47fd19aa() {
         // template type-check body (incremental)
     });
     void Foo;
-    return { props: /** @type {{ Foo?: typeof Foo; }} */({}) };
+    return { props: /** @type {{ Foo?: typeof Foo; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ Foo: typeof Foo; }} */ ({}) };
 }
 $$render_47fd19aa;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_47fd19aa>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_47fd19aa>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

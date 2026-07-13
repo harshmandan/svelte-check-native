@@ -32,6 +32,32 @@ pub fn script_calls_rune(source: &str) -> bool {
     scan(source.as_bytes())
 }
 
+/// Find the first rune-marker occurrence at byte position >= `from`,
+/// anchored on `memchr(b'$')` — every marker starts with `$`, so
+/// marker-less sources cost one SIMD sweep instead of a per-marker
+/// window scan. Returns `(pos, marker_len)`.
+///
+/// Purely textual: no comment/string awareness and no shadow or
+/// call-shape checks — callers layer their own semantics on top
+/// (emit's `is_runes_mode` stays deliberately comment-blind while
+/// [`script_calls_rune`] skips comments/strings; this primitive
+/// serves both without unifying them). At most one marker can match
+/// at a given position: the markers' second bytes are pairwise
+/// distinct.
+pub fn find_marker_from(bytes: &[u8], from: usize) -> Option<(usize, usize)> {
+    let mut i = from;
+    while let Some(rel) = memchr::memchr(b'$', &bytes[i..]) {
+        let pos = i + rel;
+        for marker in MARKERS {
+            if bytes[pos..].starts_with(marker) {
+                return Some((pos, marker.len()));
+            }
+        }
+        i = pos + 1;
+    }
+    None
+}
+
 fn scan(bytes: &[u8]) -> bool {
     let mut i = 0;
     while i < bytes.len() {
@@ -89,12 +115,16 @@ fn scan(bytes: &[u8]) -> bool {
             i = (i + 1).min(bytes.len());
             continue;
         }
-        // Try matching a rune marker at this code position.
+        // Try matching a rune marker at this code position. Guarded on
+        // the anchor byte so non-`$` positions (the overwhelming
+        // majority) skip the per-marker prefix compares.
+        if b != b'$' {
+            i += 1;
+            continue;
+        }
         for marker in MARKERS {
             if bytes[i..].starts_with(marker) {
-                // `$$props` ambient: previous char must not be `$`.
-                let prev = i.checked_sub(1).and_then(|p| bytes.get(p)).copied();
-                if prev != Some(b'$') {
+                if !rune_marker_is_shadowed_at(bytes, i) {
                     let mut after = i + marker.len();
                     // Consume `.word` chains (`$state.raw`, `$derived.by`).
                     while bytes.get(after) == Some(&b'.') {
@@ -115,6 +145,46 @@ fn scan(bytes: &[u8]) -> bool {
             }
         }
         i += 1;
+    }
+    false
+}
+
+/// True when a rune-name match at byte `pos` cannot actually be a rune
+/// usage, because the surrounding source shows it isn't a standalone
+/// identifier in expression position:
+///
+///   - the match is the TAIL of a longer identifier (`my$state`,
+///     `$$props` — the byte before is an identifier character), or
+///   - it is the PROPERTY side of a member access (`obj.$state(0)`,
+///     `this?.$props()`, including a line-wrapped `obj\n  .$state`).
+///
+/// Runes are free identifiers; a method that merely shares a rune's
+/// name (e.g. a Svelte-4 store lib exposing `api.$state(init)`) must
+/// not flip a component into runes mode. Upstream svelte2tsx skips
+/// property-access `$`-names before its runes-globals check
+/// (`processInstanceScriptContent.ts`), so member calls never reach
+/// its `checkGlobalsForRunes`.
+///
+/// A spread (`...$state(0)`) is expression position, not a member
+/// access — three consecutive dots pass through.
+pub fn rune_marker_is_shadowed_at(bytes: &[u8], pos: usize) -> bool {
+    let prev = pos.checked_sub(1).and_then(|p| bytes.get(p)).copied();
+    if prev.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'$') {
+        return true;
+    }
+    // Walk back over whitespace to the previous significant byte; a `.`
+    // there makes the marker a member-access property name.
+    let mut p = pos;
+    while p > 0 {
+        p -= 1;
+        match bytes[p] {
+            b' ' | b'\t' | b'\r' | b'\n' => continue,
+            b'.' => {
+                let spread = p >= 2 && bytes[p - 1] == b'.' && bytes[p - 2] == b'.';
+                return !spread;
+            }
+            _ => return false,
+        }
     }
     false
 }
@@ -200,7 +270,9 @@ mod tests {
 
     #[test]
     fn ignores_rune_in_line_comment() {
-        assert!(!script_calls_rune("// migrate to $state(0) later\nlet x = 1;"));
+        assert!(!script_calls_rune(
+            "// migrate to $state(0) later\nlet x = 1;"
+        ));
     }
 
     #[test]
@@ -227,11 +299,40 @@ mod tests {
     #[test]
     fn rejects_dollar_dollar_ambient_and_bare_identifier() {
         assert!(!script_calls_rune("const p = $$props;"));
-        assert!(!script_calls_rune("import { state as $state } from 'x'; let y = $state;"));
+        assert!(!script_calls_rune(
+            "import { state as $state } from 'x'; let y = $state;"
+        ));
     }
 
     #[test]
     fn rejects_identifier_suffix_continuation() {
         assert!(!script_calls_rune("function $stateful() {} $stateful();"));
+    }
+
+    #[test]
+    fn rejects_identifier_prefix_continuation() {
+        assert!(!script_calls_rune("const x = my$state(0);"));
+    }
+
+    #[test]
+    fn rejects_member_access_rune_names() {
+        // A method literally named `$state`/`$props` on some object is a
+        // property access, never a rune — a Svelte-4 component calling a
+        // store lib's `api.$state(init)` must stay in legacy mode.
+        assert!(!script_calls_rune(
+            "export let value; const s = api.$state(0);"
+        ));
+        assert!(!script_calls_rune("this.$props();"));
+        assert!(!script_calls_rune("obj?.$state(0);"));
+        // Line-wrapped member access.
+        assert!(!script_calls_rune("const s = api\n    .$state(0);"));
+        // Dotted-variant member call (`api.$state.raw(0)`).
+        assert!(!script_calls_rune("const s = api.$state.raw(0);"));
+    }
+
+    #[test]
+    fn spread_of_rune_call_still_detected() {
+        // `...` is expression position, not member access.
+        assert!(script_calls_rune("const arr = [...$state([])];"));
     }
 }

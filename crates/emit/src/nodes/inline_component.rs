@@ -67,7 +67,7 @@ pub(crate) fn emit_component_node(
         .nodes
         .iter()
         .filter_map(|n| match n {
-            Node::SnippetBlock(b) => Some(b),
+            Node::SnippetBlock(b) => Some(b.as_ref()),
             _ => None,
         })
         .collect();
@@ -777,95 +777,6 @@ fn write_quoted_prop_key_with_source(
     let mut quoted = String::with_capacity(name.len() + 2);
     write_js_string_literal_to(&mut quoted, name);
     buf.append_with_source(&quoted, attr_range);
-}
-
-/// Split `params_text` on top-level commas and, for each part that
-/// doesn't already carry a top-level type annotation, append `: any`.
-/// "Top-level" here means depth 0 in balanced `()`, `[]`, `{}`, `<>` —
-/// so object-destructure patterns like `{ a, b }` are treated as one
-/// unannotated part and get `{ a, b }: any` appended.
-///
-/// Used only by top-level `{#snippet}` blocks whose params have no
-/// parent `Snippet<[...]>` contextual type to flow from.
-pub(crate) fn annotate_snippet_params(params_text: &str) -> String {
-    let bytes = params_text.as_bytes();
-    let mut parts: Vec<(usize, usize)> = Vec::new();
-    let mut depth = 0i32;
-    let mut start = 0;
-    for (i, &b) in bytes.iter().enumerate() {
-        match b {
-            b'(' | b'[' | b'{' | b'<' => depth += 1,
-            b')' | b']' | b'}' | b'>' if depth > 0 => depth -= 1,
-            b',' if depth == 0 => {
-                parts.push((start, i));
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    parts.push((start, bytes.len()));
-
-    let mut out = String::with_capacity(params_text.len() + 16);
-    let mut first = true;
-    for (s, e) in parts {
-        if !first {
-            out.push_str(", ");
-        }
-        first = false;
-        let part = params_text[s..e].trim();
-        if part.is_empty() {
-            continue;
-        }
-        let part_bytes = part.as_bytes();
-        let mut d = 0i32;
-        let mut has_top_colon = false;
-        for &b in part_bytes {
-            match b {
-                b'(' | b'[' | b'{' | b'<' => d += 1,
-                b')' | b']' | b'}' | b'>' if d > 0 => d -= 1,
-                b':' if d == 0 => {
-                    has_top_colon = true;
-                    break;
-                }
-                _ => {}
-            }
-        }
-        out.push_str(part);
-        if !has_top_colon {
-            if let Some(eq) = find_top_level_eq(part) {
-                let before = part[..eq].trim_end();
-                let after = &part[eq..];
-                out.truncate(out.len() - part.len());
-                out.push_str(before);
-                out.push_str(": any ");
-                out.push_str(after);
-            } else {
-                out.push_str(": any");
-            }
-        }
-    }
-    out
-}
-
-/// First top-level `=` in `s`, or `None`. Skips `==` / `===` / `=>`.
-fn find_top_level_eq(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    let mut d = 0i32;
-    for (i, &b) in bytes.iter().enumerate() {
-        match b {
-            b'(' | b'[' | b'{' | b'<' => d += 1,
-            b')' | b']' | b'}' | b'>' if d > 0 => d -= 1,
-            b'=' if d == 0 => {
-                let next = bytes.get(i + 1).copied();
-                if next == Some(b'=') || next == Some(b'>') {
-                    continue;
-                }
-                return Some(i);
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Write a `{#snippet name(params)}...{/snippet}` block as an

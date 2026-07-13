@@ -128,14 +128,17 @@ impl WarningFilterPlan {
 /// `.cjs`, `.mjs`, `.ts`, `.mts`. Returns the first match in the order
 /// listed.
 ///
-/// Probes only the workspace directory — it does NOT ascend to parent
-/// directories. This mirrors upstream svelte-check, which loads the
-/// config with `loadConfig(workspacePath, { traverse: false })`
-/// (incremental.ts) — the `traverse: false` flag stops the loader at
-/// the workspace dir. Ascending would, in a monorepo whose sub-app has
-/// no local `svelte.config` but an ancestor does, apply that ancestor's
-/// `warningFilter` / `kit.files` where upstream applies defaults —
-/// shifting warning counts and Kit-file classification off parity.
+/// Probes only the given directory — it does NOT ascend to parent
+/// directories. For the workspace-root `kit.files` resolution that
+/// mirrors upstream svelte-check, which loads the config with
+/// `loadConfig(workspacePath, { traverse: false })` (incremental.ts) —
+/// the `traverse: false` flag stops the loader at the workspace dir.
+/// Ascending would, in a monorepo whose sub-app has no local
+/// `svelte.config` but an ancestor does, apply that ancestor's
+/// `kit.files` where upstream applies defaults — shifting Kit-file
+/// classification off parity. Per-file `warningFilter` / `runes`
+/// resolution (which upstream DOES search per document) layers on top
+/// via [`ConfigResolver`], calling this per directory.
 pub fn find_svelte_config(workspace: &Path) -> Option<PathBuf> {
     for candidate in [
         "svelte.config.js",
@@ -191,6 +194,162 @@ pub struct SvelteConfigSummary {
     /// `compilerOptions.namespace === 'foreign'` — preserve DOM
     /// attribute-name case in emit (upstream `preserveAttributeCase`).
     pub preserve_attribute_case: bool,
+    /// `compilerOptions.runes` boolean literal. Upstream compiles every
+    /// component with the config's compilerOptions, so a config-level
+    /// `runes: true` / `runes: false` FORCES the mode; `None` keeps the
+    /// per-file auto-detection.
+    pub runes: Option<bool>,
+}
+
+/// The per-file subset of a config — the settings upstream applies PER
+/// DOCUMENT (each document compiles with its own resolved config's
+/// `compilerOptions`).
+#[derive(Debug, Default, Clone)]
+pub struct ResolvedConfig {
+    pub warning_filter_plan: WarningFilterPlan,
+    /// `compilerOptions.runes` — see [`SvelteConfigSummary::runes`].
+    pub runes: Option<bool>,
+}
+
+/// Per-file nearest-config resolution for `warningFilter` / `runes`.
+///
+/// Upstream's language server resolves each document's Svelte config by
+/// searching UPWARD from the file's own directory (`Document.ts` →
+/// `configLoader.awaitConfig` → `searchConfigPathUpwards`): the nearest
+/// config wins outright — no merging between configs. We mirror that
+/// between each `.svelte` file and the workspace root; files with no
+/// nearer config fall back to the workspace-root resolution the CLI
+/// already performed (which covers the `--config` override and the
+/// vite-plugin-options fallback). We deliberately do NOT search above
+/// the workspace root.
+///
+/// An explicit `--config` pins that one config for every file —
+/// upstream documents that nested configs below it are ignored.
+///
+/// NOT resolved per-file on purpose: `kit.files` (upstream svelte-check
+/// loads it with `loadConfig(workspace, { traverse: false })`, so
+/// root-only IS parity) and `namespace: 'foreign'` (a process-wide emit
+/// flag today).
+///
+/// Resolution is memoized per DIRECTORY — O(dirs), not O(files ×
+/// depth). [`ConfigResolver::prime`] walks each file's ancestor chain
+/// once (filesystem probes + config analysis happen here, on one
+/// thread); [`ConfigResolver::for_path`] is a read-only lookup that the
+/// parallel lint pass can call concurrently.
+pub struct ConfigResolver {
+    workspace: PathBuf,
+    root: std::sync::Arc<ResolvedConfig>,
+    /// `--config` was given — every file resolves to `root`.
+    explicit: bool,
+    by_dir: std::collections::HashMap<PathBuf, std::sync::Arc<ResolvedConfig>>,
+    /// Below-root configs discovered during `prime`, keyed by config
+    /// path (a config shared by several directories is analysed once).
+    nested: Vec<(PathBuf, std::sync::Arc<ResolvedConfig>)>,
+}
+
+impl ConfigResolver {
+    pub fn new(workspace: PathBuf, root: ResolvedConfig, explicit_config: bool) -> Self {
+        Self {
+            workspace,
+            root: std::sync::Arc::new(root),
+            explicit: explicit_config,
+            by_dir: std::collections::HashMap::new(),
+            nested: Vec::new(),
+        }
+    }
+
+    /// Resolve (and memoize) the nearest config for every file's
+    /// directory chain. Call once, before any [`Self::for_path`] use.
+    pub fn prime<'a>(&mut self, files: impl IntoIterator<Item = &'a PathBuf>) {
+        if self.explicit {
+            // Everything resolves to the pinned config — skip the walk.
+            return;
+        }
+        for file in files {
+            if let Some(dir) = file.parent() {
+                self.resolve_dir(dir);
+            }
+        }
+    }
+
+    fn resolve_dir(&mut self, dir: &Path) -> std::sync::Arc<ResolvedConfig> {
+        if let Some(hit) = self.by_dir.get(dir) {
+            return hit.clone();
+        }
+        let resolved = if dir == self.workspace.as_path() || !dir.starts_with(&self.workspace) {
+            // The workspace root's own config was already resolved by
+            // the CLI (with --config / vite fallback) — reuse it rather
+            // than re-probing the root dir.
+            self.root.clone()
+        } else if let Some((cfg_path, summary)) = probe_dir_for_config(dir) {
+            if let Some((_, existing)) = self.nested.iter().find(|(p, _)| *p == cfg_path) {
+                existing.clone()
+            } else {
+                let rc = std::sync::Arc::new(ResolvedConfig {
+                    warning_filter_plan: summary.warning_filter_plan,
+                    runes: summary.runes,
+                });
+                self.nested.push((cfg_path, rc.clone()));
+                rc
+            }
+        } else {
+            match dir.parent() {
+                Some(parent) => self.resolve_dir(parent),
+                None => self.root.clone(),
+            }
+        };
+        self.by_dir.insert(dir.to_path_buf(), resolved.clone());
+        resolved
+    }
+
+    /// The nearest config for `path` — memo lookup with root fallback.
+    /// Read-only; safe from parallel workers after [`Self::prime`].
+    pub fn for_path(&self, path: &Path) -> &ResolvedConfig {
+        if self.explicit {
+            return &self.root;
+        }
+        let mut dir = path.parent();
+        while let Some(d) = dir {
+            if let Some(hit) = self.by_dir.get(d) {
+                return hit;
+            }
+            if d == self.workspace.as_path() {
+                break;
+            }
+            dir = d.parent();
+        }
+        &self.root
+    }
+
+    /// Below-root configs discovered during [`Self::prime`] whose
+    /// `warningFilter` only partially translated — the caller surfaces
+    /// the same stderr notice the root config gets.
+    pub fn nested_partial_configs(&self) -> impl Iterator<Item = (&Path, &WarningFilterPlan)> {
+        self.nested
+            .iter()
+            .filter(|(_, c)| c.warning_filter_plan.partial)
+            .map(|(p, c)| (p.as_path(), &c.warning_filter_plan))
+    }
+}
+
+/// Probe ONE directory for a Svelte/Vite config, mirroring the CLI's
+/// workspace-root precedence: an analysable `vite.config.*` (inline
+/// plugin options) wins, else a `svelte.config.*`, else a vite config
+/// with no readable options still ENDS the upward search — upstream's
+/// per-directory probe stops at any config file — contributing
+/// defaults.
+fn probe_dir_for_config(dir: &Path) -> Option<(PathBuf, SvelteConfigSummary)> {
+    let vite = find_vite_config(dir);
+    if let Some(p) = &vite
+        && let Some(s) = analyse_vite_config(p)
+    {
+        return Some((p.clone(), s));
+    }
+    if let Some(p) = find_svelte_config(dir) {
+        let s = analyse(&p);
+        return Some((p, s));
+    }
+    vite.map(|p| (p, SvelteConfigSummary::default()))
 }
 
 /// Read `svelte.config.js`, parse once, and return every recognised
@@ -227,6 +386,10 @@ pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
 
     // namespace: 'foreign' → preserve attribute case.
     summary.preserve_attribute_case = extract_preserve_attribute_case(&parsed.program);
+
+    // compilerOptions.runes — config-forced runes mode.
+    summary.runes =
+        default_export_config_object(&parsed.program).and_then(|obj| runes_in_object(obj));
 
     summary
 }
@@ -283,6 +446,10 @@ pub fn analyse_vite_config(config_path: &Path) -> Option<SvelteConfigSummary> {
     // namespace: 'foreign' → preserve attribute case.
     summary.preserve_attribute_case = preserve_case_in_object(plugin_obj);
 
+    // compilerOptions.runes — same relative position as in
+    // `svelte.config.js`.
+    summary.runes = runes_in_object(plugin_obj);
+
     Some(summary)
 }
 
@@ -337,10 +504,39 @@ fn find_vite_svelte_plugin_options<'a>(
     svelte_fallback.map(|obj| (obj, false))
 }
 
-/// Find the top-level config `ObjectExpression` in the default export,
-/// handling `export default {…}`, `const c = {…}; export default c`, and
-/// `defineConfig({…})` / `satisfies` wrappers. Mirrors the traversal in
-/// [`extract_warning_filter`].
+/// RHS of a top-level `module.exports = …;` assignment — the CommonJS
+/// equivalent of `export default` for `.cjs` (and CJS-mode `.js`)
+/// configs. Upstream's loadConfig executes the config module and Node's
+/// `import()` maps `module.exports` to the default export, so both
+/// forms must resolve to the same config object.
+fn module_exports_value<'a>(stmt: &'a Statement<'a>) -> Option<&'a Expression<'a>> {
+    let Statement::ExpressionStatement(es) = stmt else {
+        return None;
+    };
+    let Expression::AssignmentExpression(assign) = &es.expression else {
+        return None;
+    };
+    if assign.operator != oxc_ast::ast::AssignmentOperator::Assign {
+        return None;
+    }
+    let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(target) = &assign.left else {
+        return None;
+    };
+    let Expression::Identifier(obj) = &target.object else {
+        return None;
+    };
+    if obj.name != "module" || target.property.name != "exports" {
+        return None;
+    }
+    Some(&assign.right)
+}
+
+/// Find the top-level config `ObjectExpression` the file exports,
+/// handling `export default {…}`, the CommonJS `module.exports = {…}`,
+/// `const c = {…}; export default c` (or `module.exports = c`), and
+/// `defineConfig({…})` / `satisfies` wrappers. Shared by every
+/// extractor (warningFilter, kit.files, namespace, vite plugin options)
+/// so all of them accept the same export shapes.
 fn default_export_config_object<'a>(
     program: &'a oxc_ast::ast::Program<'a>,
 ) -> Option<&'a ObjectExpression<'a>> {
@@ -358,18 +554,21 @@ fn default_export_config_object<'a>(
         }
     }
     for stmt in &program.body {
-        let Statement::ExportDefaultDeclaration(decl) = stmt else {
-            continue;
-        };
-        let expr = match &decl.declaration {
-            ExportDefaultDeclarationKind::Identifier(id) => {
-                match named.get(id.name.as_str()).copied() {
+        let expr = match stmt {
+            Statement::ExportDefaultDeclaration(decl) => match &decl.declaration {
+                ExportDefaultDeclarationKind::Identifier(id) => {
+                    match named.get(id.name.as_str()).copied() {
+                        Some(e) => e,
+                        None => continue,
+                    }
+                }
+                ExportDefaultDeclarationKind::ObjectExpression(obj) => return Some(obj),
+                other => match other.as_expression() {
                     Some(e) => e,
                     None => continue,
-                }
-            }
-            ExportDefaultDeclarationKind::ObjectExpression(obj) => return Some(obj),
-            other => match other.as_expression() {
+                },
+            },
+            other => match module_exports_value(other) {
                 Some(e) => e,
                 None => continue,
             },
@@ -395,79 +594,51 @@ fn extract_preserve_attribute_case(program: &oxc_ast::ast::Program<'_>) -> bool 
         .unwrap_or(false)
 }
 
-/// `compilerOptions.namespace === 'foreign'` inside a config-root object.
-/// The `compilerOptions` key sits at the same relative position in a
+/// The `compilerOptions` object inside a config-root object, unwrapping
+/// `/** @type {...} */ ({...})` style parenthesised casts. The
+/// `compilerOptions` key sits at the same relative position in a
 /// `svelte.config.js` default export and in a `sveltekit(...)` /
-/// `svelte(...)` Vite-plugin options object, so both config shapes reuse
-/// this helper.
-fn preserve_case_in_object(obj: &ObjectExpression<'_>) -> bool {
-    let Some(co) = lookup_object_property(obj, "compilerOptions") else {
-        return false;
-    };
-    // Unwrap `/** @type {...} */ ({...})` style casts.
-    let mut value = co;
+/// `svelte(...)` Vite-plugin options object, so every compiler-option
+/// extractor shares this helper.
+fn compiler_options_in_object<'a>(
+    obj: &'a ObjectExpression<'a>,
+) -> Option<&'a ObjectExpression<'a>> {
+    let mut value = lookup_object_property(obj, "compilerOptions")?;
     while let Expression::ParenthesizedExpression(px) = value {
         value = &px.expression;
     }
-    let Expression::ObjectExpression(inner) = value else {
-        return false;
-    };
-    lookup_string_property(inner, "namespace").as_deref() == Some("foreign")
+    match value {
+        Expression::ObjectExpression(inner) => Some(inner),
+        _ => None,
+    }
 }
 
-/// Walk the program AST looking for `kit.files` inside the default
-/// export. Mirrors [`extract_warning_filter`]'s shape for
-/// `compilerOptions.warningFilter`.
+/// `compilerOptions.namespace === 'foreign'` inside a config-root object.
+fn preserve_case_in_object(obj: &ObjectExpression<'_>) -> bool {
+    compiler_options_in_object(obj)
+        .and_then(|co| lookup_string_property(co, "namespace"))
+        .as_deref()
+        == Some("foreign")
+}
+
+/// `compilerOptions.runes` boolean literal inside a config-root object.
+/// Non-literal values (env-dependent expressions, identifiers) yield
+/// `None` — auto-detection stays in charge rather than guessing.
+fn runes_in_object(obj: &ObjectExpression<'_>) -> Option<bool> {
+    match lookup_object_property(compiler_options_in_object(obj)?, "runes")? {
+        Expression::BooleanLiteral(b) => Some(b.value),
+        _ => None,
+    }
+}
+
+/// `kit.files` inside the exported config object. Export-shape
+/// traversal (default export, `module.exports`, named-const
+/// indirection, `defineConfig` / `satisfies` wrappers) is shared via
+/// [`default_export_config_object`].
 fn extract_kit_files_object<'a>(
     program: &'a oxc_ast::ast::Program<'a>,
 ) -> Option<&'a ObjectExpression<'a>> {
-    let mut named: std::collections::HashMap<String, &Expression<'_>> =
-        std::collections::HashMap::new();
-    for stmt in &program.body {
-        if let Statement::VariableDeclaration(vd) = stmt {
-            for d in &vd.declarations {
-                let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &d.id else {
-                    continue;
-                };
-                if let Some(init) = &d.init {
-                    named.insert(id.name.to_string(), init);
-                }
-            }
-        }
-    }
-    for stmt in &program.body {
-        let Statement::ExportDefaultDeclaration(decl) = stmt else {
-            continue;
-        };
-        let expr = match &decl.declaration {
-            ExportDefaultDeclarationKind::Identifier(id) => named.get(id.name.as_str()).copied()?,
-            ExportDefaultDeclarationKind::ObjectExpression(obj) => {
-                return kit_files_from_root(obj);
-            }
-            other => match other.as_expression() {
-                Some(e) => e,
-                None => continue,
-            },
-        };
-        // Unwrap common config-wrapper shapes:
-        //   defineConfig({...})   — Vite/SvelteKit ergonomic helper
-        //   config satisfies Config — TS narrowing wrapper
-        //   <ts cast>(<expr>)     — sometimes seen in TS configs
-        let unwrapped = unwrap_config_wrapper(expr);
-        if let Expression::ObjectExpression(obj) = unwrapped {
-            return kit_files_from_root(obj);
-        }
-        // Indirect: `export default config;` where `config` was
-        // declared as `const config = defineConfig({...})`. Recurse
-        // through the named-decl table after wrapper-unwrapping.
-        if let Expression::Identifier(id) = unwrapped
-            && let Some(target) = named.get(id.name.as_str()).copied()
-            && let Expression::ObjectExpression(obj) = unwrap_config_wrapper(target)
-        {
-            return kit_files_from_root(obj);
-        }
-    }
-    None
+    kit_files_from_root(default_export_config_object(program)?)
 }
 
 /// Strip common one-level wrappers that don't change the underlying
@@ -586,73 +757,20 @@ impl WarningFilterPlan {
     }
 }
 
-/// Walk top-level statements looking for the `warningFilter` entry
-/// inside `compilerOptions`. Handles two common export shapes:
-///   - `export default { compilerOptions: { warningFilter: ... } }`
-///   - `const config = { ... }; export default config;`
+/// `compilerOptions.warningFilter` inside the exported config object.
+/// Export-shape traversal (default export, `module.exports`,
+/// named-const indirection, `defineConfig` / `satisfies` wrappers) is
+/// shared via [`default_export_config_object`].
 fn extract_warning_filter<'a>(
     program: &'a oxc_ast::ast::Program<'a>,
 ) -> Option<&'a Expression<'a>> {
-    // Named declarations keyed by identifier for the second pattern.
-    let mut named: std::collections::HashMap<String, &Expression<'_>> =
-        std::collections::HashMap::new();
-    for stmt in &program.body {
-        if let Statement::VariableDeclaration(vd) = stmt {
-            for d in &vd.declarations {
-                if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &d.id
-                    && let Some(init) = &d.init
-                {
-                    named.insert(id.name.to_string(), init);
-                }
-            }
-        }
-    }
-    for stmt in &program.body {
-        let Statement::ExportDefaultDeclaration(decl) = stmt else {
-            continue;
-        };
-        let expr = match &decl.declaration {
-            ExportDefaultDeclarationKind::Identifier(id) => {
-                match named.get(id.name.as_str()).copied() {
-                    Some(e) => e,
-                    None => continue,
-                }
-            }
-            ExportDefaultDeclarationKind::ObjectExpression(obj) => {
-                return warning_filter_in_object(obj);
-            }
-            other => match other.as_expression() {
-                Some(e) => e,
-                None => continue,
-            },
-        };
-        let unwrapped = unwrap_config_wrapper(expr);
-        if let Expression::ObjectExpression(obj) = unwrapped {
-            return warning_filter_in_object(obj);
-        }
-        if let Expression::Identifier(id) = unwrapped
-            && let Some(target) = named.get(id.name.as_str()).copied()
-            && let Expression::ObjectExpression(obj) = unwrap_config_wrapper(target)
-        {
-            return warning_filter_in_object(obj);
-        }
-    }
-    None
+    warning_filter_in_object(default_export_config_object(program)?)
 }
 
 /// Look up `compilerOptions.warningFilter` inside a top-level config
 /// object.
 fn warning_filter_in_object<'a>(obj: &'a ObjectExpression<'a>) -> Option<&'a Expression<'a>> {
-    let co = lookup_object_property(obj, "compilerOptions")?;
-    // Unwrap `/** @type {...} */ ({...})` style casts.
-    let mut value = co;
-    while let Expression::ParenthesizedExpression(px) = value {
-        value = &px.expression;
-    }
-    let Expression::ObjectExpression(inner) = value else {
-        return None;
-    };
-    lookup_object_property(inner, "warningFilter")
+    lookup_object_property(compiler_options_in_object(obj)?, "warningFilter")
 }
 
 /// Recognise `(w) => …` / `function (w) { … }` and pull the first
@@ -724,6 +842,16 @@ fn analyse_block<'a>(block: &'a FunctionBody<'a>, param: &str, source: &str) -> 
 /// Walk a block body. Model: accumulate DropRules from each `if (X)
 /// return false;` clause, and record `const ignore = [...]` arrays so
 /// a trailing `return !ignore.includes(w.code)` can resolve them.
+///
+/// Keep-style `if (COND) return true;` statements can't be modelled
+/// (we only translate drop rules), and they SHIELD everything after
+/// them: at runtime the keep-if executes first, so a warning matching
+/// both the keep-if and a later drop source is KEPT — translating that
+/// later drop would over-suppress. Once a keep-if is seen, any
+/// subsequent drop source (drop-if, blocklist return, keep-expr
+/// return, or a `return false` default, which drops everything the
+/// keep-ifs don't keep) degrades the plan to partial/unknown —
+/// conservative keep-all with the stderr notice, never over-drop.
 fn analyse_block_stmt<'a>(
     stmts: &'a [Statement<'a>],
     param: &str,
@@ -734,6 +862,9 @@ fn analyse_block_stmt<'a>(
         std::collections::HashMap::new();
     let mut partial = false;
     let mut excerpt: Option<String> = None;
+    // Source text of the first keep-if seen — doubles as the "a keep-if
+    // shields later drops" flag and as the partial-notice excerpt.
+    let mut keep_if: Option<String> = None;
     for stmt in stmts {
         match stmt {
             Statement::VariableDeclaration(vd) => {
@@ -742,14 +873,27 @@ fn analyse_block_stmt<'a>(
                 }
             }
             Statement::IfStatement(is) => match classify_if(is, param) {
-                IfOutcome::DropWhenCondTrue(mut inner) => rules.append(&mut inner),
+                IfOutcome::DropWhenCondTrue(mut inner) => {
+                    if keep_if.is_some() {
+                        partial = true;
+                        if excerpt.is_none() {
+                            excerpt = keep_if.clone();
+                        }
+                    } else {
+                        rules.append(&mut inner);
+                    }
+                }
                 IfOutcome::Unhandled => {
                     partial = true;
                     if excerpt.is_none() {
                         excerpt = Some(source_slice(source, is.span.start, is.span.end));
                     }
                 }
-                IfOutcome::NoEffect => {}
+                IfOutcome::NoEffect => {
+                    if keep_if.is_none() {
+                        keep_if = Some(source_slice(source, is.span.start, is.span.end));
+                    }
+                }
             },
             Statement::ReturnStatement(ret) => {
                 if let Some(arg) = &ret.argument {
@@ -761,18 +905,32 @@ fn analyse_block_stmt<'a>(
                             constant: None,
                             unrecognised_excerpt: excerpt,
                         };
-                        // Only a `return true` default matters
-                        // semantically (drop-rules collected above);
-                        // `return false` default drops everything not
-                        // already explicitly kept — we don't model
-                        // keep-rules, so treat as unknown.
+                        // A `return false` default drops everything not
+                        // explicitly kept. With no keep-ifs there IS
+                        // nothing kept — the filter is constant-false
+                        // (drop all; any drop-ifs above are a subset).
+                        // With keep-ifs the kept subset is unmodelled →
+                        // unknown, keep-all + notice.
                         if !b {
-                            out.constant = Some(false);
+                            if let Some(k) = keep_if {
+                                out.partial = true;
+                                if out.unrecognised_excerpt.is_none() {
+                                    out.unrecognised_excerpt = Some(k);
+                                }
+                            } else {
+                                out.constant = Some(false);
+                            }
                         }
                         return out;
                     }
-                    // `return !ignore.includes(w.code)` shape.
-                    if let Some(drops) = try_blocklist_return(arg, param, &arrays) {
+                    if keep_if.is_some() {
+                        // Preceding keep-if shields this return's drops.
+                        partial = true;
+                        if excerpt.is_none() {
+                            excerpt = keep_if.clone();
+                        }
+                    } else if let Some(drops) = try_blocklist_return(arg, param, &arrays) {
+                        // `return !ignore.includes(w.code)` shape.
                         rules.extend(drops);
                     } else {
                         // Re-evaluate as a keep-expr.
@@ -1289,6 +1447,196 @@ export default {
     }
 
     #[test]
+    fn config_resolver_nearest_config_wins_root_is_fallback() {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path().to_path_buf();
+        let app = root.join("packages/app");
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        std::fs::write(
+            app.join("svelte.config.js"),
+            "export default { compilerOptions: { runes: true, warningFilter: (w) => !w.code.startsWith('a11y_') } };",
+        )
+        .unwrap();
+
+        let mut resolver = ConfigResolver::new(root.clone(), ResolvedConfig::default(), false);
+        let nested_file = app.join("src/App.svelte");
+        let root_file = root.join("lib/Root.svelte");
+        resolver.prime([&nested_file, &root_file]);
+
+        // Nearest config (packages/app) wins for files under it…
+        let nested = resolver.for_path(&nested_file);
+        assert_eq!(nested.runes, Some(true));
+        assert!(
+            nested
+                .warning_filter_plan
+                .should_drop("a11y_missing_attribute", None)
+        );
+        // …and it REPLACES the root config outright (no merging).
+        let at_root = resolver.for_path(&root_file);
+        assert_eq!(at_root.runes, None);
+        assert!(
+            !at_root
+                .warning_filter_plan
+                .should_drop("a11y_missing_attribute", None)
+        );
+        // Unprimed paths fall back to the root config.
+        let stray = root.join("never/primed/X.svelte");
+        assert_eq!(resolver.for_path(&stray).runes, None);
+    }
+
+    #[test]
+    fn config_resolver_walks_up_to_nearest_ancestor_below_root() {
+        // Config sits at packages/app; the file is two levels deeper.
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path().to_path_buf();
+        let deep = root.join("packages/app/src/lib/deep");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(
+            root.join("packages/app/svelte.config.js"),
+            "export default { compilerOptions: { runes: true } };",
+        )
+        .unwrap();
+
+        let mut resolver = ConfigResolver::new(root, ResolvedConfig::default(), false);
+        let file = deep.join("Deep.svelte");
+        resolver.prime([&file]);
+        assert_eq!(resolver.for_path(&file).runes, Some(true));
+    }
+
+    #[test]
+    fn config_resolver_explicit_config_ignores_nested() {
+        let ws = tempfile::tempdir().unwrap();
+        let root = ws.path().to_path_buf();
+        let app = root.join("packages/app");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(
+            app.join("svelte.config.js"),
+            "export default { compilerOptions: { runes: true } };",
+        )
+        .unwrap();
+
+        // --config pins the root resolution for every file.
+        let mut resolver = ConfigResolver::new(
+            root,
+            ResolvedConfig {
+                warning_filter_plan: WarningFilterPlan::default(),
+                runes: Some(false),
+            },
+            true,
+        );
+        let file = app.join("App.svelte");
+        resolver.prime([&file]);
+        assert_eq!(resolver.for_path(&file).runes, Some(false));
+    }
+
+    fn summary_of(src: &str) -> SvelteConfigSummary {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("svelte.config.mjs");
+        std::fs::write(&path, src).unwrap();
+        analyse(&path)
+    }
+
+    #[test]
+    fn compiler_options_runes_boolean_extracted() {
+        assert_eq!(
+            summary_of("export default { compilerOptions: { runes: true } };").runes,
+            Some(true)
+        );
+        assert_eq!(
+            summary_of("export default { compilerOptions: { runes: false } };").runes,
+            Some(false)
+        );
+        // Absent → auto-detect.
+        assert_eq!(
+            summary_of("export default { compilerOptions: {} };").runes,
+            None
+        );
+        assert_eq!(summary_of("export default {};").runes, None);
+        // Non-literal (can't be evaluated statically) → auto-detect.
+        assert_eq!(
+            summary_of("const flag = true;\nexport default { compilerOptions: { runes: flag } };")
+                .runes,
+            None
+        );
+    }
+
+    #[test]
+    fn vite_inline_plugin_runes_extracted() {
+        let s = vite_summary(
+            r#"
+import { sveltekit } from '@sveltejs/kit/vite';
+export default { plugins: [sveltekit({ compilerOptions: { runes: true } })] };
+"#,
+        )
+        .expect("inline sveltekit options must be analysed");
+        assert_eq!(s.runes, Some(true));
+    }
+
+    fn analyse_cjs(src: &str) -> SvelteConfigSummary {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("svelte.config.cjs");
+        std::fs::write(&path, src).unwrap();
+        analyse(&path)
+    }
+
+    #[test]
+    fn cjs_module_exports_object_literal_is_analysed() {
+        // CommonJS configs assign the config to `module.exports` instead
+        // of `export default` — upstream's loadConfig executes the module
+        // and Node maps module.exports to the imported default export.
+        let s = analyse_cjs(
+            r#"
+module.exports = {
+  compilerOptions: {
+    namespace: 'foreign',
+    warningFilter: (w) => !w.code.startsWith('a11y_')
+  },
+  kit: { files: { params: 'src/matchers' } }
+};
+"#,
+        );
+        assert_eq!(
+            s.warning_filter_plan.rules,
+            vec![DropRule::CodePrefix("a11y_".into())]
+        );
+        assert!(!s.warning_filter_plan.partial);
+        assert_eq!(s.kit_files_settings.params_path, "src/matchers");
+        assert!(s.preserve_attribute_case);
+    }
+
+    #[test]
+    fn cjs_module_exports_named_const_is_analysed() {
+        let s = analyse_cjs(
+            r#"
+const config = {
+  compilerOptions: { warningFilter: (w) => w.code !== 'css_unused_selector' }
+};
+module.exports = config;
+"#,
+        );
+        assert_eq!(
+            s.warning_filter_plan.rules,
+            vec![DropRule::CodeEquals("css_unused_selector".into())]
+        );
+    }
+
+    #[test]
+    fn cjs_unrelated_member_assignment_is_ignored() {
+        // Only `module.exports = …` counts; other member assignments
+        // must not be mistaken for the config object.
+        let s = analyse_cjs(
+            r#"
+const cache = {};
+cache.exports = { compilerOptions: { namespace: 'foreign' } };
+module.other = { compilerOptions: { namespace: 'foreign' } };
+"#,
+        );
+        assert!(!s.preserve_attribute_case);
+        assert!(s.warning_filter_plan.rules.is_empty());
+    }
+
+    #[test]
     fn namespace_foreign_sets_preserve_case() {
         assert!(preserve_case(
             "export default { compilerOptions: { namespace: 'foreign' } };"
@@ -1305,9 +1653,7 @@ export default {
         assert!(!preserve_case(
             "export default { compilerOptions: { namespace: 'html' } };"
         ));
-        assert!(!preserve_case(
-            "export default { compilerOptions: {} };"
-        ));
+        assert!(!preserve_case("export default { compilerOptions: {} };"));
     }
 
     #[test]
@@ -1408,6 +1754,124 @@ export default {
         );
         assert_eq!(p.constant, Some(false));
         assert!(p.should_drop("anything", None));
+    }
+
+    #[test]
+    fn allowlist_keep_if_then_return_false_is_unknown_not_constant() {
+        // `if (COND) return true; return false;` keeps COND-matching
+        // warnings at runtime. We don't model keep-rules, so the plan
+        // must fall back to unknown (partial, keep everything) — NOT
+        // constant-false, which would drop the warnings the user's
+        // filter explicitly keeps.
+        let p = plan(
+            r#"
+export default {
+  compilerOptions: {
+    warningFilter: (w) => {
+      if (w.code.startsWith('a11y_')) return true;
+      return false;
+    }
+  }
+};
+"#,
+        );
+        assert_eq!(p.constant, None);
+        assert!(p.partial);
+        assert!(p.rules.is_empty());
+        assert!(!p.should_drop("a11y_click_events_have_key_events", None));
+        // Conservative: unknown filters keep everything (stderr notice
+        // + --compiler-warnings escape hatch), never over-drop.
+        assert!(!p.should_drop("css_unused_selector", None));
+    }
+
+    #[test]
+    fn drop_if_then_return_false_stays_constant_false() {
+        // With only drop-ifs before it, a trailing `return false`
+        // genuinely drops every warning — the collected rules are a
+        // subset of "drop all", so constant-false is exact.
+        let p = plan(
+            r#"
+export default {
+  compilerOptions: {
+    warningFilter: (w) => {
+      if (w.code === 'x') return false;
+      return false;
+    }
+  }
+};
+"#,
+        );
+        assert_eq!(p.constant, Some(false));
+        assert!(p.should_drop("anything", None));
+    }
+
+    #[test]
+    fn drop_if_after_keep_if_is_shielded_and_partial() {
+        // `if (A) return true; if (B) return false; return true;` — a
+        // warning matching BOTH A and B is kept at runtime (A executes
+        // first), so translating B into a drop rule would over-drop.
+        let p = plan(
+            r#"
+export default {
+  compilerOptions: {
+    warningFilter: (w) => {
+      if (w.code.startsWith('a11y_')) return true;
+      if (w.code === 'css_unused_selector') return false;
+      return true;
+    }
+  }
+};
+"#,
+        );
+        assert!(p.partial);
+        assert!(p.rules.is_empty());
+        assert!(!p.should_drop("css_unused_selector", None));
+    }
+
+    #[test]
+    fn drop_if_before_keep_if_keeps_the_drop_rule() {
+        // Drops that precede the first keep-if execute before it at
+        // runtime, so they translate exactly.
+        let p = plan(
+            r#"
+export default {
+  compilerOptions: {
+    warningFilter: (w) => {
+      if (w.code === 'css_unused_selector') return false;
+      if (w.code.startsWith('a11y_')) return true;
+      return true;
+    }
+  }
+};
+"#,
+        );
+        assert!(!p.partial);
+        assert_eq!(
+            p.rules,
+            vec![DropRule::CodeEquals("css_unused_selector".into())]
+        );
+    }
+
+    #[test]
+    fn blocklist_return_after_keep_if_is_shielded_and_partial() {
+        // `if (A) return true; return !ignore.includes(w.code);` — the
+        // keep-if shields ignore-list members matching A.
+        let p = plan(
+            r#"
+export default {
+  compilerOptions: {
+    warningFilter: (w) => {
+      if (w.code.startsWith('a11y_')) return true;
+      const ignore = ['a11y_no_static_element_interactions', 'css_unused_selector'];
+      return !ignore.includes(w.code);
+    }
+  }
+};
+"#,
+        );
+        assert!(p.partial);
+        assert!(p.rules.is_empty());
+        assert!(!p.should_drop("a11y_no_static_element_interactions", None));
     }
 
     #[test]

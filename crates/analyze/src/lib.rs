@@ -69,8 +69,9 @@ pub use events::{
 };
 pub use props::{PropInfo, PropsInfo, PropsSource, contains_typeof_ref, root_type_name_of};
 pub use store::{
-    collect_top_level_bindings, collect_type_only_import_bindings, collect_typed_top_level_lets,
-    collect_typed_uninit_lets, find_store_refs, find_store_refs_with_bindings,
+    RuneScanContext, collect_rune_scan_context, collect_top_level_bindings,
+    collect_type_only_import_bindings, collect_typed_top_level_lets, collect_typed_uninit_lets,
+    find_store_refs, find_store_refs_with_bindings, has_svelte_store_derived_import,
 };
 pub use template_refs::find_template_refs;
 pub use template_scope::extract_at_const_bindings;

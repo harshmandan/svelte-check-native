@@ -16,7 +16,7 @@ use smol_str::SmolStr;
 
 use crate::process_instance_script_content;
 use crate::sveltekit;
-use crate::util::{is_ascii_ws, is_horiz_ws, is_ident_byte, utf8_char_len};
+use crate::util::{is_ascii_ws, is_horiz_ws, is_ident_byte};
 
 /// Rewrite `let <name>: T;` → `let <name>!: T;` for each bind-target
 /// identifier, in-place inside the already-built output buffer.
@@ -31,32 +31,51 @@ use crate::util::{is_ascii_ws, is_horiz_ws, is_ident_byte, utf8_char_len};
 /// initializers (`let x = ...`) are already definitely assigned and don't
 /// need the `!`. Adding `!` to an initialized declaration is itself a TS
 /// error (TS1263).
-pub(crate) fn rewrite_definite_assignment_in_place(out: &mut String, target_names: &[SmolStr]) {
+///
+/// Returns the insertions performed as ascending `(position, length)`
+/// pairs in PRE-rewrite buffer coordinates (none of the inserted text
+/// contains a newline). Callers that hold position metadata computed
+/// against the pre-rewrite buffer (token-map byte spans) must re-anchor
+/// it with these — see `EmitBuffer::adjust_token_map_for_insertions`.
+pub(crate) fn rewrite_definite_assignment_in_place(
+    out: &mut String,
+    target_names: &[SmolStr],
+) -> Vec<(u32, u32)> {
+    let mut edits: Vec<(u32, u32)> = Vec::new();
     if target_names.is_empty() {
-        return;
+        return edits;
     }
-    let original = std::mem::take(out);
-    let bytes = original.as_bytes();
+    // Phase 1: scan for `!` insertion positions without touching the
+    // buffer. A statement match can only start at an ASCII `l`, never
+    // inside a multi-byte char, so a plain byte step is safe.
+    let bytes = out.as_bytes();
+    let mut positions: Vec<usize> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         if let Some((stmt_end, insertions)) = try_process_let_statement(bytes, i, target_names) {
-            // Emit the let statement with `!` inserted after each matched
-            // binding identifier. Insertions are in ascending order by
-            // byte position — emit segments between them verbatim.
-            let mut cursor = i;
-            for pos in &insertions {
-                out.push_str(&original[cursor..*pos]);
-                out.push('!');
-                cursor = *pos;
-            }
-            out.push_str(&original[cursor..stmt_end]);
+            positions.extend(insertions);
             i = stmt_end;
         } else {
-            let ch_len = utf8_char_len(bytes[i]);
-            out.push_str(&original[i..i + ch_len]);
-            i += ch_len;
+            i += 1;
         }
     }
+    if positions.is_empty() {
+        return edits;
+    }
+    // Phase 2: rebuild once with bulk segment copies, a `!` spliced
+    // after each matched binding identifier. Positions are ascending.
+    let original = std::mem::take(out);
+    let mut rebuilt = String::with_capacity(original.len() + positions.len());
+    let mut cursor = 0;
+    for pos in positions {
+        rebuilt.push_str(&original[cursor..pos]);
+        rebuilt.push('!');
+        edits.push((pos as u32, 1));
+        cursor = pos;
+    }
+    rebuilt.push_str(&original[cursor..]);
+    *out = rebuilt;
+    edits
 }
 
 /// At byte position `i`, try to recognize an entire `let …;` statement
@@ -488,10 +507,13 @@ pub(crate) fn has_strict_events_attr(doc: &svn_parser::Document<'_>) -> bool {
     })
 }
 
-/// Infer Svelte 5 runes mode from the document source. Mirrors
-/// svn-lint's `scan_doc_for_rune_call` (`walk.rs`) — intentionally
-/// duplicated rather than dep'ing on lint, so emit gets the signal
-/// with no circular dep in the other direction.
+/// Infer Svelte 5 runes mode from the document source.
+///
+/// Deliberately NOT comment/string-aware, unlike svn_core's
+/// [`svn_core::rune_scan::script_calls_rune`] (svn-lint's scan): a
+/// `$state(0)` inside a comment or string literal DOES flip emit's
+/// runes mode. The two scans share the marker-anchoring primitive
+/// (`find_marker_from`) but keep their distinct match semantics.
 ///
 /// Emit only ever sees `.svelte` documents, so runes mode is inferred
 /// purely from rune-call markers in the source — there is no filename
@@ -517,41 +539,30 @@ pub(crate) fn is_runes_mode(
     if svn_parser::runes_option(fragment, doc.source) == Some(true) {
         return true;
     }
-    let source = doc.source;
-    for marker in [
-        "$state",
-        "$derived",
-        "$effect",
-        "$props",
-        "$bindable",
-        "$inspect",
-        "$host",
-    ] {
-        let bytes = source.as_bytes();
-        let mbytes = marker.as_bytes();
-        let mut i = 0;
-        while let Some(rel) = bytes[i..].windows(mbytes.len()).position(|w| w == mbytes) {
-            let pos = i + rel;
-            if pos.checked_sub(1).and_then(|p| bytes.get(p)).copied() == Some(b'$') {
-                i = pos + mbytes.len();
-                continue;
-            }
-            let mut after = pos + mbytes.len();
-            while bytes.get(after) == Some(&b'.') {
-                after += 1;
-                while after < bytes.len()
-                    && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_')
-                {
-                    after += 1;
-                }
-            }
-            while after < bytes.len() && matches!(bytes[after], b' ' | b'\t') {
+    let bytes = doc.source.as_bytes();
+    let mut i = 0;
+    while let Some((pos, marker_len)) = svn_core::rune_scan::find_marker_from(bytes, i) {
+        i = pos + 1;
+        // Identifier tails (`$$props`, `my$state`) and member-access
+        // property names (`api.$state(0)`, `this?.$props()`) are not
+        // rune usages — shared guard with svn_core's rune scan.
+        if svn_core::rune_scan::rune_marker_is_shadowed_at(bytes, pos) {
+            continue;
+        }
+        let mut after = pos + marker_len;
+        while bytes.get(after) == Some(&b'.') {
+            after += 1;
+            while after < bytes.len()
+                && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_')
+            {
                 after += 1;
             }
-            if bytes.get(after) == Some(&b'(') {
-                return true;
-            }
-            i = pos + mbytes.len();
+        }
+        while after < bytes.len() && matches!(bytes[after], b' ' | b'\t') {
+            after += 1;
+        }
+        if bytes.get(after) == Some(&b'(') {
+            return true;
         }
     }
     false
@@ -594,53 +605,71 @@ pub(crate) fn is_runes_mode(
 /// single expression in parens). String / template / comment content
 /// inside the parens is skipped so a `,` inside a string doesn't
 /// trigger a false rewrite.
-pub(crate) fn rewrite_void_sequence_to_array(out: &mut String) {
-    let original = std::mem::take(out);
-    let bytes = original.as_bytes();
+///
+/// Returns the insertions performed (the `void ` prefix on `$:` labels
+/// — the paren→bracket swaps are length-preserving and need no
+/// re-anchoring) as ascending `(position, length)` pairs in PRE-rewrite
+/// buffer coordinates, same contract as
+/// [`rewrite_definite_assignment_in_place`].
+pub(crate) fn rewrite_void_sequence_to_array(out: &mut String) -> Vec<(u32, u32)> {
+    // Phase 1: scan for sequence sites without touching the buffer —
+    // most files have none and return with zero allocation.
+    let bytes = out.as_bytes();
+    let mut sites: Vec<(SeqKind, usize, usize)> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         let c = bytes[i];
-        // Skip string / template literals and comments verbatim so a
+        // Skip string / template literals and comments so a
         // `void (a, b)` appearing inside `"…"` or `// …` isn't rewritten.
         if matches!(c, b'"' | b'\'' | b'`') {
-            let end = skip_string_literal(bytes, i, c);
-            out.push_str(&original[i..end]);
-            i = end;
+            i = skip_string_literal(bytes, i, c);
             continue;
         }
         if c == b'/' && bytes.get(i + 1).copied() == Some(b'/') {
-            let start = i;
             while i < bytes.len() && bytes[i] != b'\n' {
                 i += 1;
             }
-            out.push_str(&original[start..i]);
             continue;
         }
         if c == b'/' && bytes.get(i + 1).copied() == Some(b'*') {
-            let start = i;
             let mut k = i + 2;
             while k + 1 < bytes.len() && !(bytes[k] == b'*' && bytes[k + 1] == b'/') {
                 k += 1;
             }
             i = k.saturating_add(2).min(bytes.len());
-            out.push_str(&original[start..i]);
             continue;
         }
-        if let Some((kind, paren_open, paren_close)) = find_paren_sequence(bytes, i) {
-            out.push_str(&original[i..paren_open]);
-            if matches!(kind, SeqKind::ReactiveLabel) {
-                out.push_str("void ");
-            }
-            out.push('[');
-            out.push_str(&original[paren_open + 1..paren_close]);
-            out.push(']');
-            i = paren_close + 1;
+        if let Some(site) = find_paren_sequence(bytes, i) {
+            i = site.2 + 1;
+            sites.push(site);
         } else {
-            let ch_len = utf8_char_len(bytes[i]);
-            out.push_str(&original[i..i + ch_len]);
-            i += ch_len;
+            i += 1;
         }
     }
+    let mut edits: Vec<(u32, u32)> = Vec::new();
+    if sites.is_empty() {
+        return edits;
+    }
+    // Phase 2: rebuild once with bulk segment copies. The paren →
+    // bracket swaps are length-preserving; only the `void ` prefix on
+    // `$:` labels grows the buffer.
+    let original = std::mem::take(out);
+    let mut rebuilt = String::with_capacity(original.len() + sites.len() * 5);
+    let mut cursor = 0;
+    for (kind, paren_open, paren_close) in sites {
+        rebuilt.push_str(&original[cursor..paren_open]);
+        if matches!(kind, SeqKind::ReactiveLabel) {
+            rebuilt.push_str("void ");
+            edits.push((paren_open as u32, 5));
+        }
+        rebuilt.push('[');
+        rebuilt.push_str(&original[paren_open + 1..paren_close]);
+        rebuilt.push(']');
+        cursor = paren_close + 1;
+    }
+    rebuilt.push_str(&original[cursor..]);
+    *out = rebuilt;
+    edits
 }
 
 #[derive(Copy, Clone)]
@@ -840,35 +869,60 @@ fn skip_to_decl_continuation(bytes: &[u8], mut s: usize) -> usize {
     s
 }
 
-pub(crate) fn denarrow_typed_exported_props_in_place(out: &mut String, target_names: &[SmolStr]) {
+pub(crate) fn denarrow_typed_exported_props_in_place(
+    out: &mut String,
+    target_names: &[SmolStr],
+) -> Vec<(u32, u32)> {
+    let mut edits: Vec<(u32, u32)> = Vec::new();
     if target_names.is_empty() {
-        return;
+        return edits;
     }
-    let original = std::mem::take(out);
-    let bytes = original.as_bytes();
+    // Phase 1: scan for qualifying statements without touching the
+    // buffer.
+    let bytes = out.as_bytes();
+    let mut sites: Vec<(usize, Vec<SmolStr>)> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         if let Some((stmt_end, matched_names)) =
             try_process_let_statement_for_denarrow(bytes, i, target_names)
         {
-            out.push_str(&original[i..stmt_end]);
             if !matched_names.is_empty() {
-                if !out.ends_with(';') {
-                    out.push(';');
-                }
-                for name in &matched_names {
-                    out.push(' ');
-                    out.push_str(name);
-                    out.push_str(" = undefined as any;");
-                }
+                sites.push((stmt_end, matched_names));
             }
             i = stmt_end;
         } else {
-            let ch_len = utf8_char_len(bytes[i]);
-            out.push_str(&original[i..i + ch_len]);
-            i += ch_len;
+            i += 1;
         }
     }
+    if sites.is_empty() {
+        return edits;
+    }
+    // Phase 2: rebuild once with bulk segment copies, appending the
+    // ` NAME = undefined as any;` trailer after each matched statement.
+    let original = std::mem::take(out);
+    let trailer_estimate: usize = sites
+        .iter()
+        .map(|(_, names)| 1 + names.iter().map(|n| n.len() + 21).sum::<usize>())
+        .sum();
+    let mut rebuilt = String::with_capacity(original.len() + trailer_estimate);
+    let mut cursor = 0;
+    for (stmt_end, matched_names) in sites {
+        rebuilt.push_str(&original[cursor..stmt_end]);
+        let before = rebuilt.len();
+        if !rebuilt.ends_with(';') {
+            rebuilt.push(';');
+        }
+        for name in &matched_names {
+            rebuilt.push(' ');
+            rebuilt.push_str(name);
+            rebuilt.push_str(" = undefined as any;");
+        }
+        edits.push((stmt_end as u32, (rebuilt.len() - before) as u32));
+        cursor = stmt_end;
+    }
+    rebuilt.push_str(&original[cursor..]);
+    *out = rebuilt;
+    edits
 }
 
 /// Declarator scanner matched to `try_process_let_statement_*` twins.
@@ -1080,76 +1134,96 @@ pub(crate) fn widen_untyped_exports_jsdoc_in_place(
     out: &mut String,
     target_names: &[SmolStr],
     route_kind: Option<sveltekit::RouteKind>,
-) {
+) -> Vec<(u32, u32)> {
+    let mut edits: Vec<(u32, u32)> = Vec::new();
     if target_names.is_empty() {
-        return;
+        return edits;
     }
+    // Phase 1: scan for insertion sites without touching the buffer.
+    let bytes = out.as_bytes();
+    let sites = collect_widening_sites(bytes, target_names);
+    if sites.is_empty() {
+        return edits;
+    }
+    // Phase 2: rebuild once with bulk segment copies.
     let original = std::mem::take(out);
-    let bytes = original.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if let Some((stmt_end, insertions)) =
-            try_process_let_statement_for_widening(bytes, i, target_names)
-        {
-            let mut cursor = i;
-            for (pos, name) in &insertions {
-                out.push_str(&original[cursor..*pos]);
-                let kit_type = route_kind.and_then(|k| sveltekit::kit_widen_type(name, k));
-                match kit_type {
-                    Some(ty) => {
-                        out.push_str(" = /** @type {");
-                        out.push_str(ty);
-                        out.push_str("} */ (/** @type {any} */ (null))");
-                    }
-                    None => {
-                        out.push_str(" = /** @type {any} */ (null)");
-                    }
-                }
-                cursor = *pos;
+    let mut rebuilt = String::with_capacity(original.len() + sites.len() * 64);
+    let mut cursor = 0;
+    for (pos, name) in &sites {
+        rebuilt.push_str(&original[cursor..*pos]);
+        let before = rebuilt.len();
+        let kit_type = route_kind.and_then(|k| sveltekit::kit_widen_type(name, k));
+        match kit_type {
+            Some(ty) => {
+                rebuilt.push_str(" = /** @type {");
+                rebuilt.push_str(ty);
+                rebuilt.push_str("} */ (/** @type {any} */ (null))");
             }
-            out.push_str(&original[cursor..stmt_end]);
-            i = stmt_end;
-        } else {
-            let ch_len = utf8_char_len(bytes[i]);
-            out.push_str(&original[i..i + ch_len]);
-            i += ch_len;
+            None => {
+                rebuilt.push_str(" = /** @type {any} */ (null)");
+            }
         }
+        edits.push((*pos as u32, (rebuilt.len() - before) as u32));
+        cursor = *pos;
     }
+    rebuilt.push_str(&original[cursor..]);
+    *out = rebuilt;
+    edits
 }
 
 pub(crate) fn widen_untyped_exported_props_in_place(
     out: &mut String,
     target_names: &[SmolStr],
     route_kind: Option<sveltekit::RouteKind>,
-) {
+) -> Vec<(u32, u32)> {
+    let mut edits: Vec<(u32, u32)> = Vec::new();
     if target_names.is_empty() {
-        return;
+        return edits;
     }
+    // Phase 1: scan for insertion sites without touching the buffer.
+    let bytes = out.as_bytes();
+    let sites = collect_widening_sites(bytes, target_names);
+    if sites.is_empty() {
+        return edits;
+    }
+    // Phase 2: rebuild once with bulk segment copies.
     let original = std::mem::take(out);
-    let bytes = original.as_bytes();
+    let mut rebuilt = String::with_capacity(original.len() + sites.len() * 16);
+    let mut cursor = 0;
+    for (pos, name) in &sites {
+        rebuilt.push_str(&original[cursor..*pos]);
+        let widen_type = route_kind
+            .and_then(|k| sveltekit::kit_widen_type(name, k))
+            .unwrap_or("any");
+        rebuilt.push_str(": ");
+        rebuilt.push_str(widen_type);
+        edits.push((*pos as u32, (2 + widen_type.len()) as u32));
+        cursor = *pos;
+    }
+    rebuilt.push_str(&original[cursor..]);
+    *out = rebuilt;
+    edits
+}
+
+/// Shared phase-1 scan for the two widening rewrites: walk the whole
+/// buffer, collect every `(byte position, declarator name)` at which a
+/// widening insertion goes. A statement match can only start at an
+/// ASCII `l`, never inside a multi-byte char, so a plain byte step is
+/// safe.
+fn collect_widening_sites(bytes: &[u8], target_names: &[SmolStr]) -> Vec<(usize, SmolStr)> {
+    let mut sites: Vec<(usize, SmolStr)> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         if let Some((stmt_end, insertions)) =
             try_process_let_statement_for_widening(bytes, i, target_names)
         {
-            let mut cursor = i;
-            for (pos, name) in &insertions {
-                out.push_str(&original[cursor..*pos]);
-                let widen_type = route_kind
-                    .and_then(|k| sveltekit::kit_widen_type(name, k))
-                    .unwrap_or("any");
-                out.push_str(": ");
-                out.push_str(widen_type);
-                cursor = *pos;
-            }
-            out.push_str(&original[cursor..stmt_end]);
+            sites.extend(insertions);
             i = stmt_end;
         } else {
-            let ch_len = utf8_char_len(bytes[i]);
-            out.push_str(&original[i..i + ch_len]);
-            i += ch_len;
+            i += 1;
         }
     }
+    sites
 }
 
 /// Declarator scanner twin of `try_process_let_statement`. The
@@ -1288,5 +1362,61 @@ fn try_process_let_statement_for_widening(
             b'\n' => return Some((s, insertions)),
             _ => return Some((s, insertions)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use super::is_runes_mode;
+
+    fn runes(source: &str) -> bool {
+        let (doc, _) = svn_parser::parse_sections(source);
+        let (fragment, _) = svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+        is_runes_mode(&doc, &fragment)
+    }
+
+    #[test]
+    fn plain_rune_call_flips_runes_mode() {
+        assert!(runes("<script>let x = $state(0);</script>"));
+        assert!(runes("<script>let x = $derived.by(() => 1);</script>"));
+    }
+
+    #[test]
+    fn member_call_rune_names_stay_legacy() {
+        // A store lib method literally named `$state` is a property
+        // access, not a rune — the component keeps its Svelte-4
+        // default-export shape and events strictness.
+        assert!(!runes(
+            "<script>export let value; const s = api.$state(0);</script>"
+        ));
+        assert!(!runes("<script>this.$props();</script>"));
+        assert!(!runes("<script>obj?.$state(0);</script>"));
+        assert!(!runes("<script>const x = my$state(0);</script>"));
+    }
+
+    #[test]
+    fn options_attr_forces_runes() {
+        assert!(runes("<svelte:options runes /><script>let x = 1;</script>"));
+    }
+
+    #[test]
+    fn rune_in_comment_or_string_still_flips_runes_mode() {
+        // Emit's runes detection is deliberately comment/string-BLIND —
+        // a rune call mentioned in a comment or string literal counts.
+        // svn_core::rune_scan::script_calls_rune (svn-lint's scan) is
+        // the comment-aware variant; the two must not be unified.
+        assert!(runes(
+            "<script>// migrate to $state(0) later\nlet x = 1;</script>"
+        ));
+        assert!(runes("<script>const s = \"$state(0)\";</script>"));
+    }
+
+    #[test]
+    fn marker_less_source_stays_legacy() {
+        assert!(!runes(
+            "<script>export let value: string; let total = 0;</script>\n<p>{value} {total}</p>"
+        ));
     }
 }

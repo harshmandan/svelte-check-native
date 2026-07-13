@@ -183,10 +183,7 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
         // awareness (`'…'`, `"…"`, template `` `…` `` so a `{` inside
         // a string doesn't increment depth).
         if scanner.peek_byte() == Some(b'{') {
-            scanner.set_pos(scan_past_mustache(
-                scanner.source().as_bytes(),
-                scanner.pos(),
-            ));
+            scanner.set_pos(scan_past_mustache(scanner.source(), scanner.pos()));
             continue;
         }
         // Track `<NAME>` / `</NAME>` nesting — cheap but sufficient
@@ -205,7 +202,7 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
                 continue;
             }
             if next.is_some_and(|b| b.is_ascii_alphabetic()) {
-                let (end, self_closing) = scan_past_open_tag(bytes, pos);
+                let (end, self_closing) = scan_past_open_tag(scanner.source(), pos);
                 if !self_closing {
                     tag_depth += 1;
                 }
@@ -213,8 +210,14 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
                 continue;
             }
         }
-        // Anything else: keep walking.
+        // Anything else: consume the current char (it may itself be a
+        // `<` that fell through every guard, e.g. `<` before a digit),
+        // then hop straight to the next possible dispatch byte. All
+        // guards above trigger only on `<` or `{`, so plain text and
+        // whitespace are skipped in one memchr2 sweep instead of a
+        // per-char walk.
         scanner.advance_char();
+        scanner.skip_until2(b'<', b'{');
     }
 
     // Flush trailing template text.
@@ -609,11 +612,13 @@ fn parse_lang_attr(attrs: &[ScriptAttr], errors: &mut Vec<ParseError>) -> Script
 /// has, so `{x.replace(/}/g, '')}` ended the mustache early at the `}`
 /// inside the regex and desynced the section/template-run boundaries.
 ///
-/// `bytes` is always the full source (valid UTF-8, since it originates
-/// from a `&str`), so offsets passed to `find_mustache_end` are
-/// absolute and reconstruction via `from_utf8` is infallible in
-/// practice.
-fn scan_past_mustache(bytes: &[u8], from: u32) -> u32 {
+/// `src` is the full source, so offsets passed to `find_mustache_end`
+/// are absolute. Taking `&str` (and deriving bytes locally) rather
+/// than `&[u8]` matters: rebuilding a `&str` via `from_utf8` here
+/// re-validated the ENTIRE file once per mustache, turning the
+/// section walk quadratic on template-heavy files.
+fn scan_past_mustache(src: &str, from: u32) -> u32 {
+    let bytes = src.as_bytes();
     // A Svelte close-block tag — `{/if}`, `{/each}`, `{/await}`,
     // `{/key}`, `{/snippet}` — begins with `/` and contains no
     // expression. `find_mustache_end` would read that leading `/` as a
@@ -627,10 +632,7 @@ fn scan_past_mustache(bytes: &[u8], from: u32) -> u32 {
         }
         return ((i + 1) as u32).min(bytes.len() as u32);
     }
-    let Ok(source) = std::str::from_utf8(bytes) else {
-        return bytes.len() as u32;
-    };
-    match crate::mustache::find_mustache_end(source, from + 1) {
+    match crate::mustache::find_mustache_end(src, from + 1) {
         // find_mustache_end returns the offset OF the `}`; we return
         // the index just past it.
         Some(close) => close + 1,
@@ -644,7 +646,8 @@ fn scan_past_mustache(bytes: &[u8], from: u32) -> u32 {
 /// `/>` self-close OR an HTML void element (`<img>`, `<br>`, etc.)
 /// which by spec has no closing tag. Respects quoted attribute
 /// values and balanced mustache regions.
-fn scan_past_open_tag(bytes: &[u8], from: usize) -> (usize, bool) {
+fn scan_past_open_tag(src: &str, from: usize) -> (usize, bool) {
+    let bytes = src.as_bytes();
     let mut i = from + 1;
     // Extract the tag name so we can recognize HTML void elements.
     // Stops at the first byte that can't be part of a tag name
@@ -668,7 +671,7 @@ fn scan_past_open_tag(bytes: &[u8], from: usize) -> (usize, bool) {
             }
             b'{' => {
                 // Attribute value with mustache — skip balanced.
-                i = scan_past_mustache(bytes, i as u32) as usize;
+                i = scan_past_mustache(src, i as u32) as usize;
             }
             b'/' if bytes.get(i + 1) == Some(&b'>') => {
                 return (i + 2, true);

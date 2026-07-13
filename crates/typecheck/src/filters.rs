@@ -49,8 +49,16 @@ const USER_CONFIG_OPTION_CODES: &[u32] = &[5023, 5095, 5101, 5102, 5107, 5108, 5
 /// canonicalized absolute path (handles symlinks like `/var` vs
 /// `/private/var` on macOS) and a final ends-with check on the unique
 /// `.svelte-check/tsconfig.json` suffix.
-pub(crate) fn is_overlay_tsconfig_noise(raw: &RawDiagnostic, layout: &CacheLayout) -> bool {
-    if !is_on_overlay_tsconfig(raw, layout) {
+/// `canonical_overlay_tsconfig` is `layout.overlay_tsconfig` resolved
+/// through `dunce::canonicalize` ONCE by the caller — the filter runs
+/// per raw diagnostic, and canonicalizing the same invariant path on
+/// every call is a full realpath syscall walk per diagnostic.
+pub(crate) fn is_overlay_tsconfig_noise(
+    raw: &RawDiagnostic,
+    layout: &CacheLayout,
+    canonical_overlay_tsconfig: Option<&Path>,
+) -> bool {
+    if !is_on_overlay_tsconfig(raw, layout, canonical_overlay_tsconfig) {
         return false;
     }
     // Inherited user-config-option errors surface (parity with
@@ -60,7 +68,21 @@ pub(crate) fn is_overlay_tsconfig_noise(raw: &RawDiagnostic, layout: &CacheLayou
 }
 
 /// True when `raw` is attributed to our overlay `tsconfig.json`.
-fn is_on_overlay_tsconfig(raw: &RawDiagnostic, layout: &CacheLayout) -> bool {
+fn is_on_overlay_tsconfig(
+    raw: &RawDiagnostic,
+    layout: &CacheLayout,
+    canonical_overlay_tsconfig: Option<&Path>,
+) -> bool {
+    // Basename short-circuit: every match below requires the final
+    // path component to agree — exact equality trivially; the
+    // canonicalized comparison because tsgo reports the very path we
+    // passed it (so no differently-named symlink can sit in between);
+    // and the last-resort fallback compares basenames explicitly.
+    // Diagnostics on overlay `.svn.ts` files — virtually all of them —
+    // return here without paying a realpath walk.
+    if raw.file.file_name() != layout.overlay_tsconfig.file_name() {
+        return false;
+    }
     let abs = if raw.file.is_absolute() {
         raw.file.clone()
     } else {
@@ -69,10 +91,7 @@ fn is_on_overlay_tsconfig(raw: &RawDiagnostic, layout: &CacheLayout) -> bool {
     if abs == layout.overlay_tsconfig {
         return true;
     }
-    if let (Ok(a), Ok(b)) = (
-        dunce::canonicalize(&abs),
-        dunce::canonicalize(&layout.overlay_tsconfig),
-    ) {
+    if let (Ok(a), Some(b)) = (dunce::canonicalize(&abs), canonical_overlay_tsconfig) {
         if a == b {
             return true;
         }
@@ -170,6 +189,12 @@ pub(crate) fn is_overlay_dollar_reactive_label(overlay: &str, offset: u32) -> bo
 /// duplicates that reach the type-checker come from the
 /// `<el on:click={fn} on:click>` (handle + forward) idiom or from
 /// spread-plus-attribute combinations.
+///
+/// The text scan alone can't tell a synthesized attribute key from a
+/// quoted key the user wrote in their `<script>` — the caller in
+/// `map_diagnostic` supplies that context by only invoking this on
+/// positions with no line-map coverage (i.e. outside verbatim user
+/// code).
 pub(crate) fn is_overlay_attribute_key(overlay: &str, offset: u32) -> bool {
     let bytes = overlay.as_bytes();
     let off = offset as usize;
@@ -228,21 +253,21 @@ pub(crate) fn is_in_ignore_region(regions: &[(u32, u32)], offset: u32) -> bool {
 ///
 /// Mirrors upstream svelte-check's `expectedTransitionThirdArgument`
 /// filter at
-/// `language-tools/packages/language-server/src/plugins/typescript/features/DiagnosticsProvider.ts:663-700`.
+/// `language-tools/packages/language-server/src/plugins/typescript/features/DiagnosticsProvider.ts:663-705`
+/// (and the typescript-go provider's variant at
+/// `plugins/typescript-go/features/DiagnosticsProvider.ts:1199-1230`).
 /// The upstream filter consults the language service to confirm the
 /// inner call's signature has exactly 3 non-optional parameters. When
 /// no language service is available upstream falls back to matching the
 /// diagnostic message text — the substring ` 3`, i.e. "Expected 3
 /// arguments". We have no TS language service in our pipeline, so the
-/// caller mirrors that no-language-service fallback: it pairs the
-/// message-text guard (` 3`) with this structural origin check. The
-/// check here only confirms the diagnostic originates inside the
-/// wrapper — if the bytes immediately preceding `offset` (after walking
-/// back through identifier characters) end with `__svn_ensure_transition(`.
-/// The wrapper only wraps user-supplied transition function calls, so
-/// the false-positive surface is narrow, and a user's function
-/// deliberately declared with > 3 params would fire TS2554 either way
-/// (the 3-arg shape is the runtime contract).
+/// caller mirrors that no-language-service fallback: it pairs
+/// [`is_expected_three_arguments_message`] with this structural origin
+/// check. The check here only confirms the diagnostic originates
+/// inside the wrapper — if the bytes immediately preceding `offset`
+/// (after walking back through identifier characters) end with
+/// `__svn_ensure_transition(`. The wrapper only wraps user-supplied
+/// transition function calls, so the false-positive surface is narrow.
 pub(crate) fn is_overlay_in_ensure_transition_call(overlay: &str, offset: u32) -> bool {
     const PREFIX: &[u8] = b"__svn_ensure_transition(";
     let bytes = overlay.as_bytes();
@@ -272,6 +297,22 @@ pub(crate) fn is_overlay_in_ensure_transition_call(overlay: &str, offset: u32) -
         return false;
     }
     &bytes[cursor - PREFIX.len()..cursor] == PREFIX
+}
+
+/// Does a TS2554 message describe the 3-argument transition contract
+/// (`Expected 3 arguments, but got 2.`)?
+///
+/// Mirrors upstream's no-language-service fallback in
+/// `expectedTransitionThirdArgument` verbatim — a `' 3'` substring
+/// match on the flattened message. The synthetic wrapper call site
+/// always passes exactly 2 args, so "but got 3" can never occur there
+/// and the loose substring cannot false-match. A transition function
+/// with 4+ required params produces "Expected 4 arguments, but got 2."
+/// — no ` 3` — so its genuine arity error surfaces, matching the
+/// typescript-go provider's exactly-3-non-optional-params signature
+/// check.
+pub(crate) fn is_expected_three_arguments_message(message: &str) -> bool {
+    message.contains(" 3")
 }
 
 /// Scan `overlay_text` for [`IGNORE_START_MARKER`] / [`IGNORE_END_MARKER`]

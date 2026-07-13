@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use svn_parser::ast::{Attribute, Fragment, Node, SvelteElementKind};
-use svn_parser::{parse_all_template_runs, parse_sections};
+use svn_parser::{parse_all_template_runs, parse_script_body, parse_sections};
 
 use crate::codes::Code;
 use crate::context::{CustomElementInfo, LintContext};
@@ -314,25 +314,38 @@ pub fn walk_parsed(
         ctx.runes = explicit;
     }
 
-    // `<svelte:options customElement={…}>` wiring — drives
-    // `options_missing_custom_element` (fires once for the attribute)
-    // and `custom_element_props_identifier` (fires in
-    // `binding_rules` per $props() identifier/rest candidate).
-    // Upstream: `2-analyze/index.js:468-471, 688-690` + the
-    // `VariableDeclarator.js:72-83` path. We don't receive compile
-    // options, so `custom_element_from_option` is always false and
-    // the attribute-presence alone triggers the missing-option
-    // warning. `tag-custom-element-options-true` sets
+    // `<svelte:options>` attribute warnings. Mirrors the loop over
+    // `root.options.attributes` at the end of upstream's analyze
+    // phase, which fires per attribute in source order:
+    //   - `accessors` / `immutable` are deprecated no-ops in runes
+    //     mode (`options_deprecated_accessors` / `_immutable`);
+    //   - `customElement` without the `customElement: true` compile
+    //     option fires `options_missing_custom_element` and drives
+    //     `custom_element_props_identifier` (fires in `binding_rules`
+    //     per $props() identifier/rest candidate, via the
+    //     `VariableDeclarator.js` path).
+    // We don't receive compile options, so `custom_element_from_option`
+    // is always false and the attribute's presence alone triggers the
+    // missing-option warning. `tag-custom-element-options-true` sets
     // `customElement: true` via `_config.js`; `upstream_validator`
     // already skips that fixture via the `_config.js` escape.
-    if let Some((attr_range, has_props_option)) = find_custom_element_option(fragment, source) {
-        ctx.emit(
-            Code::options_missing_custom_element,
-            messages::options_missing_custom_element(),
-            attr_range,
-        );
-        ctx.custom_element_info = Some(CustomElementInfo { has_props_option });
-    }
+    visit_svelte_options_attributes(fragment, source, ctx);
+
+    // Parse each script body exactly once; the scope builder and the
+    // script-AST rules below both walk the same `Program`. The
+    // allocator is hoisted to this frame so the parsed ASTs outlive
+    // both consumers.
+    let script_alloc = oxc_allocator::Allocator::default();
+    let parsed_module = doc
+        .module_script
+        .as_ref()
+        .map(|s| parse_script_body(&script_alloc, s.content, s.lang));
+    let parsed_instance = doc
+        .instance_script
+        .as_ref()
+        .map(|s| parse_script_body(&script_alloc, s.content, s.lang));
+    let module_program = parsed_module.as_ref().map(|p| &p.program);
+    let instance_program = parsed_instance.as_ref().map(|p| &p.program);
 
     // Build the scope tree once; Phase-C rules query it by binding
     // name from both the script walker and the template walker. The
@@ -345,6 +358,8 @@ pub fn walk_parsed(
         source,
         ctx.runes,
         ctx.compat,
+        module_program,
+        instance_program,
     ));
 
     // <script>-attribute rules (script_unknown_attribute,
@@ -354,14 +369,14 @@ pub fn walk_parsed(
     // <script>-body (JS/TS AST) rules: perf_avoid_inline_class,
     // perf_avoid_nested_class, reactive_declaration_invalid_placement,
     // ...
-    crate::rules::script_ast_rules::visit_document(doc, ctx);
+    crate::rules::script_ast_rules::visit_document(doc, module_program, instance_program, ctx);
 
     // Phase-C binding-driven rules (non_reactive_update,
     // state_referenced_locally). Run AFTER script ast rules so
     // `ctx.scope_tree` is populated.
     crate::rules::binding_rules::visit(ctx);
 
-    let mut ancestors: Vec<String> = Vec::new();
+    let mut ancestors: Vec<Ancestor> = Vec::new();
     walk_fragment_impl(fragment, ctx, None, &mut ancestors, false);
 
     // element_implicitly_closed — source-level tag scanner. Runs
@@ -369,42 +384,68 @@ pub fn walk_parsed(
     crate::rules::implicit_close::scan(source, ctx);
 }
 
-/// Scan the top-level fragment for `<svelte:options customElement={…}>`.
-/// Returns the attribute's full range (matches upstream's warning
-/// span: `customElement="..."` / `customElement={…}` including the
-/// name) and whether the literal object has a `props` key, when the
-/// value is an ObjectExpression. String / boolean values have no
-/// props option.
-fn find_custom_element_option(
-    fragment: &Fragment,
-    source: &str,
-) -> Option<(svn_core::Range, bool)> {
+/// Scan the top-level fragment for `<svelte:options>` and fire the
+/// per-attribute warnings in source order, mirroring upstream's
+/// `for (const attribute of root.options.attributes)` loop:
+/// `accessors` / `immutable` warn (in runes mode only) that the option
+/// is a deprecated no-op; `customElement` warns that the compile
+/// option is missing and records [`CustomElementInfo`]. Each warning
+/// spans the whole attribute (upstream passes the attribute node).
+/// The name check is name-only — the attribute's value shape and
+/// truthiness are irrelevant, so `accessors={false}` still warns.
+fn visit_svelte_options_attributes(fragment: &Fragment, source: &str, ctx: &mut LintContext<'_>) {
     for node in &fragment.nodes {
-        if let Node::SvelteElement(se) = node
-            && se.kind == SvelteElementKind::Options
-        {
-            for attr in &se.attributes {
-                match attr {
-                    Attribute::Plain(p) if p.name.as_str() == "customElement" => {
-                        // `customElement="name"` — string form. No props option.
-                        return Some((p.range, false));
-                    }
-                    Attribute::Expression(e) if e.name.as_str() == "customElement" => {
-                        // `customElement={expr}` — inspect the expression.
-                        let expr_src = source.get(
-                            e.expression_range.start as usize..e.expression_range.end as usize,
-                        );
-                        let has_props = expr_src
-                            .map(object_expression_has_props_key)
-                            .unwrap_or(false);
-                        return Some((e.range, has_props));
-                    }
-                    _ => {}
+        let Node::SvelteElement(se) = node else {
+            continue;
+        };
+        if se.kind != SvelteElementKind::Options {
+            continue;
+        }
+        for attr in &se.attributes {
+            let (attr_name, attr_range) = match attr {
+                Attribute::Plain(p) => (p.name.as_str(), p.range),
+                Attribute::Expression(e) => (e.name.as_str(), e.range),
+                Attribute::Shorthand(s) => (s.name.as_str(), s.range),
+                _ => continue,
+            };
+            match attr_name {
+                "accessors" if ctx.runes => {
+                    ctx.emit(
+                        Code::options_deprecated_accessors,
+                        messages::options_deprecated_accessors(),
+                        attr_range,
+                    );
                 }
+                "immutable" if ctx.runes => {
+                    ctx.emit(
+                        Code::options_deprecated_immutable,
+                        messages::options_deprecated_immutable(),
+                        attr_range,
+                    );
+                }
+                "customElement" => {
+                    // Whether the literal object value has a `props`
+                    // key — only the `customElement={{...}}` object
+                    // form can carry one; string / boolean / shorthand
+                    // forms have no props option.
+                    let has_props_option = match attr {
+                        Attribute::Expression(e) => source
+                            .get(e.expression_range.start as usize..e.expression_range.end as usize)
+                            .map(object_expression_has_props_key)
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+                    ctx.emit(
+                        Code::options_missing_custom_element,
+                        messages::options_missing_custom_element(),
+                        attr_range,
+                    );
+                    ctx.custom_element_info = Some(CustomElementInfo { has_props_option });
+                }
+                _ => {}
             }
         }
     }
-    None
 }
 
 /// Parse `expr` as a JS expression and return true iff it's an
@@ -447,12 +488,35 @@ fn object_expression_has_props_key(src: &str) -> bool {
     })
 }
 
+/// One frame of the enclosing-node stack threaded through the
+/// template walk. Mirrors the slice of upstream's `context.path` that
+/// the ancestor-driven rules inspect: upstream's path never resets, so
+/// consumers see every enclosing node and apply their own skip/stop
+/// rules per node type.
+///
+/// Two consumers, two semantics:
+/// - a11y `is_parent` (autofocus-in-dialog, figcaption-in-figure,
+///   redundant header/footer roles) walks past `Boundary` frames and
+///   treats a `SvelteElement` frame as "unknown, play it safe" (true).
+/// - HTML tree-model placement checks stop at the first non-`Element`
+///   frame, exactly like upstream RegularElement.js breaks its
+///   ancestor scan at Component / SvelteElement / SnippetBlock.
+#[derive(Debug, Clone)]
+pub(crate) enum Ancestor {
+    /// A regular DOM element, carrying its tag name.
+    Element(String),
+    /// A `<svelte:element>` — renders as an unknown tag.
+    SvelteElement,
+    /// A Component or `{#snippet}` frame.
+    Boundary,
+}
+
 /// Recursively visit every template node, dispatching rules as we go.
 ///
 /// `parent_tag`: closest enclosing regular-element tag, for
 /// `is_tag_valid_with_parent` checks.
-/// `ancestors`: stack of enclosing regular-element tags (outer → inner),
-/// for `is_tag_valid_with_ancestor` checks.
+/// `ancestors`: stack of enclosing nodes (outer → inner) — see
+/// [`Ancestor`] for how each consumer interprets the frames.
 /// `inside_control_block`: true if we're currently inside an
 /// `{#if}`/`{#each}`/`{#await}`/`{#key}`. Only in that case does
 /// the placement warning fire (otherwise upstream errors).
@@ -460,11 +524,11 @@ fn walk_fragment_impl(
     fragment: &Fragment,
     ctx: &mut LintContext<'_>,
     parent_tag: Option<&str>,
-    ancestors: &mut Vec<String>,
+    ancestors: &mut Vec<Ancestor>,
     inside_control_block: bool,
 ) {
     let source = ctx.source;
-    for node in &fragment.nodes {
+    for (idx, node) in fragment.nodes.iter().enumerate() {
         // Ignore-stack: pull any svelte-ignore comments immediately
         // preceding this node (in the same fragment). These scope
         // the ignore to this one node and its subtree — mirror
@@ -496,7 +560,7 @@ fn walk_fragment_impl(
             _ => false,
         };
         let ignores = if is_target {
-            crate::ignore::collect_preceding_comment_ignores(&fragment.nodes, node, ctx)
+            crate::ignore::collect_preceding_comment_ignores(&fragment.nodes, idx, ctx)
         } else {
             Vec::new()
         };
@@ -514,7 +578,7 @@ fn walk_fragment_impl(
                     ancestors,
                     inside_control_block,
                 );
-                ancestors.push(el.name.to_string());
+                ancestors.push(Ancestor::Element(el.name.to_string()));
                 walk_fragment_impl(
                     &el.children,
                     ctx,
@@ -533,15 +597,22 @@ fn walk_fragment_impl(
             }
             Node::Component(comp) => {
                 crate::rules::component_rules::visit(comp, ctx);
-                // Components reset the ancestor chain — upstream
-                // breaks out when it sees a Component ancestor.
-                let mut empty_ancestors: Vec<String> = Vec::new();
-                walk_fragment_impl(&comp.children, ctx, None, &mut empty_ancestors, false);
+                // A Boundary frame: the HTML placement checks stop
+                // here (upstream RegularElement.js breaks at a
+                // Component ancestor), but the a11y is_parent walk
+                // continues past it — upstream's path never resets.
+                ancestors.push(Ancestor::Boundary);
+                walk_fragment_impl(&comp.children, ctx, None, ancestors, false);
+                ancestors.pop();
             }
             Node::SvelteElement(se) => {
                 crate::rules::svelte_element_rules::visit(se, ctx, ancestors);
-                let mut empty_ancestors: Vec<String> = Vec::new();
-                walk_fragment_impl(&se.children, ctx, None, &mut empty_ancestors, false);
+                // Placement checks stop here too, while the a11y
+                // is_parent walk answers "unknown tag — play it safe"
+                // for this frame.
+                ancestors.push(Ancestor::SvelteElement);
+                walk_fragment_impl(&se.children, ctx, None, ancestors, false);
+                ancestors.pop();
             }
             Node::IfBlock(b) => {
                 crate::rules::block_rules::visit_if(b, ctx);
@@ -577,9 +648,12 @@ fn walk_fragment_impl(
                 walk_fragment_impl(&b.body, ctx, parent_tag, ancestors, true);
             }
             Node::SnippetBlock(b) => {
-                // Snippets reset the ancestor chain.
-                let mut empty_ancestors: Vec<String> = Vec::new();
-                walk_fragment_impl(&b.body, ctx, parent_tag, &mut empty_ancestors, false);
+                // Snippet frames stop the placement checks (upstream
+                // breaks at SnippetBlock) but not the a11y is_parent
+                // walk.
+                ancestors.push(Ancestor::Boundary);
+                walk_fragment_impl(&b.body, ctx, parent_tag, ancestors, false);
+                ancestors.pop();
             }
             Node::Text(t) => {
                 crate::rules::text_rules::visit_text(t, ctx);

@@ -7,7 +7,7 @@ use crate::context::LintContext;
 use crate::messages;
 use crate::rules::element_rules::{AttrParent, visit_attribute};
 
-pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[String]) {
+pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::walk::Ancestor]) {
     // svelte_component_deprecated: `<svelte:component>` in runes mode.
     if ctx.runes && se.kind == SvelteElementKind::Component {
         let msg = messages::svelte_component_deprecated();

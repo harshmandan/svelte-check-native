@@ -10,7 +10,6 @@ use svn_parser::SnippetBlock;
 
 use crate::emit_buffer::EmitBuffer;
 use crate::is_ts::emit_is_ts;
-use crate::nodes::inline_component::annotate_snippet_params;
 use crate::{all_identifiers, emit_template_body};
 
 /// Emit a lexical-scope block wrapping a `{#snippet name(params)}` body
@@ -18,11 +17,12 @@ use crate::{all_identifiers, emit_template_body};
 /// inside the body (including component-prop checks on `<Component>`
 /// nodes nested below the snippet).
 ///
-/// Parameters are typed as `any` — we don't resolve their types from
-/// the declared `Snippet<[...]>` shape here. For excess-prop and
-/// "cannot find name" detection that's sufficient; precise param
-/// typing would require threading the consumer's `Snippet<...>` into
-/// the snippet body's type context, which v0.1 punts on.
+/// Parameters are spliced VERBATIM with a token-map anchor, exactly
+/// like upstream (`SnippetBlock.ts` moves the param list as-is with
+/// source mapping). An unannotated param therefore fires TS7006 under
+/// `noImplicitAny` just as upstream does, and any diagnostic landing
+/// in the param list maps back to the .svelte source instead of being
+/// dropped.
 ///
 /// Handles both identifier params (`foo, bar`) and destructure params
 /// (`{months, weekdays}`, `[a, b]`) via `all_identifiers`. Default
@@ -90,21 +90,25 @@ pub(crate) fn emit_snippet_const(
     // The arrow params are the binding introductions — their type
     // annotations flow into the body (e.g. `{#snippet row(v: VideoState)}`
     // gets `v: VideoState`), and any type imported solely for a snippet
-    // param annotation shows up as a reference, suppressing TS6133. For
-    // TS overlays append `: any` to each unannotated param so the body
-    // type-checks under `--strict` without `noImplicitAny` firing; for JS
-    // overlays keep params verbatim so JSDoc / default-value inference
-    // still flows.
-    let annotated = if is_ts {
-        annotate_snippet_params(params)
-    } else {
-        params.to_string()
-    };
+    // param annotation shows up as a reference, suppressing TS6133.
+    // Splice them VERBATIM with a token-map anchor: upstream moves the
+    // param list as-is with source mapping (`SnippetBlock.ts`), so an
+    // unannotated param fires TS7006 under `noImplicitAny` exactly like
+    // upstream, and diagnostics landing in the param list map back to
+    // the user's source instead of being dropped.
     let idents = all_identifiers(params);
+    let raw = source
+        .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
+        .unwrap_or("");
+    let leading_ws = (raw.len() - raw.trim_start().len()) as u32;
+    let params_start = s.parameters_range.start + leading_ws;
+    let params_range = svn_core::Range::new(params_start, params_start + params.len() as u32);
+    let _ = write!(buf, "{decl}const {} = (", s.name);
+    buf.append_with_source(params, params_range);
     if is_ts {
-        let _ = writeln!(buf, "{decl}const {} = ({annotated}): any => {{", s.name);
+        let _ = writeln!(buf, "): any => {{");
     } else {
-        let _ = writeln!(buf, "{decl}const {} = ({annotated}) => {{", s.name);
+        let _ = writeln!(buf, ") => {{");
     }
     emit_template_body(buf, source, &s.body, body_depth, insts, action_counter);
     for ident in &idents {

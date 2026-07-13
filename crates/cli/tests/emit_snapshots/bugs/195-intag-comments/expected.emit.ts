@@ -3,7 +3,11 @@
 async function $$render_d9977a5c() {
 
   let x = 0;
-  function fade(_n: Node, _o: object) { return {}; }
+  // Params optional: a bare `transition:fade` emits a one-argument
+  // call, so a required second parameter fires a genuine TS2554 that
+  // upstream also reports — this fixture locks in-tag comment
+  // parsing, not transition arity.
+  function fade(_n: Node, _o?: object) { return {}; }
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {

@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 11, "column": 36, "code": 2304 }
+    ],
+    "_note": "Plain slot-prop attribute values route through the shared attribute-value transform (upstream Attribute.ts handles Slot parents the same as elements, skipping only `name=`). Multi-line text values emit as newline-safe backtick template literals (previously the raw double-quoted source was spliced verbatim, firing TS1002/TS1005 overlay syntax errors upstream doesn't produce), and `{expr}` interpolations emit as token-mapped `${expr}` holes so the TS2304 on `missingName` fires at the identifier's source position instead of being swallowed inside a string literal."
+}

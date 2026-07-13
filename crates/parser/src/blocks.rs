@@ -22,7 +22,8 @@ use crate::ast::{
 };
 use crate::error::ParseError;
 use crate::mustache::{
-    can_start_regex, find_mustache_end, skip_ascii_string, skip_regex_literal, skip_template_literal,
+    can_start_regex, find_mustache_end, skip_ascii_string, skip_regex_literal,
+    skip_template_literal,
 };
 use crate::scanner::Scanner;
 
@@ -230,13 +231,16 @@ pub(crate) fn parse_each_header(
     }
 
     let header = &scanner.source()[header_start as usize..header_end as usize];
-    // Find top-level ` as ` token.
-    let as_pos = find_token_at_depth_zero(header, " as ");
+    // Find the top-level `as` keyword. Any whitespace run (spaces, tabs,
+    // newlines) may surround it — upstream parses the iterable with
+    // `read_expression`, then `allow_whitespace()` + `match('as')`.
+    let as_pos = find_keyword_at_depth_zero(header, "as");
 
     let (expression_range, as_clause) = match as_pos {
         Some(p) => {
-            let expr_end = header_start + p as u32;
-            let clause_start = expr_end + 4; // past " as "
+            // Trim the whitespace run before `as` off the expression.
+            let expr_end = skip_ws_end(header, 0, p as u32) + header_start;
+            let clause_start = header_start + p as u32 + 2; // past `as`
             let clause_str = &scanner.source()[clause_start as usize..header_end as usize];
             let clause = parse_each_as_clause(clause_str, clause_start);
             (Range::new(header_start, expr_end), Some(clause))
@@ -351,34 +355,34 @@ pub(crate) fn parse_await_header(
 
     let header = &scanner.source()[header_start as usize..header_end as usize];
 
-    // Look for `then` or `catch` separator at depth zero. Either form may
-    // be followed by an optional context binding before the closing `}`.
-    let (short, split_at) = if let Some(p) = find_token_at_depth_zero(header, " then ") {
-        let ctx_start = header_start + (p + 6) as u32;
-        let ctx = trimmed_range(scanner.source(), ctx_start, header_end);
-        (AwaitShortForm::Then(ctx), Some(p))
-    } else if let Some(p) = find_token_at_depth_zero(header, " catch ") {
-        let ctx_start = header_start + (p + 7) as u32;
-        let ctx = trimmed_range(scanner.source(), ctx_start, header_end);
-        (AwaitShortForm::Catch(ctx), Some(p))
-    } else if let Some(p) = header
-        .strip_suffix(" then")
-        .map(|h| h.len())
+    // Look for the `then` or `catch` separator keyword at depth zero. Any
+    // whitespace run may surround it (upstream: read_expression +
+    // allow_whitespace + eat('then')), and the trailing context binding is
+    // optional (`{#await p then}` is the no-binding shorthand). A bare
+    // `then`/`catch` header keeps its historical reading as a shorthand
+    // with an empty promise expression.
+    let (short, split_at) = if let Some(p) = find_keyword_at_depth_zero(header, "then")
         .or_else(|| if header == "then" { Some(0) } else { None })
     {
-        (AwaitShortForm::Then(None), Some(p))
-    } else if let Some(p) = header
-        .strip_suffix(" catch")
-        .map(|h| h.len())
+        let ctx_start = header_start + (p + 4) as u32;
+        let ctx = trimmed_range(scanner.source(), ctx_start, header_end);
+        (AwaitShortForm::Then(ctx), Some(p))
+    } else if let Some(p) = find_keyword_at_depth_zero(header, "catch")
         .or_else(|| if header == "catch" { Some(0) } else { None })
     {
-        (AwaitShortForm::Catch(None), Some(p))
+        let ctx_start = header_start + (p + 5) as u32;
+        let ctx = trimmed_range(scanner.source(), ctx_start, header_end);
+        (AwaitShortForm::Catch(ctx), Some(p))
     } else {
         (AwaitShortForm::None, None)
     };
 
     let expression_range = match split_at {
-        Some(p) => Range::new(header_start, header_start + p as u32),
+        // Trim the whitespace run before the keyword off the expression.
+        Some(p) => Range::new(
+            header_start,
+            header_start + skip_ws_end(header, 0, p as u32),
+        ),
         None => Range::new(header_start, header_end),
     };
 
@@ -490,7 +494,12 @@ pub(crate) fn parse_snippet_header(
             b'"' => i = skip_ascii_string(bytes, i + 1, b'"')?,
             b'\'' => i = skip_ascii_string(bytes, i + 1, b'\'')?,
             b'`' => {
-                i = skip_template_literal(bytes, i + 1, &mut template_brace_stack, &mut brace_depth)?
+                i = skip_template_literal(
+                    bytes,
+                    i + 1,
+                    &mut template_brace_stack,
+                    &mut brace_depth,
+                )?
             }
             b'/' => match bytes.get(i + 1).copied() {
                 Some(b'/') => {
@@ -544,19 +553,28 @@ pub(crate) fn parse_snippet_header(
 
 // ===== Lexical helpers ===================================================
 
-/// Find a token at depth 0 (outside strings / template literals / nested
-/// parens / brackets / braces / comments). Searches for `needle` as a
-/// contiguous byte match.
-fn find_token_at_depth_zero(src: &str, needle: &str) -> Option<usize> {
+/// Find a standalone keyword (`as` / `then` / `catch`) at depth 0
+/// (outside strings / template literals / nested parens / brackets /
+/// braces / comments). The keyword matches only when preceded by at
+/// least one whitespace byte and followed by whitespace or the end of
+/// `src` — mirroring upstream's `read_expression`, `allow_whitespace()`,
+/// `match(keyword)` sequence, which accepts any whitespace run (spaces,
+/// tabs, CR/LF) around the keyword, not just single spaces. Returns the
+/// byte offset of the keyword itself.
+fn find_keyword_at_depth_zero(src: &str, keyword: &str) -> Option<usize> {
     let bytes = src.as_bytes();
-    let needle_bytes = needle.as_bytes();
+    let kw = keyword.as_bytes();
     let mut i = 0;
     let mut depth: i32 = 0;
 
     while i < bytes.len() {
         if depth == 0
-            && i + needle_bytes.len() <= bytes.len()
-            && &bytes[i..i + needle_bytes.len()] == needle_bytes
+            && i > 0
+            && bytes[i - 1].is_ascii_whitespace()
+            && bytes[i..].starts_with(kw)
+            && bytes
+                .get(i + kw.len())
+                .is_none_or(|b| b.is_ascii_whitespace())
         {
             return Some(i);
         }
@@ -862,13 +880,126 @@ mod tests {
     }
 
     #[test]
-    fn find_token_at_depth_zero_basic() {
-        assert_eq!(find_token_at_depth_zero("foo as bar", " as "), Some(3));
-        // Same token inside parens: depth != 0, skip.
+    fn await_header_accepts_newline_around_then_and_catch() {
+        // `{#await p\nthen v}` / `{#await p\tcatch e}` are valid Svelte —
+        // upstream reads the promise expression, then allow_whitespace +
+        // eat('then'/'catch'), so any whitespace run may separate them.
+        for (src, expect_expr, expect_then) in [
+            ("p\nthen v}", "p", true),
+            ("p\tthen\tv}", "p", true),
+            ("p\r\nthen v}", "p", true),
+            ("p \n then \n v}", "p", true),
+            ("p\ncatch v}", "p", false),
+            ("p\tcatch\tv}", "p", false),
+        ] {
+            let mut scanner = Scanner::new(src);
+            let mut errors = Vec::new();
+            let Some((expr, short)) = parse_await_header(&mut scanner, &mut errors) else {
+                panic!("expected await header for {src:?}, errors: {errors:?}");
+            };
+            assert_eq!(expr.slice(src), expect_expr, "expression for {src:?}");
+            match (expect_then, short) {
+                (true, AwaitShortForm::Then(ctx)) | (false, AwaitShortForm::Catch(ctx)) => {
+                    let ctx = ctx.unwrap_or_else(|| panic!("binding dropped for {src:?}"));
+                    assert_eq!(ctx.slice(src), "v", "binding for {src:?}");
+                }
+                (_, other) => panic!("wrong short form for {src:?}: {other:?}"),
+            }
+            assert!(
+                errors.is_empty(),
+                "unexpected errors for {src:?}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn await_header_multiline_promise_expression() {
+        let src = "fetchData(\n  url,\n  opts\n)\nthen result}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (expr, short) = parse_await_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(expr.slice(src), "fetchData(\n  url,\n  opts\n)");
+        let AwaitShortForm::Then(Some(ctx)) = short else {
+            panic!("expected then shorthand, got {short:?}");
+        };
+        assert_eq!(ctx.slice(src), "result");
+    }
+
+    #[test]
+    fn await_header_newline_then_without_binding() {
+        // `{#await p\nthen}` — keyword at end of header, no binding.
+        let src = "p\nthen}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (expr, short) = parse_await_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(expr.slice(src), "p");
+        assert!(matches!(short, AwaitShortForm::Then(None)), "got {short:?}");
+    }
+
+    #[test]
+    fn find_keyword_at_depth_zero_whitespace_variants() {
+        // Any whitespace run around the keyword matches — upstream does
+        // read_expression + allow_whitespace + match(keyword).
+        assert_eq!(find_keyword_at_depth_zero("foo as bar", "as"), Some(4));
+        assert_eq!(find_keyword_at_depth_zero("foo\nas bar", "as"), Some(4));
+        assert_eq!(find_keyword_at_depth_zero("foo\tas\tbar", "as"), Some(4));
+        assert_eq!(find_keyword_at_depth_zero("foo\r\nas bar", "as"), Some(5));
+        assert_eq!(find_keyword_at_depth_zero("foo  as\n bar", "as"), Some(5));
+        // Keyword at end of src (no binding after it).
+        assert_eq!(find_keyword_at_depth_zero("p then", "then"), Some(2));
+        // Not a standalone keyword: part of an identifier.
+        assert_eq!(find_keyword_at_depth_zero("foo aster", "as"), None);
+        assert_eq!(find_keyword_at_depth_zero("foo.as bar", "as"), None);
+        // Inside parens: depth != 0, skip to the top-level one.
         assert_eq!(
-            find_token_at_depth_zero("foo(a as b) as c", " as "),
-            Some(11)
+            find_keyword_at_depth_zero("foo(a as b)\nas c", "as"),
+            Some(12)
         );
+        // Inside a string: skipped.
+        assert_eq!(find_keyword_at_depth_zero("\"x as y\" as z", "as"), Some(9));
+    }
+
+    #[test]
+    fn each_header_accepts_newline_around_as() {
+        // `{#each items\nas item}` is valid Svelte — the as-clause must
+        // not be silently dropped when the whitespace isn't a single
+        // space.
+        for src in [
+            "items\nas item}",
+            "items\tas\titem}",
+            "items\r\nas item}",
+            "items \n as item}",
+        ] {
+            let mut scanner = Scanner::new(src);
+            let mut errors = Vec::new();
+            let Some((expr, clause)) = parse_each_header(&mut scanner, &mut errors) else {
+                panic!("expected each header for {src:?}, errors: {errors:?}");
+            };
+            assert_eq!(expr.slice(src), "items", "expression for {src:?}");
+            let clause = clause.unwrap_or_else(|| panic!("as-clause dropped for {src:?}"));
+            assert_eq!(
+                clause.context_range.slice(src),
+                "item",
+                "context for {src:?}"
+            );
+            assert!(
+                errors.is_empty(),
+                "unexpected errors for {src:?}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_header_multiline_expression_with_as() {
+        let src = "getItems(\n  a,\n  b\n)\nas item, i (item.id)}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (expr, clause) = parse_each_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(expr.slice(src), "getItems(\n  a,\n  b\n)");
+        let clause = clause.expect("as-clause present");
+        assert_eq!(clause.context_range.slice(src), "item");
+        assert_eq!(clause.index_range.map(|r| r.slice(src)), Some("i"));
+        assert_eq!(clause.key_range.map(|r| r.slice(src)), Some("item.id"));
     }
 
     #[test]

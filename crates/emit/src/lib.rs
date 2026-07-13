@@ -329,7 +329,8 @@ fn emit_document_with_render_name(
     // added up to 4-5 repeats of the same work on the hot path. The
     // `rewritten_content` reparse at bindings-collection time is
     // separate (different source string) and only fires when the
-    // Svelte-4 reactive rewrite actually touched the script.
+    // rewrite chain actually changed the script bytes — identity
+    // chains collapse `rewritten_content` to None below.
     let alloc_instance = Allocator::default();
     let parsed_instance = doc
         .instance_script
@@ -444,7 +445,7 @@ fn emit_document_with_render_name(
             && !is_route_file
             && doc.script_lang() == svn_parser::ScriptLang::Ts
             && raw_props_info.type_text.is_none()
-            && !raw_props_info.destructures.is_empty()
+            && (!raw_props_info.destructures.is_empty() || raw_props_info.props_with_unknown)
         {
             synthesise_js_props_typedef_body(&raw_props_info)
         } else {
@@ -928,6 +929,15 @@ fn emit_document_with_render_name(
             after_state
         }
     });
+    // Identity rewrite chains collapse to None: split_imports falls
+    // back to the original content, and the bindings reparse in
+    // analyze_script_and_template_refs is skipped — re-parsing
+    // identical bytes contributes nothing `parsed_instance` didn't.
+    let rewritten_content = rewritten_content.filter(|rw| {
+        doc.instance_script
+            .as_ref()
+            .is_some_and(|s| rw.as_str() != s.content)
+    });
 
     // Hoist imports out of the instance script. Required because the
     // instance body gets wrapped in `function $$render() { ... }` and ES
@@ -1195,14 +1205,14 @@ fn emit_document_with_render_name(
     // TS-only emission. JS overlays (`.svelte.svn.js`) can't carry
     // TS-only `type X = …` syntax — pure-JS parsers reject it, and
     // even tsgo's `allowJs` mode flags it as syntactically invalid
-    // when `checkJs` is on. The alias is dead code in JS overlays
-    // anyway: the JS render-fn return short-circuits to `{ props }`
-    // (no events field), and the JS default export is a JSDoc-typed
-    // `Component<__SvnDefaultProps>` with no events surface — so
-    // there's nothing for the alias to feed into. Skip on JS;
-    // strict event narrowing for JS overlays is a separate (larger)
-    // port that requires JSDoc-friendly equivalents of the
-    // mapped/conditional types this alias produces.
+    // when `checkJs` is on. The JS render-fn's events field is
+    // therefore always the lax `{ [evt: string]: CustomEvent<any> }`
+    // index signature (JSDoc-cast), never a reference to this alias,
+    // and the JS default export (`Component<Props, Exports>`) has no
+    // events channel to feed either. Skip on JS; strict event
+    // narrowing for JS overlays is a separate (larger) port that
+    // requires JSDoc-friendly equivalents of the mapped/conditional
+    // types this alias produces.
     if is_ts && let Some(body) = events_alias_body.as_deref() {
         let _ = writeln!(buf, "    type $$Events = {body};");
     }
@@ -1592,7 +1602,7 @@ pub(crate) fn emit_template_body(
         .nodes
         .iter()
         .filter_map(|n| match n {
-            Node::SnippetBlock(b) => Some(b),
+            Node::SnippetBlock(b) => Some(b.as_ref()),
             _ => None,
         })
         .collect();
@@ -1660,6 +1670,16 @@ pub(crate) fn emit_template_node(
         }
         Node::SnippetBlock(b) => emit_snippet_block(buf, source, b, depth, insts, action_counter),
         Node::Element(e) => {
+            // `<!DOCTYPE html>` parses as a void element named `!DOCTYPE`;
+            // it declares the document type, not markup to type-check.
+            // Upstream svelte2tsx strips it from the overlay entirely
+            // (htmlxtojsx_v2/index.ts `str.remove(node.start, node.end)`).
+            // Matched case-insensitively: HTML doctypes are
+            // case-insensitive and `<!doctype html>` parses to a
+            // lowercase-named element.
+            if e.name.eq_ignore_ascii_case("!doctype") {
+                return;
+            }
             crate::nodes::element::emit_element_node(buf, source, e, depth, insts, action_counter)
         }
         Node::Component(c) => emit_component_node(buf, source, c, depth, insts, action_counter),

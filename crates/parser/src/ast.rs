@@ -32,10 +32,13 @@ pub struct Fragment {
 
 /// A single template node.
 ///
-/// Variants are boxed where they're structurally big (Element) or wrap a
-/// fragment (IfBlock etc., once those land) to keep `Node` enum small.
-/// For now we keep variants inline — boxing can be added when measurements
-/// justify it.
+/// Structurally big payloads (elements, components, control-flow
+/// blocks — 48-144 bytes each) are boxed so the enum stays small
+/// (24 bytes): fragments are `Vec<Node>`, and on template-heavy
+/// files the vec storage is dominated by the LARGEST variant even
+/// though most entries are Text/Interpolation. Those two (and
+/// Comment) stay inline — they're the most numerous nodes and
+/// boxing them would add an allocation per text run.
 #[derive(Debug, Clone)]
 pub enum Node {
     /// Plain text content (may contain interpolations — those become
@@ -46,24 +49,24 @@ pub enum Node {
     /// `<!-- ... -->` HTML comment.
     Comment(Comment),
     /// `<element>...</element>` — a DOM element.
-    Element(Element),
+    Element(Box<Element>),
     /// `<Component>...</Component>` — Svelte component invocation.
     ///
     /// Distinguished from `Element` by the tag name starting with an
     /// uppercase letter or containing a `.` (namespace access).
-    Component(Component),
+    Component(Box<Component>),
     /// `<svelte:foo>` — Svelte special element.
-    SvelteElement(SvelteElement),
+    SvelteElement(Box<SvelteElement>),
     /// `{#if cond}...{:else if c}...{:else}...{/if}`
-    IfBlock(IfBlock),
+    IfBlock(Box<IfBlock>),
     /// `{#each expr as item, index (key)}...{:else}...{/each}`
-    EachBlock(EachBlock),
+    EachBlock(Box<EachBlock>),
     /// `{#await promise}...{:then v}...{:catch e}...{/await}`
-    AwaitBlock(AwaitBlock),
+    AwaitBlock(Box<AwaitBlock>),
     /// `{#key expr}...{/key}`
-    KeyBlock(KeyBlock),
+    KeyBlock(Box<KeyBlock>),
     /// `{#snippet name(params)}...{/snippet}`
-    SnippetBlock(SnippetBlock),
+    SnippetBlock(Box<SnippetBlock>),
 }
 
 impl Node {
@@ -634,11 +637,16 @@ pub struct SnippetBlock {
 /// HTML "void" elements that have no closing tag.
 ///
 /// Canonical list mirroring the Svelte compiler's `VOID_ELEMENT_NAMES` (16
-/// entries, including the obsolete `command`/`keygen`/`param`). Used to decide
-/// whether parsing an opening tag should eagerly close without looking for
-/// `</tag>`. This is the single source of truth: byte-slice callers wrap it
-/// via `str::from_utf8`.
+/// entries, including the obsolete `command`/`keygen`/`param`) plus the
+/// `!doctype` special case from upstream's `is_void` (`utils.js`: the
+/// doctype declaration parses as a void element named `!DOCTYPE`, in any
+/// case). Used to decide whether parsing an opening tag should eagerly
+/// close without looking for `</tag>`. This is the single source of truth:
+/// byte-slice callers wrap it via `str::from_utf8`.
 pub fn is_void_element(tag: &str) -> bool {
+    if tag.eq_ignore_ascii_case("!doctype") {
+        return true;
+    }
     matches!(
         tag,
         "area"

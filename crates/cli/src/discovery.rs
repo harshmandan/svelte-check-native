@@ -84,9 +84,7 @@ pub(crate) fn discover_relevant_files_with_settings(
         // depth 0 is the workspace root itself — never prune it, even
         // if its basename is hidden or `node_modules` (the user pointed
         // us at it deliberately). Pruning the root yields zero files.
-        .filter_entry(|e| {
-            e.depth() == 0 || !e.file_type().is_dir() || !is_excluded_dir(e.path())
-        })
+        .filter_entry(|e| e.depth() == 0 || !e.file_type().is_dir() || !is_excluded_dir(e.path()))
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
     {
@@ -132,35 +130,32 @@ fn normalize_lexical(p: &Path) -> PathBuf {
     out
 }
 
-/// Resolve the first config in `chain` that declares the patterns
-/// returned by `get`, against THAT config's directory — TypeScript
-/// resolves `include`/`exclude` relative to the config file that
-/// declares them, and the leaf wins (replace-on-child). Returns
-/// absolute, lexically-normalized pattern strings.
+/// Resolve the chain's winning `include`/`exclude`/`files` patterns
+/// (TS `extends` precedence: leaf wins, later array-extends entries
+/// beat earlier ones — see [`svn_core::tsconfig::winning_patterns`])
+/// against the DECLARING config's directory — TypeScript resolves
+/// these fields relative to the config file that declares them.
+/// Returns absolute, lexically-normalized pattern strings.
 ///
-/// This mirrors the overlay builder's `first_non_empty_patterns`
+/// `None` means no config in the chain declares the field; an explicit
+/// empty array is a declaration and yields `Some(vec![])` — for
+/// `include` that means "no files admitted via include", NOT "default
+/// to everything" (TS replace-on-child semantics).
+///
+/// This mirrors the overlay builder's `winning_patterns_absolute`
 /// exactly, so the file-scope filter here and the overlay's `include`
-/// projection agree on which files are in the project — the two used
-/// to disagree (overlay resolved against the declaring dir; discovery
-/// resolved the *flattened* patterns against the workspace via a
-/// leading-`../`-stripping heuristic that's wrong for configs declared
-/// outside the workspace root).
+/// projection agree on which files are in the project.
 pub(crate) fn resolve_patterns_against_declaring_dir<F>(
     chain: &[svn_core::tsconfig::TsConfigFile],
     get: F,
-) -> Vec<String>
+) -> Option<Vec<String>>
 where
-    F: Fn(&svn_core::tsconfig::TsConfigFile) -> Option<&[String]>,
+    F: for<'a> Fn(&'a svn_core::tsconfig::TsConfigFile) -> Option<&'a [String]>,
 {
-    for file in chain {
-        let Some(patterns) = get(file) else {
-            continue;
-        };
-        if patterns.is_empty() {
-            continue;
-        }
-        let dir = file.config_dir();
-        return patterns
+    let (winner, patterns) = svn_core::tsconfig::winning_patterns(chain, get)?;
+    let dir = winner.config_dir();
+    Some(
+        patterns
             .iter()
             .map(|s| {
                 let resolved = if Path::new(s).is_absolute() {
@@ -170,9 +165,8 @@ where
                 };
                 normalize_lexical(&resolved).to_string_lossy().into_owned()
             })
-            .collect();
-    }
-    Vec::new()
+            .collect(),
+    )
 }
 
 /// Build a [`globset::GlobSet`] from include/exclude patterns already
@@ -182,6 +176,12 @@ where
 /// expands to a recursive `/**/*` — TS treats `"src"` as "all files
 /// under src/", whereas globset would read it as a literal name match.
 /// Unparseable patterns are dropped (TS tolerates minor config typos).
+///
+/// Compiled with `literal_separator(true)` to match TypeScript's
+/// wildcard rules: `*` and `?` match within a single path segment and
+/// never cross a `/`; only `**` descends into subdirectories. globset's
+/// default would let `src/*` match the whole `src/` subtree, scoping
+/// files in (or excluding files from) the project that tsc would not.
 pub(crate) fn build_glob_set_absolute(patterns: &[String]) -> Option<globset::GlobSet> {
     if patterns.is_empty() {
         return None;
@@ -198,7 +198,10 @@ pub(crate) fn build_glob_set_absolute(patterns: &[String]) -> Option<globset::Gl
                 p.push_str("**/*");
             }
         }
-        if let Ok(glob) = globset::Glob::new(&p) {
+        if let Ok(glob) = globset::GlobBuilder::new(&p)
+            .literal_separator(true)
+            .build()
+        {
             builder.add(glob);
             any = true;
         }
@@ -280,6 +283,80 @@ mod tests {
             normalize_lexical(Path::new("/ws/./a/./b")),
             PathBuf::from("/ws/a/b")
         );
+    }
+
+    #[test]
+    fn resolve_patterns_last_array_extends_entry_wins_against_its_own_dir() {
+        // extends: ["./a.json", "./sub/b.json"] with include declared in
+        // both parents and not the leaf: TS gives the LAST entry
+        // precedence, and resolves its patterns against ITS directory.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sub = tmp.path().join("sub");
+        std::fs::create_dir_all(&sub).expect("mkdir");
+        std::fs::write(tmp.path().join("a.json"), r#"{ "include": ["app/**/*"] }"#).expect("write");
+        std::fs::write(sub.join("b.json"), r#"{ "include": ["src/**/*"] }"#).expect("write");
+        let leaf = tmp.path().join("tsconfig.json");
+        std::fs::write(&leaf, r#"{ "extends": ["./a.json", "./sub/b.json"] }"#).expect("write");
+
+        let chain = svn_core::tsconfig::load_chain(&leaf).expect("chain");
+        let include = resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref())
+            .expect("include is declared in the chain");
+        let expected = normalize_lexical(
+            &dunce::canonicalize(&sub)
+                .expect("canonicalize")
+                .join("src/**/*"),
+        );
+        assert_eq!(include, [expected.to_string_lossy().into_owned()]);
+    }
+
+    #[test]
+    fn resolve_patterns_distinguishes_explicit_empty_from_undeclared() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("base.json"),
+            r#"{ "include": ["src/**/*"] }"#,
+        )
+        .expect("write");
+        let leaf = tmp.path().join("tsconfig.json");
+        std::fs::write(&leaf, r#"{ "extends": "./base.json", "include": [] }"#).expect("write");
+
+        let chain = svn_core::tsconfig::load_chain(&leaf).expect("chain");
+        // Explicit `"include": []` REPLACES the parent's include:
+        // declared-but-empty, not "fall through to the parent".
+        assert_eq!(
+            resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref()),
+            Some(Vec::new())
+        );
+        // `exclude` is declared nowhere → None.
+        assert_eq!(
+            resolve_patterns_against_declaring_dir(&chain, |f| f.exclude.as_deref()),
+            None
+        );
+    }
+
+    #[test]
+    fn glob_star_never_crosses_a_directory_separator() {
+        // TypeScript's include/exclude wildcard rules: `*` and `?` match
+        // within one path segment only; only `**` descends. globset's
+        // default lets `*` cross `/`, which would scope `src/*` over the
+        // whole subtree.
+        let set = build_glob_set_absolute(&["/ws/src/*".to_string()]).expect("glob set");
+        assert!(set.is_match(Path::new("/ws/src/Foo.svelte")));
+        assert!(!set.is_match(Path::new("/ws/src/lib/deep/Foo.svelte")));
+
+        let stories =
+            build_glob_set_absolute(&["/ws/src/*.stories.svelte".to_string()]).expect("glob set");
+        assert!(stories.is_match(Path::new("/ws/src/A.stories.svelte")));
+        assert!(!stories.is_match(Path::new("/ws/src/nested/A.stories.svelte")));
+
+        let single = build_glob_set_absolute(&["/ws/src/?.svelte".to_string()]).expect("glob set");
+        assert!(single.is_match(Path::new("/ws/src/A.svelte")));
+        assert!(!single.is_match(Path::new("/ws/src/a/b.svelte")));
+
+        // `**` still crosses directories.
+        let rec = build_glob_set_absolute(&["/ws/src/**/*.svelte".to_string()]).expect("glob set");
+        assert!(rec.is_match(Path::new("/ws/src/lib/deep/Foo.svelte")));
+        assert!(rec.is_match(Path::new("/ws/src/Foo.svelte")));
     }
 
     #[test]

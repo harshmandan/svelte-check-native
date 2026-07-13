@@ -53,6 +53,12 @@ use svn_parser::{ScriptLang, parse_script_body};
 /// (cheap early-out via `to_string` clone — the common case on
 /// components without bind:this).
 pub fn rewrite(content: &str, lang: ScriptLang) -> String {
+    // Substring prefilter (same pattern as reactive.rs's `$:` gate): a
+    // rewrite site requires a `$state` callee, so sources without the
+    // substring skip the full oxc parse.
+    if !content.contains("$state") {
+        return content.to_string();
+    }
     let alloc = Allocator::default();
     let parsed = parse_script_body(&alloc, content, lang);
 

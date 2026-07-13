@@ -242,84 +242,124 @@ pub(crate) fn emit_plain(
             buf.append_with_source(&key_text, name_range);
             let _ = writeln!(buf, ": {value}{line_suffix}");
         }
-        Some(v) if v.parts.is_empty() => {
+        Some(v) => {
+            // numberOnlyAttributes carve-out (single text part on a
+            // DOM element): emit bare number literal when the text
+            // parses as a number.
+            //
+            // Upstream's test is `!isNaN(Number(x))`, so reject
+            // only the textual values Rust's `parse::<f64>`
+            // accepts that JS `Number()` does not: the `nan` /
+            // `inf` spellings and the lowercase `infinity`
+            // form. JS does accept exactly-cased `Infinity`
+            // (and signed variants), which become bare global
+            // `Infinity` — keep those as numbers.
+            if let [svn_parser::AttrValuePart::Text { range }] = v.parts.as_slice() {
+                let content = range.slice(source);
+                let t = content.trim();
+                let parses_as_number = t.parse::<f64>().is_ok()
+                    && !t.eq_ignore_ascii_case("nan")
+                    && !t.eq_ignore_ascii_case("inf")
+                    && (t == "Infinity"
+                        || t == "+Infinity"
+                        || t == "-Infinity"
+                        || !t.eq_ignore_ascii_case("infinity"));
+                if is_number_only_attr(&name.to_ascii_lowercase())
+                    && !content.is_empty()
+                    && parses_as_number
+                {
+                    buf.push_str(&indent);
+                    buf.push_str(key_prefix);
+                    buf.append_with_source(&key_text, name_range);
+                    let _ = writeln!(buf, ": {}{line_suffix}", content.trim());
+                    return;
+                }
+            }
+            if plain_value_is_dropped(source, v) {
+                return;
+            }
             buf.push_str(&indent);
             buf.push_str(key_prefix);
             buf.append_with_source(&key_text, name_range);
-            let _ = writeln!(buf, ": \"\"{line_suffix}");
+            buf.push_str(": ");
+            emit_plain_value(buf, source, v);
+            let _ = writeln!(buf, "{line_suffix}");
         }
-        Some(v) if v.parts.len() == 1 => {
-            match &v.parts[0] {
-                svn_parser::AttrValuePart::Text { range } => {
-                    let content = range.slice(source);
-                    // numberOnlyAttributes carve-out: emit bare number
-                    // literal when the text parses as a number.
-                    //
-                    // Upstream's test is `!isNaN(Number(x))`, so reject
-                    // only the textual values Rust's `parse::<f64>`
-                    // accepts that JS `Number()` does not: the `nan` /
-                    // `inf` spellings and the lowercase `infinity`
-                    // form. JS does accept exactly-cased `Infinity`
-                    // (and signed variants), which become bare global
-                    // `Infinity` — keep those as numbers.
-                    let t = content.trim();
-                    let parses_as_number = t.parse::<f64>().is_ok()
-                        && !t.eq_ignore_ascii_case("nan")
-                        && !t.eq_ignore_ascii_case("inf")
-                        && (t == "Infinity"
-                            || t == "+Infinity"
-                            || t == "-Infinity"
-                            || !t.eq_ignore_ascii_case("infinity"));
-                    if is_number_only_attr(&name.to_ascii_lowercase())
-                        && !content.is_empty()
-                        && parses_as_number
-                    {
-                        buf.push_str(&indent);
-                        buf.push_str(key_prefix);
-                        buf.append_with_source(&key_text, name_range);
-                        let _ = writeln!(buf, ": {}{line_suffix}", content.trim());
-                        return;
-                    }
-                    let escaped = content.replace('\\', "\\\\").replace('`', "\\`");
-                    buf.push_str(&indent);
-                    buf.push_str(key_prefix);
-                    buf.append_with_source(&key_text, name_range);
-                    let _ = writeln!(buf, ": `{escaped}`{line_suffix}");
-                }
-                svn_parser::AttrValuePart::Expression {
-                    expression_range, ..
-                } => {
-                    let Some(expr) =
-                        source.get(expression_range.start as usize..expression_range.end as usize)
-                    else {
-                        return;
-                    };
-                    let trimmed = expr.trim();
-                    if trimmed.is_empty() {
-                        return;
-                    }
-                    let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
-                    let start = expression_range.start + leading_ws;
-                    let end = start + trimmed.len() as u32;
-                    buf.push_str(&indent);
-                    buf.push_str(key_prefix);
-                    buf.append_with_source(&key_text, name_range);
-                    buf.push_str(": (");
-                    buf.append_with_source(trimmed, svn_core::Range::new(start, end));
-                    let _ = writeln!(buf, "){line_suffix}");
-                }
+    }
+}
+
+/// True when a plain attribute's value would emit nothing: a single
+/// `{expr}` interpolation whose expression is empty or whitespace-only
+/// (or whose byte range doesn't slice cleanly). Callers that write a
+/// key or separator before the value must gate on this and drop the
+/// whole attribute — [`emit_plain_value`] emits zero bytes for it.
+pub(crate) fn plain_value_is_dropped(source: &str, v: &svn_parser::AttrValue) -> bool {
+    if let [
+        svn_parser::AttrValuePart::Expression {
+            expression_range, ..
+        },
+    ] = v.parts.as_slice()
+    {
+        source
+            .get(expression_range.start as usize..expression_range.end as usize)
+            .is_none_or(|expr| expr.trim().is_empty())
+    } else {
+        false
+    }
+}
+
+/// Emit a plain attribute's value as a standalone JS expression.
+/// Mirrors upstream `Attribute.ts`'s value handling, shared by the
+/// element/component attribute entries and the `<slot>` prop check:
+///
+///   - no parts (`attr=""`) → `""`
+///   - single text part → backtick template literal (newline-safe;
+///     backslashes and backticks escaped)
+///   - single `{expr}` part → `(expr)` with a token-map anchor on the
+///     expression so diagnostics inside it map back to source
+///   - mixed text + interpolations → one template literal with
+///     `${expr}` holes, each hole token-mapped
+///
+/// Emits nothing when [`plain_value_is_dropped`] is true — callers
+/// that write a prefix first must gate on it.
+pub(crate) fn emit_plain_value(buf: &mut EmitBuffer, source: &str, v: &svn_parser::AttrValue) {
+    match v.parts.as_slice() {
+        [] => buf.push_str("\"\""),
+        [svn_parser::AttrValuePart::Text { range }] => {
+            let content = range.slice(source);
+            let escaped = content.replace('\\', "\\\\").replace('`', "\\`");
+            buf.push('`');
+            buf.push_str(&escaped);
+            buf.push('`');
+        }
+        [
+            svn_parser::AttrValuePart::Expression {
+                expression_range, ..
+            },
+        ] => {
+            let Some(expr) =
+                source.get(expression_range.start as usize..expression_range.end as usize)
+            else {
+                return;
+            };
+            let trimmed = expr.trim();
+            if trimmed.is_empty() {
+                return;
             }
+            let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
+            let start = expression_range.start + leading_ws;
+            let end = start + trimmed.len() as u32;
+            buf.push_str("(");
+            buf.append_with_source(trimmed, svn_core::Range::new(start, end));
+            buf.push_str(")");
         }
-        Some(v) => {
+        parts => {
             // Multi-part (text + interpolations). Template literal
             // with `${expr}` placeholders so the whole attribute
             // binds as a string. Follows upstream Attribute.ts's
             // multi-value branch.
-            buf.push_str(&indent);
-            buf.push_str(key_prefix);
-            buf.append_with_source(&key_text, name_range);
-            buf.push_str(": `");
-            for part in &v.parts {
+            buf.push('`');
+            for part in parts {
                 match part {
                     svn_parser::AttrValuePart::Text { range } => {
                         let content = range.slice(source);
@@ -347,7 +387,7 @@ pub(crate) fn emit_plain(
                     }
                 }
             }
-            let _ = writeln!(buf, "`{line_suffix}");
+            buf.push('`');
         }
     }
 }

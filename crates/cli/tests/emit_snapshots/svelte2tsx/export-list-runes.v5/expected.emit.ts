@@ -34,13 +34,16 @@ async function $$render_031ccee2() {
     void RenameFoo;
     void renamebar;
     void renamebaz;
-    return { props: /** @type {{ name1?: any; name2: any; renamed1?: any; renamed2: any; Foo: any; bar: any; baz?: any; RenamedFoo: any; renamedbar: any; renamedbaz?: any; }} */({}) };
+    return { props: /** @type {{ name1?: typeof name1; name2: any; renamed1?: typeof rename1; renamed2: any; Foo: any; bar: any; baz?: typeof baz; RenamedFoo: any; renamedbar: any; renamedbaz?: typeof renamebaz; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_031ccee2;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_031ccee2>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_031ccee2>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

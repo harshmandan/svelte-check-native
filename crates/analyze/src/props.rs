@@ -73,6 +73,17 @@ pub struct PropInfo {
     pub range: Range,
     /// True for `...rest` elements.
     pub is_rest: bool,
+    /// True when the leaf is a script local only, NOT part of the
+    /// component's top-level prop surface: a leaf inside a nested
+    /// pattern (`{ user: { name } }`), under a non-identifier key
+    /// (`{ 'a-b': x }`, `{ [k]: v }`), or a non-object-pattern
+    /// `$props()` binding (`let props = $props()`). Mirrors upstream
+    /// handle$propsRune's hard-mode loop, which only pushes prop keys
+    /// for simple identifier elements — everything else flips
+    /// `withUnknown` instead (see [`PropsInfo::props_with_unknown`]).
+    /// Excluded from the synthesised `$$ComponentProps` literal and
+    /// from the `__svn_$$bindings` list.
+    pub local_only: bool,
     /// True when the destructure entry has a default value (`= …`)
     /// or is wrapped in `$bindable(...)`. JS-overlay Props synthesis
     /// uses this to mark the prop as optional in the typedef.
@@ -159,6 +170,14 @@ pub struct PropsInfo {
     /// top-level, in source order. Empty for Svelte-4 components and
     /// for components with no `$props()` call.
     pub destructures: Vec<PropInfo>,
+    /// Upstream handle$propsRune's `withUnknown`: true when the
+    /// `$props()` object pattern has any non-simple element (nested
+    /// pattern, non-identifier key, or `...rest`). The synthesised
+    /// `$$ComponentProps` then widens with `& Record<string, any>`
+    /// (bare `Record<string, any>` when no simple elements remain) so
+    /// consumers passing extra props don't fire a false
+    /// excess-property error.
+    pub props_with_unknown: bool,
 }
 
 impl PropsInfo {
@@ -177,6 +196,7 @@ impl PropsInfo {
         let mut destructures: Vec<PropInfo> = Vec::new();
         let mut type_text: Option<String> = None;
         let mut props_source = PropsSource::None;
+        let mut props_with_unknown = false;
 
         // Shape 1 / Shape 2: explicit `$props()` annotation wins over
         // everything else. Collect the destructured names from the
@@ -192,7 +212,8 @@ impl PropsInfo {
                 if !is_props_call_like(init) {
                     continue;
                 }
-                collect_from_binding(&declarator.id, source, &mut destructures);
+                props_with_unknown |=
+                    collect_props_destructure(&declarator.id, source, &mut destructures);
                 if type_text.is_some() {
                     continue;
                 }
@@ -251,6 +272,7 @@ impl PropsInfo {
             type_text,
             type_root_name,
             destructures,
+            props_with_unknown,
         }
     }
 }
@@ -403,9 +425,14 @@ fn source_uses_runes(source: &str) -> bool {
 /// Extract a single property from `export { local as alias }`. Looks up
 /// `local` in the program's top-level `let`/`const`/`var` declarations
 /// to pick up its type annotation and initializer (which decides the
-/// optional marker). When `local` can't be found or has no annotation,
-/// the prop is typed `any`. The alias becomes the public key so
-/// consumers write `<Foo {alias}=...>`.
+/// optional marker). When `local` has no annotation but does have an
+/// initializer, the prop is typed `typeof <local>` so TS enforces the
+/// initializer-inferred type — mirrors upstream svelte2tsx's
+/// `createReturnElementsType` fallback (`<alias>?: typeof <local>`),
+/// which makes `class={123}` fire TS2322 against `let className = ''`.
+/// When `local` can't be found or has neither annotation nor
+/// initializer, the prop is typed `any`. The alias becomes the public
+/// key so consumers write `<Foo {alias}=...>`.
 fn append_prop_from_export_specifier(
     spec: &oxc_ast::ast::ExportSpecifier<'_>,
     program: &oxc_ast::ast::Program<'_>,
@@ -424,7 +451,19 @@ fn append_prop_from_export_specifier(
     };
     let (ty_text, has_init) = find_local_type_and_init(program, source, local);
     let optional_marker = if has_init { "?" } else { "" };
-    let ty_src = ty_text.unwrap_or("any");
+    // Same annotated / initialized / bare ladder as
+    // `append_props_from_var_decl`: annotation verbatim, else
+    // `typeof <local>` when an initializer exists (body-scope
+    // reference — module-scope consumers must project through
+    // `Awaited<ReturnType<typeof $$render>>['props']`, flagged via
+    // `contains_typeof_ref`), else `any`.
+    let ty_src = ty_text.map(ToOwned::to_owned).unwrap_or_else(|| {
+        if has_init {
+            format!("typeof {local}")
+        } else {
+            "any".to_string()
+        }
+    });
     out.push(format!("{alias}{optional_marker}: {ty_src};"));
 }
 
@@ -607,21 +646,75 @@ fn is_props_call_like(expr: &Expression<'_>) -> bool {
     matches!(&call.callee, Expression::Identifier(id) if id.name == "$props")
 }
 
-fn collect_from_binding(pat: &BindingPattern<'_>, source: &str, out: &mut Vec<PropInfo>) {
+/// Top-level dispatcher for the `$props()` declarator's binding
+/// pattern. Returns upstream's `withUnknown`: true when the object
+/// pattern has a `...rest` element or any non-simple element (nested
+/// pattern, non-static-identifier key). Only simple elements — a
+/// static-identifier key bound to a plain identifier, optionally with
+/// a default — contribute prop-surface entries; every other leaf is
+/// collected `local_only` (script local, no prop key). A non-object
+/// `$props()` binding (`let props = $props()`, array pattern) has no
+/// prop surface at all and no widening: upstream's hard mode only
+/// reads object binding patterns, and its typedef-emission gate
+/// (`props.length > 0 || withUnknown`) stays false.
+fn collect_props_destructure(
+    pat: &BindingPattern<'_>,
+    source: &str,
+    out: &mut Vec<PropInfo>,
+) -> bool {
+    let BindingPattern::ObjectPattern(obj) = pat else {
+        collect_from_binding(pat, source, out, true);
+        return false;
+    };
+    let mut with_unknown = obj.rest.is_some();
+    for prop in &obj.properties {
+        let simple = matches!(&prop.key, PropertyKey::StaticIdentifier(_))
+            && binding_value_is_simple(&prop.value);
+        if !simple {
+            with_unknown = true;
+        }
+        collect_from_object_property(prop, source, out, !simple);
+    }
+    if let Some(rest) = &obj.rest {
+        collect_rest(&rest.argument, source, out, true, false);
+    }
+    with_unknown
+}
+
+/// True when a binding-property value is a plain identifier, possibly
+/// with a default (`x` or `x = expr`). Mirrors upstream's
+/// `ts.isIdentifier(element.name)` element test — anything else
+/// (nested object/array pattern) is a non-simple element.
+fn binding_value_is_simple(value: &BindingPattern<'_>) -> bool {
+    match value {
+        BindingPattern::BindingIdentifier(_) => true,
+        BindingPattern::AssignmentPattern(asn) => {
+            matches!(&asn.left, BindingPattern::BindingIdentifier(_))
+        }
+        _ => false,
+    }
+}
+
+fn collect_from_binding(
+    pat: &BindingPattern<'_>,
+    source: &str,
+    out: &mut Vec<PropInfo>,
+    local_only: bool,
+) {
     match pat {
         BindingPattern::ObjectPattern(obj) => {
             for prop in &obj.properties {
-                collect_from_object_property(prop, source, out);
+                collect_from_object_property(prop, source, out, local_only);
             }
             if let Some(rest) = &obj.rest {
-                collect_rest(&rest.argument, source, out, true);
+                collect_rest(&rest.argument, source, out, true, local_only);
             }
         }
         // `let [a, b, c] = $props()` isn't a valid Svelte pattern ($props
         // returns an object), but be defensive.
         BindingPattern::ArrayPattern(arr) => {
             for el in arr.elements.iter().flatten() {
-                collect_from_binding(el, source, out);
+                collect_from_binding(el, source, out, local_only);
             }
         }
         BindingPattern::BindingIdentifier(id) => {
@@ -631,6 +724,7 @@ fn collect_from_binding(pat: &BindingPattern<'_>, source: &str, out: &mut Vec<Pr
                 prop_key: name,
                 range: Range::new(id.span.start, id.span.end),
                 is_rest: false,
+                local_only,
                 has_default: false,
                 is_bindable: false,
                 default_type_text: None,
@@ -643,12 +737,12 @@ fn collect_from_binding(pat: &BindingPattern<'_>, source: &str, out: &mut Vec<Pr
             // top-level entries flow through `collect_from_object_property`
             // which sets has_default itself.
             let before = out.len();
-            collect_from_binding(&asn.left, source, out);
+            collect_from_binding(&asn.left, source, out, local_only);
             let inferred = infer_default_type(&asn.right, source);
             let bindable = is_bindable_call(&asn.right);
             for entry in &mut out[before..] {
                 entry.has_default = true;
-                if bindable {
+                if bindable && !entry.local_only {
                     entry.is_bindable = true;
                 }
                 if entry.default_type_text.is_none() {
@@ -659,7 +753,12 @@ fn collect_from_binding(pat: &BindingPattern<'_>, source: &str, out: &mut Vec<Pr
     }
 }
 
-fn collect_from_object_property(prop: &BindingProperty<'_>, source: &str, out: &mut Vec<PropInfo>) {
+fn collect_from_object_property(
+    prop: &BindingProperty<'_>,
+    source: &str,
+    out: &mut Vec<PropInfo>,
+    local_only: bool,
+) {
     // Shorthand `{ foo }` vs rename `{ foo: bar }` vs default-value
     // `{ foo = bar }` vs `{ foo: bar = baz }`. The local name lives in
     // `prop.value`; the prop key is `prop.key` (set when not shorthand);
@@ -678,26 +777,29 @@ fn collect_from_object_property(prop: &BindingProperty<'_>, source: &str, out: &
         ),
         _ => (false, None, false),
     };
-    collect_from_binding(&prop.value, source, out);
+    collect_from_binding(&prop.value, source, out, local_only);
     // Patch the entries this property added: their prop_key should
     // reflect the source property key (not the local name) for renames,
     // and `has_default` should propagate when this property carried the
     // default at its own level even if the local was a sub-pattern.
-    if let Some(key) = prop_key {
-        // `{ foo: alias }` or `{ foo: alias = default }` — the destructure
-        // pulls `foo` from $props() and binds it locally as `alias`. Only
-        // the immediate first entry corresponds to this property; deeper
-        // entries belong to sub-patterns and keep their own key.
-        if let Some(first) = out.get_mut(before) {
-            if !prop.shorthand {
-                first.prop_key = key;
-            }
-        }
+    //
+    // Only a simple value (`{ foo: alias }` / `{ foo: alias = d }`)
+    // gets the re-key — the single entry it added IS this property.
+    // A nested pattern value (`{ user: { name } }`) must NOT re-key
+    // its first leaf: `name` is not the component's `user` prop, and
+    // the invented key used to surface in the synthesised
+    // `$$ComponentProps` literal.
+    if let Some(key) = prop_key
+        && !prop.shorthand
+        && binding_value_is_simple(&prop.value)
+        && let Some(first) = out.get_mut(before)
+    {
+        first.prop_key = key;
     }
     if has_default {
         for entry in &mut out[before..] {
             entry.has_default = true;
-            if bindable {
+            if bindable && !entry.local_only {
                 entry.is_bindable = true;
             }
             if entry.default_type_text.is_none() {
@@ -707,7 +809,13 @@ fn collect_from_object_property(prop: &BindingProperty<'_>, source: &str, out: &
     }
 }
 
-fn collect_rest(pat: &BindingPattern<'_>, source: &str, out: &mut Vec<PropInfo>, is_rest: bool) {
+fn collect_rest(
+    pat: &BindingPattern<'_>,
+    source: &str,
+    out: &mut Vec<PropInfo>,
+    is_rest: bool,
+    local_only: bool,
+) {
     match pat {
         BindingPattern::BindingIdentifier(id) => {
             let name = SmolStr::from(id.name.as_str());
@@ -716,6 +824,7 @@ fn collect_rest(pat: &BindingPattern<'_>, source: &str, out: &mut Vec<PropInfo>,
                 prop_key: name,
                 range: Range::new(id.span.start, id.span.end),
                 is_rest,
+                local_only,
                 has_default: false,
                 is_bindable: false,
                 default_type_text: None,
@@ -723,13 +832,17 @@ fn collect_rest(pat: &BindingPattern<'_>, source: &str, out: &mut Vec<PropInfo>,
         }
         // Rest patterns holding further destructuring are allowed but
         // unusual; walk recursively.
-        other => collect_from_binding(other, source, out),
+        other => collect_from_binding(other, source, out, local_only),
     }
 }
 
 /// True when `expr` is a `$bindable(…)` call (with or without args).
 /// Walks through parenthesised wrappers so `($bindable())` still
-/// matches.
+/// matches, and through an `as`-cast so `$bindable('') as string` does
+/// too — upstream ExportedNames.ts's `handle$propsRune` unwraps the
+/// as-expression before matching `$bindable` (`if (ts.isAsExpression
+/// (call)) call = call.expression;`). No unwrap for `satisfies` or
+/// non-null `!` — upstream doesn't either.
 fn is_bindable_call(expr: &Expression<'_>) -> bool {
     match expr {
         Expression::CallExpression(call) => matches!(
@@ -737,6 +850,7 @@ fn is_bindable_call(expr: &Expression<'_>) -> bool {
             Expression::Identifier(id) if id.name == "$bindable",
         ),
         Expression::ParenthesizedExpression(p) => is_bindable_call(&p.expression),
+        Expression::TSAsExpression(a) => is_bindable_call(&a.expression),
         _ => false,
     }
 }
@@ -967,10 +1081,94 @@ mod tests {
     }
 
     #[test]
+    fn bindable_through_as_cast() {
+        // `value = $bindable('') as string` — the as-cast wraps the
+        // $bindable call; the prop is still bindable. Upstream
+        // ExportedNames.ts's handle$propsRune unwraps the as-expression
+        // before matching `$bindable` (`if (ts.isAsExpression(call))
+        // call = call.expression;`), so `__sveltets_$$bindings` includes
+        // the prop. Without the unwrap, a consumer's `bind:value` fires
+        // a false TS2322 against the bindings literal union.
+        let alloc = Allocator::default();
+        let src = "let { value = $bindable('') as string, other = $bindable(0) } = $props();";
+        let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
+        let info = PropsInfo::build(&parsed.program, src);
+        let bindable: Vec<&str> = info
+            .destructures
+            .iter()
+            .filter(|p| p.is_bindable)
+            .map(|p| p.prop_key.as_str())
+            .collect();
+        assert_eq!(bindable, vec!["value", "other"]);
+    }
+
+    #[test]
     fn nested_destructuring_recurses() {
         // let { outer: { inner } } = $props() — inner is a leaf binding.
         let src = "let { outer: { inner } } = $props();";
         assert_eq!(props(src), vec!["inner"]);
+    }
+
+    /// `(prop-surface keys, with_unknown)` for a $props() destructure.
+    fn prop_surface(src: &str) -> (Vec<String>, bool) {
+        let alloc = Allocator::default();
+        let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
+        let info = PropsInfo::build(&parsed.program, src);
+        let keys = info
+            .destructures
+            .iter()
+            .filter(|p| !p.local_only && !p.is_rest)
+            .map(|p| p.prop_key.to_string())
+            .collect();
+        (keys, info.props_with_unknown)
+    }
+
+    #[test]
+    fn nested_pattern_widens_and_drops_invented_keys() {
+        // Upstream handle$propsRune: a non-identifier element
+        // (`user: { name }`) sets withUnknown and contributes NO prop
+        // key — `{ age: any } & Record<string, any>`. The nested leaf
+        // `name` is a script local, never a top-level prop, and must
+        // not be re-keyed to `user`.
+        let (keys, unknown) = prop_surface("let { user: { name }, age } = $props();");
+        assert_eq!(keys, vec!["age"]);
+        assert!(unknown);
+    }
+
+    #[test]
+    fn all_nested_pattern_leaves_yield_bare_record() {
+        // `{ user: { name, age } }` — upstream emits bare
+        // `Record<string, any>`: no invented `user` requirement, no
+        // `age` key from the second leaf.
+        let (keys, unknown) = prop_surface("let { user: { name, age } } = $props();");
+        assert!(keys.is_empty());
+        assert!(unknown);
+    }
+
+    #[test]
+    fn rest_element_sets_with_unknown() {
+        // `{ a, ...rest }` — the dotDotDotToken element sets
+        // withUnknown upstream (`{ a: any } & Record<string, any>`).
+        let (keys, unknown) = prop_surface("let { a, ...rest } = $props();");
+        assert_eq!(keys, vec!["a"]);
+        assert!(unknown);
+    }
+
+    #[test]
+    fn simple_destructure_stays_closed() {
+        let (keys, unknown) = prop_surface("let { a, b = 1, c: renamed } = $props();");
+        assert_eq!(keys, vec!["a", "b", "c"]);
+        assert!(!unknown);
+    }
+
+    #[test]
+    fn bare_identifier_props_binding_has_no_prop_surface() {
+        // `let props = $props()` — upstream's hard mode only reads
+        // object binding patterns; a bare identifier contributes no
+        // prop keys and no widening (no typedef is synthesised).
+        let (keys, unknown) = prop_surface("let props = $props();");
+        assert!(keys.is_empty());
+        assert!(!unknown);
     }
 
     #[test]
@@ -1166,6 +1364,30 @@ mod tests {
     fn export_specifier_missing_init_marks_required() {
         let src = "let n: number;\nexport { n as count };";
         assert_eq!(props_type(src).as_deref(), Some("{ count: number; }"));
+    }
+
+    #[test]
+    fn export_specifier_unannotated_with_init_uses_typeof_local() {
+        // `let className = ''; export { className as class };` — no
+        // annotation, but the initializer infers `string`. Upstream's
+        // createReturnElementsType falls back to `typeof <local>` when
+        // no type was recorded, so a consumer passing `class={123}`
+        // fires TS2322. Collapsing to `any` here silently accepted it.
+        let src = "let className = \"\";\nexport { className as class };";
+        assert_eq!(
+            props_type(src).as_deref(),
+            Some("{ class?: typeof className; }")
+        );
+    }
+
+    #[test]
+    fn export_specifier_unannotated_without_init_stays_any() {
+        // No annotation AND no initializer: `typeof x` at a bare
+        // `let x;` site adds nothing (there is no inferred type to
+        // enforce), so keep the `any` fallback — same rule as the
+        // `export let` path above.
+        let src = "let x;\nexport { x as y };";
+        assert_eq!(props_type(src).as_deref(), Some("{ y: any; }"));
     }
 
     #[test]

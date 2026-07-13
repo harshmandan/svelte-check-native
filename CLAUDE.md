@@ -72,6 +72,17 @@ mechanical — delete the submodule and grep for the marker.
 - `cargo fmt` clean. `cargo clippy --workspace --all-targets -- -D warnings`
   clean. `cargo test` — the scoreboard count must be monotonically
   non-decreasing per commit.
+- **rustfmt version drift:** a rustfmt newer than the one that
+  formatted this repo reflows ~17 untouched files (line rewrapping,
+  trailing commas; editing a `lib.rs` also recurses into sibling
+  module files). Never run bare `cargo fmt` / `cargo fmt --all` unless
+  your rustfmt reproduces the committed formatting exactly. Format
+  only the files you edited (`rustfmt --edition 2024 <file>`), then
+  `git checkout --` any collateral reflow in files you didn't
+  substantively change — `git status` must show only intended files
+  before committing. If unsure whether a stray diff is formatter
+  churn, revert it and re-run your rustfmt from clean HEAD: a
+  byte-identical regenerated diff proves it's formatter-only.
 - No `unwrap()` / `expect()` in library code except with a clear
   invariant comment. Binary entry points (`main.rs`) may use
   `anyhow::Result` and propagate. Test code may use both freely (it's

@@ -457,20 +457,22 @@ fn main() -> ExitCode {
     } else {
         (None, svelte_config::SvelteConfigSummary::default())
     };
-    if let Some(cfg) = &analysed_config
-        && svelte_config_summary.warning_filter_plan.partial
-    {
-        eprintln!(
-            "svelte-check-native: partial `warningFilter` in {} — one or more branches couldn't be translated. Unrecognised: `{}`. Add `--compiler-warnings code:ignore,…` to cover the rest.",
-            cfg.display(),
-            svelte_config_summary
-                .warning_filter_plan
-                .unrecognised_excerpt
-                .as_deref()
-                .unwrap_or("?")
-        );
+    if let Some(cfg) = &analysed_config {
+        warn_partial_warning_filter(cfg, &svelte_config_summary.warning_filter_plan);
     }
-    let warning_filter_plan = svelte_config_summary.warning_filter_plan;
+    // Per-file nearest-config resolution for warningFilter + runes
+    // (upstream resolves each document's config via upward search from
+    // the file's directory — nearest wins, no merging). The
+    // workspace-root resolution above is the fallback; an explicit
+    // `--config` pins it for every file.
+    let mut config_resolver = svelte_config::ConfigResolver::new(
+        workspace.clone(),
+        svelte_config::ResolvedConfig {
+            warning_filter_plan: svelte_config_summary.warning_filter_plan,
+            runes: svelte_config_summary.runes,
+        },
+        cli.config.is_some(),
+    );
     let kit_files_settings = svelte_config_summary.kit_files_settings;
     // Set the project-wide preserve-attribute-case flag (svelte config
     // `namespace: 'foreign'`) ONCE before any (parallel) emit reads it.
@@ -513,10 +515,24 @@ fn main() -> ExitCode {
         cli.tsgo_diagnostics,
         svelte_warnings_mode,
         cli.ignore_node_modules_warnings,
-        &warning_filter_plan,
+        &mut config_resolver,
         &kit_files_settings,
         cli.include_suggestions,
     )
+}
+
+/// Stderr notice for a `warningFilter` that only partially translated —
+/// shared by the workspace-root config and any nested configs the
+/// per-file resolver discovers.
+fn warn_partial_warning_filter(config_path: &Path, plan: &svelte_config::WarningFilterPlan) {
+    if !plan.partial {
+        return;
+    }
+    eprintln!(
+        "svelte-check-native: partial `warningFilter` in {} — one or more branches couldn't be translated. Unrecognised: `{}`. Add `--compiler-warnings code:ignore,…` to cover the rest.",
+        config_path.display(),
+        plan.unrecognised_excerpt.as_deref().unwrap_or("?")
+    );
 }
 
 /// How to source compile warnings. Drives the bridge-vs-native
@@ -779,12 +795,16 @@ fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Opti
     Some(format!("{base}{}", code.replace('-', "_")))
 }
 
-/// Run the native Svelte diagnostics — fatal compile errors AND lint
-/// warnings — over every in-scope source, from a SINGLE parse per file.
+/// Native Svelte diagnostics — fatal compile errors AND lint warnings
+/// — for every in-scope source, from a SINGLE parse per file. In the
+/// default flow that parse IS the emit fan-out's parse (the fused
+/// closure in `run_typecheck` calls [`native_diagnostics_for_parsed`]
+/// on the artifacts it already has); [`collect_native_diagnostics`]
+/// exists for the tsgo-skipped flow (`--diagnostic-sources` without
+/// `js`), where no emit fan-out runs and the corpus is parsed here
+/// instead.
 ///
-/// Both concerns run after tsgo and previously parsed the corpus
-/// independently (two `parse_sections` + two `parse_all_template_runs`
-/// + two `PositionMap` builds per file). They share one parse here:
+/// Per file the shared computation covers:
 ///
 /// 1. **Fatal parse/syntax errors** (`ParseError::is_fatal`). The emit
 ///    and lint passes recover from and discard these, so a syntactically
@@ -805,113 +825,152 @@ fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Opti
 /// 3. **Lint warnings** via [`svn_lint::lint_parsed`], reusing this
 ///    file's parse and position map.
 ///
-/// Diagnostics are merged in the original two-phase emission order (all
-/// fatal/structural diagnostics first, then all warnings, both in source
-/// order) so output stays byte-identical to the two separate passes.
+/// Diagnostics are merged by [`merge_native_diagnostics`] in the
+/// original two-phase emission order (all fatal/structural diagnostics
+/// first, then all warnings, both in source order) so output stays
+/// byte-identical to the historical separate passes.
 ///
-/// Only `native` mode calls this; `bridge` mode gets the real compiler
-/// errors (with upstream-accurate codes) straight from `compile_batch`.
-fn emit_native_svelte_diagnostics(
-    svelte_sources: &[(PathBuf, String)],
-    compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
-    diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
-    seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
-    workspace: &Path,
-    broken: &mut std::collections::HashSet<PathBuf>,
-) {
-    let compat = svn_lint::detect_for_workspace(workspace);
+/// Only `native` mode computes these; `bridge` mode gets the real
+/// compiler errors (with upstream-accurate codes) straight from
+/// `compile_batch`.
+struct NativeFileDiagnostics {
+    path: PathBuf,
+    /// Fatal-parse + structural (const-placement) diagnostics.
+    diags: Vec<svn_typecheck::CheckDiagnostic>,
+    /// Set when a fatal parse error made the AST unusable.
+    broken: bool,
+    /// Lint warnings (empty for broken files — they're skipped).
+    warnings: Vec<svn_lint::Warning>,
+}
 
-    /// One file's native diagnostics, all derived from its single parse.
-    struct PerFile {
-        path: PathBuf,
-        /// Fatal-parse + structural (const-placement) diagnostics.
-        diags: Vec<svn_typecheck::CheckDiagnostic>,
-        /// Set when a fatal parse error made the AST unusable.
-        broken: bool,
-        /// Lint warnings (empty for broken files — they're skipped).
-        warnings: Vec<svn_lint::Warning>,
+/// One file's native diagnostics from an ALREADY-PARSED document —
+/// the emit fan-out hands its own parse artifacts in so each file is
+/// parsed once per run, total.
+#[allow(clippy::too_many_arguments)]
+fn native_diagnostics_for_parsed(
+    path: &Path,
+    source: &str,
+    doc: &svn_parser::Document<'_>,
+    fragment: &svn_parser::ast::Fragment,
+    section_errors: &[svn_parser::ParseError],
+    template_errors: &[svn_parser::ParseError],
+    config_resolver: &svelte_config::ConfigResolver,
+    compat: svn_lint::CompatFeatures,
+) -> NativeFileDiagnostics {
+    let pm = svn_core::PositionMap::new(source);
+
+    // (1) Fatal parse/syntax error → broken; skip every later
+    // check (the AST is garbage). First fatal error wins.
+    if let Some(err) = section_errors
+        .iter()
+        .chain(template_errors.iter())
+        .find(|e| e.is_fatal())
+    {
+        let (start, end) = pm.range_positions(err.range());
+        return NativeFileDiagnostics {
+            path: path.to_path_buf(),
+            diags: vec![svn_typecheck::CheckDiagnostic {
+                source_path: path.to_path_buf(),
+                // PositionMap is 0-based (line, UTF-16 char);
+                // CheckDiagnostic is 1-based across the board.
+                line: start.line.saturating_add(1),
+                column: start.character.saturating_add(1),
+                end_line: end.line.saturating_add(1),
+                end_column: end.character.saturating_add(1),
+                severity: svn_typecheck::Severity::Error,
+                code: svn_typecheck::DiagnosticCode::Slug(err.code_slug().to_string()),
+                message: err.to_string(),
+                source: svn_typecheck::DiagnosticSource::Svelte,
+                code_description_url: None,
+            }],
+            broken: true,
+            warnings: Vec::new(),
+        };
     }
 
+    // (2) Structural analyze-phase errors on the clean AST. The
+    // root template fragment is not a legal const-tag host (its
+    // grand-parent is the document Root) — start disallowed.
+    let mut placement_errs = Vec::new();
+    svn_analyze::check_const_placement(&fragment.nodes, false, &mut placement_errs);
+    let diags: Vec<svn_typecheck::CheckDiagnostic> = placement_errs
+        .into_iter()
+        .map(|e| {
+            let (start, end) = pm.range_positions(e.range);
+            svn_typecheck::CheckDiagnostic {
+                source_path: path.to_path_buf(),
+                line: start.line.saturating_add(1),
+                column: start.character.saturating_add(1),
+                end_line: end.line.saturating_add(1),
+                end_column: end.character.saturating_add(1),
+                severity: svn_typecheck::Severity::Error,
+                code: svn_typecheck::DiagnosticCode::Slug(
+                    "const_tag_invalid_placement".to_string(),
+                ),
+                message: svn_analyze::CONST_TAG_INVALID_PLACEMENT_MSG.to_string(),
+                source: svn_typecheck::DiagnosticSource::Svelte,
+                code_description_url: Some(
+                    "https://svelte.dev/e/const_tag_invalid_placement".to_string(),
+                ),
+            }
+        })
+        .collect();
+
+    // (3) Lint warnings — reuse the parse and the position map
+    // (no second parse_sections / line-index scan per file).
+    // The nearest config's compilerOptions.runes forces the
+    // mode; `None` keeps lint's auto-detection.
+    let config_runes = config_resolver.for_path(path).runes;
+    let warnings = svn_lint::lint_parsed(doc, fragment, source, pm, path, config_runes, compat);
+
+    NativeFileDiagnostics {
+        path: path.to_path_buf(),
+        diags,
+        broken: false,
+        warnings,
+    }
+}
+
+/// Standalone parse + native-diagnostics pass for flows where the emit
+/// fan-out didn't run (tsgo skipped via `--diagnostic-sources`). The
+/// default flow computes the same per-file results inside the emit
+/// fan-out from its single parse.
+fn collect_native_diagnostics(
+    svelte_sources: &[(PathBuf, std::sync::Arc<str>)],
+    config_resolver: &svelte_config::ConfigResolver,
+    compat: svn_lint::CompatFeatures,
+) -> Vec<NativeFileDiagnostics> {
     // Per-file work is pure compute with no shared mutable state — fan
     // out over rayon. `collect` preserves source order for the merge.
-    let per_file: Vec<PerFile> = svelte_sources
+    svelte_sources
         .par_iter()
         .map(|(path, source)| {
             let (doc, section_errors) = svn_parser::parse_sections(source);
             let (fragment, template_errors) =
                 svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
-            let pm = svn_core::PositionMap::new(source);
-
-            // (1) Fatal parse/syntax error → broken; skip every later
-            // check (the AST is garbage). First fatal error wins.
-            if let Some(err) = section_errors
-                .iter()
-                .chain(template_errors.iter())
-                .find(|e| e.is_fatal())
-            {
-                let (start, end) = pm.range_positions(err.range());
-                return PerFile {
-                    path: path.clone(),
-                    diags: vec![svn_typecheck::CheckDiagnostic {
-                        source_path: path.clone(),
-                        // PositionMap is 0-based (line, UTF-16 char);
-                        // CheckDiagnostic is 1-based across the board.
-                        line: start.line.saturating_add(1),
-                        column: start.character.saturating_add(1),
-                        end_line: end.line.saturating_add(1),
-                        end_column: end.character.saturating_add(1),
-                        severity: svn_typecheck::Severity::Error,
-                        code: svn_typecheck::DiagnosticCode::Slug(err.code_slug().to_string()),
-                        message: err.to_string(),
-                        source: svn_typecheck::DiagnosticSource::Svelte,
-                        code_description_url: None,
-                    }],
-                    broken: true,
-                    warnings: Vec::new(),
-                };
-            }
-
-            // (2) Structural analyze-phase errors on the clean AST. The
-            // root template fragment is not a legal const-tag host (its
-            // grand-parent is the document Root) — start disallowed.
-            let mut placement_errs = Vec::new();
-            svn_analyze::check_const_placement(&fragment.nodes, false, &mut placement_errs);
-            let diags: Vec<svn_typecheck::CheckDiagnostic> = placement_errs
-                .into_iter()
-                .map(|e| {
-                    let (start, end) = pm.range_positions(e.range);
-                    svn_typecheck::CheckDiagnostic {
-                        source_path: path.clone(),
-                        line: start.line.saturating_add(1),
-                        column: start.character.saturating_add(1),
-                        end_line: end.line.saturating_add(1),
-                        end_column: end.character.saturating_add(1),
-                        severity: svn_typecheck::Severity::Error,
-                        code: svn_typecheck::DiagnosticCode::Slug(
-                            "const_tag_invalid_placement".to_string(),
-                        ),
-                        message: svn_analyze::CONST_TAG_INVALID_PLACEMENT_MSG.to_string(),
-                        source: svn_typecheck::DiagnosticSource::Svelte,
-                        code_description_url: Some(
-                            "https://svelte.dev/e/const_tag_invalid_placement".to_string(),
-                        ),
-                    }
-                })
-                .collect();
-
-            // (3) Lint warnings — reuse the parse and the position map
-            // (no second parse_sections / line-index scan per file).
-            let warnings = svn_lint::lint_parsed(&doc, &fragment, source, pm, path, None, compat);
-
-            PerFile {
-                path: path.clone(),
-                diags,
-                broken: false,
-                warnings,
-            }
+            native_diagnostics_for_parsed(
+                path,
+                source,
+                &doc,
+                &fragment,
+                &section_errors,
+                &template_errors,
+                config_resolver,
+                compat,
+            )
         })
-        .collect();
+        .collect()
+}
 
+/// Merge per-file native diagnostics into the output vec in the
+/// two-phase emission order documented on [`NativeFileDiagnostics`].
+fn merge_native_diagnostics(
+    per_file: Vec<NativeFileDiagnostics>,
+    compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
+    diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
+    seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
+    broken: &mut std::collections::HashSet<PathBuf>,
+) {
     // Phase 1: all fatal/structural diagnostics + broken flags, in
     // source order — matches the old compile-error pass's emission slot.
     let mut warning_files: Vec<(PathBuf, Vec<svn_lint::Warning>)> = Vec::new();
@@ -1114,9 +1173,12 @@ fn escape_solution_tsconfig(candidate: &Path) -> Option<PathBuf> {
             Ok(c) => c,
             Err(_) => continue,
         };
-        let has_paths = chain
-            .iter()
-            .any(|f| f.compiler_options.paths.as_ref().is_some_and(|p| !p.is_empty()));
+        let has_paths = chain.iter().any(|f| {
+            f.compiler_options
+                .paths
+                .as_ref()
+                .is_some_and(|p| !p.is_empty())
+        });
         if !has_paths {
             continue;
         }
@@ -1152,7 +1214,7 @@ fn run_typecheck(
     tsgo_diagnostics: bool,
     svelte_warnings_mode: SvelteWarningsMode,
     ignore_node_modules_warnings: bool,
-    warning_filter_plan: &svelte_config::WarningFilterPlan,
+    config_resolver: &mut svelte_config::ConfigResolver,
     kit_files_settings: &svn_core::sveltekit::KitFilesSettings,
     include_suggestions: bool,
 ) -> ExitCode {
@@ -1172,17 +1234,24 @@ fn run_typecheck(
     // points at the wrong tree for those files.
     let project_scope = svn_core::tsconfig::load_chain(tsconfig).ok().map(|chain| {
         // Resolve include/exclude/files against the config that DECLARES
-        // them (TS semantics; leaf wins), producing absolute patterns —
-        // the same rule the overlay builder uses. Previously discovery
-        // resolved the *flattened* patterns against the workspace via a
-        // leading-`../`-stripping heuristic, which disagreed with the
-        // overlay for configs declared outside the workspace root.
-        let include = discovery::build_glob_set_absolute(
-            &discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref()),
-        );
-        let exclude = discovery::build_glob_set_absolute(
-            &discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.exclude.as_deref()),
-        );
+        // them (TS extends precedence: leaf wins, later array-extends
+        // entries beat earlier ones), producing absolute patterns — the
+        // same rule the overlay builder uses. `None` = the field is
+        // declared nowhere in the chain; a declared-but-empty include
+        // compiles to an empty glob set that matches nothing (TS
+        // replace-on-child: `"include": []` admits no files).
+        let include =
+            discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref())
+                .map(|pats| {
+                    discovery::build_glob_set_absolute(&pats)
+                        .unwrap_or_else(globset::GlobSet::empty)
+                });
+        let exclude =
+            discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.exclude.as_deref())
+                .map(|pats| {
+                    discovery::build_glob_set_absolute(&pats)
+                        .unwrap_or_else(globset::GlobSet::empty)
+                });
         // Files explicitly listed in tsconfig's `files` field bypass
         // both `include` glob matching AND `exclude` filtering (TS
         // spec: https://www.typescriptlang.org/tsconfig/#exclude —
@@ -1192,6 +1261,7 @@ fn run_typecheck(
         // walker paths.
         let explicit_files: std::collections::HashSet<PathBuf> =
             discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.files.as_deref())
+                .unwrap_or_default()
                 .into_iter()
                 .map(PathBuf::from)
                 .filter_map(|p| dunce::canonicalize(&p).ok().or(Some(p)))
@@ -1252,14 +1322,16 @@ fn run_typecheck(
         .filter(|p| !in_project_scope(p))
         .cloned()
         .collect();
-    // Kit files (route modules, hooks, params) get counted toward the
-    // COMPLETED denominator to match upstream svelte-check's counting,
-    // but we don't type-check them ourselves — tsgo processes them via
-    // regular `.ts` include. Apply the same project-scope filter so
-    // our count reflects only files tsgo would see.
+    // Kit files (route modules, hooks, params). We don't type-check
+    // them ourselves — tsgo processes them via regular `.ts` include —
+    // so only in-scope kit files feed the inject pass below. The FULL
+    // discovered list (`kit_files_raw`) still counts toward the
+    // COMPLETED denominator: upstream's findFiles enumeration has no
+    // tsconfig scoping.
     let kit_files: Vec<PathBuf> = kit_files_raw
-        .into_iter()
+        .iter()
         .filter(|p| in_project_scope(p))
+        .cloned()
         .collect();
     // `.svelte.ts` runes-module set. Walker paths are canonical
     // (workspace is canonicalized at startup, `main.rs:180`), so
@@ -1275,8 +1347,17 @@ fn run_typecheck(
         .into_iter()
         .filter(|p| in_project_scope(p))
         .collect();
+    // Resolve each file's nearest svelte.config (warningFilter / runes)
+    // now, sequentially — the parallel lint pass below only does
+    // read-only lookups. Nested configs whose warningFilter didn't
+    // fully translate get the same stderr notice as the root config.
+    config_resolver.prime(svelte_files_all.iter());
+    for (cfg_path, plan) in config_resolver.nested_partial_configs() {
+        warn_partial_warning_filter(cfg_path, plan);
+    }
     let t_discovery = mark.elapsed();
 
+    let mark = std::time::Instant::now();
     // Read every source up-front; we need the bytes for both the
     // tsgo-typecheck path and the svelte/compiler bridge.
     //
@@ -1285,48 +1366,119 @@ fn run_typecheck(
     // the overlay tsconfig's `files` (and run through the compiler
     // warning bridge); the tail past that are auxiliary overlays
     // that only exist so tsgo's import-following can reach them.
-    let mut svelte_sources: Vec<(PathBuf, String)> =
+    // Sources are held as `Arc<str>` so the typecheck crate's
+    // `CheckInput` can share them (no disk re-read, no duplicate copy)
+    // while this vec stays alive for the lint / bridge passes below.
+    //
+    // Reads fan out over rayon — 1000+ open/read/close round-trips on
+    // one thread are the largest serial pre-emit segment, and the pool
+    // is idle at this point anyway. The order-preserving `collect`
+    // plus the sequential fold below keep `svelte_sources` (and any
+    // read-error stderr lines) in exactly the input order the serial
+    // loop produced. The read is counted inside the `parse + analyze
+    // + emit` timing phase (the `mark` above) rather than falling
+    // untimed between phases.
+    let read_ordered = |files: &[PathBuf]| -> Vec<(PathBuf, std::io::Result<String>)> {
+        files
+            .par_iter()
+            .map(|file| (file.clone(), std::fs::read_to_string(file)))
+            .collect()
+    };
+    let mut svelte_sources: Vec<(PathBuf, std::sync::Arc<str>)> =
         Vec::with_capacity(svelte_files.len() + svelte_files_aux.len());
-    for file in &svelte_files {
-        match std::fs::read_to_string(file) {
-            Ok(s) => svelte_sources.push((file.clone(), s)),
+    for (file, result) in read_ordered(&svelte_files) {
+        match result {
+            Ok(s) => svelte_sources.push((file, s.into())),
             Err(err) => {
                 eprintln!("failed to read {}: {err}", file.display());
             }
         }
     }
     let svelte_sources_in_scope_end = svelte_sources.len();
-    for file in &svelte_files_aux {
-        match std::fs::read_to_string(file) {
-            Ok(s) => svelte_sources.push((file.clone(), s)),
+    for (file, result) in read_ordered(&svelte_files_aux) {
+        match result {
+            Ok(s) => svelte_sources.push((file, s.into())),
             Err(err) => {
                 eprintln!("failed to read {}: {err}", file.display());
             }
         }
     }
 
-    let mark = std::time::Instant::now();
     // The whole parse → analyze → emit + kit-inject + collision-
     // rewrite pipeline only feeds tsgo. When --diagnostic-sources
     // excludes `js`, tsgo is skipped entirely, so this work would
     // be discarded — gate it on `sources.js` to skip it up front.
     // The svelte/compiler bridge below still runs (it consumes
-    // `svelte_sources`, not `inputs`).
-    let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::new();
+    // `svelte_sources`, not the prepared inputs).
+    //
+    // Overlay cache writes happen INSIDE the fan-outs below via
+    // `CheckSession::prepare` — each task writes its generated TS to
+    // the cache and drops the string before returning, so peak RSS
+    // never holds the whole emitted-TS corpus across the phase
+    // barrier into the typecheck crate. `checker` carries the session
+    // plus the per-input results (in input order) to the
+    // `CheckSession::finish` call after `t_emit`.
+    type PreparedResults = Vec<Result<svn_typecheck::PreparedInput, svn_typecheck::CheckError>>;
+    let mut checker: Option<(svn_typecheck::CheckSession, PreparedResults)> = None;
+    // Native Svelte diagnostics (fatal parse errors + lint warnings).
+    // Decided up front because the default flow computes them INSIDE
+    // the emit fan-out below, from the same parse that feeds emit —
+    // one parse per file per run. The results are tiny (diagnostics
+    // only, no ASTs retained), so holding them across the tsgo phase
+    // costs nothing; they merge into the output after tsgo, in the
+    // same slot as before.
+    let run_native = sources.svelte && matches!(svelte_warnings_mode, SvelteWarningsMode::Native);
+    let native_compat = run_native.then(|| svn_lint::detect_for_workspace(workspace));
+    let config_resolver_ref: &svelte_config::ConfigResolver = config_resolver;
+    let mut native_results: Vec<Option<NativeFileDiagnostics>> = Vec::new();
     if sources.js {
+        // Cache-global setup (cache dir, type shims) plus the
+        // background `.svelte-kit/types/` mirror start here, BEFORE
+        // the emit fan-out, so the mirror's tree walk overlaps the
+        // whole emit phase instead of just the overlay writes.
+        let session = match svn_typecheck::CheckSession::new(workspace, solution_root_tsconfig) {
+            Ok(session) => session,
+            Err(err) => {
+                let message = format!("type-check failed: {err}");
+                eprintln!("svelte-check-native: {message}");
+                // Machine consumers key off a FAILURE line; emit one so
+                // a fatal check error isn't a silent stop on stdout.
+                print_machine_failure(output_format, &message);
+                return ExitCode::from(2);
+            }
+        };
+        let session_ref = &session;
         // Per-file parse → analyze → emit is pure compute with no shared
         // mutable state (each iteration owns its own oxc Allocator inside
-        // the called functions). rayon distributes across the thread pool
-        // and `collect_into_vec` preserves source order so the resulting
-        // `inputs` matches `svelte_sources` index-for-index.
-        inputs.reserve(svelte_sources.len());
-        svelte_sources
+        // the called functions); the trailing `prepare` call writes only
+        // paths derived from this file's source path. rayon distributes
+        // across the thread pool and the order-preserving `unzip` keeps
+        // the resulting inputs matching `svelte_sources` index-for-index.
+        let (prepared_svelte, natives): (PreparedResults, Vec<_>) = svelte_sources
             .par_iter()
             .enumerate()
             .map(|(idx, (file, source))| {
-                let (doc, _parse_errors) = svn_parser::parse_sections(source);
-                let (fragment, _template_errors) =
+                let (doc, section_errors) = svn_parser::parse_sections(source);
+                let (fragment, template_errors) =
                     svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+                // Fused native pass: derive fatal/lint diagnostics from
+                // THIS parse instead of re-parsing the corpus after
+                // tsgo. Only in-scope sources are linted — the aux tail
+                // exists solely for tsgo's import-following.
+                let native = native_compat
+                    .filter(|_| idx < svelte_sources_in_scope_end)
+                    .map(|compat| {
+                        native_diagnostics_for_parsed(
+                            file,
+                            source,
+                            &doc,
+                            &fragment,
+                            &section_errors,
+                            &template_errors,
+                            config_resolver_ref,
+                            compat,
+                        )
+                    });
                 let summary = svn_analyze::walk_template(&fragment, source);
                 // Overlay extension mirrors upstream svelte-check's
                 // `isTsSvelte(text)` per-file dispatch
@@ -1345,8 +1497,9 @@ fn run_typecheck(
                 } else {
                     svn_typecheck::InputKind::SvelteAuxiliary
                 };
-                svn_typecheck::CheckInput {
+                let input = svn_typecheck::CheckInput {
                     source_path: file.clone(),
+                    source: source.clone(),
                     generated_ts: emitted.typescript,
                     line_map: emitted.line_map,
                     token_map: emitted.token_map,
@@ -1354,9 +1507,12 @@ fn run_typecheck(
                     source_line_starts: emitted.source_line_starts,
                     kind,
                     is_ts_overlay: is_ts,
-                }
+                };
+                (session_ref.prepare(input), native)
             })
-            .collect_into_vec(&mut inputs);
+            .unzip();
+        let mut prepared = prepared_svelte;
+        native_results = natives;
 
         // Kit files (`+server.ts`, `+page.ts`, hooks, params): run them
         // through the inject pass to splice in `$types` imports so the
@@ -1365,20 +1521,30 @@ fn run_typecheck(
         // `inject` returns `None` (no handlers matched), skip — the
         // file type-checks as the user wrote it and the original path
         // stays in tsgo's program via the normal `include` glob.
-        inputs.extend(kit_files.iter().filter_map(|file| {
-            let source = std::fs::read_to_string(file).ok()?;
-            let generated = svn_emit::kit_inject::inject(file, &source)?;
-            Some(svn_typecheck::CheckInput {
-                source_path: file.clone(),
-                generated_ts: generated,
-                line_map: Vec::new(),
-                token_map: Vec::new(),
-                overlay_line_starts: Vec::new(),
-                source_line_starts: Vec::new(),
-                kind: svn_typecheck::InputKind::KitFile,
-                is_ts_overlay: true,
-            })
-        }));
+        // Per-file read + oxc parse with no shared mutable state — fan
+        // out over rayon like the `.svelte` emit above. rayon's Vec
+        // collect preserves the caller's order, so `inputs` stays
+        // deterministic.
+        prepared.extend(
+            kit_files
+                .par_iter()
+                .filter_map(|file| {
+                    let source = std::fs::read_to_string(file).ok()?;
+                    let generated = svn_emit::kit_inject::inject(file, &source)?;
+                    Some(session_ref.prepare(svn_typecheck::CheckInput {
+                        source_path: file.clone(),
+                        source: "".into(),
+                        generated_ts: generated,
+                        line_map: Vec::new(),
+                        token_map: Vec::new(),
+                        overlay_line_starts: Vec::new(),
+                        source_line_starts: Vec::new(),
+                        kind: svn_typecheck::InputKind::KitFile,
+                        is_ts_overlay: true,
+                    }))
+                })
+                .collect::<Vec<_>>(),
+        );
 
         // User-`.ts`-overlay for the sibling-collision case: when a user
         // `.ts` file imports `./Foo.svelte` where `Foo.svelte.ts` exists
@@ -1401,40 +1567,59 @@ fn run_typecheck(
         // overlay; others pass through tsgo's regular include. Fast-path
         // skip when no runes modules were discovered.
         if !runes_modules_set.is_empty() {
-            let rewrite_candidates = user_script_files.iter().chain(runes_modules_set.iter());
-            inputs.extend(rewrite_candidates.filter_map(|file| {
-                let source = std::fs::read_to_string(file).ok()?;
-                let rewritten =
-                    rewrite_svelte_imports_for_collisions(file, &source, &runes_modules_set)?;
-                Some(svn_typecheck::CheckInput {
-                    source_path: file.clone(),
-                    generated_ts: rewritten,
-                    line_map: Vec::new(),
-                    token_map: Vec::new(),
-                    overlay_line_starts: Vec::new(),
-                    source_line_starts: Vec::new(),
-                    kind: svn_typecheck::InputKind::UserTsOverlay,
-                    is_ts_overlay: true,
-                })
-            }));
+            // Candidate order must be stable: it flows through `inputs`
+            // into the overlay tsconfig's exclude list, and HashSet
+            // iteration order isn't deterministic — sort the runes-
+            // module tail. Then fan out over rayon (read + oxc parse
+            // per file, no shared mutable state); the Vec collect
+            // preserves candidate order.
+            let mut runes_candidates: Vec<&PathBuf> = runes_modules_set.iter().collect();
+            runes_candidates.sort();
+            let rewrite_candidates: Vec<&PathBuf> =
+                user_script_files.iter().chain(runes_candidates).collect();
+            prepared.extend(
+                rewrite_candidates
+                    .par_iter()
+                    .filter_map(|file| {
+                        let source = std::fs::read_to_string(file).ok()?;
+                        let rewritten = rewrite_svelte_imports_for_collisions(
+                            file,
+                            &source,
+                            &runes_modules_set,
+                        )?;
+                        Some(session_ref.prepare(svn_typecheck::CheckInput {
+                            source_path: (*file).clone(),
+                            source: "".into(),
+                            generated_ts: rewritten,
+                            line_map: Vec::new(),
+                            token_map: Vec::new(),
+                            overlay_line_starts: Vec::new(),
+                            source_line_starts: Vec::new(),
+                            kind: svn_typecheck::InputKind::UserTsOverlay,
+                            is_ts_overlay: true,
+                        }))
+                    })
+                    .collect::<Vec<_>>(),
+            );
         }
+        checker = Some((session, prepared));
     }
     let t_emit = mark.elapsed();
 
     // Run tsgo (`js`/`ts` source). Skipped entirely when
-    // `--diagnostic-sources` opts out of `js`. Move `inputs` into the
-    // call so each `generated_ts` string drops as soon as it has been
-    // written to the cache — see svn_typecheck::check docs.
+    // `--diagnostic-sources` opts out of `js` (`checker` stays None).
+    // Every overlay is already on disk from the fan-out's `prepare`
+    // calls; `finish` surfaces the first per-input error (in input
+    // order) before running the corpus-level steps + tsgo.
     let mark = std::time::Instant::now();
-    let (mut diagnostics, tsgo_diag_block) = if sources.js {
-        match svn_typecheck::check(
-            workspace,
-            solution_root_tsconfig,
-            tsconfig,
-            inputs,
-            tsgo_diagnostics,
-            include_suggestions,
-        ) {
+    let (mut diagnostics, tsgo_diag_block) = if let Some((session, prepared)) = checker.take() {
+        let outcome = prepared
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .and_then(|prepared| {
+                session.finish(prepared, tsconfig, tsgo_diagnostics, include_suggestions)
+            });
+        match outcome {
             Ok(out) => (out.diagnostics, out.extended_diagnostics),
             Err(err) => {
                 let message = format!("type-check failed: {err}");
@@ -1446,9 +1631,6 @@ fn run_typecheck(
             }
         }
     } else {
-        // When tsgo is skipped, drop `inputs` early too so we don't
-        // hold the generated TS strings through the bridge phase.
-        drop(inputs);
         (Vec::new(), None)
     };
     let t_typecheck = mark.elapsed();
@@ -1474,26 +1656,43 @@ fn run_typecheck(
         let mut seen: std::collections::HashSet<(String, PathBuf, u32, u32)> =
             std::collections::HashSet::new();
 
-        let run_native = matches!(svelte_warnings_mode, SvelteWarningsMode::Native);
         if run_native {
             // Fatal compile diagnostics (syntax errors → marked broken so
             // their tsgo noise is dropped below; analyze-phase structural
             // errors like gh#30's const placement → not broken, tsgo still
             // runs) AND lint warnings, all from a single parse per file.
-            emit_native_svelte_diagnostics(
-                &svelte_sources,
+            let per_file: Vec<NativeFileDiagnostics> = if sources.js {
+                // Already computed inside the emit fan-out from its
+                // parse; the aux tail's `None`s flatten away and
+                // in-scope source order is preserved.
+                native_results.into_iter().flatten().collect()
+            } else {
+                // tsgo (and with it the emit fan-out) was skipped —
+                // parse here instead. Invariant: `native_compat` is
+                // Some whenever `run_native` is true.
+                let compat =
+                    native_compat.unwrap_or_else(|| svn_lint::detect_for_workspace(workspace));
+                collect_native_diagnostics(&svelte_sources, config_resolver, compat)
+            };
+            merge_native_diagnostics(
+                per_file,
                 compiler_overrides,
                 &mut diagnostics,
                 &mut seen,
-                workspace,
                 &mut broken_files,
             );
         }
 
         let run_bridge = matches!(svelte_warnings_mode, SvelteWarningsMode::Bridge);
         if run_bridge {
-            match svn_svelte_compiler::compile_batch(workspace, std::mem::take(&mut svelte_sources))
-            {
+            // `compile_batch` wants owned Strings (they cross a worker
+            // boundary); copy out of the shared Arcs — bridge mode is
+            // the opt-in slow path and already spawns JS subprocesses.
+            let bridge_sources: Vec<(PathBuf, String)> = std::mem::take(&mut svelte_sources)
+                .into_iter()
+                .map(|(p, s)| (p, String::from(&*s)))
+                .collect();
+            match svn_svelte_compiler::compile_batch(workspace, bridge_sources) {
                 Ok(per_file) => {
                     for (path, warnings) in per_file {
                         for w in warnings {
@@ -1566,21 +1765,25 @@ fn run_typecheck(
         });
     }
 
-    // Tier 2: apply any drop rules we statically translated from the
-    // user's `svelte.config.js` `warningFilter`. Applies only to the
-    // Svelte diagnostic source — TS/JS diagnostics are tsgo's domain.
-    if !warning_filter_plan.rules.is_empty() || warning_filter_plan.constant.is_some() {
-        diagnostics.retain(|d| {
-            if !matches!(d.source, svn_typecheck::DiagnosticSource::Svelte) {
-                return true;
-            }
-            let code = match &d.code {
-                svn_typecheck::DiagnosticCode::Slug(s) => s.as_str(),
-                svn_typecheck::DiagnosticCode::Numeric(_) => "",
-            };
-            !warning_filter_plan.should_drop(code, Some(&d.source_path))
-        });
-    }
+    // Tier 2: apply the drop rules we statically translated from each
+    // file's NEAREST `svelte.config.js` `warningFilter` (per-document
+    // resolution, mirroring upstream's configLoader). Applies only to
+    // the Svelte diagnostic source — TS/JS diagnostics are tsgo's
+    // domain.
+    diagnostics.retain(|d| {
+        if !matches!(d.source, svn_typecheck::DiagnosticSource::Svelte) {
+            return true;
+        }
+        let plan = &config_resolver.for_path(&d.source_path).warning_filter_plan;
+        if plan.rules.is_empty() && plan.constant.is_none() {
+            return true;
+        }
+        let code = match &d.code {
+            svn_typecheck::DiagnosticCode::Slug(s) => s.as_str(),
+            svn_typecheck::DiagnosticCode::Numeric(_) => "",
+        };
+        !plan.should_drop(code, Some(&d.source_path))
+    });
 
     // NOTE: `--threshold error` is a PRINT-TIME filter only — applied
     // per-diagnostic inside `print_diagnostics`. The counts and exit
@@ -1599,20 +1802,28 @@ fn run_typecheck(
         .count();
 
     // `<N> FILES` in the COMPLETED line mirrors upstream svelte-check's
-    // denominator exactly: it's `|entries ∪ files-with-diagnostics|`,
-    // where `entries` is every `.svelte` + SvelteKit "Kit file" we
-    // processed (route modules like `+page.ts`, hooks, params — see
-    // `kit_files` module) and files-with-diagnostics adds any NON-entry
-    // file that picked up a TS diagnostic at tsgo time (typically
-    // `tsconfig.json`-level errors). Both sets deduplicated against
+    // denominator exactly: `|entries ∪ files-with-diagnostics|`
+    // (index.ts `writeDiagnostics` over the map
+    // `getSvelteDiagnosticsForIncremental` seeds), where `entries` is
+    // every `.svelte` + SvelteKit "Kit file" (route modules like
+    // `+page.ts`, hooks, params) that `findFiles` discovers
+    // WORKSPACE-WIDE — only node_modules/dot-dir filtering, no tsconfig
+    // `include`/`exclude` scoping (incremental.ts deliberately doesn't
+    // use them to filter virtualized files) — and files-with-diagnostics
+    // adds any NON-entry file that picked up a TS diagnostic at tsgo
+    // time (typically `tsconfig.json`-level errors). The entry half
+    // exists only while a `svelte` or `css` source is enabled: with
+    // js-only sources upstream's per-entry seeding early-returns
+    // (index.ts:324-330) and the count collapses to just the
+    // diagnostic-bearing files. Both sets deduplicated against
     // source_path.
     let files_for_completed: usize = {
         use std::collections::HashSet;
-        let mut seen: HashSet<&Path> = svelte_files
-            .iter()
-            .chain(kit_files.iter())
-            .map(PathBuf::as_path)
-            .collect();
+        let mut seen: HashSet<&Path> = HashSet::new();
+        if sources.svelte || sources.css {
+            seen.extend(svelte_files_all.iter().map(PathBuf::as_path));
+            seen.extend(kit_files_raw.iter().map(PathBuf::as_path));
+        }
         for d in &diagnostics {
             seen.insert(d.source_path.as_path());
         }
@@ -1668,9 +1879,7 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
     // Honour svelte config `namespace: 'foreign'` (preserve attribute
     // case) in the debug-emit path too, mirroring the check path.
     if let Some(cfg) = svelte_config::find_svelte_config(workspace) {
-        svn_emit::set_preserve_attribute_case(
-            svelte_config::analyse(&cfg).preserve_attribute_case,
-        );
+        svn_emit::set_preserve_attribute_case(svelte_config::analyse(&cfg).preserve_attribute_case);
     }
     let files = discover_svelte_files(workspace);
     if files.is_empty() {

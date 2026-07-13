@@ -471,19 +471,6 @@ pub(crate) fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
 
-#[inline]
-pub(crate) fn utf8_char_len(b: u8) -> usize {
-    if b < 0xC0 {
-        1
-    } else if b < 0xE0 {
-        2
-    } else if b < 0xF0 {
-        3
-    } else {
-        4
-    }
-}
-
 /// True for CSS-custom-property attribute names (`--foo`, `--some-var`).
 /// Svelte 5 treats `<Comp --css-var={...}>` as a CSS variable on the
 /// component's wrapper element, not as a typed prop — so the emit

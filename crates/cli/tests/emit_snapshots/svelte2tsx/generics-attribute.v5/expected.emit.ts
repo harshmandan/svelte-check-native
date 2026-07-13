@@ -13,13 +13,16 @@ async function $$render_cf56d9b2<A, B extends keyof A, C extends boolean>() {
         // template type-check body (incremental)
     });
     void getA;
-    return { props: /** @type {$$ComponentProps} */({}) };
+    return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ getA: typeof getA; }} */ ({}) };
 }
 $$render_cf56d9b2;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_cf56d9b2>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_cf56d9b2>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

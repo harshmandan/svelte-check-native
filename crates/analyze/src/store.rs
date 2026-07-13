@@ -36,21 +36,13 @@
 use std::collections::HashSet;
 
 use oxc_ast::ast::{
-    BindingPattern, Declaration, ImportDeclarationSpecifier, ImportOrExportKind, Statement,
+    BindingPattern, Declaration, Expression, ImportDeclarationSpecifier, ImportOrExportKind,
+    Statement, VariableDeclaration,
 };
+use oxc_span::GetSpan;
 use smol_str::SmolStr;
 
-/// All known rune names. Identifiers starting with `$` that match one of
-/// these are NOT stores — they're rune calls.
-const RUNE_NAMES: &[&str] = &[
-    "$state",
-    "$derived",
-    "$effect",
-    "$bindable",
-    "$inspect",
-    "$host",
-    "$props",
-];
+use crate::ast_walk::{WalkNode, walk_statement_descend};
 
 /// Find candidate store references in a script.
 ///
@@ -60,7 +52,172 @@ const RUNE_NAMES: &[&str] = &[
 pub fn find_store_refs(program: &oxc_ast::ast::Program<'_>, source: &str) -> Vec<SmolStr> {
     let mut bound = HashSet::new();
     collect_top_level_bindings(program, &mut bound);
-    find_store_refs_with_bindings(source, &bound)
+    let runes = collect_rune_scan_context(program, source);
+    let mut refs = find_store_refs_with_bindings(source, &bound, &runes);
+    // Mirrors upstream ImplicitStoreValues.isSvelteStoreDerivedImport:
+    // a named import of `derived` from 'svelte/store' never gets a
+    // store subscription in Svelte 5+ — `$derived(...)` in such a file
+    // is the rune, not a subscription to the imported factory.
+    if has_svelte_store_derived_import(program) {
+        refs.retain(|r| r != "$derived");
+    }
+    refs
+}
+
+/// Rune names that upstream conditionally treats as rune usage rather
+/// than a store subscription (processInstanceScriptContent.ts's
+/// `is_rune` gate). Everything else — including `$effect`, `$bindable`,
+/// `$inspect`, `$host` — is never special-cased there: those become
+/// store subscriptions whenever the base name is a real binding.
+const CONDITIONAL_RUNE_NAMES: &[&str] = &["$state", "$derived", "$props"];
+
+/// Collect the byte offsets (of the leading `$`) of every `$state` /
+/// `$derived` / `$props` identifier that sits in upstream's "is a rune,
+/// not a store" position: a direct child (callee or argument) of a call
+/// expression that is itself the initializer of a variable declarator
+/// whose binding-pattern source text contains the rune's base name.
+///
+/// Mirrors upstream `processInstanceScriptContent.ts`:
+///
+/// ```ts
+/// const is_rune =
+///     (text === '$props' || text === '$derived' || text === '$state') &&
+///     ts.isCallExpression(parent) &&
+///     ts.isVariableDeclaration(parent.parent) &&
+///     parent.parent.name.getText().includes(text.slice(1));
+/// ```
+///
+/// So `const state = $state(0)` skips (name `state` contains `state`)
+/// and `let { props } = $props()` skips (pattern text contains
+/// `props`), but `const doubled = $state.count * 2` in a component
+/// that declares `const state = writable(…)` is a store subscription
+/// of `state`, exactly like upstream.
+///
+/// `props_id_is_rune` additionally mirrors upstream's `isPropsId` /
+/// `isPropsDeclarationRune` pair: when some variable declaration binds
+/// an identifier named `props` from an initializer that is exactly
+/// `$props()`, every `$props.id()` occurrence is the rune's id getter
+/// and is filtered from store resolution
+/// (processInstanceScriptContent.ts:356-359).
+pub fn collect_rune_scan_context(
+    program: &oxc_ast::ast::Program<'_>,
+    source: &str,
+) -> RuneScanContext {
+    let mut ctx = RuneScanContext::default();
+    let on_decl = |ctx: &mut RuneScanContext, decl: &VariableDeclaration<'_>| {
+        for declarator in &decl.declarations {
+            let Some(Expression::CallExpression(call)) = declarator.init.as_ref() else {
+                continue;
+            };
+            let id_span = declarator.id.span();
+            let Some(id_text) = source.get(id_span.start as usize..id_span.end as usize) else {
+                continue;
+            };
+            // Upstream compares the initializer's exact source text
+            // against the literal string `$props()` — same here.
+            let init_span = call.span;
+            if source.get(init_span.start as usize..init_span.end as usize) == Some("$props()")
+                && pattern_mentions_props(&declarator.id)
+            {
+                ctx.props_id_is_rune = true;
+            }
+            let check = |ctx: &mut RuneScanContext, expr: &Expression<'_>| {
+                let Expression::Identifier(ident) = expr else {
+                    return;
+                };
+                let name = ident.name.as_str();
+                if CONDITIONAL_RUNE_NAMES.contains(&name) && id_text.contains(&name[1..]) {
+                    ctx.decl_offsets.insert(ident.span.start);
+                }
+            };
+            check(&mut *ctx, &call.callee);
+            for arg in &call.arguments {
+                if let Some(expr) = arg.as_expression() {
+                    check(&mut *ctx, expr);
+                }
+            }
+        }
+    };
+    for stmt in &program.body {
+        walk_statement_descend(stmt, &mut |node| match node {
+            WalkNode::Statement(Statement::VariableDeclaration(decl)) => on_decl(&mut ctx, decl),
+            WalkNode::Statement(Statement::ExportNamedDeclaration(ed)) => {
+                if let Some(Declaration::VariableDeclaration(decl)) = &ed.declaration {
+                    on_decl(&mut ctx, decl);
+                }
+            }
+            WalkNode::ForInitVarDecl(decl) => on_decl(&mut ctx, decl),
+            WalkNode::Statement(_) => {}
+        });
+    }
+    ctx
+}
+
+/// Rune-position context for the `$<ident>` scanner — see
+/// [`collect_rune_scan_context`].
+#[derive(Debug, Default)]
+pub struct RuneScanContext {
+    /// Byte offsets (of the `$`) of `$state` / `$derived` / `$props`
+    /// identifiers in upstream's `is_rune` declaration position.
+    pub decl_offsets: HashSet<u32>,
+    /// True when a `props` binding is initialised from exactly
+    /// `$props()` — makes every `$props.id()` occurrence rune usage.
+    pub props_id_is_rune: bool,
+}
+
+/// Does the binding pattern mention an identifier named `props`, as a
+/// bound name or an object-pattern key? Mirrors upstream's
+/// `isPropsDeclarationRune` trigger — `handleIdentifier` fires for any
+/// identifier named `props` visited inside the `$props()`-initialised
+/// variable declaration, which includes destructure keys and rest
+/// elements.
+fn pattern_mentions_props(pat: &BindingPattern<'_>) -> bool {
+    use oxc_ast::ast::PropertyKey;
+    match pat {
+        BindingPattern::BindingIdentifier(id) => id.name == "props",
+        BindingPattern::ObjectPattern(obj) => {
+            obj.properties.iter().any(|p| {
+                matches!(&p.key, PropertyKey::StaticIdentifier(k) if k.name == "props")
+                    || pattern_mentions_props(&p.value)
+            }) || obj
+                .rest
+                .as_ref()
+                .is_some_and(|r| pattern_mentions_props(&r.argument))
+        }
+        BindingPattern::ArrayPattern(arr) => {
+            arr.elements
+                .iter()
+                .flatten()
+                .any(|el| pattern_mentions_props(el))
+                || arr
+                    .rest
+                    .as_ref()
+                    .is_some_and(|r| pattern_mentions_props(&r.argument))
+        }
+        BindingPattern::AssignmentPattern(asn) => pattern_mentions_props(&asn.left),
+    }
+}
+
+/// True when the program has a named import binding `derived` from
+/// `'svelte/store'`. Mirrors upstream
+/// `ImplicitStoreValues.isSvelteStoreDerivedImport`, which suppresses
+/// the store-subscription declaration for exactly that import in
+/// Svelte 5+ so `$derived(...)` keeps resolving to the rune.
+pub fn has_svelte_store_derived_import(program: &oxc_ast::ast::Program<'_>) -> bool {
+    program.body.iter().any(|stmt| {
+        let Statement::ImportDeclaration(decl) = stmt else {
+            return false;
+        };
+        if decl.source.value != "svelte/store" {
+            return false;
+        }
+        decl.specifiers.iter().flatten().any(|spec| {
+            matches!(
+                spec,
+                ImportDeclarationSpecifier::ImportSpecifier(s) if s.local.name == "derived"
+            )
+        })
+    })
 }
 
 /// Like [`find_store_refs`] but accepts a pre-computed binding set,
@@ -78,7 +235,18 @@ pub fn find_store_refs(program: &oxc_ast::ast::Program<'_>, source: &str) -> Vec
 /// heuristic), so a `$<boundname>` inside a regex body could be
 /// mis-collected — rare, and only when the regex contains the literal
 /// name of a real top-level binding.
-pub fn find_store_refs_with_bindings(source: &str, bound: &HashSet<String>) -> Vec<SmolStr> {
+///
+/// `runes` carries the byte offsets (of the `$`) of `$state` /
+/// `$derived` / `$props` occurrences that are genuine rune usage per
+/// upstream's contextual gate — see [`collect_rune_scan_context`].
+/// Occurrences NOT in the set are ordinary candidates: a Svelte-4
+/// component with `const state = writable(…)` gets its `$state`
+/// subscription like any other store.
+pub fn find_store_refs_with_bindings(
+    source: &str,
+    bound: &HashSet<String>,
+    runes: &RuneScanContext,
+) -> Vec<SmolStr> {
     if bound.is_empty() {
         return Vec::new();
     }
@@ -250,12 +418,56 @@ pub fn find_store_refs_with_bindings(source: &str, bound: &HashSet<String>) -> V
         let full = &source[name_start..j];
         let ident = &full[1..];
 
-        if !RUNE_NAMES.contains(&full) && bound.contains(ident) && seen.insert(full.to_string()) {
+        // Upstream's `isPropsId` filter: with a `props = $props()`
+        // declaration in the file, `$props.id()` is the rune's id
+        // getter, never a store subscription. Upstream matches the
+        // exact member text `$props.id` (getText() comparison — no
+        // trivia between the tokens) on a zero-argument call.
+        let is_props_id_rune =
+            full == "$props" && runes.props_id_is_rune && followed_by_id_call(bytes, j);
+
+        if !runes.decl_offsets.contains(&(name_start as u32))
+            && !is_props_id_rune
+            && bound.contains(ident)
+            && seen.insert(full.to_string())
+        {
             out.push(SmolStr::from(full));
         }
         i = j;
     }
     out
+}
+
+/// True when the bytes at `pos` spell `.id()` (member name exactly
+/// `id`, then a zero-argument call; ASCII whitespace allowed around
+/// the parens, none inside the member — mirroring upstream's
+/// `parent.getText() === '$props.id'`, which fails on any trivia
+/// between `$props`, `.`, and `id`).
+fn followed_by_id_call(bytes: &[u8], pos: usize) -> bool {
+    let Some(rest) = bytes.get(pos..) else {
+        return false;
+    };
+    let Some(after_id) = rest.strip_prefix(b".id") else {
+        return false;
+    };
+    // Member name must be exactly `id` — reject `.identifier`.
+    if let Some(&next) = after_id.first()
+        && (next.is_ascii_alphanumeric() || next == b'_' || next == b'$' || next >= 0x80)
+    {
+        return false;
+    }
+    let mut k = 0;
+    while after_id.get(k).is_some_and(u8::is_ascii_whitespace) {
+        k += 1;
+    }
+    if after_id.get(k) != Some(&b'(') {
+        return false;
+    }
+    k += 1;
+    while after_id.get(k).is_some_and(u8::is_ascii_whitespace) {
+        k += 1;
+    }
+    after_id.get(k) == Some(&b')')
 }
 
 /// Collect the set of names declared at the top level of a script: imports
@@ -560,12 +772,88 @@ mod tests {
     }
 
     #[test]
-    fn rune_names_excluded() {
-        // `$state`, `$derived` etc. are runes — even if the user has a
-        // local named `state`, `$state` is the rune call.
+    fn rune_decl_positions_excluded() {
+        // `const state = $state(0)` etc. — the rune callee is the init
+        // of a declarator whose name contains the rune base, so it is
+        // NOT a store subscription (upstream's `is_rune` gate in
+        // processInstanceScriptContent.ts). The template's `{state}`
+        // refs are plain identifiers and irrelevant here.
+        let src =
+            "let { props } = $props();\nlet state = $state(0);\nlet derived = $derived(state * 2);";
+        assert!(refs(src).is_empty());
+    }
+
+    #[test]
+    fn store_named_like_rune_subscribes_outside_rune_decl() {
+        // A Svelte-4 store literally named `state`: `$state.count` is a
+        // subscription to it, not rune usage — the occurrence is not a
+        // call-init of a related declarator. Upstream emits
+        // `let $state = __sveltets_2_store_get(state);` here.
+        let src = "const state = writable({ count: 0 });\nconst doubled = $state.count * 2;";
+        assert_eq!(refs(src), vec!["$state"]);
+    }
+
+    #[test]
+    fn bare_rune_lookalike_refs_subscribe() {
+        // Upstream's stores-looking-like-runes sample: bare (non-call)
+        // `$props` / `$state` / `$derived` references with same-named
+        // consts all become store subscriptions.
+        let src = "const props = null;\n$props;\nconst state = null;\n$state;\nconst derived = null;\n$derived;";
+        assert_eq!(refs(src), vec!["$props", "$state", "$derived"]);
+    }
+
+    #[test]
+    fn unrelated_decl_name_keeps_rune_lookalike_as_store() {
+        // `const x = $state(0)` — the declarator name `x` does not
+        // contain `state`, so upstream does NOT treat the occurrence as
+        // a rune; with a top-level `state` binding it subscribes.
         let src = "let state = null;\nconst x = $state(0);";
-        let r = refs(src);
-        assert!(!r.iter().any(|s| s == "$state"));
+        assert_eq!(refs(src), vec!["$state"]);
+    }
+
+    #[test]
+    fn effect_named_binding_subscribes() {
+        // Upstream never special-cases `$effect` / `$bindable` /
+        // `$inspect` / `$host` in store resolution — a binding named
+        // `effect` makes `$effect` a store subscription.
+        let src = "let effect = null;\nconst x = $effect;";
+        assert_eq!(refs(src), vec!["$effect"]);
+    }
+
+    #[test]
+    fn props_id_is_rune_when_props_declared_from_props_rune() {
+        // Upstream's isPropsId / isPropsDeclarationRune pair: with a
+        // `props` binding initialised from exactly `$props()`,
+        // `$props.id()` is the rune's id getter — no subscription.
+        for decl in [
+            "let props = $props();",
+            "let { props } = $props();",
+            "let {...props} = $props();",
+        ] {
+            let src = format!("{decl}\nlet id = $props.id();");
+            assert!(refs(&src).is_empty(), "expected no refs for: {decl}");
+        }
+    }
+
+    #[test]
+    fn props_id_subscribes_when_props_not_rune_initialised() {
+        // `let props = {};` — no $props() initialiser, so `$props.id()`
+        // resolves as a store subscription of `props`. Upstream emits
+        // `let $props = __sveltets_2_store_get(props);` here.
+        let src = "let props = {};\nlet id = $props.id();";
+        assert_eq!(refs(src), vec!["$props"]);
+    }
+
+    #[test]
+    fn svelte_store_derived_import_never_subscribes() {
+        // `import { derived } from 'svelte/store'` + `$derived(...)` —
+        // mirrors upstream ImplicitStoreValues.isSvelteStoreDerivedImport
+        // (Svelte 5+): no subscription, `$derived` stays the rune.
+        let src = "import { derived } from 'svelte/store';\nlet a = $derived(1);";
+        assert!(refs(src).is_empty());
+        // A `derived` import from anywhere else DOES subscribe.
+        let src2 = "import { derived } from './stores';\nlet a = $derived(1);";
+        assert_eq!(refs(src2), vec!["$derived"]);
     }
 
     #[test]

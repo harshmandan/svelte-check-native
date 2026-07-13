@@ -27,7 +27,7 @@ use oxc_ast::ast::{
     ArrayPattern, AssignmentExpression, AssignmentTarget, BindingPattern, CallExpression,
     ChainElement, Class, ClassBody, ClassElement, Expression, ForStatementInit,
     IdentifierReference, LabeledStatement, ObjectExpression, ObjectPattern, ObjectPropertyKind,
-    PropertyKey, SimpleAssignmentTarget, Statement, UpdateExpression, VariableDeclaration,
+    Program, PropertyKey, SimpleAssignmentTarget, Statement, UpdateExpression, VariableDeclaration,
     VariableDeclarator,
 };
 use oxc_span::GetSpan;
@@ -159,8 +159,10 @@ pub fn build_with_template_and_runes(
     source: &str,
     runes: bool,
     compat: crate::compat::CompatFeatures,
+    module_program: Option<&Program<'_>>,
+    instance_program: Option<&Program<'_>>,
 ) -> ScopeTree {
-    let mut tree = build_with_template(doc, fragment, source);
+    let mut tree = build_with_template(doc, fragment, source, module_program, instance_program);
     if !runes {
         promote_non_runes_exports(&mut tree);
     }
@@ -273,10 +275,17 @@ fn collect_preceding_template_ignores(source: &str, script_start: u32) -> Vec<Sm
 /// references in attribute expressions / interpolations / directive
 /// values and the implicit reassignments from `bind:*` directives.
 /// Callers that only need script-side information can use [`build`].
+/// `module_program` / `instance_program` are the pre-parsed bodies of
+/// the corresponding script sections — the caller (`walk_parsed`)
+/// parses each section exactly once and shares the `Program` between
+/// this builder and the script-AST rules. A `Some` script section is
+/// always paired with a `Some` program.
 pub fn build_with_template(
     doc: &Document<'_>,
     fragment: Option<&svn_parser::ast::Fragment>,
     source: &str,
+    module_program: Option<&Program<'_>>,
+    instance_program: Option<&Program<'_>>,
 ) -> ScopeTree {
     let mut tree_builder = TreeBuilder::new();
 
@@ -285,12 +294,16 @@ pub fn build_with_template(
     // upstream's behavior — `create_scopes` always returns a scope
     // even for an empty Program body.
     let module_root = tree_builder.new_scope(None);
-    if let Some(script) = &doc.module_script {
-        tree_builder.build_script(script, module_root);
+    if let Some(script) = &doc.module_script
+        && let Some(program) = module_program
+    {
+        tree_builder.build_script(script, program, module_root);
     }
 
     let instance_root = tree_builder.new_scope(Some(module_root));
-    if let Some(script) = &doc.instance_script {
+    if let Some(script) = &doc.instance_script
+        && let Some(program) = instance_program
+    {
         // A `<!-- svelte-ignore CODE -->` comment placed in the
         // template immediately before `<script>` applies its codes
         // to the whole instance-script body. Upstream wires this up
@@ -298,7 +311,7 @@ pub fn build_with_template(
         // root Fragment; our sections parser extracts it separately,
         // so we have to bridge the ignore forward explicitly.
         let leading = collect_preceding_template_ignores(doc.source, script.open_tag_range.start);
-        tree_builder.build_script_as_instance(script, instance_root, &leading);
+        tree_builder.build_script_as_instance(script, program, instance_root, &leading);
     }
 
     if let Some(frag) = fragment {
@@ -340,6 +353,13 @@ struct TreeBuilder {
     /// instance parse (see the matching `ScopeTree` fields).
     nonrunes_export_idents: Vec<SmolStr>,
     nonrunes_export_specs: Vec<(SmolStr, Option<SmolStr>)>,
+    /// Arena reused across the per-expression template mini-parses in
+    /// `walk_expr_range`. Templates carry hundreds of tiny `{expr}`
+    /// slices per file; constructing a fresh oxc Allocator for each
+    /// costs more than the parse itself, so one arena is taken out of
+    /// this slot per parse, `reset()` (which keeps its largest chunk),
+    /// and put back. `None` only while a parse is in flight.
+    expr_alloc: Option<oxc_allocator::Allocator>,
 }
 
 struct PendingRef {
@@ -404,6 +424,7 @@ impl TreeBuilder {
             custom_element_props_ignored: Vec::new(),
             nonrunes_export_idents: Vec::new(),
             nonrunes_export_specs: Vec::new(),
+            expr_alloc: None,
         }
     }
 
@@ -661,6 +682,23 @@ impl TreeBuilder {
         let Some(slice) = ctx.source.get(range.start as usize..range.end as usize) else {
             return;
         };
+        // Fast path: the dominant template-expression shape is a bare
+        // identifier (`{name}`, `bind:value={name}`, …). Parsing one
+        // with oxc yields exactly one Read-kind `PendingRef` with no
+        // closure/state/ignore flags — the same record the Shorthand
+        // fast path in `walk_template_attr` makes — so record it
+        // directly and skip the parser. Reserved words fall through
+        // to the parser: oxc treats them as literals (`true`, `null`,
+        // `this`) or rejects them (`let`, `await`, …), so they must
+        // not be recorded as identifier references.
+        if let Some((tok_start, token)) = bare_identifier(slice)
+            && !is_reserved_word(token)
+        {
+            let abs_start = range.start + tok_start as u32;
+            let tok_range = Range::new(abs_start, abs_start + token.len() as u32);
+            self.record_template_ref(token, tok_range, ctx, flags);
+            return;
+        }
         // Template expression slices that start with `{` are object
         // literals in Svelte's grammar (`use:foo={{ a: b }}`,
         // `style={{ x: y }}`), but at program-body level oxc parses
@@ -681,7 +719,9 @@ impl TreeBuilder {
         } else {
             (slice, 0)
         };
-        let alloc = oxc_allocator::Allocator::default();
+        // Reuse one arena across all of this builder's expression
+        // parses (see the `expr_alloc` field doc).
+        let mut alloc = self.expr_alloc.take().unwrap_or_default();
         let parsed = parse_script_body(&alloc, effective_slice, ctx.lang);
         let start_depth = self.scopes[ctx.scope.0 as usize].function_depth;
         let mut walker = ScriptWalker {
@@ -720,7 +760,8 @@ impl TreeBuilder {
             ctx.in_control_flow,
         );
         drop(parsed);
-        drop(alloc);
+        alloc.reset();
+        self.expr_alloc = Some(alloc);
     }
 
     /// Declare each identifier in a binding pattern (e.g. the body of
@@ -842,8 +883,13 @@ impl TreeBuilder {
         });
     }
 
-    fn build_script(&mut self, script: &ScriptSection<'_>, root_scope: ScopeId) {
-        self.build_script_inner(script, root_scope, false, &[]);
+    fn build_script(
+        &mut self,
+        script: &ScriptSection<'_>,
+        program: &Program<'_>,
+        root_scope: ScopeId,
+    ) {
+        self.build_script_inner(script, program, root_scope, false, &[]);
     }
 }
 
@@ -1055,21 +1101,23 @@ impl TreeBuilder {
     fn build_script_as_instance(
         &mut self,
         script: &ScriptSection<'_>,
+        program: &Program<'_>,
         root_scope: ScopeId,
         leading_ignores: &[SmolStr],
     ) {
-        self.build_script_inner(script, root_scope, true, leading_ignores);
+        self.build_script_inner(script, program, root_scope, true, leading_ignores);
     }
 
+    /// `program` is the pre-parsed body of `script` — parsed once by
+    /// `walk_parsed` and shared with the script-AST rules.
     fn build_script_inner(
         &mut self,
         script: &ScriptSection<'_>,
+        program: &Program<'_>,
         root_scope: ScopeId,
         is_instance: bool,
         leading_ignores: &[SmolStr],
     ) {
-        let alloc = oxc_allocator::Allocator::default();
-        let parsed = parse_script_body(&alloc, script.content, script.lang);
         let base = script.content_range.start;
         let start_depth = self.scopes[root_scope.0 as usize].function_depth;
         // Pre-collect svelte-ignore comments by source position so
@@ -1077,7 +1125,7 @@ impl TreeBuilder {
         // O(log n) later. Spans are absolute byte offsets into the
         // full .svelte source (not the script-local span).
         let mut script_ignore_comments: Vec<IgnoreSpan> = Vec::new();
-        for c in &parsed.program.comments {
+        for c in &program.comments {
             let text = &script.content[c.span.start as usize..c.span.end as usize];
             let Some(body) = strip_comment_delimiters(text) else {
                 continue;
@@ -1124,20 +1172,20 @@ impl TreeBuilder {
         if !leading_ignores.is_empty() {
             walker.ignore_frames.push(leading_ignores.to_vec());
         }
-        for stmt in &parsed.program.body {
+        for stmt in &program.body {
             walker.visit_stmt(stmt);
         }
         if !leading_ignores.is_empty() {
             walker.ignore_frames.pop();
         }
         // Harvest non-runes `export` facts from the instance script's
-        // top level while `parsed` is still alive — so the later
-        // `promote_non_runes_exports` pass reads owned `SmolStr` facts
-        // instead of re-parsing the entire instance body. Names only;
-        // the resolve / `Var|Let` gate runs later against the built
-        // tree. Mirrors the old re-parse's statement matching exactly.
+        // top level — so the later `promote_non_runes_exports` pass
+        // reads owned `SmolStr` facts instead of re-parsing the entire
+        // instance body. Names only; the resolve / `Var|Let` gate runs
+        // later against the built tree. Mirrors the old re-parse's
+        // statement matching exactly.
         if is_instance {
-            for stmt in &parsed.program.body {
+            for stmt in &program.body {
                 let Statement::ExportNamedDeclaration(end) = stmt else {
                     continue;
                 };
@@ -1173,10 +1221,6 @@ impl TreeBuilder {
                 }
             }
         }
-        // oxc types borrow from `alloc`; keep it alive until the walk
-        // finishes. Nothing we stash below borrows from it.
-        drop(parsed);
-        drop(alloc);
     }
 
     fn finish(mut self, module_root: ScopeId, instance_root: ScopeId) -> ScopeTree {
@@ -1357,6 +1401,87 @@ fn synthesize_store_subs(
     for i in all_moved.into_iter().rev() {
         unresolved.swap_remove(i);
     }
+}
+
+/// `Some((byte_offset_of_token, token))` when `slice` consists of
+/// exactly one ASCII identifier (`[A-Za-z_$][A-Za-z0-9_$]*`)
+/// surrounded only by ASCII whitespace. Anything else — operators,
+/// comments, unicode identifiers/whitespace — returns `None` so the
+/// caller falls through to a real parse.
+fn bare_identifier(slice: &str) -> Option<(usize, &str)> {
+    let bytes = slice.as_bytes();
+    let start = bytes.iter().position(|b| !b.is_ascii_whitespace())?;
+    if !(bytes[start].is_ascii_alphabetic() || matches!(bytes[start], b'_' | b'$')) {
+        return None;
+    }
+    let mut end = start + 1;
+    while end < bytes.len()
+        && (bytes[end].is_ascii_alphanumeric() || matches!(bytes[end], b'_' | b'$'))
+    {
+        end += 1;
+    }
+    if bytes[end..].iter().all(|b| b.is_ascii_whitespace()) {
+        Some((start, &slice[start..end]))
+    } else {
+        None
+    }
+}
+
+/// Words that do NOT parse as a plain identifier reference in module
+/// (strict-mode) code: ES keywords, literal keywords (`true`, `null`,
+/// `this`, …), strict-mode reserved words, and module-context `await`.
+/// The bare-identifier fast path must send these to the parser, which
+/// records no reference for them.
+fn is_reserved_word(token: &str) -> bool {
+    matches!(
+        token,
+        "await"
+            | "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "false"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "implements"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "interface"
+            | "let"
+            | "new"
+            | "null"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "return"
+            | "static"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+            | "yield"
+    )
 }
 
 fn resolve_by_name(scopes: &[Scope], from: ScopeId, name: &str) -> Option<BindingId> {

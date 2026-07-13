@@ -45,6 +45,14 @@ pub(crate) fn rewrite_svelte_imports_for_collisions(
     runes_modules: &HashSet<PathBuf>,
 ) -> Option<String> {
     let file_dir = file.parent()?;
+    // Cheap pre-filter before the full oxc parse: every rewritable
+    // specifier ends in the literal `.svelte`, and a specifier is a
+    // substring of the source text — a file that never mentions
+    // `.svelte` cannot need the rewrite. Skips the parse for the vast
+    // majority of user scripts in workspaces that have a runes module.
+    if !source.contains(".svelte") {
+        return None;
+    }
     // Parse with the script-lang the file's extension implies; both TS
     // and JS share import/export syntax for our purposes (the source-
     // string literal in an ImportDeclaration is the same node either

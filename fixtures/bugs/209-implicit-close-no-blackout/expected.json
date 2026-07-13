@@ -1,0 +1,11 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 1, "column": 10, "code": 2322 }
+    ],
+    "warnings": [
+        { "file": "input.svelte", "line": 4, "column": 4, "code": "element_implicitly_closed" },
+        { "file": "input.svelte", "line": 4, "column": 11, "code": "element_implicitly_closed" },
+        { "file": "input.svelte", "line": 5, "column": 5, "code": "element_implicitly_closed" }
+    ],
+    "_note": "`<ul><li>a<li>b</ul>` and `<div><p>text</div>` are valid Svelte: upstream auto-closes per closing_tag_omitted (element.js) and emits only element_implicitly_closed WARNINGS — verified against svelte/compiler, which reports exactly these three warnings (1-based lines 5:4, 5:11, 6:5) and no error. The parser used to fire fatal MalformedOpenTag/UnterminatedElement instead, marking the file broken: one phantom svelte error, every tsgo diagnostic suppressed, and the lint warnings gated off. This locks the full recovery: the real TS2322 surfaces AND the three warnings reach CLI output."
+}

@@ -37,7 +37,7 @@ async function $$render_3d709d05() {
                 return null as any;
             };
             void hoistable1;
-            const hoistable2 = (bar: any): any => {
+            const hoistable2 = (bar): any => {
                 { svelteHTML.createElement("div", {});                     (bar);
                 }
                 void bar;
@@ -51,7 +51,7 @@ async function $$render_3d709d05() {
                 return null as any;
             };
             void hoistable3;
-            const hoistable4 = (foo: any): any => {
+            const hoistable4 = (foo): any => {
                 { svelteHTML.createElement("div", {});                     (foo);
                 }
                 void foo;
@@ -89,7 +89,7 @@ async function $$render_3d709d05() {
                 return null as any;
             };
             void hoistable9;
-            const hoistable10 = (foo: any): any => {
+            const hoistable10 = (foo): any => {
                 const bar = foo;
                 void bar;
                 (bar);

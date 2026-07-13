@@ -49,23 +49,21 @@ const LEGACY_RENAMES: &[(&str, &str)] = &[
     ("unused-export-let", "export_let_unused"),
 ];
 
-/// Walk the siblings of `target` in `nodes`, collecting any
+/// Walk the siblings preceding index `idx` in `nodes`, collecting any
 /// `svelte-ignore` codes found in preceding `Comment` nodes (with
-/// intervening whitespace `Text` allowed). Stops at any non-
-/// Comment / non-Text sibling.
+/// intervening `Text` allowed — whitespace or not). Stops at any
+/// non-Comment / non-Text sibling. Mirrors the upstream analyze
+/// visitor's backward walk (`else if (prev.type !== 'Text') break`),
+/// where every Text node continues the chain.
 ///
 /// Returns the deduplicated list of ignore codes as SmolStr suitable
 /// for pushing into `LintContext::ignore_stack`.
 pub fn collect_preceding_comment_ignores(
     nodes: &[Node],
-    target: &Node,
+    idx: usize,
     ctx: &mut LintContext<'_>,
 ) -> Vec<SmolStr> {
-    let source = ctx.source;
     let mut result: Vec<SmolStr> = Vec::new();
-    let Some(idx) = nodes.iter().position(|n| std::ptr::eq(n, target)) else {
-        return result;
-    };
     if idx == 0 {
         return result;
     }
@@ -81,12 +79,7 @@ pub fn collect_preceding_comment_ignores(
                     }
                 }
             }
-            Node::Text(t) => {
-                // Only whitespace-only text continues the chain.
-                if !t.range.slice(source).chars().all(char::is_whitespace) {
-                    break;
-                }
-            }
+            Node::Text(_) => {}
             _ => break,
         }
     }
@@ -127,57 +120,35 @@ fn parse_ignore_codes_emit(
 ) -> Vec<SmolStr> {
     let mut out = Vec::new();
     if ctx.runes {
-        // Split on commas. We walk the string manually to track byte
-        // offsets for the diagnostic ranges.
-        let mut i = 0usize;
-        let bytes = rest.as_bytes();
-        while i < bytes.len() {
-            // Skip leading whitespace inside the segment.
-            let seg_start = i;
-            while i < bytes.len() && bytes[i] != b',' {
-                i += 1;
-            }
-            let segment = &rest[seg_start..i];
-            if i < bytes.len() {
-                i += 1; // consume comma
-            }
-            // Extract the leading identifier from segment.
-            let leading_ws: usize = segment
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .map(|c| c.len_utf8())
-                .sum();
-            let tok_source = &segment[leading_ws..];
-            let token_len: usize = tok_source
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '$')
-                .map(|c| c.len_utf8())
-                .sum();
-            if token_len == 0 {
-                continue;
-            }
-            let code = &tok_source[..token_len];
-            let token_abs_start = rest_base_offset + (seg_start as u32) + (leading_ws as u32);
-            let token_abs_end = token_abs_start + token_len as u32;
-            if is_known_code(code) {
-                out.push(SmolStr::new(code));
-                continue;
-            }
-            // Upstream fires legacy_code / unknown_code but does NOT
-            // push the rewritten form into the ignore list — the
-            // user has to update their code to the new name for the
-            // suppression to take effect.
-            let replacement = legacy_rename(code)
-                .map(str::to_string)
-                .unwrap_or_else(|| code.replace('-', "_"));
-            let range = Range::new(token_abs_start, token_abs_end);
-            if is_known_code(&replacement) {
-                let msg = messages::legacy_code(code, &replacement);
-                ctx.emit(Code::legacy_code, msg, range);
+        // Mirrors upstream's `/([\w$-]+)(,)?/gm` loop: each token is
+        // processed (known → suppression list, unknown → warning),
+        // then parsing STOPS at the first token not immediately
+        // followed by a comma — everything after it is prose.
+        for (start, token, followed_by_comma) in runes_ignore_tokens(rest) {
+            if is_known_code(token) {
+                out.push(SmolStr::new(token));
             } else {
-                let suggestion = fuzzymatch_known_code(code);
-                let msg = messages::unknown_code(code, suggestion);
-                ctx.emit(Code::unknown_code, msg, range);
+                // Upstream fires legacy_code / unknown_code but does
+                // NOT push the rewritten form into the ignore list —
+                // the user has to update their code to the new name
+                // for the suppression to take effect.
+                let token_abs_start = rest_base_offset + start as u32;
+                let token_abs_end = token_abs_start + token.len() as u32;
+                let replacement = legacy_rename(token)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| token.replace('-', "_"));
+                let range = Range::new(token_abs_start, token_abs_end);
+                if is_known_code(&replacement) {
+                    let msg = messages::legacy_code(token, &replacement);
+                    ctx.emit(Code::legacy_code, msg, range);
+                } else {
+                    let suggestion = fuzzymatch_known_code(token);
+                    let msg = messages::unknown_code(token, suggestion);
+                    ctx.emit(Code::unknown_code, msg, range);
+                }
+            }
+            if !followed_by_comma {
+                break;
             }
         }
     } else {
@@ -230,26 +201,21 @@ pub fn parse_ignore_codes_public(rest: &str, runes: bool) -> Vec<SmolStr> {
 fn parse_ignore_codes(rest: &str, runes: bool) -> Vec<SmolStr> {
     let mut out = Vec::new();
     if runes {
-        // Split on commas. Must produce the SAME list as
-        // `parse_ignore_codes_emit`'s runes path (the authoritative one
-        // run during linting): an empty segment is skipped (not a parse
-        // stop), the token uses ASCII word-chars, and only KNOWN codes
-        // enter the suppression list — legacy/unknown codes are reported
-        // by the emit variant but do not suppress until renamed.
-        for raw in rest.split(',') {
-            let token = raw.trim();
-            let code: String = token
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '$')
-                .collect();
-            if code.is_empty() {
-                continue;
-            }
-            if is_known_code(&code) {
-                let sm = SmolStr::new(&code);
+        // Must produce the SAME list as `parse_ignore_codes_emit`'s
+        // runes path (the authoritative one run during linting): each
+        // token is considered in turn, only KNOWN codes enter the
+        // suppression list (legacy/unknown codes are reported by the
+        // emit variant but do not suppress until renamed), and parsing
+        // stops at the first token not immediately followed by a comma.
+        for (_, token, followed_by_comma) in runes_ignore_tokens(rest) {
+            if is_known_code(token) {
+                let sm = SmolStr::new(token);
                 if !out.contains(&sm) {
                     out.push(sm);
                 }
+            }
+            if !followed_by_comma {
+                break;
             }
         }
     } else {
@@ -295,6 +261,38 @@ fn parse_ignore_codes(rest: &str, runes: bool) -> Vec<SmolStr> {
 
 fn is_ident_char(b: u8) -> bool {
     (b as char).is_alphanumeric() || matches!(b, b'_' | b'-' | b'$')
+}
+
+/// Byte class of upstream's runes-mode token pattern `[\w$-]` (JS `\w`
+/// is ASCII-only).
+fn is_runes_token_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$' | b'-')
+}
+
+/// Iterate the `svelte-ignore` tail the way upstream's runes-mode
+/// regex `/([\w$-]+)(,)?/gm` does: yields `(byte_offset, token,
+/// followed_by_comma)` for each token run, where `followed_by_comma`
+/// is true only when a `,` IMMEDIATELY follows the token (no
+/// whitespace between). Callers stop consuming after the first token
+/// yielded with `followed_by_comma == false` — everything after it is
+/// prose.
+fn runes_ignore_tokens(rest: &str) -> impl Iterator<Item = (usize, &str, bool)> {
+    let bytes = rest.as_bytes();
+    let mut i = 0usize;
+    std::iter::from_fn(move || {
+        while i < bytes.len() && !is_runes_token_byte(bytes[i]) {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return None;
+        }
+        let start = i;
+        while i < bytes.len() && is_runes_token_byte(bytes[i]) {
+            i += 1;
+        }
+        let followed_by_comma = bytes.get(i) == Some(&b',');
+        Some((start, &rest[start..i], followed_by_comma))
+    })
 }
 
 /// Closest known code name to `input` via Levenshtein similarity.

@@ -7,8 +7,8 @@
 # manual review pass confirms no behavior gap or test gap.
 
 [language-tools]
-sha = "32556dbfc6527b467c0edfb26a08944d77c3da8c"
-note = "svelte-check@4.4.x — Svelte 5 declaration tags (#3033), snippet hoistability (#3032), slot-named prop in snippets (#3030), --config (#3031/#3066), tsgo experimental-api sanity tests"
+sha = "d6536401ce7d367c94d0710e24255a6728d3c0ed"
+note = "svelte-check@4.7.2 — zero-config +error.svelte props (#3076), tsgo bin via package.json (#3074), tsconfig errors in experimental-api (#3070)"
 
 [svelte-compiler]
 # The Svelte compiler repo tracked locally under

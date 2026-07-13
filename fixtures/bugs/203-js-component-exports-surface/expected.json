@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 5, "column": 8, "code": 2367 }
+    ],
+    "_note": "JS-mode render functions return the full { props, events, slots, bindings, exports } projection (upstream createRenderFunction.ts returns all five fields for JS and TS alike), and the JS default export projects the exports surface into Component's second type parameter. Child.svelte's `export const bar = true` therefore types `comp.bar` as boolean at the TS consumer, firing TS2367 on the boolean/string comparison — previously the JS return carried only { props }, Exports defaulted to {}, `comp.bar` widened to any and the misuse went undiagnosed. `comp.test()` assigning to `number` cleanly locks the typed exports surface's positive side."
+}

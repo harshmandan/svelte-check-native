@@ -658,7 +658,11 @@ fn parse_quoted_value(
             chunk_start = scanner.pos();
             continue;
         }
-        scanner.advance_char();
+        // Neither the closing quote nor `{` (both handled above) —
+        // hop to the next occurrence of either in one memchr2 sweep.
+        // Long literal values (Tailwind class strings) previously
+        // paid a peek+advance per byte here.
+        scanner.skip_until2(quote, b'{');
     }
 
     // Unterminated string — consume to EOF and return what we have.

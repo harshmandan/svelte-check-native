@@ -30,6 +30,7 @@ use crate::blocks::{
     parse_key_header, parse_snippet_header, peek_and_consume_terminator,
 };
 use crate::error::ParseError;
+use crate::html5::closing_tag_omitted;
 use crate::mustache::find_mustache_end;
 use crate::scanner::Scanner;
 
@@ -39,7 +40,19 @@ use crate::scanner::Scanner;
 /// The returned [`Fragment`] has `range == range`.
 pub fn parse_template(source: &str, range: Range) -> (Fragment, Vec<ParseError>) {
     let mut parser = TemplateParser::new(source, range);
-    let (nodes, _stop) = parser.parse_fragment_until(None);
+    let mut nodes = Vec::new();
+    // A terminator surfacing at top level is a stray `{/...}` / `{:...}`
+    // with no open block — upstream fires block_unexpected_close /
+    // block_invalid_continuation_placement. Record the error and resume
+    // so the rest of the template isn't silently dropped.
+    loop {
+        let (mut more, stop) = parser.parse_fragment_until(None);
+        nodes.append(&mut more);
+        match stop {
+            None => break,
+            Some(term) => parser.push_stray_terminator_error(&term),
+        }
+    }
     (
         Fragment {
             nodes,
@@ -81,11 +94,43 @@ pub fn parse_all_template_runs(source: &str, runs: &[Range]) -> (Fragment, Vec<P
     )
 }
 
+/// Frame in the open-element stack, mirroring the roles upstream's
+/// parser stack plays in the implicit-close walks
+/// (`1-parse/state/element.js`).
+enum OpenFrame {
+    /// Plain HTML element — may be implicitly closed (upstream pops it
+    /// with only the `element_implicitly_closed` warning).
+    Element(SmolStr),
+    /// Component or `svelte:*` element — a valid target for an ancestor
+    /// closing tag, but never implicitly closable itself (upstream errors
+    /// `element_invalid_closing_tag` instead of popping).
+    Component(SmolStr),
+    /// `{#...}` block boundary — the ancestor walk never crosses it
+    /// (upstream errors `block_unexpected_close` /
+    /// `element_invalid_closing_tag`).
+    Block,
+}
+
 struct TemplateParser<'src> {
     scanner: Scanner<'src>,
     fragment_range: Range,
     fragment_end: u32,
     errors: Vec<ParseError>,
+    /// Source span of the most recently consumed block terminator
+    /// (`{:...}` / `{/...}`). [`Self::parse_fragment_until`] records it as
+    /// it consumes the terminator so callers that receive one where none
+    /// is expected can report an accurately-positioned error.
+    last_terminator_range: Range,
+    /// Open elements/blocks enclosing the current parse position, mirroring
+    /// the recursion. Consulted by the HTML implicit-close checks.
+    open_elements: Vec<OpenFrame>,
+    /// Set when [`Self::parse_fragment_until`] stops because the current
+    /// element was implicitly closed (HTML `closing_tag_omitted` rules or
+    /// an ancestor's closing tag). Only ever set while a `stop_element` is
+    /// active, so only [`Self::parse_children_until`] consumes it: no
+    /// closing tag is expected and no error is recorded — upstream emits
+    /// just the `element_implicitly_closed` warning (svn-lint's concern).
+    pending_auto_close: bool,
 }
 
 impl<'src> TemplateParser<'src> {
@@ -97,7 +142,22 @@ impl<'src> TemplateParser<'src> {
             fragment_range: range,
             fragment_end: range.end,
             errors: Vec::new(),
+            last_terminator_range: Range::new(range.start, range.start),
+            open_elements: Vec::new(),
+            pending_auto_close: false,
         }
+    }
+
+    /// Report a block terminator that surfaced where no block is open —
+    /// at template top level or inside an element's children. Mirrors
+    /// upstream: a stray `{/...}` fires `block_unexpected_close`; a stray
+    /// `{:...}` fires `block_invalid_continuation_placement`.
+    fn push_stray_terminator_error(&mut self, term: &BlockTerminator) {
+        let range = self.last_terminator_range;
+        self.errors.push(match term {
+            BlockTerminator::Close { .. } => ParseError::UnexpectedBlockClose { range },
+            _ => ParseError::InvalidBlockContinuation { range },
+        });
     }
 
     fn at_fragment_end(&self) -> bool {
@@ -159,8 +219,10 @@ impl<'src> TemplateParser<'src> {
         while !self.at_fragment_end() {
             // Block-level terminator: `{:...}` or `{/...}`.
             if self.scanner.starts_with("{:") || self.scanner.starts_with("{/") {
+                let term_start = self.scanner.pos();
                 if let Some(term) = peek_and_consume_terminator(&mut self.scanner, &mut self.errors)
                 {
+                    self.last_terminator_range = Range::new(term_start, self.scanner.pos());
                     return (nodes, Some(term));
                 }
                 // Malformed terminator — error was recorded; advance to
@@ -285,6 +347,16 @@ impl<'src> TemplateParser<'src> {
                     if self.peek_closing_tag_matches(tag) {
                         return (nodes, None);
                     }
+                    // A closing tag for an open ancestor implicitly closes
+                    // this element: upstream pops plain-element parents
+                    // with only the element_implicitly_closed warning
+                    // until the names match (`<div><p>text</div>`). Left
+                    // unconsumed — the matching ancestor's own frame
+                    // consumes it.
+                    if self.closing_tag_matches_open_ancestor() {
+                        self.pending_auto_close = true;
+                        return (nodes, None);
+                    }
                 }
                 self.errors.push(ParseError::MalformedOpenTag {
                     range: Range::new(self.scanner.pos(), self.scanner.pos() + 2),
@@ -299,6 +371,17 @@ impl<'src> TemplateParser<'src> {
             }
 
             if self.scanner.peek_byte() == Some(b'<') {
+                // A new opening tag implicitly closes the current element
+                // when HTML omits its closing tag (`<li>a<li>` — upstream
+                // checks closing_tag_omitted(parent, tag) before pushing
+                // the new element). Left unconsumed — it parses as the
+                // parent's next child.
+                if let Some(stop) = stop_element
+                    && self.open_tag_implicitly_closes(stop)
+                {
+                    self.pending_auto_close = true;
+                    return (nodes, None);
+                }
                 if let Some(node) = self.parse_element_or_component() {
                     nodes.push(node);
                 }
@@ -336,12 +419,22 @@ impl<'src> TemplateParser<'src> {
         let name_end = self.scanner.pos();
         let name = &self.scanner.source()[name_start as usize..name_end as usize];
 
+        // Known blocks bracket their bodies with a Block frame: the
+        // implicit-close ancestor walk must not cross a block boundary
+        // (upstream: block nodes aren't RegularElements, so the close
+        // walk errors instead of popping through them).
+        let parse_known = |p: &mut Self, kind: fn(&mut Self, u32) -> Option<Node>| {
+            p.open_elements.push(OpenFrame::Block);
+            let node = kind(p, block_start);
+            p.open_elements.pop();
+            node
+        };
         match name {
-            "if" => self.parse_if_block(block_start),
-            "each" => self.parse_each_block(block_start),
-            "await" => self.parse_await_block(block_start),
-            "key" => self.parse_key_block(block_start),
-            "snippet" => self.parse_snippet_block(block_start),
+            "if" => parse_known(self, Self::parse_if_block),
+            "each" => parse_known(self, Self::parse_each_block),
+            "await" => parse_known(self, Self::parse_await_block),
+            "key" => parse_known(self, Self::parse_key_block),
+            "snippet" => parse_known(self, Self::parse_snippet_block),
             other => {
                 self.errors.push(ParseError::UnsupportedBlock {
                     range: Range::new(block_start, self.scanner.pos()),
@@ -412,14 +505,14 @@ impl<'src> TemplateParser<'src> {
             }
         }
 
-        Some(Node::IfBlock(build_if_block(
+        Some(Node::IfBlock(Box::new(build_if_block(
             condition_range,
             consequent,
             elseif_arms,
             alternate,
             block_start,
             self.scanner.pos(),
-        )))
+        ))))
     }
 
     fn parse_each_block(&mut self, block_start: u32) -> Option<Node> {
@@ -458,14 +551,14 @@ impl<'src> TemplateParser<'src> {
             }
         }
 
-        Some(Node::EachBlock(build_each_block(
+        Some(Node::EachBlock(Box::new(build_each_block(
             expr_range,
             as_clause,
             body,
             alternate,
             block_start,
             self.scanner.pos(),
-        )))
+        ))))
     }
 
     fn parse_await_block(&mut self, block_start: u32) -> Option<Node> {
@@ -554,14 +647,14 @@ impl<'src> TemplateParser<'src> {
             }
         }
 
-        Some(Node::AwaitBlock(build_await_block(
+        Some(Node::AwaitBlock(Box::new(build_await_block(
             expr_range,
             pending,
             then_branch,
             catch_branch,
             block_start,
             self.scanner.pos(),
-        )))
+        ))))
     }
 
     fn finish_await_block(&mut self, term: Option<BlockTerminator>, block_start: u32) {
@@ -592,12 +685,12 @@ impl<'src> TemplateParser<'src> {
                 });
             }
         }
-        Some(Node::KeyBlock(build_key_block(
+        Some(Node::KeyBlock(Box::new(build_key_block(
             expr_range,
             body,
             block_start,
             self.scanner.pos(),
-        )))
+        ))))
     }
 
     fn parse_snippet_block(&mut self, block_start: u32) -> Option<Node> {
@@ -616,26 +709,25 @@ impl<'src> TemplateParser<'src> {
                 });
             }
         }
-        Some(Node::SnippetBlock(build_snippet_block(
+        Some(Node::SnippetBlock(Box::new(build_snippet_block(
             name,
             params_range,
             body,
             block_start,
             self.scanner.pos(),
-        )))
+        ))))
     }
 
     fn parse_text(&mut self) -> Node {
         let start = self.scanner.pos();
-        while !self.at_fragment_end() {
-            let b = match self.scanner.peek_byte() {
-                Some(b) => b,
-                None => break,
-            };
-            if b == b'<' || b == b'{' {
-                break;
-            }
-            self.scanner.advance_char();
+        // Text runs to the next `<` or `{` (the only dispatch bytes in
+        // fragment context) or the fragment end — one memchr2 sweep
+        // instead of a per-char walk. Clamp: the skip searches the
+        // whole source, but this node must not bleed past the current
+        // fragment.
+        self.scanner.skip_until2(b'<', b'{');
+        if self.scanner.pos() > self.fragment_end {
+            self.scanner.set_pos(self.fragment_end);
         }
         let end = self.scanner.pos();
         Node::Text(Text {
@@ -712,7 +804,19 @@ impl<'src> TemplateParser<'src> {
         self.scanner.advance_byte();
 
         let name_start = self.scanner.pos();
-        if !self
+        // `<!NAME` is a doctype-shaped tag (upstream `is_valid_element_name`
+        // admits `/^![a-zA-Z]+$/`, so `<!DOCTYPE html>` parses as a void
+        // element named `!DOCTYPE`). Consume the `!` and let the regular
+        // name scan read the letters. `<!--` comments were dispatched
+        // before this point.
+        let doctype_shaped = self.scanner.peek_byte() == Some(b'!')
+            && self
+                .scanner
+                .peek_byte_at(1)
+                .is_some_and(|b| b.is_ascii_alphabetic());
+        if doctype_shaped {
+            self.scanner.advance_byte();
+        } else if !self
             .scanner
             .peek_byte()
             .map(|b| b.is_ascii_alphabetic() || b >= 0x80)
@@ -755,13 +859,13 @@ impl<'src> TemplateParser<'src> {
             } else {
                 self.parse_children_until(&name, tag_start, open_tag_end)?
             };
-            return Some(Node::SvelteElement(SvelteElement {
+            return Some(Node::SvelteElement(Box::new(SvelteElement {
                 kind,
                 attributes,
                 children,
                 self_closing,
                 range: Range::new(tag_start, self.scanner.pos()),
-            }));
+            })));
         }
 
         if is_component_tag(&name) {
@@ -770,13 +874,13 @@ impl<'src> TemplateParser<'src> {
             } else {
                 self.parse_children_until(&name, tag_start, open_tag_end)?
             };
-            return Some(Node::Component(Component {
+            return Some(Node::Component(Box::new(Component {
                 name,
                 attributes,
                 children,
                 self_closing,
                 range: Range::new(tag_start, self.scanner.pos()),
-            }));
+            })));
         }
 
         // Normal HTML element.
@@ -797,20 +901,30 @@ impl<'src> TemplateParser<'src> {
             self.parse_children_until(&name, tag_start, open_tag_end)?
         };
 
-        Some(Node::Element(Element {
+        Some(Node::Element(Box::new(Element {
             name,
             attributes,
             children,
             self_closing: self_closing || is_void,
             range: Range::new(tag_start, self.scanner.pos()),
-        }))
+        })))
     }
 
     /// After [`parse_attributes`] returns, the scanner points at `>` or `/`.
     /// Consume the closing delimiter and return `(self_closing, end_pos)`.
     fn finish_opening_tag(&mut self) -> Option<(bool, u32)> {
         self.scanner.skip_ascii_whitespace();
-        match self.scanner.peek_byte()? {
+        let Some(byte) = self.scanner.peek_byte() else {
+            // Source truncated inside the opening tag (`<div class="x"` at
+            // EOF). Upstream fires `unexpected_eof` here; silently
+            // propagating `None` would make the element — and everything
+            // it referenced — vanish with zero errors.
+            self.errors.push(ParseError::UnexpectedEof {
+                range: Range::new(self.scanner.pos(), self.scanner.pos()),
+            });
+            return None;
+        };
+        match byte {
             b'>' => {
                 self.scanner.advance_byte();
                 Some((false, self.scanner.pos()))
@@ -843,9 +957,51 @@ impl<'src> TemplateParser<'src> {
         open_start: u32,
         open_end: u32,
     ) -> Option<Fragment> {
+        let frame = if is_component_tag(tag) || tag.starts_with("svelte:") {
+            OpenFrame::Component(SmolStr::from(tag))
+        } else {
+            OpenFrame::Element(SmolStr::from(tag))
+        };
+        self.open_elements.push(frame);
+        let result = self.parse_children_until_inner(tag, open_start, open_end);
+        self.open_elements.pop();
+        result
+    }
+
+    fn parse_children_until_inner(
+        &mut self,
+        tag: &str,
+        open_start: u32,
+        open_end: u32,
+    ) -> Option<Fragment> {
         let children_start = self.scanner.pos();
-        let (children, _stop) = self.parse_fragment_until(Some(tag));
+        // A terminator surfacing here is a stray `{/...}` / `{:...}` inside
+        // an element with no open block (e.g. `<div>{:else}</div>`) —
+        // upstream errors. Report and resume so the element's remaining
+        // children and closing tag still parse.
+        let mut children = Vec::new();
+        loop {
+            let (mut more, stop) = self.parse_fragment_until(Some(tag));
+            children.append(&mut more);
+            match stop {
+                None => break,
+                Some(term) => self.push_stray_terminator_error(&term),
+            }
+        }
         let children_end = self.scanner.pos();
+
+        // Implicitly closed by a sibling opening tag or an ancestor's
+        // closing tag (HTML closing_tag_omitted rules). There is no
+        // closing tag of our own to consume and nothing to report — the
+        // element ends at the unconsumed trigger, exactly where upstream
+        // sets `parent.end = start`.
+        if self.pending_auto_close {
+            self.pending_auto_close = false;
+            return Some(Fragment {
+                nodes: children,
+                range: Range::new(children_start, children_end),
+            });
+        }
 
         // Consume the closing tag if present.
         if self.scanner.starts_with("</") {
@@ -962,6 +1118,80 @@ impl<'src> TemplateParser<'src> {
         }
 
         None
+    }
+
+    /// The tag name at the current `<`, if it plausibly starts an opening
+    /// tag. Used only for the implicit-close lookahead; full validation
+    /// happens in [`Self::parse_element_or_component`].
+    fn peek_open_tag_name(&self) -> Option<&'src str> {
+        self.peek_tag_name_at(self.scanner.pos() + 1)
+    }
+
+    /// The tag name after the current `</`.
+    fn peek_closing_tag_name(&self) -> Option<&'src str> {
+        self.peek_tag_name_at(self.scanner.pos() + 2)
+    }
+
+    fn peek_tag_name_at(&self, start: u32) -> Option<&'src str> {
+        let src = self.scanner.source();
+        let bytes = src.as_bytes();
+        let first = *bytes.get(start as usize)?;
+        if !(first.is_ascii_alphabetic() || first >= 0x80) {
+            return None;
+        }
+        let mut i = start as usize;
+        while let Some(&b) = bytes.get(i) {
+            if b.is_ascii_alphanumeric() || b >= 0x80 || matches!(b, b':' | b'-' | b'_' | b'.') {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        src.get(start as usize..i)
+    }
+
+    /// Whether the opening tag at the scanner implicitly closes the
+    /// element currently being parsed, per the HTML5 closing_tag_omitted
+    /// table (`<li>` while inside `<li>`, `<div>` while inside `<p>`, …).
+    /// The table only contains plain HTML names, so component/`svelte:*`
+    /// parents never match — mirroring upstream's
+    /// `parent.type === 'RegularElement'` gate.
+    fn open_tag_implicitly_closes(&self, stop_element: &str) -> bool {
+        self.peek_open_tag_name()
+            .is_some_and(|next| closing_tag_omitted(stop_element, Some(next)))
+    }
+
+    /// Whether the closing tag at the scanner (`</name>`, already known
+    /// not to match the current element) closes an open ancestor such
+    /// that every intervening frame — including the element currently
+    /// being parsed (the top frame) — is a plain HTML element. Mirrors
+    /// upstream's close-tag walk: plain-element parents pop with only the
+    /// element_implicitly_closed warning; reaching a component or block
+    /// boundary first is the error path instead.
+    fn closing_tag_matches_open_ancestor(&self) -> bool {
+        let Some(name) = self.peek_closing_tag_name() else {
+            return false;
+        };
+        let mut frames = self.open_elements.iter().rev();
+        // Top frame is the element whose children we're parsing; only a
+        // plain element can be implicitly closed.
+        if !matches!(frames.next(), Some(OpenFrame::Element(_))) {
+            return false;
+        }
+        for frame in frames {
+            match frame {
+                // A non-matching plain element would pop too (with its
+                // own warning) — keep walking.
+                OpenFrame::Element(n) => {
+                    if n.as_str() == name {
+                        return true;
+                    }
+                }
+                OpenFrame::Component(n) => return n.as_str() == name,
+                OpenFrame::Block => return false,
+            }
+        }
+        false
     }
 
     fn peek_closing_tag_matches(&self, tag: &str) -> bool {
@@ -1140,6 +1370,201 @@ mod tests {
         assert!(e.self_closing);
     }
 
+    // ===== HTML implicit-close (upstream element.js closing_tag_omitted) =====
+
+    #[test]
+    fn li_implicitly_closed_by_sibling_li() {
+        // `<ul><li>a<li>b</ul>` is valid Svelte: upstream closes the first
+        // `<li>` at the second `<li>` per closing_tag_omitted and emits
+        // only the element_implicitly_closed WARNING.
+        let src = "<ul><li>a<li>b</ul>";
+        let frag = parse_ok(src);
+        let [Node::Element(ul)] = frag.nodes.as_slice() else {
+            panic!("expected one ul, got {:?}", frag.nodes);
+        };
+        assert_eq!(ul.name, "ul");
+        assert_eq!(ul.range.slice(src), src);
+        let lis: Vec<&Element> = ul
+            .children
+            .nodes
+            .iter()
+            .filter_map(|n| match n {
+                Node::Element(e) if e.name == "li" => Some(e.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lis.len(), 2, "two li siblings, got {:?}", ul.children.nodes);
+        // The auto-closed element ends where the closing trigger starts
+        // (upstream sets parent.end = start of the new tag / close tag).
+        assert_eq!(lis[0].range.slice(src), "<li>a");
+        assert_eq!(lis[1].range.slice(src), "<li>b");
+    }
+
+    #[test]
+    fn p_implicitly_closed_by_ancestor_close_tag() {
+        // `<div><p>text</div>` — the `</div>` implicitly closes the open
+        // `<p>` (upstream pops RegularElement parents with a warning).
+        let src = "<div><p>text</div>";
+        let frag = parse_ok(src);
+        let [Node::Element(div)] = frag.nodes.as_slice() else {
+            panic!("expected one div, got {:?}", frag.nodes);
+        };
+        assert_eq!(div.range.slice(src), src);
+        let [Node::Element(p)] = div.children.nodes.as_slice() else {
+            panic!("expected one p child, got {:?}", div.children.nodes);
+        };
+        assert_eq!(p.name, "p");
+        assert_eq!(p.range.slice(src), "<p>text");
+    }
+
+    #[test]
+    fn ancestor_close_pops_multiple_open_elements() {
+        // `<ul><li><b>x</ul>` — upstream pops BOTH `<b>` and `<li>` with
+        // warnings when `</ul>` arrives (any RegularElement pops, not just
+        // table entries).
+        let src = "<ul><li><b>x</ul>";
+        let frag = parse_ok(src);
+        let [Node::Element(ul)] = frag.nodes.as_slice() else {
+            panic!("expected one ul, got {:?}", frag.nodes);
+        };
+        let [Node::Element(li)] = ul.children.nodes.as_slice() else {
+            panic!("expected one li child, got {:?}", ul.children.nodes);
+        };
+        let [Node::Element(b)] = li.children.nodes.as_slice() else {
+            panic!("expected one b child, got {:?}", li.children.nodes);
+        };
+        assert_eq!(b.range.slice(src), "<b>x");
+    }
+
+    #[test]
+    fn li_implicitly_closed_by_component_close_tag() {
+        // `<Comp><li>x</Comp>` parses clean upstream: the `</Comp>` pops
+        // the open `<li>` with a warning and then closes the component.
+        let src = "<Comp><li>x</Comp>";
+        let frag = parse_ok(src);
+        let [Node::Component(c)] = frag.nodes.as_slice() else {
+            panic!("expected one component, got {:?}", frag.nodes);
+        };
+        assert_eq!(c.range.slice(src), src);
+        let [Node::Element(li)] = c.children.nodes.as_slice() else {
+            panic!("expected one li child, got {:?}", c.children.nodes);
+        };
+        assert_eq!(li.range.slice(src), "<li>x");
+    }
+
+    #[test]
+    fn component_is_never_implicitly_closed() {
+        // `<div><Comp></div>` errors upstream
+        // (element_invalid_closing_tag: Comp isn't a RegularElement).
+        let src = "<div><Comp></div>";
+        let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(!errors.is_empty(), "expected errors for {src:?}");
+    }
+
+    #[test]
+    fn implicit_close_does_not_cross_block_boundary() {
+        // `<div>{#if c}<li></div>{/if}` errors upstream — the ancestor
+        // walk stops at the IfBlock (not a RegularElement).
+        let src = "<div>{#if c}<li></div>{/if}";
+        let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(!errors.is_empty(), "expected errors for {src:?}");
+    }
+
+    #[test]
+    fn open_tag_auto_close_table_variants() {
+        // A sampling of closing_tag_omitted rows beyond li: options,
+        // table cells/rows, dt/dd, and p closed by a block-level element.
+        for (src, outer, inner, count) in [
+            ("<select><option>a<option>b</select>", "select", "option", 2),
+            ("<tr><td>a<td>b<td>c</tr>", "tr", "td", 3),
+            ("<dl><dt>t<dd>d</dl>", "dl", "dt", 1),
+        ] {
+            let frag = parse_ok(src);
+            let [Node::Element(o)] = frag.nodes.as_slice() else {
+                panic!("expected one {outer}, got {:?}", frag.nodes);
+            };
+            assert_eq!(o.name, outer);
+            let inners = o
+                .children
+                .nodes
+                .iter()
+                .filter(|n| matches!(n, Node::Element(e) if e.name == inner))
+                .count();
+            assert_eq!(
+                inners, count,
+                "{count} {inner} in {src:?}: {:?}",
+                o.children.nodes
+            );
+        }
+        // `<p>` is implicitly closed by a following block-level element.
+        let src = "<p>a<div>b</div>";
+        let frag = parse_ok(src);
+        assert_eq!(frag.nodes.len(), 2, "p and div siblings: {:?}", frag.nodes);
+        let Node::Element(p) = &frag.nodes[0] else {
+            panic!("expected p first");
+        };
+        assert_eq!(p.range.slice(src), "<p>a");
+    }
+
+    #[test]
+    fn doctype_parses_as_void_element() {
+        // `<!DOCTYPE html>` is a valid Svelte template node — upstream's
+        // is_valid_element_name admits /^![a-zA-Z]+$/ and is_void treats
+        // `!doctype` (any case) as void, so no closing tag is expected
+        // and the rest of the file parses normally.
+        for (src, name) in [
+            ("<!DOCTYPE html><div>x</div>", "!DOCTYPE"),
+            ("<!doctype html><div>x</div>", "!doctype"),
+        ] {
+            let (frag, errors) = parse_template(src, Range::new(0, src.len() as u32));
+            assert!(
+                errors.is_empty(),
+                "expected no errors for {src:?}: {errors:?}"
+            );
+            assert_eq!(frag.nodes.len(), 2, "two nodes for {src:?}");
+            let Node::Element(doctype) = &frag.nodes[0] else {
+                panic!(
+                    "expected doctype element for {src:?}, got {:?}",
+                    frag.nodes[0]
+                );
+            };
+            assert_eq!(doctype.name, name);
+            assert!(doctype.self_closing, "doctype is void");
+            assert!(doctype.children.nodes.is_empty());
+            let Node::Element(div) = &frag.nodes[1] else {
+                panic!("expected div for {src:?}, got {:?}", frag.nodes[1]);
+            };
+            assert_eq!(div.name, "div");
+        }
+    }
+
+    #[test]
+    fn non_doctype_bang_tag_still_requires_close() {
+        // `<!foo>` is a valid element NAME upstream but not void — only
+        // `!doctype` is. Left unclosed it errors, same as upstream's
+        // element_unclosed.
+        let src = "<!foo>x";
+        let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ParseError::UnterminatedElement { .. })),
+            "expected UnterminatedElement, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn bang_without_letter_is_still_malformed() {
+        let src = "<![CDATA[x]]>";
+        let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ParseError::MalformedOpenTag { .. })),
+            "expected MalformedOpenTag, got {errors:?}"
+        );
+    }
+
     #[test]
     fn void_element_without_closing() {
         // <br> (no `/`) is a void element; should parse as self-closing
@@ -1236,6 +1661,105 @@ mod tests {
     }
 
     #[test]
+    fn stray_top_level_block_close_errors_and_parsing_resumes() {
+        // Upstream fires block_unexpected_close for `{/if}` with no open
+        // block. Previously the terminator was silently consumed and
+        // parsing STOPPED — everything after it was dropped with zero
+        // errors.
+        let src = "{/if}<div>{undeclared}</div>";
+        let (frag, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ParseError::UnexpectedBlockClose { .. })),
+            "expected UnexpectedBlockClose, got {errors:?}"
+        );
+        let err = errors
+            .iter()
+            .find(|e| matches!(e, ParseError::UnexpectedBlockClose { .. }))
+            .unwrap();
+        assert_eq!(err.range().slice(src), "{/if}");
+        // The rest of the template must still be parsed.
+        let Some(Node::Element(e)) = frag.nodes.first() else {
+            panic!("expected the div to survive, got {:?}", frag.nodes);
+        };
+        assert_eq!(e.name, "div");
+        assert!(matches!(e.children.nodes[0], Node::Interpolation(_)));
+    }
+
+    #[test]
+    fn stray_top_level_continuation_errors_and_parsing_resumes() {
+        // Upstream fires block_invalid_continuation_placement for a
+        // `{:...}` tag with no open block.
+        let src = "{:else}<p>after</p>";
+        let (frag, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ParseError::InvalidBlockContinuation { .. })),
+            "expected InvalidBlockContinuation, got {errors:?}"
+        );
+        assert!(
+            frag.nodes
+                .iter()
+                .any(|n| matches!(n, Node::Element(e) if e.name == "p")),
+            "expected the p to survive, got {:?}",
+            frag.nodes
+        );
+    }
+
+    #[test]
+    fn stray_continuation_inside_element_errors() {
+        // `<div>{:else}</div>` — upstream errors
+        // block_invalid_continuation_placement. Previously the `{:else}`
+        // was swallowed with zero errors.
+        let src = "<div>{:else}</div>";
+        let (frag, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ParseError::InvalidBlockContinuation { .. })),
+            "expected InvalidBlockContinuation, got {errors:?}"
+        );
+        // The element itself still parses and consumes its closing tag.
+        let Some(Node::Element(e)) = frag.nodes.first() else {
+            panic!("expected the div node, got {:?}", frag.nodes);
+        };
+        assert_eq!(e.name, "div");
+        assert_eq!(e.range.slice(src), src);
+    }
+
+    #[test]
+    fn stray_block_close_inside_element_errors() {
+        let src = "<div>{/if}</div>";
+        let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ParseError::UnexpectedBlockClose { .. })),
+            "expected UnexpectedBlockClose, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn eof_inside_opening_tag_errors() {
+        // A file truncated inside an opening tag must report an error —
+        // upstream fires `unexpected_eof`. Previously the element (and
+        // everything it referenced) vanished with zero errors and the
+        // file "checked clean".
+        for src in ["<div class=\"x\"", "<div", "<div class=\"x\" id=\"y\""] {
+            let (frag, errors) = parse_template(src, Range::new(0, src.len() as u32));
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| matches!(e, ParseError::UnexpectedEof { .. })),
+                "expected UnexpectedEof for {src:?}, got {errors:?} (nodes: {:?})",
+                frag.nodes
+            );
+        }
+    }
+
+    #[test]
     fn mismatched_closing_tag_errors() {
         let src = "<div><span></div></span>";
         let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
@@ -1302,6 +1826,18 @@ mod tests {
     }
 
     #[test]
+    fn each_block_with_newline_before_as() {
+        let src = "{#each items\nas item}<b>{item}</b>{/each}";
+        let frag = parse_ok(src);
+        let Node::EachBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        assert_eq!(b.expression_range.slice(src), "items");
+        let clause = b.as_clause.as_ref().expect("as-clause parsed");
+        assert_eq!(clause.context_range.slice(src), "item");
+    }
+
+    #[test]
     fn each_block_without_as_clause() {
         // Svelte allows `{#each items}` with no binding (iterate N times,
         // discard the item). Parser must distinguish this from the more
@@ -1341,6 +1877,30 @@ mod tests {
         };
         assert!(b.pending.is_none());
         assert!(b.then_branch.is_some());
+    }
+
+    #[test]
+    fn await_block_newline_before_then() {
+        let src = "{#await p\nthen v}{v}{/await}";
+        let frag = parse_ok(src);
+        let Node::AwaitBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        assert!(b.pending.is_none());
+        assert_eq!(b.expression_range.slice(src), "p");
+        let then = b.then_branch.as_ref().expect("then branch parsed");
+        assert_eq!(then.context_range.map(|r| r.slice(src)), Some("v"));
+    }
+
+    #[test]
+    fn await_block_tab_before_catch() {
+        let src = "{#await p\tcatch e}{e}{/await}";
+        let frag = parse_ok(src);
+        let Node::AwaitBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        let catch = b.catch_branch.as_ref().expect("catch branch parsed");
+        assert_eq!(catch.context_range.map(|r| r.slice(src)), Some("e"));
     }
 
     #[test]

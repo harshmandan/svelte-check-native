@@ -22,13 +22,16 @@ async function $$render_87d6d062() {
     });
     void bar;
     void foobar;
-    return { props: /** @type {{ bar: any; foobar?: typeof foobar; }} */({}) };
+    return { props: /** @type {{ bar: any; foobar?: typeof foobar; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { bar: (bar) } }, bindings: /** @type {string} */ (''), exports: /** @type {{ bar: typeof bar; foobar: typeof foobar; }} */ ({}) };
 }
 $$render_87d6d062;
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_87d6d062>>['props']} __SvnDefaultProps
  */
-/** @type {import('svelte').Component<__SvnDefaultProps>} */
+/**
+ * @typedef {Awaited<ReturnType<typeof $$render_87d6d062>>['exports']} __SvnDefaultExports
+ */
+/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

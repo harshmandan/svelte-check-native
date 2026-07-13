@@ -1,40 +1,50 @@
 //! JS/TS AST rules that fire inside `<script>` blocks.
 //!
-//! Script bodies are parsed once via `svn-parser::parse_script_body`
-//! (oxc). We walk the resulting AST with a minimal visitor that
-//! tracks `function_depth` (so we can tell "class declaration
-//! outside the instance scope" from "class declaration in a helper
-//! function"), plus the distinction between module-script and
-//! instance-script.
+//! Script bodies are parsed once by `walk_parsed` (oxc, shared with
+//! the scope builder). We walk the resulting AST with a minimal
+//! visitor that tracks `function_depth` (so we can tell "class
+//! declaration outside the instance scope" from "class declaration
+//! in a helper function"), plus the distinction between
+//! module-script and instance-script.
 //!
 //! Upstream equivalents:
 //! - `perf_avoid_inline_class` → `visitors/NewExpression.js:11`
 //! - `perf_avoid_nested_class` → `visitors/ClassDeclaration.js:21`
 //! - `reactive_declaration_invalid_placement` → `visitors/LabeledStatement.js:90`
 
-use oxc_allocator::Allocator;
 use oxc_ast::ast::ClassBody;
 use oxc_ast::ast::{
-    Declaration, Expression, ForStatementInit, LabeledStatement, NewExpression, Statement,
+    Declaration, Expression, ForStatementInit, LabeledStatement, NewExpression, Program, Statement,
 };
 use smol_str::SmolStr;
 use svn_core::Range;
 use svn_parser::document::{Document, ScriptSection};
-use svn_parser::parse_script_body;
 
 use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
 use crate::scope_util::strip_comment_delimiters;
 
-/// Entry point: parse both script sections and run JS-AST-dependent
-/// rules on them.
-pub fn visit_document(doc: &Document<'_>, ctx: &mut LintContext<'_>) {
-    if let Some(script) = &doc.instance_script {
-        run_on_section(script, ScriptAstContext::Instance, ctx);
+/// Entry point: run the JS-AST-dependent rules on both script
+/// sections. `module_program` / `instance_program` are the sections'
+/// pre-parsed bodies (parsed once by `walk_parsed`, shared with the
+/// scope builder); a `Some` script section is always paired with a
+/// `Some` program.
+pub fn visit_document(
+    doc: &Document<'_>,
+    module_program: Option<&Program<'_>>,
+    instance_program: Option<&Program<'_>>,
+    ctx: &mut LintContext<'_>,
+) {
+    if let Some(script) = &doc.instance_script
+        && let Some(program) = instance_program
+    {
+        run_on_section(script, program, ScriptAstContext::Instance, ctx);
     }
-    if let Some(script) = &doc.module_script {
-        run_on_section(script, ScriptAstContext::Module, ctx);
+    if let Some(script) = &doc.module_script
+        && let Some(program) = module_program
+    {
+        run_on_section(script, program, ScriptAstContext::Module, ctx);
     }
 }
 
@@ -46,15 +56,10 @@ enum ScriptAstContext {
 
 fn run_on_section(
     script: &ScriptSection<'_>,
+    program: &Program<'_>,
     script_ctx: ScriptAstContext,
     ctx: &mut LintContext<'_>,
 ) {
-    // Parse the script body with oxc.
-    let lang = script.lang;
-    let alloc = Allocator::default();
-    // Parser needs the content string to live at least as long as the
-    // allocator; `script.content` is borrowed from the source.
-    let parsed = parse_script_body(&alloc, script.content, lang);
     // Script starts at script.content_range.start in the parent
     // source — but oxc gives us offsets relative to the content
     // string. We apply a uniform bias at emit time.
@@ -73,8 +78,7 @@ fn run_on_section(
     // Pre-scan leading `// svelte-ignore …` comments in the script
     // body so visit_labeled can match on a statement's leading
     // comment. Oxc exposes comments on the program.
-    let ignore_comments: Vec<IgnoreComment> = parsed
-        .program
+    let ignore_comments: Vec<IgnoreComment> = program
         .comments
         .iter()
         .filter_map(|c| {
@@ -105,7 +109,7 @@ fn run_on_section(
         runes,
         ignore_comments,
     };
-    for stmt in &parsed.program.body {
+    for stmt in &program.body {
         walker.visit_stmt(stmt);
     }
 }

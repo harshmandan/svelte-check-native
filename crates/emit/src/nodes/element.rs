@@ -188,7 +188,7 @@ pub(crate) fn emit_svelte_element_node(
             .nodes
             .iter()
             .filter_map(|n| match n {
-                svn_parser::Node::SnippetBlock(b) => Some(b),
+                svn_parser::Node::SnippetBlock(b) => Some(b.as_ref()),
                 _ => None,
             })
             .collect();
@@ -208,7 +208,8 @@ pub(crate) fn emit_svelte_element_node(
         // `$$slot_def["X"]` and gets handled at the parent's child
         // walk via `try_emit_slot_let_consumer_open`. Skip the local
         // destructure here so we don't double-emit.
-        let has_slot_attr = svn_analyze::literal_attr_value(&s.attributes, "slot", source).is_some();
+        let has_slot_attr =
+            svn_analyze::literal_attr_value(&s.attributes, "slot", source).is_some();
         let let_destructures = if has_slot_attr {
             Vec::new()
         } else {
@@ -311,7 +312,7 @@ pub(crate) fn emit_svelte_element_node(
                     svn_parser::Node::SnippetBlock(b)
                         if b.name.as_str() == "failed" || b.name.as_str() == "pending" =>
                     {
-                        Some(b)
+                        Some(b.as_ref())
                     }
                     _ => None,
                 })
@@ -514,8 +515,7 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
     // `namespace: 'foreign'` (svelte config) preserves ALL attribute
     // case — upstream `transformAttributeCase` is gated on `!preserveCase`
     // (htmlxtojsx_v2/index.ts:109). Mirror that here.
-    let should_lowercase =
-        tag_literal && !is_custom_element && !crate::preserve_attribute_case();
+    let should_lowercase = tag_literal && !is_custom_element && !crate::preserve_attribute_case();
     for attr in attributes {
         match attr {
             svn_parser::Attribute::Plain(p) => {
@@ -783,7 +783,10 @@ pub(crate) fn emit_svelte_element_open(
             // emit_dom_element_open_with_snippet_props before reaching
             // here so the failed/pending snippets type against the
             // createElement prop signature (see emit_svelte_element_node).
-            debug_assert!(false, "Boundary should be handled by the caller's inline path");
+            debug_assert!(
+                false,
+                "Boundary should be handled by the caller's inline path"
+            );
             let _ = writeln!(buf, "{indent}{{");
         }
         Element => {
@@ -918,6 +921,23 @@ fn emit_slot_check(buf: &mut EmitBuffer, source: &str, e: &svn_parser::Element, 
         match a {
             Attribute::Plain(p) if p.name.as_str() == "name" => continue,
             Attribute::Plain(p) => {
+                // Value goes through the shared plain-attr value
+                // transform (same one element/component attribute
+                // entries use): text becomes a backtick template
+                // literal (newline-safe), and `{expr}` interpolations
+                // become `${expr}` holes with token-map anchors so a
+                // diagnostic inside the expression maps back to the
+                // .svelte source. Splicing the raw quoted source here
+                // instead would break the overlay on multi-line values
+                // and swallow interpolations into the string literal.
+                // Upstream `Attribute.ts` routes slot-prop attrs
+                // through the same value handling, skipping only
+                // `name=`.
+                if let Some(v) = &p.value
+                    && crate::nodes::attribute::plain_value_is_dropped(source, v)
+                {
+                    continue;
+                }
                 if !first {
                     buf.push_str(", ");
                 }
@@ -925,10 +945,7 @@ fn emit_slot_check(buf: &mut EmitBuffer, source: &str, e: &svn_parser::Element, 
                 emit_slot_prop_key(buf, p.name.as_str(), p.range);
                 buf.push_str(": ");
                 if let Some(v) = &p.value {
-                    let text = source
-                        .get(v.range.start as usize..v.range.end as usize)
-                        .unwrap_or("");
-                    buf.append_with_source(text, v.range);
+                    crate::nodes::attribute::emit_plain_value(buf, source, v);
                 } else {
                     buf.push_str("true");
                 }

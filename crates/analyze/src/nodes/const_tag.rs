@@ -28,7 +28,11 @@ pub struct ConstPlacementError {
 /// is whether a const tag sitting *directly* in this fragment is legal
 /// — i.e. whether the node that owns this fragment is one of upstream's
 /// permitted grand-parents. Misplaced tags are pushed to `out`.
-pub fn check_const_placement(nodes: &[Node], allowed: bool, out: &mut Vec<ConstPlacementError>) {
+pub fn check_const_placement(
+    nodes: &[Node],
+    allowed: bool,
+    out: &mut Vec<ConstPlacementError>,
+) {
     for node in nodes {
         match node {
             Node::Interpolation(i) if i.kind == InterpolationKind::AtConst => {

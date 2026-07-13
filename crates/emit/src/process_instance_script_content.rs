@@ -127,9 +127,7 @@ fn collect_module_block_type_idents(decl: &TSModuleDeclaration<'_>, out: &mut Ha
             _ => stmt.as_declaration(),
         };
         match decl {
-            Some(Declaration::TSTypeAliasDeclaration(d)) => {
-                out.extend(collect_alias_deps(d).idents)
-            }
+            Some(Declaration::TSTypeAliasDeclaration(d)) => out.extend(collect_alias_deps(d).idents),
             Some(Declaration::TSInterfaceDeclaration(d)) => {
                 out.extend(collect_interface_deps(d).idents)
             }

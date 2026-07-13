@@ -435,8 +435,7 @@ mod tests {
         // User-declared return type → we don't add a second one. The
         // param still gets `RequestEvent` (matches upstream's inner
         // `!fn.node.type` guard).
-        let source =
-            "export async function GET({ url }): Promise<Response> { return new Response(''); }";
+        let source = "export async function GET({ url }): Promise<Response> { return new Response(''); }";
         let got = inject(&server_path(), source).unwrap();
         assert!(got.contains("({ url }: import('./$types.js').RequestEvent)"));
         // No injected return annotation duplicated onto the body brace.

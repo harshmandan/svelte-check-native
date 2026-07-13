@@ -53,12 +53,6 @@ pub mod void_refs;
 pub mod walker;
 
 pub use ast_walk::{WalkNode, collect_function_body_stmts, walk_statement_descend};
-pub use events::{
-    collect_ctor_locals, collect_inline_typed_dispatcher_member_names, find_dispatched_event_names,
-    find_dispatcher_event_type_sources, find_dispatcher_local_names,
-    find_typed_dispatcher_local_names, find_untyped_dispatcher_local_names,
-    has_event_dispatcher_call, has_inline_typed_dispatcher_members,
-};
 pub use jsdoc::{
     scan_jsdoc_props_typedef_keys, scan_jsdoc_typedef_name, should_synthesise_js_props,
 };
@@ -66,6 +60,12 @@ pub use nodes::attribute::literal_attr_value;
 pub use nodes::binding::resolve_bind_value_type;
 pub use nodes::const_tag::{
     CONST_TAG_INVALID_PLACEMENT_MSG, ConstPlacementError, check_const_placement,
+};
+pub use events::{
+    collect_ctor_locals, collect_inline_typed_dispatcher_member_names, find_dispatched_event_names,
+    find_dispatcher_event_type_sources, find_dispatcher_local_names,
+    find_typed_dispatcher_local_names, find_untyped_dispatcher_local_names,
+    has_event_dispatcher_call, has_inline_typed_dispatcher_members,
 };
 pub use props::{PropInfo, PropsInfo, PropsSource, contains_typeof_ref, root_type_name_of};
 pub use store::{

@@ -1071,7 +1071,9 @@ fn emit_document_with_render_name(
     // gets its Props through `Awaited<ReturnType<typeof
     // $$render>>['props']` which already projects the destructure's
     // declared type. Skipping the alias on JS is safe.
-    if is_ts && let Some(body) = alias_body.as_deref() {
+    if is_ts
+        && let Some(body) = alias_body.as_deref()
+    {
         let _ = writeln!(buf, "    type $$ComponentProps = {body};");
     }
     // Synthesised `type $$Events = { [K in keyof <T>]:
@@ -1674,8 +1676,8 @@ pub(crate) fn emit_template_node(
     }
 }
 
-pub use is_ts::set_preserve_attribute_case;
 pub(crate) use is_ts::{IsTsGuard, emit_is_ts, preserve_attribute_case};
+pub use is_ts::set_preserve_attribute_case;
 pub(crate) use void_block::{emit_bind_pair_declarations, emit_void_block};
 
 pub(crate) use destructure_idents::all_identifiers;

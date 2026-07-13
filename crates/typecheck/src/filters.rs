@@ -170,6 +170,12 @@ pub(crate) fn is_overlay_dollar_reactive_label(overlay: &str, offset: u32) -> bo
 /// duplicates that reach the type-checker come from the
 /// `<el on:click={fn} on:click>` (handle + forward) idiom or from
 /// spread-plus-attribute combinations.
+///
+/// The text scan alone can't tell a synthesized attribute key from a
+/// quoted key the user wrote in their `<script>` — the caller in
+/// `map_diagnostic` supplies that context by only invoking this on
+/// positions with no line-map coverage (i.e. outside verbatim user
+/// code).
 pub(crate) fn is_overlay_attribute_key(overlay: &str, offset: u32) -> bool {
     let bytes = overlay.as_bytes();
     let off = offset as usize;

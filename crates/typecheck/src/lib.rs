@@ -699,15 +699,28 @@ fn map_diagnostic(
             // produce other duplicate keys when the spread also
             // contains `class`. Both manifest in the overlay as a
             // quoted-string property name in a `createElement` arg
-            // literal. The `"` prefix narrows the false-positive
-            // surface — script-side identifier collisions keep
-            // firing TS2300 because their identifiers aren't quoted.
+            // literal.
             //
-            // Less general than upstream's AST check (we don't catch
-            // unquoted shorthand keys in element literals), but
+            // The scan alone would also match a duplicate quoted key
+            // the USER wrote in their `<script>` block (`const o =
+            // { "mode": 1, "mode": 2 }`) — a genuine error upstream
+            // surfaces, since a script position is never an Element
+            // attribute node. Verbatim user code (script bodies,
+            // hoisted imports) is exactly what the emit line-map
+            // covers, while the synthesized template region — the
+            // only place emit writes element-attribute object
+            // literals — never gets line-map entries (only token-map
+            // spans). So restrict the filter to lines with no
+            // line-map coverage: synthesized-template positions can
+            // be filtered, verbatim-user-code positions never are.
+            //
+            // Still less general than upstream's AST check (a
+            // duplicate key inside a template-spliced `{expr}` is
+            // also suppressed where upstream would surface it), but
             // covers every real-world pattern observed on benches
-            // through 2026-04-27.
+            // through 2026-04-27 without eating user-script errors.
             if (raw.code == 1117 || raw.code == 2300)
+                && position::translate_line(&data.line_map, raw.line).is_none()
                 && let Some(offset) = position::overlay_byte_offset(data, raw.line, raw.column)
                 && filters::is_overlay_attribute_key(&data.overlay_text, offset)
             {
@@ -1592,6 +1605,114 @@ mod tests {
         assert!(
             kept.is_some(),
             "a transition fn with 4 required params fires a genuine TS2554"
+        );
+    }
+
+    #[test]
+    fn ts1117_in_verbatim_user_script_surfaces() {
+        // A duplicate quoted object key the USER wrote in their
+        // `<script>` block is a genuine error upstream reports —
+        // upstream's isNoFalsePositive only filters positions whose
+        // Svelte AST node is an Element attribute name, and a
+        // script-block position never is. Verbatim script lines are
+        // exactly the lines the emit line-map covers, so the filter
+        // must not fire there.
+        let gen_path = "/proj/.svelte-check/svelte/src/X.svelte.svn.ts";
+        let layout = CacheLayout::for_workspace("/proj");
+        let overlay_text = "// header\nconst opts = { \"mode\": 1, \"mode\": 2 };\n".to_string();
+        let overlay_line_starts = svn_emit::compute_line_starts(&overlay_text);
+        // 1-based column of the second `"mode"`'s opening quote.
+        let line2 = overlay_text.lines().nth(1).unwrap();
+        let column = line2.rfind("\"mode\"").unwrap() as u32 + 1;
+        let mut m = HashMap::new();
+        m.insert(
+            PathBuf::from(gen_path),
+            MapData {
+                // Verbatim script body: overlay line 2 maps to source
+                // line 2 (column passes through unchanged).
+                line_map: vec![LineMapEntry {
+                    overlay_start_line: 2,
+                    overlay_end_line: 3,
+                    source_start_line: 2,
+                }],
+                overlay_line_starts,
+                overlay_text,
+                ..Default::default()
+            },
+        );
+        let raw = RawDiagnostic {
+            file: PathBuf::from(gen_path),
+            line: 2,
+            column,
+            severity: Severity::Error,
+            code: 1117,
+            message: "An object literal cannot have multiple properties with the same name."
+                .to_string(),
+            span_length: Some(6),
+        };
+        let mapped = map_diagnostic(raw, &layout, &m)
+            .expect("user-code duplicate key must survive the attribute-key filter");
+        assert_eq!(mapped.line, 2);
+        assert_eq!(mapped.column, column);
+    }
+
+    #[test]
+    fn ts1117_on_synthesized_element_attribute_key_stays_suppressed() {
+        // The motivating case for the attribute-key filter: the
+        // `<el on:click={fn} on:click>` handle-plus-forward idiom
+        // emits duplicate `"on:click"` keys in the synthesized
+        // createElement attribute literal. Upstream drops the TS1117
+        // because the position's Svelte AST node is an Element
+        // attribute name. Our synthesized template lines carry no
+        // line-map entry (only token-map spans for spliced names), so
+        // the filter applies there.
+        let gen_path = "/proj/.svelte-check/svelte/src/X.svelte.svn.ts";
+        let layout = CacheLayout::for_workspace("/proj");
+        let overlay_text = "function $$render() {\n\
+             __svn_createElement(\"button\", {\n\
+             \"on:click\": (fn),\n\
+             \"on:click\": undefined,\n\
+             });\n}\n"
+            .to_string();
+        let source_text = "<button on:click={fn} on:click>hi</button>\n".to_string();
+        let overlay_line_starts = svn_emit::compute_line_starts(&overlay_text);
+        let source_line_starts = svn_emit::compute_line_starts(&source_text);
+        // The second `"on:click"` key is token-mapped to the second
+        // `on:click` attribute name in source (emit's
+        // append_with_source on the quoted key) — so WITHOUT the
+        // filter the diagnostic would translate and surface.
+        let key_start = overlay_text.rfind("\"on:click\"").unwrap() as u32;
+        let src_name_start = source_text.rfind("on:click").unwrap() as u32;
+        let mut m = HashMap::new();
+        m.insert(
+            PathBuf::from(gen_path),
+            MapData {
+                token_map: vec![TokenMapEntry {
+                    overlay_byte_start: key_start,
+                    overlay_byte_end: key_start + 10,
+                    source_byte_start: src_name_start,
+                    source_byte_end: src_name_start + 8,
+                }],
+                overlay_line_starts,
+                source_line_starts,
+                overlay_text,
+                source_text,
+                ..Default::default()
+            },
+        );
+        let raw = RawDiagnostic {
+            file: PathBuf::from(gen_path),
+            line: 4,
+            column: 1, // opening quote of the duplicate key
+            severity: Severity::Error,
+            code: 1117,
+            message: "An object literal cannot have multiple properties with the same name."
+                .to_string(),
+            span_length: Some(10),
+        };
+        assert!(
+            map_diagnostic(raw, &layout, &m).is_none(),
+            "duplicate element-attribute keys are emit artefacts and must stay suppressed"
         );
     }
 

@@ -329,7 +329,8 @@ fn emit_document_with_render_name(
     // added up to 4-5 repeats of the same work on the hot path. The
     // `rewritten_content` reparse at bindings-collection time is
     // separate (different source string) and only fires when the
-    // Svelte-4 reactive rewrite actually touched the script.
+    // rewrite chain actually changed the script bytes — identity
+    // chains collapse `rewritten_content` to None below.
     let alloc_instance = Allocator::default();
     let parsed_instance = doc
         .instance_script
@@ -927,6 +928,15 @@ fn emit_document_with_render_name(
         } else {
             after_state
         }
+    });
+    // Identity rewrite chains collapse to None: split_imports falls
+    // back to the original content, and the bindings reparse in
+    // analyze_script_and_template_refs is skipped — re-parsing
+    // identical bytes contributes nothing `parsed_instance` didn't.
+    let rewritten_content = rewritten_content.filter(|rw| {
+        doc.instance_script
+            .as_ref()
+            .is_some_and(|s| rw.as_str() != s.content)
     });
 
     // Hoist imports out of the instance script. Required because the

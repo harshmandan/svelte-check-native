@@ -26,6 +26,7 @@ mod attributes;
 mod blocks;
 pub mod document;
 pub mod error;
+pub mod html5;
 mod mustache;
 mod scanner;
 mod script;

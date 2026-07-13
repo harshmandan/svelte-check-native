@@ -3,8 +3,8 @@
 async function $$render_5c591573() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("article", {});             { svelteHTML.createElement("p", {});                 { svelteHTML.createElement("p", {});                 }
-            }
+        { svelteHTML.createElement("article", {});             { svelteHTML.createElement("p", {});             }
+            { svelteHTML.createElement("p", {});             }
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

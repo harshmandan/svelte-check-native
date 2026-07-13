@@ -30,6 +30,7 @@ use crate::blocks::{
     parse_key_header, parse_snippet_header, peek_and_consume_terminator,
 };
 use crate::error::ParseError;
+use crate::html5::closing_tag_omitted;
 use crate::mustache::find_mustache_end;
 use crate::scanner::Scanner;
 
@@ -93,6 +94,23 @@ pub fn parse_all_template_runs(source: &str, runs: &[Range]) -> (Fragment, Vec<P
     )
 }
 
+/// Frame in the open-element stack, mirroring the roles upstream's
+/// parser stack plays in the implicit-close walks
+/// (`1-parse/state/element.js`).
+enum OpenFrame {
+    /// Plain HTML element — may be implicitly closed (upstream pops it
+    /// with only the `element_implicitly_closed` warning).
+    Element(SmolStr),
+    /// Component or `svelte:*` element — a valid target for an ancestor
+    /// closing tag, but never implicitly closable itself (upstream errors
+    /// `element_invalid_closing_tag` instead of popping).
+    Component(SmolStr),
+    /// `{#...}` block boundary — the ancestor walk never crosses it
+    /// (upstream errors `block_unexpected_close` /
+    /// `element_invalid_closing_tag`).
+    Block,
+}
+
 struct TemplateParser<'src> {
     scanner: Scanner<'src>,
     fragment_range: Range,
@@ -103,6 +121,16 @@ struct TemplateParser<'src> {
     /// it consumes the terminator so callers that receive one where none
     /// is expected can report an accurately-positioned error.
     last_terminator_range: Range,
+    /// Open elements/blocks enclosing the current parse position, mirroring
+    /// the recursion. Consulted by the HTML implicit-close checks.
+    open_elements: Vec<OpenFrame>,
+    /// Set when [`Self::parse_fragment_until`] stops because the current
+    /// element was implicitly closed (HTML `closing_tag_omitted` rules or
+    /// an ancestor's closing tag). Only ever set while a `stop_element` is
+    /// active, so only [`Self::parse_children_until`] consumes it: no
+    /// closing tag is expected and no error is recorded — upstream emits
+    /// just the `element_implicitly_closed` warning (svn-lint's concern).
+    pending_auto_close: bool,
 }
 
 impl<'src> TemplateParser<'src> {
@@ -115,6 +143,8 @@ impl<'src> TemplateParser<'src> {
             fragment_end: range.end,
             errors: Vec::new(),
             last_terminator_range: Range::new(range.start, range.start),
+            open_elements: Vec::new(),
+            pending_auto_close: false,
         }
     }
 
@@ -317,6 +347,16 @@ impl<'src> TemplateParser<'src> {
                     if self.peek_closing_tag_matches(tag) {
                         return (nodes, None);
                     }
+                    // A closing tag for an open ancestor implicitly closes
+                    // this element: upstream pops plain-element parents
+                    // with only the element_implicitly_closed warning
+                    // until the names match (`<div><p>text</div>`). Left
+                    // unconsumed — the matching ancestor's own frame
+                    // consumes it.
+                    if self.closing_tag_matches_open_ancestor() {
+                        self.pending_auto_close = true;
+                        return (nodes, None);
+                    }
                 }
                 self.errors.push(ParseError::MalformedOpenTag {
                     range: Range::new(self.scanner.pos(), self.scanner.pos() + 2),
@@ -331,6 +371,17 @@ impl<'src> TemplateParser<'src> {
             }
 
             if self.scanner.peek_byte() == Some(b'<') {
+                // A new opening tag implicitly closes the current element
+                // when HTML omits its closing tag (`<li>a<li>` — upstream
+                // checks closing_tag_omitted(parent, tag) before pushing
+                // the new element). Left unconsumed — it parses as the
+                // parent's next child.
+                if let Some(stop) = stop_element
+                    && self.open_tag_implicitly_closes(stop)
+                {
+                    self.pending_auto_close = true;
+                    return (nodes, None);
+                }
                 if let Some(node) = self.parse_element_or_component() {
                     nodes.push(node);
                 }
@@ -368,12 +419,22 @@ impl<'src> TemplateParser<'src> {
         let name_end = self.scanner.pos();
         let name = &self.scanner.source()[name_start as usize..name_end as usize];
 
+        // Known blocks bracket their bodies with a Block frame: the
+        // implicit-close ancestor walk must not cross a block boundary
+        // (upstream: block nodes aren't RegularElements, so the close
+        // walk errors instead of popping through them).
+        let parse_known = |p: &mut Self, kind: fn(&mut Self, u32) -> Option<Node>| {
+            p.open_elements.push(OpenFrame::Block);
+            let node = kind(p, block_start);
+            p.open_elements.pop();
+            node
+        };
         match name {
-            "if" => self.parse_if_block(block_start),
-            "each" => self.parse_each_block(block_start),
-            "await" => self.parse_await_block(block_start),
-            "key" => self.parse_key_block(block_start),
-            "snippet" => self.parse_snippet_block(block_start),
+            "if" => parse_known(self, Self::parse_if_block),
+            "each" => parse_known(self, Self::parse_each_block),
+            "await" => parse_known(self, Self::parse_await_block),
+            "key" => parse_known(self, Self::parse_key_block),
+            "snippet" => parse_known(self, Self::parse_snippet_block),
             other => {
                 self.errors.push(ParseError::UnsupportedBlock {
                     range: Range::new(block_start, self.scanner.pos()),
@@ -897,6 +958,23 @@ impl<'src> TemplateParser<'src> {
         open_start: u32,
         open_end: u32,
     ) -> Option<Fragment> {
+        let frame = if is_component_tag(tag) || tag.starts_with("svelte:") {
+            OpenFrame::Component(SmolStr::from(tag))
+        } else {
+            OpenFrame::Element(SmolStr::from(tag))
+        };
+        self.open_elements.push(frame);
+        let result = self.parse_children_until_inner(tag, open_start, open_end);
+        self.open_elements.pop();
+        result
+    }
+
+    fn parse_children_until_inner(
+        &mut self,
+        tag: &str,
+        open_start: u32,
+        open_end: u32,
+    ) -> Option<Fragment> {
         let children_start = self.scanner.pos();
         // A terminator surfacing here is a stray `{/...}` / `{:...}` inside
         // an element with no open block (e.g. `<div>{:else}</div>`) —
@@ -912,6 +990,19 @@ impl<'src> TemplateParser<'src> {
             }
         }
         let children_end = self.scanner.pos();
+
+        // Implicitly closed by a sibling opening tag or an ancestor's
+        // closing tag (HTML closing_tag_omitted rules). There is no
+        // closing tag of our own to consume and nothing to report — the
+        // element ends at the unconsumed trigger, exactly where upstream
+        // sets `parent.end = start`.
+        if self.pending_auto_close {
+            self.pending_auto_close = false;
+            return Some(Fragment {
+                nodes: children,
+                range: Range::new(children_start, children_end),
+            });
+        }
 
         // Consume the closing tag if present.
         if self.scanner.starts_with("</") {
@@ -1028,6 +1119,80 @@ impl<'src> TemplateParser<'src> {
         }
 
         None
+    }
+
+    /// The tag name at the current `<`, if it plausibly starts an opening
+    /// tag. Used only for the implicit-close lookahead; full validation
+    /// happens in [`Self::parse_element_or_component`].
+    fn peek_open_tag_name(&self) -> Option<&'src str> {
+        self.peek_tag_name_at(self.scanner.pos() + 1)
+    }
+
+    /// The tag name after the current `</`.
+    fn peek_closing_tag_name(&self) -> Option<&'src str> {
+        self.peek_tag_name_at(self.scanner.pos() + 2)
+    }
+
+    fn peek_tag_name_at(&self, start: u32) -> Option<&'src str> {
+        let src = self.scanner.source();
+        let bytes = src.as_bytes();
+        let first = *bytes.get(start as usize)?;
+        if !(first.is_ascii_alphabetic() || first >= 0x80) {
+            return None;
+        }
+        let mut i = start as usize;
+        while let Some(&b) = bytes.get(i) {
+            if b.is_ascii_alphanumeric() || b >= 0x80 || matches!(b, b':' | b'-' | b'_' | b'.') {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        src.get(start as usize..i)
+    }
+
+    /// Whether the opening tag at the scanner implicitly closes the
+    /// element currently being parsed, per the HTML5 closing_tag_omitted
+    /// table (`<li>` while inside `<li>`, `<div>` while inside `<p>`, …).
+    /// The table only contains plain HTML names, so component/`svelte:*`
+    /// parents never match — mirroring upstream's
+    /// `parent.type === 'RegularElement'` gate.
+    fn open_tag_implicitly_closes(&self, stop_element: &str) -> bool {
+        self.peek_open_tag_name()
+            .is_some_and(|next| closing_tag_omitted(stop_element, Some(next)))
+    }
+
+    /// Whether the closing tag at the scanner (`</name>`, already known
+    /// not to match the current element) closes an open ancestor such
+    /// that every intervening frame — including the element currently
+    /// being parsed (the top frame) — is a plain HTML element. Mirrors
+    /// upstream's close-tag walk: plain-element parents pop with only the
+    /// element_implicitly_closed warning; reaching a component or block
+    /// boundary first is the error path instead.
+    fn closing_tag_matches_open_ancestor(&self) -> bool {
+        let Some(name) = self.peek_closing_tag_name() else {
+            return false;
+        };
+        let mut frames = self.open_elements.iter().rev();
+        // Top frame is the element whose children we're parsing; only a
+        // plain element can be implicitly closed.
+        if !matches!(frames.next(), Some(OpenFrame::Element(_))) {
+            return false;
+        }
+        for frame in frames {
+            match frame {
+                // A non-matching plain element would pop too (with its
+                // own warning) — keep walking.
+                OpenFrame::Element(n) => {
+                    if n.as_str() == name {
+                        return true;
+                    }
+                }
+                OpenFrame::Component(n) => return n.as_str() == name,
+                OpenFrame::Block => return false,
+            }
+        }
+        false
     }
 
     fn peek_closing_tag_matches(&self, tag: &str) -> bool {
@@ -1204,6 +1369,142 @@ mod tests {
         };
         assert_eq!(e.name, "br");
         assert!(e.self_closing);
+    }
+
+    // ===== HTML implicit-close (upstream element.js closing_tag_omitted) =====
+
+    #[test]
+    fn li_implicitly_closed_by_sibling_li() {
+        // `<ul><li>a<li>b</ul>` is valid Svelte: upstream closes the first
+        // `<li>` at the second `<li>` per closing_tag_omitted and emits
+        // only the element_implicitly_closed WARNING.
+        let src = "<ul><li>a<li>b</ul>";
+        let frag = parse_ok(src);
+        let [Node::Element(ul)] = frag.nodes.as_slice() else {
+            panic!("expected one ul, got {:?}", frag.nodes);
+        };
+        assert_eq!(ul.name, "ul");
+        assert_eq!(ul.range.slice(src), src);
+        let lis: Vec<&Element> = ul
+            .children
+            .nodes
+            .iter()
+            .filter_map(|n| match n {
+                Node::Element(e) if e.name == "li" => Some(e),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lis.len(), 2, "two li siblings, got {:?}", ul.children.nodes);
+        // The auto-closed element ends where the closing trigger starts
+        // (upstream sets parent.end = start of the new tag / close tag).
+        assert_eq!(lis[0].range.slice(src), "<li>a");
+        assert_eq!(lis[1].range.slice(src), "<li>b");
+    }
+
+    #[test]
+    fn p_implicitly_closed_by_ancestor_close_tag() {
+        // `<div><p>text</div>` — the `</div>` implicitly closes the open
+        // `<p>` (upstream pops RegularElement parents with a warning).
+        let src = "<div><p>text</div>";
+        let frag = parse_ok(src);
+        let [Node::Element(div)] = frag.nodes.as_slice() else {
+            panic!("expected one div, got {:?}", frag.nodes);
+        };
+        assert_eq!(div.range.slice(src), src);
+        let [Node::Element(p)] = div.children.nodes.as_slice() else {
+            panic!("expected one p child, got {:?}", div.children.nodes);
+        };
+        assert_eq!(p.name, "p");
+        assert_eq!(p.range.slice(src), "<p>text");
+    }
+
+    #[test]
+    fn ancestor_close_pops_multiple_open_elements() {
+        // `<ul><li><b>x</ul>` — upstream pops BOTH `<b>` and `<li>` with
+        // warnings when `</ul>` arrives (any RegularElement pops, not just
+        // table entries).
+        let src = "<ul><li><b>x</ul>";
+        let frag = parse_ok(src);
+        let [Node::Element(ul)] = frag.nodes.as_slice() else {
+            panic!("expected one ul, got {:?}", frag.nodes);
+        };
+        let [Node::Element(li)] = ul.children.nodes.as_slice() else {
+            panic!("expected one li child, got {:?}", ul.children.nodes);
+        };
+        let [Node::Element(b)] = li.children.nodes.as_slice() else {
+            panic!("expected one b child, got {:?}", li.children.nodes);
+        };
+        assert_eq!(b.range.slice(src), "<b>x");
+    }
+
+    #[test]
+    fn li_implicitly_closed_by_component_close_tag() {
+        // `<Comp><li>x</Comp>` parses clean upstream: the `</Comp>` pops
+        // the open `<li>` with a warning and then closes the component.
+        let src = "<Comp><li>x</Comp>";
+        let frag = parse_ok(src);
+        let [Node::Component(c)] = frag.nodes.as_slice() else {
+            panic!("expected one component, got {:?}", frag.nodes);
+        };
+        assert_eq!(c.range.slice(src), src);
+        let [Node::Element(li)] = c.children.nodes.as_slice() else {
+            panic!("expected one li child, got {:?}", c.children.nodes);
+        };
+        assert_eq!(li.range.slice(src), "<li>x");
+    }
+
+    #[test]
+    fn component_is_never_implicitly_closed() {
+        // `<div><Comp></div>` errors upstream
+        // (element_invalid_closing_tag: Comp isn't a RegularElement).
+        let src = "<div><Comp></div>";
+        let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(!errors.is_empty(), "expected errors for {src:?}");
+    }
+
+    #[test]
+    fn implicit_close_does_not_cross_block_boundary() {
+        // `<div>{#if c}<li></div>{/if}` errors upstream — the ancestor
+        // walk stops at the IfBlock (not a RegularElement).
+        let src = "<div>{#if c}<li></div>{/if}";
+        let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(!errors.is_empty(), "expected errors for {src:?}");
+    }
+
+    #[test]
+    fn open_tag_auto_close_table_variants() {
+        // A sampling of closing_tag_omitted rows beyond li: options,
+        // table cells/rows, dt/dd, and p closed by a block-level element.
+        for (src, outer, inner, count) in [
+            ("<select><option>a<option>b</select>", "select", "option", 2),
+            ("<tr><td>a<td>b<td>c</tr>", "tr", "td", 3),
+            ("<dl><dt>t<dd>d</dl>", "dl", "dt", 1),
+        ] {
+            let frag = parse_ok(src);
+            let [Node::Element(o)] = frag.nodes.as_slice() else {
+                panic!("expected one {outer}, got {:?}", frag.nodes);
+            };
+            assert_eq!(o.name, outer);
+            let inners = o
+                .children
+                .nodes
+                .iter()
+                .filter(|n| matches!(n, Node::Element(e) if e.name == inner))
+                .count();
+            assert_eq!(
+                inners, count,
+                "{count} {inner} in {src:?}: {:?}",
+                o.children.nodes
+            );
+        }
+        // `<p>` is implicitly closed by a following block-level element.
+        let src = "<p>a<div>b</div>";
+        let frag = parse_ok(src);
+        assert_eq!(frag.nodes.len(), 2, "p and div siblings: {:?}", frag.nodes);
+        let Node::Element(p) = &frag.nodes[0] else {
+            panic!("expected p first");
+        };
+        assert_eq!(p.range.slice(src), "<p>a");
     }
 
     #[test]

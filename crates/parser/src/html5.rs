@@ -6,6 +6,11 @@
 //! - `is_tag_valid_with_ancestor(child, ancestors) -> Option<String>`
 //! - `closing_tag_omitted(current, next) -> bool`
 //!
+//! Single vendored copy shared by two consumers: the template parser
+//! uses `closing_tag_omitted` to implicitly close elements exactly
+//! where upstream's parser does (`1-parse/state/element.js`), and
+//! `svn-lint` uses all three for its tree-validation warnings.
+//!
 //! When refreshing (`/update-lint`), diff the source against the
 //! vendored clone and port any table changes across.
 

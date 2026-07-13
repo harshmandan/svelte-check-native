@@ -14,6 +14,9 @@
 //       → run binary normally, assert zero ERRORs emitted (black-box)
 //   { "errors": [{file,line,column,code}] }
 //       → run binary normally, assert exact set of ERRORs (black-box)
+//   { "warnings": [{file,line,column,code}] }
+//       → additionally assert the exact set of WARNINGs; may accompany
+//         "clean" or "errors" (when absent, warnings are ignored)
 //   { "emit_contains": ["..."], "emit_not_contains": ["..."] }
 //       → run binary with `--emit-ts`; capture stdout as generated TS;
 //         assert substring presence/absence on the emitted code
@@ -172,6 +175,7 @@ function runFixture(name, fixtureDir) {
         }
 
         const actualErrors = [];
+        const actualWarnings = [];
         for (const line of stdout.split('\n')) {
             const jsonStart = line.indexOf('{');
             if (jsonStart === -1) continue;
@@ -181,8 +185,9 @@ function runFixture(name, fixtureDir) {
             } catch {
                 continue;
             }
-            if (entry.type === 'ERROR') {
-                actualErrors.push({
+            if (entry.type === 'ERROR' || entry.type === 'WARNING') {
+                const target = entry.type === 'ERROR' ? actualErrors : actualWarnings;
+                target.push({
                     file: String(entry.filename || '').replace(/\\/g, '/'),
                     line: entry.start?.line ?? -1,
                     column: entry.start?.character ?? -1,
@@ -203,6 +208,16 @@ function runFixture(name, fixtureDir) {
             const act = [...actualErrors].sort(sortKey);
             if (JSON.stringify(exp) !== JSON.stringify(act)) {
                 issues.push(`expected:\n${JSON.stringify(exp, null, 2)}\nactual:\n${JSON.stringify(act, null, 2)}`);
+            }
+        }
+
+        if (Array.isArray(expected.warnings)) {
+            const exp = [...expected.warnings].sort(sortKey);
+            const act = [...actualWarnings].sort(sortKey);
+            if (JSON.stringify(exp) !== JSON.stringify(act)) {
+                issues.push(
+                    `expected warnings:\n${JSON.stringify(exp, null, 2)}\nactual warnings:\n${JSON.stringify(act, null, 2)}`
+                );
             }
         }
     }

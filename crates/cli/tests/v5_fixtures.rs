@@ -1,7 +1,7 @@
 //! svelte2tsx `.v5` fixture parity suite.
 //!
 //! Walks the 63 Svelte-5-only fixtures from upstream svelte2tsx's test
-//! corpus and asserts our binary produces zero tsgo errors against each.
+//! corpus and asserts our binary produces zero TypeScript errors against each.
 //! Each fixture is a known-good Svelte 5 component so any error we
 //! report is a real fidelity gap.
 //!
@@ -43,13 +43,13 @@ fn v5_fixtures_suite() {
         );
 
     // Per-fixture workspaces live under /var/folders/... where there's
-    // no enclosing node_modules to walk up to. Locate the local tsgo
+    // no enclosing node_modules to walk up to. Locate the local TypeScript
     // ourselves and pass via TSGO_BIN so the binary doesn't fail in
     // discovery (which would silently inflate the pass-count).
     let tsgo = locate_local_tsgo(&crate_dir).expect(
-        "could not locate the workspace's local tsgo install. \
-         Run `npm install` at the repo root to install \
-         @typescript/native-preview.",
+        "could not locate the workspace's local native TypeScript \
+         compiler. Run `npm install` at the repo root to install \
+         @typescript/native-preview and typescript@^7.",
     );
 
     let output = match Command::new("node")
@@ -163,7 +163,8 @@ fn parse_summary(line: &str) -> (usize, usize, usize) {
 ///
 /// The previous shape of this helper hard-coded a six-path list that
 /// covered platform-native packages + the JS wrapper but missed
-/// pnpm/bun package-store layouts (`.pnpm/@typescript+native-preview@…`)
+/// pnpm/bun package-store layouts (`.pnpm/typescript@…` and legacy
+/// `.pnpm/@typescript+native-preview@…`)
 /// — the production runtime supports those via
 /// `svn_typecheck::discovery::find_in_package_store`. Reusing the
 /// real discover() keeps test coverage aligned with shipping

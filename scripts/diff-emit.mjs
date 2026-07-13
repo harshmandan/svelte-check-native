@@ -255,37 +255,58 @@ async function ensureOurOverlay() {
 }
 
 function runTsgo(cfgPath) {
-    // Map this host's (platform, arch) to the @typescript/native-preview
-    // platform-package suffix. Mirrors what
-    // svn_typecheck::discovery::current_platform_native_path() picks
-    // at runtime; the fallback paths below also try the JS wrapper
-    // in the order tsgo's npm install resolves.
+    // Map this host's (platform, arch) to the native platform-package
+    // suffixes. Mirrors svn_typecheck::discovery: stable TypeScript 7
+    // preferred, native-preview (tsgo) as the fallback.
     const suffixes = (() => {
         const p = process.platform;
         const a = process.arch;
-        if (p === 'darwin' && a === 'arm64') return ['native-preview-darwin-arm64'];
-        if (p === 'darwin' && a === 'x64') return ['native-preview-darwin-x64'];
-        if (p === 'linux' && a === 'arm64') return ['native-preview-linux-arm64'];
-        if (p === 'linux' && a === 'x64') return ['native-preview-linux-x64'];
-        if (p === 'win32' && a === 'x64') return ['native-preview-win32-x64'];
+        if (p === 'darwin' && a === 'arm64') return ['typescript-darwin-arm64', 'native-preview-darwin-arm64'];
+        if (p === 'darwin' && a === 'x64') return ['typescript-darwin-x64', 'native-preview-darwin-x64'];
+        if (p === 'linux' && a === 'arm64') return ['typescript-linux-arm64', 'native-preview-linux-arm64'];
+        if (p === 'linux' && a === 'x64') return ['typescript-linux-x64', 'native-preview-linux-x64'];
+        if (p === 'win32' && a === 'x64') return ['typescript-win32-x64', 'native-preview-win32-x64'];
         return []; // unsupported → fall through to wrapper
     })();
-    let tsgo = null;
+    let tsc = null;
     let needsNode = false;
     for (const suffix of suffixes) {
         const out = spawnSync(
             'find',
-            [workspace, '-name', 'tsgo', '-path', `*${suffix}*`, '-type', 'f'],
+            [workspace, '-name', suffix.startsWith('typescript-') ? 'tsc' : 'tsgo', '-path', `*${suffix}*`, '-type', 'f'],
             { encoding: 'utf8' },
         );
         const hit = (out.stdout || '').split('\n').filter(Boolean)[0];
         if (hit) {
-            tsgo = hit;
+            tsc = hit;
             break;
         }
     }
-    if (!tsgo) {
-        // JS-wrapper fallback (`tsgo.js`); requires node to invoke.
+    if (!tsc) {
+        // Stable `typescript` wrapper, gated to 7+: below that,
+        // `bin/tsc` is the JavaScript compiler, and every bench
+        // workspace has some typescript 5/6 installed for its own
+        // toolchain — probing with it would be the wrong engine.
+        const out = spawnSync(
+            'find',
+            [workspace, '-path', '*typescript/bin/tsc', '-type', 'f'],
+            { encoding: 'utf8' },
+        );
+        for (const hit of (out.stdout || '').split('\n').filter(Boolean)) {
+            try {
+                const pkg = JSON.parse(readFileSync(join(dirname(hit), '../package.json'), 'utf8'));
+                if (parseInt(String(pkg.version).split('.')[0], 10) >= 7) {
+                    tsc = hit;
+                    needsNode = true;
+                    break;
+                }
+            } catch {
+                // unreadable manifest → can't identify the engine; skip
+            }
+        }
+    }
+    if (!tsc) {
+        // tsgo JS-wrapper fallback; requires node to invoke.
         const out = spawnSync(
             'find',
             [workspace, '-path', '*native-preview/bin/tsgo.js', '-type', 'f'],
@@ -293,20 +314,18 @@ function runTsgo(cfgPath) {
         );
         const hit = (out.stdout || '').split('\n').filter(Boolean)[0];
         if (hit) {
-            tsgo = hit;
+            tsc = hit;
             needsNode = true;
         }
     }
-    if (!tsgo) {
-        console.error(
-            `tsgo not found in ${workspace} for platform ${process.platform}-${process.arch}.`,
-        );
+    if (!tsc) {
+        console.error(`TypeScript not found in ${workspace} for platform ${process.platform}-${process.arch}.`);
         return '';
     }
     const args = needsNode
-        ? [tsgo, '--pretty', 'false', '-p', cfgPath]
+        ? [tsc, '--pretty', 'false', '-p', cfgPath]
         : ['--pretty', 'false', '-p', cfgPath];
-    const cmd = needsNode ? 'node' : tsgo;
+    const cmd = needsNode ? 'node' : tsc;
     const r = spawnSync(cmd, args, {
         encoding: 'utf8',
         maxBuffer: 64 * 1024 * 1024,

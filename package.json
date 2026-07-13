@@ -39,6 +39,7 @@
     "publish:all": "npm run build:all && npm run prepare-release && node scripts/publish-all.mjs"
   },
   "devDependencies": {
-    "@typescript/native-preview": ">=7.0.0-dev.0"
+    "@typescript/native-preview": ">=7.0.0-dev.0",
+    "typescript": "^7.0.2"
   }
 }

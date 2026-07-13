@@ -56,14 +56,6 @@ updates:
     cooldown:
       default-days: 7
       semver-major-days: 14
-    # @typescript/native-preview ships dev releases multiple times per
-    # week; cooldown alone would block updates indefinitely. Skip its
-    # patch-bump churn — the version pin in package.json is open
-    # (`>=7.0.0-dev.0`), so users always get the latest at install.
-    ignore:
-      - dependency-name: "@typescript/native-preview"
-        update-types:
-          - version-update:semver-patch
     groups:
       npm:
         patterns:

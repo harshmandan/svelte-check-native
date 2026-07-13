@@ -99,9 +99,19 @@ function mainPackageJson(v) {
     optionalDependencies: Object.fromEntries(
       TARGETS.map((t) => [`${MAIN_PKG}-${t.npmPlatform}`, v]),
     ),
-    peerDependencies: { '@typescript/native-preview': '>=7.0.0-dev.0' },
+    // Either engine satisfies the runtime requirement (discovery
+    // prefers native-preview, accepts typescript 7+). Both peers are
+    // optional so that installs carrying only one of them — e.g. a
+    // tsgo-only project, or a stable-TS7-only project — don't get
+    // unresolved-peer warnings. Discovery errors at check time when
+    // neither is present.
+    peerDependencies: {
+      typescript: '>=7.0.0',
+      '@typescript/native-preview': '>=7.0.0-dev.0',
+    },
     peerDependenciesMeta: {
-      '@typescript/native-preview': { optional: false },
+      typescript: { optional: true },
+      '@typescript/native-preview': { optional: true },
     },
   };
 }

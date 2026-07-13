@@ -1,26 +1,44 @@
-//! Locate the tsgo binary.
+//! Locate the native TypeScript compiler (TypeScript 7 `tsc` / tsgo).
 //!
-//! Resolution order at each ancestor `node_modules`, closest first:
-//! 1. `TSGO_BIN` env var (absolute path to a tsgo executable or wrapper).
-//! 2. The platform-native binary at
-//!    `node_modules/@typescript/native-preview-<platform>/lib/tsgo[.exe]`.
-//!    This skips Node.js startup overhead (~50-100 ms per check).
-//! 3. The JavaScript wrapper at
-//!    `node_modules/@typescript/native-preview/bin/tsgo.js` invoked via
-//!    `node`.
+//! Two npm packages ship it: stable `typescript` 7+ (the supported
+//! release channel going forward) and `@typescript/native-preview`
+//! (tsgo, the nightly channel). Both are supported; when both are
+//! installed, **stable `typescript` 7+ wins**, with tsgo as the
+//! fallback — including when `typescript` is installed but below 7.
+//!
+//! That version gate is load-bearing: at 6 and below the `typescript`
+//! package's `bin/tsc` is the JavaScript compiler, not the native
+//! one, and nearly every workspace has some `typescript` installed
+//! for its own toolchain. Without the gate we'd spawn classic `tsc`
+//! in exactly the projects that installed tsgo to avoid it — the gate
+//! is what lets a project keep `typescript@6` for its build while
+//! type-checking with tsgo.
+//!
+//! Resolution order at each ancestor `node_modules`, closest first —
+//! engine preference dominates, and within each engine the
+//! platform-native binary beats the JS wrapper (skips Node.js startup
+//! overhead, ~50-100 ms per check):
+//! 1. `TSGO_BIN` env var (absolute path to an executable or wrapper).
+//! 2. Stable TypeScript 7+ —
+//!    `node_modules/@typescript/typescript-<platform>/lib/tsc[.exe]`
+//!    (the scoped platform packages only exist for 7+, so no version
+//!    gate is needed), then `node_modules/typescript/bin/tsc` gated
+//!    on the installed package's `version` being 7+.
+//! 3. tsgo —
+//!    `node_modules/@typescript/native-preview-<platform>/lib/tsgo[.exe]`,
+//!    then `node_modules/@typescript/native-preview/bin/tsgo.js`.
 //! 4. pnpm / bun per-package-store fallbacks:
-//!    `node_modules/.pnpm/@typescript+native-preview@*/node_modules/...`
-//!    and `node_modules/.bun/@typescript+native-preview@*/node_modules/...`.
+//!    `node_modules/.pnpm/<pkg>@*/node_modules/...` and
+//!    `node_modules/.bun/<pkg>@*/node_modules/...`, same engine
+//!    preference and the same 7+ gate on `typescript@*` entries.
 //!    Needed when `shamefully-hoist=false` (default in pnpm 8+) or
 //!    `symlink=false` prevents the hoisted paths above from existing.
 //!    When multiple versions are installed, the highest semver wins.
 //!
-//! `@typescript/native-preview` ships the JS wrapper and installs a
-//! platform-specific package (e.g. `native-preview-darwin-arm64`) as an
-//! optionalDependency containing the real binary. We can therefore
-//! reliably invoke the native form when one is present and fall back to
-//! the wrapper otherwise (e.g. on a platform where no native package
-//! exists).
+//! Both packages ship the JS wrapper and install a platform-specific
+//! package as an optionalDependency containing the real binary. We
+//! invoke the native form when one is present and fall back to the
+//! wrapper otherwise (e.g. on a platform with no native package).
 //!
 //! Returns a [`TsgoBinary`] handle that the runner uses to spawn the
 //! correct command (a `.js` wrapper has to be invoked via `node`; a native
@@ -28,7 +46,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// A located tsgo binary, ready to spawn.
+/// A located TypeScript compiler binary, ready to spawn.
 #[derive(Debug, Clone)]
 pub struct TsgoBinary {
     /// Path to the executable or JS wrapper.
@@ -37,14 +55,16 @@ pub struct TsgoBinary {
     pub needs_node: bool,
 }
 
-/// Errors when looking for tsgo.
+/// Errors when looking for TypeScript.
 #[derive(Debug, thiserror::Error)]
 pub enum DiscoveryError {
     #[error(
-        "could not find tsgo. Install `@typescript/native-preview` as a \
+        "could not find a native TypeScript compiler. Install \
+         `typescript` (7+) or `@typescript/native-preview` as a \
          devDependency, or set TSGO_BIN to an absolute path. Searched \
-         upward from {searched_from} for `@typescript/native-preview` \
-         (hoisted under node_modules, or isolated under .pnpm/.bun)."
+         upward from {searched_from} (hoisted under node_modules, or \
+         isolated under .pnpm/.bun). TypeScript 6 and below is not \
+         supported as a check engine."
     )]
     NotFound { searched_from: PathBuf },
 
@@ -52,7 +72,8 @@ pub enum DiscoveryError {
     EnvBinNotFound { path: PathBuf },
 }
 
-/// Locate tsgo.
+/// Locate the native TypeScript compiler — stable `typescript` 7+
+/// preferred, `@typescript/native-preview` (tsgo) as the fallback.
 pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
     if let Ok(env_path) = std::env::var("TSGO_BIN") {
         let path = PathBuf::from(env_path);
@@ -71,12 +92,16 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
         return Ok(TsgoBinary { path, needs_node });
     }
 
-    let native_relative = current_platform_native_path();
-    let wrapper_relative = Path::new("node_modules/@typescript/native-preview/bin/tsgo.js");
+    // Stable 7+ before preview (tsgo); native before wrapper within
+    // each engine — see module docs.
+    let native_relatives = [
+        stable_platform_native_path(),
+        preview_platform_native_path(),
+    ];
 
     svn_core::walk_up_dirs(workspace, |dir| {
-        // Native binary is preferred — no Node.js startup overhead.
-        if let Some(rel) = &native_relative {
+        // Stable TypeScript 7+.
+        if let Some(rel) = &native_relatives[0] {
             let candidate = dir.join(rel);
             if candidate.is_file() {
                 return Some(TsgoBinary {
@@ -85,102 +110,150 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
                 });
             }
         }
-        // Fallback: JS wrapper requires `node`.
-        let wrapper = dir.join(wrapper_relative);
-        if wrapper.is_file() {
+        if let Some(found) = stable_typescript_wrapper(dir) {
+            return Some(found);
+        }
+        // tsgo (native-preview) fallback.
+        if let Some(rel) = &native_relatives[1] {
+            let candidate = dir.join(rel);
+            if candidate.is_file() {
+                return Some(TsgoBinary {
+                    path: candidate,
+                    needs_node: false,
+                });
+            }
+        }
+        let preview_wrapper = dir.join("node_modules/@typescript/native-preview/bin/tsgo.js");
+        if preview_wrapper.is_file() {
             return Some(TsgoBinary {
-                path: wrapper,
+                path: preview_wrapper,
                 needs_node: true,
             });
         }
         // pnpm / bun per-package store. Only reached when the
         // canonical hoisted paths above are absent (pnpm
         // `shamefully-hoist=false`, isolated installs, etc.).
-        find_in_package_store(dir, native_relative.as_deref())
+        find_in_package_store(dir, &native_relatives)
     })
     .ok_or_else(|| DiscoveryError::NotFound {
         searched_from: workspace.to_path_buf(),
     })
 }
 
-/// Look for `@typescript+native-preview@<version>` directories under
+/// The stable `typescript` package's `bin/tsc` wrapper — accepted only
+/// when the installed package's `version` is 7 or newer. At 6 and
+/// below the same path holds the JavaScript compiler: spawning it
+/// would silently swap the check engine in any workspace that happens
+/// to have `typescript` installed for its own build tooling, which is
+/// most of them. A `typescript` install whose package.json is missing
+/// or unparseable is skipped for the same reason — we only ever spawn
+/// a wrapper we can positively identify as the native compiler.
+fn stable_typescript_wrapper(dir: &Path) -> Option<TsgoBinary> {
+    let wrapper = dir.join("node_modules/typescript/bin/tsc");
+    if !wrapper.is_file() {
+        return None;
+    }
+    let manifest = dir.join("node_modules/typescript/package.json");
+    let text = std::fs::read_to_string(manifest).ok()?;
+    let pkg: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let version = semver::Version::parse(pkg.get("version")?.as_str()?).ok()?;
+    if version.major < 7 {
+        return None;
+    }
+    Some(TsgoBinary {
+        path: wrapper,
+        needs_node: true,
+    })
+}
+
+/// Look for stable `typescript@<version>` and
+/// `@typescript+native-preview@<version>` directories under
 /// `<dir>/node_modules/.pnpm` and `<dir>/node_modules/.bun`. Returns
 /// the highest-version match's native binary (preferred) or JS wrapper
-/// (fallback). Returns `None` when no package-store entries exist.
+/// (fallback). Stable TypeScript is preferred over native-preview,
+/// and `typescript@*` entries below major 7 are ignored entirely —
+/// same engine rules as the hoisted paths (see module docs).
 ///
 /// pnpm store layout (shamefully-hoist=false or symlink=false):
 ///
 /// ```text
 /// node_modules/.pnpm/
-///   @typescript+native-preview@7.0.0-dev.20260101.1/
+///   typescript@7.0.2/
 ///     node_modules/@typescript/
-///       native-preview/bin/tsgo.js
-///       native-preview-darwin-arm64/lib/tsgo
+///       typescript-darwin-arm64/lib/tsc
+///     typescript/bin/tsc
 /// ```
 ///
 /// bun uses the same layout under `.bun/`.
-fn find_in_package_store(dir: &Path, native_relative: Option<&Path>) -> Option<TsgoBinary> {
+fn find_in_package_store(
+    dir: &Path,
+    native_relatives: &[Option<PathBuf>; 2],
+) -> Option<TsgoBinary> {
     for manager_root in [
         dir.join(svn_core::NODE_MODULES_DIR).join(".pnpm"),
         dir.join(svn_core::NODE_MODULES_DIR).join(".bun"),
     ] {
-        let Ok(entries) = std::fs::read_dir(&manager_root) else {
-            continue;
-        };
-        // Collect every `@typescript+native-preview@<version>` entry
-        // and sort newest-first by parsed semver. Lexicographic sort
-        // mis-orders any segment that crosses a multi-digit boundary
-        // (`...9` beats `...10`, `9.0.0` beats `10.0.0`) — tsgo's
-        // dev-release suffix `7.0.0-dev.YYYYMMDD.N` is fine today
-        // because `N` is single-digit and the date is fixed-width, but
-        // either axis can cross 9→10 in the future and silently
-        // downgrade users to an older tsgo.
-        let mut candidates: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| {
-                p.file_name()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|name| name.starts_with("@typescript+native-preview@"))
-            })
-            .collect();
-        candidates.sort_by(|a, b| {
-            let va = version_from_store_entry(a);
-            let vb = version_from_store_entry(b);
-            // Newest first. Unparseable entries sort last so a weird
-            // store subdir never shadows a real version.
-            match (va, vb) {
-                (Some(va), Some(vb)) => vb.cmp(&va),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => b.cmp(a),
-            }
-        });
+        for (prefix, wrapper_tail) in [
+            ("typescript@", "typescript/bin/tsc"),
+            (
+                "@typescript+native-preview@",
+                "@typescript/native-preview/bin/tsgo.js",
+            ),
+        ] {
+            let Ok(entries) = std::fs::read_dir(&manager_root) else {
+                continue;
+            };
+            // Collect every version in this package family and sort
+            // newest-first by parsed semver. Lexicographic sorting would
+            // mis-order a multi-digit version or preview suffix.
+            // `typescript@*` entries carry the 7+ engine gate: below
+            // that, `bin/tsc` is the JavaScript compiler.
+            let mut candidates: Vec<PathBuf> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|s| s.to_str())
+                        .is_some_and(|name| name.starts_with(prefix))
+                })
+                .filter(|p| {
+                    prefix != "typescript@"
+                        || version_from_store_entry(p).is_some_and(|v| v.major >= 7)
+                })
+                .collect();
+            candidates.sort_by(|a, b| {
+                let va = version_from_store_entry(a);
+                let vb = version_from_store_entry(b);
+                match (va, vb) {
+                    (Some(va), Some(vb)) => vb.cmp(&va),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => b.cmp(a),
+                }
+            });
 
-        for pkg_root in candidates {
-            let inner = pkg_root.join("node_modules/@typescript");
-            // Native binary under the sibling platform package inside
-            // the same store entry — prefer this form when present.
-            if let Some(rel) = native_relative {
-                // native_relative is rooted at `node_modules/...`; we
-                // need the tail after `node_modules/` to attach under
-                // the store's own `node_modules/`.
-                if let Ok(tail) = rel.strip_prefix("node_modules/") {
-                    let native_candidate = pkg_root.join(svn_core::NODE_MODULES_DIR).join(tail);
-                    if native_candidate.is_file() {
-                        return Some(TsgoBinary {
-                            path: native_candidate,
-                            needs_node: false,
-                        });
+            for pkg_root in candidates {
+                // Native binary under the sibling platform package inside
+                // the same store entry — prefer this form when present.
+                for rel in native_relatives.iter().flatten() {
+                    if let Ok(tail) = rel.strip_prefix("node_modules/") {
+                        let native_candidate = pkg_root.join(svn_core::NODE_MODULES_DIR).join(tail);
+                        if native_candidate.is_file() {
+                            return Some(TsgoBinary {
+                                path: native_candidate,
+                                needs_node: false,
+                            });
+                        }
                     }
                 }
-            }
-            let wrapper_candidate = inner.join("native-preview/bin/tsgo.js");
-            if wrapper_candidate.is_file() {
-                return Some(TsgoBinary {
-                    path: wrapper_candidate,
-                    needs_node: true,
-                });
+                let wrapper_candidate =
+                    pkg_root.join(svn_core::NODE_MODULES_DIR).join(wrapper_tail);
+                if wrapper_candidate.is_file() {
+                    return Some(TsgoBinary {
+                        path: wrapper_candidate,
+                        needs_node: true,
+                    });
+                }
             }
         }
     }
@@ -189,21 +262,23 @@ fn find_in_package_store(dir: &Path, native_relative: Option<&Path>) -> Option<T
 
 /// Extract and parse the version from a pnpm/bun store directory name.
 ///
-/// Store entries are named `@typescript+native-preview@<version>`. When the
-/// version is valid semver (tsgo's own `7.0.0-dev.YYYYMMDD.N` form is), the
+/// Store entries are named `typescript@<version>` or
+/// `@typescript+native-preview@<version>`. When the version is valid semver
+/// (including tsgo's own `7.0.0-dev.YYYYMMDD.N` form), the
 /// parsed [`Version`](semver::Version) sorts correctly by semver rules —
 /// `1.0.0-dev.10` > `1.0.0-dev.9` (numeric identifier compare) and
 /// `10.0.0` > `9.0.0`. Returns `None` for entries that don't match the
 /// expected name or whose version doesn't parse.
 fn version_from_store_entry(path: &Path) -> Option<semver::Version> {
     let name = path.file_name().and_then(|s| s.to_str())?;
-    let ver = name.strip_prefix("@typescript+native-preview@")?;
+    let ver = name
+        .strip_prefix("typescript@")
+        .or_else(|| name.strip_prefix("@typescript+native-preview@"))?;
     semver::Version::parse(ver).ok()
 }
 
-/// Return the relative path to the platform-native tsgo binary, or `None`
-/// if we don't know how to map the current platform to a published
-/// `@typescript/native-preview-<platform>` package.
+/// npm platform tag for the running host, or `None` on platforms
+/// where neither package publishes a native binary we know about.
 ///
 /// Mapping mirrors the platform tags used by the npm packages:
 /// - `darwin` + `aarch64` → `darwin-arm64`
@@ -211,19 +286,40 @@ fn version_from_store_entry(path: &Path) -> Option<semver::Version> {
 /// - `linux`  + `aarch64` → `linux-arm64`
 /// - `linux`  + `x86_64`  → `linux-x64`
 /// - `windows`+ `x86_64`  → `win32-x64` (binary suffixed `.exe`)
-fn current_platform_native_path() -> Option<PathBuf> {
-    let platform_tag = match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => "darwin-arm64",
-        ("macos", "x86_64") => "darwin-x64",
-        ("linux", "aarch64") => "linux-arm64",
-        ("linux", "x86_64") => "linux-x64",
-        ("windows", "x86_64") => "win32-x64",
-        _ => return None,
-    };
+fn platform_tag() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => Some("darwin-arm64"),
+        ("macos", "x86_64") => Some("darwin-x64"),
+        ("linux", "aarch64") => Some("linux-arm64"),
+        ("linux", "x86_64") => Some("linux-x64"),
+        ("windows", "x86_64") => Some("win32-x64"),
+        _ => None,
+    }
+}
+
+/// Relative path to `@typescript/native-preview-<platform>`'s tsgo
+/// binary (the preferred engine — see module docs).
+fn preview_platform_native_path() -> Option<PathBuf> {
+    let tag = platform_tag()?;
     let exe = if cfg!(windows) { "tsgo.exe" } else { "tsgo" };
     Some(
         PathBuf::from("node_modules/@typescript")
-            .join(format!("native-preview-{platform_tag}"))
+            .join(format!("native-preview-{tag}"))
+            .join("lib")
+            .join(exe),
+    )
+}
+
+/// Relative path to `@typescript/typescript-<platform>`'s native `tsc`
+/// binary — stable TypeScript's layout since 7.0. The scoped platform
+/// packages only exist for 7+, so unlike the `typescript` JS wrapper
+/// this path needs no version gate.
+fn stable_platform_native_path() -> Option<PathBuf> {
+    let tag = platform_tag()?;
+    let exe = if cfg!(windows) { "tsc.exe" } else { "tsc" };
+    Some(
+        PathBuf::from("node_modules/@typescript")
+            .join(format!("typescript-{tag}"))
             .join("lib")
             .join(exe),
     )
@@ -248,6 +344,90 @@ mod tests {
         let found = discover(tmp.path()).unwrap();
         assert_eq!(found.path, tsgo);
         assert!(found.needs_node);
+    }
+
+    /// Write a stub `typescript` package (wrapper + package.json at the
+    /// given version) under `root/node_modules` and return the wrapper
+    /// path.
+    fn write_typescript_pkg(root: &Path, version: &str) -> PathBuf {
+        let pkg_dir = root.join("node_modules/typescript");
+        let wrapper = pkg_dir.join("bin/tsc");
+        fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+        fs::write(&wrapper, "#!/usr/bin/env node\n").unwrap();
+        fs::write(
+            pkg_dir.join("package.json"),
+            format!(r#"{{"name":"typescript","version":"{version}"}}"#),
+        )
+        .unwrap();
+        wrapper
+    }
+
+    #[test]
+    fn discovers_typescript_wrapper_in_local_node_modules() {
+        let tmp = tempdir().unwrap();
+        let wrapper = write_typescript_pkg(tmp.path(), "7.0.2");
+
+        let found = discover(tmp.path()).unwrap();
+        assert_eq!(found.path, wrapper);
+        assert!(found.needs_node);
+    }
+
+    #[test]
+    fn typescript_6_wrapper_is_not_an_engine() {
+        // `typescript@6`'s bin/tsc is the JavaScript compiler. A
+        // workspace that has it installed for its own tooling (most
+        // do) must not have it picked up as the check engine.
+        let tmp = tempdir().unwrap();
+        write_typescript_pkg(tmp.path(), "6.1.0");
+
+        let err = discover(tmp.path()).unwrap_err();
+        assert!(matches!(err, DiscoveryError::NotFound { .. }));
+    }
+
+    #[test]
+    fn typescript_wrapper_without_manifest_is_skipped() {
+        // No package.json → can't positively identify the wrapper as
+        // the native compiler → skip rather than guess.
+        let tmp = tempdir().unwrap();
+        let wrapper = tmp.path().join("node_modules/typescript/bin/tsc");
+        fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+        fs::write(&wrapper, "#!/usr/bin/env node\n").unwrap();
+
+        let err = discover(tmp.path()).unwrap_err();
+        assert!(matches!(err, DiscoveryError::NotFound { .. }));
+    }
+
+    #[test]
+    fn typescript_7_preferred_over_preview_wrapper() {
+        // Both engines installed side by side: stable `typescript` 7+
+        // wins — it's the supported release channel; tsgo is the
+        // fallback for projects that haven't moved yet.
+        let tmp = tempdir().unwrap();
+        let tsc = write_typescript_pkg(tmp.path(), "7.0.2");
+        let tsgo = tmp
+            .path()
+            .join("node_modules/@typescript/native-preview/bin/tsgo.js");
+        fs::create_dir_all(tsgo.parent().unwrap()).unwrap();
+        fs::write(&tsgo, b"// stub").unwrap();
+
+        let found = discover(tmp.path()).unwrap();
+        assert_eq!(found.path, tsc);
+    }
+
+    #[test]
+    fn typescript_6_alongside_preview_uses_preview() {
+        // The exact mixed setup the gate exists for: TypeScript 6 for
+        // the project's own toolchain, tsgo for checking.
+        let tmp = tempdir().unwrap();
+        write_typescript_pkg(tmp.path(), "6.0.4");
+        let tsgo = tmp
+            .path()
+            .join("node_modules/@typescript/native-preview/bin/tsgo.js");
+        fs::create_dir_all(tsgo.parent().unwrap()).unwrap();
+        fs::write(&tsgo, b"// stub").unwrap();
+
+        let found = discover(tmp.path()).unwrap();
+        assert_eq!(found.path, tsgo);
     }
 
     #[test]
@@ -278,7 +458,7 @@ mod tests {
     fn native_binary_preferred_over_js_wrapper() {
         // When both forms are present, the native binary wins (saves Node
         // startup overhead).
-        let Some(rel) = current_platform_native_path() else {
+        let Some(rel) = stable_platform_native_path() else {
             // Skip on platforms we don't have a native package for.
             return;
         };
@@ -316,11 +496,11 @@ mod tests {
     }
 
     #[test]
-    fn current_platform_native_path_returns_some_for_known_platforms() {
+    fn stable_platform_native_path_returns_some_for_known_platforms() {
         // Smoke test: on the platforms our CI matrix covers, the helper
         // should return a path; on unknown platforms returning None is
         // also valid behavior.
-        let _ = current_platform_native_path();
+        let _ = stable_platform_native_path();
     }
 
     // Note: we intentionally don't have a unit test for the `TSGO_BIN`
@@ -345,6 +525,36 @@ mod tests {
         let found = discover(tmp.path()).unwrap();
         assert_eq!(found.path, wrapper);
         assert!(found.needs_node);
+    }
+
+    #[test]
+    fn discovers_typescript_in_pnpm_package_store_wrapper() {
+        let tmp = tempdir().unwrap();
+        let pkg_root = tmp.path().join("node_modules/.pnpm/typescript@7.0.2");
+        let wrapper = pkg_root.join("node_modules/typescript/bin/tsc");
+        fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+        fs::write(&wrapper, "#!/usr/bin/env node\n").unwrap();
+
+        let found = discover(tmp.path()).unwrap();
+        assert_eq!(found.path, wrapper);
+        assert!(found.needs_node);
+    }
+
+    #[test]
+    fn discovers_typescript_native_binary_in_pnpm_package_store() {
+        let Some(rel) = stable_platform_native_path() else {
+            return;
+        };
+        let tmp = tempdir().unwrap();
+        let pkg_root = tmp.path().join("node_modules/.pnpm/typescript@7.0.2");
+        let tail = rel.strip_prefix("node_modules/").unwrap();
+        let native = pkg_root.join("node_modules").join(tail);
+        fs::create_dir_all(native.parent().unwrap()).unwrap();
+        fs::write(&native, b"native stub").unwrap();
+
+        let found = discover(tmp.path()).unwrap();
+        assert_eq!(found.path, native);
+        assert!(!found.needs_node);
     }
 
     #[test]
@@ -441,7 +651,7 @@ mod tests {
     fn pnpm_store_prefers_native_binary_when_present() {
         // Store entry has BOTH the JS wrapper and a platform-native
         // binary. Native wins.
-        let Some(rel) = current_platform_native_path() else {
+        let Some(rel) = preview_platform_native_path() else {
             return;
         };
         let tmp = tempdir().unwrap();
@@ -463,6 +673,45 @@ mod tests {
         let found = discover(tmp.path()).unwrap();
         assert_eq!(found.path, native);
         assert!(!found.needs_node);
+    }
+
+    #[test]
+    fn pnpm_store_ignores_typescript_below_7() {
+        // `.pnpm/typescript@5.x` is the JavaScript compiler — same
+        // engine gate as the hoisted layout.
+        let tmp = tempdir().unwrap();
+        let wrapper = tmp
+            .path()
+            .join("node_modules/.pnpm/typescript@5.8.3")
+            .join("node_modules/typescript/bin/tsc");
+        fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+        fs::write(&wrapper, "#!/usr/bin/env node\n").unwrap();
+
+        let err = discover(tmp.path()).unwrap_err();
+        assert!(matches!(err, DiscoveryError::NotFound { .. }));
+    }
+
+    #[test]
+    fn pnpm_store_prefers_typescript_7_over_preview() {
+        // Both engines in the store: stable `typescript` 7+ wins, same
+        // preference as the hoisted layout.
+        let tmp = tempdir().unwrap();
+        let ts_wrapper = tmp
+            .path()
+            .join("node_modules/.pnpm/typescript@7.0.2")
+            .join("node_modules/typescript/bin/tsc");
+        fs::create_dir_all(ts_wrapper.parent().unwrap()).unwrap();
+        fs::write(&ts_wrapper, "#!/usr/bin/env node\n").unwrap();
+
+        let tsgo = tmp
+            .path()
+            .join("node_modules/.pnpm/@typescript+native-preview@7.0.0-dev.20260101.1")
+            .join("node_modules/@typescript/native-preview/bin/tsgo.js");
+        fs::create_dir_all(tsgo.parent().unwrap()).unwrap();
+        fs::write(&tsgo, b"// stub").unwrap();
+
+        let found = discover(tmp.path()).unwrap();
+        assert_eq!(found.path, ts_wrapper);
     }
 
     #[test]

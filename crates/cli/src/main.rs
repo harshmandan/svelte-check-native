@@ -29,12 +29,13 @@ use output::{print_diagnostics, print_machine_failure};
 #[command(
     name = "svelte-check-native",
     version,
-    about = "CLI-only type checker for Svelte 5+ projects. Powered by tsgo.",
+    about = "CLI-only type checker for Svelte 5+ projects. Powered by TypeScript's native compiler.",
     long_about = "svelte-check-native — type-check Svelte components.\n\n\
                   Both Svelte 4 (export let, $:, <slot>, on:event) and Svelte 5\n\
-                  (runes) syntax are supported. tsgo (@typescript/native-preview)\n\
-                  must be installed in the project's node_modules, or pointed at\n\
-                  via TSGO_BIN. A tsconfig/jsconfig is required (mirrors\n\
+                  (runes) syntax are supported. A native TypeScript compiler —\n\
+                  typescript 7+ (preferred) or @typescript/native-preview (tsgo)\n\
+                  — must be installed in the project's node_modules, or pointed\n\
+                  at via TSGO_BIN. A tsconfig/jsconfig is required (mirrors\n\
                   `svelte-check --tsgo`); --no-tsconfig and watch mode are not\n\
                   supported."
 )]
@@ -192,8 +193,7 @@ struct Cli {
     debug_paths: bool,
 
     /// Print the resolved tsgo binary path + its --version output, then
-    /// exit. Helps verify that `@typescript/native-preview` is at the
-    /// expected version.
+    /// exit. Helps verify that TypeScript 7 is at the expected version.
     #[arg(long = "tsgo-version", default_value_t = false)]
     tsgo_version: bool,
 
@@ -620,8 +620,8 @@ fn run_tsgo_version(workspace: &Path) -> ExitCode {
         }
     };
     println!("tsgo binary: {}", &bin.path.display());
-    // The discovery layer flags JS-wrapper installs (`tsgo.js` under
-    // node_modules/@typescript/native-preview/bin/) with
+    // The discovery layer flags JS-wrapper installs (`tsc` under
+    // node_modules/typescript/bin/) with
     // `needs_node = true`. Those can't be exec'd directly — we have
     // to spawn `node <path>` instead. The main type-check path at
     // runner.rs honors this; missing it here meant

@@ -15,9 +15,35 @@
 //! formatted identically to upstream so existing wrappers parsing the
 //! prelude / completion lines keep working.
 
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 use crate::ColorMode;
+
+/// Unwrap a stdout write result, preserving `println!`'s
+/// panic-on-write-failure posture (same message shape as std's
+/// `print_to` panic). The pre-buffering code used `println!` per line
+/// (one lock + write syscall each — measured 0.6-0.8s of overhead at
+/// 40k human-verbose diagnostics); swallowing a write error after the
+/// switch to an explicit writer would silently truncate machine
+/// output that CI parsers key off, so a failed write still panics
+/// exactly as `println!` did.
+fn stdout_write_ok(result: std::io::Result<()>) {
+    if let Err(err) = result {
+        panic!("failed printing to stdout: {err}");
+    }
+}
+
+/// `writeln!` into the locked, buffered stdout writer through
+/// [`stdout_write_ok`].
+macro_rules! outln {
+    ($out:expr) => {
+        stdout_write_ok(writeln!($out))
+    };
+    ($out:expr, $($arg:tt)*) => {
+        stdout_write_ok(writeln!($out, $($arg)*))
+    };
+}
 
 /// Compute `target` relative to `base`, walking up with `..` segments
 /// when `target` is not a descendant of `base` (mirrors Node's
@@ -92,10 +118,18 @@ pub(crate) fn print_diagnostics(
         .collect();
     let use_color = color.use_color();
 
+    // One locked, buffered writer for the whole report. Every helper
+    // below writes through it, so a diagnostic-heavy run issues a
+    // handful of large write syscalls instead of one per output line
+    // (std's unlocked `println!` flushes LineWriter-buffered stdout at
+    // every newline).
+    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+
     match output_format {
         "machine-verbose" => {
-            print_machine(workspace, diagnostics, now_ms, true, threshold);
+            print_machine(&mut out, workspace, diagnostics, now_ms, true, threshold);
             print_machine_completed(
+                &mut out,
                 now_ms,
                 files_checked,
                 errors,
@@ -104,8 +138,9 @@ pub(crate) fn print_diagnostics(
             );
         }
         "machine" => {
-            print_machine(workspace, diagnostics, now_ms, false, threshold);
+            print_machine(&mut out, workspace, diagnostics, now_ms, false, threshold);
             print_machine_completed(
+                &mut out,
                 now_ms,
                 files_checked,
                 errors,
@@ -114,25 +149,53 @@ pub(crate) fn print_diagnostics(
             );
         }
         "human" => {
-            print_human(workspace, diagnostics, false, use_color, threshold);
-            print_human_summary(errors, warnings, files_with_problems.len(), use_color);
+            print_human(
+                &mut out,
+                workspace,
+                diagnostics,
+                false,
+                use_color,
+                threshold,
+            );
+            print_human_summary(
+                &mut out,
+                errors,
+                warnings,
+                files_with_problems.len(),
+                use_color,
+            );
         }
         // human-verbose is the default
         _ => {
             // Verbose mode prints a banner before diagnostics — matches
             // upstream svelte-check so editor integrations and shell
             // wrappers parsing the prelude don't break.
-            println!("Loading svelte-check in workspace: {}", workspace.display());
-            println!("Getting Svelte diagnostics...");
-            println!();
-            print_human(workspace, diagnostics, true, use_color, threshold);
-            print_human_summary(errors, warnings, files_with_problems.len(), use_color);
+            outln!(
+                out,
+                "Loading svelte-check in workspace: {}",
+                workspace.display()
+            );
+            outln!(out, "Getting Svelte diagnostics...");
+            outln!(out);
+            print_human(&mut out, workspace, diagnostics, true, use_color, threshold);
+            print_human_summary(
+                &mut out,
+                errors,
+                warnings,
+                files_with_problems.len(),
+                use_color,
+            );
         }
     }
+    // Flush before the writer drops so a failure surfaces as the same
+    // loud panic a failed `println!` produced (BufWriter's Drop flush
+    // swallows errors).
+    stdout_write_ok(out.flush());
 }
 
 /// `machine` and `machine-verbose` body — per-diagnostic lines.
 fn print_machine(
+    out: &mut impl Write,
     workspace: &Path,
     diagnostics: &[svn_typecheck::CheckDiagnostic],
     now_ms: u128,
@@ -144,7 +207,7 @@ fn print_machine(
     // quote or backslash doesn't break machine-output parsers.
     let ws = serde_json::to_string(&workspace.display().to_string())
         .unwrap_or_else(|_| format!("\"{}\"", workspace.display()));
-    println!("{now_ms} START {ws}");
+    outln!(out, "{now_ms} START {ws}");
     for d in diagnostics {
         if !passes_threshold(d.severity, threshold) {
             continue;
@@ -198,27 +261,31 @@ fn print_machine(
             }
             obj.insert("source".to_string(), serde_json::json!(d.source.as_str()));
             let payload = serde_json::Value::Object(obj);
-            println!("{now_ms} {payload}");
+            outln!(out, "{now_ms} {payload}");
         } else {
             // Non-verbose: line-oriented `<ts> <TYPE> "<file>" <line>:<col> "<msg>"`.
             let fname = serde_json::to_string(&rel.to_string_lossy()).unwrap_or_default();
             let msg = serde_json::to_string(&d.message).unwrap_or_default();
-            println!(
+            outln!(
+                out,
                 "{now_ms} {type_label} {fname} {}:{} {msg}",
-                d.line, d.column,
+                d.line,
+                d.column,
             );
         }
     }
 }
 
 fn print_machine_completed(
+    out: &mut impl Write,
     now_ms: u128,
     files_checked: usize,
     errors: usize,
     warnings: usize,
     files_with_problems: usize,
 ) {
-    println!(
+    outln!(
+        out,
         "{now_ms} COMPLETED {files_checked} FILES {errors} ERRORS {warnings} WARNINGS {files_with_problems} FILES_WITH_PROBLEMS"
     );
 }
@@ -237,11 +304,13 @@ pub(crate) fn print_machine_failure(output_format: &str, message: &str) {
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let msg = serde_json::to_string(message).unwrap_or_else(|_| format!("\"{message}\""));
-    println!("{now_ms} FAILURE {msg}");
+    let mut out = std::io::stdout().lock();
+    outln!(out, "{now_ms} FAILURE {msg}");
 }
 
 /// `human` / `human-verbose` body — per-diagnostic block.
 fn print_human(
+    out: &mut impl Write,
     workspace: &Path,
     diagnostics: &[svn_typecheck::CheckDiagnostic],
     verbose: bool,
@@ -264,7 +333,8 @@ fn print_human(
         // Path that IDEs turn into clickable links. Use the platform
         // separator between workspace and file (upstream uses `sep`), so
         // Windows links resolve.
-        println!(
+        outln!(
+            out,
             "{workspace_display}{}{}:{}:{}",
             std::path::MAIN_SEPARATOR,
             paint(&filename, "32", color),
@@ -302,22 +372,29 @@ fn print_human(
                 _ => String::new(),
             };
             if frame.is_empty() {
-                println!("{label}: {} ({source})", d.message);
+                outln!(out, "{label}: {} ({source})", d.message);
             } else {
-                println!(
+                outln!(
+                    out,
                     "{label}: {} ({source})\n{}",
                     d.message,
                     paint(&frame, "36", color),
                 );
             }
         } else {
-            println!("{label}: {} ({source})", d.message);
+            outln!(out, "{label}: {} ({source})", d.message);
         }
-        println!();
+        outln!(out);
     }
 }
 
-fn print_human_summary(errors: usize, warnings: usize, files: usize, color: bool) {
+fn print_human_summary(
+    out: &mut impl Write,
+    errors: usize,
+    warnings: usize,
+    files: usize,
+    color: bool,
+) {
     // Mirror upstream's completion line (writers.ts): a `====` rule
     // when any file has problems, then `svelte-check-native found …`
     // (we brand the human summary; machine output stays byte-compatible
@@ -326,7 +403,7 @@ fn print_human_summary(errors: usize, warnings: usize, files: usize, color: bool
     // time (use `--timings` for that). Pre-fix we always printed
     // `in N files` and an elapsed suffix upstream doesn't emit.
     if files > 0 {
-        println!("====================================");
+        outln!(out, "====================================");
     }
     let in_files = if files > 0 {
         format!(" in {files} file{}", if files == 1 { "" } else { "s" })
@@ -341,11 +418,11 @@ fn print_human_summary(errors: usize, warnings: usize, files: usize, color: bool
         if warnings == 1 { "" } else { "s" },
     );
     if errors > 0 {
-        println!("{}", paint(&parts, "31", color));
+        outln!(out, "{}", paint(&parts, "31", color));
     } else if warnings > 0 {
-        println!("{}", paint(&parts, "33", color));
+        outln!(out, "{}", paint(&parts, "33", color));
     } else {
-        println!("{}", paint(&parts, "32", color));
+        outln!(out, "{}", paint(&parts, "32", color));
     }
 }
 

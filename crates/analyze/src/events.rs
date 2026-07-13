@@ -240,7 +240,9 @@ fn collect_dispatcher_locals_via_walker(
 /// would force dispatcher detection, event surface synthesis, and
 /// the iso default-export shape on a value that has no actual
 /// Svelte event semantics.
-pub fn collect_ctor_locals(program: &oxc_ast::ast::Program<'_>) -> std::collections::HashSet<String> {
+pub fn collect_ctor_locals(
+    program: &oxc_ast::ast::Program<'_>,
+) -> std::collections::HashSet<String> {
     use std::collections::HashSet;
     let mut ctor_locals: HashSet<String> = HashSet::new();
     for stmt in &program.body {

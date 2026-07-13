@@ -37,7 +37,8 @@ use std::path::Path;
 use oxc_allocator::Allocator;
 use smol_str::SmolStr;
 use svn_analyze::{
-    PropsInfo, collect_top_level_bindings, find_store_refs_with_bindings, find_template_refs,
+    PropsInfo, collect_rune_scan_context, collect_top_level_bindings,
+    find_store_refs_with_bindings, find_template_refs, has_svelte_store_derived_import,
 };
 use svn_parser::parse_script_body;
 
@@ -95,38 +96,37 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
         .map(|p| p.local_name.clone())
         .collect();
 
-    let prop_type_source: Option<String> =
-        if let (Some(_s), Some(instance), Some(parsed_orig)) =
-            (split, &doc.instance_script, parsed_instance)
-        {
-            // SvelteKit auto-typing: route components (+page.svelte,
-            // +layout.svelte) with an untyped `$props()` pick up
-            // `PageData` / `LayoutData` / `ActionData` from the file
-            // path + the list of destructured prop names. Only fires
-            // when PropsInfo saw no user-provided source.
-            let ty = effective_props_type_text
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    sveltekit::route_kind(source_path).and_then(|kind| {
-                        let names_borrow: Vec<&str> = props_info
-                            .destructures
-                            .iter()
-                            .map(|p| p.local_name.as_str())
-                            .collect();
-                        sveltekit::synthesize_route_props_type(kind, &names_borrow)
-                    })
-                });
+    let prop_type_source: Option<String> = if let (Some(_s), Some(instance), Some(parsed_orig)) =
+        (split, &doc.instance_script, parsed_instance)
+    {
+        // SvelteKit auto-typing: route components (+page.svelte,
+        // +layout.svelte) with an untyped `$props()` pick up
+        // `PageData` / `LayoutData` / `ActionData` from the file
+        // path + the list of destructured prop names. Only fires
+        // when PropsInfo saw no user-provided source.
+        let ty = effective_props_type_text
+            .map(|s| s.to_string())
+            .or_else(|| {
+                sveltekit::route_kind(source_path).and_then(|kind| {
+                    let names_borrow: Vec<&str> = props_info
+                        .destructures
+                        .iter()
+                        .map(|p| p.local_name.as_str())
+                        .collect();
+                    sveltekit::synthesize_route_props_type(kind, &names_borrow)
+                })
+            });
 
-            collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
-            if let Some(rewritten) = rewritten_content {
-                let alloc_rw = Allocator::default();
-                let parsed_rw = parse_script_body(&alloc_rw, rewritten, instance.lang);
-                collect_top_level_bindings(&parsed_rw.program, &mut script_bindings);
-            }
-            ty
-        } else {
-            None
-        };
+        collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
+        if let Some(rewritten) = rewritten_content {
+            let alloc_rw = Allocator::default();
+            let parsed_rw = parse_script_body(&alloc_rw, rewritten, instance.lang);
+            collect_top_level_bindings(&parsed_rw.program, &mut script_bindings);
+        }
+        ty
+    } else {
+        None
+    };
 
     // Store auto-subscribe scan happens AFTER both module + instance
     // bindings are collected, so a `$properties` use in instance can
@@ -143,15 +143,24 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
                 }
             };
         if let Some(module_script) = &doc.module_script {
+            // Rune-position skips are per-script — the offsets index
+            // into the script content being scanned.
+            let runes = parsed_mod
+                .as_ref()
+                .map(|p| collect_rune_scan_context(&p.program, module_script.content))
+                .unwrap_or_default();
             push_unique(
-                find_store_refs_with_bindings(module_script.content, &script_bindings),
+                find_store_refs_with_bindings(module_script.content, &script_bindings, &runes),
                 &mut seen,
                 &mut accumulated,
             );
         }
         if let Some(instance) = &doc.instance_script {
+            let runes = parsed_instance
+                .map(|p| collect_rune_scan_context(&p.program, instance.content))
+                .unwrap_or_default();
             push_unique(
-                find_store_refs_with_bindings(instance.content, &script_bindings),
+                find_store_refs_with_bindings(instance.content, &script_bindings, &runes),
                 &mut seen,
                 &mut accumulated,
             );
@@ -183,7 +192,12 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
         let already: HashSet<&str> = store_refs
             .iter()
             .map(|s| s.as_str())
-            .chain(props_info.destructures.iter().map(|p| p.local_name.as_str()))
+            .chain(
+                props_info
+                    .destructures
+                    .iter()
+                    .map(|p| p.local_name.as_str()),
+            )
             .collect();
         let mut tpl_voids = Vec::new();
         let mut tpl_stores = Vec::new();
@@ -206,6 +220,21 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
         (tpl_voids, tpl_stores, tpl_types)
     };
     store_refs.extend(template_store_refs);
+
+    // Mirrors upstream ImplicitStoreValues.isSvelteStoreDerivedImport
+    // (Svelte 5+): a named import of `derived` from 'svelte/store'
+    // never gets a store subscription — `$derived(...)` anywhere in
+    // the component (script OR template) stays the rune.
+    let derived_import = parsed_instance
+        .map(|p| has_svelte_store_derived_import(&p.program))
+        .unwrap_or(false)
+        || parsed_mod
+            .as_ref()
+            .map(|p| has_svelte_store_derived_import(&p.program))
+            .unwrap_or(false);
+    if derived_import {
+        store_refs.retain(|r| r != "$derived");
+    }
 
     ScriptAndTemplateAnalysis {
         bindable_prop_names,

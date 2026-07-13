@@ -355,34 +355,34 @@ pub(crate) fn parse_await_header(
 
     let header = &scanner.source()[header_start as usize..header_end as usize];
 
-    // Look for `then` or `catch` separator at depth zero. Either form may
-    // be followed by an optional context binding before the closing `}`.
-    let (short, split_at) = if let Some(p) = find_token_at_depth_zero(header, " then ") {
-        let ctx_start = header_start + (p + 6) as u32;
-        let ctx = trimmed_range(scanner.source(), ctx_start, header_end);
-        (AwaitShortForm::Then(ctx), Some(p))
-    } else if let Some(p) = find_token_at_depth_zero(header, " catch ") {
-        let ctx_start = header_start + (p + 7) as u32;
-        let ctx = trimmed_range(scanner.source(), ctx_start, header_end);
-        (AwaitShortForm::Catch(ctx), Some(p))
-    } else if let Some(p) = header
-        .strip_suffix(" then")
-        .map(|h| h.len())
+    // Look for the `then` or `catch` separator keyword at depth zero. Any
+    // whitespace run may surround it (upstream: read_expression +
+    // allow_whitespace + eat('then')), and the trailing context binding is
+    // optional (`{#await p then}` is the no-binding shorthand). A bare
+    // `then`/`catch` header keeps its historical reading as a shorthand
+    // with an empty promise expression.
+    let (short, split_at) = if let Some(p) = find_keyword_at_depth_zero(header, "then")
         .or_else(|| if header == "then" { Some(0) } else { None })
     {
-        (AwaitShortForm::Then(None), Some(p))
-    } else if let Some(p) = header
-        .strip_suffix(" catch")
-        .map(|h| h.len())
+        let ctx_start = header_start + (p + 4) as u32;
+        let ctx = trimmed_range(scanner.source(), ctx_start, header_end);
+        (AwaitShortForm::Then(ctx), Some(p))
+    } else if let Some(p) = find_keyword_at_depth_zero(header, "catch")
         .or_else(|| if header == "catch" { Some(0) } else { None })
     {
-        (AwaitShortForm::Catch(None), Some(p))
+        let ctx_start = header_start + (p + 5) as u32;
+        let ctx = trimmed_range(scanner.source(), ctx_start, header_end);
+        (AwaitShortForm::Catch(ctx), Some(p))
     } else {
         (AwaitShortForm::None, None)
     };
 
     let expression_range = match split_at {
-        Some(p) => Range::new(header_start, header_start + p as u32),
+        // Trim the whitespace run before the keyword off the expression.
+        Some(p) => Range::new(
+            header_start,
+            header_start + skip_ws_end(header, 0, p as u32),
+        ),
         None => Range::new(header_start, header_end),
     };
 
@@ -575,77 +575,6 @@ fn find_keyword_at_depth_zero(src: &str, keyword: &str) -> Option<usize> {
             && bytes
                 .get(i + kw.len())
                 .is_none_or(|b| b.is_ascii_whitespace())
-        {
-            return Some(i);
-        }
-        match bytes[i] {
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            b'"' | b'\'' => {
-                let q = bytes[i];
-                i += 1;
-                while i < bytes.len() && bytes[i] != q {
-                    if bytes[i] == b'\\' {
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-            b'`' => {
-                i += 1;
-                while i < bytes.len() && bytes[i] != b'`' {
-                    if bytes[i] == b'\\' {
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-            b'/' => match bytes.get(i + 1).copied() {
-                Some(b'/') => {
-                    // Line comment to end of line. `//` is unambiguously a
-                    // comment in expression context (an empty `//` regex is
-                    // invalid), so no regex/division disambiguation is needed.
-                    i += 2;
-                    while i < bytes.len() && bytes[i] != b'\n' {
-                        i += 1;
-                    }
-                }
-                Some(b'*') => {
-                    // Block comment to `*/`. Leave `i` on the closing `/` so
-                    // the trailing `i += 1` steps past it.
-                    i += 2;
-                    while i + 1 < bytes.len() {
-                        if bytes[i] == b'*' && bytes[i + 1] == b'/' {
-                            i += 1;
-                            break;
-                        }
-                        i += 1;
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Find a token at depth 0 (outside strings / template literals / nested
-/// parens / brackets / braces / comments). Searches for `needle` as a
-/// contiguous byte match.
-fn find_token_at_depth_zero(src: &str, needle: &str) -> Option<usize> {
-    let bytes = src.as_bytes();
-    let needle_bytes = needle.as_bytes();
-    let mut i = 0;
-    let mut depth: i32 = 0;
-
-    while i < bytes.len() {
-        if depth == 0
-            && i + needle_bytes.len() <= bytes.len()
-            && &bytes[i..i + needle_bytes.len()] == needle_bytes
         {
             return Some(i);
         }
@@ -951,13 +880,60 @@ mod tests {
     }
 
     #[test]
-    fn find_token_at_depth_zero_basic() {
-        assert_eq!(find_token_at_depth_zero("foo as bar", " as "), Some(3));
-        // Same token inside parens: depth != 0, skip.
-        assert_eq!(
-            find_token_at_depth_zero("foo(a as b) as c", " as "),
-            Some(11)
-        );
+    fn await_header_accepts_newline_around_then_and_catch() {
+        // `{#await p\nthen v}` / `{#await p\tcatch e}` are valid Svelte —
+        // upstream reads the promise expression, then allow_whitespace +
+        // eat('then'/'catch'), so any whitespace run may separate them.
+        for (src, expect_expr, expect_then) in [
+            ("p\nthen v}", "p", true),
+            ("p\tthen\tv}", "p", true),
+            ("p\r\nthen v}", "p", true),
+            ("p \n then \n v}", "p", true),
+            ("p\ncatch v}", "p", false),
+            ("p\tcatch\tv}", "p", false),
+        ] {
+            let mut scanner = Scanner::new(src);
+            let mut errors = Vec::new();
+            let Some((expr, short)) = parse_await_header(&mut scanner, &mut errors) else {
+                panic!("expected await header for {src:?}, errors: {errors:?}");
+            };
+            assert_eq!(expr.slice(src), expect_expr, "expression for {src:?}");
+            match (expect_then, short) {
+                (true, AwaitShortForm::Then(ctx)) | (false, AwaitShortForm::Catch(ctx)) => {
+                    let ctx = ctx.unwrap_or_else(|| panic!("binding dropped for {src:?}"));
+                    assert_eq!(ctx.slice(src), "v", "binding for {src:?}");
+                }
+                (_, other) => panic!("wrong short form for {src:?}: {other:?}"),
+            }
+            assert!(
+                errors.is_empty(),
+                "unexpected errors for {src:?}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn await_header_multiline_promise_expression() {
+        let src = "fetchData(\n  url,\n  opts\n)\nthen result}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (expr, short) = parse_await_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(expr.slice(src), "fetchData(\n  url,\n  opts\n)");
+        let AwaitShortForm::Then(Some(ctx)) = short else {
+            panic!("expected then shorthand, got {short:?}");
+        };
+        assert_eq!(ctx.slice(src), "result");
+    }
+
+    #[test]
+    fn await_header_newline_then_without_binding() {
+        // `{#await p\nthen}` — keyword at end of header, no binding.
+        let src = "p\nthen}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (expr, short) = parse_await_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(expr.slice(src), "p");
+        assert!(matches!(short, AwaitShortForm::Then(None)), "got {short:?}");
     }
 
     #[test]

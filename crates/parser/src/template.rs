@@ -1356,6 +1356,30 @@ mod tests {
     }
 
     #[test]
+    fn await_block_newline_before_then() {
+        let src = "{#await p\nthen v}{v}{/await}";
+        let frag = parse_ok(src);
+        let Node::AwaitBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        assert!(b.pending.is_none());
+        assert_eq!(b.expression_range.slice(src), "p");
+        let then = b.then_branch.as_ref().expect("then branch parsed");
+        assert_eq!(then.context_range.map(|r| r.slice(src)), Some("v"));
+    }
+
+    #[test]
+    fn await_block_tab_before_catch() {
+        let src = "{#await p\tcatch e}{e}{/await}";
+        let frag = parse_ok(src);
+        let Node::AwaitBlock(b) = &frag.nodes[0] else {
+            unreachable!()
+        };
+        let catch = b.catch_branch.as_ref().expect("catch branch parsed");
+        assert_eq!(catch.context_range.map(|r| r.slice(src)), Some("e"));
+    }
+
+    #[test]
     fn await_short_then_with_trailing_catch() {
         // `{#await p then v} body {:catch} fallback {/await}` — Svelte
         // grammar allows `:catch` after a then-short-form. Pre-fix this

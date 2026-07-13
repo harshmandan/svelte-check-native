@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "The await header's `then`/`catch` keyword may be separated from the promise expression by any whitespace (newline/tab/CRLF), not just single spaces — upstream does read_expression, then allow_whitespace + eat('then'/'catch'). A newline before `then` used to silently drop the branch: the `{v}` body was misclassified as the pending fragment and `v` referenced with no binding (phantom TS2304)."
+}

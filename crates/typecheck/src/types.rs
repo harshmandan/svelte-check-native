@@ -32,8 +32,10 @@ pub struct MapData {
     /// Source `.svelte` text. Same UTF-16-vs-byte conversion need on
     /// the source side: we map a matched token-map's source byte
     /// range back to a (line, UTF-16-column) for the user-facing
-    /// diagnostic.
-    pub source_text: String,
+    /// diagnostic. Shared (`Arc`) with the caller's in-memory corpus,
+    /// so retaining it across the tsgo subprocess phase duplicates
+    /// nothing.
+    pub source_text: std::sync::Arc<str>,
     /// When true, overlay positions that don't match any `token_map` /
     /// `line_map` entry pass through unchanged (identity map) instead
     /// of being dropped. Set for kit-file inputs where the overlay is
@@ -63,6 +65,13 @@ pub struct CheckInput {
     /// Kit-file inputs (`kind == InputKind::KitFile`) it's a `.ts`
     /// under `src/routes/` or `src/hooks.*` / `src/params/`.
     pub source_path: PathBuf,
+    /// Original source text for Svelte / SvelteAuxiliary kinds, shared
+    /// with the caller via `Arc` (the CLI already holds the full
+    /// corpus in memory for its own passes, so this adds no RSS and
+    /// saves a per-file disk re-read inside [`crate::check`]). Empty
+    /// for KitFile / UserTsOverlay kinds — those are identity-mapped
+    /// and the position helpers read the overlay text for both sides.
+    pub source: std::sync::Arc<str>,
     /// Generated TypeScript that should be type-checked.
     pub generated_ts: String,
     /// Line mappings from emit — overlay-line ranges back to source-line

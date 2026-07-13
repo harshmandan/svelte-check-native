@@ -386,23 +386,23 @@ pub fn check(
 
         let ignore_regions = scan_ignore_regions(&input.generated_ts);
         // Source text for the position mapper. For Svelte / Aux
-        // overlays the source is the user's `.svelte` file; for kit /
-        // user-ts overlays the original layout is preserved through
-        // the inject and rewrite paths so we can reuse the overlay
-        // text as the source view (identity_map=true on those kinds
-        // already handles the line/col pass-through, but having the
-        // text on hand keeps position_to_byte / byte_to_position's
-        // UTF-16 conversion correct on non-ASCII content).
+        // overlays the source is the user's `.svelte` file — shared
+        // via `Arc` with the caller's in-memory corpus, so no disk
+        // re-read and no duplicate copy. For kit / user-ts overlays
+        // the original layout is preserved through the inject and
+        // rewrite paths so we can reuse the overlay text as the source
+        // view (identity_map=true on those kinds already handles the
+        // line/col pass-through, but having the text on hand keeps
+        // position_to_byte / byte_to_position's UTF-16 conversion
+        // correct on non-ASCII content).
         let source_text = match input.kind {
-            InputKind::Svelte | InputKind::SvelteAuxiliary => {
-                std::fs::read_to_string(&input.source_path).unwrap_or_default()
-            }
+            InputKind::Svelte | InputKind::SvelteAuxiliary => input.source.clone(),
             // Identity-map kinds preserve the original layout, so the
             // overlay text doubles as the source view. The position
             // helpers read `overlay_text` for both sides when
             // `identity_map` is true, so there's no need to clone a
             // second copy here.
-            InputKind::KitFile | InputKind::UserTsOverlay => String::new(),
+            InputKind::KitFile | InputKind::UserTsOverlay => std::sync::Arc::from(""),
         };
         let pug_template_ranges = filters::scan_pug_template_ranges(&source_text);
         let overlay_text = std::mem::take(&mut input.generated_ts);
@@ -1577,7 +1577,7 @@ mod tests {
             // a 60-byte filler text so byte_to_position can count
             // chars between line start and target byte.
             source_line_starts: vec![0, 10, 20, 30, 40, 50, 60],
-            source_text: "0123456789".repeat(6),
+            source_text: "0123456789".repeat(6).into(),
             ..Default::default()
         };
         // Overlay (line=2, col=3) corresponds to overlay byte 3+2=5.
@@ -1654,7 +1654,7 @@ mod tests {
                 overlay_line_starts: vec![0, 3, 10, 12],
                 overlay_text: "aa\nBBBBBB\ncc".to_string(),
                 source_line_starts: vec![0, 10, 20, 30, 40, 50, 60],
-                source_text: "0123456789".repeat(6),
+                source_text: "0123456789".repeat(6).into(),
                 ..Default::default()
             },
         );
@@ -1697,7 +1697,7 @@ mod tests {
                 overlay_line_starts,
                 source_line_starts,
                 overlay_text,
-                source_text,
+                source_text: source_text.into(),
                 ..Default::default()
             },
         );
@@ -1766,6 +1766,7 @@ mod tests {
         let gen_path = layout.generated_path_with_lang(&source_path, true);
         let input = CheckInput {
             source_path,
+            source: "".into(),
             generated_ts: emit_text.clone(),
             line_map: Vec::new(),
             token_map: Vec::new(),
@@ -1916,7 +1917,7 @@ mod tests {
                 overlay_line_starts,
                 source_line_starts,
                 overlay_text,
-                source_text,
+                source_text: source_text.into(),
                 ..Default::default()
             },
         );

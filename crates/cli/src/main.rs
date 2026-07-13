@@ -829,7 +829,7 @@ fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Opti
 /// Only `native` mode calls this; `bridge` mode gets the real compiler
 /// errors (with upstream-accurate codes) straight from `compile_batch`.
 fn emit_native_svelte_diagnostics(
-    svelte_sources: &[(PathBuf, String)],
+    svelte_sources: &[(PathBuf, std::sync::Arc<str>)],
     compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
     diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
     seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
@@ -1328,11 +1328,14 @@ fn run_typecheck(
     // the overlay tsconfig's `files` (and run through the compiler
     // warning bridge); the tail past that are auxiliary overlays
     // that only exist so tsgo's import-following can reach them.
-    let mut svelte_sources: Vec<(PathBuf, String)> =
+    // Sources are held as `Arc<str>` so the typecheck crate's
+    // `CheckInput` can share them (no disk re-read, no duplicate copy)
+    // while this vec stays alive for the lint / bridge passes below.
+    let mut svelte_sources: Vec<(PathBuf, std::sync::Arc<str>)> =
         Vec::with_capacity(svelte_files.len() + svelte_files_aux.len());
     for file in &svelte_files {
         match std::fs::read_to_string(file) {
-            Ok(s) => svelte_sources.push((file.clone(), s)),
+            Ok(s) => svelte_sources.push((file.clone(), s.into())),
             Err(err) => {
                 eprintln!("failed to read {}: {err}", file.display());
             }
@@ -1341,7 +1344,7 @@ fn run_typecheck(
     let svelte_sources_in_scope_end = svelte_sources.len();
     for file in &svelte_files_aux {
         match std::fs::read_to_string(file) {
-            Ok(s) => svelte_sources.push((file.clone(), s)),
+            Ok(s) => svelte_sources.push((file.clone(), s.into())),
             Err(err) => {
                 eprintln!("failed to read {}: {err}", file.display());
             }
@@ -1390,6 +1393,7 @@ fn run_typecheck(
                 };
                 svn_typecheck::CheckInput {
                     source_path: file.clone(),
+                    source: source.clone(),
                     generated_ts: emitted.typescript,
                     line_map: emitted.line_map,
                     token_map: emitted.token_map,
@@ -1420,6 +1424,7 @@ fn run_typecheck(
                     let generated = svn_emit::kit_inject::inject(file, &source)?;
                     Some(svn_typecheck::CheckInput {
                         source_path: file.clone(),
+                        source: "".into(),
                         generated_ts: generated,
                         line_map: Vec::new(),
                         token_map: Vec::new(),
@@ -1475,6 +1480,7 @@ fn run_typecheck(
                         )?;
                         Some(svn_typecheck::CheckInput {
                             source_path: (*file).clone(),
+                            source: "".into(),
                             generated_ts: rewritten,
                             line_map: Vec::new(),
                             token_map: Vec::new(),
@@ -1562,8 +1568,14 @@ fn run_typecheck(
 
         let run_bridge = matches!(svelte_warnings_mode, SvelteWarningsMode::Bridge);
         if run_bridge {
-            match svn_svelte_compiler::compile_batch(workspace, std::mem::take(&mut svelte_sources))
-            {
+            // `compile_batch` wants owned Strings (they cross a worker
+            // boundary); copy out of the shared Arcs — bridge mode is
+            // the opt-in slow path and already spawns JS subprocesses.
+            let bridge_sources: Vec<(PathBuf, String)> = std::mem::take(&mut svelte_sources)
+                .into_iter()
+                .map(|(p, s)| (p, String::from(&*s)))
+                .collect();
+            match svn_svelte_compiler::compile_batch(workspace, bridge_sources) {
                 Ok(per_file) => {
                     for (path, warnings) in per_file {
                         for w in warnings {

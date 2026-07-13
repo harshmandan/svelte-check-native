@@ -94,7 +94,7 @@ pub(crate) fn translate_position(
                 // Identity-map kinds don't carry a separate source-text
                 // copy — the overlay text is the source view, so read the
                 // overlay-side line-starts/text for the UTF-16 conversion.
-                let (source_line_starts, source_text) = if data.identity_map {
+                let (source_line_starts, source_text): (&[u32], &str) = if data.identity_map {
                     (&data.overlay_line_starts, &data.overlay_text)
                 } else {
                     (&data.source_line_starts, &data.source_text)

@@ -516,6 +516,16 @@ pub fn check(
         include_suggestions,
     )?;
 
+    // Kit / user-ts originals that received a mirror overlay: any
+    // diagnostic tsgo attributes to one of these paths is dropped in
+    // `map_diagnostic` (see its docs — `exclude` doesn't stop
+    // import-following, so the untyped originals can still enter the
+    // program).
+    let excluded_kit_sources: std::collections::HashSet<PathBuf> = kit_overlay_sources
+        .iter()
+        .map(|p| path_utils::lexical_normalise(p))
+        .collect();
+
     // Step 4: map diagnostics back to source paths + apply line map.
     // Drop only the STRUCTURAL noise our overlay tsconfig produces
     // (artifacts of the generated `files` / rewritten `paths`); a
@@ -538,7 +548,7 @@ pub fn check(
             d
         })
         .filter(|d| !filters::is_overlay_tsconfig_noise(d, &layout))
-        .filter_map(|d| map_diagnostic(d, &layout, &map_data))
+        .filter_map(|d| map_diagnostic(d, &layout, &map_data, &excluded_kit_sources))
         .filter(|d| !filters::is_svelte4_reactive_noop_comma(d))
         .map(|mut d| {
             // Reclassify suggestion-style codes as Hint when the caller
@@ -651,10 +661,24 @@ fn overlay_disk_text(input: &CheckInput, gen_path: &Path, workspace: &Path) -> O
     ))
 }
 
+/// `excluded_kit_sources` is the set of original (lexically
+/// normalised, absolute) source paths that received a kit / user-ts
+/// mirror overlay. Diagnostics tsgo attributes to those originals are
+/// dropped wholesale: the overlay tsconfig excludes them, but
+/// `exclude` does not stop import-following, so a user file importing
+/// the original directly pulls the untyped source into the program and
+/// fires diagnostics upstream never shows. Upstream svelte-check drops
+/// these the same way (`excludedSourcePaths` in `incremental.ts` — its
+/// comment notes the originals can be re-included "through code in
+/// .svelte-kit/types importing them"). The typed mirror's diagnostics
+/// are attributed to the MIRROR path and re-map to the original via
+/// `original_from_generated`, so real problems on those files still
+/// surface.
 fn map_diagnostic(
     raw: RawDiagnostic,
     layout: &CacheLayout,
     map_data: &std::collections::HashMap<PathBuf, MapData>,
+    excluded_kit_sources: &std::collections::HashSet<PathBuf>,
 ) -> Option<CheckDiagnostic> {
     // tsgo emits paths relative to the working directory when the input
     // tsconfig path is itself relative (which it usually is). Absolutize
@@ -674,6 +698,10 @@ fn map_diagnostic(
         layout.workspace.join(&raw.file)
     };
     let absolute_file = path_utils::lexical_normalise(&absolute_file);
+    // Injected kit originals drop before any mapping — see the fn docs.
+    if excluded_kit_sources.contains(&absolute_file) {
+        return None;
+    }
     let (source_path, line, column) = match layout.original_from_generated(&absolute_file) {
         Some(orig) => {
             // For overlay files, require the position to resolve to a
@@ -852,7 +880,7 @@ fn map_diagnostic(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     // Tests of moved helpers reference them via their new module
     // paths. Pulled in here so the test bodies stay verbatim.
     use crate::filters::{is_in_ignore_region, scan_ignore_regions};
@@ -1040,7 +1068,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        let mapped = map_diagnostic(raw, &layout, &map).expect("mapped");
+        let mapped = map_diagnostic(raw, &layout, &map, &HashSet::new()).expect("mapped");
         assert_eq!(mapped.source_path, PathBuf::from("/proj/src/Foo.svelte"));
         // overlay line 10 - overlay_start (5) = 5, + source_start (1) = 6.
         assert_eq!(mapped.line, 6);
@@ -1058,9 +1086,71 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        let mapped = map_diagnostic(raw, &layout, &HashMap::new()).expect("mapped");
+        let mapped =
+            map_diagnostic(raw, &layout, &HashMap::new(), &HashSet::new()).expect("mapped");
         assert_eq!(mapped.source_path, PathBuf::from("/proj/src/plain.ts"));
         assert_eq!(mapped.line, 4); // no offset applied to non-generated files
+    }
+
+    #[test]
+    fn diagnostics_on_kit_original_sources_are_dropped() {
+        // The overlay tsconfig's `exclude` does not stop
+        // import-following: a user file importing the original
+        // `+page.ts` directly pulls the untyped source into the
+        // program, and tsgo reports diagnostics there (e.g. TS7031 on
+        // a destructured `load` arg that only the injected `$types`
+        // annotations in our mirror overlay would type). Upstream
+        // drops every diagnostic attributed to an injected kit source
+        // path (`excludedSourcePaths` in svelte-check's
+        // incremental.ts); we must too. Real problems on those files
+        // still surface — the typed mirror's diagnostics are
+        // attributed to the mirror path and re-map to the original
+        // through `original_from_generated`.
+        let layout = CacheLayout::for_workspace("/proj");
+        let excluded: std::collections::HashSet<PathBuf> =
+            [PathBuf::from("/proj/src/routes/foo/+page.ts")].into();
+        let raw = |file: &str| RawDiagnostic {
+            file: PathBuf::from(file),
+            line: 3,
+            column: 28,
+            severity: Severity::Error,
+            code: 7031,
+            message: "Binding element 'fetch' implicitly has an 'any' type.".to_string(),
+            span_length: Some(5),
+        };
+        assert!(
+            map_diagnostic(
+                raw("/proj/src/routes/foo/+page.ts"),
+                &layout,
+                &HashMap::new(),
+                &excluded
+            )
+            .is_none(),
+            "diagnostics on an injected kit original must drop"
+        );
+        // tsgo usually reports paths relative to its cwd — the same
+        // file must drop after absolutization.
+        assert!(
+            map_diagnostic(
+                raw("src/routes/foo/+page.ts"),
+                &layout,
+                &HashMap::new(),
+                &excluded
+            )
+            .is_none(),
+            "relative attribution of the same kit original must drop too"
+        );
+        // A normal user .ts file passes through untouched even with a
+        // non-empty excluded set.
+        let kept = map_diagnostic(
+            raw("/proj/src/lib/util.ts"),
+            &layout,
+            &HashMap::new(),
+            &excluded,
+        )
+        .expect("mapped");
+        assert_eq!(kept.source_path, PathBuf::from("/proj/src/lib/util.ts"));
+        assert_eq!((kept.line, kept.column), (3, 28));
     }
 
     #[test]
@@ -1087,7 +1177,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        assert!(map_diagnostic(raw_before, &layout, &map).is_none());
+        assert!(map_diagnostic(raw_before, &layout, &map, &HashSet::new()).is_none());
         let raw_after = RawDiagnostic {
             file: PathBuf::from(gen_path),
             line: 30,
@@ -1097,7 +1187,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        assert!(map_diagnostic(raw_after, &layout, &map).is_none());
+        assert!(map_diagnostic(raw_after, &layout, &map, &HashSet::new()).is_none());
     }
 
     #[test]
@@ -1138,7 +1228,12 @@ mod tests {
         };
         // 15 is in range [10, 20) — offset 5 from overlay_start (10),
         // applied to source_start (50) = source line 55.
-        assert_eq!(map_diagnostic(raw, &layout, &map).expect("mapped").line, 55);
+        assert_eq!(
+            map_diagnostic(raw, &layout, &map, &HashSet::new())
+                .expect("mapped")
+                .line,
+            55
+        );
     }
 
     #[test]
@@ -1171,7 +1266,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        assert!(map_diagnostic(raw, &layout, &map).is_none());
+        assert!(map_diagnostic(raw, &layout, &map, &HashSet::new()).is_none());
     }
 
     #[test]
@@ -1191,7 +1286,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        let mapped = map_diagnostic(raw, &layout, &map);
+        let mapped = map_diagnostic(raw, &layout, &map, &HashSet::new());
         // Empty line map for an overlay file now drops the diagnostic
         // entirely (same principle as outside-any-range: no evidence
         // the tsgo diagnostic originated from user source).
@@ -1215,7 +1310,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        let mapped = map_diagnostic(raw, &layout, &HashMap::new());
+        let mapped = map_diagnostic(raw, &layout, &HashMap::new(), &HashSet::new());
         // Without any line-map entry, diagnostics against an overlay
         // file are dropped — the path-reverse logic itself still
         // works but there's no user-source line to attribute to.
@@ -1245,7 +1340,7 @@ mod tests {
             message: "original message".to_string(),
             span_length: None,
         };
-        let mapped = map_diagnostic(raw, &layout, &map).expect("mapped");
+        let mapped = map_diagnostic(raw, &layout, &map, &HashSet::new()).expect("mapped");
         assert_eq!(mapped.column, 42);
         assert_eq!(mapped.severity, Severity::Warning);
         assert!(
@@ -1310,7 +1405,8 @@ mod tests {
             message: "Type 'X' does not satisfy the constraint".to_string(),
             span_length: Some(1),
         };
-        let mapped = map_diagnostic(raw, &layout, &HashMap::new()).expect("mapped");
+        let mapped =
+            map_diagnostic(raw, &layout, &HashMap::new(), &HashSet::new()).expect("mapped");
         assert_eq!(
             mapped.source_path,
             PathBuf::from("/proj/.svelte-kit/types/src/routes/foo/$types.d.ts")
@@ -1571,7 +1667,7 @@ mod tests {
             message: "mismatch".to_string(),
             span_length: Some(4),
         };
-        let mapped = map_diagnostic(raw, &layout, &m).expect("mapped");
+        let mapped = map_diagnostic(raw, &layout, &m, &HashSet::new()).expect("mapped");
         assert_eq!(mapped.line, 5, "line must follow the token span");
         assert_eq!(mapped.column, 5, "column must follow the token span");
         assert_eq!(mapped.end_column, 9, "end column = column + span_length");
@@ -1632,11 +1728,22 @@ mod tests {
         // 3-required-params contract: the synthetic 2-arg call site is
         // the artefact — drop.
         assert!(
-            map_diagnostic(diag("Expected 3 arguments, but got 2."), &layout, &map).is_none(),
+            map_diagnostic(
+                diag("Expected 3 arguments, but got 2."),
+                &layout,
+                &map,
+                &HashSet::new()
+            )
+            .is_none(),
             "the (node, params, options) contract case must stay suppressed"
         );
         // 4-required-params: a real user error upstream reports — keep.
-        let kept = map_diagnostic(diag("Expected 4 arguments, but got 2."), &layout, &map);
+        let kept = map_diagnostic(
+            diag("Expected 4 arguments, but got 2."),
+            &layout,
+            &map,
+            &HashSet::new(),
+        );
         assert!(
             kept.is_some(),
             "a transition fn with 4 required params fires a genuine TS2554"
@@ -1712,12 +1819,12 @@ mod tests {
             span_length: Some(1),
         };
         assert!(
-            map_diagnostic(diag(7028), &layout, &m).is_none(),
+            map_diagnostic(diag(7028), &layout, &m, &HashSet::new()).is_none(),
             "the reactive-label filter must still fire after a length-changing rewrite"
         );
         // Control: a non-filtered code at the same position translates
         // normally, proving the drop above came from the filter.
-        let kept = map_diagnostic(diag(2322), &layout, &m).expect("mapped");
+        let kept = map_diagnostic(diag(2322), &layout, &m, &HashSet::new()).expect("mapped");
         assert_eq!((kept.line, kept.column), (2, dollar_col));
     }
 
@@ -1763,7 +1870,7 @@ mod tests {
                 .to_string(),
             span_length: Some(6),
         };
-        let mapped = map_diagnostic(raw, &layout, &m)
+        let mapped = map_diagnostic(raw, &layout, &m, &HashSet::new())
             .expect("user-code duplicate key must survive the attribute-key filter");
         assert_eq!(mapped.line, 2);
         assert_eq!(mapped.column, column);
@@ -1824,7 +1931,7 @@ mod tests {
             span_length: Some(10),
         };
         assert!(
-            map_diagnostic(raw, &layout, &m).is_none(),
+            map_diagnostic(raw, &layout, &m, &HashSet::new()).is_none(),
             "duplicate element-attribute keys are emit artefacts and must stay suppressed"
         );
     }

@@ -98,11 +98,11 @@ semver = "1"
 # JS/TS parser. Architecture rule: embedded JS/TS is parsed once into
 # a real AST and walked structurally — never scanned character-by-
 # character. oxc is the only parser in the workspace for this reason.
-oxc_allocator = "0.137"
-oxc_ast = "0.137"
-oxc_diagnostics = "0.137"
-oxc_parser = "0.137"
-oxc_span = "0.137"
+oxc_allocator = "0.138"
+oxc_ast = "0.138"
+oxc_diagnostics = "0.138"
+oxc_parser = "0.138"
+oxc_span = "0.138"
 
 # Testing
 insta = { version = "1", features = ["yaml", "filters"] }

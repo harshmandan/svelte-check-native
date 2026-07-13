@@ -634,11 +634,16 @@ pub struct SnippetBlock {
 /// HTML "void" elements that have no closing tag.
 ///
 /// Canonical list mirroring the Svelte compiler's `VOID_ELEMENT_NAMES` (16
-/// entries, including the obsolete `command`/`keygen`/`param`). Used to decide
-/// whether parsing an opening tag should eagerly close without looking for
-/// `</tag>`. This is the single source of truth: byte-slice callers wrap it
-/// via `str::from_utf8`.
+/// entries, including the obsolete `command`/`keygen`/`param`) plus the
+/// `!doctype` special case from upstream's `is_void` (`utils.js`: the
+/// doctype declaration parses as a void element named `!DOCTYPE`, in any
+/// case). Used to decide whether parsing an opening tag should eagerly
+/// close without looking for `</tag>`. This is the single source of truth:
+/// byte-slice callers wrap it via `str::from_utf8`.
 pub fn is_void_element(tag: &str) -> bool {
+    if tag.eq_ignore_ascii_case("!doctype") {
+        return true;
+    }
     matches!(
         tag,
         "area"

@@ -744,7 +744,19 @@ impl<'src> TemplateParser<'src> {
         self.scanner.advance_byte();
 
         let name_start = self.scanner.pos();
-        if !self
+        // `<!NAME` is a doctype-shaped tag (upstream `is_valid_element_name`
+        // admits `/^![a-zA-Z]+$/`, so `<!DOCTYPE html>` parses as a void
+        // element named `!DOCTYPE`). Consume the `!` and let the regular
+        // name scan read the letters. `<!--` comments were dispatched
+        // before this point.
+        let doctype_shaped = self.scanner.peek_byte() == Some(b'!')
+            && self
+                .scanner
+                .peek_byte_at(1)
+                .is_some_and(|b| b.is_ascii_alphabetic());
+        if doctype_shaped {
+            self.scanner.advance_byte();
+        } else if !self
             .scanner
             .peek_byte()
             .map(|b| b.is_ascii_alphabetic() || b >= 0x80)
@@ -1192,6 +1204,65 @@ mod tests {
         };
         assert_eq!(e.name, "br");
         assert!(e.self_closing);
+    }
+
+    #[test]
+    fn doctype_parses_as_void_element() {
+        // `<!DOCTYPE html>` is a valid Svelte template node — upstream's
+        // is_valid_element_name admits /^![a-zA-Z]+$/ and is_void treats
+        // `!doctype` (any case) as void, so no closing tag is expected
+        // and the rest of the file parses normally.
+        for (src, name) in [
+            ("<!DOCTYPE html><div>x</div>", "!DOCTYPE"),
+            ("<!doctype html><div>x</div>", "!doctype"),
+        ] {
+            let (frag, errors) = parse_template(src, Range::new(0, src.len() as u32));
+            assert!(
+                errors.is_empty(),
+                "expected no errors for {src:?}: {errors:?}"
+            );
+            assert_eq!(frag.nodes.len(), 2, "two nodes for {src:?}");
+            let Node::Element(doctype) = &frag.nodes[0] else {
+                panic!(
+                    "expected doctype element for {src:?}, got {:?}",
+                    frag.nodes[0]
+                );
+            };
+            assert_eq!(doctype.name, name);
+            assert!(doctype.self_closing, "doctype is void");
+            assert!(doctype.children.nodes.is_empty());
+            let Node::Element(div) = &frag.nodes[1] else {
+                panic!("expected div for {src:?}, got {:?}", frag.nodes[1]);
+            };
+            assert_eq!(div.name, "div");
+        }
+    }
+
+    #[test]
+    fn non_doctype_bang_tag_still_requires_close() {
+        // `<!foo>` is a valid element NAME upstream but not void — only
+        // `!doctype` is. Left unclosed it errors, same as upstream's
+        // element_unclosed.
+        let src = "<!foo>x";
+        let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ParseError::UnterminatedElement { .. })),
+            "expected UnterminatedElement, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn bang_without_letter_is_still_malformed() {
+        let src = "<![CDATA[x]]>";
+        let (_, errors) = parse_template(src, Range::new(0, src.len() as u32));
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ParseError::MalformedOpenTag { .. })),
+            "expected MalformedOpenTag, got {errors:?}"
+        );
     }
 
     #[test]

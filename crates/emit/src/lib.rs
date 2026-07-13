@@ -1660,6 +1660,16 @@ pub(crate) fn emit_template_node(
         }
         Node::SnippetBlock(b) => emit_snippet_block(buf, source, b, depth, insts, action_counter),
         Node::Element(e) => {
+            // `<!DOCTYPE html>` parses as a void element named `!DOCTYPE`;
+            // it declares the document type, not markup to type-check.
+            // Upstream svelte2tsx strips it from the overlay entirely
+            // (htmlxtojsx_v2/index.ts `str.remove(node.start, node.end)`).
+            // Matched case-insensitively: HTML doctypes are
+            // case-insensitive and `<!doctype html>` parses to a
+            // lowercase-named element.
+            if e.name.eq_ignore_ascii_case("!doctype") {
+                return;
+            }
             crate::nodes::element::emit_element_node(buf, source, e, depth, insts, action_counter)
         }
         Node::Component(c) => emit_component_node(buf, source, c, depth, insts, action_counter),

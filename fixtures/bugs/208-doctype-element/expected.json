@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 10,
+            "code": 2322
+        }
+    ],
+    "_note": "`<!DOCTYPE html>` is a valid Svelte template node: upstream's parser admits `![a-zA-Z]+` element names and treats `!doctype` (any case) as void; svelte2tsx strips the element from the overlay entirely (htmlxtojsx_v2/index.ts). Our parser used to reject the `!` with a fatal malformed-open-tag error, which marked the whole file broken — one phantom svelte error and EVERY tsgo diagnostic suppressed. The deliberate TS2322 here proves the doctype no longer blacks out real diagnostics."
+}

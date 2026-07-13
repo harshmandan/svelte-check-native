@@ -109,6 +109,25 @@ impl<'src> Scanner<'src> {
         }
     }
 
+    /// Jump forward to the next occurrence of byte `a` or `b`, leaving
+    /// the cursor ON that byte — or at EOF when neither occurs.
+    ///
+    /// Replaces per-char peek/advance walks in find-next-dispatch-byte
+    /// loops with one memchr2 sweep. Both needles must be ASCII: an
+    /// ASCII byte can never appear inside a UTF-8 continuation
+    /// sequence, so the byte-level jump always lands on a char
+    /// boundary. No other scanner state exists (positions are plain
+    /// byte offsets; there is no line accounting), so skipping is
+    /// state-identical to advancing char by char.
+    pub fn skip_until2(&mut self, a: u8, b: u8) {
+        debug_assert!(a.is_ascii() && b.is_ascii());
+        let start = (self.pos as usize).min(self.bytes.len());
+        self.pos = match memchr::memchr2(a, b, &self.bytes[start..]) {
+            Some(off) => (start + off) as u32,
+            None => self.bytes.len() as u32,
+        };
+    }
+
     /// Find the byte position of the next occurrence of `needle` starting at
     /// or after `pos`. Returns the source-relative byte offset, or `None`.
     pub fn find(&self, needle: &[u8]) -> Option<u32> {
@@ -186,6 +205,29 @@ mod tests {
         s.advance_char();
         assert_eq!(s.pos(), 6);
         assert!(s.eof());
+    }
+
+    #[test]
+    fn skip_until2_lands_on_needle_or_eof() {
+        let mut s = Scanner::new("plain text {x} more");
+        s.skip_until2(b'<', b'{');
+        assert_eq!(s.pos(), 11);
+        assert_eq!(s.peek_byte(), Some(b'{'));
+        // Cursor already on a needle byte: no movement.
+        s.skip_until2(b'<', b'{');
+        assert_eq!(s.pos(), 11);
+        // No needle ahead: lands at EOF.
+        s.advance_byte();
+        s.skip_until2(b'<', b'`');
+        assert!(s.eof());
+    }
+
+    #[test]
+    fn skip_until2_steps_over_multibyte_chars() {
+        let mut s = Scanner::new("a🎉b<div>");
+        s.skip_until2(b'<', b'{');
+        assert_eq!(s.pos(), 6);
+        assert_eq!(s.peek_byte(), Some(b'<'));
     }
 
     #[test]

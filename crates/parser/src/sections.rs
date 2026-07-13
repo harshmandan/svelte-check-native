@@ -210,8 +210,14 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
                 continue;
             }
         }
-        // Anything else: keep walking.
+        // Anything else: consume the current char (it may itself be a
+        // `<` that fell through every guard, e.g. `<` before a digit),
+        // then hop straight to the next possible dispatch byte. All
+        // guards above trigger only on `<` or `{`, so plain text and
+        // whitespace are skipped in one memchr2 sweep instead of a
+        // per-char walk.
         scanner.advance_char();
+        scanner.skip_until2(b'<', b'{');
     }
 
     // Flush trailing template text.

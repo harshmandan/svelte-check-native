@@ -720,15 +720,14 @@ impl<'src> TemplateParser<'src> {
 
     fn parse_text(&mut self) -> Node {
         let start = self.scanner.pos();
-        while !self.at_fragment_end() {
-            let b = match self.scanner.peek_byte() {
-                Some(b) => b,
-                None => break,
-            };
-            if b == b'<' || b == b'{' {
-                break;
-            }
-            self.scanner.advance_char();
+        // Text runs to the next `<` or `{` (the only dispatch bytes in
+        // fragment context) or the fragment end — one memchr2 sweep
+        // instead of a per-char walk. Clamp: the skip searches the
+        // whole source, but this node must not bleed past the current
+        // fragment.
+        self.scanner.skip_until2(b'<', b'{');
+        if self.scanner.pos() > self.fragment_end {
+            self.scanner.set_pos(self.fragment_end);
         }
         let end = self.scanner.pos();
         Node::Text(Text {

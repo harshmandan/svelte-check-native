@@ -405,7 +405,7 @@ pub fn build(
     // `exclude` — tsgo never tries to read raw `.svelte` files even
     // when the include glob would match them. Mirrors upstream
     // (`incremental.ts:417` keeps user `include` patterns as-is).
-    let mut user_includes = first_non_empty_patterns(&chain, |f| f.include.as_deref());
+    let mut user_includes = winning_patterns_absolute(&chain, |f| f.include.as_deref());
     // Redirect `.svelte-kit/types/**/$types.d.ts` includes to the
     // cache mirror (when present). Load-bearing companion to the
     // mirror+rootDirs setup: without this redirect the user's
@@ -521,7 +521,7 @@ pub fn build(
     // Only emit the field if at least one source contributed — an
     // empty `exclude` field in our overlay would clobber the user's
     // inherited exclude with an empty list.
-    let mut excludes: Vec<String> = first_non_empty_patterns(&chain, |f| f.exclude.as_deref());
+    let mut excludes: Vec<String> = winning_patterns_absolute(&chain, |f| f.exclude.as_deref());
     // Each sibling reference's own `exclude` patterns, anchored at
     // that reference's project_dir. Critical for preserving user
     // intent — app's tsconfig.playwright.json excludes binary
@@ -625,35 +625,33 @@ fn project_to_virtual_svelte_dts(layout: &CacheLayout, abs_pattern: &str) -> Opt
     Some(mirrored.to_string_lossy().into_owned())
 }
 
-/// First tsconfig in the BFS chain that declares `include` / `exclude`
-/// wins — match TS's replace-on-child semantics. Each pattern is
-/// resolved against the declaring config's dir so the overlay's
-/// absolute-path globs work regardless of where the overlay tsconfig
-/// itself lives.
-///
-fn first_non_empty_patterns<F>(chain: &[TsConfigFile], get: F) -> Vec<String>
+/// The chain's winning `include` / `exclude` patterns under TS's
+/// `extends` precedence (leaf wins, later array-extends entries beat
+/// earlier ones — see [`svn_core::tsconfig::winning_patterns`]). Each
+/// pattern is resolved against the DECLARING config's dir so the
+/// overlay's absolute-path globs work regardless of where the overlay
+/// tsconfig itself lives. Empty when the field is declared nowhere OR
+/// declared as an explicit empty array (either way the overlay emits
+/// no user patterns for it).
+fn winning_patterns_absolute<F>(chain: &[TsConfigFile], get: F) -> Vec<String>
 where
-    F: Fn(&TsConfigFile) -> Option<&[String]>,
+    F: for<'a> Fn(&'a TsConfigFile) -> Option<&'a [String]>,
 {
-    for file in chain {
-        let Some(patterns) = get(file) else {
-            continue;
-        };
-        let dir = file.config_dir();
-        let mut out: Vec<String> = Vec::new();
-        for s in patterns {
+    let Some((winner, patterns)) = svn_core::tsconfig::winning_patterns(chain, get) else {
+        return Vec::new();
+    };
+    let dir = winner.config_dir();
+    patterns
+        .iter()
+        .map(|s| {
             let resolved = if Path::new(s).is_absolute() {
                 PathBuf::from(s)
             } else {
                 dir.join(s)
             };
-            out.push(normalize(&resolved).to_string_lossy().into_owned());
-        }
-        if !out.is_empty() {
-            return out;
-        }
-    }
-    Vec::new()
+            normalize(&resolved).to_string_lossy().into_owned()
+        })
+        .collect()
 }
 
 /// True when a `types` entry will resolve under tsgo's lookup rules.

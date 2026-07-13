@@ -148,6 +148,74 @@ pub fn load_chain(entry: impl AsRef<Path>) -> Result<Vec<TsConfigFile>, LoadErro
     Ok(out)
 }
 
+/// Find the config in `chain` (as returned by [`load_chain`]) whose
+/// declaration of a top-level pattern field (`include` / `exclude` /
+/// `files`) wins under TypeScript's `extends` precedence, and return it
+/// together with the winning patterns.
+///
+/// Precedence is the same replace-on-child rule [`load`]'s `merge_into`
+/// applies: the entry (leaf) wins whenever it declares the field — an
+/// explicit empty array counts as a declaration — otherwise the field
+/// comes from the `extends` list where LATER entries override earlier
+/// ones, each entry resolved recursively through its own parents.
+///
+/// Returning the declaring [`TsConfigFile`] (not just the patterns)
+/// matters because TS resolves `include`/`exclude`/`files` relative to
+/// the directory of the config file that declares them — callers rebase
+/// against `winner.config_dir()`.
+///
+/// Returns `None` when no config in the chain declares the field.
+pub fn winning_patterns<'a, F>(
+    chain: &'a [TsConfigFile],
+    get: F,
+) -> Option<(&'a TsConfigFile, &'a [String])>
+where
+    F: Fn(&'a TsConfigFile) -> Option<&'a [String]>,
+{
+    let entry = chain.first()?;
+    let mut visited: HashSet<&Path> = HashSet::new();
+    winning_patterns_from(chain, entry, &get, &mut visited)
+}
+
+fn winning_patterns_from<'a, F>(
+    chain: &'a [TsConfigFile],
+    file: &'a TsConfigFile,
+    get: &F,
+    visited: &mut HashSet<&'a Path>,
+) -> Option<(&'a TsConfigFile, &'a [String])>
+where
+    F: Fn(&'a TsConfigFile) -> Option<&'a [String]>,
+{
+    if !visited.insert(file.path.as_path()) {
+        // Extends cycle — load_chain already de-duplicated the files, so
+        // revisiting can only happen through a cyclic reference; stop.
+        return None;
+    }
+    if let Some(patterns) = get(file) {
+        return Some((file, patterns));
+    }
+    // Later extends entries override earlier ones (TS array-extends), so
+    // probe the parents in reverse: the first hit is the winner.
+    let parent_dir = file
+        .path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    for ext_ref in file.extends.iter().rev() {
+        let Ok(resolved) = resolve_extends(ext_ref, &parent_dir) else {
+            continue;
+        };
+        let canon = dunce::canonicalize(&resolved).unwrap_or(resolved);
+        let Some(parent) = chain.iter().find(|f| f.path == canon) else {
+            continue;
+        };
+        if let Some(hit) = winning_patterns_from(chain, parent, get, visited) {
+            return Some(hit);
+        }
+    }
+    None
+}
+
 fn load_recursive(path: &Path, seen: &mut HashSet<PathBuf>) -> Result<TsConfigFile, LoadError> {
     let canonical = dunce::canonicalize(path).map_err(|source| LoadError::Io {
         path: path.to_path_buf(),
@@ -763,7 +831,10 @@ mod tests {
         .unwrap();
         let cfg = load(&ts).unwrap();
         let paths = cfg.compiler_options.paths.as_ref().unwrap();
-        assert!(paths.is_empty(), "child {{}} should blank parent: {paths:?}");
+        assert!(
+            paths.is_empty(),
+            "child {{}} should blank parent: {paths:?}"
+        );
     }
 
     #[test]
@@ -967,6 +1038,93 @@ mod tests {
             base_entry.compiler_options.root_dirs,
             vec![expected.to_str().unwrap()]
         );
+    }
+
+    #[test]
+    fn winning_patterns_leaf_beats_parents() {
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("base.json");
+        let ts = tmp.path().join("tsconfig.json");
+        write(&base, r#"{ "include": ["base/**/*"] }"#);
+        write(
+            &ts,
+            r#"{ "extends": "./base.json", "include": ["src/**/*"] }"#,
+        );
+
+        let chain = load_chain(&ts).unwrap();
+        let (winner, patterns) = winning_patterns(&chain, |f| f.include.as_deref()).unwrap();
+        assert!(winner.path.ends_with("tsconfig.json"));
+        assert_eq!(patterns, ["src/**/*"]);
+    }
+
+    #[test]
+    fn winning_patterns_array_extends_last_entry_wins() {
+        // extends: ["./a.json", "./b.json"] with the field declared only
+        // in the parents — TS array-extends gives the LAST entry
+        // precedence, exactly like merge_into's compilerOptions handling
+        // (see load_with_array_extends_last_wins_for_conflicts).
+        let tmp = tempdir().unwrap();
+        let a = tmp.path().join("a.json");
+        let b = tmp.path().join("b.json");
+        let ts = tmp.path().join("tsconfig.json");
+        write(&a, r#"{ "include": ["app/**/*"] }"#);
+        write(&b, r#"{ "include": ["src/**/*"] }"#);
+        write(&ts, r#"{ "extends": ["./a.json", "./b.json"] }"#);
+
+        let chain = load_chain(&ts).unwrap();
+        let (winner, patterns) = winning_patterns(&chain, |f| f.include.as_deref()).unwrap();
+        assert!(winner.path.ends_with("b.json"));
+        assert_eq!(patterns, ["src/**/*"]);
+    }
+
+    #[test]
+    fn winning_patterns_later_subtree_beats_earlier_declaration() {
+        // extends: ["./a.json", "./b.json"]; a declares the field
+        // directly, b inherits it from ITS parent. b's whole merged
+        // subtree overrides a's, so b2's value wins even though it sits
+        // deeper in the chain than a.
+        let tmp = tempdir().unwrap();
+        let a = tmp.path().join("a.json");
+        let b = tmp.path().join("b.json");
+        let b2 = tmp.path().join("b2.json");
+        let ts = tmp.path().join("tsconfig.json");
+        write(&a, r#"{ "include": ["app/**/*"] }"#);
+        write(&b, r#"{ "extends": "./b2.json" }"#);
+        write(&b2, r#"{ "include": ["nested/**/*"] }"#);
+        write(&ts, r#"{ "extends": ["./a.json", "./b.json"] }"#);
+
+        let chain = load_chain(&ts).unwrap();
+        let (winner, patterns) = winning_patterns(&chain, |f| f.include.as_deref()).unwrap();
+        assert!(winner.path.ends_with("b2.json"));
+        assert_eq!(patterns, ["nested/**/*"]);
+    }
+
+    #[test]
+    fn winning_patterns_explicit_empty_array_is_a_declaration() {
+        // `"include": []` on the leaf REPLACES a parent's include (TS
+        // replace-on-child) — it must not be skipped as "not declared".
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("base.json");
+        let ts = tmp.path().join("tsconfig.json");
+        write(&base, r#"{ "include": ["src/**/*"] }"#);
+        write(&ts, r#"{ "extends": "./base.json", "include": [] }"#);
+
+        let chain = load_chain(&ts).unwrap();
+        let (winner, patterns) = winning_patterns(&chain, |f| f.include.as_deref()).unwrap();
+        assert!(winner.path.ends_with("tsconfig.json"));
+        assert!(patterns.is_empty());
+    }
+
+    #[test]
+    fn winning_patterns_none_when_no_config_declares() {
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("base.json");
+        let ts = tmp.path().join("tsconfig.json");
+        write(&base, r#"{ "compilerOptions": { "strict": true } }"#);
+        write(&ts, r#"{ "extends": "./base.json" }"#);
+
+        let chain = load_chain(&ts).unwrap();
+        assert!(winning_patterns(&chain, |f| f.include.as_deref()).is_none());
     }
 
     #[test]

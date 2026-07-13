@@ -31,11 +31,7 @@ use crate::ColorMode;
 fn relative_path(target: &Path, base: &Path) -> PathBuf {
     let t: Vec<Component<'_>> = target.components().collect();
     let b: Vec<Component<'_>> = base.components().collect();
-    let common = t
-        .iter()
-        .zip(b.iter())
-        .take_while(|(a, c)| a == c)
-        .count();
+    let common = t.iter().zip(b.iter()).take_while(|(a, c)| a == c).count();
     let mut rel = PathBuf::new();
     for _ in common..b.len() {
         rel.push("..");
@@ -477,10 +473,7 @@ mod tests {
     fn relative_path_descendant_matches_strip_prefix() {
         let base = Path::new("/home/user/project");
         let target = Path::new("/home/user/project/src/App.svelte");
-        assert_eq!(
-            relative_path(target, base),
-            Path::new("src/App.svelte"),
-        );
+        assert_eq!(relative_path(target, base), Path::new("src/App.svelte"),);
     }
 
     #[test]

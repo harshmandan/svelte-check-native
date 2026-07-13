@@ -1305,9 +1305,7 @@ export default {
         assert!(!preserve_case(
             "export default { compilerOptions: { namespace: 'html' } };"
         ));
-        assert!(!preserve_case(
-            "export default { compilerOptions: {} };"
-        ));
+        assert!(!preserve_case("export default { compilerOptions: {} };"));
     }
 
     #[test]

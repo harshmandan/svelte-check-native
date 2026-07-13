@@ -1115,9 +1115,12 @@ fn escape_solution_tsconfig(candidate: &Path) -> Option<PathBuf> {
             Ok(c) => c,
             Err(_) => continue,
         };
-        let has_paths = chain
-            .iter()
-            .any(|f| f.compiler_options.paths.as_ref().is_some_and(|p| !p.is_empty()));
+        let has_paths = chain.iter().any(|f| {
+            f.compiler_options
+                .paths
+                .as_ref()
+                .is_some_and(|p| !p.is_empty())
+        });
         if !has_paths {
             continue;
         }
@@ -1173,17 +1176,24 @@ fn run_typecheck(
     // points at the wrong tree for those files.
     let project_scope = svn_core::tsconfig::load_chain(tsconfig).ok().map(|chain| {
         // Resolve include/exclude/files against the config that DECLARES
-        // them (TS semantics; leaf wins), producing absolute patterns —
-        // the same rule the overlay builder uses. Previously discovery
-        // resolved the *flattened* patterns against the workspace via a
-        // leading-`../`-stripping heuristic, which disagreed with the
-        // overlay for configs declared outside the workspace root.
-        let include = discovery::build_glob_set_absolute(
-            &discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref()),
-        );
-        let exclude = discovery::build_glob_set_absolute(
-            &discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.exclude.as_deref()),
-        );
+        // them (TS extends precedence: leaf wins, later array-extends
+        // entries beat earlier ones), producing absolute patterns — the
+        // same rule the overlay builder uses. `None` = the field is
+        // declared nowhere in the chain; a declared-but-empty include
+        // compiles to an empty glob set that matches nothing (TS
+        // replace-on-child: `"include": []` admits no files).
+        let include =
+            discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref())
+                .map(|pats| {
+                    discovery::build_glob_set_absolute(&pats)
+                        .unwrap_or_else(globset::GlobSet::empty)
+                });
+        let exclude =
+            discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.exclude.as_deref())
+                .map(|pats| {
+                    discovery::build_glob_set_absolute(&pats)
+                        .unwrap_or_else(globset::GlobSet::empty)
+                });
         // Files explicitly listed in tsconfig's `files` field bypass
         // both `include` glob matching AND `exclude` filtering (TS
         // spec: https://www.typescriptlang.org/tsconfig/#exclude —
@@ -1193,6 +1203,7 @@ fn run_typecheck(
         // walker paths.
         let explicit_files: std::collections::HashSet<PathBuf> =
             discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.files.as_deref())
+                .unwrap_or_default()
                 .into_iter()
                 .map(PathBuf::from)
                 .filter_map(|p| dunce::canonicalize(&p).ok().or(Some(p)))
@@ -1669,9 +1680,7 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
     // Honour svelte config `namespace: 'foreign'` (preserve attribute
     // case) in the debug-emit path too, mirroring the check path.
     if let Some(cfg) = svelte_config::find_svelte_config(workspace) {
-        svn_emit::set_preserve_attribute_case(
-            svelte_config::analyse(&cfg).preserve_attribute_case,
-        );
+        svn_emit::set_preserve_attribute_case(svelte_config::analyse(&cfg).preserve_attribute_case);
     }
     let files = discover_svelte_files(workspace);
     if files.is_empty() {

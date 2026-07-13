@@ -200,7 +200,9 @@ mod tests {
 
     #[test]
     fn ignores_rune_in_line_comment() {
-        assert!(!script_calls_rune("// migrate to $state(0) later\nlet x = 1;"));
+        assert!(!script_calls_rune(
+            "// migrate to $state(0) later\nlet x = 1;"
+        ));
     }
 
     #[test]
@@ -227,7 +229,9 @@ mod tests {
     #[test]
     fn rejects_dollar_dollar_ambient_and_bare_identifier() {
         assert!(!script_calls_rune("const p = $$props;"));
-        assert!(!script_calls_rune("import { state as $state } from 'x'; let y = $state;"));
+        assert!(!script_calls_rune(
+            "import { state as $state } from 'x'; let y = $state;"
+        ));
     }
 
     #[test]

@@ -1410,8 +1410,17 @@ fn run_typecheck(
     // excludes `js`, tsgo is skipped entirely, so this work would
     // be discarded — gate it on `sources.js` to skip it up front.
     // The svelte/compiler bridge below still runs (it consumes
-    // `svelte_sources`, not `inputs`).
-    let mut inputs: Vec<svn_typecheck::CheckInput> = Vec::new();
+    // `svelte_sources`, not the prepared inputs).
+    //
+    // Overlay cache writes happen INSIDE the fan-outs below via
+    // `CheckSession::prepare` — each task writes its generated TS to
+    // the cache and drops the string before returning, so peak RSS
+    // never holds the whole emitted-TS corpus across the phase
+    // barrier into the typecheck crate. `checker` carries the session
+    // plus the per-input results (in input order) to the
+    // `CheckSession::finish` call after `t_emit`.
+    type PreparedResults = Vec<Result<svn_typecheck::PreparedInput, svn_typecheck::CheckError>>;
+    let mut checker: Option<(svn_typecheck::CheckSession, PreparedResults)> = None;
     // Native Svelte diagnostics (fatal parse errors + lint warnings).
     // Decided up front because the default flow computes them INSIDE
     // the emit fan-out below, from the same parse that feeds emit —
@@ -1424,12 +1433,29 @@ fn run_typecheck(
     let config_resolver_ref: &svelte_config::ConfigResolver = config_resolver;
     let mut native_results: Vec<Option<NativeFileDiagnostics>> = Vec::new();
     if sources.js {
+        // Cache-global setup (cache dir, type shims) plus the
+        // background `.svelte-kit/types/` mirror start here, BEFORE
+        // the emit fan-out, so the mirror's tree walk overlaps the
+        // whole emit phase instead of just the overlay writes.
+        let session = match svn_typecheck::CheckSession::new(workspace, solution_root_tsconfig) {
+            Ok(session) => session,
+            Err(err) => {
+                let message = format!("type-check failed: {err}");
+                eprintln!("svelte-check-native: {message}");
+                // Machine consumers key off a FAILURE line; emit one so
+                // a fatal check error isn't a silent stop on stdout.
+                print_machine_failure(output_format, &message);
+                return ExitCode::from(2);
+            }
+        };
+        let session_ref = &session;
         // Per-file parse → analyze → emit is pure compute with no shared
         // mutable state (each iteration owns its own oxc Allocator inside
-        // the called functions). rayon distributes across the thread pool
-        // and the order-preserving `unzip` keeps the resulting `inputs`
-        // matching `svelte_sources` index-for-index.
-        let (emitted_inputs, natives): (Vec<_>, Vec<_>) = svelte_sources
+        // the called functions); the trailing `prepare` call writes only
+        // paths derived from this file's source path. rayon distributes
+        // across the thread pool and the order-preserving `unzip` keeps
+        // the resulting inputs matching `svelte_sources` index-for-index.
+        let (prepared_svelte, natives): (PreparedResults, Vec<_>) = svelte_sources
             .par_iter()
             .enumerate()
             .map(|(idx, (file, source))| {
@@ -1483,10 +1509,10 @@ fn run_typecheck(
                     kind,
                     is_ts_overlay: is_ts,
                 };
-                (input, native)
+                (session_ref.prepare(input), native)
             })
             .unzip();
-        inputs = emitted_inputs;
+        let mut prepared = prepared_svelte;
         native_results = natives;
 
         // Kit files (`+server.ts`, `+page.ts`, hooks, params): run them
@@ -1500,13 +1526,13 @@ fn run_typecheck(
         // out over rayon like the `.svelte` emit above. rayon's Vec
         // collect preserves the caller's order, so `inputs` stays
         // deterministic.
-        inputs.extend(
+        prepared.extend(
             kit_files
                 .par_iter()
                 .filter_map(|file| {
                     let source = std::fs::read_to_string(file).ok()?;
                     let generated = svn_emit::kit_inject::inject(file, &source)?;
-                    Some(svn_typecheck::CheckInput {
+                    Some(session_ref.prepare(svn_typecheck::CheckInput {
                         source_path: file.clone(),
                         source: "".into(),
                         generated_ts: generated,
@@ -1516,7 +1542,7 @@ fn run_typecheck(
                         source_line_starts: Vec::new(),
                         kind: svn_typecheck::InputKind::KitFile,
                         is_ts_overlay: true,
-                    })
+                    }))
                 })
                 .collect::<Vec<_>>(),
         );
@@ -1552,7 +1578,7 @@ fn run_typecheck(
             runes_candidates.sort();
             let rewrite_candidates: Vec<&PathBuf> =
                 user_script_files.iter().chain(runes_candidates).collect();
-            inputs.extend(
+            prepared.extend(
                 rewrite_candidates
                     .par_iter()
                     .filter_map(|file| {
@@ -1562,7 +1588,7 @@ fn run_typecheck(
                             &source,
                             &runes_modules_set,
                         )?;
-                        Some(svn_typecheck::CheckInput {
+                        Some(session_ref.prepare(svn_typecheck::CheckInput {
                             source_path: (*file).clone(),
                             source: "".into(),
                             generated_ts: rewritten,
@@ -1572,28 +1598,29 @@ fn run_typecheck(
                             source_line_starts: Vec::new(),
                             kind: svn_typecheck::InputKind::UserTsOverlay,
                             is_ts_overlay: true,
-                        })
+                        }))
                     })
                     .collect::<Vec<_>>(),
             );
         }
+        checker = Some((session, prepared));
     }
     let t_emit = mark.elapsed();
 
     // Run tsgo (`js`/`ts` source). Skipped entirely when
-    // `--diagnostic-sources` opts out of `js`. Move `inputs` into the
-    // call so each `generated_ts` string drops as soon as it has been
-    // written to the cache — see svn_typecheck::check docs.
+    // `--diagnostic-sources` opts out of `js` (`checker` stays None).
+    // Every overlay is already on disk from the fan-out's `prepare`
+    // calls; `finish` surfaces the first per-input error (in input
+    // order) before running the corpus-level steps + tsgo.
     let mark = std::time::Instant::now();
-    let (mut diagnostics, tsgo_diag_block) = if sources.js {
-        match svn_typecheck::check(
-            workspace,
-            solution_root_tsconfig,
-            tsconfig,
-            inputs,
-            tsgo_diagnostics,
-            include_suggestions,
-        ) {
+    let (mut diagnostics, tsgo_diag_block) = if let Some((session, prepared)) = checker.take() {
+        let outcome = prepared
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .and_then(|prepared| {
+                session.finish(prepared, tsconfig, tsgo_diagnostics, include_suggestions)
+            });
+        match outcome {
             Ok(out) => (out.diagnostics, out.extended_diagnostics),
             Err(err) => {
                 let message = format!("type-check failed: {err}");
@@ -1605,9 +1632,6 @@ fn run_typecheck(
             }
         }
     } else {
-        // When tsgo is skipped, drop `inputs` early too so we don't
-        // hold the generated TS strings through the bridge phase.
-        drop(inputs);
         (Vec::new(), None)
     };
     let t_typecheck = mark.elapsed();

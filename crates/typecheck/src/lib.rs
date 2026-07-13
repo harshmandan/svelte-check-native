@@ -216,6 +216,11 @@ fn gc_orphaned_overlays(svelte_dir: &Path, written_paths: &std::collections::Has
 /// overlays whose on-disk copy diverges from emit space stay in memory
 /// (see [`emit_space_overlay_text`]).
 ///
+/// Callers that produce inputs inside their own parallel pipeline
+/// should prefer the split-phase [`CheckSession`] API — this one-shot
+/// form still requires the whole overlay corpus to be in memory at
+/// the call boundary.
+///
 /// Returns mapped diagnostics + the count of files in tsgo's program
 /// (used for the COMPLETED line's `<N> FILES` denominator so it
 /// matches upstream svelte-check's number — upstream prints the
@@ -229,487 +234,561 @@ pub fn check(
     extended_diagnostics: bool,
     include_suggestions: bool,
 ) -> Result<CheckOutput, CheckError> {
-    let layout = CacheLayout::for_workspace_with_solution_root(
-        workspace,
-        solution_root_tsconfig.map(|p| p.to_path_buf()),
-    );
-
-    // Start the `.svelte-kit/types/` mirror sync (Step 1b) in the
-    // background right away. It depends only on the layout — it reads
-    // the USER's `.svelte-kit/types/` tree and writes the cache's
-    // `svelte-kit/types/` mirror, both disjoint from everything the
-    // Step-1 overlay fan-out touches (`svelte/` subtree) — so it can
-    // overlap the whole overlay-write pass instead of adding its
-    // serial walk (tens of milliseconds on large Kit route trees) to
-    // the pre-tsgo critical path. Joined right before the overlay
-    // tsconfig build consumes the result.
-    let kit_types_mirror_task = {
-        let layout = layout.clone();
-        std::thread::spawn(move || kit_types_mirror::sync_mirror(&layout))
-    };
-
-    std::fs::create_dir_all(&layout.svelte_dir)?;
-
-    // Ship the svelte type shims into the cache. Core (runes + helper
-    // types + shim-wide ambients) is always written. The fallback
-    // `declare module 'svelte/*'` block — marked in-source with
-    // @@FALLBACK_BEGIN@@ / @@FALLBACK_END@@ — is stripped when a real
-    // svelte install is reachable; otherwise its minimal declarations
-    // would shadow the richer real types (e.g. svelte/elements
-    // re-exports HTMLAnchorAttributes, HTMLInputAttributes, ClassValue
-    // from clsx, etc., none of which the fallback enumerates).
-    let shim_text = resolve_shim_text(/* keep_fallback */ !has_real_svelte(workspace));
-    write_if_changed(&layout.svelte_shims, &shim_text)?;
-
-    // Step 1: write generated TS for each input. Skip identical writes.
-    // Collect a per-overlay-path line map so the diagnostic mapper can
-    // translate tsgo's overlay positions back to source positions.
-    //
-    // Note: no separate `.d.svelte.ts` re-export stub is written. The
-    // generated `<name>.svelte.ts` IS the type definition for
-    // `<name>.svelte` — emit rewrites every `import './X.svelte'` to
-    // `import './X.svelte.js'` so TS's standard `.js`→`.ts` resolver
-    // lands on our generated file rather than the `*.svelte` ambient
-    // declaration that the `svelte` package ships.
-    let mut generated_paths: Vec<PathBuf> = Vec::with_capacity(inputs.len());
-    let mut kit_overlay_sources: Vec<PathBuf> = Vec::new();
-    // Source `.svelte` paths handed to the overlay's `exclude` so tsgo
-    // never tries to load the raw `.svelte` file from the user's tree —
-    // it always reaches the overlay through the `.d.svelte.ts`
-    // re-export chain (or, currently, through `compilerOptions.files`
-    // listing the `.svn.ts` directly). Mirrors upstream's
-    // `upsertedExcludes` at `incremental.ts:430-431`. Today this is a
-    // no-op (tsgo doesn't load `.svelte` files anyway because their
-    // extension isn't on its program-input list), but keeping it in
-    // place is the structural pre-req for moving overlays out of
-    // `files` while still keeping `.svelte` patterns in `include`.
-    let mut source_svelte_paths: Vec<PathBuf> = Vec::with_capacity(inputs.len());
-    let mut map_data: std::collections::HashMap<PathBuf, MapData> =
-        std::collections::HashMap::with_capacity(inputs.len());
-    // Track every cache file we touch this run. Anything in
-    // `svelte_dir` not in this set after the loop is orphaned (the
-    // source `.svelte` was deleted or renamed) and gets garbage-
-    // collected so stale overlays / ambients don't keep masking real
-    // "module not found" errors at later imports.
-    let mut written_paths: std::collections::HashSet<PathBuf> =
-        std::collections::HashSet::with_capacity(inputs.len() * 2);
-    /// Per-input product of the Step-1 write fan-out below, folded
-    /// into the shared collections afterwards in input order.
-    struct Prepared {
-        gen_path: PathBuf,
-        map_data: MapData,
-        /// Ambient sidecar written for this input (Svelte kinds
-        /// without a user-owned ambient) — joins `written_paths`.
-        ambient_path: Option<PathBuf>,
-        /// Original source of a mirror-overlay kind — joins the
-        /// overlay tsconfig's `exclude` via `kit_overlay_sources`.
-        kit_overlay_source: Option<PathBuf>,
-        /// `.svelte` source path (Svelte kinds) — joins
-        /// `source_svelte_paths`.
-        source_svelte_path: Option<PathBuf>,
-        /// Whether `gen_path` is listed in the overlay tsconfig's
-        /// `files` array.
-        list_in_files: bool,
-    }
-
-    // `inputs` is consumed here — `generated_ts` and `line_map` move out
-    // of each `CheckInput` and the string usually drops at end of
-    // iteration (retained only when the disk copy isn't emit-space —
-    // see `emit_space_overlay_text`).
-    //
-    // The per-input work is 5-6 blocking filesystem ops (read-compare
-    // writes, sibling remove, ambient stats) plus pure compute, with
-    // no shared mutable state — fan it out over rayon so tsgo isn't
-    // gated on a serial pass over the whole corpus. The indexed
-    // collect preserves input order, so every order-sensitive
-    // consumer (`generated_paths` → overlay tsconfig `files`,
-    // `kit_overlay_sources` → `exclude`) sees the same sequence the
-    // serial loop produced. On error, one of the failures is
-    // propagated — same exit path as the serial `?`.
-    let prepared: Vec<Prepared> = inputs
+    let session = CheckSession::new(workspace, solution_root_tsconfig)?;
+    // Step 1: the per-input write fan-out. The work per input is 5-6
+    // blocking filesystem ops (read-compare writes, sibling remove,
+    // ambient stats) plus pure compute, with no shared mutable state —
+    // fan it out over rayon so tsgo isn't gated on a serial pass over
+    // the whole corpus. The indexed collect preserves input order, so
+    // every order-sensitive consumer (`generated_paths` → overlay
+    // tsconfig `files`, `kit_overlay_sources` → `exclude`) sees the
+    // same sequence a serial loop would produce. On error, one of the
+    // failures is propagated — same exit path as a serial `?`.
+    let prepared: Vec<PreparedInput> = inputs
         .into_par_iter()
-        .map(|mut input| -> Result<Prepared, CheckError> {
-            let gen_path = match input.kind {
-                InputKind::Svelte | InputKind::SvelteAuxiliary => {
-                    layout.generated_path_with_lang(&input.source_path, input.is_ts_overlay)
-                }
-                InputKind::KitFile | InputKind::UserTsOverlay => {
-                    layout.kit_overlay_path(&input.source_path)
-                }
-            };
-            // When the source's script-lang toggles between JS and TS
-            // across runs, the previously-written sibling (`.svn.ts` when
-            // we now emit `.svn.js`, or vice versa) becomes stale. TS's
-            // bundler resolver prefers `.ts` when `./foo.svelte.svn.js` is
-            // imported, so a stale `.svn.ts` wins and tsgo reads outdated
-            // emit. Remove the other-extension sibling on every write —
-            // cheap `fs::remove_file` ignored-not-found.
-            if matches!(input.kind, InputKind::Svelte | InputKind::SvelteAuxiliary) {
-                let sibling =
-                    layout.generated_path_with_lang(&input.source_path, !input.is_ts_overlay);
-                let _ = std::fs::remove_file(&sibling);
-            }
-            // The DISK copy gets the external-import rewrite; everything
-            // the diagnostic mapper reads stays in emit space. See
-            // [`overlay_disk_text`] for the space invariant and
-            // [`emit_space_overlay_text`] for how the emit text is either
-            // dropped here (lazily reloadable from the identical disk
-            // copy) or retained (rewrite changed bytes).
-            let disk_text = overlay_disk_text(&input, &gen_path, &layout.workspace);
-            write_if_changed(
-                &gen_path,
-                disk_text.as_deref().unwrap_or(&input.generated_ts),
-            )?;
-            // Scanned from the emit text before it moves below.
-            let ignore_regions = scan_ignore_regions(&input.generated_ts);
-            let overlay_text = emit_space_overlay_text(
-                std::mem::take(&mut input.generated_ts),
-                disk_text,
-                &gen_path,
-            );
-            let ambient_path: Option<PathBuf> = match input.kind {
-                InputKind::Svelte | InputKind::SvelteAuxiliary => {
-                    // Ambient `.d.svelte.ts` sidecar next to the overlay.
-                    // Makes `import './Foo.svelte'` in user-controlled files
-                    // (barrel re-exports, plain `.ts` modules we don't
-                    // rewrite, Svelte files OUTSIDE the tsconfig scope that
-                    // are imported by in-scope ones) resolve to the
-                    // overlay's types via TS's `allowArbitraryExtensions`
-                    // mechanism. Content is a one-shot re-export from the
-                    // overlay; no diagnostic should ever fire on this file.
-                    //
-                    // Written for SvelteAuxiliary inputs too — those exist
-                    // PRECISELY so tsgo's import-following can reach an
-                    // out-of-scope Svelte file and pick up our overlay's
-                    // types.
-                    //
-                    // KNOWN LIMITATION: this ambient doesn't help in the
-                    // sibling-collision case where the user has both
-                    // `Foo.svelte` AND `Foo.svelte.ts` (a Svelte 5 runes
-                    // module) in the same directory. tsgo's resolver picks
-                    // the workspace as the `rootDirs` match for
-                    // `./Foo.svelte` (because the physical file lives
-                    // there, not in cache) and searches WITHIN the
-                    // workspace — so it finds the runes module via bundler
-                    // auto-extension (`.svelte` → `.svelte.ts`) before our
-                    // cache-resident ambient is tried. Writing a
-                    // `.d.svelte.ts` into the cache at the mirrored path is
-                    // unreachable for this specific import. Observed on
-                    // shadcn-svelte-style barrel `index.ts` re-exports in
-                    // the wild. Real fix would require either writing
-                    // ambients into the user's source tree (invasive) or
-                    // pre-rewriting every user-owned `.ts` file that
-                    // imports `.svelte` (high scope). Deferred.
-                    let ambient_path = layout.ambient_path(&input.source_path);
-                    // Skip writing our re-export ambient when the user has
-                    // their own hand-written ambient sibling next to the
-                    // `.svelte` source (`Foo.svelte.d.ts` or its variant
-                    // `Foo.d.svelte.ts` under `allowArbitraryExtensions`).
-                    // The cache `rootDirs` lists our cache dir FIRST, so
-                    // ours would shadow the user's — and ours re-exports
-                    // from `Foo.svelte.svn.ts` whose surface is purely the
-                    // overlay's `default` (no named exports). User-owned
-                    // ambients exist precisely to declare named exports
-                    // (`export declare const a: boolean;`) that consumers
-                    // import — shadowing them with our re-export-only
-                    // form fires TS2614 "no exported member" on every
-                    // such named import. Mirrors upstream svelte-check's
-                    // behavior of only synthesizing ambients when no
-                    // user-owned counterpart exists.
-                    let user_has_ambient = user_has_svelte_ambient(&input.source_path);
-                    if user_has_ambient {
-                        None
-                    } else {
-                        let overlay_file_name = gen_path
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("unknown.svelte.svn.ts");
-                        let ambient_text = format!(
-                            "// generated by svelte-check-native; do not edit\n\
-                         export {{ default }} from './{overlay_file_name}';\n\
-                         export * from './{overlay_file_name}';\n"
-                        );
-                        write_if_changed(&ambient_path, &ambient_text)?;
-                        Some(ambient_path)
-                    }
-                }
-                InputKind::KitFile | InputKind::UserTsOverlay => {
-                    // Mirror-overlay kinds: original source path goes into
-                    // the overlay tsconfig's `exclude` so tsgo reads only
-                    // our rewritten version. KitFile carries injected
-                    // route / hooks types; UserTsOverlay carries rewritten
-                    // `.svelte` imports that bypass the sibling-runes-module
-                    // collision.
-                    None
-                }
-            };
-
-            // Source text for the position mapper. For Svelte / Aux
-            // overlays the source is the user's `.svelte` file — shared
-            // via `Arc` with the caller's in-memory corpus, so no disk
-            // re-read and no duplicate copy. For kit / user-ts overlays
-            // the original layout is preserved through the inject and
-            // rewrite paths so we can reuse the overlay text as the source
-            // view (identity_map=true on those kinds already handles the
-            // line/col pass-through, but having the text on hand keeps
-            // position_to_byte / byte_to_position's UTF-16 conversion
-            // correct on non-ASCII content).
-            let source_text = match input.kind {
-                InputKind::Svelte | InputKind::SvelteAuxiliary => input.source.clone(),
-                // Identity-map kinds preserve the original layout, so the
-                // overlay text doubles as the source view. The position
-                // helpers read `overlay_text` for both sides when
-                // `identity_map` is true, so there's no need to clone a
-                // second copy here.
-                InputKind::KitFile | InputKind::UserTsOverlay => std::sync::Arc::from(""),
-            };
-            let pug_template_ranges = filters::scan_pug_template_ranges(&source_text);
-            let map_data = MapData {
-                line_map: input.line_map,
-                token_map: input.token_map,
-                overlay_line_starts: input.overlay_line_starts,
-                source_line_starts: input.source_line_starts,
-                overlay_text,
-                source_text,
-                identity_map: matches!(input.kind, InputKind::KitFile | InputKind::UserTsOverlay),
-                ignore_regions,
-                pug_template_ranges,
-            };
-            // `.svn.ts` (TS) Svelte overlays + Kit-file overlays land in
-            // the tsconfig's `files` list directly. `.svn.js` (JS overlays
-            // — script-less `.svelte` or `<script>` without `lang="ts"`)
-            // do NOT — listing a `.js` file in `compilerOptions.files`
-            // makes tsgo fire TS6504 under default `allowJs: false`, fatal
-            // at the program-config layer (issue #16). They reach the
-            // program through the `<cache>/svelte/**/*.svn.js` cache-mirror
-            // include glob.
-            //
-            // `SvelteAuxiliary` overlays — out-of-scope `.svelte` files
-            // pulled in by transitive imports — also stay out of `files`.
-            // Listing them unconditionally re-introduces the
-            // out-of-scope-error noise the tsconfig scope filter exists
-            // to prevent. They reach via the `.d.svelte.ts` ambient
-            // sidecar chain when an in-scope file imports them.
-            //
-            // Why `.svn.ts` overlays stay in `files` (not in include via
-            // a `.d.svelte.ts` re-export glob, which would mirror upstream
-            // svelte-check's structure exactly): the
-            // `export { default } from './File.svelte.svn.ts'; export *
-            // from './File.svelte.svn.ts';` re-export chain doesn't
-            // preserve enough type info for tsgo to type-check Svelte 5
-            // snippet props at the consumer site (observed on shadcn-docs:
-            // 0 → 111 spurious TS7031 errors when overlays were dropped
-            // from `files` in commit a6a77bce; reverted here while keeping
-            // the rest of the overlay-parity refactor). Ours diverges
-            // from upstream's structure here for correctness — same
-            // class of intentional-divergence as `kit_types_mirror`,
-            // `__svn_self_default`, and the `.svn` infix.
-            let is_js_overlay =
-                matches!(input.kind, InputKind::Svelte | InputKind::SvelteAuxiliary)
-                    && !input.is_ts_overlay;
-            let list_in_files = !matches!(input.kind, InputKind::SvelteAuxiliary) && !is_js_overlay;
-            let (kit_overlay_source, source_svelte_path) = match input.kind {
-                InputKind::Svelte | InputKind::SvelteAuxiliary => (None, Some(input.source_path)),
-                InputKind::KitFile | InputKind::UserTsOverlay => (Some(input.source_path), None),
-            };
-            Ok(Prepared {
-                gen_path,
-                map_data,
-                ambient_path,
-                kit_overlay_source,
-                source_svelte_path,
-                list_in_files,
-            })
-        })
-        .collect::<Result<Vec<Prepared>, CheckError>>()?;
-
-    // Fold the parallel results in input order.
-    for p in prepared {
-        written_paths.insert(p.gen_path.clone());
-        if let Some(ambient) = p.ambient_path {
-            written_paths.insert(ambient);
-        }
-        if let Some(kit_source) = p.kit_overlay_source {
-            kit_overlay_sources.push(kit_source);
-        }
-        if let Some(svelte_path) = p.source_svelte_path {
-            source_svelte_paths.push(svelte_path);
-        }
-        map_data.insert(p.gen_path.clone(), p.map_data);
-        if p.list_in_files {
-            generated_paths.push(p.gen_path);
-        }
-    }
-
-    // Step 1a: garbage-collect orphaned overlay files. A `.svelte`
-    // source that was deleted or renamed leaves its stale overlay
-    // (`Foo.svelte.svn.ts`) and ambient sidecar (`Foo.d.svelte.ts`)
-    // behind in the cache; subsequent runs see them resolve as if
-    // the source still existed, masking the user's real "module not
-    // found" error at the import site.
-    //
-    // Walk the cache's `svelte/` subtree and delete any file that
-    // wasn't written this run. `written_paths` accumulated every
-    // gen_path + ambient_path the loop above produced; anything else
-    // under `svelte_dir` is orphaned. Best-effort delete — a held
-    // file (Windows process lock, antivirus scan) leaves the orphan
-    // for next run and doesn't break this one.
-    gc_orphaned_overlays(&layout.svelte_dir, &written_paths);
-
-    // Step 1b: collect the synthetic `.svelte-kit/types/` mirror the
-    // background thread has been writing since the top of `check` —
-    // it makes the `$types.d.ts` chain `'../(…/)src/routes/…/+page.js'`
-    // resolve through our typed Kit-file copies instead of the user's
-    // untyped source. Some(mirror_dir) when the user actually has a
-    // svelte-kit-generated types tree (the common SvelteKit case),
-    // None for non-Kit projects. The overlay builder uses this signal
-    // to enable rootDirs priority + include-glob redirect; without it
-    // the overlay degrades cleanly to today's behavior.
-    let kit_types_mirror = match kit_types_mirror_task.join() {
-        Ok(result) => result?,
-        // Re-raise a mirror-thread panic on this thread, exactly as if
-        // `sync_mirror` had run inline here.
-        Err(panic) => std::panic::resume_unwind(panic),
-    };
-
-    // Step 1c: write fallback `$app/*` ambient-module declarations
-    // when this is a Kit project (`.svelte-kit/types/` exists) but
-    // `@sveltejs/kit` types aren't reachable from the workspace's
-    // node_modules. Closes TS2307 on `import { dev } from
-    // '$app/environment'` for monorepos that have Kit at the root
-    // but not in per-app node_modules. Returns None when the
-    // fallback isn't needed (real types win, or non-Kit project).
-    let kit_app_ambients = kit_app_ambients::write_ambients(&layout)?;
-
-    // Step 2: write overlay tsconfig.
-    let overlay = overlay::build(
-        &layout,
+        .map(|input| session.prepare(input))
+        .collect::<Result<Vec<PreparedInput>, CheckError>>()?;
+    session.finish(
+        prepared,
         user_tsconfig,
-        &generated_paths,
-        &kit_overlay_sources,
-        &source_svelte_paths,
-        kit_types_mirror.as_deref(),
-        kit_app_ambients.as_deref(),
-    );
-    let overlay_text = serde_json::to_string_pretty(&overlay)?;
-    write_if_changed(&layout.overlay_tsconfig, &overlay_text)?;
-
-    // Step 3: spawn tsgo.
-    let tsgo = discover(workspace)?;
-    let run = run_tsgo(
-        &tsgo,
-        &layout.overlay_tsconfig,
-        workspace,
         extended_diagnostics,
         include_suggestions,
-    )?;
+    )
+}
 
-    // Kit / user-ts originals that received a mirror overlay: any
-    // diagnostic tsgo attributes to one of these paths is dropped in
-    // `map_diagnostic` (see its docs — `exclude` doesn't stop
-    // import-following, so the untyped originals can still enter the
-    // program).
-    let excluded_kit_sources: std::collections::HashSet<PathBuf> = kit_overlay_sources
-        .iter()
-        .map(|p| path_utils::lexical_normalise(p))
-        .collect();
+/// Per-input product of [`CheckSession::prepare`] — the overlay (and
+/// ambient sidecar) already written to the cache plus the mapping
+/// data the diagnostic mapper needs. Folded into the corpus-level
+/// collections by [`CheckSession::finish`] in input order.
+#[derive(Debug)]
+pub struct PreparedInput {
+    gen_path: PathBuf,
+    map_data: MapData,
+    /// Ambient sidecar written for this input (Svelte kinds
+    /// without a user-owned ambient) — joins `written_paths`.
+    ambient_path: Option<PathBuf>,
+    /// Original source of a mirror-overlay kind — joins the
+    /// overlay tsconfig's `exclude` via `kit_overlay_sources`.
+    kit_overlay_source: Option<PathBuf>,
+    /// `.svelte` source path (Svelte kinds) — joins
+    /// `source_svelte_paths`.
+    source_svelte_path: Option<PathBuf>,
+    /// Whether `gen_path` is listed in the overlay tsconfig's
+    /// `files` array.
+    list_in_files: bool,
+}
 
-    // Step 4: map diagnostics back to source paths + apply line map.
-    // Drop only the STRUCTURAL noise our overlay tsconfig produces
-    // (artifacts of the generated `files` / rewritten `paths`); a
-    // compiler-option validation error attributed to the overlay is
-    // inherited from the user's tsconfig via `extends` and is surfaced,
-    // matching upstream `svelte-check --tsgo`. See
-    // `filters::is_overlay_tsconfig_noise`.
-    //
-    // The overlay tsconfig's canonical path is resolved once here —
-    // the noise filter needs it per diagnostic, and a realpath walk
-    // per call adds up on diagnostic-heavy runs.
-    let canonical_overlay_tsconfig = dunce::canonicalize(&layout.overlay_tsconfig).ok();
-    let mut diagnostics: Vec<CheckDiagnostic> = run
-        .diagnostics
-        .into_iter()
-        .map(|mut d| {
-            // Bare-form diagnostics (config-level, no position) come out
-            // of the parser with an empty `file`. Substitute the user's
-            // tsconfig path so downstream attribution treats them as
-            // belonging to that config — mirrors upstream svelte-check's
-            // `mapCliDiagnosticsToLsp(.., opts.tsconfig)` fallback.
-            if d.file.as_os_str().is_empty() {
-                d.file = user_tsconfig.to_path_buf();
-            }
-            d
-        })
-        .filter(|d| {
-            !filters::is_overlay_tsconfig_noise(d, &layout, canonical_overlay_tsconfig.as_deref())
-        })
-        .filter_map(|d| map_diagnostic(d, &layout, &map_data, &excluded_kit_sources))
-        .filter(|d| !filters::is_svelte4_reactive_noop_comma(d))
-        .map(|mut d| {
-            // Reclassify suggestion-style codes as Hint when the caller
-            // asked for them. tsgo doesn't emit hint severity from CLI;
-            // it emits these codes as Error when `--noUnusedLocals` /
-            // `--noUnusedParameters` are on (which we set in the runner
-            // when `include_suggestions` is true). The reclassification
-            // is what makes the machine-output writer label them HINT
-            // instead of ERROR, matching upstream LS's
-            // `getSuggestionDiagnostics` semantics.
-            //
-            // Codes:
-            //   6133 — declared but never read (locals, params)
-            //   6192 — all imports unused
-            //   6196 — declared but never used (looser than 6133)
-            //   6385 — `<X>` is deprecated
-            //   6387 — function decorator deprecated
-            //
-            // 6385/6387 don't fire from tsgo CLI (no flag exposes
-            // them); kept here for symmetry once they do.
-            if include_suggestions
-                && let DiagnosticCode::Numeric(n) = &d.code
-                && matches!(*n, 6133 | 6192 | 6196 | 6385 | 6387)
-            {
-                d.severity = output::Severity::Hint;
-            }
-            d
-        })
-        .collect();
+/// Split-phase variant of [`check`] for callers that produce inputs
+/// inside their own parallel pipeline.
+///
+/// [`check`] takes the whole corpus of [`CheckInput`]s at once, which
+/// forces the caller to hold every generated overlay string in memory
+/// simultaneously before the write fan-out starts draining them — on
+/// a 1000-file workspace that's the full emitted-TS corpus (2-4x the
+/// source bytes) resident across the phase barrier. With a session
+/// the caller invokes [`CheckSession::prepare`] right where each
+/// input is emitted (e.g. inside its own rayon fan-out task), so each
+/// overlay string is written to the cache and dropped within the task
+/// that created it; peak RSS holds a thread-count's worth of overlay
+/// text instead of the corpus. [`CheckSession::finish`] then runs the
+/// corpus-level steps (cache GC, kit mirror join, overlay tsconfig,
+/// tsgo spawn, diagnostic mapping).
+///
+/// Constructing the session performs the cache-global setup up front
+/// (cache dir creation, type-shim write) and starts the
+/// `.svelte-kit/types/` mirror sync in the background so it overlaps
+/// the caller's emit pipeline.
+pub struct CheckSession {
+    layout: CacheLayout,
+    /// Background `.svelte-kit/types/` mirror sync (Step 1b). It
+    /// depends only on the layout — it reads the USER's
+    /// `.svelte-kit/types/` tree and writes the cache's
+    /// `svelte-kit/types/` mirror, both disjoint from everything the
+    /// Step-1 overlay fan-out touches (`svelte/` subtree) — so it can
+    /// overlap the whole emit + overlay-write phase instead of adding
+    /// its serial walk (tens of milliseconds on large Kit route
+    /// trees) to the pre-tsgo critical path. Joined in [`Self::finish`]
+    /// right before the overlay tsconfig build consumes the result.
+    kit_types_mirror_task: std::thread::JoinHandle<std::io::Result<Option<PathBuf>>>,
+}
 
-    // Drop unused-import / unused-local hints whose source position
-    // sits on an import statement that ALSO has a module-resolution
-    // error (TS2307 cannot-find-module / TS2305 missing export /
-    // TS2306 not a module). Mirrors upstream tsgo's
-    // getSuggestionDiagnostics behaviour: when a symbol's import
-    // source can't be resolved, the unused-locals checker can't
-    // safely conclude the symbol is unused (its type is unknown,
-    // so any usage analysis is moot). Upstream LS surfaces only
-    // the resolution error, not the spurious unused-decl hint
-    // (verified against `pug` fixture's expected JSON which has
-    // 2307×2 + 2322 only, no 6133/6192 on the same import lines).
-    if include_suggestions {
-        let mut suppressed: std::collections::HashMap<PathBuf, std::collections::HashSet<u32>> =
-            std::collections::HashMap::new();
-        for d in diagnostics
-            .iter()
-            .filter(|d| matches!(d.code, DiagnosticCode::Numeric(2305..=2307)))
-        {
-            suppressed
-                .entry(d.source_path.clone())
-                .or_default()
-                .insert(d.line);
-        }
-        diagnostics.retain(|d| {
-            if !matches!(d.code, DiagnosticCode::Numeric(6133 | 6192 | 6196)) {
-                return true;
-            }
-            !suppressed
-                .get(&d.source_path)
-                .is_some_and(|lines| lines.contains(&d.line))
-        });
+impl CheckSession {
+    /// Set up the cache and start the background kit-types mirror
+    /// sync. See the struct docs for the phase layout.
+    pub fn new(
+        workspace: &Path,
+        solution_root_tsconfig: Option<&Path>,
+    ) -> Result<Self, CheckError> {
+        let layout = CacheLayout::for_workspace_with_solution_root(
+            workspace,
+            solution_root_tsconfig.map(|p| p.to_path_buf()),
+        );
+
+        let kit_types_mirror_task = {
+            let layout = layout.clone();
+            std::thread::spawn(move || kit_types_mirror::sync_mirror(&layout))
+        };
+
+        std::fs::create_dir_all(&layout.svelte_dir)?;
+
+        // Ship the svelte type shims into the cache. Core (runes + helper
+        // types + shim-wide ambients) is always written. The fallback
+        // `declare module 'svelte/*'` block — marked in-source with
+        // @@FALLBACK_BEGIN@@ / @@FALLBACK_END@@ — is stripped when a real
+        // svelte install is reachable; otherwise its minimal declarations
+        // would shadow the richer real types (e.g. svelte/elements
+        // re-exports HTMLAnchorAttributes, HTMLInputAttributes, ClassValue
+        // from clsx, etc., none of which the fallback enumerates).
+        let shim_text = resolve_shim_text(/* keep_fallback */ !has_real_svelte(workspace));
+        write_if_changed(&layout.svelte_shims, &shim_text)?;
+
+        Ok(Self {
+            layout,
+            kit_types_mirror_task,
+        })
     }
-    Ok(CheckOutput {
-        diagnostics,
-        extended_diagnostics: run.extended_diagnostics,
-    })
+
+    /// Write one input's generated TS (and ambient sidecar) into the
+    /// cache and build its diagnostic-mapping data. Safe to call from
+    /// parallel tasks — every write targets a path derived from the
+    /// input's own source path, and the layout is read-only.
+    ///
+    /// Skips identical writes so unchanged files don't perturb tsgo's
+    /// incremental build info.
+    ///
+    /// Note: no separate `.d.svelte.ts` re-export stub is written. The
+    /// generated `<name>.svelte.ts` IS the type definition for
+    /// `<name>.svelte` — emit rewrites every `import './X.svelte'` to
+    /// `import './X.svelte.js'` so TS's standard `.js`→`.ts` resolver
+    /// lands on our generated file rather than the `*.svelte` ambient
+    /// declaration that the `svelte` package ships.
+    ///
+    /// `input` is consumed — `generated_ts` and `line_map` move out of
+    /// the `CheckInput` and the string usually drops before returning
+    /// (retained only when the disk copy isn't emit-space — see
+    /// `emit_space_overlay_text`).
+    pub fn prepare(&self, mut input: CheckInput) -> Result<PreparedInput, CheckError> {
+        let layout = &self.layout;
+        let gen_path = match input.kind {
+            InputKind::Svelte | InputKind::SvelteAuxiliary => {
+                layout.generated_path_with_lang(&input.source_path, input.is_ts_overlay)
+            }
+            InputKind::KitFile | InputKind::UserTsOverlay => {
+                layout.kit_overlay_path(&input.source_path)
+            }
+        };
+        // When the source's script-lang toggles between JS and TS
+        // across runs, the previously-written sibling (`.svn.ts` when
+        // we now emit `.svn.js`, or vice versa) becomes stale. TS's
+        // bundler resolver prefers `.ts` when `./foo.svelte.svn.js` is
+        // imported, so a stale `.svn.ts` wins and tsgo reads outdated
+        // emit. Remove the other-extension sibling on every write —
+        // cheap `fs::remove_file` ignored-not-found.
+        if matches!(input.kind, InputKind::Svelte | InputKind::SvelteAuxiliary) {
+            let sibling = layout.generated_path_with_lang(&input.source_path, !input.is_ts_overlay);
+            let _ = std::fs::remove_file(&sibling);
+        }
+        // The DISK copy gets the external-import rewrite; everything
+        // the diagnostic mapper reads stays in emit space. See
+        // [`overlay_disk_text`] for the space invariant and
+        // [`emit_space_overlay_text`] for how the emit text is either
+        // dropped here (lazily reloadable from the identical disk
+        // copy) or retained (rewrite changed bytes).
+        let disk_text = overlay_disk_text(&input, &gen_path, &layout.workspace);
+        write_if_changed(
+            &gen_path,
+            disk_text.as_deref().unwrap_or(&input.generated_ts),
+        )?;
+        // Scanned from the emit text before it moves below.
+        let ignore_regions = scan_ignore_regions(&input.generated_ts);
+        let overlay_text = emit_space_overlay_text(
+            std::mem::take(&mut input.generated_ts),
+            disk_text,
+            &gen_path,
+        );
+        let ambient_path: Option<PathBuf> = match input.kind {
+            InputKind::Svelte | InputKind::SvelteAuxiliary => {
+                // Ambient `.d.svelte.ts` sidecar next to the overlay.
+                // Makes `import './Foo.svelte'` in user-controlled files
+                // (barrel re-exports, plain `.ts` modules we don't
+                // rewrite, Svelte files OUTSIDE the tsconfig scope that
+                // are imported by in-scope ones) resolve to the
+                // overlay's types via TS's `allowArbitraryExtensions`
+                // mechanism. Content is a one-shot re-export from the
+                // overlay; no diagnostic should ever fire on this file.
+                //
+                // Written for SvelteAuxiliary inputs too — those exist
+                // PRECISELY so tsgo's import-following can reach an
+                // out-of-scope Svelte file and pick up our overlay's
+                // types.
+                //
+                // KNOWN LIMITATION: this ambient doesn't help in the
+                // sibling-collision case where the user has both
+                // `Foo.svelte` AND `Foo.svelte.ts` (a Svelte 5 runes
+                // module) in the same directory. tsgo's resolver picks
+                // the workspace as the `rootDirs` match for
+                // `./Foo.svelte` (because the physical file lives
+                // there, not in cache) and searches WITHIN the
+                // workspace — so it finds the runes module via bundler
+                // auto-extension (`.svelte` → `.svelte.ts`) before our
+                // cache-resident ambient is tried. Writing a
+                // `.d.svelte.ts` into the cache at the mirrored path is
+                // unreachable for this specific import. Observed on
+                // shadcn-svelte-style barrel `index.ts` re-exports in
+                // the wild. Real fix would require either writing
+                // ambients into the user's source tree (invasive) or
+                // pre-rewriting every user-owned `.ts` file that
+                // imports `.svelte` (high scope). Deferred.
+                let ambient_path = layout.ambient_path(&input.source_path);
+                // Skip writing our re-export ambient when the user has
+                // their own hand-written ambient sibling next to the
+                // `.svelte` source (`Foo.svelte.d.ts` or its variant
+                // `Foo.d.svelte.ts` under `allowArbitraryExtensions`).
+                // The cache `rootDirs` lists our cache dir FIRST, so
+                // ours would shadow the user's — and ours re-exports
+                // from `Foo.svelte.svn.ts` whose surface is purely the
+                // overlay's `default` (no named exports). User-owned
+                // ambients exist precisely to declare named exports
+                // (`export declare const a: boolean;`) that consumers
+                // import — shadowing them with our re-export-only
+                // form fires TS2614 "no exported member" on every
+                // such named import. Mirrors upstream svelte-check's
+                // behavior of only synthesizing ambients when no
+                // user-owned counterpart exists.
+                let user_has_ambient = user_has_svelte_ambient(&input.source_path);
+                if user_has_ambient {
+                    None
+                } else {
+                    let overlay_file_name = gen_path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unknown.svelte.svn.ts");
+                    let ambient_text = format!(
+                        "// generated by svelte-check-native; do not edit\n\
+                         export {{ default }} from './{overlay_file_name}';\n\
+                         export * from './{overlay_file_name}';\n"
+                    );
+                    write_if_changed(&ambient_path, &ambient_text)?;
+                    Some(ambient_path)
+                }
+            }
+            InputKind::KitFile | InputKind::UserTsOverlay => {
+                // Mirror-overlay kinds: original source path goes into
+                // the overlay tsconfig's `exclude` so tsgo reads only
+                // our rewritten version. KitFile carries injected
+                // route / hooks types; UserTsOverlay carries rewritten
+                // `.svelte` imports that bypass the sibling-runes-module
+                // collision.
+                None
+            }
+        };
+
+        // Source text for the position mapper. For Svelte / Aux
+        // overlays the source is the user's `.svelte` file — shared
+        // via `Arc` with the caller's in-memory corpus, so no disk
+        // re-read and no duplicate copy. For kit / user-ts overlays
+        // the original layout is preserved through the inject and
+        // rewrite paths so we can reuse the overlay text as the source
+        // view (identity_map=true on those kinds already handles the
+        // line/col pass-through, but having the text on hand keeps
+        // position_to_byte / byte_to_position's UTF-16 conversion
+        // correct on non-ASCII content).
+        let source_text = match input.kind {
+            InputKind::Svelte | InputKind::SvelteAuxiliary => input.source.clone(),
+            // Identity-map kinds preserve the original layout, so the
+            // overlay text doubles as the source view. The position
+            // helpers read `overlay_text` for both sides when
+            // `identity_map` is true, so there's no need to clone a
+            // second copy here.
+            InputKind::KitFile | InputKind::UserTsOverlay => std::sync::Arc::from(""),
+        };
+        let pug_template_ranges = filters::scan_pug_template_ranges(&source_text);
+        let map_data = MapData {
+            line_map: input.line_map,
+            token_map: input.token_map,
+            overlay_line_starts: input.overlay_line_starts,
+            source_line_starts: input.source_line_starts,
+            overlay_text,
+            source_text,
+            identity_map: matches!(input.kind, InputKind::KitFile | InputKind::UserTsOverlay),
+            ignore_regions,
+            pug_template_ranges,
+        };
+        // `.svn.ts` (TS) Svelte overlays + Kit-file overlays land in
+        // the tsconfig's `files` list directly. `.svn.js` (JS overlays
+        // — script-less `.svelte` or `<script>` without `lang="ts"`)
+        // do NOT — listing a `.js` file in `compilerOptions.files`
+        // makes tsgo fire TS6504 under default `allowJs: false`, fatal
+        // at the program-config layer (issue #16). They reach the
+        // program through the `<cache>/svelte/**/*.svn.js` cache-mirror
+        // include glob.
+        //
+        // `SvelteAuxiliary` overlays — out-of-scope `.svelte` files
+        // pulled in by transitive imports — also stay out of `files`.
+        // Listing them unconditionally re-introduces the
+        // out-of-scope-error noise the tsconfig scope filter exists
+        // to prevent. They reach via the `.d.svelte.ts` ambient
+        // sidecar chain when an in-scope file imports them.
+        //
+        // Why `.svn.ts` overlays stay in `files` (not in include via
+        // a `.d.svelte.ts` re-export glob, which would mirror upstream
+        // svelte-check's structure exactly): the
+        // `export { default } from './File.svelte.svn.ts'; export *
+        // from './File.svelte.svn.ts';` re-export chain doesn't
+        // preserve enough type info for tsgo to type-check Svelte 5
+        // snippet props at the consumer site (observed on shadcn-docs:
+        // 0 → 111 spurious TS7031 errors when overlays were dropped
+        // from `files` in commit a6a77bce; reverted here while keeping
+        // the rest of the overlay-parity refactor). Ours diverges
+        // from upstream's structure here for correctness — same
+        // class of intentional-divergence as `kit_types_mirror`,
+        // `__svn_self_default`, and the `.svn` infix.
+        let is_js_overlay = matches!(input.kind, InputKind::Svelte | InputKind::SvelteAuxiliary)
+            && !input.is_ts_overlay;
+        let list_in_files = !matches!(input.kind, InputKind::SvelteAuxiliary) && !is_js_overlay;
+        let (kit_overlay_source, source_svelte_path) = match input.kind {
+            InputKind::Svelte | InputKind::SvelteAuxiliary => (None, Some(input.source_path)),
+            InputKind::KitFile | InputKind::UserTsOverlay => (Some(input.source_path), None),
+        };
+        Ok(PreparedInput {
+            gen_path,
+            map_data,
+            ambient_path,
+            kit_overlay_source,
+            source_svelte_path,
+            list_in_files,
+        })
+    }
+
+    /// Corpus-level tail of the pipeline: fold the prepared inputs,
+    /// GC orphaned cache files, join the kit-types mirror, build the
+    /// overlay tsconfig, spawn tsgo, and map its diagnostics back to
+    /// source positions. `prepared` must be in input order — the fold
+    /// sequences the overlay tsconfig's `files` / `exclude` arrays.
+    pub fn finish(
+        self,
+        prepared: Vec<PreparedInput>,
+        user_tsconfig: &Path,
+        extended_diagnostics: bool,
+        include_suggestions: bool,
+    ) -> Result<CheckOutput, CheckError> {
+        let layout = &self.layout;
+        let mut generated_paths: Vec<PathBuf> = Vec::with_capacity(prepared.len());
+        let mut kit_overlay_sources: Vec<PathBuf> = Vec::new();
+        // Source `.svelte` paths handed to the overlay's `exclude` so tsgo
+        // never tries to load the raw `.svelte` file from the user's tree —
+        // it always reaches the overlay through the `.d.svelte.ts`
+        // re-export chain (or, currently, through `compilerOptions.files`
+        // listing the `.svn.ts` directly). Mirrors upstream's
+        // `upsertedExcludes` at `incremental.ts:430-431`. Today this is a
+        // no-op (tsgo doesn't load `.svelte` files anyway because their
+        // extension isn't on its program-input list), but keeping it in
+        // place is the structural pre-req for moving overlays out of
+        // `files` while still keeping `.svelte` patterns in `include`.
+        let mut source_svelte_paths: Vec<PathBuf> = Vec::with_capacity(prepared.len());
+        let mut map_data: std::collections::HashMap<PathBuf, MapData> =
+            std::collections::HashMap::with_capacity(prepared.len());
+        // Track every cache file this run touched. Anything in
+        // `svelte_dir` not in this set after the fold is orphaned (the
+        // source `.svelte` was deleted or renamed) and gets garbage-
+        // collected so stale overlays / ambients don't keep masking real
+        // "module not found" errors at later imports.
+        let mut written_paths: std::collections::HashSet<PathBuf> =
+            std::collections::HashSet::with_capacity(prepared.len() * 2);
+
+        // Fold the per-input results in input order.
+        for p in prepared {
+            written_paths.insert(p.gen_path.clone());
+            if let Some(ambient) = p.ambient_path {
+                written_paths.insert(ambient);
+            }
+            if let Some(kit_source) = p.kit_overlay_source {
+                kit_overlay_sources.push(kit_source);
+            }
+            if let Some(svelte_path) = p.source_svelte_path {
+                source_svelte_paths.push(svelte_path);
+            }
+            map_data.insert(p.gen_path.clone(), p.map_data);
+            if p.list_in_files {
+                generated_paths.push(p.gen_path);
+            }
+        }
+
+        // Step 1a: garbage-collect orphaned overlay files. A `.svelte`
+        // source that was deleted or renamed leaves its stale overlay
+        // (`Foo.svelte.svn.ts`) and ambient sidecar (`Foo.d.svelte.ts`)
+        // behind in the cache; subsequent runs see them resolve as if
+        // the source still existed, masking the user's real "module not
+        // found" error at the import site.
+        //
+        // Walk the cache's `svelte/` subtree and delete any file that
+        // wasn't written this run. `written_paths` accumulated every
+        // gen_path + ambient_path the loop above produced; anything else
+        // under `svelte_dir` is orphaned. Best-effort delete — a held
+        // file (Windows process lock, antivirus scan) leaves the orphan
+        // for next run and doesn't break this one.
+        gc_orphaned_overlays(&layout.svelte_dir, &written_paths);
+
+        // Step 1b: collect the synthetic `.svelte-kit/types/` mirror the
+        // background thread has been writing since the session was
+        // created — it makes the `$types.d.ts` chain
+        // `'../(…/)src/routes/…/+page.js'` resolve through our typed
+        // Kit-file copies instead of the user's untyped source.
+        // Some(mirror_dir) when the user actually has a
+        // svelte-kit-generated types tree (the common SvelteKit case),
+        // None for non-Kit projects. The overlay builder uses this signal
+        // to enable rootDirs priority + include-glob redirect; without it
+        // the overlay degrades cleanly to today's behavior.
+        let kit_types_mirror = match self.kit_types_mirror_task.join() {
+            Ok(result) => result?,
+            // Re-raise a mirror-thread panic on this thread, exactly as if
+            // `sync_mirror` had run inline here.
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
+
+        // Step 1c: write fallback `$app/*` ambient-module declarations
+        // when this is a Kit project (`.svelte-kit/types/` exists) but
+        // `@sveltejs/kit` types aren't reachable from the workspace's
+        // node_modules. Closes TS2307 on `import { dev } from
+        // '$app/environment'` for monorepos that have Kit at the root
+        // but not in per-app node_modules. Returns None when the
+        // fallback isn't needed (real types win, or non-Kit project).
+        let kit_app_ambients = kit_app_ambients::write_ambients(layout)?;
+
+        // Step 2: write overlay tsconfig.
+        let overlay = overlay::build(
+            layout,
+            user_tsconfig,
+            &generated_paths,
+            &kit_overlay_sources,
+            &source_svelte_paths,
+            kit_types_mirror.as_deref(),
+            kit_app_ambients.as_deref(),
+        );
+        let overlay_text = serde_json::to_string_pretty(&overlay)?;
+        write_if_changed(&layout.overlay_tsconfig, &overlay_text)?;
+
+        // Step 3: spawn tsgo.
+        let tsgo = discover(&layout.workspace)?;
+        let run = run_tsgo(
+            &tsgo,
+            &layout.overlay_tsconfig,
+            &layout.workspace,
+            extended_diagnostics,
+            include_suggestions,
+        )?;
+
+        // Kit / user-ts originals that received a mirror overlay: any
+        // diagnostic tsgo attributes to one of these paths is dropped in
+        // `map_diagnostic` (see its docs — `exclude` doesn't stop
+        // import-following, so the untyped originals can still enter the
+        // program).
+        let excluded_kit_sources: std::collections::HashSet<PathBuf> = kit_overlay_sources
+            .iter()
+            .map(|p| path_utils::lexical_normalise(p))
+            .collect();
+
+        // Step 4: map diagnostics back to source paths + apply line map.
+        // Drop only the STRUCTURAL noise our overlay tsconfig produces
+        // (artifacts of the generated `files` / rewritten `paths`); a
+        // compiler-option validation error attributed to the overlay is
+        // inherited from the user's tsconfig via `extends` and is surfaced,
+        // matching upstream `svelte-check --tsgo`. See
+        // `filters::is_overlay_tsconfig_noise`.
+        //
+        // The overlay tsconfig's canonical path is resolved once here —
+        // the noise filter needs it per diagnostic, and a realpath walk
+        // per call adds up on diagnostic-heavy runs.
+        let canonical_overlay_tsconfig = dunce::canonicalize(&layout.overlay_tsconfig).ok();
+        let mut diagnostics: Vec<CheckDiagnostic> = run
+            .diagnostics
+            .into_iter()
+            .map(|mut d| {
+                // Bare-form diagnostics (config-level, no position) come out
+                // of the parser with an empty `file`. Substitute the user's
+                // tsconfig path so downstream attribution treats them as
+                // belonging to that config — mirrors upstream svelte-check's
+                // `mapCliDiagnosticsToLsp(.., opts.tsconfig)` fallback.
+                if d.file.as_os_str().is_empty() {
+                    d.file = user_tsconfig.to_path_buf();
+                }
+                d
+            })
+            .filter(|d| {
+                !filters::is_overlay_tsconfig_noise(
+                    d,
+                    layout,
+                    canonical_overlay_tsconfig.as_deref(),
+                )
+            })
+            .filter_map(|d| map_diagnostic(d, layout, &map_data, &excluded_kit_sources))
+            .filter(|d| !filters::is_svelte4_reactive_noop_comma(d))
+            .map(|mut d| {
+                // Reclassify suggestion-style codes as Hint when the caller
+                // asked for them. tsgo doesn't emit hint severity from CLI;
+                // it emits these codes as Error when `--noUnusedLocals` /
+                // `--noUnusedParameters` are on (which we set in the runner
+                // when `include_suggestions` is true). The reclassification
+                // is what makes the machine-output writer label them HINT
+                // instead of ERROR, matching upstream LS's
+                // `getSuggestionDiagnostics` semantics.
+                //
+                // Codes:
+                //   6133 — declared but never read (locals, params)
+                //   6192 — all imports unused
+                //   6196 — declared but never used (looser than 6133)
+                //   6385 — `<X>` is deprecated
+                //   6387 — function decorator deprecated
+                //
+                // 6385/6387 don't fire from tsgo CLI (no flag exposes
+                // them); kept here for symmetry once they do.
+                if include_suggestions
+                    && let DiagnosticCode::Numeric(n) = &d.code
+                    && matches!(*n, 6133 | 6192 | 6196 | 6385 | 6387)
+                {
+                    d.severity = output::Severity::Hint;
+                }
+                d
+            })
+            .collect();
+
+        // Drop unused-import / unused-local hints whose source position
+        // sits on an import statement that ALSO has a module-resolution
+        // error (TS2307 cannot-find-module / TS2305 missing export /
+        // TS2306 not a module). Mirrors upstream tsgo's
+        // getSuggestionDiagnostics behaviour: when a symbol's import
+        // source can't be resolved, the unused-locals checker can't
+        // safely conclude the symbol is unused (its type is unknown,
+        // so any usage analysis is moot). Upstream LS surfaces only
+        // the resolution error, not the spurious unused-decl hint
+        // (verified against `pug` fixture's expected JSON which has
+        // 2307×2 + 2322 only, no 6133/6192 on the same import lines).
+        if include_suggestions {
+            let mut suppressed: std::collections::HashMap<PathBuf, std::collections::HashSet<u32>> =
+                std::collections::HashMap::new();
+            for d in diagnostics
+                .iter()
+                .filter(|d| matches!(d.code, DiagnosticCode::Numeric(2305..=2307)))
+            {
+                suppressed
+                    .entry(d.source_path.clone())
+                    .or_default()
+                    .insert(d.line);
+            }
+            diagnostics.retain(|d| {
+                if !matches!(d.code, DiagnosticCode::Numeric(6133 | 6192 | 6196)) {
+                    return true;
+                }
+                !suppressed
+                    .get(&d.source_path)
+                    .is_some_and(|lines| lines.contains(&d.line))
+            });
+        }
+        Ok(CheckOutput {
+            diagnostics,
+            extended_diagnostics: run.extended_diagnostics,
+        })
+    }
 }
 
 /// Overlay text to write to the cache for `input`, or `None` when the

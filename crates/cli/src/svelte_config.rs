@@ -337,10 +337,39 @@ fn find_vite_svelte_plugin_options<'a>(
     svelte_fallback.map(|obj| (obj, false))
 }
 
-/// Find the top-level config `ObjectExpression` in the default export,
-/// handling `export default {…}`, `const c = {…}; export default c`, and
-/// `defineConfig({…})` / `satisfies` wrappers. Mirrors the traversal in
-/// [`extract_warning_filter`].
+/// RHS of a top-level `module.exports = …;` assignment — the CommonJS
+/// equivalent of `export default` for `.cjs` (and CJS-mode `.js`)
+/// configs. Upstream's loadConfig executes the config module and Node's
+/// `import()` maps `module.exports` to the default export, so both
+/// forms must resolve to the same config object.
+fn module_exports_value<'a>(stmt: &'a Statement<'a>) -> Option<&'a Expression<'a>> {
+    let Statement::ExpressionStatement(es) = stmt else {
+        return None;
+    };
+    let Expression::AssignmentExpression(assign) = &es.expression else {
+        return None;
+    };
+    if assign.operator != oxc_ast::ast::AssignmentOperator::Assign {
+        return None;
+    }
+    let oxc_ast::ast::AssignmentTarget::StaticMemberExpression(target) = &assign.left else {
+        return None;
+    };
+    let Expression::Identifier(obj) = &target.object else {
+        return None;
+    };
+    if obj.name != "module" || target.property.name != "exports" {
+        return None;
+    }
+    Some(&assign.right)
+}
+
+/// Find the top-level config `ObjectExpression` the file exports,
+/// handling `export default {…}`, the CommonJS `module.exports = {…}`,
+/// `const c = {…}; export default c` (or `module.exports = c`), and
+/// `defineConfig({…})` / `satisfies` wrappers. Shared by every
+/// extractor (warningFilter, kit.files, namespace, vite plugin options)
+/// so all of them accept the same export shapes.
 fn default_export_config_object<'a>(
     program: &'a oxc_ast::ast::Program<'a>,
 ) -> Option<&'a ObjectExpression<'a>> {
@@ -358,18 +387,21 @@ fn default_export_config_object<'a>(
         }
     }
     for stmt in &program.body {
-        let Statement::ExportDefaultDeclaration(decl) = stmt else {
-            continue;
-        };
-        let expr = match &decl.declaration {
-            ExportDefaultDeclarationKind::Identifier(id) => {
-                match named.get(id.name.as_str()).copied() {
+        let expr = match stmt {
+            Statement::ExportDefaultDeclaration(decl) => match &decl.declaration {
+                ExportDefaultDeclarationKind::Identifier(id) => {
+                    match named.get(id.name.as_str()).copied() {
+                        Some(e) => e,
+                        None => continue,
+                    }
+                }
+                ExportDefaultDeclarationKind::ObjectExpression(obj) => return Some(obj),
+                other => match other.as_expression() {
                     Some(e) => e,
                     None => continue,
-                }
-            }
-            ExportDefaultDeclarationKind::ObjectExpression(obj) => return Some(obj),
-            other => match other.as_expression() {
+                },
+            },
+            other => match module_exports_value(other) {
                 Some(e) => e,
                 None => continue,
             },
@@ -415,59 +447,14 @@ fn preserve_case_in_object(obj: &ObjectExpression<'_>) -> bool {
     lookup_string_property(inner, "namespace").as_deref() == Some("foreign")
 }
 
-/// Walk the program AST looking for `kit.files` inside the default
-/// export. Mirrors [`extract_warning_filter`]'s shape for
-/// `compilerOptions.warningFilter`.
+/// `kit.files` inside the exported config object. Export-shape
+/// traversal (default export, `module.exports`, named-const
+/// indirection, `defineConfig` / `satisfies` wrappers) is shared via
+/// [`default_export_config_object`].
 fn extract_kit_files_object<'a>(
     program: &'a oxc_ast::ast::Program<'a>,
 ) -> Option<&'a ObjectExpression<'a>> {
-    let mut named: std::collections::HashMap<String, &Expression<'_>> =
-        std::collections::HashMap::new();
-    for stmt in &program.body {
-        if let Statement::VariableDeclaration(vd) = stmt {
-            for d in &vd.declarations {
-                let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &d.id else {
-                    continue;
-                };
-                if let Some(init) = &d.init {
-                    named.insert(id.name.to_string(), init);
-                }
-            }
-        }
-    }
-    for stmt in &program.body {
-        let Statement::ExportDefaultDeclaration(decl) = stmt else {
-            continue;
-        };
-        let expr = match &decl.declaration {
-            ExportDefaultDeclarationKind::Identifier(id) => named.get(id.name.as_str()).copied()?,
-            ExportDefaultDeclarationKind::ObjectExpression(obj) => {
-                return kit_files_from_root(obj);
-            }
-            other => match other.as_expression() {
-                Some(e) => e,
-                None => continue,
-            },
-        };
-        // Unwrap common config-wrapper shapes:
-        //   defineConfig({...})   — Vite/SvelteKit ergonomic helper
-        //   config satisfies Config — TS narrowing wrapper
-        //   <ts cast>(<expr>)     — sometimes seen in TS configs
-        let unwrapped = unwrap_config_wrapper(expr);
-        if let Expression::ObjectExpression(obj) = unwrapped {
-            return kit_files_from_root(obj);
-        }
-        // Indirect: `export default config;` where `config` was
-        // declared as `const config = defineConfig({...})`. Recurse
-        // through the named-decl table after wrapper-unwrapping.
-        if let Expression::Identifier(id) = unwrapped
-            && let Some(target) = named.get(id.name.as_str()).copied()
-            && let Expression::ObjectExpression(obj) = unwrap_config_wrapper(target)
-        {
-            return kit_files_from_root(obj);
-        }
-    }
-    None
+    kit_files_from_root(default_export_config_object(program)?)
 }
 
 /// Strip common one-level wrappers that don't change the underlying
@@ -586,58 +573,14 @@ impl WarningFilterPlan {
     }
 }
 
-/// Walk top-level statements looking for the `warningFilter` entry
-/// inside `compilerOptions`. Handles two common export shapes:
-///   - `export default { compilerOptions: { warningFilter: ... } }`
-///   - `const config = { ... }; export default config;`
+/// `compilerOptions.warningFilter` inside the exported config object.
+/// Export-shape traversal (default export, `module.exports`,
+/// named-const indirection, `defineConfig` / `satisfies` wrappers) is
+/// shared via [`default_export_config_object`].
 fn extract_warning_filter<'a>(
     program: &'a oxc_ast::ast::Program<'a>,
 ) -> Option<&'a Expression<'a>> {
-    // Named declarations keyed by identifier for the second pattern.
-    let mut named: std::collections::HashMap<String, &Expression<'_>> =
-        std::collections::HashMap::new();
-    for stmt in &program.body {
-        if let Statement::VariableDeclaration(vd) = stmt {
-            for d in &vd.declarations {
-                if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &d.id
-                    && let Some(init) = &d.init
-                {
-                    named.insert(id.name.to_string(), init);
-                }
-            }
-        }
-    }
-    for stmt in &program.body {
-        let Statement::ExportDefaultDeclaration(decl) = stmt else {
-            continue;
-        };
-        let expr = match &decl.declaration {
-            ExportDefaultDeclarationKind::Identifier(id) => {
-                match named.get(id.name.as_str()).copied() {
-                    Some(e) => e,
-                    None => continue,
-                }
-            }
-            ExportDefaultDeclarationKind::ObjectExpression(obj) => {
-                return warning_filter_in_object(obj);
-            }
-            other => match other.as_expression() {
-                Some(e) => e,
-                None => continue,
-            },
-        };
-        let unwrapped = unwrap_config_wrapper(expr);
-        if let Expression::ObjectExpression(obj) = unwrapped {
-            return warning_filter_in_object(obj);
-        }
-        if let Expression::Identifier(id) = unwrapped
-            && let Some(target) = named.get(id.name.as_str()).copied()
-            && let Expression::ObjectExpression(obj) = unwrap_config_wrapper(target)
-        {
-            return warning_filter_in_object(obj);
-        }
-    }
-    None
+    warning_filter_in_object(default_export_config_object(program)?)
 }
 
 /// Look up `compilerOptions.warningFilter` inside a top-level config
@@ -1326,6 +1269,69 @@ export default {
         let local = app.join("svelte.config.js");
         std::fs::write(&local, "export default {};").unwrap();
         assert_eq!(find_svelte_config(&app), Some(local));
+    }
+
+    fn analyse_cjs(src: &str) -> SvelteConfigSummary {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("svelte.config.cjs");
+        std::fs::write(&path, src).unwrap();
+        analyse(&path)
+    }
+
+    #[test]
+    fn cjs_module_exports_object_literal_is_analysed() {
+        // CommonJS configs assign the config to `module.exports` instead
+        // of `export default` — upstream's loadConfig executes the module
+        // and Node maps module.exports to the imported default export.
+        let s = analyse_cjs(
+            r#"
+module.exports = {
+  compilerOptions: {
+    namespace: 'foreign',
+    warningFilter: (w) => !w.code.startsWith('a11y_')
+  },
+  kit: { files: { params: 'src/matchers' } }
+};
+"#,
+        );
+        assert_eq!(
+            s.warning_filter_plan.rules,
+            vec![DropRule::CodePrefix("a11y_".into())]
+        );
+        assert!(!s.warning_filter_plan.partial);
+        assert_eq!(s.kit_files_settings.params_path, "src/matchers");
+        assert!(s.preserve_attribute_case);
+    }
+
+    #[test]
+    fn cjs_module_exports_named_const_is_analysed() {
+        let s = analyse_cjs(
+            r#"
+const config = {
+  compilerOptions: { warningFilter: (w) => w.code !== 'css_unused_selector' }
+};
+module.exports = config;
+"#,
+        );
+        assert_eq!(
+            s.warning_filter_plan.rules,
+            vec![DropRule::CodeEquals("css_unused_selector".into())]
+        );
+    }
+
+    #[test]
+    fn cjs_unrelated_member_assignment_is_ignored() {
+        // Only `module.exports = …` counts; other member assignments
+        // must not be mistaken for the config object.
+        let s = analyse_cjs(
+            r#"
+const cache = {};
+cache.exports = { compilerOptions: { namespace: 'foreign' } };
+module.other = { compilerOptions: { namespace: 'foreign' } };
+"#,
+        );
+        assert!(!s.preserve_attribute_case);
+        assert!(s.warning_filter_plan.rules.is_empty());
     }
 
     #[test]

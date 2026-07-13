@@ -1264,14 +1264,16 @@ fn run_typecheck(
         .filter(|p| !in_project_scope(p))
         .cloned()
         .collect();
-    // Kit files (route modules, hooks, params) get counted toward the
-    // COMPLETED denominator to match upstream svelte-check's counting,
-    // but we don't type-check them ourselves — tsgo processes them via
-    // regular `.ts` include. Apply the same project-scope filter so
-    // our count reflects only files tsgo would see.
+    // Kit files (route modules, hooks, params). We don't type-check
+    // them ourselves — tsgo processes them via regular `.ts` include —
+    // so only in-scope kit files feed the inject pass below. The FULL
+    // discovered list (`kit_files_raw`) still counts toward the
+    // COMPLETED denominator: upstream's findFiles enumeration has no
+    // tsconfig scoping.
     let kit_files: Vec<PathBuf> = kit_files_raw
-        .into_iter()
+        .iter()
         .filter(|p| in_project_scope(p))
+        .cloned()
         .collect();
     // `.svelte.ts` runes-module set. Walker paths are canonical
     // (workspace is canonicalized at startup, `main.rs:180`), so
@@ -1611,20 +1613,28 @@ fn run_typecheck(
         .count();
 
     // `<N> FILES` in the COMPLETED line mirrors upstream svelte-check's
-    // denominator exactly: it's `|entries ∪ files-with-diagnostics|`,
-    // where `entries` is every `.svelte` + SvelteKit "Kit file" we
-    // processed (route modules like `+page.ts`, hooks, params — see
-    // `kit_files` module) and files-with-diagnostics adds any NON-entry
-    // file that picked up a TS diagnostic at tsgo time (typically
-    // `tsconfig.json`-level errors). Both sets deduplicated against
+    // denominator exactly: `|entries ∪ files-with-diagnostics|`
+    // (index.ts `writeDiagnostics` over the map
+    // `getSvelteDiagnosticsForIncremental` seeds), where `entries` is
+    // every `.svelte` + SvelteKit "Kit file" (route modules like
+    // `+page.ts`, hooks, params) that `findFiles` discovers
+    // WORKSPACE-WIDE — only node_modules/dot-dir filtering, no tsconfig
+    // `include`/`exclude` scoping (incremental.ts deliberately doesn't
+    // use them to filter virtualized files) — and files-with-diagnostics
+    // adds any NON-entry file that picked up a TS diagnostic at tsgo
+    // time (typically `tsconfig.json`-level errors). The entry half
+    // exists only while a `svelte` or `css` source is enabled: with
+    // js-only sources upstream's per-entry seeding early-returns
+    // (index.ts:324-330) and the count collapses to just the
+    // diagnostic-bearing files. Both sets deduplicated against
     // source_path.
     let files_for_completed: usize = {
         use std::collections::HashSet;
-        let mut seen: HashSet<&Path> = svelte_files
-            .iter()
-            .chain(kit_files.iter())
-            .map(PathBuf::as_path)
-            .collect();
+        let mut seen: HashSet<&Path> = HashSet::new();
+        if sources.svelte || sources.css {
+            seen.extend(svelte_files_all.iter().map(PathBuf::as_path));
+            seen.extend(kit_files_raw.iter().map(PathBuf::as_path));
+        }
         for d in &diagnostics {
             seen.insert(d.source_path.as_path());
         }

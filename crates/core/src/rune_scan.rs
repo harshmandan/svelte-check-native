@@ -32,6 +32,32 @@ pub fn script_calls_rune(source: &str) -> bool {
     scan(source.as_bytes())
 }
 
+/// Find the first rune-marker occurrence at byte position >= `from`,
+/// anchored on `memchr(b'$')` — every marker starts with `$`, so
+/// marker-less sources cost one SIMD sweep instead of a per-marker
+/// window scan. Returns `(pos, marker_len)`.
+///
+/// Purely textual: no comment/string awareness and no shadow or
+/// call-shape checks — callers layer their own semantics on top
+/// (emit's `is_runes_mode` stays deliberately comment-blind while
+/// [`script_calls_rune`] skips comments/strings; this primitive
+/// serves both without unifying them). At most one marker can match
+/// at a given position: the markers' second bytes are pairwise
+/// distinct.
+pub fn find_marker_from(bytes: &[u8], from: usize) -> Option<(usize, usize)> {
+    let mut i = from;
+    while let Some(rel) = memchr::memchr(b'$', &bytes[i..]) {
+        let pos = i + rel;
+        for marker in MARKERS {
+            if bytes[pos..].starts_with(marker) {
+                return Some((pos, marker.len()));
+            }
+        }
+        i = pos + 1;
+    }
+    None
+}
+
 fn scan(bytes: &[u8]) -> bool {
     let mut i = 0;
     while i < bytes.len() {
@@ -89,7 +115,13 @@ fn scan(bytes: &[u8]) -> bool {
             i = (i + 1).min(bytes.len());
             continue;
         }
-        // Try matching a rune marker at this code position.
+        // Try matching a rune marker at this code position. Guarded on
+        // the anchor byte so non-`$` positions (the overwhelming
+        // majority) skip the per-marker prefix compares.
+        if b != b'$' {
+            i += 1;
+            continue;
+        }
         for marker in MARKERS {
             if bytes[i..].starts_with(marker) {
                 if !rune_marker_is_shadowed_at(bytes, i) {

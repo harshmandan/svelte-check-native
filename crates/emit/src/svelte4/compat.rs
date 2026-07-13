@@ -500,10 +500,13 @@ pub(crate) fn has_strict_events_attr(doc: &svn_parser::Document<'_>) -> bool {
     })
 }
 
-/// Infer Svelte 5 runes mode from the document source. Mirrors
-/// svn-lint's `scan_doc_for_rune_call` (`walk.rs`) — intentionally
-/// duplicated rather than dep'ing on lint, so emit gets the signal
-/// with no circular dep in the other direction.
+/// Infer Svelte 5 runes mode from the document source.
+///
+/// Deliberately NOT comment/string-aware, unlike svn_core's
+/// [`svn_core::rune_scan::script_calls_rune`] (svn-lint's scan): a
+/// `$state(0)` inside a comment or string literal DOES flip emit's
+/// runes mode. The two scans share the marker-anchoring primitive
+/// (`find_marker_from`) but keep their distinct match semantics.
 ///
 /// Emit only ever sees `.svelte` documents, so runes mode is inferred
 /// purely from rune-call markers in the source — there is no filename
@@ -529,44 +532,30 @@ pub(crate) fn is_runes_mode(
     if svn_parser::runes_option(fragment, doc.source) == Some(true) {
         return true;
     }
-    let source = doc.source;
-    for marker in [
-        "$state",
-        "$derived",
-        "$effect",
-        "$props",
-        "$bindable",
-        "$inspect",
-        "$host",
-    ] {
-        let bytes = source.as_bytes();
-        let mbytes = marker.as_bytes();
-        let mut i = 0;
-        while let Some(rel) = bytes[i..].windows(mbytes.len()).position(|w| w == mbytes) {
-            let pos = i + rel;
-            // Identifier tails (`$$props`, `my$state`) and member-access
-            // property names (`api.$state(0)`, `this?.$props()`) are not
-            // rune usages — shared guard with svn_core's rune scan.
-            if svn_core::rune_scan::rune_marker_is_shadowed_at(bytes, pos) {
-                i = pos + mbytes.len();
-                continue;
-            }
-            let mut after = pos + mbytes.len();
-            while bytes.get(after) == Some(&b'.') {
-                after += 1;
-                while after < bytes.len()
-                    && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_')
-                {
-                    after += 1;
-                }
-            }
-            while after < bytes.len() && matches!(bytes[after], b' ' | b'\t') {
+    let bytes = doc.source.as_bytes();
+    let mut i = 0;
+    while let Some((pos, marker_len)) = svn_core::rune_scan::find_marker_from(bytes, i) {
+        i = pos + 1;
+        // Identifier tails (`$$props`, `my$state`) and member-access
+        // property names (`api.$state(0)`, `this?.$props()`) are not
+        // rune usages — shared guard with svn_core's rune scan.
+        if svn_core::rune_scan::rune_marker_is_shadowed_at(bytes, pos) {
+            continue;
+        }
+        let mut after = pos + marker_len;
+        while bytes.get(after) == Some(&b'.') {
+            after += 1;
+            while after < bytes.len()
+                && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_')
+            {
                 after += 1;
             }
-            if bytes.get(after) == Some(&b'(') {
-                return true;
-            }
-            i = pos + mbytes.len();
+        }
+        while after < bytes.len() && matches!(bytes[after], b' ' | b'\t') {
+            after += 1;
+        }
+        if bytes.get(after) == Some(&b'(') {
+            return true;
         }
     }
     false
@@ -1363,5 +1352,24 @@ mod tests {
     #[test]
     fn options_attr_forces_runes() {
         assert!(runes("<svelte:options runes /><script>let x = 1;</script>"));
+    }
+
+    #[test]
+    fn rune_in_comment_or_string_still_flips_runes_mode() {
+        // Emit's runes detection is deliberately comment/string-BLIND —
+        // a rune call mentioned in a comment or string literal counts.
+        // svn_core::rune_scan::script_calls_rune (svn-lint's scan) is
+        // the comment-aware variant; the two must not be unified.
+        assert!(runes(
+            "<script>// migrate to $state(0) later\nlet x = 1;</script>"
+        ));
+        assert!(runes("<script>const s = \"$state(0)\";</script>"));
+    }
+
+    #[test]
+    fn marker_less_source_stays_legacy() {
+        assert!(!runes(
+            "<script>export let value: string; let total = 0;</script>\n<p>{value} {total}</p>"
+        ));
     }
 }

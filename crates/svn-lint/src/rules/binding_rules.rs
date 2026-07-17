@@ -43,7 +43,6 @@ pub fn visit(ctx: &mut LintContext<'_>) {
     // mode too (legacy reactivity), so it runs regardless.
     reactive_declaration_module_script_dependency(&tree, ctx);
     store_rune_conflict(&tree, ctx);
-    bind_invalid_each_rest(&tree, ctx);
     custom_element_props_identifier(&tree, ctx);
     if ctx.runes {
         state_referenced_locally(&tree, ctx);
@@ -109,9 +108,11 @@ fn store_rune_conflict(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
             if !r.parent_is_call {
                 continue;
             }
-            if ref_ignores(r, Code::store_rune_conflict) {
-                continue;
-            }
+            // Deliberately NOT consulting `r.ignored`: upstream fires
+            // this warning from the store-sub synthesis loop, BEFORE
+            // the analyze walk populates the ignore map — neither a
+            // script `// svelte-ignore` nor a template comment can
+            // suppress it (verified against the compiler).
             let msg = messages::store_rune_conflict(store_name);
             ctx.emit(Code::store_rune_conflict, msg, r.range);
         }
@@ -260,24 +261,5 @@ fn custom_element_props_identifier(tree: &ScopeTree, ctx: &mut LintContext<'_>) 
         }
         let msg = messages::custom_element_props_identifier();
         ctx.emit(Code::custom_element_props_identifier, msg, *range);
-    }
-}
-
-/// Upstream: `visitors/BindDirective.js:271`. Each-block bindings
-/// declared inside a rest element produce a fresh object on every
-/// iteration, so `bind:*` writes never reach the original. Fires at
-/// the binding declaration (name inside the `...rest` pattern).
-fn bind_invalid_each_rest(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
-    for (_, binding) in tree.all_bindings() {
-        if binding.kind != BindingKind::Each || !binding.inside_rest {
-            continue;
-        }
-        if binding.bind_reference_count == 0 {
-            continue;
-        }
-        let msg = messages::bind_invalid_each_rest(binding.name.as_str());
-        for _ in 0..binding.bind_reference_count {
-            ctx.emit(Code::bind_invalid_each_rest, msg.clone(), binding.range);
-        }
     }
 }

@@ -1245,3 +1245,88 @@ fn legacy_component_creation_fires_and_ignores_at_statement() {
         codes(&warnings)
     );
 }
+
+// ----------------------------------------------------------------
+// bind_invalid_each_rest / store_rune_conflict ignore semantics.
+// Verified against svelte 5.56.5.
+// ----------------------------------------------------------------
+
+/// A template `<!-- svelte-ignore bind_invalid_each_rest -->` above
+/// the `{#each}` suppresses the warning (upstream fires it during
+/// the walk, under the live ignore stack).
+#[test]
+fn bind_invalid_each_rest_template_ignore_suppresses() {
+    let src = "\
+<script>
+\tlet items = [{ a: 1, b: 2 }];
+</script>
+<!-- svelte-ignore bind_invalid_each_rest -->
+{#each items as { a, ...rest }}
+\t<input bind:value={rest.b} />
+\t{a}
+{/each}
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        !codes(&warnings).contains(&"bind_invalid_each_rest"),
+        "template ignore above the each must suppress, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Control: without the comment the warning fires at the rest
+/// binding's declaration.
+#[test]
+fn bind_invalid_each_rest_fires_without_ignore() {
+    let src = "\
+<script>
+\tlet items = [{ a: 1, b: 2 }];
+</script>
+{#each items as { a, ...rest }}
+\t<input bind:value={rest.b} />
+\t{a}
+{/each}
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        codes(&warnings).contains(&"bind_invalid_each_rest"),
+        "each-rest bind must fire, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// store_rune_conflict fires BEFORE upstream's analyze walk, when the
+/// ignore map is empty — neither a script `// svelte-ignore` nor a
+/// template comment can suppress it (both verified).
+#[test]
+fn store_rune_conflict_is_unsuppressable() {
+    let script_ignore = "\
+<script>
+\tlet state = 5;
+\t// svelte-ignore store_rune_conflict
+\tconst doubled = $state(5);
+\tvoid doubled; void state;
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(script_ignore);
+    assert!(
+        codes(&warnings).contains(&"store_rune_conflict"),
+        "script ignore must NOT suppress store_rune_conflict, got: {:?}",
+        codes(&warnings)
+    );
+    let template_ignore = "\
+<script>
+\tlet state = 5;
+\tvoid state;
+</script>
+<!-- svelte-ignore store_rune_conflict -->
+<p>{$state(5)}</p>
+";
+    let warnings = lint_nonrunes(template_ignore);
+    assert!(
+        codes(&warnings).contains(&"store_rune_conflict"),
+        "template ignore must NOT suppress store_rune_conflict, got: {:?}",
+        codes(&warnings)
+    );
+}

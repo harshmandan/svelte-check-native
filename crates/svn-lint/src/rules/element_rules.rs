@@ -307,6 +307,43 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
                 let msg = messages::event_directive_deprecated(d.name.as_str());
                 ctx.emit(Code::event_directive_deprecated, msg, d.range);
             }
+
+            // bind_invalid_each_rest — upstream `BindDirective.js`:
+            // the bind expression's BASE identifier resolves to an
+            // each-context binding declared inside a rest element.
+            // Fires per bind site, anchored at the binding's
+            // declaration, DURING the template walk — so the live
+            // ignore stack applies and a template
+            // `<!-- svelte-ignore … -->` above the `{#each}`
+            // suppresses (verified against the compiler). Getter/
+            // setter pairs (SequenceExpression) skip the binding
+            // resolution upstream, so they don't fire.
+            if d.kind == DirectiveKind::Bind {
+                use svn_parser::ast::DirectiveValue;
+                let base: Option<&str> = match &d.value {
+                    Some(DirectiveValue::Expression {
+                        expression_range, ..
+                    }) => ctx
+                        .source
+                        .get(expression_range.start as usize..expression_range.end as usize)
+                        .and_then(crate::scope_util::extract_base_ident),
+                    // `bind:foo` shorthand — the implied identifier.
+                    None => Some(d.name.as_str()),
+                    _ => None,
+                };
+                if let Some(base) = base
+                    && let Some(tree) = &ctx.scope_tree
+                    && let Some(bid) =
+                        tree.resolve(tree.innermost_template_scope_at(d.range.start), base)
+                {
+                    let b = tree.binding(bid);
+                    if b.kind == crate::scope::BindingKind::Each && b.inside_rest {
+                        let msg = messages::bind_invalid_each_rest(b.name.as_str());
+                        let range = b.range;
+                        ctx.emit(Code::bind_invalid_each_rest, msg, range);
+                    }
+                }
+            }
         }
         _ => {}
     }

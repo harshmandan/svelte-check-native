@@ -134,3 +134,75 @@ fn js_only_sources_count_only_files_with_diagnostics() {
         "js-only runs count only diagnostic-bearing files. stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn solution_escape_picks_first_reference_with_paths_and_reports_it() {
+    // Documents (locks, without endorsing) the monorepo auto-escape's
+    // pick-FIRST behavior: a project-references solution root with TWO
+    // referenced apps redirects workspace + tsconfig to the first
+    // reference whose extends chain declares `compilerOptions.paths`.
+    // The second app is silently out of the run — its files don't
+    // enter discovery or the `<N> FILES` denominator. The escape must
+    // announce itself on stderr naming the chosen sub-project so a
+    // two-app monorepo user can see which app was (and wasn't) checked.
+    let bin = env!("CARGO_BIN_EXE_svelte-check-native");
+    let ws = tempfile::tempdir().expect("tempdir");
+    let root = ws.path();
+
+    write(
+        &root.join("tsconfig.json"),
+        r#"{
+            "files": [],
+            "references": [{ "path": "./app-a" }, { "path": "./app-b" }]
+        }"#,
+    );
+    for app in ["app-a", "app-b"] {
+        write(
+            &root.join(app).join("tsconfig.json"),
+            r#"{
+                "compilerOptions": { "paths": { "$lib/*": ["./src/lib/*"] } },
+                "include": ["src/**/*"]
+            }"#,
+        );
+        write(
+            &root.join(app).join("src/App.svelte"),
+            "<script>let a = 1;</script><p>{a}</p>",
+        );
+    }
+
+    // `--diagnostic-sources svelte` skips tsgo, keeping the test
+    // hermetic; discovery + the denominator still exercise the
+    // escaped workspace.
+    let output = Command::new(bin)
+        .args([
+            "--workspace",
+            root.to_str().unwrap(),
+            "--output",
+            "machine",
+            "--diagnostic-sources",
+            "svelte",
+        ])
+        .output()
+        .expect("binary should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // The escape decision is announced on stderr, naming app-a.
+    assert!(
+        stderr.contains("redirected workspace to"),
+        "escape must be visible on stderr. stderr:\n{stderr}"
+    );
+    let app_a = root.join("app-a");
+    assert!(
+        stderr.contains(app_a.to_str().unwrap()) || stderr.contains("app-a"),
+        "stderr must name the chosen sub-project. stderr:\n{stderr}"
+    );
+
+    // Pick-first: only app-a's file is discovered/counted; app-b's
+    // App.svelte is out of the run entirely.
+    assert_eq!(
+        completed_files(&stdout),
+        Some(1),
+        "only the first referenced app's files enter the denominator. stdout:\n{stdout}"
+    );
+}

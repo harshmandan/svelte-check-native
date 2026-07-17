@@ -468,6 +468,35 @@ structural delta is usually a wrapper / lambda / parenthesization
   real artifact is the ground truth; reading it is almost always
   faster than reasoning about it.
 
+### Parse-layer counterpart — `scripts/diff-parse.mjs`
+
+Same protocol one stage earlier: parse a `.svelte` file with the real
+`svelte/compiler` `parse()` (modern AST) AND `crates/parser`, normalize
+both to a common kind/name/byte-span skeleton, diff.
+
+```sh
+# Single file: side-by-side skeleton diff + per-node divergence lines.
+node scripts/diff-parse.mjs path/to/File.svelte
+
+# Sweep a tree (bench workspace, repro dir); node_modules skipped.
+node scripts/diff-parse.mjs --dir bench/<workspace>
+```
+
+The reference compiler resolves from the target's workspace or the
+newest bench/* install (`--svelte <dir>` to pin). Requires the dump
+binary: `cargo build --release -p svn-parser --example dump_parse`.
+
+Reach for it whenever a divergence could be a PARSE difference rather
+than an emit difference — wrong spans in diagnostics, template
+constructs that emit from a differently-shaped tree, or any suspicion
+that our parser reads a construct differently from Svelte itself
+(historically: script-in-`{#if}`, nested raw-text bodies). Decided
+divergences live in `scripts/diff-parse-allow.json` — hand-written
+entries with reasons only, no auto-update; the sweep warns on stale
+entries. `crates/parser/tests/diff_parse_smoke.rs` keeps the harness
+runnable; bench-wide sweeps stay interactive (bench isn't part of
+`cargo test`).
+
 ---
 
 ## Exit codes

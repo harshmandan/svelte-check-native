@@ -923,15 +923,21 @@ impl<'src> TemplateParser<'src> {
         let is_void = is_void_element(&name);
         let children = if self_closing || is_void {
             Fragment::default()
+        } else if name == "textarea" {
+            // Textarea content is a text/mustache sequence up to the
+            // closing tag (upstream element.js `read_sequence`):
+            // embedded tags are TEXT, only `{...}` interpolates, and the
+            // closing tag may carry attributes
+            // (`/<\/textarea(\s[^>]*)?>/iy`).
+            self.parse_textarea_children(tag_start, open_tag_end)?
         } else if name.eq_ignore_ascii_case("style") || name.eq_ignore_ascii_case("script") {
             // Raw-text both `style` AND nested `script` (e.g. a JSON-LD
             // `<script type="application/ld+json">` in `<svelte:head>`).
             // Svelte's parser blanks `<script>` bodies verbatim
             // (svelte2tsx htmlxparser `blankVerbatimContent`); without
             // this, `{...}` in a JSON-LD block parses as a mustache
-            // interpolation and fires phantom diagnostics. `textarea`/
-            // `title` are NOT raw-text — Svelte interpolates mustaches
-            // inside them.
+            // interpolation and fires phantom diagnostics. `title` is
+            // NOT raw-text — Svelte interpolates mustaches inside it.
             self.parse_raw_text_children_until(&name, tag_start, open_tag_end)?
         } else {
             self.parse_children_until(&name, tag_start, open_tag_end)?
@@ -1072,6 +1078,114 @@ impl<'src> TemplateParser<'src> {
             nodes: children,
             range: Range::new(children_start, children_end),
         })
+    }
+
+    /// Textarea children: a sequence of text runs and `{...}`
+    /// interpolations up to the closing tag (upstream element.js
+    /// `read_sequence`). Embedded tags are TEXT — `<br>` inside a
+    /// textarea does not open an element — and the closing tag may
+    /// carry attributes (`/<\/textarea(\s[^>]*)?>/iy`). Block/`@` tags
+    /// are invalid here (upstream `block_invalid_placement` /
+    /// `tag_invalid_placement`); we record the error and skip the
+    /// balanced mustache.
+    fn parse_textarea_children(&mut self, open_start: u32, open_end: u32) -> Option<Fragment> {
+        let children_start = self.scanner.pos();
+        let mut nodes: Vec<Node> = Vec::new();
+        let mut text_start = children_start;
+
+        let flush_text = |nodes: &mut Vec<Node>, from: u32, to: u32| {
+            if from < to {
+                nodes.push(Node::Text(Text {
+                    range: Range::new(from, to),
+                }));
+            }
+        };
+
+        loop {
+            if self.at_fragment_end() {
+                // Unterminated textarea — everything to the fragment end
+                // is its text (upstream errors unexpected_eof).
+                flush_text(&mut nodes, text_start, self.fragment_end);
+                self.errors.push(ParseError::UnterminatedElement {
+                    name: "textarea".to_string(),
+                    range: Range::new(open_start, open_end),
+                });
+                self.scanner.set_pos(self.fragment_end);
+                return Some(Fragment {
+                    nodes,
+                    range: Range::new(children_start, self.fragment_end),
+                });
+            }
+            let pos = self.scanner.pos();
+            match self.scanner.peek_byte() {
+                Some(b'<') => {
+                    if let Some(after) = self.match_textarea_close_tag(pos) {
+                        flush_text(&mut nodes, text_start, pos);
+                        self.scanner.set_pos(after);
+                        return Some(Fragment {
+                            nodes,
+                            range: Range::new(children_start, pos),
+                        });
+                    }
+                    // Any other `<` is literal text inside a textarea.
+                    self.scanner.advance_byte();
+                }
+                Some(b'{') => {
+                    flush_text(&mut nodes, text_start, pos);
+                    let (sigil, _) =
+                        classify_mustache_sigil(self.scanner.source().as_bytes(), pos as usize);
+                    if matches!(sigil, MustacheSigil::Other) {
+                        if let Some(node) = self.parse_interpolation() {
+                            nodes.push(node);
+                        } else {
+                            self.scanner.advance_byte();
+                        }
+                    } else {
+                        // `{#...}` / `{@...}` / `{:...}` / `{/...}` are
+                        // invalid inside a textarea — record and skip the
+                        // balanced mustache.
+                        self.errors.push(ParseError::MalformedOpenTag {
+                            range: Range::new(pos, pos + 1),
+                        });
+                        match self.find_mustache_end_in_fragment(pos + 1) {
+                            Some(end) => self.scanner.set_pos(end + 1),
+                            None => self.scanner.set_pos(self.fragment_end),
+                        }
+                    }
+                    text_start = self.scanner.pos();
+                }
+                _ => {
+                    // Hop to the next possible dispatch byte in one sweep.
+                    self.scanner.advance_byte();
+                    self.scanner.skip_until2(b'<', b'{');
+                }
+            }
+        }
+    }
+
+    /// Match the textarea closing tag at `pos`, mirroring upstream's
+    /// `/<\/textarea(\s[^>]*)?>/iy`: case-insensitive, and attributes are
+    /// allowed after whitespace. Returns the offset just past the `>`.
+    fn match_textarea_close_tag(&self, pos: u32) -> Option<u32> {
+        const LIT: &[u8] = b"</textarea";
+        let bytes = self.scanner.source().as_bytes();
+        let end = self.fragment_end as usize;
+        let pos = pos as usize;
+        if pos + LIT.len() > end || !bytes[pos..pos + LIT.len()].eq_ignore_ascii_case(LIT) {
+            return None;
+        }
+        let mut i = pos + LIT.len();
+        match bytes.get(i) {
+            Some(b'>') => Some((i + 1) as u32),
+            Some(b) if b.is_ascii_whitespace() => {
+                i += 1;
+                while i < end && bytes[i] != b'>' {
+                    i += 1;
+                }
+                if i < end { Some((i + 1) as u32) } else { None }
+            }
+            _ => None,
+        }
     }
 
     fn parse_raw_text_children_until(
@@ -2051,6 +2165,65 @@ mod tests {
         };
         assert_eq!(e.range.start, 18);
         assert_eq!(e.range.slice(src), "<p>hi</p>");
+    }
+
+    #[test]
+    fn textarea_children_are_text_not_markup() {
+        // Upstream reads textarea content as a text/mustache sequence up
+        // to the closing tag — embedded tags are TEXT, not elements.
+        let src = "<textarea><br>hi</textarea>";
+        let frag = parse_ok(src);
+        let [Node::Element(e)] = frag.nodes.as_slice() else {
+            panic!("expected one element, got {:?}", frag.nodes);
+        };
+        assert_eq!(e.name, "textarea");
+        let [Node::Text(t)] = e.children.nodes.as_slice() else {
+            panic!("expected one text child, got {:?}", e.children.nodes);
+        };
+        assert_eq!(t.range.slice(src), "<br>hi");
+    }
+
+    #[test]
+    fn textarea_interpolations_still_parse() {
+        let src = "<textarea>a{value}b</textarea>";
+        let frag = parse_ok(src);
+        let [Node::Element(e)] = frag.nodes.as_slice() else {
+            panic!("expected one element, got {:?}", frag.nodes);
+        };
+        let [Node::Text(_), Node::Interpolation(i), Node::Text(_)] = e.children.nodes.as_slice()
+        else {
+            panic!(
+                "expected text/interpolation/text, got {:?}",
+                e.children.nodes
+            );
+        };
+        assert_eq!(i.expression_range.slice(src), "value");
+    }
+
+    #[test]
+    fn textarea_close_tag_may_carry_attributes() {
+        // Upstream's closing regex is /<\/textarea(\s[^>]*)?>/iy.
+        let src = "<textarea>x</textarea foo=\"bar\">rest";
+        let frag = parse_ok(src);
+        let [Node::Element(e), Node::Text(t)] = frag.nodes.as_slice() else {
+            panic!("expected element + trailing text, got {:?}", frag.nodes);
+        };
+        assert_eq!(e.name, "textarea");
+        assert_eq!(t.range.slice(src), "rest");
+    }
+
+    #[test]
+    fn textarea_close_like_text_stays_text() {
+        // `</textareas>` does not match the closing regex — it is text.
+        let src = "<textarea></textareas></textarea>";
+        let frag = parse_ok(src);
+        let [Node::Element(e)] = frag.nodes.as_slice() else {
+            panic!("expected one element, got {:?}", frag.nodes);
+        };
+        let [Node::Text(t)] = e.children.nodes.as_slice() else {
+            panic!("expected one text child, got {:?}", e.children.nodes);
+        };
+        assert_eq!(t.range.slice(src), "</textareas>");
     }
 
     #[test]

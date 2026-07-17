@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 5,
+            "column": 58,
+            "code": 2345
+        }
+    ],
+    "_note": "Textarea content is a text/mustache sequence, not markup: the compiler reads it with read_sequence up to /<\\/textarea(\\s[^>]*)?>/iy, so embedded tags like <br> are literal TEXT (a textarea shows its content verbatim) and only {...} interpolates. The template parser used to parse textarea children as regular markup, so an unbalanced tag in the content fired phantom mismatched-closing-tag errors and desynced the element tree. Interpolations still type-check: the deliberately wrong shout(42) fires TS2345 at the argument, byte-identical to upstream svelte-check --tsgo, proving the sequence's expressions flow into the overlay with correct positions."
+}

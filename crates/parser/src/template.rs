@@ -32,7 +32,7 @@ use crate::blocks::{
 use crate::error::ParseError;
 use crate::html5::closing_tag_omitted;
 use crate::mustache::{MustacheSigil, classify_mustache_sigil, find_mustache_end};
-use crate::scanner::Scanner;
+use crate::scanner::{Scanner, is_svelte_whitespace_at};
 
 /// Parse one template fragment out of the source string.
 ///
@@ -866,7 +866,18 @@ impl<'src> TemplateParser<'src> {
         }
 
         while let Some(b) = self.scanner.peek_byte() {
-            if b.is_ascii_alphanumeric() || b >= 0x80 || matches!(b, b':' | b'-' | b'_' | b'.') {
+            if b >= 0x80 {
+                // Non-ASCII may continue a (component) name, but a
+                // Unicode space terminates it like an ASCII one —
+                // upstream reads names up to the next `\s` char.
+                if is_svelte_whitespace_at(
+                    self.scanner.source().as_bytes(),
+                    self.scanner.pos() as usize,
+                ) {
+                    break;
+                }
+                self.scanner.advance_char();
+            } else if b.is_ascii_alphanumeric() || matches!(b, b':' | b'-' | b'_' | b'.') {
                 self.scanner.advance_byte();
             } else {
                 break;
@@ -955,7 +966,7 @@ impl<'src> TemplateParser<'src> {
     /// After [`parse_attributes`] returns, the scanner points at `>` or `/`.
     /// Consume the closing delimiter and return `(self_closing, end_pos)`.
     fn finish_opening_tag(&mut self) -> Option<(bool, u32)> {
-        self.scanner.skip_ascii_whitespace();
+        self.scanner.skip_svelte_whitespace();
         let Some(byte) = self.scanner.peek_byte() else {
             // Source truncated inside the opening tag (`<div class="x"` at
             // EOF). Upstream fires `unexpected_eof` here; silently
@@ -2165,6 +2176,63 @@ mod tests {
         };
         assert_eq!(e.range.start, 18);
         assert_eq!(e.range.slice(src), "<p>hi</p>");
+    }
+
+    #[test]
+    fn nbsp_between_attributes_separates_them() {
+        // Upstream is_whitespace accepts NBSP (and U+2000-200A, U+2028/9,
+        // U+3000, U+FEFF) anywhere whitespace separates tokens; NBSP
+        // between attributes is easy to type accidentally (Alt+Space).
+        let src = "<div\u{a0}a=\"1\"\u{a0}b=\"2\"\u{a0}>hi</div>";
+        let frag = parse_ok(src);
+        let [Node::Element(e)] = frag.nodes.as_slice() else {
+            panic!("expected one element, got {:?}", frag.nodes);
+        };
+        let names: Vec<_> = e
+            .attributes
+            .iter()
+            .filter_map(|a| match a {
+                crate::ast::Attribute::Plain(p) => Some(p.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["a", "b"], "attrs: {:?}", e.attributes);
+    }
+
+    #[test]
+    fn unicode_whitespace_after_open_brace() {
+        let src = "{\u{a0}#if x}a{\u{3000}/if}";
+        let frag = parse_ok(src);
+        assert!(
+            matches!(frag.nodes.as_slice(), [Node::IfBlock(_)]),
+            "got {:?}",
+            frag.nodes
+        );
+    }
+
+    #[test]
+    fn unicode_snippet_name() {
+        let src = "{#snippet ヘッダ()}hi{/snippet}";
+        let frag = parse_ok(src);
+        let [Node::SnippetBlock(s)] = frag.nodes.as_slice() else {
+            panic!("expected one snippet, got {:?}", frag.nodes);
+        };
+        assert_eq!(s.name, "ヘッダ");
+    }
+
+    #[test]
+    fn unicode_shorthand_attribute() {
+        // `{変数}` shorthand — identifiers are full-Unicode upstream
+        // (read_identifier uses acorn's isIdentifierStart/Char).
+        let src = "<div {変数}>x</div>";
+        let frag = parse_ok(src);
+        let [Node::Element(e)] = frag.nodes.as_slice() else {
+            panic!("expected one element, got {:?}", frag.nodes);
+        };
+        let [crate::ast::Attribute::Shorthand(s)] = e.attributes.as_slice() else {
+            panic!("expected one shorthand attr, got {:?}", e.attributes);
+        };
+        assert_eq!(s.name, "変数");
     }
 
     #[test]

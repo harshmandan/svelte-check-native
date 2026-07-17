@@ -25,7 +25,9 @@ use crate::mustache::{
     MustacheSigil, can_start_regex, classify_mustache_sigil, find_mustache_end, skip_ascii_string,
     skip_regex_literal, skip_template_literal,
 };
-use crate::scanner::Scanner;
+use crate::scanner::{
+    Scanner, is_svelte_whitespace_at, is_svelte_whitespace_before, unicode_identifier_len,
+};
 
 /// What block terminator was found in a child fragment scan.
 #[derive(Debug)]
@@ -79,7 +81,7 @@ pub(crate) fn peek_and_consume_terminator(
 
     if is_close {
         // `{/tag}` — skip whitespace and expect `}`.
-        scanner.skip_ascii_whitespace();
+        scanner.skip_svelte_whitespace();
         if scanner.peek_byte() != Some(b'}') {
             errors.push(ParseError::MalformedOpenTag {
                 range: Range::new(start, scanner.pos()),
@@ -96,7 +98,7 @@ pub(crate) fn peek_and_consume_terminator(
     // Branch tag.
     match word {
         "else" => {
-            scanner.skip_ascii_whitespace();
+            scanner.skip_svelte_whitespace();
             if scanner.peek_byte() == Some(b'}') {
                 scanner.advance_byte();
                 Some(BlockTerminator::Else)
@@ -110,7 +112,7 @@ pub(crate) fn peek_and_consume_terminator(
                     .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$')
             {
                 scanner.advance(2);
-                scanner.skip_ascii_whitespace();
+                scanner.skip_svelte_whitespace();
                 let cond_start = scanner.pos();
                 let end = find_matching_close_brace(scanner)?;
                 if end <= cond_start {
@@ -132,7 +134,7 @@ pub(crate) fn peek_and_consume_terminator(
             }
         }
         "then" | "catch" => {
-            scanner.skip_ascii_whitespace();
+            scanner.skip_svelte_whitespace();
             // Optional binding before `}`. Round-8 follow-up #3:
             // destructure patterns (`{:catch { message }}`) contain
             // nested `{...}` braces; scan depth-aware via
@@ -180,18 +182,19 @@ fn find_matching_close_brace(scanner: &Scanner<'_>) -> Option<u32> {
     find_mustache_end(scanner.source(), scanner.pos())
 }
 
-fn skip_ws_start(src: &str, mut start: u32, end: u32) -> u32 {
-    let bytes = src.as_bytes();
-    while start < end && bytes[start as usize].is_ascii_whitespace() {
-        start += 1;
-    }
-    start
+fn skip_ws_start(src: &str, start: u32, end: u32) -> u32 {
+    (crate::scanner::skip_svelte_whitespace_at(src.as_bytes(), start as usize) as u32).min(end)
 }
 
 fn skip_ws_end(src: &str, start: u32, mut end: u32) -> u32 {
     let bytes = src.as_bytes();
-    while end > start && bytes[(end - 1) as usize].is_ascii_whitespace() {
-        end -= 1;
+    while end > start && is_svelte_whitespace_before(bytes, end as usize) {
+        // Step back over the whole whitespace char (may be multi-byte).
+        let mut e = end - 1;
+        while e > start && bytes[e as usize] & 0xC0 == 0x80 {
+            e -= 1;
+        }
+        end = e;
     }
     end
 }
@@ -205,7 +208,7 @@ pub(crate) fn parse_if_header(
     scanner: &mut Scanner<'_>,
     errors: &mut Vec<ParseError>,
 ) -> Option<Range> {
-    scanner.skip_ascii_whitespace();
+    scanner.skip_svelte_whitespace();
     let start = scanner.pos();
     let end = find_matching_close_brace(scanner)?;
     if end <= start {
@@ -228,7 +231,7 @@ pub(crate) fn parse_each_header(
     scanner: &mut Scanner<'_>,
     errors: &mut Vec<ParseError>,
 ) -> Option<(Range, Option<EachAsClause>)> {
-    scanner.skip_ascii_whitespace();
+    scanner.skip_svelte_whitespace();
     let header_start = scanner.pos();
     let header_end = find_matching_close_brace(scanner)?;
     if header_end <= header_start {
@@ -352,13 +355,9 @@ fn is_valid_binding_pattern(pattern: &str) -> bool {
 }
 
 /// Plain-identifier check for index bindings (`i` in `as item, i`).
+/// Full-Unicode, like upstream's `read_identifier`.
 fn is_valid_identifier(text: &str) -> bool {
-    let mut chars = text.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first.is_ascii_alphabetic() || first == '_' || first == '$')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+    !text.is_empty() && unicode_identifier_len(text) as usize == text.len()
 }
 
 fn parse_each_as_clause(clause: &str, base_offset: u32) -> EachAsClause {
@@ -459,7 +458,7 @@ pub(crate) fn parse_await_header(
     scanner: &mut Scanner<'_>,
     errors: &mut Vec<ParseError>,
 ) -> Option<(Range, AwaitShortForm)> {
-    scanner.skip_ascii_whitespace();
+    scanner.skip_svelte_whitespace();
     let header_start = scanner.pos();
     let header_end = find_matching_close_brace(scanner)?;
     if header_end <= header_start {
@@ -576,17 +575,13 @@ pub(crate) fn parse_snippet_header(
     scanner: &mut Scanner<'_>,
     errors: &mut Vec<ParseError>,
 ) -> Option<(SmolStr, Range, Option<Range>)> {
-    scanner.skip_ascii_whitespace();
+    scanner.skip_svelte_whitespace();
 
+    // Snippet names are full-Unicode identifiers (upstream
+    // read_identifier via acorn's isIdentifierStart/Char).
     let name_start = scanner.pos();
-    while let Some(b) = scanner.peek_byte() {
-        if b.is_ascii_alphanumeric() || b == b'_' || b == b'$' {
-            scanner.advance_byte();
-        } else {
-            break;
-        }
-    }
-    let name_end = scanner.pos();
+    let name_end = name_start + unicode_identifier_len(&scanner.source()[name_start as usize..]);
+    scanner.set_pos(name_end);
     if name_end == name_start {
         errors.push(ParseError::MalformedOpenTag {
             range: Range::new(name_start, name_end.max(name_start + 1)),
@@ -595,7 +590,7 @@ pub(crate) fn parse_snippet_header(
     }
     let name: SmolStr = scanner.source()[name_start as usize..name_end as usize].into();
 
-    scanner.skip_ascii_whitespace();
+    scanner.skip_svelte_whitespace();
 
     // Optional TS generic signature between the name and the parameter
     // list: `{#snippet row<T>(x: T)}` (Svelte 5.19+). Upstream matches
@@ -612,7 +607,7 @@ pub(crate) fn parse_snippet_header(
         };
         generics_range = Some(Range::new(open + 1, close));
         scanner.set_pos(close + 1);
-        scanner.skip_ascii_whitespace();
+        scanner.skip_svelte_whitespace();
     }
 
     if scanner.peek_byte() != Some(b'(') {
@@ -721,7 +716,7 @@ pub(crate) fn parse_snippet_header(
         return None;
     }
     scanner.advance_byte(); // past `)`
-    scanner.skip_ascii_whitespace();
+    scanner.skip_svelte_whitespace();
     if scanner.peek_byte() != Some(b'}') {
         errors.push(ParseError::MalformedOpenTag {
             range: Range::new(scanner.pos(), scanner.pos()),
@@ -795,12 +790,9 @@ fn find_keywords_at_depth_zero(src: &str, keyword: &str) -> Vec<usize> {
 
     while i < bytes.len() {
         if depth == 0
-            && i > 0
-            && bytes[i - 1].is_ascii_whitespace()
+            && is_svelte_whitespace_before(bytes, i)
             && bytes[i..].starts_with(kw)
-            && bytes
-                .get(i + kw.len())
-                .is_none_or(|b| b.is_ascii_whitespace())
+            && (i + kw.len() >= bytes.len() || is_svelte_whitespace_at(bytes, i + kw.len()))
         {
             found.push(i);
             i += kw.len();
@@ -1382,6 +1374,20 @@ mod tests {
         assert_eq!(clause.context_range.unwrap().slice(src), "item");
         assert_eq!(clause.index_range.map(|r| r.slice(src)), Some("i"));
         assert_eq!(clause.key_range.map(|r| r.slice(src)), Some("item.id"));
+    }
+
+    #[test]
+    fn each_header_nbsp_around_as() {
+        // Upstream is_whitespace accepts NBSP wherever whitespace
+        // separates tokens, including around the `as` keyword.
+        let src = "xs\u{a0}as\u{a0}x}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (expr, clause) = parse_each_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(expr.slice(src), "xs");
+        let clause = clause.expect("as-clause present");
+        assert_eq!(clause.context_range.unwrap().slice(src), "x");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
     }
 
     #[test]

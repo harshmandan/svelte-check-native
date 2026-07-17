@@ -127,10 +127,7 @@ pub(crate) enum MustacheSigil {
 /// the byte offset of the sigil itself (for [`MustacheSigil::Other`],
 /// the first non-whitespace byte — or the end of input).
 pub(crate) fn classify_mustache_sigil(bytes: &[u8], open_brace: usize) -> (MustacheSigil, usize) {
-    let mut i = open_brace + 1;
-    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-        i += 1;
-    }
+    let i = crate::scanner::skip_svelte_whitespace_at(bytes, open_brace + 1);
     let kind = match bytes.get(i) {
         Some(b'#') => MustacheSigil::BlockOpen,
         Some(b':') => MustacheSigil::Continuation,

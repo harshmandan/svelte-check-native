@@ -103,6 +103,10 @@ oxc_ast = "0.139"
 oxc_diagnostics = "0.139"
 oxc_parser = "0.139"
 oxc_span = "0.139"
+# Unicode identifier tables (is_identifier_start/part) — already in the
+# dependency tree via oxc_parser, exposed directly for the template
+# parser's identifier reads (full-Unicode like upstream read_identifier).
+oxc_syntax = "0.139"
 
 # Testing
 insta = { version = "1", features = ["yaml", "filters"] }

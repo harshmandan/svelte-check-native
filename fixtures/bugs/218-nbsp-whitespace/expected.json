@@ -1,0 +1,5 @@
+{
+    "clean": true,
+    "warnings": [],
+    "_note": "The compiler's is_whitespace accepts NBSP (U+00A0) plus U+1680, U+2000-200A, U+2028/9, U+202F, U+205F, U+3000 and U+FEFF wherever whitespace separates tokens - an accidental NBSP (Alt+Space) after a tag name or between attributes is valid Svelte. The parser skipped only ASCII whitespace and let non-ASCII bytes continue tag/attribute names, so '<p' followed by an NBSP read the NBSP into the tag name and fired a phantom malformed-opening-tag error. Whitespace-separating positions now use the compiler's full whitespace class, and identifier reads (shorthand attrs, snippet names, each index bindings) are full-Unicode like upstream's read_identifier."
+}

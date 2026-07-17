@@ -109,6 +109,12 @@ impl<'src> Scanner<'src> {
         }
     }
 
+    /// Skip whitespace as the Svelte compiler defines it — the ASCII run
+    /// plus the rare Unicode spaces. See [`is_svelte_whitespace`].
+    pub fn skip_svelte_whitespace(&mut self) {
+        self.pos = skip_svelte_whitespace_at(self.bytes, self.pos as usize) as u32;
+    }
+
     /// Jump forward to the next occurrence of byte `a` or `b`, leaving
     /// the cursor ON that byte — or at EOF when neither occurs.
     ///
@@ -138,6 +144,104 @@ impl<'src> Scanner<'src> {
         }
         memchr::memmem::find(&self.bytes[start..], needle).map(|off| (start + off) as u32)
     }
+}
+
+/// Whitespace as the Svelte compiler defines it (`is_whitespace` in
+/// `phases/1-parse/index.js`): the ASCII run (space, `\t`, `\n`, `\v`,
+/// `\f`, `\r`) plus NBSP, U+1680, U+2000-200A, U+2028, U+2029, U+202F,
+/// U+205F, U+3000 and U+FEFF.
+#[inline]
+pub fn is_svelte_whitespace(c: char) -> bool {
+    matches!(c,
+        ' ' | '\t'..='\r'
+        | '\u{a0}'
+        | '\u{1680}'
+        | '\u{2000}'..='\u{200a}'
+        | '\u{2028}'
+        | '\u{2029}'
+        | '\u{202f}'
+        | '\u{205f}'
+        | '\u{3000}'
+        | '\u{feff}')
+}
+
+/// Byte-offset variant of [`Scanner::skip_svelte_whitespace`] for the
+/// byte-level scan loops: returns the first offset at/after `i` that is
+/// not svelte whitespace. `bytes` must be valid UTF-8 (it always is —
+/// every caller passes a `&str`'s bytes); a malformed sequence stops the
+/// skip rather than panicking.
+pub(crate) fn skip_svelte_whitespace_at(bytes: &[u8], mut i: usize) -> usize {
+    while i < bytes.len() {
+        let b = bytes[i];
+        if matches!(b, b' ' | 0x09..=0x0d) {
+            i += 1;
+            continue;
+        }
+        if b < 0x80 {
+            break;
+        }
+        match char_at(bytes, i) {
+            Some((c, len)) if is_svelte_whitespace(c) => i += len,
+            _ => break,
+        }
+    }
+    i
+}
+
+/// Is the char at byte offset `i` svelte whitespace?
+pub(crate) fn is_svelte_whitespace_at(bytes: &[u8], i: usize) -> bool {
+    skip_svelte_whitespace_at(bytes, i) > i
+}
+
+/// Is the char ENDING at byte offset `i` (exclusive) svelte whitespace?
+pub(crate) fn is_svelte_whitespace_before(bytes: &[u8], i: usize) -> bool {
+    if i == 0 {
+        return false;
+    }
+    let b = bytes[i - 1];
+    if b < 0x80 {
+        return matches!(b, b' ' | 0x09..=0x0d);
+    }
+    // Walk back over UTF-8 continuation bytes to the leading byte, then
+    // decode and require the char to span exactly up to `i`.
+    let mut start = i - 1;
+    let mut steps = 0;
+    while start > 0 && bytes[start] & 0xC0 == 0x80 && steps < 3 {
+        start -= 1;
+        steps += 1;
+    }
+    matches!(char_at(bytes, start), Some((c, len)) if start + len == i && is_svelte_whitespace(c))
+}
+
+/// Length in bytes of the Unicode identifier at the start of `s` (0
+/// when `s` doesn't begin with an identifier-start char). Uses oxc's
+/// identifier tables — the same definition acorn's
+/// isIdentifierStart/Char gives upstream's `read_identifier`.
+pub(crate) fn unicode_identifier_len(s: &str) -> u32 {
+    let mut chars = s.char_indices();
+    match chars.next() {
+        Some((_, c)) if oxc_syntax::identifier::is_identifier_start(c) => {}
+        _ => return 0,
+    }
+    for (idx, c) in chars {
+        if !oxc_syntax::identifier::is_identifier_part(c) {
+            return idx as u32;
+        }
+    }
+    s.len() as u32
+}
+
+/// Decode the char at byte offset `i` of valid-UTF-8 `bytes`. Returns
+/// the char and its encoded length, or `None` on a malformed sequence.
+pub(crate) fn char_at(bytes: &[u8], i: usize) -> Option<(char, usize)> {
+    let b = *bytes.get(i)?;
+    if b < 0x80 {
+        return Some((b as char, 1));
+    }
+    let len = utf8_len(b) as usize;
+    let slice = bytes.get(i..i + len)?;
+    let c = std::str::from_utf8(slice).ok()?.chars().next()?;
+    Some((c, len))
 }
 
 /// UTF-8 sequence length from the leading byte.

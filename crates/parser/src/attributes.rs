@@ -35,7 +35,7 @@ use crate::ast::{
 };
 use crate::error::ParseError;
 use crate::mustache::find_mustache_end;
-use crate::scanner::Scanner;
+use crate::scanner::{Scanner, is_svelte_whitespace_at, unicode_identifier_len};
 
 /// Parse zero or more attributes, stopping before `>` or `/>`.
 ///
@@ -48,7 +48,9 @@ pub fn parse_attributes(
     let mut attrs = Vec::new();
 
     loop {
-        scanner.skip_ascii_whitespace();
+        // Attributes separate on the compiler's full whitespace class —
+        // an accidental NBSP between attributes is still a separator.
+        scanner.skip_svelte_whitespace();
 
         if scanner.pos() >= fragment_end || scanner.eof() {
             // Unterminated tag; let the caller report the higher-level error.
@@ -61,7 +63,10 @@ pub fn parse_attributes(
             // in-tag JS comment (`//` or `/* */`, a Svelte 5 feature).
             Some(b'/') => match scanner.peek_byte_at(1) {
                 Some(b'/') | Some(b'*') => {
-                    attrs.push(Attribute::Comment(parse_intag_comment(scanner, fragment_end)));
+                    attrs.push(Attribute::Comment(parse_intag_comment(
+                        scanner,
+                        fragment_end,
+                    )));
                 }
                 _ => return attrs,
             },
@@ -186,16 +191,16 @@ fn parse_brace_attribute(
     }
 
     // Shorthand: `{name}`. Read identifier, require `}` next (optionally
-    // after whitespace).
+    // after whitespace). Identifiers are full-Unicode (upstream
+    // read_identifier uses acorn's isIdentifierStart/Char), so `{変数}`
+    // is a valid shorthand.
     let name_start = cursor.pos();
-    while let Some(b) = cursor.peek_byte() {
-        if b.is_ascii_alphanumeric() || b == b'_' || b == b'$' {
-            cursor.advance_byte();
-        } else {
-            break;
-        }
-    }
-    let name_end = cursor.pos();
+    let name_end = {
+        let src = scanner.source();
+        let rest = &src[name_start as usize..];
+        name_start + unicode_identifier_len(rest)
+    };
+    cursor.set_pos(name_end);
 
     cursor.skip_ascii_whitespace();
     if cursor.peek_byte() != Some(b'}') || name_end == name_start {
@@ -273,6 +278,17 @@ fn parse_named_attribute(
     let name_start = scanner.pos();
     let mut bracket_depth: u32 = 0;
     while let Some(b) = scanner.peek_byte() {
+        // Upstream terminates names on `\s` — the full JS whitespace
+        // class — so a Unicode space (NBSP etc.) between attributes
+        // ends the name like an ASCII space does. Other non-ASCII
+        // chars are part of the name.
+        if b >= 0x80 {
+            if is_svelte_whitespace_at(scanner.source().as_bytes(), scanner.pos() as usize) {
+                break;
+            }
+            scanner.advance_char();
+            continue;
+        }
         if bracket_depth > 0 {
             if matches!(
                 b,
@@ -468,7 +484,8 @@ fn parse_directive_value(
             let start = scanner.pos();
             let text_start = start;
             while let Some(b) = scanner.peek_byte() {
-                if b.is_ascii_whitespace() || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`') {
+                if b.is_ascii_whitespace() || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`')
+                {
                     break;
                 }
                 // A bare `/` is part of an unquoted value; only `/>` ends it.
@@ -534,7 +551,8 @@ fn parse_attr_value(scanner: &mut Scanner<'_>, errors: &mut Vec<ParseError>) -> 
             let mut parts: Vec<AttrValuePart> = Vec::new();
             let mut chunk_start = start;
             while let Some(b) = scanner.peek_byte() {
-                if b.is_ascii_whitespace() || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`') {
+                if b.is_ascii_whitespace() || matches!(b, b'>' | b'"' | b'\'' | b'=' | b'<' | b'`')
+                {
                     break;
                 }
                 // A bare `/` is part of an unquoted value (`href=/foo`,

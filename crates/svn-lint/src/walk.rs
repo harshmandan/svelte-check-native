@@ -369,7 +369,13 @@ pub fn walk_parsed(
     // <script>-body (JS/TS AST) rules: perf_avoid_inline_class,
     // perf_avoid_nested_class, reactive_declaration_invalid_placement,
     // ...
-    crate::rules::script_ast_rules::visit_document(doc, module_program, instance_program, ctx);
+    crate::rules::script_ast_rules::visit_document(
+        doc,
+        fragment,
+        module_program,
+        instance_program,
+        ctx,
+    );
 
     // Phase-C binding-driven rules (non_reactive_update,
     // state_referenced_locally). Run AFTER script ast rules so

@@ -30,6 +30,7 @@ use crate::messages;
 /// `Some` program.
 pub fn visit_document(
     doc: &Document<'_>,
+    fragment: &svn_parser::ast::Fragment,
     module_program: Option<&Program<'_>>,
     instance_program: Option<&Program<'_>>,
     ctx: &mut LintContext<'_>,
@@ -37,12 +38,12 @@ pub fn visit_document(
     if let Some(script) = &doc.instance_script
         && let Some(program) = instance_program
     {
-        run_on_section(script, program, ScriptAstContext::Instance, ctx);
+        run_on_section(script, program, fragment, ScriptAstContext::Instance, ctx);
     }
     if let Some(script) = &doc.module_script
         && let Some(program) = module_program
     {
-        run_on_section(script, program, ScriptAstContext::Module, ctx);
+        run_on_section(script, program, fragment, ScriptAstContext::Module, ctx);
     }
 }
 
@@ -55,6 +56,7 @@ enum ScriptAstContext {
 fn run_on_section(
     script: &ScriptSection<'_>,
     program: &Program<'_>,
+    fragment: &svn_parser::ast::Fragment,
     script_ctx: ScriptAstContext,
     ctx: &mut LintContext<'_>,
 ) {
@@ -82,6 +84,18 @@ fn run_on_section(
         runes,
     );
 
+    // A `<!-- svelte-ignore … -->` template comment immediately
+    // preceding the `<script>` bridges into the whole script body —
+    // upstream's parser attaches it as the Program's leadingComments
+    // (element.js), so its codes sit at the bottom of the ignore
+    // stack for every node in the script.
+    let bridged = crate::scope::collect_preceding_template_ignores(
+        Some(fragment),
+        ctx.source,
+        script.open_tag_range.start,
+        runes,
+    );
+
     let mut walker = ScriptWalker {
         ctx,
         script_ctx,
@@ -92,6 +106,9 @@ fn run_on_section(
         script_len: script.content.len() as u32,
         ignore_frames: Vec::new(),
     };
+    if !bridged.is_empty() {
+        walker.ignore_frames.push(bridged);
+    }
     for stmt in &program.body {
         walker.visit_stmt(stmt);
     }

@@ -490,10 +490,13 @@ fn template_comment_before_script_suppresses_script_ignores() {
     );
 }
 
-/// Multiple consecutive `<!-- svelte-ignore A --><!-- svelte-ignore B -->`
-/// comments stack — both codes suppressed in the script.
+/// With stacked `<!-- svelte-ignore A --><!-- svelte-ignore B -->`
+/// comments only the NEAREST one bridges into the script — upstream's
+/// parser takes a single `prev_comment` (element.js) and breaks at
+/// the first comment scanning backward. Verified against svelte
+/// 5.56.5: the outer comment's code still warns.
 #[test]
-fn multiple_template_comments_before_script_all_apply() {
+fn only_nearest_template_comment_applies_to_script() {
     let src = "\
 <!-- svelte-ignore state_referenced_locally -->
 <!-- svelte-ignore non_reactive_update -->
@@ -505,8 +508,50 @@ fn multiple_template_comments_before_script_all_apply() {
 ";
     let warnings = svn_lint::lint_file(src, Path::new("t.svelte"), None, CompatFeatures::MODERN);
     assert!(
-        !codes(&warnings).contains(&"state_referenced_locally"),
-        "stacked ignores must both apply, got: {:?}",
+        codes(&warnings).contains(&"state_referenced_locally"),
+        "only the nearest comment bridges; the outer one must still warn, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// The nearest-comment bridge applies to a MODULE script too.
+#[test]
+fn template_comment_bridges_into_module_script() {
+    let src = "\
+<p>lead</p>
+<!-- svelte-ignore bidirectional_control_characters -->
+<script module>
+\tconst x = '\u{202a}hidden';
+\tvoid x;
+</script>
+<p>hi</p>
+";
+    let warnings = svn_lint::lint_file(src, Path::new("t.svelte"), None, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"bidirectional_control_characters"),
+        "template ignore must bridge into the module script, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A comment body containing a literal `<!--` still parses — the
+/// pairing must come from the parsed Comment node, not a textual
+/// backward scan for the opener.
+#[test]
+fn template_comment_with_embedded_opener_still_bridges() {
+    let src = "\
+<p>lead</p>
+<!-- svelte-ignore bidirectional_control_characters <!-- x -->
+<script>
+\tconst y = '\u{202a}hidden';
+\tvoid y;
+</script>
+<p>hi</p>
+";
+    let warnings = svn_lint::lint_file(src, Path::new("t.svelte"), None, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"bidirectional_control_characters"),
+        "embedded <!-- must not break the ignore comment, got: {:?}",
         codes(&warnings)
     );
 }

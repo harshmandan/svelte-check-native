@@ -232,49 +232,62 @@ fn promote_to_bindable_prop(tree: &mut ScopeTree, root: ScopeId, name: &str) {
     }
 }
 
-/// Scan backward from `script_start` through whitespace-only runs
-/// of template text looking for one or more consecutive
-/// `<!-- svelte-ignore CODE, CODE, … -->` comments, and return the
-/// flattened list of codes. Mirrors upstream's treatment of
-/// comment-siblings immediately preceding a node in the root
-/// fragment — the codes silence fires inside the following node
-/// (which for us is the instance `<script>`).
-fn collect_preceding_template_ignores(source: &str, script_start: u32) -> Vec<SmolStr> {
-    let bytes = source.as_bytes();
-    let mut end = script_start as usize;
-    let mut codes: Vec<SmolStr> = Vec::new();
-    loop {
-        // Skip whitespace backward.
-        while end > 0 && matches!(bytes[end - 1], b' ' | b'\t' | b'\n' | b'\r') {
-            end -= 1;
+/// Find the ONE template comment immediately preceding a `<script>`
+/// (whitespace-only text siblings allowed between) and return its
+/// `svelte-ignore` codes. Mirrors upstream's parser
+/// (`element.js:327-350`): it scans the fragment's nodes backward,
+/// takes the FIRST comment it meets, and stops — of two stacked
+/// comments only the nearest one bridges (verified against the
+/// compiler), and the bridge applies to module and instance scripts
+/// alike. Working off the parsed `Comment` nodes also keeps a body
+/// containing a literal `<!--` intact, which a textual backward
+/// scan for the opener would mis-pair.
+pub(crate) fn collect_preceding_template_ignores(
+    fragment: Option<&svn_parser::ast::Fragment>,
+    source: &str,
+    script_start: u32,
+    runes: bool,
+) -> Vec<SmolStr> {
+    use svn_parser::ast::Node;
+    let Some(fragment) = fragment else {
+        return Vec::new();
+    };
+    let mut end = script_start;
+    for node in fragment.nodes.iter().rev() {
+        let r = node.range();
+        if r.end > end {
+            // Node at/after the script tag.
+            continue;
         }
-        // Must see `-->` now.
-        if end < 3 || &bytes[end - 3..end] != b"-->" {
-            break;
-        }
-        // Find matching `<!--` (search backward).
-        let Some(open) = source[..end - 3].rfind("<!--") else {
+        // The gap between this node and the cursor must be
+        // whitespace-only (the runs around the extracted script
+        // section aren't contiguous in our fragment).
+        let Some(gap) = source.get(r.end as usize..end as usize) else {
             break;
         };
-        let body = &source[open + 4..end - 3];
-        let trimmed = body.trim_start();
-        let Some(rest) = trimmed.strip_prefix("svelte-ignore") else {
+        if !gap.chars().all(char::is_whitespace) {
             break;
-        };
-        let rest = match rest.chars().next() {
-            Some(ch) if ch.is_whitespace() => &rest[ch.len_utf8()..],
+        }
+        match node {
+            Node::Comment(c) => {
+                let body = c.data_range.slice(source);
+                let trimmed = body.trim_start();
+                let Some(rest) = trimmed.strip_prefix("svelte-ignore") else {
+                    return Vec::new();
+                };
+                let rest = match rest.chars().next() {
+                    Some(ch) if ch.is_whitespace() => &rest[ch.len_utf8()..],
+                    _ => return Vec::new(),
+                };
+                return crate::ignore::parse_ignore_codes_public(rest, runes);
+            }
+            Node::Text(t) if t.range.slice(source).trim().is_empty() => {
+                end = r.start;
+            }
             _ => break,
-        };
-        // Parse codes in runes-mode lenient (same path script
-        // leading-comments use). Prepend so the scan order mirrors
-        // source order.
-        let comment_codes = crate::ignore::parse_ignore_codes_public(rest, true);
-        let mut merged = comment_codes;
-        merged.extend(codes);
-        codes = merged;
-        end = open;
+        }
     }
-    codes
+    Vec::new()
 }
 
 /// Like [`build`], but also walks the template fragment — capturing
@@ -304,20 +317,32 @@ pub fn build_with_template(
     if let Some(script) = &doc.module_script
         && let Some(program) = module_program
     {
-        tree_builder.build_script(script, program, module_root, runes);
+        // A `<!-- svelte-ignore CODE -->` comment placed in the
+        // template immediately before a `<script>` applies its codes
+        // to the whole script body — module and instance alike.
+        // Upstream wires this up in the parser (element.js sets the
+        // Program's leadingComments); our sections parser extracts
+        // scripts separately, so we bridge the ignore forward
+        // explicitly.
+        let leading = collect_preceding_template_ignores(
+            fragment,
+            doc.source,
+            script.open_tag_range.start,
+            runes,
+        );
+        tree_builder.build_script(script, program, module_root, runes, &leading);
     }
 
     let instance_root = tree_builder.new_scope(Some(module_root));
     if let Some(script) = &doc.instance_script
         && let Some(program) = instance_program
     {
-        // A `<!-- svelte-ignore CODE -->` comment placed in the
-        // template immediately before `<script>` applies its codes
-        // to the whole instance-script body. Upstream wires this up
-        // naturally because the script is an AST sibling inside the
-        // root Fragment; our sections parser extracts it separately,
-        // so we have to bridge the ignore forward explicitly.
-        let leading = collect_preceding_template_ignores(doc.source, script.open_tag_range.start);
+        let leading = collect_preceding_template_ignores(
+            fragment,
+            doc.source,
+            script.open_tag_range.start,
+            runes,
+        );
         tree_builder.build_script_as_instance(script, program, instance_root, runes, &leading);
     }
 
@@ -908,8 +933,9 @@ impl TreeBuilder {
         program: &Program<'_>,
         root_scope: ScopeId,
         runes: bool,
+        leading_ignores: &[SmolStr],
     ) {
-        self.build_script_inner(script, program, root_scope, false, runes, &[]);
+        self.build_script_inner(script, program, root_scope, false, runes, leading_ignores);
     }
 }
 

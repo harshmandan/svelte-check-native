@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 6,
+            "column": 66,
+            "code": 2345
+        }
+    ],
+    "_note": "bind:x={get, set} function pairs are detected by parsing the whole value: upstream acorn-parses it and a pair is exactly a two-element SequenceExpression. The old detector split at the first lexically top-level comma, but TS type-argument commas also look top-level (angle brackets do not nest for the depth tracker), so a generic call inside a pair half - bind:value={() => pick<string, number>(plain), (v) => sink(v)} - split inside the type arguments and produced garbage halves. The value is now probe-parsed with oxc and only a two-expression sequence splits, at the real pair comma. The expected TS2345 fires where the setter arrow's argument (the input's string value) meets sink(v: number), byte-identical to upstream svelte-check --tsgo."
+}

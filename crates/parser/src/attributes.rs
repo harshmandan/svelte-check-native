@@ -458,15 +458,21 @@ fn parse_directive_value(
             };
             scanner.set_pos(end + 1);
 
-            // For bind:foo={getter, setter}, detect a top-level comma.
-            if matches!(kind, DirectiveKind::Bind) {
-                if let Some(comma_pos) = find_top_level_comma(scanner.source(), expr_start, end) {
-                    return Some(DirectiveValue::BindPair {
-                        getter_range: Range::new(expr_start, comma_pos),
-                        setter_range: Range::new(comma_pos + 1, end),
-                        range: Range::new(start, end + 1),
-                    });
-                }
+            // For bind:foo={getter, setter}, detect the pair comma.
+            // Textual comma scanning can't decide this: the depth
+            // tracker doesn't nest `<...>`, so the type-argument comma
+            // in `bind:value={fn<A, B>()}` looks top-level too.
+            // Upstream acorn-parses the whole value and a pair is
+            // exactly a two-element SequenceExpression — mirror that
+            // with an oxc probe parse.
+            if matches!(kind, DirectiveKind::Bind)
+                && let Some(comma_pos) = bind_pair_split(scanner.source(), expr_start, end)
+            {
+                return Some(DirectiveValue::BindPair {
+                    getter_range: Range::new(expr_start, comma_pos),
+                    setter_range: Range::new(comma_pos + 1, end),
+                    range: Range::new(start, end + 1),
+                });
             }
 
             Some(DirectiveValue::Expression {
@@ -697,100 +703,51 @@ fn parse_quoted_value(
     })
 }
 
-/// Find a top-level comma inside a mustache expression range.
+/// Byte offset of the comma splitting a `bind:x={get, set}` function
+/// pair, or `None` when the value is a single expression.
 ///
-/// Used to detect `bind:value={getter, setter}` pairs — a SequenceExpression
-/// where the top-level comma separates two arrow functions.
-///
-/// The scan respects string literals, template literals, line/block
-/// comments, and nested parens/brackets/braces. Returns the byte offset of
-/// the comma, or `None` if none is found at depth 0.
-fn find_top_level_comma(src: &str, start: u32, end: u32) -> Option<u32> {
-    let bytes = src.as_bytes();
-    let mut i = start as usize;
-    let end = end as usize;
-    let mut depth: i32 = 0;
-    // Re-use the same template-literal-stack idiom as `find_mustache_end`.
-    let mut template_stack: Vec<i32> = Vec::new();
+/// Decided the way upstream does: parse the whole value (acorn there,
+/// oxc here, TS mode) — a pair is exactly a two-element
+/// SequenceExpression. A TS type-argument comma (`fn<A, B>()`) parses
+/// as a single CallExpression and never splits; a generic call inside a
+/// pair half (`() => pick<A, B>(x), (v) => sink(v)`) still yields the
+/// two-arrow sequence with the split at the real pair comma.
+fn bind_pair_split(src: &str, start: u32, end: u32) -> Option<u32> {
+    use oxc_ast::ast::{Expression, Statement};
 
-    while i < end {
-        let b = bytes[i];
-        match b {
-            b',' if depth == 0 && template_stack.is_empty() => return Some(i as u32),
-            b'(' | b'[' | b'{' => {
-                depth += 1;
-                i += 1;
-            }
-            b')' | b']' | b'}' => {
-                depth -= 1;
-                i += 1;
-            }
-            b'"' => {
-                i = skip_string(bytes, i + 1, b'"', end)?;
-            }
-            b'\'' => {
-                i = skip_string(bytes, i + 1, b'\'', end)?;
-            }
-            b'`' => {
-                i = skip_template_literal(bytes, i + 1, end, &mut template_stack, &mut depth)?;
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                // Line comment to newline or end.
-                i += 2;
-                while i < end && bytes[i] != b'\n' {
-                    i += 1;
-                }
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i += 2;
-                while i + 1 < end {
-                    if bytes[i] == b'*' && bytes[i + 1] == b'/' {
-                        i += 2;
-                        break;
-                    }
-                    i += 1;
-                }
-            }
-            _ => i += 1,
-        }
+    let text = &src[start as usize..end as usize];
+    if !text.contains(',') {
+        return None;
     }
-    None
-}
-
-fn skip_string(bytes: &[u8], start: usize, quote: u8, limit: usize) -> Option<usize> {
-    let mut i = start;
-    while i < limit {
-        match bytes[i] {
-            b if b == quote => return Some(i + 1),
-            b'\\' => i += 2,
-            b'\n' => return Some(i + 1),
-            _ => i += 1,
-        }
+    let allocator = oxc_allocator::Allocator::default();
+    let probe = format!("({text});");
+    let parsed = oxc_parser::Parser::new(
+        &allocator,
+        &probe,
+        oxc_span::SourceType::default().with_typescript(true),
+    )
+    .parse();
+    if !parsed.diagnostics.is_empty() || parsed.panicked || parsed.program.body.len() != 1 {
+        return None;
     }
-    Some(limit)
-}
-
-fn skip_template_literal(
-    bytes: &[u8],
-    start: usize,
-    limit: usize,
-    template_stack: &mut Vec<i32>,
-    outer_depth: &mut i32,
-) -> Option<usize> {
-    let mut i = start;
-    while i < limit {
-        match bytes[i] {
-            b'`' => return Some(i + 1),
-            b'\\' => i += 2,
-            b'$' if bytes.get(i + 1) == Some(&b'{') => {
-                template_stack.push(*outer_depth);
-                *outer_depth += 1;
-                return Some(i + 2);
-            }
-            _ => i += 1,
-        }
+    let Statement::ExpressionStatement(stmt) = &parsed.program.body[0] else {
+        return None;
+    };
+    let Expression::ParenthesizedExpression(paren) = &stmt.expression else {
+        return None;
+    };
+    let Expression::SequenceExpression(seq) = &paren.expression else {
+        return None;
+    };
+    if seq.expressions.len() != 2 {
+        return None;
     }
-    Some(limit)
+    // The comma sits between the two expression spans. Probe offsets are
+    // shifted +1 by the wrapping `(`.
+    let gap_start = oxc_span::GetSpan::span(&seq.expressions[0]).end as usize;
+    let gap_end = oxc_span::GetSpan::span(&seq.expressions[1]).start as usize;
+    let comma_in_probe = probe[gap_start..gap_end].find(',')? + gap_start;
+    Some(start + comma_in_probe as u32 - 1)
 }
 
 #[cfg(test)]
@@ -1009,6 +966,27 @@ mod tests {
     }
 
     #[test]
+    fn bind_expression_with_generic_comma_is_not_a_pair() {
+        // The comma in `fn<A, B>()` separates TYPE arguments — angle
+        // brackets don't nest for the depth tracker, so the comma looks
+        // top-level, but the halves (`fn<A` / `B>()`) aren't
+        // expressions. Upstream parses the whole value with acorn-ts
+        // and gets a single CallExpression.
+        let src = "bind:value={fn<string, number>()}";
+        let attrs = parse_ok(src);
+        let Attribute::Directive(d) = &attrs[0] else {
+            panic!("expected Directive");
+        };
+        let Some(DirectiveValue::Expression {
+            expression_range, ..
+        }) = &d.value
+        else {
+            panic!("expected single Expression, got {:?}", d.value);
+        };
+        assert_eq!(expression_range.slice(src), "fn<string, number>()");
+    }
+
+    #[test]
     fn bind_expression_with_inner_comma_is_not_a_pair() {
         // Comma inside a function call is NOT a top-level comma.
         let attrs = parse_ok("bind:value={foo(a, b)}");
@@ -1188,27 +1166,27 @@ mod tests {
     }
 
     #[test]
-    fn find_top_level_comma_basic() {
-        // "a, b" — comma at offset 1.
-        let src = "_{a, b}_";
-        // We're passing just the expression body range.
-        assert_eq!(find_top_level_comma(src, 2, 6), Some(3));
-    }
-
-    #[test]
-    fn find_top_level_comma_ignores_nested() {
-        let src = "_{foo(a, b), bar}_";
-        // Only the comma after `)` is top-level.
-        let top = find_top_level_comma(src, 2, 16).unwrap();
-        assert_eq!(&src[top as usize..=top as usize], ",");
-        assert_eq!(top, 11);
-    }
-
-    #[test]
-    fn find_top_level_comma_ignores_in_string() {
-        let src = r#"_{"a,b", 1}_"#;
-        let top = find_top_level_comma(src, 2, 10).unwrap();
-        // Only the comma between the string and `1`.
-        assert_eq!(top, 7);
+    fn bind_pair_with_generic_call_in_getter_splits_at_real_comma() {
+        // The type-argument comma in `pick<string, number>(x)` also
+        // looks top-level (angle brackets don't nest), but its halves
+        // don't parse — the split lands on the real pair comma instead.
+        let src = "bind:value={() => pick<string, number>(x), (v) => sink(v)}";
+        let attrs = parse_ok(src);
+        let Attribute::Directive(d) = &attrs[0] else {
+            panic!("expected Directive");
+        };
+        let Some(DirectiveValue::BindPair {
+            getter_range,
+            setter_range,
+            ..
+        }) = &d.value
+        else {
+            panic!("expected BindPair, got {:?}", d.value);
+        };
+        assert_eq!(
+            getter_range.slice(src).trim(),
+            "() => pick<string, number>(x)"
+        );
+        assert_eq!(setter_range.slice(src).trim(), "(v) => sink(v)");
     }
 }

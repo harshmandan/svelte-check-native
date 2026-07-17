@@ -700,6 +700,9 @@ impl CheckSession {
         // the noise filter needs it per diagnostic, and a realpath walk
         // per call adds up on diagnostic-heavy runs.
         let canonical_overlay_tsconfig = dunce::canonicalize(&layout.overlay_tsconfig).ok();
+        // Probed once per run: upstream's message adjustments differ
+        // between pre-5 and 5+ Svelte (see `adjust_message_if_necessary`).
+        let svelte5_plus = filters::workspace_svelte_is_5_plus(&layout.workspace);
         let mut diagnostics: Vec<CheckDiagnostic> = run
             .diagnostics
             .into_iter()
@@ -721,7 +724,9 @@ impl CheckSession {
                     canonical_overlay_tsconfig.as_deref(),
                 )
             })
-            .filter_map(|d| map_diagnostic(d, layout, &map_data, &excluded_kit_sources))
+            .filter_map(|d| {
+                map_diagnostic(d, layout, &map_data, &excluded_kit_sources, svelte5_plus)
+            })
             .filter(|d| !filters::is_svelte4_reactive_noop_comma(d))
             .map(|mut d| {
                 // Reclassify suggestion-style codes as Hint when the caller
@@ -874,10 +879,11 @@ fn emit_space_overlay_text(
 /// `original_from_generated`, so real problems on those files still
 /// surface.
 fn map_diagnostic(
-    raw: RawDiagnostic,
+    mut raw: RawDiagnostic,
     layout: &CacheLayout,
     map_data: &std::collections::HashMap<PathBuf, MapData>,
     excluded_kit_sources: &std::collections::HashSet<PathBuf>,
+    svelte5_plus: bool,
 ) -> Option<CheckDiagnostic> {
     // tsgo emits paths relative to the working directory when the input
     // tsconfig path is itself relative (which it usually is). Absolutize
@@ -1010,6 +1016,32 @@ fn map_diagnostic(
                 && filters::is_overlay_in_ensure_transition_call(data.overlay_text.get(), offset)
             {
                 return None;
+            }
+            // Message-shape parity with upstream's `mapAndFilterDiagnostics`
+            // (Svelte documents only — kit identity-map overlays route
+            // through upstream's plain `JSOrTSDocumentSnapshot` conversion,
+            // which applies neither adjustment):
+            //
+            // - `moveBindingErrorMessage`: a TS2322 on our emitted
+            //   `inst.$$bindings = 'NAME'` non-bindable-prop check is
+            //   rewritten into the user-facing "Cannot use 'bind:' with
+            //   this property" hint. The range needs no remap — emit
+            //   anchors the assignment to the `bind:NAME` source span.
+            // - `adjustIfNecessary`: clarity trailers on TS2345
+            //   (ConstructorOfATypedSvelteComponent) and TS1184.
+            if !data.identity_map {
+                if raw.code == 2322
+                    && let Some(offset) = position::overlay_byte_offset(data, raw.line, raw.column)
+                    && let Some(rewritten) = filters::move_binding_error_message(
+                        data.overlay_text.get(),
+                        offset,
+                        raw.span_length.unwrap_or(0),
+                        &raw.message,
+                    )
+                {
+                    raw.message = rewritten;
+                }
+                filters::adjust_message_if_necessary(raw.code, &mut raw.message, svelte5_plus);
             }
             match position::translate_position(data, raw.line, raw.column) {
                 Some((mapped_line, mapped_col)) => {
@@ -1267,7 +1299,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        let mapped = map_diagnostic(raw, &layout, &map, &HashSet::new()).expect("mapped");
+        let mapped = map_diagnostic(raw, &layout, &map, &HashSet::new(), true).expect("mapped");
         assert_eq!(mapped.source_path, PathBuf::from("/proj/src/Foo.svelte"));
         // overlay line 10 - overlay_start (5) = 5, + source_start (1) = 6.
         assert_eq!(mapped.line, 6);
@@ -1286,7 +1318,7 @@ mod tests {
             span_length: None,
         };
         let mapped =
-            map_diagnostic(raw, &layout, &HashMap::new(), &HashSet::new()).expect("mapped");
+            map_diagnostic(raw, &layout, &HashMap::new(), &HashSet::new(), true).expect("mapped");
         assert_eq!(mapped.source_path, PathBuf::from("/proj/src/plain.ts"));
         assert_eq!(mapped.line, 4); // no offset applied to non-generated files
     }
@@ -1322,7 +1354,8 @@ mod tests {
                 raw("/proj/src/routes/foo/+page.ts"),
                 &layout,
                 &HashMap::new(),
-                &excluded
+                &excluded,
+                true
             )
             .is_none(),
             "diagnostics on an injected kit original must drop"
@@ -1334,7 +1367,8 @@ mod tests {
                 raw("src/routes/foo/+page.ts"),
                 &layout,
                 &HashMap::new(),
-                &excluded
+                &excluded,
+                true
             )
             .is_none(),
             "relative attribution of the same kit original must drop too"
@@ -1346,6 +1380,7 @@ mod tests {
             &layout,
             &HashMap::new(),
             &excluded,
+            true,
         )
         .expect("mapped");
         assert_eq!(kept.source_path, PathBuf::from("/proj/src/lib/util.ts"));
@@ -1376,7 +1411,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        assert!(map_diagnostic(raw_before, &layout, &map, &HashSet::new()).is_none());
+        assert!(map_diagnostic(raw_before, &layout, &map, &HashSet::new(), true).is_none());
         let raw_after = RawDiagnostic {
             file: PathBuf::from(gen_path),
             line: 30,
@@ -1386,7 +1421,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        assert!(map_diagnostic(raw_after, &layout, &map, &HashSet::new()).is_none());
+        assert!(map_diagnostic(raw_after, &layout, &map, &HashSet::new(), true).is_none());
     }
 
     #[test]
@@ -1428,7 +1463,7 @@ mod tests {
         // 15 is in range [10, 20) — offset 5 from overlay_start (10),
         // applied to source_start (50) = source line 55.
         assert_eq!(
-            map_diagnostic(raw, &layout, &map, &HashSet::new())
+            map_diagnostic(raw, &layout, &map, &HashSet::new(), true)
                 .expect("mapped")
                 .line,
             55
@@ -1465,7 +1500,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        assert!(map_diagnostic(raw, &layout, &map, &HashSet::new()).is_none());
+        assert!(map_diagnostic(raw, &layout, &map, &HashSet::new(), true).is_none());
     }
 
     #[test]
@@ -1485,7 +1520,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        let mapped = map_diagnostic(raw, &layout, &map, &HashSet::new());
+        let mapped = map_diagnostic(raw, &layout, &map, &HashSet::new(), true);
         // Empty line map for an overlay file now drops the diagnostic
         // entirely (same principle as outside-any-range: no evidence
         // the tsgo diagnostic originated from user source).
@@ -1509,7 +1544,7 @@ mod tests {
             message: "x".to_string(),
             span_length: None,
         };
-        let mapped = map_diagnostic(raw, &layout, &HashMap::new(), &HashSet::new());
+        let mapped = map_diagnostic(raw, &layout, &HashMap::new(), &HashSet::new(), true);
         // Without any line-map entry, diagnostics against an overlay
         // file are dropped — the path-reverse logic itself still
         // works but there's no user-source line to attribute to.
@@ -1539,7 +1574,7 @@ mod tests {
             message: "original message".to_string(),
             span_length: None,
         };
-        let mapped = map_diagnostic(raw, &layout, &map, &HashSet::new()).expect("mapped");
+        let mapped = map_diagnostic(raw, &layout, &map, &HashSet::new(), true).expect("mapped");
         assert_eq!(mapped.column, 42);
         assert_eq!(mapped.severity, Severity::Warning);
         assert!(
@@ -1605,7 +1640,7 @@ mod tests {
             span_length: Some(1),
         };
         let mapped =
-            map_diagnostic(raw, &layout, &HashMap::new(), &HashSet::new()).expect("mapped");
+            map_diagnostic(raw, &layout, &HashMap::new(), &HashSet::new(), true).expect("mapped");
         assert_eq!(
             mapped.source_path,
             PathBuf::from("/proj/.svelte-kit/types/src/routes/foo/$types.d.ts")
@@ -1866,7 +1901,7 @@ mod tests {
             message: "mismatch".to_string(),
             span_length: Some(4),
         };
-        let mapped = map_diagnostic(raw, &layout, &m, &HashSet::new()).expect("mapped");
+        let mapped = map_diagnostic(raw, &layout, &m, &HashSet::new(), true).expect("mapped");
         assert_eq!(mapped.line, 5, "line must follow the token span");
         assert_eq!(mapped.column, 5, "column must follow the token span");
         assert_eq!(mapped.end_column, 9, "end column = column + span_length");
@@ -1931,7 +1966,8 @@ mod tests {
                 diag("Expected 3 arguments, but got 2."),
                 &layout,
                 &map,
-                &HashSet::new()
+                &HashSet::new(),
+                true
             )
             .is_none(),
             "the (node, params, options) contract case must stay suppressed"
@@ -1942,6 +1978,7 @@ mod tests {
             &layout,
             &map,
             &HashSet::new(),
+            true,
         );
         assert!(
             kept.is_some(),
@@ -2019,12 +2056,12 @@ mod tests {
             span_length: Some(1),
         };
         assert!(
-            map_diagnostic(diag(7028), &layout, &m, &HashSet::new()).is_none(),
+            map_diagnostic(diag(7028), &layout, &m, &HashSet::new(), true).is_none(),
             "the reactive-label filter must still fire after a length-changing rewrite"
         );
         // Control: a non-filtered code at the same position translates
         // normally, proving the drop above came from the filter.
-        let kept = map_diagnostic(diag(2322), &layout, &m, &HashSet::new()).expect("mapped");
+        let kept = map_diagnostic(diag(2322), &layout, &m, &HashSet::new(), true).expect("mapped");
         assert_eq!((kept.line, kept.column), (2, dollar_col));
     }
 
@@ -2070,7 +2107,7 @@ mod tests {
                 .to_string(),
             span_length: Some(6),
         };
-        let mapped = map_diagnostic(raw, &layout, &m, &HashSet::new())
+        let mapped = map_diagnostic(raw, &layout, &m, &HashSet::new(), true)
             .expect("user-code duplicate key must survive the attribute-key filter");
         assert_eq!(mapped.line, 2);
         assert_eq!(mapped.column, column);
@@ -2131,7 +2168,7 @@ mod tests {
             span_length: Some(10),
         };
         assert!(
-            map_diagnostic(raw, &layout, &m, &HashSet::new()).is_none(),
+            map_diagnostic(raw, &layout, &m, &HashSet::new(), true).is_none(),
             "duplicate element-attribute keys are emit artefacts and must stay suppressed"
         );
     }

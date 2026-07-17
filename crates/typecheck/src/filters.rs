@@ -441,6 +441,143 @@ pub fn is_in_pug_template(ranges: &[(u32, u32)], byte_offset: u32) -> bool {
         .any(|&(start, end)| byte_offset >= start && byte_offset < end)
 }
 
+/// Rewrite a TS2322 that fired on an `inst.$$bindings = 'NAME'`
+/// post-instance check into the user-facing "Cannot use 'bind:' with
+/// this property" message. Returns `Some(new_message)` when the
+/// diagnostic matches the shape, `None` to leave it untouched.
+///
+/// Mirrors upstream `moveBindingErrorMessage` (both the tsc and
+/// typescript-go DiagnosticsProvider variants are identical): a
+/// TS2322 whose flagged span text ends with `.$$bindings` is the
+/// non-bindable-prop binding check. Upstream additionally walks the
+/// Svelte AST to confirm an enclosing `InlineComponent` carries a
+/// `Binding` attribute with the assigned name; we don't carry the
+/// Svelte AST here, but our emit writes the `LHS.$$bindings = 'NAME'`
+/// statement exclusively for a component's `bind:NAME` directive
+/// (`emit_component_bindings_post_check`), so the span-suffix check
+/// plus the quoted-name read establishes the same fact structurally.
+///
+/// Upstream also remaps the range onto the `bind:NAME` attribute —
+/// ours arrives pre-mapped: the emit anchors both sides of the
+/// assignment to the directive's source span via TokenMapEntries.
+///
+/// Message forms (verbatim upstream):
+/// - When the original message follows the English `Type '"x"' is not
+///   assignable to type '…'` shape, REPLACE it with the short form
+///   naming the prop.
+/// - Otherwise PREPEND the generic form, keeping the original text.
+pub(crate) fn move_binding_error_message(
+    overlay: &str,
+    offset: u32,
+    span: u32,
+    message: &str,
+) -> Option<String> {
+    let start = offset as usize;
+    let end = start.checked_add(span as usize)?;
+    let flagged = overlay.get(start..end)?;
+    if !flagged.ends_with(".$$bindings") {
+        return None;
+    }
+    // The bound prop's name follows as `= 'NAME'` — read up to 100
+    // bytes ahead (same window upstream uses) and take the first
+    // single-quoted token. Bail when absent: not our emit shape.
+    let tail = &overlay[end..(end + 100).min(overlay.len())];
+    let quote = tail.find('\'')?;
+    let name_rest = &tail[quote + 1..];
+    let name_len = name_rest.find('\'')?;
+    if name_len == 0 {
+        return None;
+    }
+
+    const EXPLANATION: &str = "Cannot use 'bind:' with this property. \
+         It is declared as non-bindable inside the component.\n";
+    if message.starts_with("Type '") && message.contains("is not assignable to type '") {
+        // `Type '"NAME"' is not assignable to …` — pull NAME out of
+        // the message so the hint names the exact prop.
+        if let Some(idx) = message.find("Type '\"") {
+            let after = idx + "Type '\"".len();
+            if let Some(name_end) = message[after..].find('"') {
+                let prop = &message[after..after + name_end];
+                return Some(format!(
+                    "{EXPLANATION}To mark a property as bindable: \
+                     'let {{ {prop} = $bindable() }} = $props()'"
+                ));
+            }
+        }
+    }
+    Some(format!(
+        "{EXPLANATION}To mark a property as bindable: \
+         'let {{ prop = $bindable() }} = $props()'\n\n{message}"
+    ))
+}
+
+/// Message-clarity adjustments for JSX-era / confusing TS nomenclature.
+/// Mirrors upstream `adjustIfNecessary` (identical in the tsc and
+/// typescript-go DiagnosticsProvider variants), which runs on every
+/// Svelte-document diagnostic right before conversion:
+///
+/// - TS2345 mentioning `ConstructorOfATypedSvelteComponent` gains a
+///   "Possible causes" trailer (with an extra SvelteComponentTyped
+///   how-to on pre-5 Svelte).
+/// - TS1184 ("Modifiers cannot appear here.") gains the
+///   move-into-module-script hint.
+///
+/// `svelte5_plus` mirrors upstream's `isSvelte5Plus`
+/// (`Number(version?.split('.')[0]) >= 5` — an UNKNOWN version is
+/// falsy and gets the longer pre-5 text).
+pub(crate) fn adjust_message_if_necessary(code: u32, message: &mut String, svelte5_plus: bool) {
+    if code == 2345 && message.contains("ConstructorOfATypedSvelteComponent") {
+        message.push_str(
+            "\n\nPossible causes:\n\
+             - You use the instance type of a component where you should use the constructor type\n\
+             - Type definitions are missing for this Svelte Component. ",
+        );
+        if !svelte5_plus {
+            message.push_str(
+                "If you are using Svelte 3.31+, use SvelteComponentTyped to add a definition:\n  \
+                 import type { SvelteComponentTyped } from \"svelte\";\n  \
+                 class ComponentName extends SvelteComponentTyped<{propertyName: string;}> {}",
+            );
+        }
+    }
+    if code == 1184 {
+        message.push_str(
+            "\nIf this is a declare statement, move it into <script context=\"module\">..</script>",
+        );
+    }
+}
+
+/// Is the workspace's `svelte` package major version ≥ 5? Walks up
+/// from `workspace` looking for `node_modules/svelte/package.json`
+/// (same walk-up the engine discovery performs) and parses the
+/// `"version"` major. Unknown (no svelte install, unreadable
+/// manifest) reports `false`, mirroring upstream's
+/// `isSvelte5Plus = Number(undefined) >= 5` fallthrough.
+pub(crate) fn workspace_svelte_is_5_plus(workspace: &Path) -> bool {
+    let mut dir = Some(workspace);
+    while let Some(d) = dir {
+        let manifest = d.join("node_modules").join("svelte").join("package.json");
+        if let Ok(text) = std::fs::read_to_string(&manifest) {
+            return svelte_manifest_major(&text).is_some_and(|major| major >= 5);
+        }
+        dir = d.parent();
+    }
+    false
+}
+
+/// Extract the major version from a package.json's `"version"` field.
+/// Cheap textual scan — the manifest is npm-generated JSON and the
+/// field value is always a plain semver string.
+fn svelte_manifest_major(manifest: &str) -> Option<u32> {
+    let idx = manifest.find("\"version\"")?;
+    let rest = &manifest[idx + "\"version\"".len()..];
+    let colon = rest.find(':')?;
+    let rest = rest[colon + 1..].trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let end = rest.find(['.', '"'])?;
+    rest[..end].parse().ok()
+}
+
 /// `memmem`-style byte-slice search. Rust stdlib doesn't expose this
 /// for byte slices so we roll a small one. Linear in haystack size,
 /// which is fine for overlay files (~hundreds of KB at most).
@@ -451,4 +588,245 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn binding_error_message_rewrites_english_shape() {
+        let overlay = "__svn_inst_0.$$bindings = 'notBindable';";
+        let span = "__svn_inst_0.$$bindings".len() as u32;
+        let msg = "Type '\"notBindable\"' is not assignable to type '\"bindableProp\"'.";
+        let rewritten = move_binding_error_message(overlay, 0, span, msg).expect("rewrites");
+        assert_eq!(
+            rewritten,
+            "Cannot use 'bind:' with this property. It is declared as non-bindable inside the component.\n\
+             To mark a property as bindable: 'let { notBindable = $bindable() } = $props()'"
+        );
+    }
+
+    #[test]
+    fn binding_error_message_prepends_on_unrecognised_shape() {
+        let overlay = "__svn_inst_0.$$bindings = 'x';";
+        let span = "__svn_inst_0.$$bindings".len() as u32;
+        let msg = "Der Typ ist nicht zuweisbar.";
+        let rewritten = move_binding_error_message(overlay, 0, span, msg).expect("rewrites");
+        assert!(rewritten.starts_with("Cannot use 'bind:' with this property."));
+        assert!(rewritten.ends_with("\n\nDer Typ ist nicht zuweisbar."));
+    }
+
+    #[test]
+    fn binding_error_message_ignores_other_2322_spans() {
+        // A TS2322 whose span is NOT the $$bindings LHS stays untouched.
+        let overlay = "const bad: string = 123;";
+        assert!(move_binding_error_message(overlay, 6, 3, "Type 'number' ...").is_none());
+        // ...as does a $$bindings span not followed by a quoted name.
+        let overlay = "x.$$bindings = name;";
+        assert!(move_binding_error_message(overlay, 0, 12, "Type ...").is_none());
+    }
+
+    #[test]
+    fn adjust_message_appends_ts1184_hint() {
+        let mut msg = String::from("Modifiers cannot appear here.");
+        adjust_message_if_necessary(1184, &mut msg, true);
+        assert_eq!(
+            msg,
+            "Modifiers cannot appear here.\nIf this is a declare statement, move it into <script context=\"module\">..</script>"
+        );
+    }
+
+    #[test]
+    fn adjust_message_appends_constructor_causes_variants() {
+        let base = "Argument of type 'X' is not assignable to parameter of type 'ConstructorOfATypedSvelteComponent'.";
+        let mut v5 = String::from(base);
+        adjust_message_if_necessary(2345, &mut v5, true);
+        assert!(v5.ends_with("- Type definitions are missing for this Svelte Component. "));
+        let mut v4 = String::from(base);
+        adjust_message_if_necessary(2345, &mut v4, false);
+        assert!(v4.contains("SvelteComponentTyped to add a definition"));
+        // Other codes / other messages are untouched.
+        let mut other = String::from("Argument of type 'A' is not assignable ...");
+        adjust_message_if_necessary(2345, &mut other, true);
+        assert_eq!(other, "Argument of type 'A' is not assignable ...");
+    }
+
+    #[test]
+    fn svelte_manifest_major_parses_semver() {
+        assert_eq!(
+            svelte_manifest_major(r#"{ "name": "svelte", "version": "5.56.5" }"#),
+            Some(5)
+        );
+        assert_eq!(svelte_manifest_major(r#"{"version":"4.2.19"}"#), Some(4));
+        assert_eq!(svelte_manifest_major(r#"{"name":"svelte"}"#), None);
+    }
+
+    /// Triage of upstream's `DiagnosticCode` enum
+    /// (`DiagnosticsProvider.ts`). Every code upstream's diagnostic
+    /// pipeline names must be accounted for here as one of:
+    ///
+    /// - `ported` — we implement the equivalent handling (filter,
+    ///   message adjustment, or an emit shape that produces the same
+    ///   observable result);
+    /// - `not-applicable-cli` — the upstream handling can't fire on
+    ///   the CLI path we mirror (lang-gated, LSP-only, dead code, or
+    ///   made unreachable by our emit shape);
+    /// - `tracked` — a known gap with a pointer to where it's
+    ///   tracked.
+    ///
+    /// The test below parses the enum out of the pinned submodule, so
+    /// a submodule bump that adds a new code fails here until the
+    /// code is triaged into this table.
+    const UPSTREAM_DIAGNOSTIC_CODE_TRIAGE: &[(u32, &str)] = &[
+        (
+            1184,
+            "ported: adjust_message_if_necessary appends the move-into-module-script hint",
+        ),
+        (
+            2454,
+            "not-applicable-cli: emit definite-assigns exported props (`let x!: T`), so TS2454 is unreachable for props and upstream's isNoUsedBeforeAssigned drop has nothing to drop",
+        ),
+        (
+            2607,
+            "not-applicable-cli: declared upstream but unused (JSX-era legacy)",
+        ),
+        (
+            2786,
+            "not-applicable-cli: declared upstream but unused (JSX-era legacy)",
+        ),
+        (
+            2695,
+            "not-applicable-cli: resolveNoopsInReactiveStatements needs the checker on both upstream variants; our void-sequence emit rewrite prevents the equivalent tsgo TS2871 shape from firing",
+        ),
+        (
+            6133,
+            "ported: suggestion reclassification (include_suggestions) + pug-filter exception",
+        ),
+        (
+            6192,
+            "ported: suggestion reclassification + pug-filter exception",
+        ),
+        (
+            7028,
+            "ported: is_overlay_dollar_reactive_label drops the synthetic `$:` label",
+        ),
+        (
+            17001,
+            "not-applicable-cli: declared upstream but unused (JSX-era legacy)",
+        ),
+        (
+            2300,
+            "ported: is_overlay_attribute_key drops duplicate element-attribute keys",
+        ),
+        (
+            1117,
+            "ported: is_overlay_attribute_key drops duplicate element-attribute keys",
+        ),
+        (
+            2345,
+            "ported: adjust_message_if_necessary ConstructorOfATypedSvelteComponent trailer; the $store misuse enhancement is tracked (ls_diagnostics skip $store-wrong-usage)",
+        ),
+        (
+            2322,
+            "ported: move_binding_error_message rewrites the non-bindable bind: check",
+        ),
+        (
+            2820,
+            "not-applicable-cli: declared upstream but unused (JSX-era legacy)",
+        ),
+        (2353, "not-applicable-cli: declared upstream but unused"),
+        (
+            2739,
+            "ported: emit's component-call TokenMapEntry anchors missing-prop diagnostics at the start tag (rangeMapper's getNodeIfIsInStartTag equivalent)",
+        ),
+        (
+            2741,
+            "ported: same component-call TokenMapEntry anchoring as 2739",
+        ),
+        (
+            2769,
+            "tracked: $store misuse enhancement not ported — ls_diagnostics skip $store-wrong-usage",
+        ),
+        (
+            2304,
+            "not-applicable-cli: used only by CodeActionsProvider (LSP quick fixes)",
+        ),
+        (
+            2552,
+            "not-applicable-cli: used only by CodeActionsProvider (LSP quick fixes)",
+        ),
+        (
+            2554,
+            "ported: is_overlay_in_ensure_transition_call drops the 3-arg transition contract case",
+        ),
+        (
+            6387,
+            "tracked: tsgo CLI emits no deprecation suggestions today — ls_diagnostics skip deprecated-unused-hints",
+        ),
+    ];
+
+    #[test]
+    fn every_upstream_diagnostic_code_is_triaged() {
+        let upstream = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../language-tools/packages/language-server/src/plugins/typescript/features/DiagnosticsProvider.ts",
+        );
+        let Ok(text) = std::fs::read_to_string(&upstream) else {
+            eprintln!(
+                "SKIP: language-tools submodule not checked out at {}",
+                upstream.display()
+            );
+            return;
+        };
+        let enum_start = text
+            .find("enum DiagnosticCode")
+            .expect("upstream DiagnosticCode enum moved — update this test");
+        let mut upstream_codes: Vec<u32> = Vec::new();
+        for line in text[enum_start..].lines() {
+            // The enum closes with a lone `}` — comments inside it may
+            // contain `}` (e.g. `'{0}'` placeholders), so scan by line
+            // rather than `find('}')`.
+            if line.trim() == "}" {
+                break;
+            }
+            // Shape: `    NAME = 1234, // "..."`.
+            let Some((_, rhs)) = line.split_once('=') else {
+                continue;
+            };
+            let num: String = rhs
+                .trim_start()
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            if let Ok(code) = num.parse::<u32>() {
+                upstream_codes.push(code);
+            }
+        }
+        assert!(
+            upstream_codes.len() >= 20,
+            "parsed suspiciously few codes ({}) — enum shape changed?",
+            upstream_codes.len()
+        );
+        for code in &upstream_codes {
+            assert!(
+                UPSTREAM_DIAGNOSTIC_CODE_TRIAGE
+                    .iter()
+                    .any(|(c, _)| c == code),
+                "upstream DiagnosticCode {code} is not triaged — a submodule bump added \
+                 a code the CLI pipeline hasn't decided on. Add it to \
+                 UPSTREAM_DIAGNOSTIC_CODE_TRIAGE as ported / not-applicable-cli / tracked \
+                 (with the matching implementation or tracking pointer)."
+            );
+        }
+        // Inverse guard: triage entries that no longer exist upstream
+        // are stale and should be removed.
+        for (code, _) in UPSTREAM_DIAGNOSTIC_CODE_TRIAGE {
+            assert!(
+                upstream_codes.contains(code),
+                "triage entry {code} no longer exists in upstream's DiagnosticCode enum — remove it"
+            );
+        }
+    }
 }

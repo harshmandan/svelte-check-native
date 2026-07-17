@@ -42,13 +42,16 @@ pub(crate) fn emit_each_block(
         let start = b.expression_range.start + leading_ws;
         Some(svn_core::Range::new(start, start + expr_text.len() as u32))
     };
-    let binding_text = match &b.as_clause {
-        Some(c) => source
-            .get(c.context_range.start as usize..c.context_range.end as usize)
-            .unwrap_or("__svn_each_unused")
-            .to_string(),
-        None => "__svn_each_unused".to_string(),
-    };
+    // `{#each expr, i}` (index-only sequence form) has an as-clause with
+    // no context pattern — the placeholder binding covers it like the
+    // clause-less `{#each items}`.
+    let binding_text = b
+        .as_clause
+        .as_ref()
+        .and_then(|c| c.context_range)
+        .and_then(|r| source.get(r.start as usize..r.end as usize))
+        .unwrap_or("__svn_each_unused")
+        .to_string();
     // `{#each items as item, i}` — `i` is the zero-based iteration index.
     // `__svn_each_items` returns a plain Iterable, which doesn't expose
     // `.entries()`, so declaring the index as a `const i: number` inside

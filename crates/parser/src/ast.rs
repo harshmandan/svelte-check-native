@@ -578,9 +578,11 @@ pub struct EachBlock {
 #[derive(Debug, Clone)]
 pub struct EachAsClause {
     /// Byte range of the destructuring pattern (may be an identifier,
-    /// array-destructuring, or object-destructuring).
-    pub context_range: Range,
-    /// `index` binding range (the `i` in `as item, i`).
+    /// array-destructuring, or object-destructuring). `None` for the
+    /// index-only sequence form `{#each expr, i}` (Svelte 5.4+), which
+    /// binds an index without an item context.
+    pub context_range: Option<Range>,
+    /// `index` binding range (the `i` in `as item, i` or `expr, i`).
     pub index_range: Option<Range>,
     /// `(key)` expression range, if a key is provided.
     pub key_range: Option<Range>,

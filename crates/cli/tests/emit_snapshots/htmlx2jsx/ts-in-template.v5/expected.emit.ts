@@ -61,10 +61,9 @@ async function $$render_43de206c() {
             } else if ((bar as false)) {
                 void [bar];
             }
-            for (const [''] as item: string of __svn_each_items(items)) {
+            for (const item: string of __svn_each_items(items as [''])) {
                 const i: number = 0;
                 (item as string);
-                void as;
                 void item;
                 void i;
             }

@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 5,
+            "column": 14,
+            "code": 2345
+        }
+    ],
+    "_note": "Svelte 5.4+ allows the index-only each form '{#each expr, i}': no 'as' context, just an index binding (the compiler reads the header as a SequenceExpression, keeps the first expression as the iterable, and binds ', i' via read_identifier). The header parser used to fold the ', i' into the iterable expression, so 'i' was never declared and every body reference to it fired TS2304. Now the depth-zero comma splits the header when the remainder is a bare identifier (optionally with a '(key)'), the clause carries an index with no context, and emit declares 'const i: number = 0' in the loop body. The expected error proves 'i' is bound AND correctly typed as number: passing it to a (n: string) parameter fires TS2345 at the argument position, byte-identical to upstream svelte-check --tsgo on the same file."
+}

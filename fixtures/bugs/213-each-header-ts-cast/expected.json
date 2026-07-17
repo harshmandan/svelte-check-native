@@ -1,0 +1,5 @@
+{
+    "clean": true,
+    "warnings": [],
+    "_note": "The iterable in an {#each} header may itself contain depth-zero 'as' TypeScript casts: '{#each items as unknown as Item[] as item}' iterates 'items as unknown as Item[]' with context 'item'. The Svelte compiler acorn-parses the whole header (which swallows every 'as' into nested TSAsExpression nodes) and then peels ONE trailing cast back off as the binding context. The header splitter used to cut at the FIRST depth-zero 'as', making the context 'unknown as Item[] as item' — garbage that cascaded into TS2304s. It now tries candidates right-to-left, accepting the last 'as' whose right side parses as a valid binding pattern, so the casts stay in the expression."
+}

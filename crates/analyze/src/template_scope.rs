@@ -589,9 +589,11 @@ fn walk_node_inner<V: TemplateScopeVisitor>(node: &Node, source: &str, visitor: 
             let mut is_keyed = false;
             let mut key_range: Option<Range> = None;
             if let Some(as_clause) = &b.as_clause {
-                let context = collect_pattern_bindings_from_slice(source, as_clause.context_range);
-                bindings.extend(context.bindings);
-                defaults.extend(context.default_value_ranges);
+                if let Some(ctx) = as_clause.context_range {
+                    let context = collect_pattern_bindings_from_slice(source, ctx);
+                    bindings.extend(context.bindings);
+                    defaults.extend(context.default_value_ranges);
+                }
                 if let Some(idx) = &as_clause.index_range {
                     let i = collect_pattern_bindings_from_slice(source, *idx);
                     bindings.extend(i.bindings);

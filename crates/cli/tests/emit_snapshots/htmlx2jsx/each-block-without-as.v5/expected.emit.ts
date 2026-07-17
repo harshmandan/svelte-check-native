@@ -6,9 +6,11 @@ async function $$render_c7e1c908() {
         for (const __svn_each_unused of __svn_each_items({ length: 5 })) {
             void __svn_each_unused;
         }
-        for (const __svn_each_unused of __svn_each_items({ length: 5 }, index)) {
+        for (const __svn_each_unused of __svn_each_items({ length: 5 })) {
+            /** @type {number} */ const index = 0;
             (index);
             void __svn_each_unused;
+            void index;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

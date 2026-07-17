@@ -1843,7 +1843,7 @@ mod tests {
         let src = "{#each items as item}<li>{item}</li>{/each}";
         assert_eq!(b.expression_range.slice(src).trim(), "items");
         let clause = b.as_clause.as_ref().unwrap();
-        assert_eq!(clause.context_range.slice(src), "item");
+        assert_eq!(clause.context_range.unwrap().slice(src), "item");
     }
 
     #[test]
@@ -1854,7 +1854,7 @@ mod tests {
             unreachable!()
         };
         let clause = b.as_clause.as_ref().unwrap();
-        assert_eq!(clause.context_range.slice(src), "item");
+        assert_eq!(clause.context_range.unwrap().slice(src), "item");
         assert_eq!(clause.index_range.map(|r| r.slice(src)), Some("i"));
         assert_eq!(clause.key_range.map(|r| r.slice(src)), Some("item.id"));
     }
@@ -1868,7 +1868,7 @@ mod tests {
         };
         assert_eq!(b.expression_range.slice(src), "items");
         let clause = b.as_clause.as_ref().expect("as-clause parsed");
-        assert_eq!(clause.context_range.slice(src), "item");
+        assert_eq!(clause.context_range.unwrap().slice(src), "item");
     }
 
     #[test]

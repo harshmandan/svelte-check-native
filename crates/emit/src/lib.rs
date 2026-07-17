@@ -59,6 +59,8 @@ mod process_instance_script_content;
 mod process_module_script_tag;
 mod props_emit;
 mod render_function;
+#[cfg(test)]
+mod rewrite_invariants;
 mod script_body_rewrites;
 mod script_template_analysis;
 mod state_nullish_rewrite;
@@ -1081,9 +1083,7 @@ fn emit_document_with_render_name(
     // gets its Props through `Awaited<ReturnType<typeof
     // $$render>>['props']` which already projects the destructure's
     // declared type. Skipping the alias on JS is safe.
-    if is_ts
-        && let Some(body) = alias_body.as_deref()
-    {
+    if is_ts && let Some(body) = alias_body.as_deref() {
         let _ = writeln!(buf, "    type $$ComponentProps = {body};");
     }
     // Synthesised `type $$Events = { [K in keyof <T>]:
@@ -1317,35 +1317,45 @@ fn emit_document_with_render_name(
                 padded = format!("{}\n", s.body);
                 &padded
             };
-            // R-Conv #2: when the body bytes equal the source slice
-            // 1:1 (no imports stripped, no store-prefix rewrites),
-            // push a TokenMapEntry covering the body's overlay span
-            // so position translation preserves the column offset
-            // inside the span. Without this, single-line scripts
-            // (`<script lang="ts">const asd: string = true;asd;
-            // </script>`) reverse-mapped to source col 6 because
-            // the line-map fallback returns the overlay column
-            // unchanged — but the script content sits at source col
-            // 18 / 35 (after `<script lang="ts">` /
-            // `<script context="module" lang="ts">`), not col 0.
+            // R-Conv #2 (generalised): push byte-precise 1:1
+            // TokenMapEntries for the parts of the body that are
+            // byte-identical to the source slice. Without a token
+            // entry, position translation falls back to the line map,
+            // which returns the overlay COLUMN unchanged — wrong for
+            // single-line scripts (`<script lang="ts">const asd:
+            // string = true;</script>` sits at source col 18, not 0)
+            // and wrong to the RIGHT of any in-line rewrite on the
+            // same line (the `$state<T>(null)` generic injection,
+            // dispatcher typing, `$props()` annotation, `$:` reactive
+            // rewrite — all shift later columns).
             //
-            // For rewritten bodies the byte offsets shift, so the
-            // token-map's 1:1 mapping would lie. Skip in that case
-            // and let the line-map approximation handle it.
+            // The body may differ from the source slice because of
+            // those rewrites plus import-hoist blanking; none of them
+            // add or remove newlines (the line map depends on that —
+            // see the rewrite-invariants test module), but byte
+            // offsets after a change point shift. Map the longest
+            // common prefix and the longest common suffix as two 1:1
+            // entries: everything before the first change and after
+            // the last change keeps exact column mapping, and only
+            // the changed middle falls back to the line-map
+            // approximation.
             let body_no_pad = s.body.trim_end_matches('\n');
             if let Some(src_slice) = doc
                 .source
                 .get(instance.content_range.start as usize..instance.content_range.end as usize)
-                && src_slice.trim_end_matches('\n') == body_no_pad
             {
+                let src = src_slice.trim_end_matches('\n');
                 let overlay_start = buf.raw_string_mut().len() as u32;
-                let overlay_end = overlay_start + body_no_pad.len() as u32;
-                buf.push_token_map(TokenMapEntry {
-                    overlay_byte_start: overlay_start,
-                    overlay_byte_end: overlay_end,
-                    source_byte_start: instance.content_range.start,
-                    source_byte_end: instance.content_range.start + body_no_pad.len() as u32,
-                });
+                for (overlay_off, src_off, len) in
+                    common_affix_spans(src.as_bytes(), body_no_pad.as_bytes())
+                {
+                    buf.push_token_map(TokenMapEntry {
+                        overlay_byte_start: overlay_start + overlay_off,
+                        overlay_byte_end: overlay_start + overlay_off + len,
+                        source_byte_start: instance.content_range.start + src_off,
+                        source_byte_end: instance.content_range.start + src_off + len,
+                    });
+                }
             }
             buf.append_verbatim(text, doc.source, instance.content_range);
         }
@@ -1554,6 +1564,59 @@ use script_template_analysis::{ScriptAndTemplateAnalysis, analyze_script_and_tem
 /// type checks. Using a bare `any` here avoids re-emitting the user's
 /// param list at this site, which would duplicate `noImplicitAny`
 /// diagnostics on each user param across overlay scopes.
+/// Longest-common-prefix and longest-common-suffix spans between a
+/// source slice and the (possibly rewritten) script body spliced into
+/// the overlay. Returns up to two `(overlay_offset, source_offset,
+/// len)` spans over byte-identical content — the caller turns them
+/// into 1:1 [`TokenMapEntry`]s so diagnostics inside keep exact
+/// column mapping even when an in-line rewrite shifted bytes
+/// elsewhere in the body.
+///
+/// The prefix and suffix never overlap (the suffix is capped at
+/// `min(len) - prefix_len`), and both ends are rounded down to UTF-8
+/// char boundaries so a span edge can't split a multi-byte char.
+fn common_affix_spans(src: &[u8], body: &[u8]) -> Vec<(u32, u32, u32)> {
+    let mut spans: Vec<(u32, u32, u32)> = Vec::new();
+    let min_len = src.len().min(body.len());
+    let mut prefix = src
+        .iter()
+        .zip(body.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    // Round down to a char boundary. The byte AT the prefix end is the
+    // first divergent byte, so it can differ between the two sides —
+    // check both: a continuation byte (0b10xxxxxx) at the boundary in
+    // either means the boundary splits that side's char.
+    while prefix > 0
+        && ((prefix < body.len() && (body[prefix] & 0xC0) == 0x80)
+            || (prefix < src.len() && (src[prefix] & 0xC0) == 0x80))
+    {
+        prefix -= 1;
+    }
+    if prefix > 0 {
+        spans.push((0, 0, prefix as u32));
+    }
+    let max_suffix = min_len - prefix;
+    let mut suffix = src
+        .iter()
+        .rev()
+        .zip(body.iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count()
+        .min(max_suffix);
+    while suffix > 0 && (body[body.len() - suffix] & 0xC0) == 0x80 {
+        suffix -= 1;
+    }
+    if suffix > 0 {
+        spans.push((
+            (body.len() - suffix) as u32,
+            (src.len() - suffix) as u32,
+            suffix as u32,
+        ));
+    }
+    spans
+}
+
 fn emit_top_level_snippet_forward_decls(
     buf: &mut EmitBuffer,
     _source: &str,
@@ -1696,8 +1759,8 @@ pub(crate) fn emit_template_node(
     }
 }
 
-pub(crate) use is_ts::{IsTsGuard, emit_is_ts, preserve_attribute_case};
 pub use is_ts::set_preserve_attribute_case;
+pub(crate) use is_ts::{IsTsGuard, emit_is_ts, preserve_attribute_case};
 pub(crate) use void_block::{emit_bind_pair_declarations, emit_void_block};
 
 pub(crate) use destructure_idents::all_identifiers;

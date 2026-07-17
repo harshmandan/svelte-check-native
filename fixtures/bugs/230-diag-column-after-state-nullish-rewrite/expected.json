@@ -1,0 +1,19 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 1,
+            "column": 53,
+            "code": 2322
+        }
+    ],
+    "warnings": [
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 6,
+            "code": "state_referenced_locally"
+        }
+    ],
+    "_note": "The `let el: T | null = $state(null)` declaration gets an in-line `<T>` generic injected into the overlay, shifting every later byte on that line. Diagnostics to the right of the injection (the TS2322 on `bad`) must still map to the pre-shift source column: the script-body splice records longest-common-prefix/suffix token-map entries against the source slice, so byte-identical regions around an in-line rewrite keep exact column mapping instead of falling back to the line map's column passthrough."
+}

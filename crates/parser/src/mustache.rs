@@ -98,6 +98,51 @@ pub fn find_mustache_end(source: &str, expression_start: u32) -> Option<u32> {
     None
 }
 
+/// How a `{...}` tag dispatches. The Svelte compiler's tag lexer
+/// (`phases/1-parse/state/tag.js`) advances past `{`, allows whitespace,
+/// and only THEN classifies the next byte: `#` opens a block, `:`
+/// continues one, `@` starts a special tag, and `/` closes a block —
+/// unless it begins a `//` or `/*` comment, which belongs to an
+/// expression. Everything else is an expression or declaration tag.
+///
+/// This is the single classifier shared by the section pre-pass, the
+/// template parser's fragment dispatch, and the block-terminator reader,
+/// so the three layers cannot disagree about what the same bytes mean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MustacheSigil {
+    /// `{#...}` — block open.
+    BlockOpen,
+    /// `{:...}` — block continuation (`{:else}`, `{:then}`, ...).
+    Continuation,
+    /// `{/...}` — block close.
+    BlockClose,
+    /// `{@...}` — special tag (`{@html}`, `{@const}`, ...).
+    AtTag,
+    /// Expression or `{const ...}`/`{let ...}` declaration tag.
+    Other,
+}
+
+/// Classify the mustache tag whose `{` is at `open_brace`. Skips any
+/// whitespace between the `{` and the sigil. Returns the sigil kind and
+/// the byte offset of the sigil itself (for [`MustacheSigil::Other`],
+/// the first non-whitespace byte — or the end of input).
+pub(crate) fn classify_mustache_sigil(bytes: &[u8], open_brace: usize) -> (MustacheSigil, usize) {
+    let mut i = open_brace + 1;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let kind = match bytes.get(i) {
+        Some(b'#') => MustacheSigil::BlockOpen,
+        Some(b':') => MustacheSigil::Continuation,
+        Some(b'@') => MustacheSigil::AtTag,
+        Some(b'/') if !matches!(bytes.get(i + 1), Some(b'/') | Some(b'*')) => {
+            MustacheSigil::BlockClose
+        }
+        _ => MustacheSigil::Other,
+    };
+    (kind, i)
+}
+
 /// True when a slash at `slash` can begin a JS regex literal.
 ///
 /// This is a delimiter-finding heuristic, not a full JS parser. It only opts

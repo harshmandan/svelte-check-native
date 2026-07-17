@@ -22,8 +22,8 @@ use crate::ast::{
 };
 use crate::error::ParseError;
 use crate::mustache::{
-    can_start_regex, find_mustache_end, skip_ascii_string, skip_regex_literal,
-    skip_template_literal,
+    MustacheSigil, can_start_regex, classify_mustache_sigil, find_mustache_end, skip_ascii_string,
+    skip_regex_literal, skip_template_literal,
 };
 use crate::scanner::Scanner;
 
@@ -51,11 +51,19 @@ pub(crate) fn peek_and_consume_terminator(
     errors: &mut Vec<ParseError>,
 ) -> Option<BlockTerminator> {
     let start = scanner.pos();
-    if !scanner.starts_with("{:") && !scanner.starts_with("{/") {
+    if scanner.peek_byte() != Some(b'{') {
         return None;
     }
-    let is_close = scanner.starts_with("{/");
-    scanner.advance(2); // past `{:` or `{/`
+    // Whitespace is allowed between `{` and the `:`/`/` sigil (upstream
+    // allows whitespace before classifying). A `/` that begins a comment
+    // is an expression, not a close tag — the classifier handles that.
+    let (sigil, sigil_idx) = classify_mustache_sigil(scanner.source().as_bytes(), start as usize);
+    let is_close = match sigil {
+        MustacheSigil::BlockClose => true,
+        MustacheSigil::Continuation => false,
+        _ => return None,
+    };
+    scanner.set_pos(sigil_idx as u32 + 1); // past `:` or `/`
 
     // Read tag word.
     let word_start = scanner.pos();
@@ -805,6 +813,54 @@ mod tests {
             "got {term:?}"
         );
         assert!(!errors.is_empty(), "expected a malformed-open-tag error");
+    }
+
+    #[test]
+    fn terminator_allows_whitespace_after_open_brace() {
+        // Upstream allows whitespace between `{` and the `:`/`/` sigil.
+        for (src, expect_close) in [
+            ("{ /if}", true),
+            ("{\t/each}", true),
+            ("{\n  /await}", true),
+            ("{ :else}", false),
+        ] {
+            let mut scanner = Scanner::new(src);
+            let mut errors = Vec::new();
+            let term = peek_and_consume_terminator(&mut scanner, &mut errors);
+            match (expect_close, term) {
+                (true, Some(BlockTerminator::Close { .. }))
+                | (false, Some(BlockTerminator::Else)) => {}
+                (_, other) => panic!("wrong terminator for {src:?}: {other:?}"),
+            }
+            assert!(
+                errors.is_empty(),
+                "unexpected errors for {src:?}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn brace_comment_is_not_a_terminator() {
+        // `{//x}` and `{/* x */}` start with `{/` but the `/` opens a
+        // comment — they are expressions, not close tags.
+        for src in ["{//x}", "{/* x */ y}", "{ /* x */ y}"] {
+            let mut scanner = Scanner::new(src);
+            let mut errors = Vec::new();
+            let term = peek_and_consume_terminator(&mut scanner, &mut errors);
+            assert!(
+                term.is_none(),
+                "expected no terminator for {src:?}, got {term:?}"
+            );
+            assert_eq!(
+                scanner.pos(),
+                0,
+                "scanner must be left untouched for {src:?}"
+            );
+            assert!(
+                errors.is_empty(),
+                "unexpected errors for {src:?}: {errors:?}"
+            );
+        }
     }
 
     #[test]

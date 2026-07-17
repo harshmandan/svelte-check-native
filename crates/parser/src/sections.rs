@@ -17,6 +17,7 @@ use crate::document::{
     Document, ScriptAttr, ScriptContext, ScriptLang, ScriptSection, StyleSection, Template,
 };
 use crate::error::ParseError;
+use crate::mustache::{MustacheSigil, classify_mustache_sigil};
 use crate::scanner::Scanner;
 
 /// Parse the top-level section layout of a Svelte source file.
@@ -654,11 +655,10 @@ fn parse_lang_attr(attrs: &[ScriptAttr], errors: &mut Vec<ParseError>) -> Script
     }
 }
 
-/// What a `{` at document level opens. Mirrors the compiler's tag
-/// lexer (`tag.js`): whitespace is allowed after `{`, then `#` opens
-/// a block, `/` closes one — unless it starts a `//` or `/*` comment,
-/// which makes the tag an expression. `{:…}` / `{@…}` continuations
-/// and plain expressions don't change block nesting.
+/// What a `{` at document level opens, for block-depth tracking only.
+/// Delegates to the crate-wide [`classify_mustache_sigil`] (whitespace
+/// is allowed between `{` and the sigil); continuations, `{@…}` tags and
+/// plain expressions don't change block nesting.
 #[derive(PartialEq)]
 enum MustacheKind {
     BlockOpen,
@@ -667,15 +667,9 @@ enum MustacheKind {
 }
 
 fn classify_mustache(bytes: &[u8], open_brace: usize) -> MustacheKind {
-    let mut i = open_brace + 1;
-    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    match bytes.get(i) {
-        Some(b'#') => MustacheKind::BlockOpen,
-        Some(b'/') if !matches!(bytes.get(i + 1), Some(b'/') | Some(b'*')) => {
-            MustacheKind::BlockClose
-        }
+    match classify_mustache_sigil(bytes, open_brace).0 {
+        MustacheSigil::BlockOpen => MustacheKind::BlockOpen,
+        MustacheSigil::BlockClose => MustacheKind::BlockClose,
         _ => MustacheKind::Other,
     }
 }

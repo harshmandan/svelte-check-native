@@ -31,7 +31,7 @@ use crate::blocks::{
 };
 use crate::error::ParseError;
 use crate::html5::closing_tag_omitted;
-use crate::mustache::find_mustache_end;
+use crate::mustache::{MustacheSigil, classify_mustache_sigil, find_mustache_end};
 use crate::scanner::Scanner;
 
 /// Parse one template fragment out of the source string.
@@ -175,17 +175,17 @@ impl<'src> TemplateParser<'src> {
         find_mustache_end(self.scanner.source(), expr_start).filter(|&end| end < self.fragment_end)
     }
 
-    /// Peek for a Svelte 5 declaration-tag opener at the current `{`:
-    /// `{const`/`{let` followed by a word boundary. Returns the kind and
-    /// the keyword byte length (`5` for `const`, `3` for `let`) on a
-    /// match, else `None` (in which case the `{…}` is a plain expression
-    /// — `{constant}`, `{letter}`, etc.). Mirrors the Svelte compiler's
+    /// Peek for a Svelte 5 declaration-tag keyword at `content_start`
+    /// (the first non-whitespace byte after the `{`): `const`/`let`
+    /// followed by a word boundary. Returns the kind and the absolute
+    /// byte offset just past the keyword on a match, else `None` (in
+    /// which case the `{…}` is a plain expression — `{constant}`,
+    /// `{letter}`, etc.). Mirrors the Svelte compiler's
     /// `/(?:let|const)\b/y` in `phases/1-parse/state/tag.js`: the keyword
     /// must not run into a longer identifier.
-    fn peek_declaration_tag(&self) -> Option<(InterpolationKind, u32)> {
+    fn peek_declaration_tag(&self, content_start: u32) -> Option<(InterpolationKind, u32)> {
         let src = self.scanner.source();
-        let after_brace = (self.scanner.pos() + 1) as usize;
-        let rest = src.get(after_brace..)?;
+        let rest = src.get(content_start as usize..)?;
         let (kind, kw_len) = if rest.starts_with("const") {
             (InterpolationKind::DeclConst, 5usize)
         } else if rest.starts_with("let") {
@@ -197,7 +197,7 @@ impl<'src> TemplateParser<'src> {
         // identifier (so `{constant}` / `{letter}` stay plain expressions).
         match rest.as_bytes().get(kw_len).copied() {
             Some(b) if b.is_ascii_alphanumeric() || b == b'_' || b == b'$' => None,
-            _ => Some((kind, kw_len as u32)),
+            _ => Some((kind, content_start + kw_len as u32)),
         }
     }
 
@@ -217,8 +217,33 @@ impl<'src> TemplateParser<'src> {
     ) -> (Vec<Node>, Option<BlockTerminator>) {
         let mut nodes = Vec::new();
         while !self.at_fragment_end() {
+            // Mustache dispatch. Upstream's tag lexer skips whitespace
+            // after `{` BEFORE classifying the sigil, so `{ #if}`,
+            // `{ :else}`, `{ /if}` and `{ @html}` are all valid. The
+            // shared classifier is the same one the section pre-pass
+            // uses, so the two layers agree on what the bytes mean.
+            let sigil = if self.scanner.peek_byte() == Some(b'{') {
+                let (sigil, sigil_idx) = classify_mustache_sigil(
+                    self.scanner.source().as_bytes(),
+                    self.scanner.pos() as usize,
+                );
+                // A sigil at/past the fragment boundary belongs to a
+                // following run — treat the `{` as a (necessarily
+                // unterminated) expression instead.
+                if (sigil_idx as u32) < self.fragment_end {
+                    Some((sigil, sigil_idx as u32))
+                } else {
+                    Some((MustacheSigil::Other, self.fragment_end))
+                }
+            } else {
+                None
+            };
+
             // Block-level terminator: `{:...}` or `{/...}`.
-            if self.scanner.starts_with("{:") || self.scanner.starts_with("{/") {
+            if matches!(
+                sigil,
+                Some((MustacheSigil::Continuation | MustacheSigil::BlockClose, _))
+            ) {
                 let term_start = self.scanner.pos();
                 if let Some(term) = peek_and_consume_terminator(&mut self.scanner, &mut self.errors)
                 {
@@ -232,8 +257,8 @@ impl<'src> TemplateParser<'src> {
             }
 
             // Block header: `{#if}`, `{#each}`, `{#await}`, `{#key}`, `{#snippet}`.
-            if self.scanner.starts_with("{#") {
-                if let Some(node) = self.parse_block() {
+            if let Some((MustacheSigil::BlockOpen, sigil_idx)) = sigil {
+                if let Some(node) = self.parse_block(sigil_idx) {
                     nodes.push(node);
                 }
                 continue;
@@ -255,11 +280,11 @@ impl<'src> TemplateParser<'src> {
             // (where `name` is a new binding, not a reference), but the
             // template-ref pass intersects with script bindings, so a `@const`
             // local that doesn't shadow a script local just gets dropped.
-            if self.scanner.starts_with("{@") {
+            if let Some((MustacheSigil::AtTag, sigil_idx)) = sigil {
                 let start = self.scanner.pos();
                 match self.find_mustache_end_in_fragment(self.scanner.pos() + 1) {
                     Some(end) => {
-                        let body_start = self.scanner.pos() + 2; // past `{@`
+                        let body_start = sigil_idx + 1; // past `@`
                         let src = self.scanner.source();
                         let bytes = src.as_bytes();
                         // Read the tag keyword (alpha chars) into a slice
@@ -312,14 +337,17 @@ impl<'src> TemplateParser<'src> {
             // (e.g. `foo: number = 1` for `{let foo: number = 1}`), the
             // same convention `{@const}` uses — emit prepends the right
             // keyword and the analyze pass reuses `extract_at_const_bindings`.
-            if let Some((kind, kw_len)) = self.peek_declaration_tag() {
+            if let Some((kind, kw_end)) = sigil
+                .filter(|(kind, _)| *kind == MustacheSigil::Other)
+                .and_then(|(_, sigil_idx)| self.peek_declaration_tag(sigil_idx))
+            {
                 let start = self.scanner.pos();
                 match self.find_mustache_end_in_fragment(self.scanner.pos() + 1) {
                     Some(end) => {
                         let src = self.scanner.source();
                         let bytes = src.as_bytes();
                         // Skip whitespace after the `const`/`let` keyword.
-                        let mut p = (start + 1 + kw_len) as usize;
+                        let mut p = kw_end as usize;
                         while p < end as usize && bytes[p].is_ascii_whitespace() {
                             p += 1;
                         }
@@ -402,11 +430,17 @@ impl<'src> TemplateParser<'src> {
         (nodes, None)
     }
 
-    /// Dispatch on the block name after `{#` and build the correct block node.
-    fn parse_block(&mut self) -> Option<Node> {
+    /// Dispatch on the block name after `{#` and build the correct block
+    /// node. `sigil_idx` is the byte offset of the `#` (whitespace may
+    /// separate it from the `{` the scanner sits on).
+    fn parse_block(&mut self, sigil_idx: u32) -> Option<Node> {
         let block_start = self.scanner.pos();
-        debug_assert!(self.scanner.starts_with("{#"));
-        self.scanner.advance(2);
+        debug_assert_eq!(self.scanner.peek_byte(), Some(b'{'));
+        debug_assert_eq!(
+            self.scanner.source().as_bytes().get(sigil_idx as usize),
+            Some(&b'#')
+        );
+        self.scanner.set_pos(sigil_idx + 1);
 
         let name_start = self.scanner.pos();
         while let Some(b) = self.scanner.peek_byte() {
@@ -2015,5 +2049,78 @@ mod tests {
         };
         assert_eq!(e.range.start, 18);
         assert_eq!(e.range.slice(src), "<p>hi</p>");
+    }
+
+    #[test]
+    fn whitespace_after_open_brace_in_block_tags() {
+        // Upstream's tag lexer advances past `{` and allows whitespace
+        // BEFORE classifying the sigil, so `{ #if}`, `{ :else}` and
+        // `{ /if}` are all valid.
+        let src = "{ #if x}a{ :else}b{ /if}";
+        let frag = parse_ok(src);
+        let [Node::IfBlock(b)] = frag.nodes.as_slice() else {
+            panic!("expected one IfBlock, got {:?}", frag.nodes);
+        };
+        assert_eq!(b.condition_range.slice(src), "x");
+        assert!(b.alternate.is_some(), "alternate branch dropped");
+    }
+
+    #[test]
+    fn whitespace_after_open_brace_close_tag_variants() {
+        for src in ["{#if x}a{\t/if}", "{#if x}a{\n  /if}", "{#if x}a{ /if }"] {
+            let frag = parse_ok(src);
+            assert!(
+                matches!(frag.nodes.as_slice(), [Node::IfBlock(_)]),
+                "expected one IfBlock for {src:?}, got {:?}",
+                frag.nodes
+            );
+        }
+    }
+
+    #[test]
+    fn whitespace_after_open_brace_in_each_and_at_tags() {
+        let src = "{ #each xs as x}{ @html x}{ /each}";
+        let frag = parse_ok(src);
+        let [Node::EachBlock(b)] = frag.nodes.as_slice() else {
+            panic!("expected one EachBlock, got {:?}", frag.nodes);
+        };
+        let [Node::Interpolation(i)] = b.body.nodes.as_slice() else {
+            panic!("expected one Interpolation, got {:?}", b.body.nodes);
+        };
+        assert_eq!(i.kind, InterpolationKind::AtHtml);
+        assert_eq!(i.expression_range.slice(src), "x");
+    }
+
+    #[test]
+    fn whitespace_after_open_brace_before_declaration_tag() {
+        let src = "{ const y = 1}";
+        let frag = parse_ok(src);
+        let [Node::Interpolation(i)] = frag.nodes.as_slice() else {
+            panic!("expected one Interpolation, got {:?}", frag.nodes);
+        };
+        assert_eq!(i.kind, InterpolationKind::DeclConst);
+        assert_eq!(i.expression_range.slice(src), "y = 1");
+    }
+
+    #[test]
+    fn brace_leading_comment_is_expression_not_block_close() {
+        // `{/* note */ x}` starts with `/` but that `/` opens a comment,
+        // not a `{/...}` close tag — upstream only treats `/` as a close
+        // sigil when it isn't `//` or `/*`.
+        for src in ["{/* note */ x}", "{ /* note */ x}"] {
+            let range = Range::new(0, src.len() as u32);
+            let (frag, errors) = parse_template(src, range);
+            assert!(
+                errors.is_empty(),
+                "unexpected errors for {src:?}: {errors:?}"
+            );
+            let [Node::Interpolation(i)] = frag.nodes.as_slice() else {
+                panic!(
+                    "expected one Interpolation for {src:?}, got {:?}",
+                    frag.nodes
+                );
+            };
+            assert_eq!(i.kind, InterpolationKind::Expression);
+        }
     }
 }

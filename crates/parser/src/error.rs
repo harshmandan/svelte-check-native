@@ -3,6 +3,55 @@
 //! Kept as concrete variants with ranges so diagnostics can be reported with
 //! accurate source spans. All errors implement `std::error::Error` via
 //! `thiserror`.
+//!
+//! ## Coverage vs the Svelte compiler's parse errors
+//!
+//! The compiler defines on the order of a hundred parse-time errors
+//! (`compiler/errors.js`); this enum ports only the handful whose
+//! absence would silently corrupt a parse (unterminated constructs,
+//! duplicate sections, mismatched/stray tags). Malformed-input
+//! diagnostic parity is deliberately best-effort: the mandate is parity
+//! on code the compiler accepts, and a file that fails to compile
+//! upstream gets its authoritative errors from the compiler itself.
+//! The unported families, so the gap is explicit rather than
+//! accidental:
+//!
+//! - Token/expression detail errors: `expected_token`,
+//!   `expected_identifier`, `expected_pattern`, `expected_whitespace`,
+//!   `expected_block_type`, `expected_tag`, `expected_attribute_value`,
+//!   `js_parse_error`, `unexpected_reserved_word`,
+//!   `unterminated_string_constant`, `block_unexpected_character`.
+//! - Block-shape validation: `block_invalid_elseif`,
+//!   `block_duplicate_clause`, `block_unclosed` (we report
+//!   `UnterminatedElement` instead), `each_key_without_as`,
+//!   `illegal_await_expression`.
+//! - Placement validation: `block_invalid_placement`,
+//!   `tag_invalid_placement`, `node_invalid_placement`,
+//!   `const_tag_invalid_placement`, `let_directive_invalid_placement`,
+//!   `title_invalid_content`, `textarea_invalid_content` (we report
+//!   `MalformedOpenTag` there), `void_element_invalid_content`,
+//!   `svelte_meta_invalid_placement`, `svelte_self_invalid_placement`,
+//!   `svelte_fragment_invalid_placement`.
+//! - Attribute/directive validation: `attribute_duplicate`,
+//!   `attribute_invalid_name`, `attribute_empty_shorthand`,
+//!   `attribute_invalid_sequence_expression`,
+//!   `attribute_unquoted_sequence`, `directive_invalid_value`,
+//!   `directive_missing_name`, the `bind_*`, `event_handler_*`,
+//!   `animation_*`, `transition_*` and `style_directive_*` families.
+//! - `svelte:*` / slot validation: the `svelte_component_*`,
+//!   `svelte_element_*`, `svelte_options_*`, `svelte_boundary_*`,
+//!   `svelte_meta_*`, `svelte_head`/`svelte_body`, `slot_*` and
+//!   `title_illegal_attribute` families.
+//! - Script/style tag validation: `script_invalid_attribute_value`,
+//!   `script_reserved_attribute`, `script_invalid_context` (we report
+//!   `UnknownScriptContext`).
+//! - Snippet/tag declarations: `snippet_*`, `render_tag_*`,
+//!   `declaration_tag_*`, `const_tag_*` (non-placement),
+//!   `debug_tag_invalid_arguments`, `legacy_await_invalid`,
+//!   `experimental_async`.
+//!
+//! Analyze-phase errors (rune misuse, store/prop rules, CSS) are
+//! `svn-lint`'s concern, not the parser's.
 
 use svn_core::Range;
 

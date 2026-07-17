@@ -181,8 +181,10 @@ impl<'src> TemplateParser<'src> {
     /// byte offset just past the keyword on a match, else `None` (in
     /// which case the `{…}` is a plain expression — `{constant}`,
     /// `{letter}`, etc.). Mirrors the Svelte compiler's
-    /// `/(?:let|const)\b/y` in `phases/1-parse/state/tag.js`: the keyword
-    /// must not run into a longer identifier.
+    /// `regex_supported_declaration` (`/(?:let|const)\b/y`,
+    /// `phases/1-parse/state/tag.js` in compilers that ship declaration
+    /// tags — older checkouts predate the constant): the keyword must
+    /// not run into a longer identifier.
     fn peek_declaration_tag(&self, content_start: u32) -> Option<(InterpolationKind, u32)> {
         let src = self.scanner.source();
         let rest = src.get(content_start as usize..)?;
@@ -328,7 +330,8 @@ impl<'src> TemplateParser<'src> {
             // no `@`). Distinguished from a plain `{constant}` /
             // `{letter}` expression by requiring a word boundary after
             // the keyword. Mirrors the Svelte compiler's
-            // `/(?:let|const)\b/y` (phases/1-parse/state/tag.js). Unlike
+            // `regex_supported_declaration` (`/(?:let|const)\b/y`,
+            // phases/1-parse/state/tag.js). Unlike
             // `{@const}`, a declaration tag is freely placeable, so it
             // carries no parent-placement restriction.
             //

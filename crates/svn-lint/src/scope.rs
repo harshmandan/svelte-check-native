@@ -66,8 +66,17 @@ pub struct ScopeTree {
     pub instance_root: ScopeId,
     /// Upstream `module.scope.references` — identifiers that never
     /// resolved to a declaration anywhere on the chain. Preserved so
-    /// rules like `store_rune_conflict` can inspect them.
+    /// rules like `store_rune_conflict` can inspect them, and so the
+    /// runes-mode resolver can look for surviving rune-named
+    /// references (upstream `2-analyze/index.js:456`).
     pub unresolved_refs: Vec<UnresolvedRef>,
+    /// True when an `await` occurs with no enclosing function in the
+    /// INSTANCE script or a template expression — upstream's
+    /// `has_await || instance.has_await` runes trigger (scope.js
+    /// counts an AwaitExpression whose ancestor path has no
+    /// Arrow/FunctionExpression/FunctionDeclaration; module-script
+    /// awaits are NOT consulted).
+    pub has_await: bool,
     /// `$props()` declarators that would fire
     /// `custom_element_props_identifier` when the file compiles as a
     /// custom element without an explicit `customElement.props`
@@ -392,6 +401,8 @@ struct TreeBuilder {
     /// this slot per parse, `reset()` (which keeps its largest chunk),
     /// and put back. `None` only while a parse is in flight.
     expr_alloc: Option<oxc_allocator::Allocator>,
+    /// See [`ScopeTree::has_await`].
+    has_await: bool,
 }
 
 struct PendingRef {
@@ -457,6 +468,7 @@ impl TreeBuilder {
             nonrunes_export_idents: Vec::new(),
             nonrunes_export_specs: Vec::new(),
             expr_alloc: None,
+            has_await: false,
         }
     }
 
@@ -789,6 +801,9 @@ impl TreeBuilder {
             script_comments: crate::ignore::ScriptComments::empty(),
             script_content: effective_slice,
             ignore_frames: Vec::new(),
+            // Template expressions count toward the runes await
+            // trigger (upstream: fragment create_scopes has_await).
+            counts_await: true,
         };
         for stmt in &parsed.program.body {
             walker.visit_stmt(stmt);
@@ -1193,6 +1208,7 @@ impl TreeBuilder {
             script_comments,
             script_content: script.content,
             ignore_frames: Vec::new(),
+            counts_await: is_instance,
         };
         // Push the template-comment ignores so they apply to every
         // reference recorded during this script walk.
@@ -1318,6 +1334,7 @@ impl TreeBuilder {
             module_root,
             instance_root,
             unresolved_refs: unresolved,
+            has_await: self.has_await,
             custom_element_props_candidates: self.custom_element_props_candidates,
             custom_element_props_ignored: self.custom_element_props_ignored,
             nonrunes_export_idents: self.nonrunes_export_idents,
@@ -1353,8 +1370,11 @@ fn synthesize_store_subs(
         let store_name = &n[1..];
         let backing = resolve_by_name(&tree.scopes, module_root, store_name)
             .or_else(|| resolve_by_name(&tree.scopes, instance_root, store_name));
-        let is_rune_name = is_rune_name(n);
-        if backing.is_none() && !is_rune_name {
+        // No backing declaration → upstream leaves the reference in
+        // `module.scope.references` (no store-sub synthesis). For
+        // rune names that surviving reference is what flips the file
+        // into runes mode.
+        if backing.is_none() {
             continue;
         }
         // Upstream guards:
@@ -1385,6 +1405,18 @@ fn synthesize_store_subs(
             // svelte/compiler 5.53.6 on threlte/theatre, which does NOT
             // fire the warning for this canonical pattern.
             if store_name == "props" && backing_binding.kind == BindingKind::Prop {
+                continue;
+            }
+            // `import { derived } from 'svelte/store'` must not
+            // capture `$derived` as a subscription — upstream skips
+            // synthesis so the rune reference survives (flipping
+            // runes) and `store_rune_conflict` stays silent on
+            // `$derived(…)` calls (both verified against the
+            // compiler).
+            if n == "$derived"
+                && let InitialKind::Import { source, .. } = &backing_binding.initial
+                && source == "svelte/store"
+            {
                 continue;
             }
         }
@@ -1573,6 +1605,11 @@ struct ScriptWalker<'b, 'src> {
     /// codes at any time = flatten all frames. Snapshot is cloned
     /// onto each `PendingRef` we record.
     ignore_frames: Vec<Vec<SmolStr>>,
+    /// Whether a function-free `await` in this walk contributes to
+    /// [`ScopeTree::has_await`] — true for the instance-script walk
+    /// and template expression walks, false for the module script
+    /// (upstream consults only `has_await || instance.has_await`).
+    counts_await: bool,
 }
 
 impl<'b, 'src> ScriptWalker<'b, 'src> {
@@ -2483,7 +2520,16 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     self.visit_expr(e);
                 }
             }
-            Expression::AwaitExpression(a) => self.visit_expr(&a.argument),
+            Expression::AwaitExpression(a) => {
+                // Upstream flips runes mode on any await whose
+                // ancestor path contains no function (scope.js
+                // AwaitExpression) — `in_function_closure` tracks
+                // exactly the three excluded node types.
+                if self.counts_await && !self.in_function_closure {
+                    self.tree.has_await = true;
+                }
+                self.visit_expr(&a.argument)
+            }
             Expression::YieldExpression(y) => {
                 if let Some(arg) = &y.argument {
                     self.visit_expr(arg);

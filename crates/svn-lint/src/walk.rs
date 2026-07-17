@@ -376,20 +376,32 @@ pub fn walk_parsed(
     runes: Option<bool>,
     ctx: &mut LintContext<'_>,
 ) {
-    // Resolve runes mode from the document we just parsed: an explicit
-    // caller hint wins, else the `.svelte.{js,ts}` filename shortcut,
-    // else a rune-call scan over the parsed script bodies. Doing it
-    // here (rather than a pre-walk `infer_runes_mode`) reuses this
-    // parse instead of running a second `parse_sections` per file.
-    ctx.runes = runes.unwrap_or_else(|| runes_from_filename(path) || scan_doc_for_rune_call(doc));
-
-    // `<svelte:options runes>` / `<svelte:options runes={true}>` /
-    // `<svelte:options runes={false}>` explicit override beats the
-    // substring heuristic. Upstream: phase 2-analyze resolves this
-    // from `root.options`.
-    if let Some(explicit) = svn_parser::runes_option(fragment, source) {
-        ctx.runes = explicit;
-    }
+    // Resolve runes mode. A forced mode wins outright: the
+    // `<svelte:options runes={…}>` attribute, then an explicit
+    // caller hint (the CLI's config `compilerOptions.runes`), then
+    // the `.svelte.{js,ts}` filename shortcut (rune modules are
+    // always runes). Otherwise the mode is DETECTED the way the
+    // compiler does (`2-analyze/index.js:456`):
+    //
+    //   runes = has_await || instance.has_await
+    //           || module.scope.references.keys().some(is_rune)
+    //
+    // i.e. a function-free `await` in the instance script or a
+    // template expression, or a rune-named reference that survived
+    // store-sub synthesis (a backing `state` binding turns `$state`
+    // into a store subscription — such a file stays legacy even
+    // though the text contains `$state(`). Both directions verified
+    // against the compiler.
+    //
+    // The textual rune-call scan only seeds the FIRST scope-tree
+    // build (the ignore-comment strictness and the compat-gated
+    // binding fields depend on the mode); when the authoritative
+    // scope-derived answer disagrees, the tree is rebuilt once under
+    // the correct mode.
+    let forced: Option<bool> = svn_parser::runes_option(fragment, source)
+        .or(runes)
+        .or_else(|| runes_from_filename(path).then_some(true));
+    ctx.runes = forced.unwrap_or_else(|| scan_doc_for_rune_call(doc));
 
     // Emission order below mirrors the compiler's pipeline (verified
     // on a mixed fixture against svelte 5.56.5): parse-time warnings
@@ -397,15 +409,6 @@ pub fn walk_parsed(
     // <svelte:options> attribute loop, then the module → instance →
     // template walks, then the post-walk declaration loops. The CLI
     // does not sort diagnostics, so this order is user-visible.
-
-    // <script>-attribute rules (script_unknown_attribute is
-    // parse-time upstream; script_context_deprecated fires early in
-    // analyze — both precede the walks).
-    crate::rules::script_rules::visit_document(doc, ctx);
-
-    // element_implicitly_closed — parse-time upstream, so it leads
-    // everything the analyze phase produces.
-    crate::rules::implicit_close::scan(source, ctx);
 
     // Parse each script body exactly once; the scope builder and the
     // script-AST rules below both walk the same `Program`. The
@@ -428,7 +431,7 @@ pub fn walk_parsed(
     // template walk here is what surfaces "identifier is referenced
     // in the template, not just in a script helper" to rules like
     // `non_reactive_update`.
-    ctx.scope_tree = Some(crate::scope::build_with_template_and_runes(
+    let mut tree = crate::scope::build_with_template_and_runes(
         doc,
         Some(fragment),
         source,
@@ -436,7 +439,45 @@ pub fn walk_parsed(
         ctx.compat,
         module_program,
         instance_program,
-    ));
+    );
+
+    // Authoritative runes resolution (see the comment above). The
+    // reference set and await flag are mode-independent, so the
+    // preliminary build answers correctly; only the mode-dependent
+    // tree state (ignore parsing, compat gates, non-runes export
+    // promotion) needs the rebuild when the answer flips.
+    if forced.is_none() {
+        let authoritative = tree.has_await
+            || tree
+                .unresolved_refs
+                .iter()
+                .any(|r| crate::scope::is_rune_name(&r.name));
+        if authoritative != ctx.runes {
+            ctx.runes = authoritative;
+            tree = crate::scope::build_with_template_and_runes(
+                doc,
+                Some(fragment),
+                source,
+                ctx.runes,
+                ctx.compat,
+                module_program,
+                instance_program,
+            );
+        }
+    }
+    ctx.scope_tree = Some(tree);
+
+    // <script>-attribute rules (script_unknown_attribute is
+    // parse-time upstream; script_context_deprecated fires early in
+    // analyze — both precede the walks). Runs after the runes
+    // resolution above because `script_context_deprecated` is gated
+    // on the FINAL mode; the tree build emits nothing, so these
+    // still lead the output.
+    crate::rules::script_rules::visit_document(doc, ctx);
+
+    // element_implicitly_closed — parse-time upstream, so it leads
+    // everything the analyze phase produces.
+    crate::rules::implicit_close::scan(source, ctx);
 
     // store_rune_conflict — upstream fires it from the store-sub
     // synthesis loop, before even the options warnings.

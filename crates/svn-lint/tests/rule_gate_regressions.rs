@@ -1518,3 +1518,263 @@ fn non_reactive_update_emits_after_template_warnings() {
         "post-walk rule must follow template warnings"
     );
 }
+
+// ----------------------------------------------------------------
+// Runes-mode resolution — mirrors the compiler's rule exactly:
+//   runes = option ?? (template has_await || instance has_await
+//                      || post-synthesis rune-named references)
+// (2-analyze/index.js:456). Each shape verified against svelte
+// 5.56.5; `event_directive_deprecated` (runes-only, on:click on a
+// DOM element) discriminates the resolved mode.
+// ----------------------------------------------------------------
+
+fn lint_auto(source: &str) -> Vec<Warning> {
+    svn_lint::lint_file(source, Path::new("t.svelte"), None, CompatFeatures::MODERN)
+}
+
+/// A backing `state` binding turns `$state(…)` into a store
+/// subscription — the file stays NON-runes (verified: compiler
+/// reports runes:false + store_rune_conflict only) even though the
+/// text contains a rune-shaped call.
+#[test]
+fn store_named_state_call_stays_non_runes() {
+    let src = "\
+<script>
+\tlet state = 5;
+\tvoid state;
+\tconst doubled = $state(5);
+\tvoid doubled;
+</script>
+<button on:click={() => {}}>x</button>
+";
+    let warnings = lint_auto(src);
+    let got = codes(&warnings);
+    assert!(
+        got.contains(&"store_rune_conflict"),
+        "conflict must fire, got: {got:?}"
+    );
+    assert!(
+        !got.contains(&"event_directive_deprecated"),
+        "file must resolve as NON-runes, got: {got:?}"
+    );
+}
+
+/// A bare rune REFERENCE without backing stays in the unresolved
+/// reference set — the file resolves as runes (upstream then errors
+/// rune_missing_parentheses, proving the flip).
+#[test]
+fn bare_rune_reference_flips_runes() {
+    let src = "\
+<script>
+\tlet f = $state;
+\tvoid f;
+</script>
+<button on:click={() => {}}>x</button>
+";
+    let warnings = lint_auto(src);
+    assert!(
+        codes(&warnings).contains(&"event_directive_deprecated"),
+        "bare $state ref must flip runes, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// …but a bare `$state` ref WITH a backing `state` binding is a
+/// store subscription — non-runes (verified: runes:false).
+#[test]
+fn bare_rune_reference_with_backing_store_stays_non_runes() {
+    let src = "\
+<script>
+\timport { state } from './stores.js';
+</script>
+<button on:click={() => {}}>{$state}</button>
+";
+    let warnings = lint_auto(src);
+    assert!(
+        !codes(&warnings).contains(&"event_directive_deprecated"),
+        "backing store must keep the file non-runes, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// `import { derived } from 'svelte/store'` does NOT capture
+/// `$derived` as a store subscription (upstream carve-out) — the
+/// rune reference survives, flips runes, and store_rune_conflict
+/// does NOT fire on `$derived(…)` calls (verified: runes:true, no
+/// conflict warning).
+#[test]
+fn derived_store_import_carve_out() {
+    let src = "\
+<script>
+\timport { derived } from 'svelte/store';
+\tvoid derived;
+\tlet a = $state(1);
+\tconst d = $derived(a + 1);
+\tvoid d;
+</script>
+<button on:click={() => {}}>x</button>
+";
+    let warnings = lint_auto(src);
+    let got = codes(&warnings);
+    assert!(
+        !got.contains(&"store_rune_conflict"),
+        "svelte/store derived import must not conflict with $derived, got: {got:?}"
+    );
+    assert!(
+        got.contains(&"event_directive_deprecated"),
+        "file must resolve as runes, got: {got:?}"
+    );
+}
+
+/// Instance-script top-level await forces runes (verified with the
+/// async option: runes:true).
+#[test]
+fn instance_top_level_await_flips_runes() {
+    let src = "\
+<script>
+\tconst x = await Promise.resolve(1);
+\tvoid x;
+</script>
+<button on:click={() => {}}>x</button>
+";
+    let warnings = lint_auto(src);
+    assert!(
+        codes(&warnings).contains(&"event_directive_deprecated"),
+        "instance top-level await must flip runes, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// An await inside a top-level for body still counts (no function
+/// boundary on the path — verified runes:true).
+#[test]
+fn await_in_top_level_for_body_flips_runes() {
+    let src = "\
+<script>
+\tfor (const p of [Promise.resolve(1)]) { const v = await p; void v; }
+</script>
+<button on:click={() => {}}>x</button>
+";
+    let warnings = lint_auto(src);
+    assert!(
+        codes(&warnings).contains(&"event_directive_deprecated"),
+        "await under a top-level for must flip runes, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Awaits inside functions do NOT count (verified runes:false).
+#[test]
+fn await_inside_function_does_not_flip_runes() {
+    let src = "\
+<script>
+\tasync function f() { return await Promise.resolve(1); }
+\tvoid f;
+</script>
+<button on:click={() => {}}>x</button>
+";
+    let warnings = lint_auto(src);
+    assert!(
+        !codes(&warnings).contains(&"event_directive_deprecated"),
+        "function-enclosed await must not flip runes, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// MODULE-script top-level await is NOT consulted — upstream reads
+/// only `has_await || instance.has_await` (verified runes:false).
+#[test]
+fn module_top_level_await_does_not_flip_runes() {
+    let src = "\
+<script module>
+\tconst x = await Promise.resolve(1);
+\tvoid x;
+</script>
+<script>
+\tlet y = 1;
+\tvoid y;
+</script>
+<button on:click={() => {}}>x</button>
+";
+    let warnings = lint_auto(src);
+    assert!(
+        !codes(&warnings).contains(&"event_directive_deprecated"),
+        "module-script await must not flip runes, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A template `{await p}` expression tag counts (verified runes:true).
+#[test]
+fn template_await_tag_flips_runes() {
+    let src = "\
+<script>
+\tconst p = Promise.resolve(1);
+</script>
+<button on:click={() => {}}>{await p}</button>
+";
+    let warnings = lint_auto(src);
+    assert!(
+        codes(&warnings).contains(&"event_directive_deprecated"),
+        "template await tag must flip runes, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// `$state` as a non-computed object key or member property is not
+/// a reference — no flip (verified runes:false).
+#[test]
+fn rune_name_in_key_or_member_position_does_not_flip_runes() {
+    let src = "\
+<script>
+\tconst obj = { $state: 1 };
+\tconst v = obj.$state;
+\tvoid v;
+</script>
+<button on:click={() => {}}>x</button>
+";
+    let warnings = lint_auto(src);
+    assert!(
+        !codes(&warnings).contains(&"event_directive_deprecated"),
+        "key/member $state must not flip runes, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// An explicit `<svelte:options runes={false} />` beats detection —
+/// even with a top-level await present.
+#[test]
+fn explicit_runes_false_option_beats_await_detection() {
+    let src = "\
+<svelte:options runes={false} />
+<script>
+\tconst x = await Promise.resolve(1);
+\tvoid x;
+</script>
+<button on:click={() => {}}>x</button>
+";
+    let warnings = lint_auto(src);
+    assert!(
+        !codes(&warnings).contains(&"event_directive_deprecated"),
+        "explicit option must beat detection, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// An await inside a template event-handler arrow is
+/// function-enclosed — no flip.
+#[test]
+fn await_in_template_handler_arrow_does_not_flip_runes() {
+    let src = "\
+<script>
+\tconst f = () => Promise.resolve(1);
+</script>
+<button on:click={async () => { await f(); }}>x</button>
+";
+    let warnings = lint_auto(src);
+    assert!(
+        !codes(&warnings).contains(&"event_directive_deprecated"),
+        "handler-arrow await must not flip runes, got: {:?}",
+        codes(&warnings)
+    );
+}

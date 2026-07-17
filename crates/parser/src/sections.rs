@@ -35,14 +35,20 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
 
     let mut template_runs: Vec<Range> = Vec::new();
     let mut template_cursor: u32 = 0;
-    // Tag-nesting depth. `<script>` / `<style>` are grabbed as Svelte
-    // sections only when depth == 0; nested occurrences (analytics
-    // snippet under `<svelte:head>{#if}…`) are left for the template
-    // parser. Tracked by a cheap `<NAME>` / `</NAME>` counter that
-    // respects quoted attribute values and self-closing tags. Not a
-    // real DOM — just enough to distinguish "document level" from
-    // "inside something."
+    // Nesting depth. `<script>` / `<style>` are grabbed as Svelte
+    // sections only at document level; nested occurrences (an
+    // analytics snippet under `<svelte:head>`, a CDN loader gated
+    // behind `{#if}`) are left for the template parser. The Svelte
+    // compiler decides this from its parser stack (`element.js`:
+    // scripts/styles are sections iff `current.type === 'Root'`),
+    // where elements AND logic blocks both push a frame — so we track
+    // both. `tag_depth` is a cheap `<NAME>` / `</NAME>` counter that
+    // respects quoted attribute values and self-closing tags;
+    // `block_depth` counts `{#…}` / `{/…}` pairs. Not a real DOM —
+    // just enough to distinguish "document level" from "inside
+    // something."
     let mut tag_depth: u32 = 0;
+    let mut block_depth: u32 = 0;
 
     while !scanner.eof() {
         let here = scanner.pos();
@@ -84,6 +90,7 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
         }
 
         if tag_depth == 0
+            && block_depth == 0
             && scanner.peek_byte() == Some(b'<')
             && (scanner.starts_with_ignore_case("<script")
                 && !is_ident_char(scanner.peek_byte_at(7)))
@@ -119,18 +126,13 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
                         instance_script = Some(section);
                         false
                     };
-                    // A "duplicate" script is almost always a `<script>`
-                    // element that lives INSIDE the template (typically
-                    // nested under `<svelte:head>` for analytics / Google
-                    // Identity Services tags). Its opening-tag attributes
-                    // often reference script-local bindings — e.g.
-                    // `onload={useManualGoogleAuth('signin')}` — which
-                    // must be scanned by the template-ref pass so the
-                    // import isn't flagged as TS6133 "declared but never
-                    // read". Add the opening tag's span to the template
-                    // runs; the template parser then picks it up as
-                    // normal element content and its attribute expressions
-                    // flow through the usual walker.
+                    // A duplicate here is a genuine second document-level
+                    // script (nested ones are routed to the template by
+                    // the depth guards above). Recovery: surface the
+                    // extra tag's spans as template runs so its attribute
+                    // expressions still flow through the template-ref
+                    // pass and any bindings they reference aren't flagged
+                    // as TS6133 "declared but never read".
                     if is_duplicate_script {
                         template_runs.push(Range::new(open_range.start, open_range.end));
                         if close_range.start < close_range.end {
@@ -149,6 +151,7 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
         }
 
         if tag_depth == 0
+            && block_depth == 0
             && scanner.peek_byte() == Some(b'<')
             && (scanner.starts_with_ignore_case("<style")
                 && !is_ident_char(scanner.peek_byte_at(6)))
@@ -176,13 +179,63 @@ pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
             continue;
         }
 
+        // Nested (non-section) `<script>` / `<style>` — skip the whole
+        // element verbatim, body included, without touching either
+        // depth counter. The body is raw text per HTML rules; scanning
+        // it as template text would let stray `<` / `{` bytes inside
+        // the JS/CSS desync the counters. The span stays inside the
+        // current template run, so the template parser (which raw-texts
+        // nested script/style bodies and type-checks their attribute
+        // expressions) picks it up as a normal element.
+        if scanner.peek_byte() == Some(b'<')
+            && ((scanner.starts_with_ignore_case("<script")
+                && !is_ident_char(scanner.peek_byte_at(7)))
+                || (scanner.starts_with_ignore_case("<style")
+                    && !is_ident_char(scanner.peek_byte_at(6))))
+        {
+            // Only reachable at depth > 0: the section guards above
+            // already claimed the document-level case and `continue`d.
+            let close_literal = if scanner.starts_with_ignore_case("<script") {
+                "</script"
+            } else {
+                "</style"
+            };
+            let (open_end, self_closing) =
+                scan_past_open_tag(scanner.source(), scanner.pos() as usize);
+            scanner.set_pos(open_end as u32);
+            if !self_closing {
+                match find_close_tag(&scanner, close_literal) {
+                    Some(close_pos) => {
+                        scanner.set_pos(close_pos);
+                        scanner.advance(close_literal.len() as u32);
+                        scanner.skip_ascii_whitespace();
+                        if scanner.peek_byte() == Some(b'>') {
+                            scanner.advance_byte();
+                        }
+                    }
+                    // Unterminated nested script/style — treat the rest
+                    // of the source as its body (the compiler does the
+                    // same: read_body scans to EOF) and let the template
+                    // parser surface the error.
+                    None => scanner.set_pos(scanner.source().len() as u32),
+                }
+            }
+            continue;
+        }
         // Mustache — skip the whole balanced `{…}` region. `<` and
         // `>` inside a mustache expression (`{a < b}`) are operator
         // tokens, not tag markers, and must not perturb tag_depth.
         // Skip quickly by counting braces with string-literal
         // awareness (`'…'`, `"…"`, template `` `…` `` so a `{` inside
-        // a string doesn't increment depth).
+        // a string doesn't increment depth). Block open/close tags
+        // adjust block_depth first so the section guards know whether
+        // a later `<script>`/`<style>` sits at document level.
         if scanner.peek_byte() == Some(b'{') {
+            match classify_mustache(scanner.source().as_bytes(), scanner.pos() as usize) {
+                MustacheKind::BlockOpen => block_depth += 1,
+                MustacheKind::BlockClose => block_depth = block_depth.saturating_sub(1),
+                MustacheKind::Other => {}
+            }
             scanner.set_pos(scan_past_mustache(scanner.source(), scanner.pos()));
             continue;
         }
@@ -601,6 +654,32 @@ fn parse_lang_attr(attrs: &[ScriptAttr], errors: &mut Vec<ParseError>) -> Script
     }
 }
 
+/// What a `{` at document level opens. Mirrors the compiler's tag
+/// lexer (`tag.js`): whitespace is allowed after `{`, then `#` opens
+/// a block, `/` closes one — unless it starts a `//` or `/*` comment,
+/// which makes the tag an expression. `{:…}` / `{@…}` continuations
+/// and plain expressions don't change block nesting.
+#[derive(PartialEq)]
+enum MustacheKind {
+    BlockOpen,
+    BlockClose,
+    Other,
+}
+
+fn classify_mustache(bytes: &[u8], open_brace: usize) -> MustacheKind {
+    let mut i = open_brace + 1;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    match bytes.get(i) {
+        Some(b'#') => MustacheKind::BlockOpen,
+        Some(b'/') if !matches!(bytes.get(i + 1), Some(b'/') | Some(b'*')) => {
+            MustacheKind::BlockClose
+        }
+        _ => MustacheKind::Other,
+    }
+}
+
 /// Skip past a balanced `{…}` mustache block whose opening `{` is at
 /// `from`, returning the index just past the matching `}` (or the
 /// source length on EOF / unterminated input).
@@ -625,7 +704,9 @@ fn scan_past_mustache(src: &str, from: u32) -> u32 {
     // regex-literal opener and over-scan to EOF. Svelte reserves `{/`
     // for close tags (a mustache can't legitimately begin with a regex
     // literal), so scan a close tag with a plain brace search instead.
-    if bytes.get(from as usize + 1) == Some(&b'/') {
+    // Uses the same classifier as the section walker's block-depth
+    // tracking so the two can't disagree on what a close tag is.
+    if classify_mustache(bytes, from as usize) == MustacheKind::BlockClose {
         let mut i = from as usize + 1;
         while i < bytes.len() && bytes[i] != b'}' {
             i += 1;
@@ -1094,6 +1175,97 @@ let x: number = 1;
         let doc = parse_ok(src);
         let s = doc.instance_script.expect("instance script");
         assert!(s.content.contains("let x = 1"));
+    }
+
+    #[test]
+    fn script_inside_if_block_stays_in_template() {
+        // A `<script>` element gated behind a bare `{#if}` — no element
+        // wrapper, so only block nesting hides it from document level.
+        // The compiler parses this as a regular element (its stack top
+        // is the IfBlock, not Root); claiming it as a section fired a
+        // false "duplicate <script> block" error.
+        let src = "<script lang=\"ts\">let load = true;</script>\n\
+                   {#if load}<script defer src=\"https://x/a.js\"></script>{/if}";
+        let doc = parse_ok(src);
+        let s = doc.instance_script.expect("instance script");
+        assert!(s.content.contains("let load"));
+    }
+
+    #[test]
+    fn script_inside_if_block_with_expression_attrs() {
+        // Expression-valued attributes on a nested script previously
+        // reached the mustache-unaware section attribute parser and
+        // fired a false "malformed opening tag" error.
+        let src = "<script lang=\"ts\">let load = true;</script>\n\
+                   {#if load}<script defer src={`https://x/lib@${'1.0.0'}/a.js`} \
+                   onload={done}></script>{/if}";
+        let doc = parse_ok(src);
+        assert!(doc.instance_script.is_some());
+    }
+
+    #[test]
+    fn script_inside_each_await_and_snippet_blocks() {
+        // Every block kind nests; `{:then}` / `{:else}` continuations
+        // are depth-neutral.
+        for src in [
+            "{#each items as item}<script src=\"/a.js\"></script>{/each}",
+            "{#await p}{:then v}<script src=\"/a.js\"></script>{/await}",
+            "{#snippet row()}<script src=\"/a.js\"></script>{/snippet}",
+        ] {
+            let doc = parse_ok(src);
+            assert!(
+                doc.instance_script.is_none(),
+                "script inside a block must stay in the template: {src}"
+            );
+        }
+    }
+
+    #[test]
+    fn top_level_script_after_closed_block_is_claimed() {
+        // Scripts may appear anywhere at document level, including
+        // after template content; a balanced block returns depth to 0.
+        let src = "{#if visible}<p>hi</p>{/if}\n<script>let x = 1;</script>";
+        let doc = parse_ok(src);
+        let s = doc.instance_script.expect("instance script after block");
+        assert!(s.content.contains("let x = 1"));
+    }
+
+    #[test]
+    fn stray_block_close_saturates_and_later_script_is_claimed() {
+        // An unbalanced `{/if}` must not underflow the counter and
+        // permanently hide later document-level sections.
+        let src = "{/if}\n<script>let x = 1;</script>";
+        let (doc, _errors) = parse_sections(src);
+        assert!(doc.instance_script.is_some());
+    }
+
+    #[test]
+    fn nested_script_body_does_not_desync_depth_counters() {
+        // The nested body is raw text; `<` and `{` inside the JS must
+        // not perturb either depth counter, or the following top-level
+        // <style> would be absorbed into the template.
+        let src = "{#if x}<script>if (a<b) { run('</div>'); }</script>{/if}\n\
+                   <style>p { color: red }</style>";
+        let doc = parse_ok(src);
+        assert!(doc.style.is_some(), "style after nested script body");
+    }
+
+    #[test]
+    fn self_closing_nested_script_inside_block() {
+        let src = "{#if x}<script src=\"/a.js\" />{/if}<script>let y = 2;</script>";
+        let doc = parse_ok(src);
+        let s = doc.instance_script.expect("instance script");
+        assert!(s.content.contains("let y = 2"));
+    }
+
+    #[test]
+    fn whitespace_padded_close_tag_keeps_block_depth_in_sync() {
+        // The compiler allows whitespace after `{` in block tags;
+        // `{ /if}` must decrement like `{/if}` (classifier shared with
+        // scan_past_mustache so the two can't disagree).
+        let src = "{#if x}<p>hi</p>{ /if}\n<script>let x = 1;</script>";
+        let doc = parse_ok(src);
+        assert!(doc.instance_script.is_some());
     }
 
     #[test]

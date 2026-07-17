@@ -1,0 +1,5 @@
+{
+    "clean": true,
+    "warnings": [],
+    "_note": "A <script> element nested inside a {#if} block is a template element (conditionally injected external script), not a component script section. The sections walker tracked element nesting but not Svelte block nesting, so the walker claimed the nested <script> at 'top level': with a real instance script present it fired a false 'duplicate <script> block' error, and an expression-valued attribute (src={`...`}) sent the mustache-unaware section attribute parser into a false 'malformed opening tag' error. Upstream decides script-section-ness from the AST parent (compiler element.js: current.type === 'Root'; svelte2tsx Scripts.ts: parent !== root), where blocks nest exactly like elements. The nested script must flow to the template parser, which already raw-texts its body and type-checks its attribute expressions, so onload={handleLoad} keeps handleLoad referenced."
+}

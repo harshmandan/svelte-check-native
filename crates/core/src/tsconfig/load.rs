@@ -21,10 +21,12 @@
 //!
 //! ### `${configDir}` substitution
 //!
-//! Done per-file, before merging. The placeholder expands to the absolute path
-//! of the directory containing the file that literally wrote it. So if
-//! `base.json` has `"baseUrl": "${configDir}/src"` and the user's
-//! `tsconfig.json` extends it, `${configDir}` resolves to *base.json's* dir.
+//! The placeholder expands to the absolute path of the directory containing
+//! the ROOT config being loaded (the entry tsconfig), never the extended
+//! file's own dir — TypeScript 5.5 semantics. So if `base.json` has
+//! `"baseUrl": "${configDir}/src"` and the user's `tsconfig.json` extends it,
+//! `${configDir}` resolves to the *user tsconfig's* dir. Implemented by
+//! threading the entry dir through the extends chain (see `entry_dir` below).
 //!
 //! ### Merge rules (match TypeScript's behavior)
 //!

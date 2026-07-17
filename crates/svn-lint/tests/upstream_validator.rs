@@ -110,6 +110,9 @@ const PORTED_CODES: &[&str] = &[
     "custom_element_props_identifier",
     "options_missing_custom_element",
     "element_implicitly_closed",
+    "options_deprecated_accessors",
+    "options_deprecated_immutable",
+    "svelte_element_invalid_this",
 ];
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]

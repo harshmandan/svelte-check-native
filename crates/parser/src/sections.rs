@@ -764,33 +764,15 @@ fn scan_past_open_tag(src: &str, from: usize) -> (usize, bool) {
     (bytes.len(), is_void)
 }
 
-/// HTML5 void elements (https://html.spec.whatwg.org/#void-elements).
-/// These never have a closing tag and so must not push our top-level
-/// section walker into an apparent-nesting state. Without this check
-/// a `<style>` block following a void element gets absorbed into the
-/// preceding template run instead of recognised as a section.
-///
-/// Svelte requires lowercase HTML element names so we match
-/// case-sensitively; tag-name byte slices come straight from source.
+/// HTML5 void elements never have a closing tag and so must not push
+/// the top-level section walker into an apparent-nesting state
+/// (otherwise a `<style>` block following a void element gets
+/// absorbed into the preceding template run instead of recognised as
+/// a section). Delegates to the crate's single void-element list —
+/// this used to be a second hand-copied list that had drifted
+/// (missing `command`).
 fn is_void_html_tag(name: &[u8]) -> bool {
-    matches!(
-        name,
-        b"area"
-            | b"base"
-            | b"br"
-            | b"col"
-            | b"embed"
-            | b"hr"
-            | b"img"
-            | b"input"
-            | b"keygen"
-            | b"link"
-            | b"meta"
-            | b"param"
-            | b"source"
-            | b"track"
-            | b"wbr"
-    )
+    std::str::from_utf8(name).is_ok_and(crate::ast::is_void_element)
 }
 
 #[cfg(test)]

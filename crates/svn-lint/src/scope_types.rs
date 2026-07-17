@@ -238,15 +238,22 @@ pub struct Scope {
     /// reference against the element's lexical scope). `None` for script
     /// scopes (module/instance root + JS function/block scopes).
     pub range: Option<Range>,
+    /// True for block-like scopes (plain blocks, loop heads, switch,
+    /// catch clauses) that don't bump `function_depth`. `var`
+    /// declarations hoist through porous scopes to the nearest
+    /// non-porous one — upstream `scope.js` `Scope#declare` forwards
+    /// `var` to the parent while the scope is porous.
+    pub porous: bool,
 }
 
 impl Scope {
-    pub(crate) fn new(parent: Option<ScopeId>, function_depth: u32) -> Self {
+    pub(crate) fn new(parent: Option<ScopeId>, function_depth: u32, porous: bool) -> Self {
         Self {
             parent,
             function_depth,
             declarations: HashMap::new(),
             range: None,
+            porous,
         }
     }
 }

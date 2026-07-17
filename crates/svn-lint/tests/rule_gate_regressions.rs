@@ -661,11 +661,460 @@ fn global_event_ref_suppressed_when_binding_encloses_element() {
 /// A top-level (instance/template-root) binding still suppresses.
 #[test]
 fn global_event_ref_suppressed_by_top_level_binding() {
-    let src = "<script lang=\"ts\">let onclick = () => {};</script>\n<button {onclick}>x</button>\n";
+    let src =
+        "<script lang=\"ts\">let onclick = () => {};</script>\n<button {onclick}>x</button>\n";
     let warnings = lint(src, CompatFeatures::MODERN);
     assert!(
         !codes(&warnings).contains(&"attribute_global_event_reference"),
         "top-level onclick must suppress, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+// ----------------------------------------------------------------
+// Scope-walker: spread call/new arguments, for-of/for-in left,
+// catch params, class constructs, assignment-target destructuring,
+// var hoisting, named function expressions.
+//
+// Every expectation below was verified against the real Svelte
+// compiler (5.56.5).
+// ----------------------------------------------------------------
+
+fn lint_nonrunes(source: &str) -> Vec<Warning> {
+    svn_lint::lint_file(
+        source,
+        Path::new("t.svelte"),
+        Some(false),
+        CompatFeatures::MODERN,
+    )
+}
+
+/// `f(...a)` — the spread argument's identifier is a reference, so
+/// the prop is used (upstream: no export_let_unused).
+#[test]
+fn call_spread_argument_counts_as_usage() {
+    let src = "\
+<script>
+  export let a;
+  function f(...xs) { void xs; }
+  f(...a);
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        !codes(&warnings).contains(&"export_let_unused"),
+        "prop used via call spread arg must not fire, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// `new F(...a)` — same for new-expression spread arguments.
+#[test]
+fn new_spread_argument_counts_as_usage() {
+    let src = "\
+<script>
+  export let a;
+  class F { constructor(...xs) { this.xs = xs; } }
+  const f = new F(...a);
+  void f;
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        !codes(&warnings).contains(&"export_let_unused"),
+        "prop used via new spread arg must not fire, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A `$state` read inside a spread argument is a local reference —
+/// upstream fires state_referenced_locally on `f(...[count])`.
+#[test]
+fn call_spread_argument_records_state_read() {
+    let src = "\
+<script>
+  let count = $state(0);
+  function f(...xs) { void xs; }
+  f(...[count]);
+</script>
+<button onclick={() => count++}>{count}</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"state_referenced_locally"),
+        "state read inside call spread arg must fire, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// `for (const count of list)` declares `count` in a fresh block
+/// scope — body reads resolve to the loop variable, not the outer
+/// $state binding (upstream: no state_referenced_locally).
+#[test]
+fn for_of_declaration_shadows_outer_state() {
+    let src = "\
+<script>
+  let count = $state(0);
+  const list = [1, 2];
+  for (const count of list) { console.log(count); }
+</script>
+<button onclick={() => count++}>{count}</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"state_referenced_locally"),
+        "for-of loop variable must shadow the outer state, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Control: a for-of body reading the OUTER state still fires.
+#[test]
+fn for_of_body_read_of_outer_state_fires() {
+    let src = "\
+<script>
+  let count = $state(0);
+  const list = [1, 2];
+  for (const item of list) { console.log(item, count); }
+</script>
+<button onclick={() => count++}>{count}</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"state_referenced_locally"),
+        "outer-state read in for-of body must fire, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// `for (x of xs)` with an identifier left is NOT a reassignment
+/// upstream (updates come only from AssignmentExpression /
+/// UpdateExpression) — verified: no non_reactive_update.
+#[test]
+fn for_of_identifier_left_is_not_a_reassignment() {
+    let src = "\
+<script>
+  let x = 'a';
+  const xs = ['b', 'c'];
+  function go() { for (x of xs) { console.log(x); } }
+</script>
+<p>{x}</p><button onclick={go}>go</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"non_reactive_update"),
+        "for-of identifier left must not count as reassignment, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A catch parameter shadows the outer binding inside the handler.
+#[test]
+fn catch_param_shadows_outer_state() {
+    let src = "\
+<script>
+  let count = $state(0);
+  try { console.log('x'); } catch (count) { console.log(count); }
+</script>
+<button onclick={() => count++}>{count}</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"state_referenced_locally"),
+        "catch param must shadow the outer state, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Control: a catch body reading the OUTER state still fires.
+#[test]
+fn catch_body_read_of_outer_state_fires() {
+    let src = "\
+<script>
+  let count = $state(0);
+  try { console.log('x'); } catch (e) { console.log(e, count); }
+</script>
+<button onclick={() => count++}>{count}</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"state_referenced_locally"),
+        "outer-state read in catch body must fire, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// `class Foo extends Base {}` — the super-class is a reference.
+#[test]
+fn class_super_class_counts_as_usage() {
+    let src = "\
+<script>
+  export let Base;
+  class Foo extends Base {}
+  void Foo;
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        !codes(&warnings).contains(&"export_let_unused"),
+        "super-class reference must count as usage, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A class-expression property initializer reading `$state` fires
+/// state_referenced_locally, same as a class declaration.
+#[test]
+fn class_expression_property_init_records_state_read() {
+    let src = "\
+<script>
+  let count = $state(0);
+  const C = class { x = count; };
+  void C;
+</script>
+<button onclick={() => count++}>{count}</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"state_referenced_locally"),
+        "class-expression property init must record the read, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A static block does NOT bump function depth upstream (scope.js has
+/// no StaticBlock visitor) — a `$state` read inside fires.
+#[test]
+fn class_static_block_records_state_read() {
+    let src = "\
+<script>
+  let count = $state(0);
+  class A { static { console.log(count); } }
+  void A;
+</script>
+<button onclick={() => count++}>{count}</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"state_referenced_locally"),
+        "static-block read must fire at the declaration depth, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A computed class-member key is a reference.
+#[test]
+fn class_computed_key_counts_as_usage() {
+    let src = "\
+<script>
+  export let k;
+  class A { [k]() {} }
+  void A;
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        !codes(&warnings).contains(&"export_let_unused"),
+        "computed key must count as usage, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// `import(path)` — the dynamic-import argument is a reference.
+#[test]
+fn dynamic_import_argument_counts_as_usage() {
+    let src = "\
+<script>
+  export let path;
+  function load() { return import(path); }
+  void load;
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        !codes(&warnings).contains(&"export_let_unused"),
+        "dynamic import argument must count as usage, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// `#x in obj` — the right side of a private-in test is a reference.
+#[test]
+fn private_in_expression_counts_as_usage() {
+    let src = "\
+<script>
+  export let obj;
+  class A { #x = 1; m() { return #x in obj; } }
+  void A;
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        !codes(&warnings).contains(&"export_let_unused"),
+        "private-in right side must count as usage, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Upstream scope.js has NO ClassExpression id handling — the name
+/// of a named class expression resolves OUTWARD (verified: the body
+/// reference counts as prop usage, no export_let_unused).
+#[test]
+fn named_class_expression_name_resolves_outward() {
+    let src = "\
+<script>
+  export let Inner;
+  const C = class Inner { m() { return Inner; } };
+  void C;
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        !codes(&warnings).contains(&"export_let_unused"),
+        "named class expression must NOT self-declare its name, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// A named function expression DOES declare its own name inside its
+/// scope (scope.js FunctionExpression) — the body's `g()` resolves to
+/// the function itself, so the prop stays unused (verified upstream).
+#[test]
+fn named_function_expression_self_declares() {
+    let src = "\
+<script>
+  export let g;
+  const f = function g() { g(); };
+  void f;
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        codes(&warnings).contains(&"export_let_unused"),
+        "named fn expression must shadow the outer prop, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// `[el] = pair` marks `el` reassigned (upstream unwrap_pattern on
+/// AssignmentExpression left) — non_reactive_update fires.
+#[test]
+fn destructuring_assignment_marks_reassigned() {
+    let src = "\
+<script>
+  let el;
+  const pair = ['a'];
+  function go() { [el] = pair; }
+</script>
+<p>{el}</p><button onclick={go}>go</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"non_reactive_update"),
+        "destructuring assignment must mark the target reassigned, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Object-destructuring form too: `({ el } = obj)`.
+#[test]
+fn object_destructuring_assignment_marks_reassigned() {
+    let src = "\
+<script>
+  let el;
+  const obj = { el: 'a' };
+  function go() { ({ el } = obj); }
+</script>
+<p>{el}</p><button onclick={go}>go</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"non_reactive_update"),
+        "object destructuring assignment must mark reassigned, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// `var` declarations hoist out of porous (block) scopes to the
+/// nearest function/root scope (scope.js:675) — the template ref
+/// resolves and non_reactive_update fires.
+#[test]
+fn var_hoists_out_of_block_scope() {
+    let src = "\
+<script>
+  { var x = 'a'; }
+  function go() { x = 'b'; }
+</script>
+<p>{x}</p><button onclick={go}>go</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"non_reactive_update"),
+        "block-scoped var must hoist to the instance root, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// `for (let count = 0; …)` — the init declaration lands in the
+/// loop's own block scope, shadowing the outer state binding.
+#[test]
+fn for_init_declaration_shadows_outer_state() {
+    let src = "\
+<script>
+  let count = $state(0);
+  for (let count = 0; count < 2; count++) { console.log(count); }
+</script>
+<button onclick={() => count++}>{count}</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"state_referenced_locally"),
+        "for-init declaration must shadow the outer state, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Bidirectional control characters hide inside spread call
+/// arguments too — walker coverage, verified upstream.
+#[test]
+fn bidi_string_inside_call_spread_argument_fires() {
+    let src = "\
+<script>
+  function f(...xs) { void xs; }
+  f(...['\u{202a}hidden']);
+</script>
+<p>hi</p>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"bidirectional_control_characters"),
+        "bidi char inside call spread arg must fire, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Same for new-expression spread arguments.
+#[test]
+fn bidi_string_inside_new_spread_argument_fires() {
+    let src = "\
+<script>
+  class F { constructor(...xs) { void xs; } }
+  void new F(...['\u{202a}hidden']);
+</script>
+<p>hi</p>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"bidirectional_control_characters"),
+        "bidi char inside new spread arg must fire, got: {:?}",
         codes(&warnings)
     );
 }

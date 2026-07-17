@@ -360,10 +360,9 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
                 self.visit_class_body(&cls.body);
             }
             Expression::CallExpression(call) => {
+                self.visit_expr(&call.callee);
                 for a in &call.arguments {
-                    if let Some(e) = a.as_expression() {
-                        self.visit_expr(e);
-                    }
+                    self.visit_argument(a);
                 }
             }
             Expression::ParenthesizedExpression(p) => self.visit_expr(&p.expression),
@@ -390,8 +389,18 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
             Expression::UnaryExpression(u) => self.visit_expr(&u.argument),
             Expression::ArrayExpression(a) => {
                 for el in &a.elements {
-                    if let Some(e) = el.as_expression() {
-                        self.visit_expr(e);
+                    use oxc_ast::ast::ArrayExpressionElement as AE;
+                    match el {
+                        // `as_expression()` is None for spreads —
+                        // walk the argument so nothing inside
+                        // `[...(xs)]` goes unchecked.
+                        AE::SpreadElement(s) => self.visit_expr(&s.argument),
+                        AE::Elision(_) => {}
+                        other => {
+                            if let Some(e) = other.as_expression() {
+                                self.visit_expr(e);
+                            }
+                        }
                     }
                 }
             }
@@ -452,9 +461,18 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
         // expression with nested classes.
         self.visit_expr(&ne.callee);
         for a in &ne.arguments {
-            if let Some(e) = a.as_expression() {
-                self.visit_expr(e);
-            }
+            self.visit_argument(a);
+        }
+    }
+
+    /// One call/new argument. `as_expression()` is None for
+    /// `Argument::SpreadElement`, so spreads need their own arm —
+    /// otherwise the bidi/perf checks are blind inside `f(...args)`.
+    fn visit_argument(&mut self, a: &oxc_ast::ast::Argument<'_>) {
+        if let oxc_ast::ast::Argument::SpreadElement(s) = a {
+            self.visit_expr(&s.argument);
+        } else if let Some(e) = a.as_expression() {
+            self.visit_expr(e);
         }
     }
 

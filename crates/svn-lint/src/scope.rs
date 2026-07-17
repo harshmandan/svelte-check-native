@@ -441,14 +441,14 @@ impl TreeBuilder {
             None => 0,
         };
         let id = ScopeId(self.scopes.len() as u32);
-        self.scopes.push(Scope::new(parent, depth));
+        self.scopes.push(Scope::new(parent, depth, false));
         id
     }
 
     fn new_porous_scope(&mut self, parent: ScopeId) -> ScopeId {
         let depth = self.scopes[parent.0 as usize].function_depth;
         let id = ScopeId(self.scopes.len() as u32);
-        self.scopes.push(Scope::new(Some(parent), depth));
+        self.scopes.push(Scope::new(Some(parent), depth, true));
         id
     }
 
@@ -461,6 +461,18 @@ impl TreeBuilder {
         declaration_kind: DeclarationKind,
         initial: InitialKind,
     ) -> BindingId {
+        // `var` hoists through porous (block-like) scopes to the
+        // nearest function/root scope — upstream `scope.js` forwards
+        // the declaration to the parent while the scope is porous.
+        let mut scope = scope;
+        if declaration_kind == DeclarationKind::Var {
+            while self.scopes[scope.0 as usize].porous {
+                let Some(parent) = self.scopes[scope.0 as usize].parent else {
+                    break;
+                };
+                scope = parent;
+            }
+        }
         let id = BindingId(self.bindings.len() as u32);
         self.bindings.push(Binding {
             scope,
@@ -742,7 +754,6 @@ impl TreeBuilder {
             function_depth: start_depth,
             rune_bump: 0,
             in_function_closure: false,
-            type_annotation_depth: 0,
             in_state_arg_nested: false,
             in_reactive_statement: false,
             is_instance: false,
@@ -1149,7 +1160,6 @@ impl TreeBuilder {
             function_depth: start_depth,
             rune_bump: 0,
             in_function_closure: false,
-            type_annotation_depth: 0,
             in_state_arg_nested: false,
             in_reactive_statement: false,
             is_instance,
@@ -1502,11 +1512,6 @@ struct ScriptWalker<'b, 'src> {
     /// / ArrowFunctionExpression body. Non_reactive_update filters
     /// references by this flag.
     in_function_closure: bool,
-    /// When >0, we're inside a TS type annotation subtree — all
-    /// identifiers within are types, not value references. Upstream
-    /// strips these via `remove_typescript_nodes` before scope walk;
-    /// we skip them at walk time instead.
-    type_annotation_depth: u32,
     /// True when we're walking under a `$state(…)` or `$state.raw(…)`
     /// argument AT LEAST ONE level deep (i.e. the reference is nested,
     /// not the direct arg identifier). Used by
@@ -1763,31 +1768,35 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 }
             }
             Statement::ForStatement(f) => {
-                if let Some(init) = &f.init {
-                    match init {
-                        ForStatementInit::VariableDeclaration(v) => self.visit_var_decl(v),
-                        e => {
-                            if let Some(expr) = expression_from_for_init(e) {
-                                self.visit_expr(expr);
+                // Upstream gives every for-statement a porous block
+                // scope (`create_block_scope`), so an init declaration
+                // shadows outer bindings instead of overwriting them.
+                let s = self.tree.new_porous_scope(self.cur_scope());
+                self.with_scope(s, |w| {
+                    if let Some(init) = &f.init {
+                        match init {
+                            ForStatementInit::VariableDeclaration(v) => w.visit_var_decl(v),
+                            e => {
+                                if let Some(expr) = expression_from_for_init(e) {
+                                    w.visit_expr(expr);
+                                }
                             }
                         }
                     }
-                }
-                if let Some(t) = &f.test {
-                    self.visit_expr(t);
-                }
-                if let Some(u) = &f.update {
-                    self.visit_expr(u);
-                }
-                self.visit_stmt(&f.body);
+                    if let Some(t) = &f.test {
+                        w.visit_expr(t);
+                    }
+                    if let Some(u) = &f.update {
+                        w.visit_expr(u);
+                    }
+                    w.visit_stmt(&f.body);
+                });
             }
             Statement::ForInStatement(f) => {
-                self.visit_expr(&f.right);
-                self.visit_stmt(&f.body);
+                self.visit_for_in_of(&f.left, &f.right, &f.body);
             }
             Statement::ForOfStatement(f) => {
-                self.visit_expr(&f.right);
-                self.visit_stmt(&f.body);
+                self.visit_for_in_of(&f.left, &f.right, &f.body);
             }
             Statement::WhileStatement(w) => {
                 self.visit_expr(&w.test);
@@ -1802,9 +1811,19 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     self.visit_stmt(s);
                 }
                 if let Some(h) = &t.handler {
-                    for s in &h.body.body {
-                        self.visit_stmt(s);
-                    }
+                    // Catch params live in a porous scope covering the
+                    // handler (upstream `CatchClause` declares them
+                    // 'normal'/'let' in a `child(true)` scope) — body
+                    // refs to the param must shadow outer bindings.
+                    let s = self.tree.new_porous_scope(self.cur_scope());
+                    self.with_scope(s, |w| {
+                        if let Some(param) = &h.param {
+                            w.declare_pattern(&param.pattern, DeclarationKind::Let);
+                        }
+                        for s in &h.body.body {
+                            w.visit_stmt(s);
+                        }
+                    });
                 }
                 if let Some(f) = &t.finalizer {
                     for s in &f.body {
@@ -1814,14 +1833,19 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             }
             Statement::SwitchStatement(s) => {
                 self.visit_expr(&s.discriminant);
-                for case in &s.cases {
-                    if let Some(t) = &case.test {
-                        self.visit_expr(t);
+                // Upstream: `SwitchStatement: create_block_scope` —
+                // case-body declarations scope to the switch.
+                let sc = self.tree.new_porous_scope(self.cur_scope());
+                self.with_scope(sc, |w| {
+                    for case in &s.cases {
+                        if let Some(t) = &case.test {
+                            w.visit_expr(t);
+                        }
+                        for s in &case.consequent {
+                            w.visit_stmt(s);
+                        }
                     }
-                    for s in &case.consequent {
-                        self.visit_stmt(s);
-                    }
-                }
+                });
             }
             Statement::ExpressionStatement(es) => self.visit_expr(&es.expression),
             Statement::ReturnStatement(r) => {
@@ -1888,6 +1912,19 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 InitialKind::ClassDecl,
             );
         }
+        self.visit_class_common(cls);
+    }
+
+    /// The parts shared by class declarations and class expressions:
+    /// the super-class expression (a plain reference position) and
+    /// the body. Upstream has NO `ClassExpression` visitor, so a
+    /// named class expression's id is NOT declared anywhere — its
+    /// body references resolve outward (verified against the
+    /// compiler) — which is why this helper never touches `cls.id`.
+    fn visit_class_common(&mut self, cls: &Class<'_>) {
+        if let Some(sup) = &cls.super_class {
+            self.visit_expr(sup);
+        }
         self.visit_class_body(&cls.body);
     }
 
@@ -1896,6 +1933,11 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             let pushed = self.push_leading_ignores(Some(m.span().start));
             match m {
                 ClassElement::MethodDefinition(md) => {
+                    if md.computed
+                        && let Some(k) = expression_from_property_key(&md.key)
+                    {
+                        self.visit_expr(k);
+                    }
                     self.with_function(|w| {
                         if let Some(body) = &md.value.body {
                             for p in &md.value.params.items {
@@ -1908,11 +1950,37 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     });
                 }
                 ClassElement::PropertyDefinition(p) => {
+                    if p.computed
+                        && let Some(k) = expression_from_property_key(&p.key)
+                    {
+                        self.visit_expr(k);
+                    }
                     if let Some(v) = &p.value {
                         self.visit_expr(v);
                     }
                 }
-                _ => {}
+                ClassElement::AccessorProperty(p) => {
+                    if p.computed
+                        && let Some(k) = expression_from_property_key(&p.key)
+                    {
+                        self.visit_expr(k);
+                    }
+                    if let Some(v) = &p.value {
+                        self.visit_expr(v);
+                    }
+                }
+                ClassElement::StaticBlock(sb) => {
+                    // Upstream `scope.js` has no StaticBlock visitor:
+                    // no new scope, no function-depth bump — the
+                    // statements walk in the enclosing scope, so a
+                    // `$state` read inside fires
+                    // `state_referenced_locally` (verified against
+                    // the compiler).
+                    for s in &sb.body {
+                        self.visit_stmt(s);
+                    }
+                }
+                ClassElement::TSIndexSignature(_) => {}
             }
             if pushed {
                 self.ignore_frames.pop();
@@ -2271,6 +2339,22 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             }
             Expression::FunctionExpression(f) => {
                 self.with_function(|w| {
+                    // A named function expression declares its own
+                    // name inside its scope (upstream scope.js
+                    // `FunctionExpression`: `scope.declare(node.id,
+                    // 'normal', 'function')`) — body references to
+                    // the name resolve to the function, not an outer
+                    // binding of the same name.
+                    if let Some(id) = &f.id {
+                        w.declare_with_ignores(
+                            w.cur_scope(),
+                            SmolStr::from(id.name.as_str()),
+                            w.abs(id.span.start, id.span.end),
+                            BindingKind::Normal,
+                            DeclarationKind::Function,
+                            InitialKind::FunctionDecl,
+                        );
+                    }
                     for p in &f.params.items {
                         w.declare_pattern(&p.pattern, DeclarationKind::Param);
                     }
@@ -2285,11 +2369,17 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             Expression::NewExpression(n) => {
                 self.visit_expr(&n.callee);
                 for a in &n.arguments {
-                    if let Some(e) = a.as_expression() {
-                        self.visit_expr(e);
-                    }
+                    self.visit_argument(a, false);
                 }
             }
+            Expression::ClassExpression(cls) => self.visit_class_common(cls),
+            Expression::ImportExpression(ie) => {
+                self.visit_expr(&ie.source);
+                if let Some(opts) = &ie.options {
+                    self.visit_expr(opts);
+                }
+            }
+            Expression::PrivateInExpression(pie) => self.visit_expr(&pie.right),
             Expression::ObjectExpression(o) => self.visit_object(o),
             Expression::ArrayExpression(a) => {
                 for el in &a.elements {
@@ -2466,16 +2556,41 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             self.rune_bump += 1;
         }
         for a in &c.arguments {
-            if let Some(e) = a.as_expression() {
-                if push_state {
-                    self.visit_arg_inside_state_call(e);
-                } else {
-                    self.visit_expr(e);
-                }
-            }
+            self.visit_argument(a, push_state);
         }
         if bump {
             self.rune_bump -= 1;
+        }
+    }
+
+    /// One call/new argument. `as_expression()` is None for
+    /// `Argument::SpreadElement`, so spreads need their own arm —
+    /// `f(...props)` must record the references inside the spread
+    /// argument (verified: upstream counts them, and a `$state` read
+    /// inside `f(...[count])` fires `state_referenced_locally`).
+    fn visit_argument(&mut self, a: &oxc_ast::ast::Argument<'_>, in_state_call: bool) {
+        if let oxc_ast::ast::Argument::SpreadElement(s) = a {
+            // Anchor leading ignores at the `...`, mirroring the
+            // array-spread path.
+            let pushed = self.push_leading_ignores(Some(s.span.start));
+            // A spread's inner identifier is never the DIRECT rune
+            // argument, so upstream's ancestor walk always sees it as
+            // nested — flag accordingly inside `$state(…)` calls.
+            let saved = self.in_state_arg_nested;
+            if in_state_call {
+                self.in_state_arg_nested = true;
+            }
+            self.visit_expr(&s.argument);
+            self.in_state_arg_nested = saved;
+            if pushed {
+                self.ignore_frames.pop();
+            }
+        } else if let Some(e) = a.as_expression() {
+            if in_state_call {
+                self.visit_arg_inside_state_call(e);
+            } else {
+                self.visit_expr(e);
+            }
         }
     }
 
@@ -2579,11 +2694,174 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 self.visit_expr(&m.object);
                 self.visit_expr(&m.expression);
             }
-            AssignmentTarget::ArrayAssignmentTarget(_)
-            | AssignmentTarget::ObjectAssignmentTarget(_) => {
-                // Destructuring assignment — upstream `unwrap_pattern`
-                // would extract each leaf; we skip for now since the
-                // 4 target rules don't need it.
+            AssignmentTarget::ArrayAssignmentTarget(arr) => {
+                // `[el] = pair` — upstream drains updates through
+                // `unwrap_pattern`, so every leaf target counts as a
+                // reassignment (identifier form) or mutation (member
+                // form). Recursing through `visit_assignment_target`
+                // reproduces that per leaf.
+                for el in arr.elements.iter().flatten() {
+                    self.visit_assignment_target_maybe_default(el);
+                }
+                if let Some(rest) = &arr.rest {
+                    self.visit_assignment_target(&rest.target);
+                }
+            }
+            AssignmentTarget::ObjectAssignmentTarget(obj) => {
+                for p in &obj.properties {
+                    use oxc_ast::ast::AssignmentTargetProperty as ATP;
+                    match p {
+                        ATP::AssignmentTargetPropertyIdentifier(pi) => {
+                            // Shorthand `({ el } = obj)` — the binding
+                            // IS the target identifier.
+                            self.record_ref_id(
+                                pi.binding.name.as_str(),
+                                pi.binding.span.start,
+                                pi.binding.span.end,
+                                RefParentKind::AssignmentLeft,
+                            );
+                            self.tree.pending_updates.push(PendingUpdate {
+                                scope: self.cur_scope(),
+                                name: SmolStr::from(pi.binding.name.as_str()),
+                                range: self.abs(pi.binding.span.start, pi.binding.span.end),
+                                is_reassign: true,
+                            });
+                            if let Some(init) = &pi.init {
+                                self.visit_expr(init);
+                            }
+                        }
+                        ATP::AssignmentTargetPropertyProperty(pp) => {
+                            if pp.computed
+                                && let Some(k) = expression_from_property_key(&pp.name)
+                            {
+                                self.visit_expr(k);
+                            }
+                            self.visit_assignment_target_maybe_default(&pp.binding);
+                        }
+                    }
+                }
+                if let Some(rest) = &obj.rest {
+                    self.visit_assignment_target(&rest.target);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn visit_assignment_target_maybe_default(
+        &mut self,
+        t: &oxc_ast::ast::AssignmentTargetMaybeDefault<'_>,
+    ) {
+        use oxc_ast::ast::AssignmentTargetMaybeDefault as ATMD;
+        match t {
+            ATMD::AssignmentTargetWithDefault(d) => {
+                self.visit_assignment_target(&d.binding);
+                self.visit_expr(&d.init);
+            }
+            other => {
+                if let Some(target) = other.as_assignment_target() {
+                    self.visit_assignment_target(target);
+                }
+            }
+        }
+    }
+
+    /// Shared walk for `for (… of …)` / `for (… in …)`. Upstream
+    /// wraps the whole statement in a porous block scope
+    /// (`create_block_scope`), so a declaration left shadows outer
+    /// bindings; an identifier/pattern left records plain READ
+    /// references — updates come only from AssignmentExpression /
+    /// UpdateExpression, so `for (x of xs)` is NOT a reassignment
+    /// (verified against the compiler).
+    fn visit_for_in_of(
+        &mut self,
+        left: &oxc_ast::ast::ForStatementLeft<'_>,
+        right: &Expression<'_>,
+        body: &Statement<'_>,
+    ) {
+        use oxc_ast::ast::ForStatementLeft as FSL;
+        let s = self.tree.new_porous_scope(self.cur_scope());
+        self.with_scope(s, |w| {
+            match left {
+                FSL::VariableDeclaration(v) => w.visit_var_decl(v),
+                other => {
+                    if let Some(target) = other.as_assignment_target() {
+                        w.visit_target_reads(target);
+                    }
+                }
+            }
+            w.visit_expr(right);
+            w.visit_stmt(body);
+        });
+    }
+
+    /// Record READ references for every identifier leaf of an
+    /// assignment-target pattern, without registering updates. Only
+    /// the for-of/for-in left-hand side needs this weaker walk — see
+    /// [`Self::visit_for_in_of`].
+    fn visit_target_reads(&mut self, t: &AssignmentTarget<'_>) {
+        use oxc_ast::ast::{AssignmentTargetMaybeDefault as ATMD, AssignmentTargetProperty as ATP};
+        let maybe_default = |w: &mut Self, el: &ATMD<'_>| match el {
+            ATMD::AssignmentTargetWithDefault(d) => {
+                w.visit_target_reads(&d.binding);
+                w.visit_expr(&d.init);
+            }
+            other => {
+                if let Some(target) = other.as_assignment_target() {
+                    w.visit_target_reads(target);
+                }
+            }
+        };
+        match t {
+            AssignmentTarget::AssignmentTargetIdentifier(id) => {
+                self.record_ref_id(
+                    id.name.as_str(),
+                    id.span.start,
+                    id.span.end,
+                    RefParentKind::Read,
+                );
+            }
+            AssignmentTarget::StaticMemberExpression(m) => self.visit_member_object(&m.object),
+            AssignmentTarget::ComputedMemberExpression(m) => {
+                self.visit_member_object(&m.object);
+                self.visit_expr(&m.expression);
+            }
+            AssignmentTarget::PrivateFieldExpression(m) => self.visit_member_object(&m.object),
+            AssignmentTarget::ArrayAssignmentTarget(arr) => {
+                for el in arr.elements.iter().flatten() {
+                    maybe_default(self, el);
+                }
+                if let Some(rest) = &arr.rest {
+                    self.visit_target_reads(&rest.target);
+                }
+            }
+            AssignmentTarget::ObjectAssignmentTarget(obj) => {
+                for p in &obj.properties {
+                    match p {
+                        ATP::AssignmentTargetPropertyIdentifier(pi) => {
+                            self.record_ref_id(
+                                pi.binding.name.as_str(),
+                                pi.binding.span.start,
+                                pi.binding.span.end,
+                                RefParentKind::Read,
+                            );
+                            if let Some(init) = &pi.init {
+                                self.visit_expr(init);
+                            }
+                        }
+                        ATP::AssignmentTargetPropertyProperty(pp) => {
+                            if pp.computed
+                                && let Some(k) = expression_from_property_key(&pp.name)
+                            {
+                                self.visit_expr(k);
+                            }
+                            maybe_default(self, &pp.binding);
+                        }
+                    }
+                }
+                if let Some(rest) = &obj.rest {
+                    self.visit_target_reads(&rest.target);
+                }
             }
             _ => {}
         }
@@ -2662,9 +2940,6 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         parent_kind: RefParentKind,
         parent_is_call: bool,
     ) {
-        if self.type_annotation_depth > 0 {
-            return;
-        }
         let ignored = self.current_ignore_snapshot();
         self.tree.pending_refs.push(PendingRef {
             scope: self.cur_scope(),

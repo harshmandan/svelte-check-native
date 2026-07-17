@@ -324,6 +324,14 @@ impl CheckSession {
             solution_root_tsconfig.map(|p| p.to_path_buf()),
         );
 
+        // Version-stamp gate BEFORE anything touches the root (the kit
+        // mirror task below writes under it): a cache written by a
+        // different binary version or emit schema is wiped wholesale,
+        // discarding overlays and .tsbuildinfo that describe emit
+        // shapes this binary no longer produces. Mirrors upstream's
+        // MANIFEST_VERSION invalidation.
+        cache::ensure_version_stamp(&layout.root)?;
+
         let kit_types_mirror_task = {
             let layout = layout.clone();
             std::thread::spawn(move || kit_types_mirror::sync_mirror(&layout))

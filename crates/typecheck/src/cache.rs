@@ -293,6 +293,55 @@ impl CacheLayout {
     }
 }
 
+/// Basename of the version-stamp file written at the cache root.
+const VERSION_STAMP_FILE: &str = "version";
+
+/// The stamp content the running binary expects: crate version plus
+/// the overlay-emit schema counter. Either changing means every
+/// cached overlay (and the `.tsbuildinfo` tsgo built against them)
+/// may describe emit shapes this binary no longer produces.
+fn expected_version_stamp() -> String {
+    format!(
+        "svelte-check-native {} emit-schema {}\n",
+        env!("CARGO_PKG_VERSION"),
+        svn_emit::EMIT_SCHEMA_VERSION
+    )
+}
+
+/// Validate the cache root's version stamp, wiping the whole root on
+/// mismatch before it is used.
+///
+/// Upstream svelte-check versions its incremental manifest
+/// (`MANIFEST_VERSION` in `incremental.ts`) and discards state written
+/// by another version; without an equivalent, a binary upgrade that
+/// changes emit shape leaves a stale `.tsbuildinfo` (and stale
+/// overlays / kit-types mirror) from the previous version in place —
+/// tsgo then trusts build info describing files the new binary would
+/// emit differently. Cost per run is one small file read; the wipe
+/// only triggers across binary/emit-schema changes.
+///
+/// Handles all three states:
+/// - fresh root (doesn't exist) → create + stamp;
+/// - stamped with the current version → no-op;
+/// - missing or mismatching stamp (older binary, or a future binary's
+///   format) → `remove_dir_all` the root, recreate, stamp.
+pub fn ensure_version_stamp(root: &Path) -> std::io::Result<()> {
+    let stamp_path = root.join(VERSION_STAMP_FILE);
+    let expected = expected_version_stamp();
+    match std::fs::read_to_string(&stamp_path) {
+        Ok(existing) if existing == expected => return Ok(()),
+        _ if !root.exists() => {}
+        _ => {
+            // Stale, unreadable, or absent stamp on an existing root:
+            // the contents were written by some other binary. Wipe.
+            std::fs::remove_dir_all(root)?;
+        }
+    }
+    std::fs::create_dir_all(root)?;
+    std::fs::write(&stamp_path, expected)?;
+    Ok(())
+}
+
 /// Write a file only if `contents` differs from what's currently on disk.
 ///
 /// Returns `Ok(true)` if a write happened, `Ok(false)` if the file was
@@ -514,5 +563,63 @@ mod tests {
         let wrote_again = write_if_changed(&path, "v2").unwrap();
         assert!(wrote_again);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "v2");
+    }
+
+    #[test]
+    fn version_stamp_creates_fresh_root() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("cache");
+        ensure_version_stamp(&root).unwrap();
+        let stamp = std::fs::read_to_string(root.join(VERSION_STAMP_FILE)).unwrap();
+        assert_eq!(stamp, expected_version_stamp());
+    }
+
+    #[test]
+    fn version_stamp_match_preserves_cache_contents() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("cache");
+        ensure_version_stamp(&root).unwrap();
+        let overlay = root.join("svelte").join("Foo.svelte.svn.ts");
+        std::fs::create_dir_all(overlay.parent().unwrap()).unwrap();
+        std::fs::write(&overlay, "cached").unwrap();
+        ensure_version_stamp(&root).unwrap();
+        assert!(
+            overlay.exists(),
+            "a matching stamp must not wipe cached overlays"
+        );
+    }
+
+    #[test]
+    fn version_stamp_mismatch_wipes_root() {
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("cache");
+        std::fs::create_dir_all(root.join("svelte")).unwrap();
+        std::fs::write(
+            root.join(VERSION_STAMP_FILE),
+            "svelte-check-native 0.0.1 emit-schema 0\n",
+        )
+        .unwrap();
+        let stale = root.join("tsbuildinfo.json");
+        std::fs::write(&stale, "{}").unwrap();
+        ensure_version_stamp(&root).unwrap();
+        assert!(!stale.exists(), "a stale stamp must wipe the whole root");
+        assert_eq!(
+            std::fs::read_to_string(root.join(VERSION_STAMP_FILE)).unwrap(),
+            expected_version_stamp()
+        );
+    }
+
+    #[test]
+    fn version_stamp_missing_on_existing_root_wipes() {
+        // A root written by a pre-stamp binary has contents but no
+        // stamp file — same stale-state treatment.
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().join("cache");
+        std::fs::create_dir_all(&root).unwrap();
+        let stale = root.join("tsbuildinfo.json");
+        std::fs::write(&stale, "{}").unwrap();
+        ensure_version_stamp(&root).unwrap();
+        assert!(!stale.exists());
+        assert!(root.join(VERSION_STAMP_FILE).exists());
     }
 }

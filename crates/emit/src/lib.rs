@@ -46,6 +46,16 @@
 
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
+/// Overlay-emit schema counter, stamped into the typecheck cache root
+/// alongside the binary version. Bump when the emitted overlay SHAPE
+/// changes in a way that makes previously-cached overlays (and tsgo's
+/// `.tsbuildinfo` built against them) stale within the same released
+/// version — e.g. renaming synthesized helpers, changing the render-fn
+/// scaffold, or moving the overlay extension scheme. Version bumps
+/// already invalidate the cache on their own; this counter covers
+/// dev-cycle emit changes between releases.
+pub const EMIT_SCHEMA_VERSION: u32 = 1;
+
 mod default_export;
 mod destructure_idents;
 mod emit_buffer;

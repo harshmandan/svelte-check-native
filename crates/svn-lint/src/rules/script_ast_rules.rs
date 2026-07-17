@@ -35,15 +35,17 @@ pub fn visit_document(
     instance_program: Option<&Program<'_>>,
     ctx: &mut LintContext<'_>,
 ) {
-    if let Some(script) = &doc.instance_script
-        && let Some(program) = instance_program
-    {
-        run_on_section(script, program, fragment, ScriptAstContext::Instance, ctx);
-    }
+    // Module first — upstream's analyze walks run module, then
+    // instance, then template, and warnings surface in that order.
     if let Some(script) = &doc.module_script
         && let Some(program) = module_program
     {
         run_on_section(script, program, fragment, ScriptAstContext::Module, ctx);
+    }
+    if let Some(script) = &doc.instance_script
+        && let Some(program) = instance_program
+    {
+        run_on_section(script, program, fragment, ScriptAstContext::Instance, ctx);
     }
 }
 

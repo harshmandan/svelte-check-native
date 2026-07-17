@@ -391,22 +391,21 @@ pub fn walk_parsed(
         ctx.runes = explicit;
     }
 
-    // `<svelte:options>` attribute warnings. Mirrors the loop over
-    // `root.options.attributes` at the end of upstream's analyze
-    // phase, which fires per attribute in source order:
-    //   - `accessors` / `immutable` are deprecated no-ops in runes
-    //     mode (`options_deprecated_accessors` / `_immutable`);
-    //   - `customElement` without the `customElement: true` compile
-    //     option fires `options_missing_custom_element` and drives
-    //     `custom_element_props_identifier` (fires in `binding_rules`
-    //     per $props() identifier/rest candidate, via the
-    //     `VariableDeclarator.js` path).
-    // We don't receive compile options, so `custom_element_from_option`
-    // is always false and the attribute's presence alone triggers the
-    // missing-option warning. `tag-custom-element-options-true` sets
-    // `customElement: true` via `_config.js`; `upstream_validator`
-    // already skips that fixture via the `_config.js` escape.
-    visit_svelte_options_attributes(fragment, source, ctx);
+    // Emission order below mirrors the compiler's pipeline (verified
+    // on a mixed fixture against svelte 5.56.5): parse-time warnings
+    // first, then store_rune_conflict (store-sub synthesis), then the
+    // <svelte:options> attribute loop, then the module → instance →
+    // template walks, then the post-walk declaration loops. The CLI
+    // does not sort diagnostics, so this order is user-visible.
+
+    // <script>-attribute rules (script_unknown_attribute is
+    // parse-time upstream; script_context_deprecated fires early in
+    // analyze — both precede the walks).
+    crate::rules::script_rules::visit_document(doc, ctx);
+
+    // element_implicitly_closed — parse-time upstream, so it leads
+    // everything the analyze phase produces.
+    crate::rules::implicit_close::scan(source, ctx);
 
     // Parse each script body exactly once; the scope builder and the
     // script-AST rules below both walk the same `Program`. The
@@ -439,13 +438,30 @@ pub fn walk_parsed(
         instance_program,
     ));
 
-    // <script>-attribute rules (script_unknown_attribute,
-    // script_context_deprecated).
-    crate::rules::script_rules::visit_document(doc, ctx);
+    // store_rune_conflict — upstream fires it from the store-sub
+    // synthesis loop, before even the options warnings.
+    crate::rules::binding_rules::visit_pre_options(ctx);
+
+    // `<svelte:options>` attribute warnings. Mirrors the loop over
+    // `root.options.attributes` in upstream's analyze phase (before
+    // the walks), which fires per attribute in source order:
+    //   - `accessors` / `immutable` are deprecated no-ops in runes
+    //     mode (`options_deprecated_accessors` / `_immutable`);
+    //   - `customElement` without the `customElement: true` compile
+    //     option fires `options_missing_custom_element` and drives
+    //     `custom_element_props_identifier` (fires in `binding_rules`
+    //     per $props() identifier/rest candidate, via the
+    //     `VariableDeclarator.js` path).
+    // We don't receive compile options, so `custom_element_from_option`
+    // is always false and the attribute's presence alone triggers the
+    // missing-option warning. `tag-custom-element-options-true` sets
+    // `customElement: true` via `_config.js`; `upstream_validator`
+    // already skips that fixture via the `_config.js` escape.
+    visit_svelte_options_attributes(fragment, source, ctx);
 
     // <script>-body (JS/TS AST) rules: perf_avoid_inline_class,
     // perf_avoid_nested_class, reactive_declaration_invalid_placement,
-    // ...
+    // ... (module first, then instance — upstream walk order).
     crate::rules::script_ast_rules::visit_document(
         doc,
         fragment,
@@ -454,17 +470,17 @@ pub fn walk_parsed(
         ctx,
     );
 
-    // Phase-C binding-driven rules (non_reactive_update,
-    // state_referenced_locally). Run AFTER script ast rules so
-    // `ctx.scope_tree` is populated.
+    // Walk-time binding rules (state_referenced_locally, …) —
+    // upstream fires these during the instance walk, so they land
+    // between the script-AST rules and the template warnings.
     crate::rules::binding_rules::visit(ctx);
 
     let mut ancestors: Vec<Ancestor> = Vec::new();
     walk_fragment_impl(fragment, ctx, None, &mut ancestors, false);
 
-    // element_implicitly_closed — source-level tag scanner. Runs
-    // after the AST walk so it sits in a predictable output position.
-    crate::rules::implicit_close::scan(source, ctx);
+    // Post-walk declaration loops (non_reactive_update /
+    // export_let_unused) — upstream runs them after all three walks.
+    crate::rules::binding_rules::visit_post_template(ctx);
 }
 
 /// Scan the top-level fragment for `<svelte:options>` and fire the

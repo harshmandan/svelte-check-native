@@ -30,8 +30,22 @@ fn binding_ignores(b: &crate::scope::Binding, code: Code) -> bool {
     }
 }
 
-/// Driver: run every binding-driven rule. Called once per file
-/// from `walk::walk` after `ctx.scope_tree` is populated.
+/// Pre-options pass: `store_rune_conflict` alone. Upstream fires it
+/// from the store-sub synthesis loop, before even the
+/// `<svelte:options>` attribute warnings.
+pub fn visit_pre_options(ctx: &mut LintContext<'_>) {
+    let tree = match ctx.scope_tree.take() {
+        Some(t) => t,
+        None => return,
+    };
+    store_rune_conflict(&tree, ctx);
+    ctx.scope_tree = Some(tree);
+}
+
+/// Walk-time pass: rules whose upstream counterparts fire DURING the
+/// instance-script walk. Their emissions are merged and sorted by
+/// source position so interleaved anchors come out in walk order —
+/// upstream does not group `state_referenced_locally` per binding.
 pub fn visit(ctx: &mut LintContext<'_>) {
     // Take the tree out of the context so we can iterate its bindings
     // while still being able to `ctx.emit(...)`.
@@ -39,20 +53,37 @@ pub fn visit(ctx: &mut LintContext<'_>) {
         Some(t) => t,
         None => return,
     };
+    let mut pending: Vec<(svn_core::Range, Code, String)> = Vec::new();
     // reactive_declaration_module_script_dependency fires in non-runes
     // mode too (legacy reactivity), so it runs regardless.
-    reactive_declaration_module_script_dependency(&tree, ctx);
-    store_rune_conflict(&tree, ctx);
-    custom_element_props_identifier(&tree, ctx);
+    reactive_declaration_module_script_dependency(&tree, &mut pending);
+    custom_element_props_identifier(&tree, ctx, &mut pending);
     if ctx.runes {
-        state_referenced_locally(&tree, ctx);
-        non_reactive_update(&tree, ctx);
-    } else {
-        export_let_unused(&tree, ctx);
+        state_referenced_locally(&tree, &mut pending);
+    }
+    pending.sort_by_key(|(range, _, _)| range.start);
+    for (range, code, msg) in pending {
+        ctx.emit(code, msg, range);
     }
     // Put it back — downstream template walkers may still want to
     // query the tree (element_rules has already run by this point,
     // but keep the invariant so future rules don't trip over None).
+    ctx.scope_tree = Some(tree);
+}
+
+/// Post-template pass: upstream runs these as loops over scope
+/// declarations AFTER all three walks (module, instance, template),
+/// so they emit after template warnings.
+pub fn visit_post_template(ctx: &mut LintContext<'_>) {
+    let tree = match ctx.scope_tree.take() {
+        Some(t) => t,
+        None => return,
+    };
+    if ctx.runes {
+        non_reactive_update(&tree, ctx);
+    } else {
+        export_let_unused(&tree, ctx);
+    }
     ctx.scope_tree = Some(tree);
 }
 
@@ -61,7 +92,10 @@ pub fn visit(ctx: &mut LintContext<'_>) {
 /// fire at each reference inside an instance-script `$:` reactive
 /// statement — the reactivity system doesn't observe module-level
 /// writes.
-fn reactive_declaration_module_script_dependency(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
+fn reactive_declaration_module_script_dependency(
+    tree: &ScopeTree,
+    pending: &mut Vec<(svn_core::Range, Code, String)>,
+) {
     for (_, binding) in tree.all_bindings() {
         if binding.scope != tree.module_root || !binding.reassigned {
             continue;
@@ -71,11 +105,11 @@ fn reactive_declaration_module_script_dependency(tree: &ScopeTree, ctx: &mut Lin
                 && !ref_ignores(r, Code::reactive_declaration_module_script_dependency)
             {
                 let msg = messages::reactive_declaration_module_script_dependency();
-                ctx.emit(
+                pending.push((
+                    r.range,
                     Code::reactive_declaration_module_script_dependency,
                     msg,
-                    r.range,
-                );
+                ));
             }
         }
     }
@@ -126,7 +160,7 @@ fn store_rune_conflict(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
 /// only fires when the binding is also reassigned OR its initial
 /// argument is a primitive (uses the conservative `should_proxy`
 /// analog in `scope.rs::is_primitive_expr`).
-fn state_referenced_locally(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
+fn state_referenced_locally(tree: &ScopeTree, pending: &mut Vec<(svn_core::Range, Code, String)>) {
     for (_, binding) in tree.all_bindings() {
         // Upstream gate (visitors/Identifier.js:110-119): fires on
         // `state` (specific reassigned / primitive-init) /
@@ -163,7 +197,7 @@ fn state_referenced_locally(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
                 "closure"
             };
             let msg = messages::state_referenced_locally(binding.name.as_str(), type_var);
-            ctx.emit(Code::state_referenced_locally, msg, r.range);
+            pending.push((r.range, Code::state_referenced_locally, msg));
         }
     }
 }
@@ -244,7 +278,11 @@ fn export_let_unused(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
 /// candidates are collected by the scope walker so this step just
 /// filters by the options gate. Scope-walker snapshot of the ignore
 /// stack is honoured per-candidate.
-fn custom_element_props_identifier(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
+fn custom_element_props_identifier(
+    tree: &ScopeTree,
+    ctx: &LintContext<'_>,
+    pending: &mut Vec<(svn_core::Range, Code, String)>,
+) {
     let Some(info) = ctx.custom_element_info.clone() else {
         return;
     };
@@ -260,6 +298,6 @@ fn custom_element_props_identifier(tree: &ScopeTree, ctx: &mut LintContext<'_>) 
             continue;
         }
         let msg = messages::custom_element_props_identifier();
-        ctx.emit(Code::custom_element_props_identifier, msg, *range);
+        pending.push((*range, Code::custom_element_props_identifier, msg));
     }
 }

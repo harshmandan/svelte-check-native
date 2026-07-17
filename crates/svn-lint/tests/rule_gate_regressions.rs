@@ -1440,3 +1440,81 @@ fn reactive_declaration_at_top_level_is_clean() {
         codes(&warnings)
     );
 }
+
+// ----------------------------------------------------------------
+// Warning emit order — locked against the real compiler's output
+// order for a mixed fixture (svelte 5.56.5): parse-time implicit
+// closes first, then the options-attribute loop, then script-walk
+// warnings in source order (NOT grouped by binding), then template
+// warnings.
+// ----------------------------------------------------------------
+
+#[test]
+fn warning_order_matches_compiler_on_mixed_fixture() {
+    let src = "\
+<svelte:options accessors />
+<script>
+\tlet a = $state(0);
+\tlet b = $state(1);
+\tconst x = a;
+\tconst y = b;
+\tconst z = a;
+\tvoid x; void y; void z;
+</script>
+<ul>
+\t<li>one
+\t<li>two
+</ul>
+<img src=\"x.png\" />
+<button onclick={() => { a++; b++; }}>{a}{b}</button>
+";
+    let warnings = svn_lint::lint_file(src, Path::new("t.svelte"), None, CompatFeatures::MODERN);
+    let got = codes(&warnings);
+    assert_eq!(
+        got,
+        vec![
+            "element_implicitly_closed",
+            "element_implicitly_closed",
+            "options_deprecated_accessors",
+            "state_referenced_locally",
+            "state_referenced_locally",
+            "state_referenced_locally",
+            "a11y_missing_attribute",
+        ],
+        "warning order must match the compiler"
+    );
+    // The three state warnings fire in SOURCE order (a, b, a) —
+    // upstream emits during the walk, not grouped per binding.
+    let state_positions: Vec<u32> = warnings
+        .iter()
+        .filter(|w| w.code.as_str() == "state_referenced_locally")
+        .map(|w| w.range.start)
+        .collect();
+    let mut sorted = state_positions.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        state_positions, sorted,
+        "state_referenced_locally must emit in source order"
+    );
+}
+
+/// non_reactive_update is a POST-walk loop upstream — it emits after
+/// template-walk warnings like a11y.
+#[test]
+fn non_reactive_update_emits_after_template_warnings() {
+    let src = "\
+<script>
+\tlet v = 'x';
+\tfunction go() { v = 'y'; }
+</script>
+<img src=\"x.png\" />
+<p>{v}</p><button onclick={go}>go</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    let got = codes(&warnings);
+    assert_eq!(
+        got,
+        vec!["a11y_missing_attribute", "non_reactive_update"],
+        "post-walk rule must follow template warnings"
+    );
+}

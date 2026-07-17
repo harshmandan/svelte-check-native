@@ -380,7 +380,10 @@ fn parse_opaque_section<'src>(
     })
 }
 
-/// Case-insensitively find the next `</tagname` from the scanner's position.
+/// Case-insensitively find the next `</tagname` from the scanner's
+/// position. Mirrors upstream's closing regex (`/<\/script\s*>/` in
+/// read/script.js): after the tag name only whitespace may precede the
+/// `>`, so `</script x` is body text, not a closing tag.
 fn find_close_tag(scanner: &Scanner<'_>, close_literal: &str) -> Option<u32> {
     let bytes = scanner.source().as_bytes();
     let start = scanner.pos() as usize;
@@ -396,16 +399,12 @@ fn find_close_tag(scanner: &Scanner<'_>, close_literal: &str) -> Option<u32> {
             .zip(needle)
             .all(|(a, b)| a.eq_ignore_ascii_case(b))
         {
-            // Sanity: ensure next byte isn't an ident continuation, else
-            // `</scripted>` would match `</script`. Check the char right
-            // after the literal.
-            match bytes.get(i + needle.len()).copied() {
-                None => return Some(i as u32),
-                Some(next) => {
-                    if !(next.is_ascii_alphanumeric() || matches!(next, b'-' | b'_')) {
-                        return Some(i as u32);
-                    }
-                }
+            let mut j = i + needle.len();
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if bytes.get(j) == Some(&b'>') {
+                return Some(i as u32);
             }
         }
         i += 1;
@@ -751,6 +750,27 @@ fn scan_past_open_tag(src: &str, from: usize) -> (usize, bool) {
             b'/' if bytes.get(i + 1) == Some(&b'>') => {
                 return (i + 2, true);
             }
+            // In-tag JS comments (Svelte 5, upstream read_attribute →
+            // read_comment): a `>` or `{` inside `//…` / `/*…*/` is
+            // comment text, not the tag close / a mustache. Without the
+            // skip, the tag scan ends early and the comment tail
+            // re-enters the section walk as template text.
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                i += 2;
+                while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
+                    i += 1;
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i + 1 < bytes.len() {
+                    if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                        i += 2;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
             b'>' => return (i + 1, is_void),
             _ => i += 1,
         }
@@ -780,6 +800,45 @@ mod tests {
             "expected no errors, got {errors:?} for source:\n{src}"
         );
         doc
+    }
+
+    #[test]
+    fn in_tag_js_comment_does_not_derail_section_walk() {
+        // Svelte 5 allows `//` and `/* */` comments between attributes.
+        // A `>` inside such a comment must not end the tag scan early:
+        // the comment tail would then re-enter the section walk as
+        // template text, and a `{#if}` in it would permanently raise
+        // block depth, misrouting every later top-level <script>.
+        let src = "<div /* > {#if x} */ class=\"x\">hi</div>\n<script>let a = 1;</script>";
+        let doc = parse_ok(src);
+        let instance = doc.instance_script.expect("instance script claimed");
+        assert_eq!(instance.content, "let a = 1;");
+    }
+
+    #[test]
+    fn in_tag_line_comment_hides_tag_close_until_newline() {
+        let src = "<div // > {#each xs as x}\n  class=\"x\">hi</div>\n<script>let a = 1;</script>";
+        let doc = parse_ok(src);
+        assert!(doc.instance_script.is_some(), "instance script claimed");
+    }
+
+    #[test]
+    fn script_close_tag_requires_only_whitespace_before_gt() {
+        // Upstream's closing regex is /<\/script\s*>/ — `</script x` is
+        // NOT a closing tag, so a body containing that text must not be
+        // truncated at it.
+        let src = "<script>const s = \"</script x\"; let y = 1;</script>\n{y}";
+        let doc = parse_ok(src);
+        let instance = doc.instance_script.expect("instance script claimed");
+        assert_eq!(instance.content, "const s = \"</script x\"; let y = 1;");
+    }
+
+    #[test]
+    fn script_close_tag_with_whitespace_still_closes() {
+        let src = "<script>let a = 1;</script\n  >";
+        let doc = parse_ok(src);
+        let instance = doc.instance_script.expect("instance script claimed");
+        assert_eq!(instance.content, "let a = 1;");
     }
 
     #[test]

@@ -535,8 +535,8 @@ commit as `release: vX.Y.Z`.
 
 ```sh
 npm run publish:dry       # dry run first — builds + packs, no registry writes
-npm run publish:all       # real publish; enforces platforms first, wrapper last
-git push origin main      # publish:all does NOT push
+npm run publish           # real publish; enforces platforms first, wrapper last
+git push origin main      # `npm run publish` does NOT push
 ```
 
 **Cut the GitHub release last.** `gh release create "v$VER"` creates
@@ -560,5 +560,5 @@ return `X.Y.Z`; smoke-install in a scratch dir.
   ordering is load-bearing.
 - Don't bump version without re-running `prepare-release.mjs`.
 - Don't `git tag` manually — let `gh release create` do it.
-- Don't create the release before `npm publish:all` and `git push` complete.
+- Don't create the release before `npm run publish` and `git push` complete.
 - Don't mark stable releases `--prerelease`.

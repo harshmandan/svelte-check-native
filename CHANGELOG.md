@@ -6,6 +6,101 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0]
+
+Two user-reported false-positive fixes (#36, #37), a ~30-item parity
+audit sweep across all four pipeline layers — every finding verified
+against the real Svelte compiler before fixing — and three structural
+hardenings that retire the bug classes behind them. Output on the
+1000-file control benches is byte-identical before/after except where
+a fix corrects a genuine divergence from upstream `svelte-check`.
+
+### Fixed
+
+- **`<script>` elements inside markup are template elements, not
+  component scripts** (#36). A script gated behind `{#if}` (the
+  conditional CDN-loader pattern) fired false "duplicate `<script>`
+  block" / "malformed opening tag" errors — a false-error regression
+  window since v0.8.7 (earlier versions showed a phantom "Empty
+  block" warning instead). Section-ness is now decided the way the
+  compiler decides it: only a script/style at the true document root
+  is a section.
+- **`// svelte-ignore` comments are honored at every expression
+  position** (#37): object properties, array elements, call and
+  `new` arguments, class members, initializers — including stacked
+  comment runs and blank lines, mirroring the compiler's leading-
+  comment attachment. Same-line *trailing* comments now correctly
+  suppress nothing (the compiler consumes them), fixing two silent
+  over-suppression cases alongside the reported false warnings.
+- **Diagnostic columns after in-line script rewrites.** Diagnostics
+  landing on a line the emitter had rewritten (e.g. `$state(null)`
+  typing) could report a shifted column; positions now map through
+  the rewrite and match upstream exactly.
+- **Runes-mode detection matches the compiler**: top-level `await`
+  flips a file to runes; a legacy component calling `$state(...)`
+  with a store named `state` in scope stays legacy (previously
+  mis-classified as runes); a regex literal containing `$state(` no
+  longer flips the mode; `$derived` calls alongside a
+  `svelte/store` `derived` import no longer fire a spurious
+  `store_rune_conflict`.
+- **Parser parity batch**, each verified against svelte 5.56.5:
+  whitespace after `{` in block tags (`{ /if}`); `{#each}` headers
+  with TS casts (`items as unknown as Item[] as item`) and the
+  index-only form (`{#each expr, i}`); `{#await}` operands named
+  `then`/`catch`; `{#snippet name<T>(...)}` generic signatures (now
+  also bound at render sites); `<textarea>` children as raw text;
+  regex literals after `await`/`yield`/`do`/`else`; NBSP and other
+  Unicode whitespace between attributes; Unicode identifiers in
+  shorthands and snippet names; `bind:x={get, set}` values containing
+  generic-call commas; JS comments inside top-level tags; nested
+  raw-text `<script>`/`<style>` body shape.
+- **Lint scope-model parity batch**: spread arguments (`f(...xs)`),
+  `for…of`/`for…in`/`catch` bindings, class expressions,
+  super-classes, static blocks, computed keys, destructuring
+  reassignment targets, `var` hoisting — all now tracked, closing
+  false `export_let_unused` / `state_referenced_locally` /
+  `non_reactive_update` fires and misses.
+- **Warning order now mirrors the compiler** (parse-time warnings
+  first, module before instance, source order within stages), and
+  suppression semantics match exactly — including upstream behaviors
+  we previously "improved on": `store_rune_conflict` is not
+  suppressible, `throw new App(...)` does not warn, and only the
+  nearest template comment bridges onto a `<script>` (module scripts
+  now included).
+- **tsconfig `include`/`exclude` matching follows TypeScript**:
+  case-insensitive on case-insensitive filesystems, lexical
+  directory-pattern expansion, literal `[`/`{` handling.
+
+### Added
+
+- **`$types` typing for JavaScript SvelteKit routes.** `+page.js` /
+  `+server.js` and friends now get the same zero-config `load` /
+  endpoint typing as TS routes via JSDoc injection, matching
+  upstream's diagnostics on JS Kit projects.
+- **Upstream's diagnostic refinements on the CLI path**: TS2322
+  binding errors remap onto the offending `bind:` attribute with the
+  "Cannot use 'bind:'" hint; the ConstructorOfATypedSvelteComponent
+  and TS1184 message clarifications.
+- **Cache version stamping.** Both cache roots are stamped and
+  wiped automatically when the binary or emit schema changes —
+  stale-cache poisoning across upgrades can no longer occur.
+- **`scripts/diff-parse.mjs`** — differential harness parsing any
+  file (or tree) with both the real `svelte/compiler` parser and
+  ours, diffing normalized ASTs. The full bench fleet (9,335 files)
+  parses identically modulo four files hitting one documented,
+  intentional divergence.
+
+### Changed
+
+- Internal: template/script section detection, the lint script
+  walker, and script-rule traversal were each consolidated onto a
+  single mechanism mirroring the compiler's own architecture
+  (parser-stack section detection; one shared AST walk with one
+  ignore stack). Net −450 lines; no behavior change beyond the fixes
+  above.
+- The release publish command is `npm run publish` (was
+  `publish:all`).
+
 ## [1.0.2]
 
 ### Fixed

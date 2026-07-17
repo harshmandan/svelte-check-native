@@ -158,11 +158,47 @@ fn is_left_boundary(prev: Option<u8>) -> bool {
     }
 }
 
+/// Whether a `/` encountered at code position can START a regex
+/// literal, judged by the previous significant (non-whitespace,
+/// non-comment) byte. After an identifier/number/`)`/`]`/quote the
+/// `/` is division; after an operator, opener, separator, or at the
+/// start of input it's a regex. Keyword-tail cases (`return /x/`)
+/// end in identifier bytes and classify as division — the only
+/// fallout is the pre-existing over-scan (monotonic-OR keeps rune
+/// detection safe from false negatives there).
+fn regex_can_start_after(prev: Option<u8>) -> bool {
+    match prev {
+        None => true,
+        Some(b) => matches!(
+            b,
+            b'(' | b','
+                | b'='
+                | b':'
+                | b'['
+                | b'!'
+                | b'&'
+                | b'|'
+                | b'?'
+                | b'{'
+                | b'}'
+                | b';'
+                | b'<'
+                | b'>'
+                | b'+'
+                | b'-'
+                | b'*'
+                | b'%'
+                | b'~'
+                | b'^'
+        ),
+    }
+}
+
 /// Scan a JS/TS script body for any call-form rune occurrence
 /// (`$state(`, `$derived(`, etc., or `$state.raw(` etc.). Skips line
-/// comments, block comments, single/double-quoted strings, and
-/// template-literal contents (re-entering when a `${…}` interpolation
-/// opens). Returns true on the first match.
+/// comments, block comments, single/double-quoted strings, regex
+/// literals, and template-literal contents (re-entering when a
+/// `${…}` interpolation opens). Returns true on the first match.
 fn scan_script_for_rune_call(source: &str) -> bool {
     const MARKERS: &[&[u8]] = &[
         b"$state",
@@ -175,6 +211,8 @@ fn scan_script_for_rune_call(source: &str) -> bool {
     ];
     let bytes = source.as_bytes();
     let mut i = 0;
+    // Last significant code byte — decides `/` regex-vs-division.
+    let mut last_sig: Option<u8> = None;
     // Outer code state. Template-literal nesting depth tracked
     // separately so a `${…}` interpolation re-enters code-scan with
     // proper rune visibility.
@@ -196,6 +234,40 @@ fn scan_script_for_rune_call(source: &str) -> bool {
             i = (i + 2).min(bytes.len());
             continue;
         }
+        // Regex literal — a `$state(` inside `/…/` is pattern text,
+        // not code (the real compiler stays non-runes). Skip to the
+        // closing unescaped `/`, honouring character classes; an
+        // unterminated candidate (newline/EOF first) was a division
+        // after all, so fall through to the normal byte path.
+        if b == b'/' && regex_can_start_after(last_sig) {
+            let mut j = i + 1;
+            let mut in_class = false;
+            let mut closed = false;
+            while j < bytes.len() {
+                match bytes[j] {
+                    b'\\' => j += 1,
+                    b'[' => in_class = true,
+                    b']' => in_class = false,
+                    b'/' if !in_class => {
+                        closed = true;
+                        break;
+                    }
+                    b'\n' => break,
+                    _ => {}
+                }
+                j += 1;
+            }
+            if closed {
+                // Skip the flags.
+                j += 1;
+                while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                    j += 1;
+                }
+                i = j;
+                last_sig = Some(b'/');
+                continue;
+            }
+        }
         // String literals — walk past, honouring `\\` escapes.
         if b == b'\'' || b == b'"' {
             let quote = b;
@@ -208,6 +280,7 @@ fn scan_script_for_rune_call(source: &str) -> bool {
                 }
             }
             i = (i + 1).min(bytes.len());
+            last_sig = Some(quote);
             continue;
         }
         // Template literal — skip the literal text but recurse on
@@ -242,6 +315,7 @@ fn scan_script_for_rune_call(source: &str) -> bool {
                 i += 1;
             }
             i = (i + 1).min(bytes.len());
+            last_sig = Some(b'`');
             continue;
         }
         // Try matching a rune marker at this code position.
@@ -271,6 +345,9 @@ fn scan_script_for_rune_call(source: &str) -> bool {
                     }
                 }
             }
+        }
+        if !b.is_ascii_whitespace() {
+            last_sig = Some(b);
         }
         i += 1;
     }
@@ -780,6 +857,28 @@ mod runes_inference_tests {
         // by definition; no scan needed.
         let src = "// no rune calls here";
         assert!(infer_runes_mode(src, &p("foo.svelte.js")));
+    }
+
+    #[test]
+    fn rune_call_inside_regex_literal_does_not_enable_runes() {
+        // A regex literal is not code — `/\$state\(/` must not flip
+        // runes mode (the real compiler stays non-runes here).
+        let src = r"<script>const re = /\$state\(/; void re;</script>";
+        assert!(!infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn rune_call_after_division_still_enables_runes() {
+        // The `/` here is division, not a regex opener — the scan
+        // must not swallow the rest of the script.
+        let src = "<script>let n = 1 / 2;\nlet c = $state(0);\nvoid n; void c;</script>";
+        assert!(infer_runes_mode(src, &p("Foo.svelte")));
+    }
+
+    #[test]
+    fn rune_call_after_regex_literal_still_enables_runes() {
+        let src = r"<script>const re = /x/g; let c = $state(0); void re; void c;</script>";
+        assert!(infer_runes_mode(src, &p("Foo.svelte")));
     }
 }
 

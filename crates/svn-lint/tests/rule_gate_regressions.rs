@@ -1375,3 +1375,68 @@ fn store_rune_conflict_is_unsuppressable() {
         codes(&warnings)
     );
 }
+
+// ----------------------------------------------------------------
+// `$:` placement — upstream compares the label's PARENT against
+// Program, so bare blocks / if bodies at depth 0 still misplace.
+// Verified against svelte 5.56.5.
+// ----------------------------------------------------------------
+
+/// `{ $: x = y }` in a bare block fires despite depth staying 0.
+#[test]
+fn reactive_declaration_in_bare_block_fires() {
+    let src = "\
+<script>
+\tlet y = 1;
+\t{
+\t\t$: x = y;
+\t}
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        codes(&warnings).contains(&"reactive_declaration_invalid_placement"),
+        "$: inside a bare block is not a Program child, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Same for an if body.
+#[test]
+fn reactive_declaration_in_if_body_fires() {
+    let src = "\
+<script>
+\tlet y = 1;
+\tif (y) {
+\t\t$: x = y;
+\t}
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        codes(&warnings).contains(&"reactive_declaration_invalid_placement"),
+        "$: inside an if body is not a Program child, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Control: a top-level `$:` stays clean.
+#[test]
+fn reactive_declaration_at_top_level_is_clean() {
+    let src = "\
+<script>
+\tlet y = 1;
+\t$: x = y;
+\tvoid x;
+</script>
+<p>{x}</p>
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        !codes(&warnings).contains(&"reactive_declaration_invalid_placement"),
+        "top-level $: is valid, got: {:?}",
+        codes(&warnings)
+    );
+}

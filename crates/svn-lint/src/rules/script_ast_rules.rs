@@ -105,11 +105,13 @@ fn run_on_section(
         script_comments,
         script_len: script.content.len() as u32,
         ignore_frames: Vec::new(),
+        at_program_top: false,
     };
     if !bridged.is_empty() {
         walker.ignore_frames.push(bridged);
     }
     for stmt in &program.body {
+        walker.at_program_top = true;
         walker.visit_stmt(stmt);
     }
 }
@@ -140,19 +142,27 @@ struct ScriptWalker<'a, 'src> {
     /// `new` expression). Rule sites read the flattened union via
     /// [`Self::is_ignored`].
     ignore_frames: Vec<Vec<smol_str::SmolStr>>,
+    /// True only while the CURRENT statement is a direct child of
+    /// the Program body — upstream's `$:` placement check compares
+    /// the label's parent against Program, so a bare block or if
+    /// body at depth 0 still counts as "not at top level".
+    at_program_top: bool,
 }
 
 impl<'a, 'src> ScriptWalker<'a, 'src> {
     fn visit_stmt(&mut self, stmt: &Statement<'_>) {
         use oxc_span::GetSpan;
         let pushed = self.push_leading_ignores(stmt.span().start);
-        self.visit_stmt_inner(stmt);
+        // Only the caller's Program-body loop sets the flag; every
+        // statement visited from here down is nested.
+        let at_program_top = std::mem::replace(&mut self.at_program_top, false);
+        self.visit_stmt_inner(stmt, at_program_top);
         if pushed {
             self.ignore_frames.pop();
         }
     }
 
-    fn visit_stmt_inner(&mut self, stmt: &Statement<'_>) {
+    fn visit_stmt_inner(&mut self, stmt: &Statement<'_>, at_program_top: bool) {
         match stmt {
             // Classes.
             Statement::ClassDeclaration(cls) => {
@@ -201,7 +211,7 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
             }
 
             Statement::LabeledStatement(lbl) => {
-                self.visit_labeled(lbl);
+                self.visit_labeled(lbl, at_program_top);
             }
 
             Statement::BlockStatement(block) => {
@@ -554,30 +564,18 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
             .any(|frame| frame.iter().any(|c| c.as_str() == code))
     }
 
-    fn visit_labeled(&mut self, lbl: &LabeledStatement<'_>) {
-        // reactive_declaration_invalid_placement: `$:` that's not
-        // at the program top level of the INSTANCE script. Upstream
-        // fires this outside runes mode only — but the error path
-        // inside runes ignores the label. We match the warning
-        // semantics: non-runes, `$:` below Program body is invalid.
+    fn visit_labeled(&mut self, lbl: &LabeledStatement<'_>, at_program_top: bool) {
+        // reactive_declaration_invalid_placement: `$:` that's not a
+        // DIRECT child of the INSTANCE script's Program. Upstream
+        // compares the label's parent against Program
+        // (`LabeledStatement.js`), so a bare block or if body at
+        // depth 0 still fires (verified against the compiler).
+        // Fires outside runes mode only — the error path inside
+        // runes handles the label instead.
         if lbl.label.name == "$" {
-            // Upstream `LabeledStatement.js:90`:
-            //   if (!analysis.runes) { w.reactive_declaration_invalid_placement(node); }
-            // inside the "not at top level" branch.
-            //
-            // Our function_depth is biased so instance top is 1.
-            // Fires in two cases:
-            //   - Inside a function (depth > instance-top or module-top)
-            //   - Inside the MODULE script at any depth (`$:` in module
-            //     script is always invalid — module-script root equivalent
-            //     to instance-script "not top level" in upstream's eyes).
-            let instance_top = match self.script_ctx {
-                ScriptAstContext::Module => 0,
-                ScriptAstContext::Instance => 1,
-            };
-            let not_at_top = self.function_depth > instance_top;
-            let in_module = self.script_ctx == ScriptAstContext::Module;
-            if (!self.runes) && (not_at_top || in_module) {
+            let is_reactive_statement =
+                self.script_ctx == ScriptAstContext::Instance && at_program_top;
+            if !self.runes && !is_reactive_statement {
                 // Honour a `// svelte-ignore reactive_declaration_invalid_placement`
                 // (or its legacy dashed equivalent) preceding this
                 // `$:` statement inside the same script body.

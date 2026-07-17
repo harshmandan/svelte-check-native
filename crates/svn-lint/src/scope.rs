@@ -782,7 +782,7 @@ impl TreeBuilder {
             in_state_arg_nested: false,
             in_reactive_statement: false,
             is_instance: false,
-            program_depth: start_depth,
+            at_program_top: false,
             // Template expression slices rarely carry
             // `// svelte-ignore` comments (they're inside `{…}`),
             // so skip the precollect for perf.
@@ -1189,7 +1189,7 @@ impl TreeBuilder {
             in_state_arg_nested: false,
             in_reactive_statement: false,
             is_instance,
-            program_depth: start_depth,
+            at_program_top: false,
             script_comments,
             script_content: script.content,
             ignore_frames: Vec::new(),
@@ -1200,6 +1200,7 @@ impl TreeBuilder {
             walker.ignore_frames.push(leading_ignores.to_vec());
         }
         for stmt in &program.body {
+            walker.at_program_top = true;
             walker.visit_stmt(stmt);
         }
         if !leading_ignores.is_empty() {
@@ -1552,9 +1553,11 @@ struct ScriptWalker<'b, 'src> {
     /// `reactive_declaration_module_script_dependency` trigger
     /// behind `ast_type === 'instance'`; we mirror it.
     is_instance: bool,
-    /// `function_depth` value at the start of the current script —
-    /// used to recognize "top-level of Program" for `$:` statements.
-    program_depth: u32,
+    /// True only while the CURRENT statement is a direct child of
+    /// the Program body — upstream recognizes a `$:` reactive
+    /// statement by its parent being Program, so a bare block at
+    /// depth 0 does NOT count.
+    at_program_top: bool,
     /// Index of every comment in the script body (built from
     /// `parsed.program.comments` before the walk starts) — resolves
     /// the leading `// svelte-ignore …` run for any node position.
@@ -1621,7 +1624,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
 
     fn visit_stmt(&mut self, stmt: &Statement<'_>) {
         let pushed = self.push_leading_ignores(Some(stmt.span().start));
-        self.visit_stmt_inner(stmt);
+        // Only the Program-body loop sets the flag; every statement
+        // visited from here down is nested.
+        let at_program_top = std::mem::replace(&mut self.at_program_top, false);
+        self.visit_stmt_inner(stmt, at_program_top);
         if pushed {
             self.ignore_frames.pop();
         }
@@ -1690,7 +1696,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         Some(out)
     }
 
-    fn visit_stmt_inner(&mut self, stmt: &Statement<'_>) {
+    fn visit_stmt_inner(&mut self, stmt: &Statement<'_>, at_program_top: bool) {
         match stmt {
             Statement::VariableDeclaration(vd) => self.visit_var_decl(vd),
             Statement::FunctionDeclaration(f) => {
@@ -1879,7 +1885,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     self.visit_expr(arg);
                 }
             }
-            Statement::LabeledStatement(lbl) => self.visit_labeled(lbl),
+            Statement::LabeledStatement(lbl) => self.visit_labeled(lbl, at_program_top),
             Statement::ThrowStatement(t) => self.visit_expr(&t.argument),
             Statement::ExportDefaultDeclaration(ed) => {
                 use oxc_ast::ast::ExportDefaultDeclarationKind as Ed;
@@ -1908,7 +1914,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         }
     }
 
-    fn visit_labeled(&mut self, lbl: &LabeledStatement<'_>) {
+    fn visit_labeled(&mut self, lbl: &LabeledStatement<'_>, at_program_top: bool) {
         // `$: …` — upstream puts the LHS name into
         // `possible_implicit_declarations` and promotes it to
         // `legacy_reactive` post-walk if no outer binding exists.
@@ -1916,8 +1922,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // `reactive_declaration_module_script_dependency` we need to
         // know the reference sits inside a `$:` block at the top
         // level of the instance script.
-        let is_top_level_reactive =
-            lbl.label.name == "$" && self.is_instance && self.function_depth == self.program_depth;
+        let is_top_level_reactive = lbl.label.name == "$" && self.is_instance && at_program_top;
         if is_top_level_reactive {
             let prev = std::mem::replace(&mut self.in_reactive_statement, true);
             self.visit_stmt(&lbl.body);

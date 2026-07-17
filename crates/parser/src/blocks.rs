@@ -474,18 +474,23 @@ pub(crate) fn parse_await_header(
     // Look for the `then` or `catch` separator keyword at depth zero. Any
     // whitespace run may surround it (upstream: read_expression +
     // allow_whitespace + eat('then')), and the trailing context binding is
-    // optional (`{#await p then}` is the no-binding shorthand). A bare
-    // `then`/`catch` header keeps its historical reading as a shorthand
-    // with an empty promise expression.
-    let (short, split_at) = if let Some(p) = find_keyword_at_depth_zero(header, "then")
-        .or_else(|| if header == "then" { Some(0) } else { None })
-    {
+    // optional (`{#await p then}` is the no-binding shorthand).
+    //
+    // `then` and `catch` are also valid identifiers, so an operand merely
+    // NAMED `then` ({#await flag ? then : fallback}) must stay inside the
+    // promise expression — upstream acorn-parses the expression first and
+    // only then eats the keyword. Each candidate is therefore checked
+    // with [`is_await_branch_split`] before it is allowed to split.
+    let find_branch_keyword = |kw: &str| {
+        find_keywords_at_depth_zero(header, kw)
+            .into_iter()
+            .find(|&p| is_await_branch_split(header, p, kw.len()))
+    };
+    let (short, split_at) = if let Some(p) = find_branch_keyword("then") {
         let ctx_start = header_start + (p + 4) as u32;
         let ctx = trimmed_range(scanner.source(), ctx_start, header_end);
         (AwaitShortForm::Then(ctx), Some(p))
-    } else if let Some(p) = find_keyword_at_depth_zero(header, "catch")
-        .or_else(|| if header == "catch" { Some(0) } else { None })
-    {
+    } else if let Some(p) = find_branch_keyword("catch") {
         let ctx_start = header_start + (p + 5) as u32;
         let ctx = trimmed_range(scanner.source(), ctx_start, header_end);
         (AwaitShortForm::Catch(ctx), Some(p))
@@ -504,6 +509,45 @@ pub(crate) fn parse_await_header(
 
     scanner.set_pos(header_end + 1);
     Some((expression_range, short))
+}
+
+/// Whether the `then`/`catch` keyword at `p` in an await header is the
+/// branch separator rather than an identifier inside the promise
+/// expression. Approximates upstream's parse-expression-first order with
+/// two shape checks: the last significant byte before the keyword must
+/// be able to END an expression (identifier/literal tail, closing
+/// bracket, quote, backtick, or TS non-null `!`), and what follows the
+/// keyword must start a binding pattern — or the header must end there
+/// (`{#await p then}` has no binding).
+fn is_await_branch_split(header: &str, p: usize, kw_len: usize) -> bool {
+    let bytes = header.as_bytes();
+    let mut i = p;
+    while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+        i -= 1;
+    }
+    if i == 0 {
+        // Nothing before the keyword: `{#await then}` awaits a variable
+        // NAMED `then`, it isn't the branch shorthand.
+        return false;
+    }
+    let prev = bytes[i - 1];
+    let prev_can_end_expression = prev.is_ascii_alphanumeric()
+        || prev >= 0x80
+        || matches!(
+            prev,
+            b'_' | b'$' | b')' | b']' | b'}' | b'"' | b'\'' | b'`' | b'!'
+        );
+    if !prev_can_end_expression {
+        return false;
+    }
+    let mut j = p + kw_len;
+    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    match bytes.get(j) {
+        None => true,
+        Some(&b) => b.is_ascii_alphabetic() || b >= 0x80 || matches!(b, b'_' | b'$' | b'{' | b'['),
+    }
 }
 
 #[derive(Debug)]
@@ -668,12 +712,6 @@ pub(crate) fn parse_snippet_header(
 }
 
 // ===== Lexical helpers ===================================================
-
-/// Find the first standalone keyword (`as` / `then` / `catch`) at depth
-/// 0. See [`find_keywords_at_depth_zero`] for the matching rules.
-fn find_keyword_at_depth_zero(src: &str, keyword: &str) -> Option<usize> {
-    find_keywords_at_depth_zero(src, keyword).into_iter().next()
-}
 
 /// Find every standalone keyword occurrence (`as` / `then` / `catch`)
 /// at depth 0 (outside strings / template literals / nested parens /
@@ -1087,6 +1125,61 @@ mod tests {
     }
 
     #[test]
+    fn await_header_operand_named_then_is_not_a_split() {
+        // `{#await flag ? then : fallback}` awaits a conditional whose
+        // branches are variables NAMED `then`/`fallback` — upstream
+        // parses the whole expression first, so no branch split happens.
+        let src = "flag ? then : fallback}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (expr, short) = parse_await_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(expr.slice(src), "flag ? then : fallback");
+        assert!(matches!(short, AwaitShortForm::None), "got {short:?}");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn await_header_bare_then_is_an_expression() {
+        // `{#await then}` awaits a variable named `then` (upstream reads
+        // it with read_expression before trying to eat the keyword).
+        let src = "then}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (expr, short) = parse_await_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(expr.slice(src), "then");
+        assert!(matches!(short, AwaitShortForm::None), "got {short:?}");
+    }
+
+    #[test]
+    fn await_header_second_then_candidate_splits() {
+        // The first ` then ` sits after `?` (can't end an expression);
+        // the second one, after an identifier, is the real separator.
+        let src = "a ? then : b then v}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (expr, short) = parse_await_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(expr.slice(src), "a ? then : b");
+        let AwaitShortForm::Then(Some(ctx)) = short else {
+            panic!("expected then shorthand, got {short:?}");
+        };
+        assert_eq!(ctx.slice(src), "v");
+    }
+
+    #[test]
+    fn await_header_nonnull_assertion_before_then_splits() {
+        // TS postfix `!` can end the promise expression: `{#await p! then v}`.
+        let src = "p! then v}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (expr, short) = parse_await_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(expr.slice(src), "p!");
+        let AwaitShortForm::Then(Some(ctx)) = short else {
+            panic!("expected then shorthand, got {short:?}");
+        };
+        assert_eq!(ctx.slice(src), "v");
+    }
+
+    #[test]
     fn await_header_multiline_promise_expression() {
         let src = "fetchData(\n  url,\n  opts\n)\nthen result}";
         let mut scanner = Scanner::new(src);
@@ -1108,6 +1201,12 @@ mod tests {
         let (expr, short) = parse_await_header(&mut scanner, &mut errors).expect("header parses");
         assert_eq!(expr.slice(src), "p");
         assert!(matches!(short, AwaitShortForm::Then(None)), "got {short:?}");
+    }
+
+    /// First-match convenience over [`find_keywords_at_depth_zero`],
+    /// mirroring how header parsing consumes the candidate list.
+    fn find_keyword_at_depth_zero(src: &str, keyword: &str) -> Option<usize> {
+        find_keywords_at_depth_zero(src, keyword).into_iter().next()
     }
 
     #[test]

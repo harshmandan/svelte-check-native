@@ -1,0 +1,5 @@
+{
+    "clean": true,
+    "warnings": [],
+    "_note": "'then' and 'catch' are valid identifiers, so '{#await flag ? then : fallback}' awaits a conditional expression whose branches are variables NAMED then/fallback — the compiler reads the promise expression with acorn FIRST and only then eats a 'then'/'catch' branch keyword. The await-header splitter used to cut at the first depth-zero whitespace-surrounded 'then', yielding promise 'flag ?' and a phantom binding ': fallback', which desynced the block and reported it unterminated. A candidate keyword now only splits when the byte before it can end an expression (identifier tail, closing bracket, quote, or TS '!') and what follows starts a binding pattern (or the header ends)."
+}

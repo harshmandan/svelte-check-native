@@ -1,121 +1,83 @@
 //! JS/TS AST rules that fire inside `<script>` blocks.
 //!
-//! Script bodies are parsed once by `walk_parsed` (oxc, shared with
-//! the scope builder). We walk the resulting AST with a minimal
-//! visitor that tracks `function_depth` (so we can tell "class
-//! declaration outside the instance scope" from "class declaration
-//! in a helper function"), plus the distinction between
-//! module-script and instance-script.
+//! There is no traversal here: the scope builder's `ScriptWalker`
+//! (`crate::scope`) is the ONE walk over each script body, and it
+//! drives these rules through the [`ScriptRuleHooks`] callbacks at
+//! the node kinds the rules care about. The hooks don't emit
+//! directly — the scope build runs before the `LintContext` is ready
+//! for warnings (and may run twice when the provisional runes answer
+//! flips, discarding the first tree) — so each hook buffers a
+//! [`ScriptRuleEvent`] on the tree builder. [`flush`] replays the
+//! buffer at the pipeline stage where these rules have always
+//! emitted: after the `<svelte:options>` attribute warnings, before
+//! the walk-time binding rules. Buffer order is walk order (module
+//! script first, then instance — upstream's analyze order), so the
+//! user-visible warning order is unchanged.
 //!
 //! Upstream equivalents:
 //! - `perf_avoid_inline_class` → `visitors/NewExpression.js:11`
 //! - `perf_avoid_nested_class` → `visitors/ClassDeclaration.js:21`
 //! - `reactive_declaration_invalid_placement` → `visitors/LabeledStatement.js:90`
+//! - `bidirectional_control_characters` → the Literal / TemplateLiteral visitors
+//! - `legacy_component_creation` → `visitors/ExpressionStatement.js`
 
-use oxc_ast::ast::ClassBody;
-use oxc_ast::ast::{
-    Declaration, Expression, ForStatementInit, LabeledStatement, NewExpression, Program, Statement,
-};
+use oxc_ast::ast::{Expression, LabeledStatement, NewExpression, TemplateLiteral};
+use smol_str::SmolStr;
 use svn_core::Range;
-use svn_parser::document::{Document, ScriptSection};
 
 use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
 
-/// Entry point: run the JS-AST-dependent rules on both script
-/// sections. `module_program` / `instance_program` are the sections'
-/// pre-parsed bodies (parsed once by `walk_parsed`, shared with the
-/// scope builder); a `Some` script section is always paired with a
-/// `Some` program.
-pub fn visit_document(
-    doc: &Document<'_>,
-    fragment: &svn_parser::ast::Fragment,
-    module_program: Option<&Program<'_>>,
-    instance_program: Option<&Program<'_>>,
-    ctx: &mut LintContext<'_>,
-) {
-    // Module first — upstream's analyze walks run module, then
-    // instance, then template, and warnings surface in that order.
-    if let Some(script) = &doc.module_script
-        && let Some(program) = module_program
-    {
-        run_on_section(script, program, fragment, ScriptAstContext::Module, ctx);
-    }
-    if let Some(script) = &doc.instance_script
-        && let Some(program) = instance_program
-    {
-        run_on_section(script, program, fragment, ScriptAstContext::Instance, ctx);
-    }
+/// One buffered rule outcome from the shared script walk.
+pub(crate) enum ScriptRuleEvent {
+    /// A warning fully decided at walk time.
+    Warning {
+        code: Code,
+        message: String,
+        range: Range,
+    },
+    /// `new Callee({ target: … })` — the syntactic half of
+    /// `legacy_component_creation`, matched at walk time. Whether it
+    /// fires depends on `callee` resolving to a default import from a
+    /// `.svelte` source, which needs the FINISHED scope tree — so the
+    /// resolution happens in [`flush`], exactly when the old
+    /// standalone pass ran.
+    LegacyCreationCandidate { callee: SmolStr, range: Range },
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ScriptAstContext {
-    Instance,
-    Module,
+/// Per-script-walk configuration for the rule hooks. Carried as
+/// `Option<ScriptRuleHooks>` by the scope builder's `ScriptWalker`:
+/// `Some` for the module / instance script walks, `None` for the
+/// template mini-expression walks (these rules never ran on template
+/// expressions).
+///
+/// The walker's `function_depth` convention matches upstream's
+/// analyze-phase convention byte-for-byte — the module root scope has
+/// depth 0 and the instance root depth 1 (the implicit component
+/// function) — so hooks read the walker's counter directly. The
+/// walker's `rune_bump` (a `$derived(…)`-argument elevation applied
+/// only to recorded references) is deliberately NOT included:
+/// upstream's perf visitors consult `scope.function_depth`, which the
+/// rune bump never touches.
+#[derive(Clone, Copy)]
+pub(crate) struct ScriptRuleHooks {
+    /// The file's runes mode. The retained scope tree is always the
+    /// one built under the FINAL runes answer (a flip triggers a
+    /// rebuild that discards the first buffer), so this matches
+    /// `ctx.runes` at flush time.
+    pub runes: bool,
+    /// Instance script vs module script.
+    pub is_instance: bool,
 }
 
-fn run_on_section(
-    script: &ScriptSection<'_>,
-    program: &Program<'_>,
-    fragment: &svn_parser::ast::Fragment,
-    script_ctx: ScriptAstContext,
-    ctx: &mut LintContext<'_>,
-) {
-    // Script starts at script.content_range.start in the parent
-    // source — but oxc gives us offsets relative to the content
-    // string. We apply a uniform bias at emit time.
-    let base_offset = script.content_range.start;
-
-    let runes = ctx.runes;
-    // Upstream's function_depth convention: module-script top level
-    // starts at 0; instance-script top level starts at 1 (the
-    // implicit component function). Match that so our T3/perf
-    // thresholds line up byte-for-byte with upstream.
-    let starting_depth = match script_ctx {
-        ScriptAstContext::Module => 0,
-        ScriptAstContext::Instance => 1,
-    };
-
-    // Index the script body's comments so rule sites can resolve a
-    // node's leading `// svelte-ignore …` run (shared semantics with
-    // the scope walker — see `crate::ignore::ScriptComments`).
-    let script_comments = crate::ignore::ScriptComments::build(
-        program.comments.iter().map(|c| (c.span.start, c.span.end)),
-        script.content,
-        runes,
-    );
-
-    // A `<!-- svelte-ignore … -->` template comment immediately
-    // preceding the `<script>` bridges into the whole script body —
-    // upstream's parser attaches it as the Program's leadingComments
-    // (element.js), so its codes sit at the bottom of the ignore
-    // stack for every node in the script.
-    let bridged = crate::scope::collect_preceding_template_ignores(
-        Some(fragment),
-        ctx.source,
-        script.open_tag_range.start,
-        runes,
-    );
-
-    let mut walker = ScriptWalker {
-        ctx,
-        script_ctx,
-        base_offset,
-        function_depth: starting_depth,
-        runes,
-        script_comments,
-        script_len: script.content.len() as u32,
-        ignore_frames: Vec::new(),
-        at_program_top: false,
-    };
-    if !bridged.is_empty() {
-        walker.ignore_frames.push(bridged);
-    }
-    for stmt in &program.body {
-        walker.at_program_top = true;
-        walker.visit_stmt(stmt);
-    }
+/// Does any active ignore frame mention `code`? Upstream's per-node
+/// stack union — an ignore above a statement suppresses warnings
+/// anchored anywhere in the subtree.
+fn is_ignored(frames: &[Vec<SmolStr>], code: Code) -> bool {
+    frames
+        .iter()
+        .any(|frame| frame.iter().any(|c| c.as_str() == code.as_str()))
 }
 
 /// Matches upstream's `regex_bidirectional_control_characters`.
@@ -124,539 +86,219 @@ fn has_bidi_char(s: &str) -> bool {
         .any(|c| matches!(c as u32, 0x202A..=0x202E | 0x2066..=0x2069))
 }
 
-struct ScriptWalker<'a, 'src> {
-    ctx: &'a mut LintContext<'src>,
-    script_ctx: ScriptAstContext,
-    base_offset: u32,
-    function_depth: u32,
-    runes: bool,
-    /// Comment index over the script body — resolves a node's
-    /// leading `// svelte-ignore …` run.
-    script_comments: crate::ignore::ScriptComments,
-    /// Length of the script body in bytes; with `base_offset` this
-    /// recovers the script-content slice of `ctx.source`.
-    script_len: u32,
-    /// Live stack of ignore-code sets — one frame per node entered
-    /// with leading `// svelte-ignore` comments. Upstream pushes a
-    /// frame at EVERY node and consults the whole stack, so an
-    /// ignore above a statement suppresses warnings anchored
-    /// anywhere in the subtree (a nested class, a string literal, a
-    /// `new` expression). Rule sites read the flattened union via
-    /// [`Self::is_ignored`].
-    ignore_frames: Vec<Vec<smol_str::SmolStr>>,
-    /// True only while the CURRENT statement is a direct child of
-    /// the Program body — upstream's `$:` placement check compares
-    /// the label's parent against Program, so a bare block or if
-    /// body at depth 0 still counts as "not at top level".
-    at_program_top: bool,
+impl ScriptRuleHooks {
+    /// Class-declaration statement (named or exported).
+    ///
+    /// `perf_avoid_nested_class`: runes mode only. Upstream
+    /// (`visitors/ClassDeclaration.js:21`):
+    ///   allowed_depth = ast_type === 'module' ? 0 : 1;
+    ///   if (scope.function_depth > allowed_depth) w.perf_avoid_nested_class(node);
+    /// Exported class declarations are syntactically top-level, so
+    /// they sit exactly at the allowed depth and can never trip the
+    /// check — running it uniformly for every class-declaration
+    /// statement is safe.
+    pub fn class_declaration(
+        &self,
+        events: &mut Vec<ScriptRuleEvent>,
+        frames: &[Vec<SmolStr>],
+        function_depth: u32,
+        range: Range,
+    ) {
+        if !self.runes {
+            return;
+        }
+        let allowed = if self.is_instance { 1 } else { 0 };
+        if function_depth > allowed && !is_ignored(frames, Code::perf_avoid_nested_class) {
+            events.push(ScriptRuleEvent::Warning {
+                code: Code::perf_avoid_nested_class,
+                message: messages::perf_avoid_nested_class(),
+                range,
+            });
+        }
+    }
+
+    /// `perf_avoid_inline_class`: `new (class {…})` at any
+    /// function_depth > 0. Upstream (`visitors/NewExpression.js:11`)
+    /// fires only when `callee` is a ClassExpression.
+    pub fn new_expression(
+        &self,
+        events: &mut Vec<ScriptRuleEvent>,
+        frames: &[Vec<SmolStr>],
+        function_depth: u32,
+        ne: &NewExpression<'_>,
+        range: Range,
+    ) {
+        if function_depth > 0
+            && matches!(&ne.callee, Expression::ClassExpression(_))
+            && !is_ignored(frames, Code::perf_avoid_inline_class)
+        {
+            events.push(ScriptRuleEvent::Warning {
+                code: Code::perf_avoid_inline_class,
+                message: messages::perf_avoid_inline_class(),
+                range,
+            });
+        }
+    }
+
+    /// `reactive_declaration_invalid_placement`: a `$:` label that's
+    /// not a DIRECT child of the INSTANCE script's Program. Upstream
+    /// compares the label's parent against Program
+    /// (`LabeledStatement.js:90`), so a bare block or if body at
+    /// depth 0 still fires (verified against the compiler). Fires
+    /// outside runes mode only — the error path inside runes handles
+    /// the label instead.
+    pub fn labeled_statement(
+        &self,
+        events: &mut Vec<ScriptRuleEvent>,
+        frames: &[Vec<SmolStr>],
+        at_program_top: bool,
+        lbl: &LabeledStatement<'_>,
+        range: Range,
+    ) {
+        if lbl.label.name != "$" {
+            return;
+        }
+        let is_reactive_statement = self.is_instance && at_program_top;
+        if !self.runes
+            && !is_reactive_statement
+            && !is_ignored(frames, Code::reactive_declaration_invalid_placement)
+        {
+            events.push(ScriptRuleEvent::Warning {
+                code: Code::reactive_declaration_invalid_placement,
+                message: messages::reactive_declaration_invalid_placement(),
+                range,
+            });
+        }
+    }
+
+    /// `bidirectional_control_characters` on a string literal.
+    pub fn string_literal(
+        &self,
+        events: &mut Vec<ScriptRuleEvent>,
+        frames: &[Vec<SmolStr>],
+        value: &str,
+        range: Range,
+    ) {
+        if has_bidi_char(value) && !is_ignored(frames, Code::bidirectional_control_characters) {
+            events.push(ScriptRuleEvent::Warning {
+                code: Code::bidirectional_control_characters,
+                message: messages::bidirectional_control_characters(),
+                range,
+            });
+        }
+    }
+
+    /// `bidirectional_control_characters` on a template literal's
+    /// quasis. All quasis are checked before the caller walks the
+    /// interpolation expressions, matching upstream's visitor order.
+    pub fn template_literal(
+        &self,
+        events: &mut Vec<ScriptRuleEvent>,
+        frames: &[Vec<SmolStr>],
+        tl: &TemplateLiteral<'_>,
+        base_offset: u32,
+    ) {
+        for q in &tl.quasis {
+            if let Some(cooked) = q.value.cooked.as_deref()
+                && has_bidi_char(cooked)
+                && !is_ignored(frames, Code::bidirectional_control_characters)
+            {
+                events.push(ScriptRuleEvent::Warning {
+                    code: Code::bidirectional_control_characters,
+                    message: messages::bidirectional_control_characters(),
+                    range: Range::new(q.span.start + base_offset, q.span.end + base_offset),
+                });
+            }
+        }
+    }
+
+    /// Upstream `visitors/ExpressionStatement.js` — the Svelte 4
+    /// class-instantiation pattern `new ComponentName({ target: … })`
+    /// that no longer works in Svelte 5. Fires from expression
+    /// STATEMENTS only, so `throw new App({target})` and
+    /// `const app = new App({target})` do not warn (verified against
+    /// the compiler). The callee-resolution half runs at flush time.
+    pub fn expression_statement(
+        &self,
+        events: &mut Vec<ScriptRuleEvent>,
+        frames: &[Vec<SmolStr>],
+        expr: &Expression<'_>,
+        base_offset: u32,
+    ) {
+        let Some((callee, span)) = legacy_creation_candidate(expr) else {
+            return;
+        };
+        if is_ignored(frames, Code::legacy_component_creation) {
+            return;
+        }
+        events.push(ScriptRuleEvent::LegacyCreationCandidate {
+            callee: SmolStr::from(callee),
+            range: Range::new(span.start + base_offset, span.end + base_offset),
+        });
+    }
 }
 
-impl<'a, 'src> ScriptWalker<'a, 'src> {
-    fn visit_stmt(&mut self, stmt: &Statement<'_>) {
-        use oxc_span::GetSpan;
-        let pushed = self.push_leading_ignores(stmt.span().start);
-        // Only the caller's Program-body loop sets the flag; every
-        // statement visited from here down is nested.
-        let at_program_top = std::mem::replace(&mut self.at_program_top, false);
-        self.visit_stmt_inner(stmt, at_program_top);
-        if pushed {
-            self.ignore_frames.pop();
-        }
+/// The syntactic half of `legacy_component_creation`: a `new` on a
+/// bare identifier with exactly one argument — an ObjectExpression
+/// carrying a `target` property. `new Foo()` and `new Foo({})`
+/// deliberately skip.
+fn legacy_creation_candidate<'a>(expr: &'a Expression<'_>) -> Option<(&'a str, oxc_span::Span)> {
+    let Expression::NewExpression(ne) = expr else {
+        return None;
+    };
+    let Expression::Identifier(callee) = &ne.callee else {
+        return None;
+    };
+    if ne.arguments.len() != 1 {
+        return None;
     }
+    let arg = ne.arguments[0].as_expression()?;
+    let Expression::ObjectExpression(obj) = arg else {
+        return None;
+    };
+    let has_target = obj.properties.iter().any(|p| {
+        matches!(
+            p,
+            oxc_ast::ast::ObjectPropertyKind::ObjectProperty(op)
+                if matches!(&op.key, oxc_ast::ast::PropertyKey::StaticIdentifier(k) if k.name.as_str() == "target")
+        )
+    });
+    has_target.then(|| (callee.name.as_str(), ne.span))
+}
 
-    fn visit_stmt_inner(&mut self, stmt: &Statement<'_>, at_program_top: bool) {
-        match stmt {
-            // Classes.
-            Statement::ClassDeclaration(cls) => {
-                // perf_avoid_nested_class: runes mode only. Allowed
-                // at function_depth 0 in module scripts, at
-                // function_depth 1 (component scope) in instance
-                // scripts. Fires above that.
-                //
-                // Upstream logic:
-                //   allowed_depth = ast_type === 'module' ? 0 : 1;
-                //   if (scope.function_depth > allowed_depth) w.perf_avoid_nested_class(node);
-                //
-                // Our `function_depth` convention: 0 at the
-                // program top level, incremented on entering a
-                // function. Module scripts stay at 0 at top level;
-                // instance-script top-level is ALSO 0 (the
-                // component scope is a virtual implicit function in
-                // upstream — we need to model that).
-                if self.runes {
-                    // Upstream: allowed_depth = (ast_type === 'module') ? 0 : 1.
-                    // We've biased function_depth so module top is
-                    // 0 and instance top is 1, matching upstream.
-                    let allowed = match self.script_ctx {
-                        ScriptAstContext::Module => 0,
-                        ScriptAstContext::Instance => 1,
-                    };
-                    if self.function_depth > allowed
-                        && !self.is_ignored(Code::perf_avoid_nested_class.as_str())
-                    {
-                        let range = self.abs_range(cls.span.start, cls.span.end);
-                        let msg = messages::perf_avoid_nested_class();
-                        self.ctx.emit(Code::perf_avoid_nested_class, msg, range);
-                    }
-                }
-                self.visit_class_body(&cls.body);
-            }
-
-            Statement::FunctionDeclaration(f) => {
-                self.function_depth += 1;
-                if let Some(body) = &f.body {
-                    for s in &body.statements {
-                        self.visit_stmt(s);
-                    }
-                }
-                self.function_depth -= 1;
-            }
-
-            Statement::LabeledStatement(lbl) => {
-                self.visit_labeled(lbl, at_program_top);
-            }
-
-            Statement::BlockStatement(block) => {
-                for s in &block.body {
-                    self.visit_stmt(s);
-                }
-            }
-
-            Statement::IfStatement(i) => {
-                self.visit_stmt(&i.consequent);
-                if let Some(alt) = &i.alternate {
-                    self.visit_stmt(alt);
-                }
-                self.visit_expr(&i.test);
-            }
-            Statement::ForStatement(f) => {
-                if let Some(init) = &f.init {
-                    match init {
-                        ForStatementInit::VariableDeclaration(vd) => {
-                            for d in &vd.declarations {
-                                if let Some(i) = &d.init {
-                                    self.visit_expr(i);
-                                }
-                            }
-                        }
-                        other => {
-                            if let Some(e) = other.as_expression() {
-                                self.visit_expr(e);
-                            }
-                        }
-                    }
-                }
-                if let Some(t) = &f.test {
-                    self.visit_expr(t);
-                }
-                if let Some(u) = &f.update {
-                    self.visit_expr(u);
-                }
-                self.visit_stmt(&f.body);
-            }
-            Statement::ForInStatement(f) => {
-                self.visit_expr(&f.right);
-                self.visit_stmt(&f.body);
-            }
-            Statement::ForOfStatement(f) => {
-                self.visit_expr(&f.right);
-                self.visit_stmt(&f.body);
-            }
-            Statement::SwitchStatement(s) => {
-                self.visit_expr(&s.discriminant);
-                for case in &s.cases {
-                    if let Some(t) = &case.test {
-                        self.visit_expr(t);
-                    }
-                    for st in &case.consequent {
-                        self.visit_stmt(st);
-                    }
-                }
-            }
-            Statement::ThrowStatement(t) => {
-                // legacy_component_creation deliberately NOT checked
-                // here — upstream fires it from its
-                // ExpressionStatement visitor only, so
-                // `throw new App({target})` does not warn (verified
-                // against the compiler).
-                self.visit_expr(&t.argument);
-            }
-            Statement::WhileStatement(w) => {
-                self.visit_expr(&w.test);
-                self.visit_stmt(&w.body);
-            }
-            Statement::DoWhileStatement(d) => {
-                self.visit_stmt(&d.body);
-                self.visit_expr(&d.test);
-            }
-            // Exported declarations descend into their bodies / inits.
-            // (An exported decl is always at module top level, so it can
-            // never trip perf_avoid_nested_class itself — only nested
-            // constructs inside it matter.)
-            Statement::ExportNamedDeclaration(e) => match &e.declaration {
-                Some(Declaration::VariableDeclaration(vd)) => {
-                    for d in &vd.declarations {
-                        if let Some(i) = &d.init {
-                            self.visit_expr(i);
-                        }
-                    }
-                }
-                Some(Declaration::FunctionDeclaration(f)) => {
-                    self.function_depth += 1;
-                    if let Some(body) = &f.body {
-                        for s in &body.statements {
-                            self.visit_stmt(s);
-                        }
-                    }
-                    self.function_depth -= 1;
-                }
-                Some(Declaration::ClassDeclaration(c)) => self.visit_class_body(&c.body),
-                _ => {}
-            },
-            Statement::TryStatement(t) => {
-                for s in &t.block.body {
-                    self.visit_stmt(s);
-                }
-                if let Some(h) = &t.handler {
-                    for s in &h.body.body {
-                        self.visit_stmt(s);
-                    }
-                }
-                if let Some(f) = &t.finalizer {
-                    for s in &f.body {
-                        self.visit_stmt(s);
-                    }
-                }
-            }
-            Statement::ExpressionStatement(es) => {
-                self.check_legacy_component_creation(&es.expression);
-                self.visit_expr(&es.expression);
-            }
-            Statement::ReturnStatement(r) => {
-                if let Some(arg) = &r.argument {
-                    self.visit_expr(arg);
-                }
-            }
-            Statement::VariableDeclaration(vd) => {
-                for decl in &vd.declarations {
-                    if let Some(init) = &decl.init {
-                        self.visit_expr(init);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn visit_expr(&mut self, expr: &Expression<'_>) {
-        use oxc_span::GetSpan;
-        let pushed = self.push_leading_ignores(expr.span().start);
-        self.visit_expr_inner(expr);
-        if pushed {
-            self.ignore_frames.pop();
-        }
-    }
-
-    fn visit_expr_inner(&mut self, expr: &Expression<'_>) {
-        match expr {
-            Expression::StringLiteral(lit) => {
-                if has_bidi_char(&lit.value)
-                    && !self.is_ignored(Code::bidirectional_control_characters.as_str())
-                {
-                    let range = self.abs_range(lit.span.start, lit.span.end);
-                    let msg = messages::bidirectional_control_characters();
-                    self.ctx
-                        .emit(Code::bidirectional_control_characters, msg, range);
-                }
-            }
-            Expression::TemplateLiteral(tl) => {
-                for q in &tl.quasis {
-                    if let Some(cooked) = q.value.cooked.as_deref() {
-                        if has_bidi_char(cooked)
-                            && !self.is_ignored(Code::bidirectional_control_characters.as_str())
-                        {
-                            let range = self.abs_range(q.span.start, q.span.end);
-                            let msg = messages::bidirectional_control_characters();
-                            self.ctx
-                                .emit(Code::bidirectional_control_characters, msg, range);
-                        }
-                    }
-                }
-                for e in &tl.expressions {
-                    self.visit_expr(e);
-                }
-            }
-            Expression::NewExpression(ne) => self.visit_new(ne),
-            Expression::ArrowFunctionExpression(arr) => {
-                self.function_depth += 1;
-                for s in &arr.body.statements {
-                    self.visit_stmt(s);
-                }
-                self.function_depth -= 1;
-            }
-            Expression::FunctionExpression(f) => {
-                self.function_depth += 1;
-                if let Some(body) = &f.body {
-                    for s in &body.statements {
-                        self.visit_stmt(s);
-                    }
-                }
-                self.function_depth -= 1;
-            }
-            Expression::ClassExpression(cls) => {
-                // Nested class inside expression position. Rule
-                // fires via perf_avoid_inline_class on the parent
-                // NewExpression (not here); we still walk the body
-                // to catch further nested rules.
-                self.visit_class_body(&cls.body);
-            }
-            Expression::CallExpression(call) => {
-                self.visit_expr(&call.callee);
-                for a in &call.arguments {
-                    self.visit_argument(a);
-                }
-            }
-            Expression::ParenthesizedExpression(p) => self.visit_expr(&p.expression),
-            Expression::AssignmentExpression(a) => self.visit_expr(&a.right),
-            Expression::BinaryExpression(b) => {
-                self.visit_expr(&b.left);
-                self.visit_expr(&b.right);
-            }
-            Expression::LogicalExpression(l) => {
-                self.visit_expr(&l.left);
-                self.visit_expr(&l.right);
-            }
-            Expression::ConditionalExpression(c) => {
-                self.visit_expr(&c.test);
-                self.visit_expr(&c.consequent);
-                self.visit_expr(&c.alternate);
-            }
-            Expression::SequenceExpression(s) => {
-                for e in &s.expressions {
-                    self.visit_expr(e);
-                }
-            }
-            Expression::AwaitExpression(a) => self.visit_expr(&a.argument),
-            Expression::UnaryExpression(u) => self.visit_expr(&u.argument),
-            Expression::ArrayExpression(a) => {
-                for el in &a.elements {
-                    use oxc_ast::ast::ArrayExpressionElement as AE;
-                    match el {
-                        // `as_expression()` is None for spreads —
-                        // walk the argument so nothing inside
-                        // `[...(xs)]` goes unchecked.
-                        AE::SpreadElement(s) => self.visit_expr(&s.argument),
-                        AE::Elision(_) => {}
-                        other => {
-                            if let Some(e) = other.as_expression() {
-                                self.visit_expr(e);
-                            }
-                        }
-                    }
-                }
-            }
-            Expression::ObjectExpression(o) => {
-                for prop in &o.properties {
-                    // Frame anchors at the PROPERTY span — a comment
-                    // before `key:` must suppress inside the value.
-                    use oxc_span::GetSpan;
-                    let pushed = self.push_leading_ignores(prop.span().start);
-                    if let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(op) = prop {
-                        self.visit_expr(&op.value);
-                    } else if let oxc_ast::ast::ObjectPropertyKind::SpreadProperty(sp) = prop {
-                        self.visit_expr(&sp.argument);
-                    }
-                    if pushed {
-                        self.ignore_frames.pop();
-                    }
-                }
-            }
-            Expression::StaticMemberExpression(m) => self.visit_expr(&m.object),
-            Expression::ComputedMemberExpression(m) => {
-                self.visit_expr(&m.object);
-                self.visit_expr(&m.expression);
-            }
-            _ => {}
-        }
-    }
-
-    fn visit_class_body(&mut self, body: &ClassBody<'_>) {
-        for member in &body.body {
-            use oxc_ast::ast::ClassElement;
-            use oxc_span::GetSpan;
-            let pushed = self.push_leading_ignores(member.span().start);
-            match member {
-                ClassElement::MethodDefinition(m) => {
-                    if let Some(body) = &m.value.body {
-                        self.function_depth += 1;
-                        for s in &body.statements {
-                            self.visit_stmt(s);
-                        }
-                        self.function_depth -= 1;
-                    }
-                }
-                ClassElement::PropertyDefinition(p) => {
-                    if let Some(v) = &p.value {
-                        self.visit_expr(v);
-                    }
-                }
-                _ => {}
-            }
-            if pushed {
-                self.ignore_frames.pop();
-            }
-        }
-    }
-
-    fn visit_new(&mut self, ne: &NewExpression<'_>) {
-        // perf_avoid_inline_class: `new (class {...})` at any
-        // function_depth > 0. Upstream fires only when `callee` is
-        // a ClassExpression.
-        if self.function_depth > 0
-            && let Expression::ClassExpression(_) = &ne.callee
-            && !self.is_ignored(Code::perf_avoid_inline_class.as_str())
-        {
-            let range = self.abs_range(ne.span.start, ne.span.end);
-            let msg = messages::perf_avoid_inline_class();
-            self.ctx.emit(Code::perf_avoid_inline_class, msg, range);
-        }
-        // Continue walking — inner callee might be another
-        // expression with nested classes.
-        self.visit_expr(&ne.callee);
-        for a in &ne.arguments {
-            self.visit_argument(a);
-        }
-    }
-
-    /// One call/new argument. `as_expression()` is None for
-    /// `Argument::SpreadElement`, so spreads need their own arm —
-    /// otherwise the bidi/perf checks are blind inside `f(...args)`.
-    fn visit_argument(&mut self, a: &oxc_ast::ast::Argument<'_>) {
-        if let oxc_ast::ast::Argument::SpreadElement(s) = a {
-            self.visit_expr(&s.argument);
-        } else if let Some(e) = a.as_expression() {
-            self.visit_expr(e);
-        }
-    }
-
-    /// Resolve the `// svelte-ignore …` run leading the node at
-    /// `span_start` (script-local offset) and push it as a new
-    /// ignore frame. Returns `true` if a frame was pushed so the
-    /// caller pops on exit.
-    fn push_leading_ignores(&mut self, span_start: u32) -> bool {
-        if !self.script_comments.has_ignores() {
-            return false;
-        }
-        let content = &self.ctx.source
-            [self.base_offset as usize..(self.base_offset + self.script_len) as usize];
-        let codes = self.script_comments.leading_ignores(content, span_start);
-        if codes.is_empty() {
-            false
-        } else {
-            self.ignore_frames.push(codes);
-            true
-        }
-    }
-
-    /// Does any active ignore frame mention `code`? Upstream's
-    /// per-node stack union.
-    fn is_ignored(&self, code: &str) -> bool {
-        self.ignore_frames
-            .iter()
-            .any(|frame| frame.iter().any(|c| c.as_str() == code))
-    }
-
-    fn visit_labeled(&mut self, lbl: &LabeledStatement<'_>, at_program_top: bool) {
-        // reactive_declaration_invalid_placement: `$:` that's not a
-        // DIRECT child of the INSTANCE script's Program. Upstream
-        // compares the label's parent against Program
-        // (`LabeledStatement.js`), so a bare block or if body at
-        // depth 0 still fires (verified against the compiler).
-        // Fires outside runes mode only — the error path inside
-        // runes handles the label instead.
-        if lbl.label.name == "$" {
-            let is_reactive_statement =
-                self.script_ctx == ScriptAstContext::Instance && at_program_top;
-            if !self.runes && !is_reactive_statement {
-                // Honour a `// svelte-ignore reactive_declaration_invalid_placement`
-                // (or its legacy dashed equivalent) preceding this
-                // `$:` statement inside the same script body.
-                let is_ignored =
-                    self.is_ignored(Code::reactive_declaration_invalid_placement.as_str());
-                if !is_ignored {
-                    let range = self.abs_range(lbl.span.start, lbl.span.end);
-                    let msg = messages::reactive_declaration_invalid_placement();
-                    self.ctx
-                        .emit(Code::reactive_declaration_invalid_placement, msg, range);
+/// Replay the buffered events in walk order. Runs at the pipeline
+/// stage where this module's standalone walk used to emit, with the
+/// finished scope tree available on `ctx` for the
+/// `legacy_component_creation` callee resolution: the callee must be
+/// a default import from a `.svelte` source.
+pub(crate) fn flush(events: Vec<ScriptRuleEvent>, ctx: &mut LintContext<'_>) {
+    for event in events {
+        match event {
+            ScriptRuleEvent::Warning {
+                code,
+                message,
+                range,
+            } => ctx.emit(code, message, range),
+            ScriptRuleEvent::LegacyCreationCandidate { callee, range } => {
+                let Some(tree) = &ctx.scope_tree else {
+                    continue;
+                };
+                let Some(bid) = tree.resolve_from_template(&callee) else {
+                    continue;
+                };
+                let is_svelte_default_import = matches!(
+                    &tree.binding(bid).initial,
+                    crate::scope::InitialKind::Import { source, is_default: true }
+                        if source.ends_with(".svelte")
+                );
+                if is_svelte_default_import {
+                    ctx.emit(
+                        Code::legacy_component_creation,
+                        messages::legacy_component_creation(),
+                        range,
+                    );
                 }
             }
         }
-
-        // Recurse into the label's body.
-        self.visit_stmt(&lbl.body);
-    }
-
-    fn abs_range(&self, start: u32, end: u32) -> Range {
-        Range::new(start + self.base_offset, end + self.base_offset)
-    }
-
-    /// Upstream `visitors/ExpressionStatement.js`. Fires on
-    /// `new ComponentName({ target: … })` when `ComponentName` is a
-    /// default import from a `.svelte` file — the Svelte 4 class-
-    /// instantiation pattern that no longer works in Svelte 5.
-    fn check_legacy_component_creation(&mut self, expr: &Expression<'_>) {
-        let Expression::NewExpression(ne) = expr else {
-            return;
-        };
-        // Callee must be a bare identifier.
-        let Expression::Identifier(callee) = &ne.callee else {
-            return;
-        };
-        // Exactly one argument — an ObjectExpression with a `target`
-        // property. `new Foo()` and `new Foo({})` deliberately skip.
-        if ne.arguments.len() != 1 {
-            return;
-        }
-        let Some(arg) = ne.arguments[0].as_expression() else {
-            return;
-        };
-        let Expression::ObjectExpression(obj) = arg else {
-            return;
-        };
-        let has_target = obj.properties.iter().any(|p| {
-            matches!(
-                p,
-                oxc_ast::ast::ObjectPropertyKind::ObjectProperty(op)
-                    if matches!(&op.key, oxc_ast::ast::PropertyKey::StaticIdentifier(k) if k.name.as_str() == "target")
-            )
-        });
-        if !has_target {
-            return;
-        }
-        // Callee must resolve to a default import from a `.svelte`
-        // source.
-        let Some(tree) = &self.ctx.scope_tree else {
-            return;
-        };
-        let name = callee.name.as_str();
-        let Some(bid) = tree.resolve_from_template(name) else {
-            return;
-        };
-        let b = tree.binding(bid);
-        let matches = matches!(
-            &b.initial,
-            crate::scope::InitialKind::Import { source, is_default: true }
-                if source.ends_with(".svelte")
-        );
-        if !matches {
-            return;
-        }
-        if self.is_ignored(crate::codes::Code::legacy_component_creation.as_str()) {
-            return;
-        }
-        let range = self.abs_range(ne.span.start, ne.span.end);
-        let msg = crate::messages::legacy_component_creation();
-        self.ctx
-            .emit(crate::codes::Code::legacy_component_creation, msg, range);
     }
 }

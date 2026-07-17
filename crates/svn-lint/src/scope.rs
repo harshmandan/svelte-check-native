@@ -37,6 +37,7 @@ use svn_core::Range;
 use svn_parser::document::{Document, ScriptSection};
 use svn_parser::parse_script_body;
 
+use crate::rules::script_ast_rules::{ScriptRuleEvent, ScriptRuleHooks};
 pub use crate::scope_rune_detection::is_rune_name;
 use crate::scope_rune_detection::{
     detect_bindable_default, detect_rune_call_from_call, is_primitive_expr, is_primitive_rune_init,
@@ -99,6 +100,12 @@ pub struct ScopeTree {
     /// when it differs from `local`).
     nonrunes_export_idents: Vec<SmolStr>,
     nonrunes_export_specs: Vec<(SmolStr, Option<SmolStr>)>,
+    /// Script-AST rule events buffered by the [`ScriptRuleHooks`]
+    /// callbacks during the module / instance script walks (see
+    /// `crate::rules::script_ast_rules`). The walk itself emits no
+    /// warnings — `walk_parsed` takes this buffer once the tree is
+    /// final and flushes it at the stage where those rules emit.
+    pub(crate) script_rule_events: Vec<crate::rules::script_ast_rules::ScriptRuleEvent>,
 }
 
 impl ScopeTree {
@@ -403,6 +410,9 @@ struct TreeBuilder {
     expr_alloc: Option<oxc_allocator::Allocator>,
     /// See [`ScopeTree::has_await`].
     has_await: bool,
+    /// See [`ScopeTree::script_rule_events`] — filled by the
+    /// [`ScriptRuleHooks`] callbacks during the script walks.
+    script_rule_events: Vec<ScriptRuleEvent>,
 }
 
 struct PendingRef {
@@ -469,6 +479,7 @@ impl TreeBuilder {
             nonrunes_export_specs: Vec::new(),
             expr_alloc: None,
             has_await: false,
+            script_rule_events: Vec::new(),
         }
     }
 
@@ -804,6 +815,7 @@ impl TreeBuilder {
             // Template expressions count toward the runes await
             // trigger (upstream: fragment create_scopes has_await).
             counts_await: true,
+            hooks: None,
         };
         for stmt in &parsed.program.body {
             walker.visit_stmt(stmt);
@@ -1209,6 +1221,7 @@ impl TreeBuilder {
             script_content: script.content,
             ignore_frames: Vec::new(),
             counts_await: is_instance,
+            hooks: Some(ScriptRuleHooks { runes, is_instance }),
         };
         // Push the template-comment ignores so they apply to every
         // reference recorded during this script walk.
@@ -1339,6 +1352,7 @@ impl TreeBuilder {
             custom_element_props_ignored: self.custom_element_props_ignored,
             nonrunes_export_idents: self.nonrunes_export_idents,
             nonrunes_export_specs: self.nonrunes_export_specs,
+            script_rule_events: self.script_rule_events,
         }
     }
 }
@@ -1610,6 +1624,12 @@ struct ScriptWalker<'b, 'src> {
     /// and template expression walks, false for the module script
     /// (upstream consults only `has_await || instance.has_await`).
     counts_await: bool,
+    /// Script-AST rule callbacks riding this walk — `Some` for the
+    /// module / instance script walks, `None` for template
+    /// mini-expression walks (those rules never ran on template
+    /// expressions). Hook sites buffer events into
+    /// `tree.script_rule_events`; nothing is emitted during the walk.
+    hooks: Option<ScriptRuleHooks>,
 }
 
 impl<'b, 'src> ScriptWalker<'b, 'src> {
@@ -1916,7 +1936,17 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     }
                 });
             }
-            Statement::ExpressionStatement(es) => self.visit_expr(&es.expression),
+            Statement::ExpressionStatement(es) => {
+                if let Some(h) = self.hooks {
+                    h.expression_statement(
+                        &mut self.tree.script_rule_events,
+                        &self.ignore_frames,
+                        &es.expression,
+                        self.base_offset,
+                    );
+                }
+                self.visit_expr(&es.expression)
+            }
             Statement::ReturnStatement(r) => {
                 if let Some(arg) = &r.argument {
                     self.visit_expr(arg);
@@ -1959,6 +1989,16 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // `reactive_declaration_module_script_dependency` we need to
         // know the reference sits inside a `$:` block at the top
         // level of the instance script.
+        if let Some(h) = self.hooks {
+            let range = self.abs(lbl.span.start, lbl.span.end);
+            h.labeled_statement(
+                &mut self.tree.script_rule_events,
+                &self.ignore_frames,
+                at_program_top,
+                lbl,
+                range,
+            );
+        }
         let is_top_level_reactive = lbl.label.name == "$" && self.is_instance && at_program_top;
         if is_top_level_reactive {
             let prev = std::mem::replace(&mut self.in_reactive_statement, true);
@@ -1970,6 +2010,15 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     }
 
     fn visit_class_decl(&mut self, cls: &Class<'_>) {
+        if let Some(h) = self.hooks {
+            let range = self.abs(cls.span.start, cls.span.end);
+            h.class_declaration(
+                &mut self.tree.script_rule_events,
+                &self.ignore_frames,
+                self.function_depth,
+                range,
+            );
+        }
         if let Some(id) = &cls.id {
             self.declare_with_ignores(
                 self.cur_scope(),
@@ -2435,6 +2484,16 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             }
             Expression::CallExpression(c) => self.visit_call(c),
             Expression::NewExpression(n) => {
+                if let Some(h) = self.hooks {
+                    let range = self.abs(n.span.start, n.span.end);
+                    h.new_expression(
+                        &mut self.tree.script_rule_events,
+                        &self.ignore_frames,
+                        self.function_depth,
+                        n,
+                        range,
+                    );
+                }
                 self.visit_expr(&n.callee);
                 for a in &n.arguments {
                     self.visit_argument(a, false);
@@ -2509,7 +2568,26 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 // inner expression.
                 self.visit_expr(&p.expression);
             }
+            Expression::StringLiteral(lit) => {
+                if let Some(h) = self.hooks {
+                    let range = self.abs(lit.span.start, lit.span.end);
+                    h.string_literal(
+                        &mut self.tree.script_rule_events,
+                        &self.ignore_frames,
+                        &lit.value,
+                        range,
+                    );
+                }
+            }
             Expression::TemplateLiteral(t) => {
+                if let Some(h) = self.hooks {
+                    h.template_literal(
+                        &mut self.tree.script_rule_events,
+                        &self.ignore_frames,
+                        t,
+                        self.base_offset,
+                    );
+                }
                 for e in &t.expressions {
                     self.visit_expr(e);
                 }

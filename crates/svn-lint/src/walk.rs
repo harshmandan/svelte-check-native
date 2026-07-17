@@ -465,6 +465,12 @@ pub fn walk_parsed(
             );
         }
     }
+    // Script-AST rule events (perf_avoid_inline_class, bidi, …) were
+    // buffered by the scope build's rule hooks — the retained tree is
+    // always the one built under the FINAL runes mode, so the buffer
+    // matches `ctx.runes`. Flushed below at the stage where the
+    // standalone script-AST walk used to emit.
+    let script_rule_events = std::mem::take(&mut tree.script_rule_events);
     ctx.scope_tree = Some(tree);
 
     // <script>-attribute rules (script_unknown_attribute is
@@ -502,14 +508,11 @@ pub fn walk_parsed(
 
     // <script>-body (JS/TS AST) rules: perf_avoid_inline_class,
     // perf_avoid_nested_class, reactive_declaration_invalid_placement,
-    // ... (module first, then instance — upstream walk order).
-    crate::rules::script_ast_rules::visit_document(
-        doc,
-        fragment,
-        module_program,
-        instance_program,
-        ctx,
-    );
+    // ... — buffered during the shared script walk (module first,
+    // then instance — upstream walk order), replayed here so they
+    // land between the options warnings and the walk-time binding
+    // rules exactly as the standalone walk did.
+    crate::rules::script_ast_rules::flush(script_rule_events, ctx);
 
     // Walk-time binding rules (state_referenced_locally, …) —
     // upstream fires these during the instance walk, so they land

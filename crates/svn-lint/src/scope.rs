@@ -1626,9 +1626,10 @@ struct ScriptWalker<'b, 'src> {
     counts_await: bool,
     /// Script-AST rule callbacks riding this walk — `Some` for the
     /// module / instance script walks, `None` for template
-    /// mini-expression walks (those rules never ran on template
-    /// expressions). Hook sites buffer events into
-    /// `tree.script_rule_events`; nothing is emitted during the walk.
+    /// mini-expression walks (the rules are scoped to `<script>`
+    /// bodies and do not fire inside template `{…}` expressions).
+    /// Hook sites buffer events into `tree.script_rule_events`;
+    /// nothing is emitted during the walk.
     hooks: Option<ScriptRuleHooks>,
 }
 

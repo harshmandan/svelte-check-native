@@ -8,11 +8,10 @@
 //! for warnings (and may run twice when the provisional runes answer
 //! flips, discarding the first tree) — so each hook buffers a
 //! [`ScriptRuleEvent`] on the tree builder. [`flush`] replays the
-//! buffer at the pipeline stage where these rules have always
-//! emitted: after the `<svelte:options>` attribute warnings, before
-//! the walk-time binding rules. Buffer order is walk order (module
-//! script first, then instance — upstream's analyze order), so the
-//! user-visible warning order is unchanged.
+//! buffer after the `<svelte:options>` attribute warnings and before
+//! the walk-time binding rules, in walk order (module script first,
+//! then instance) — the position and order these warnings surface in
+//! upstream's analyze pipeline.
 //!
 //! Upstream equivalents:
 //! - `perf_avoid_inline_class` → `visitors/NewExpression.js:11`
@@ -41,16 +40,16 @@ pub(crate) enum ScriptRuleEvent {
     /// `legacy_component_creation`, matched at walk time. Whether it
     /// fires depends on `callee` resolving to a default import from a
     /// `.svelte` source, which needs the FINISHED scope tree — so the
-    /// resolution happens in [`flush`], exactly when the old
-    /// standalone pass ran.
+    /// resolution happens in [`flush`].
     LegacyCreationCandidate { callee: SmolStr, range: Range },
 }
 
 /// Per-script-walk configuration for the rule hooks. Carried as
 /// `Option<ScriptRuleHooks>` by the scope builder's `ScriptWalker`:
 /// `Some` for the module / instance script walks, `None` for the
-/// template mini-expression walks (these rules never ran on template
-/// expressions).
+/// template mini-expression walks — these rules are scoped to the
+/// `<script>` bodies and do not fire inside template `{…}`
+/// expressions.
 ///
 /// The walker's `function_depth` convention matches upstream's
 /// analyze-phase convention byte-for-byte — the module root scope has
@@ -266,11 +265,12 @@ fn legacy_creation_candidate<'a>(expr: &'a Expression<'_>) -> Option<(&'a str, o
     has_target.then(|| (callee.name.as_str(), ne.span))
 }
 
-/// Replay the buffered events in walk order. Runs at the pipeline
-/// stage where this module's standalone walk used to emit, with the
-/// finished scope tree available on `ctx` for the
-/// `legacy_component_creation` callee resolution: the callee must be
-/// a default import from a `.svelte` source.
+/// Replay the buffered events in walk order. Runs after the
+/// `<svelte:options>` attribute warnings and before the walk-time
+/// binding rules (see the module doc), with the finished scope tree
+/// available on `ctx` for the `legacy_component_creation` callee
+/// resolution: the callee must be a default import from a `.svelte`
+/// source.
 pub(crate) fn flush(events: Vec<ScriptRuleEvent>, ctx: &mut LintContext<'_>) {
     for event in events {
         match event {

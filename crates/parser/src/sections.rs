@@ -1,15 +1,26 @@
-//! Structural top-level parser.
+//! Top-level `<script>` / `<style>` section machinery.
 //!
-//! Walks the source and identifies top-level `<script>`, `<script context="module">`,
-//! and `<style>` sections. Everything not inside one of those is template text.
+//! Section-ness is decided inside the template parser: [`parse_sections`]
+//! drives one document-mode walk of the whole source
+//! ([`crate::template::scan_document_sections`]), and a `<script>` /
+//! `<style>` open tag encountered while the parser's open-frame stack is
+//! empty — no element open, no block open — is a top-level section. That
+//! is the same rule the Svelte compiler applies (`element.js`: sections
+//! iff `current.type === 'Root'`, where elements and blocks both push a
+//! parser-stack frame). Everything else — an analytics snippet under
+//! `<svelte:head>`, a CDN loader gated behind `{#if}`, a commented-out
+//! reference implementation — is a template element (or comment text) by
+//! construction, because the template parser already knows every
+//! construct that can enclose a tag.
 //!
-//! Inside a script or style block, HTML rules apply: everything up to the
-//! matching `</script>` / `</style>` (case-insensitive) is opaque — we don't
-//! interpret strings, comments, or template literals. This matches browser
-//! HTML parsing (and Svelte's own parser).
-//!
-//! The body of script blocks is recovered verbatim so oxc can parse it; the
-//! body of style blocks is recovered for future CSS validation.
+//! This module owns what happens once a tag IS a section: the opaque
+//! read of `<TAG ...>body</TAG>` (HTML rules — everything up to the
+//! matching case-insensitive close tag is uninterpreted, matching
+//! browser parsing and Svelte's own), attribute / lang / context /
+//! generics interpretation, duplicate-section errors, and accumulation
+//! of the template text runs (everything not claimed by a section).
+//! Script bodies are recovered verbatim so oxc can parse them; style
+//! bodies are recovered for CSS validation.
 
 use svn_core::Range;
 
@@ -17,7 +28,6 @@ use crate::document::{
     Document, ScriptAttr, ScriptContext, ScriptLang, ScriptSection, StyleSection, Template,
 };
 use crate::error::ParseError;
-use crate::mustache::{MustacheSigil, classify_mustache_sigil};
 use crate::scanner::Scanner;
 
 /// Parse the top-level section layout of a Svelte source file.
@@ -26,269 +36,160 @@ use crate::scanner::Scanner;
 /// document is always returned (even if errors exist) so downstream crates
 /// can still inspect partial state — e.g., an instance script that was
 /// otherwise OK even though the style block was malformed.
+///
+/// Only section-level errors (duplicates, unterminated tags, unknown
+/// lang/context) are reported here; template-structure errors surface
+/// when `parse_all_template_runs` parses the returned text runs.
 pub fn parse_sections(source: &str) -> (Document<'_>, Vec<ParseError>) {
-    let mut scanner = Scanner::new(source);
-    let mut errors: Vec<ParseError> = Vec::new();
+    let mut collector = SectionCollector::new(source);
+    crate::template::scan_document_sections(source, &mut collector);
+    collector.into_document()
+}
 
-    let mut module_script: Option<ScriptSection<'_>> = None;
-    let mut instance_script: Option<ScriptSection<'_>> = None;
-    let mut style: Option<StyleSection<'_>> = None;
+/// If the scanner sits on a `<script` / `<style` tag start, the section
+/// tag name — else `None`. The identifier-boundary check distinguishes
+/// `<script>` from e.g. `<scripted>`. Whether the position actually IS a
+/// section is the template parser's call (root frame only); this only
+/// answers "is this one of the two section tag names?".
+pub(crate) fn section_tag_at(scanner: &Scanner<'_>) -> Option<&'static str> {
+    if scanner.peek_byte() != Some(b'<') {
+        return None;
+    }
+    if scanner.starts_with_ignore_case("<script") && !is_ident_char(scanner.peek_byte_at(7)) {
+        return Some("script");
+    }
+    if scanner.starts_with_ignore_case("<style") && !is_ident_char(scanner.peek_byte_at(6)) {
+        return Some("style");
+    }
+    None
+}
 
-    let mut template_runs: Vec<Range> = Vec::new();
-    let mut template_cursor: u32 = 0;
-    // Nesting depth. `<script>` / `<style>` are grabbed as Svelte
-    // sections only at document level; nested occurrences (an
-    // analytics snippet under `<svelte:head>`, a CDN loader gated
-    // behind `{#if}`) are left for the template parser. The Svelte
-    // compiler decides this from its parser stack (`element.js`:
-    // scripts/styles are sections iff `current.type === 'Root'`),
-    // where elements AND logic blocks both push a frame — so we track
-    // both. `tag_depth` is a cheap `<NAME>` / `</NAME>` counter that
-    // respects quoted attribute values and self-closing tags;
-    // `block_depth` counts `{#…}` / `{/…}` pairs. Not a real DOM —
-    // just enough to distinguish "document level" from "inside
-    // something."
-    let mut tag_depth: u32 = 0;
-    let mut block_depth: u32 = 0;
+/// Accumulates sections and template text runs during the document-mode
+/// template walk. The template parser calls [`SectionCollector::claim`]
+/// whenever a `<script>`/`<style>` open tag surfaces at the document
+/// root; every byte not claimed by a section ends up in `text_runs`.
+pub(crate) struct SectionCollector<'src> {
+    source: &'src str,
+    module_script: Option<ScriptSection<'src>>,
+    instance_script: Option<ScriptSection<'src>>,
+    style: Option<StyleSection<'src>>,
+    text_runs: Vec<Range>,
+    /// Start of the pending (not yet flushed) template text run.
+    template_cursor: u32,
+    errors: Vec<ParseError>,
+}
 
-    while !scanner.eof() {
-        let here = scanner.pos();
-
-        // We only interpret `<script` / `<style` at positions where they
-        // look like tag starts: the preceding char should be '>' or
-        // whitespace or BOF so we don't misfire inside attribute values.
-        // In practice these identifiers only appear at the top level of
-        // a Svelte file (or inside templates as string literals), and the
-        // Svelte compiler treats them as opaque-tag triggers whenever they
-        // appear at a `<` position. Matching upstream behavior: any '<' that
-        // starts with `<script` or `<style` (case-insensitive) becomes an
-        // opaque section.
-
-        // HTML comment content is opaque — must not be scanned for
-        // `<script>` / `<style>` tags. Real-world pattern: a
-        // component's reference / legacy code kept as commented-out
-        // `<!-- <script>...</script>...{#if x}...-->`. Without this
-        // skip, the sections pass picks up the inner `<script>` as
-        // the instance script and the template parser picks up inner
-        // `{#if}` blocks referencing names that only exist in the
-        // commented-out code, firing TS2304 in the overlay.
-        if scanner.peek_byte() == Some(b'<') && scanner.starts_with("<!--") {
-            let after_open = scanner.pos() as usize + 4;
-            match scanner.source()[after_open..].find("-->") {
-                Some(offset) => {
-                    let skip_to = (after_open + offset + 3).min(scanner.source().len());
-                    scanner.set_pos(skip_to as u32);
-                }
-                None => {
-                    // Unterminated comment — treat rest of source as
-                    // comment body to avoid re-scanning the same `<!--`.
-                    // parse_template below will surface the unterminated
-                    // error when it walks the same region.
-                    scanner.set_pos(scanner.source().len() as u32);
-                }
-            }
-            continue;
+impl<'src> SectionCollector<'src> {
+    pub(crate) fn new(source: &'src str) -> Self {
+        Self {
+            source,
+            module_script: None,
+            instance_script: None,
+            style: None,
+            text_runs: Vec::new(),
+            template_cursor: 0,
+            errors: Vec::new(),
         }
+    }
 
-        if tag_depth == 0
-            && block_depth == 0
-            && scanner.peek_byte() == Some(b'<')
-            && (scanner.starts_with_ignore_case("<script")
-                && !is_ident_char(scanner.peek_byte_at(7)))
-        {
-            // Flush pending template text.
-            if template_cursor < here {
-                template_runs.push(Range::new(template_cursor, here));
-            }
-            match parse_opaque_section(&mut scanner, "script") {
-                Ok(raw) => {
-                    let section = build_script_section(source, raw, &mut errors);
-                    let is_module = section.context == ScriptContext::Module;
-                    let open_range = section.open_tag_range;
-                    let close_range = section.close_tag_range;
-                    let is_duplicate_script = if is_module {
-                        let dup = module_script.is_some();
-                        if dup {
-                            errors.push(ParseError::DuplicateScript {
-                                descriptor: " context=\"module\"",
-                                range: open_range,
-                            });
-                        } else {
-                            module_script = Some(section);
-                        }
-                        dup
-                    } else if instance_script.is_some() {
-                        errors.push(ParseError::DuplicateScript {
-                            descriptor: "",
+    /// Claim the section whose `<` the scanner sits on. `tag` is
+    /// `"script"` or `"style"` as reported by [`section_tag_at`]. On
+    /// success the scanner ends up just past `</TAG>`; on error the
+    /// unclaimed bytes stay template text (the cursor is not advanced)
+    /// and the scanner moves at least one byte so the walk progresses.
+    pub(crate) fn claim(&mut self, scanner: &mut Scanner<'src>, tag: &'static str) {
+        // Flush pending template text.
+        let here = scanner.pos();
+        if self.template_cursor < here {
+            self.text_runs.push(Range::new(self.template_cursor, here));
+        }
+        match parse_opaque_section(scanner, tag) {
+            Ok(raw) if tag == "script" => {
+                let section = build_script_section(self.source, raw, &mut self.errors);
+                let is_module = section.context == ScriptContext::Module;
+                let open_range = section.open_tag_range;
+                let close_range = section.close_tag_range;
+                let is_duplicate_script = if is_module {
+                    let dup = self.module_script.is_some();
+                    if dup {
+                        self.errors.push(ParseError::DuplicateScript {
+                            descriptor: " context=\"module\"",
                             range: open_range,
                         });
-                        true
                     } else {
-                        instance_script = Some(section);
-                        false
-                    };
-                    // A duplicate here is a genuine second document-level
-                    // script (nested ones are routed to the template by
-                    // the depth guards above). Recovery: surface the
-                    // extra tag's spans as template runs so its attribute
-                    // expressions still flow through the template-ref
-                    // pass and any bindings they reference aren't flagged
-                    // as TS6133 "declared but never read".
-                    if is_duplicate_script {
-                        template_runs.push(Range::new(open_range.start, open_range.end));
-                        if close_range.start < close_range.end {
-                            template_runs.push(Range::new(close_range.start, close_range.end));
-                        }
+                        self.module_script = Some(section);
                     }
-                    template_cursor = scanner.pos();
-                }
-                Err(err) => {
-                    errors.push(err);
-                    // Skip the `<` we just saw so we don't loop forever.
-                    scanner.advance_byte();
-                }
-            }
-            continue;
-        }
-
-        if tag_depth == 0
-            && block_depth == 0
-            && scanner.peek_byte() == Some(b'<')
-            && (scanner.starts_with_ignore_case("<style")
-                && !is_ident_char(scanner.peek_byte_at(6)))
-        {
-            if template_cursor < here {
-                template_runs.push(Range::new(template_cursor, here));
-            }
-            match parse_opaque_section(&mut scanner, "style") {
-                Ok(raw) => {
-                    let section = build_style_section(source, raw);
-                    if style.is_some() {
-                        errors.push(ParseError::DuplicateStyle {
-                            range: section.open_tag_range,
-                        });
-                    } else {
-                        style = Some(section);
+                    dup
+                } else if self.instance_script.is_some() {
+                    self.errors.push(ParseError::DuplicateScript {
+                        descriptor: "",
+                        range: open_range,
+                    });
+                    true
+                } else {
+                    self.instance_script = Some(section);
+                    false
+                };
+                // A duplicate here is a genuine second document-level
+                // script (nested ones never reach the collector — the
+                // template parser routes them to the element path).
+                // Recovery: surface the extra tag's spans as template
+                // runs so its attribute expressions still flow through
+                // the template-ref pass and any bindings they reference
+                // aren't flagged as TS6133 "declared but never read".
+                if is_duplicate_script {
+                    self.text_runs
+                        .push(Range::new(open_range.start, open_range.end));
+                    if close_range.start < close_range.end {
+                        self.text_runs
+                            .push(Range::new(close_range.start, close_range.end));
                     }
-                    template_cursor = scanner.pos();
                 }
-                Err(err) => {
-                    errors.push(err);
-                    scanner.advance_byte();
-                }
+                self.template_cursor = scanner.pos();
             }
-            continue;
-        }
-
-        // Nested (non-section) `<script>` / `<style>` — skip the whole
-        // element verbatim, body included, without touching either
-        // depth counter. The body is raw text per HTML rules; scanning
-        // it as template text would let stray `<` / `{` bytes inside
-        // the JS/CSS desync the counters. The span stays inside the
-        // current template run, so the template parser (which raw-texts
-        // nested script/style bodies and type-checks their attribute
-        // expressions) picks it up as a normal element.
-        if scanner.peek_byte() == Some(b'<')
-            && ((scanner.starts_with_ignore_case("<script")
-                && !is_ident_char(scanner.peek_byte_at(7)))
-                || (scanner.starts_with_ignore_case("<style")
-                    && !is_ident_char(scanner.peek_byte_at(6))))
-        {
-            // Only reachable at depth > 0: the section guards above
-            // already claimed the document-level case and `continue`d.
-            let close_literal = if scanner.starts_with_ignore_case("<script") {
-                "</script"
-            } else {
-                "</style"
-            };
-            let (open_end, self_closing) =
-                scan_past_open_tag(scanner.source(), scanner.pos() as usize);
-            scanner.set_pos(open_end as u32);
-            if !self_closing {
-                match find_close_tag(&scanner, close_literal) {
-                    Some(close_pos) => {
-                        scanner.set_pos(close_pos);
-                        scanner.advance(close_literal.len() as u32);
-                        scanner.skip_ascii_whitespace();
-                        if scanner.peek_byte() == Some(b'>') {
-                            scanner.advance_byte();
-                        }
-                    }
-                    // Unterminated nested script/style — treat the rest
-                    // of the source as its body (the compiler does the
-                    // same: read_body scans to EOF) and let the template
-                    // parser surface the error.
-                    None => scanner.set_pos(scanner.source().len() as u32),
+            Ok(raw) => {
+                let section = build_style_section(self.source, raw);
+                if self.style.is_some() {
+                    self.errors.push(ParseError::DuplicateStyle {
+                        range: section.open_tag_range,
+                    });
+                } else {
+                    self.style = Some(section);
                 }
+                self.template_cursor = scanner.pos();
             }
-            continue;
-        }
-        // Mustache — skip the whole balanced `{…}` region. `<` and
-        // `>` inside a mustache expression (`{a < b}`) are operator
-        // tokens, not tag markers, and must not perturb tag_depth.
-        // Skip quickly by counting braces with string-literal
-        // awareness (`'…'`, `"…"`, template `` `…` `` so a `{` inside
-        // a string doesn't increment depth). Block open/close tags
-        // adjust block_depth first so the section guards know whether
-        // a later `<script>`/`<style>` sits at document level.
-        if scanner.peek_byte() == Some(b'{') {
-            match classify_mustache(scanner.source().as_bytes(), scanner.pos() as usize) {
-                MustacheKind::BlockOpen => block_depth += 1,
-                MustacheKind::BlockClose => block_depth = block_depth.saturating_sub(1),
-                MustacheKind::Other => {}
-            }
-            scanner.set_pos(scan_past_mustache(scanner.source(), scanner.pos()));
-            continue;
-        }
-        // Track `<NAME>` / `</NAME>` nesting — cheap but sufficient
-        // for "is a following `<script>` at document level?".
-        if scanner.peek_byte() == Some(b'<') {
-            let bytes = scanner.source().as_bytes();
-            let pos = scanner.pos() as usize;
-            let next = bytes.get(pos + 1).copied();
-            if next == Some(b'/') {
-                tag_depth = tag_depth.saturating_sub(1);
-                let mut i = pos + 2;
-                while i < bytes.len() && bytes[i] != b'>' {
-                    i += 1;
-                }
-                scanner.set_pos((i + 1).min(bytes.len()) as u32);
-                continue;
-            }
-            if next.is_some_and(|b| b.is_ascii_alphabetic()) {
-                let (end, self_closing) = scan_past_open_tag(scanner.source(), pos);
-                if !self_closing {
-                    tag_depth += 1;
-                }
-                scanner.set_pos(end as u32);
-                continue;
+            Err(err) => {
+                self.errors.push(err);
+                // Step past wherever the opaque read stopped so the
+                // document walk can't loop; the bytes re-enter the walk
+                // as template text.
+                scanner.advance_byte();
             }
         }
-        // Anything else: consume the current char (it may itself be a
-        // `<` that fell through every guard, e.g. `<` before a digit),
-        // then hop straight to the next possible dispatch byte. All
-        // guards above trigger only on `<` or `{`, so plain text and
-        // whitespace are skipped in one memchr2 sweep instead of a
-        // per-char walk.
-        scanner.advance_char();
-        scanner.skip_until2(b'<', b'{');
     }
 
-    // Flush trailing template text.
-    if template_cursor < scanner.pos() {
-        template_runs.push(Range::new(template_cursor, scanner.pos()));
+    /// Flush the trailing template text run. `end` is the document
+    /// walk's final scanner position.
+    pub(crate) fn finish(&mut self, end: u32) {
+        if self.template_cursor < end {
+            self.text_runs.push(Range::new(self.template_cursor, end));
+        }
     }
 
-    let doc = Document {
-        source,
-        module_script,
-        instance_script,
-        style,
-        template: Template {
-            text_runs: template_runs,
-        },
-    };
-    (doc, errors)
+    pub(crate) fn into_document(self) -> (Document<'src>, Vec<ParseError>) {
+        (
+            Document {
+                source: self.source,
+                module_script: self.module_script,
+                instance_script: self.instance_script,
+                style: self.style,
+                template: Template {
+                    text_runs: self.text_runs,
+                },
+            },
+            self.errors,
+        )
+    }
 }
 
 /// Is the byte a character that could be part of an HTML tag-name identifier?
@@ -654,141 +555,6 @@ fn parse_lang_attr(attrs: &[ScriptAttr], errors: &mut Vec<ParseError>) -> Script
     }
 }
 
-/// What a `{` at document level opens, for block-depth tracking only.
-/// Delegates to the crate-wide [`classify_mustache_sigil`] (whitespace
-/// is allowed between `{` and the sigil); continuations, `{@…}` tags and
-/// plain expressions don't change block nesting.
-#[derive(PartialEq)]
-enum MustacheKind {
-    BlockOpen,
-    BlockClose,
-    Other,
-}
-
-fn classify_mustache(bytes: &[u8], open_brace: usize) -> MustacheKind {
-    match classify_mustache_sigil(bytes, open_brace).0 {
-        MustacheSigil::BlockOpen => MustacheKind::BlockOpen,
-        MustacheSigil::BlockClose => MustacheKind::BlockClose,
-        _ => MustacheKind::Other,
-    }
-}
-
-/// Skip past a balanced `{…}` mustache block whose opening `{` is at
-/// `from`, returning the index just past the matching `}` (or the
-/// source length on EOF / unterminated input).
-///
-/// Delegates to the canonical [`crate::mustache::find_mustache_end`] so
-/// the document-level section walk and the attribute-value scan share
-/// ONE lexical grammar. The previous hand-rolled scanner here lacked
-/// regex-literal and template-`${}` handling that `find_mustache_end`
-/// has, so `{x.replace(/}/g, '')}` ended the mustache early at the `}`
-/// inside the regex and desynced the section/template-run boundaries.
-///
-/// `src` is the full source, so offsets passed to `find_mustache_end`
-/// are absolute. Taking `&str` (and deriving bytes locally) rather
-/// than `&[u8]` matters: rebuilding a `&str` via `from_utf8` here
-/// re-validated the ENTIRE file once per mustache, turning the
-/// section walk quadratic on template-heavy files.
-fn scan_past_mustache(src: &str, from: u32) -> u32 {
-    let bytes = src.as_bytes();
-    // A Svelte close-block tag — `{/if}`, `{/each}`, `{/await}`,
-    // `{/key}`, `{/snippet}` — begins with `/` and contains no
-    // expression. `find_mustache_end` would read that leading `/` as a
-    // regex-literal opener and over-scan to EOF. Svelte reserves `{/`
-    // for close tags (a mustache can't legitimately begin with a regex
-    // literal), so scan a close tag with a plain brace search instead.
-    // Uses the same classifier as the section walker's block-depth
-    // tracking so the two can't disagree on what a close tag is.
-    if classify_mustache(bytes, from as usize) == MustacheKind::BlockClose {
-        let mut i = from as usize + 1;
-        while i < bytes.len() && bytes[i] != b'}' {
-            i += 1;
-        }
-        return ((i + 1) as u32).min(bytes.len() as u32);
-    }
-    match crate::mustache::find_mustache_end(src, from + 1) {
-        // find_mustache_end returns the offset OF the `}`; we return
-        // the index just past it.
-        Some(close) => close + 1,
-        None => bytes.len() as u32,
-    }
-}
-
-/// Skip past `<NAME … >` or `<NAME … />` starting at `from`. Returns
-/// `(index_past_close, treat_as_zero_depth)`. The boolean is true
-/// when the tag should not increment template tag-depth: an explicit
-/// `/>` self-close OR an HTML void element (`<img>`, `<br>`, etc.)
-/// which by spec has no closing tag. Respects quoted attribute
-/// values and balanced mustache regions.
-fn scan_past_open_tag(src: &str, from: usize) -> (usize, bool) {
-    let bytes = src.as_bytes();
-    let mut i = from + 1;
-    // Extract the tag name so we can recognize HTML void elements.
-    // Stops at the first byte that can't be part of a tag name
-    // (whitespace, `/`, `>`, attribute boundary).
-    let name_start = i;
-    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || matches!(bytes[i], b'-' | b':')) {
-        i += 1;
-    }
-    let is_void = is_void_html_tag(&bytes[name_start..i]);
-    while i < bytes.len() {
-        match bytes[i] {
-            b'"' | b'\'' => {
-                let quote = bytes[i];
-                i += 1;
-                while i < bytes.len() && bytes[i] != quote {
-                    i += 1;
-                }
-                if i < bytes.len() {
-                    i += 1;
-                }
-            }
-            b'{' => {
-                // Attribute value with mustache — skip balanced.
-                i = scan_past_mustache(src, i as u32) as usize;
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'>') => {
-                return (i + 2, true);
-            }
-            // In-tag JS comments (Svelte 5, upstream read_attribute →
-            // read_comment): a `>` or `{` inside `//…` / `/*…*/` is
-            // comment text, not the tag close / a mustache. Without the
-            // skip, the tag scan ends early and the comment tail
-            // re-enters the section walk as template text.
-            b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                i += 2;
-                while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
-                    i += 1;
-                }
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i += 2;
-                while i + 1 < bytes.len() {
-                    if bytes[i] == b'*' && bytes[i + 1] == b'/' {
-                        i += 2;
-                        break;
-                    }
-                    i += 1;
-                }
-            }
-            b'>' => return (i + 1, is_void),
-            _ => i += 1,
-        }
-    }
-    (bytes.len(), is_void)
-}
-
-/// HTML5 void elements never have a closing tag and so must not push
-/// the top-level section walker into an apparent-nesting state
-/// (otherwise a `<style>` block following a void element gets
-/// absorbed into the preceding template run instead of recognised as
-/// a section). Delegates to the crate's single void-element list —
-/// this used to be a second hand-copied list that had drifted
-/// (missing `command`).
-fn is_void_html_tag(name: &[u8]) -> bool {
-    std::str::from_utf8(name).is_ok_and(crate::ast::is_void_element)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -806,9 +572,9 @@ mod tests {
     fn in_tag_js_comment_does_not_derail_section_walk() {
         // Svelte 5 allows `//` and `/* */` comments between attributes.
         // A `>` inside such a comment must not end the tag scan early:
-        // the comment tail would then re-enter the section walk as
-        // template text, and a `{#if}` in it would permanently raise
-        // block depth, misrouting every later top-level <script>.
+        // the comment tail would then re-enter the walk as template
+        // text and the real `</div>` would look like a stray closing
+        // tag, misrouting the later top-level <script>.
         let src = "<div /* > {#if x} */ class=\"x\">hi</div>\n<script>let a = 1;</script>";
         let doc = parse_ok(src);
         let instance = doc.instance_script.expect("instance script claimed");
@@ -844,10 +610,10 @@ mod tests {
     #[test]
     fn script_inside_html_comment_not_picked_up_as_instance() {
         // Real-world pattern: a component file keeps its legacy /
-        // reference implementation in an HTML comment. Without the
-        // comment-skip, the sections pass wires up the inner
-        // <script> as the instance script, which leaks body-scope
-        // references into the template and breaks the overlay.
+        // reference implementation in an HTML comment. Comment content
+        // is opaque — treating the inner <script> as the instance
+        // script would leak body-scope references into the template
+        // and break the overlay.
         let src = r#"<script lang="ts">
 import Foo from './Foo.svelte';
 </script>
@@ -882,13 +648,11 @@ let position: string;
 
     #[test]
     fn void_html_elements_in_template_dont_break_subsequent_style_section() {
-        // Regression: `<img>` and other HTML void elements have no
-        // closing tag, so our top-level walker must not treat them as
-        // pushing tag depth. Without the void-element list, depth
-        // never returns to zero after a void element appears in the
-        // template, and a following `<style>` block gets absorbed
-        // into the preceding template run instead of being parsed as
-        // a section.
+        // `<img>` and other HTML void elements have no closing tag, so
+        // they must not leave an open element frame behind. A stuck
+        // frame would make every following `<style>` block look nested
+        // — absorbed into the preceding template run instead of being
+        // parsed as a section.
         let src = r#"<script lang="ts">
 let x = 1;
 </script>
@@ -902,10 +666,10 @@ let x = 1;
 
     #[test]
     fn void_html_elements_dont_swallow_following_script_block() {
-        // Same regression but for a script block following a void
-        // element. Svelte allows scripts at any document position;
-        // the void-element bug also caused later `<script>` blocks to
-        // be absorbed into the template.
+        // Same shape but for a script block following a void element.
+        // Svelte allows scripts at any document position; a stuck
+        // element frame would absorb later `<script>` blocks into the
+        // template.
         let src = r#"<input type="text">
 <script lang="ts">
 let y = 2;
@@ -1171,15 +935,17 @@ let x: number = 1;
     }
 
     // ============================================================
-    // Tag-depth tracking + mustache-aware scan tests.
+    // Document-level vs nested section decisions.
     //
     // These tests lock the parse shapes we observed breaking real
     // Svelte projects — nested <script> tags inside <svelte:head>
     // templates, mustache expressions with JS comments, template
-    // literals containing quote chars, and so on. The mustache
-    // scanner went through several iterations (missing JS-comment
-    // handling, off-by-one on self-closing tags); each test below
-    // corresponds to a class of bug we hit once and want to block.
+    // literals containing quote chars, and so on. Each corresponds
+    // to a construct a pre-parse scanner once misjudged; the
+    // document walk now runs through the template parser itself, so
+    // every construct the parser knows (elements, blocks, comments,
+    // raw-text bodies, attribute mustaches) is handled by the same
+    // grammar that parses the template.
     // ============================================================
 
     #[test]
@@ -1217,8 +983,8 @@ let x: number = 1;
         // A `<script>` element gated behind a bare `{#if}` — no element
         // wrapper, so only block nesting hides it from document level.
         // The compiler parses this as a regular element (its stack top
-        // is the IfBlock, not Root); claiming it as a section fired a
-        // false "duplicate <script> block" error.
+        // is the IfBlock, not Root); claiming it as a section would
+        // fire a false "duplicate <script> block" error.
         let src = "<script lang=\"ts\">let load = true;</script>\n\
                    {#if load}<script defer src=\"https://x/a.js\"></script>{/if}";
         let doc = parse_ok(src);
@@ -1228,9 +994,10 @@ let x: number = 1;
 
     #[test]
     fn script_inside_if_block_with_expression_attrs() {
-        // Expression-valued attributes on a nested script previously
-        // reached the mustache-unaware section attribute parser and
-        // fired a false "malformed opening tag" error.
+        // Expression-valued attributes on a nested script go through
+        // the template parser's mustache-aware attribute parser, not
+        // the section attribute parser (which reads only plain HTML
+        // attribute shapes and would misread `{`).
         let src = "<script lang=\"ts\">let load = true;</script>\n\
                    {#if load}<script defer src={`https://x/lib@${'1.0.0'}/a.js`} \
                    onload={done}></script>{/if}";
@@ -1258,7 +1025,8 @@ let x: number = 1;
     #[test]
     fn top_level_script_after_closed_block_is_claimed() {
         // Scripts may appear anywhere at document level, including
-        // after template content; a balanced block returns depth to 0.
+        // after template content; once a block closes the walk is back
+        // at the document root.
         let src = "{#if visible}<p>hi</p>{/if}\n<script>let x = 1;</script>";
         let doc = parse_ok(src);
         let s = doc.instance_script.expect("instance script after block");
@@ -1266,19 +1034,20 @@ let x: number = 1;
     }
 
     #[test]
-    fn stray_block_close_saturates_and_later_script_is_claimed() {
-        // An unbalanced `{/if}` must not underflow the counter and
-        // permanently hide later document-level sections.
+    fn stray_block_close_does_not_hide_later_script() {
+        // An unbalanced `{/if}` is a stray terminator, not an open
+        // scope — it must not permanently hide later document-level
+        // sections.
         let src = "{/if}\n<script>let x = 1;</script>";
         let (doc, _errors) = parse_sections(src);
         assert!(doc.instance_script.is_some());
     }
 
     #[test]
-    fn nested_script_body_does_not_desync_depth_counters() {
+    fn nested_script_body_is_raw_text() {
         // The nested body is raw text; `<` and `{` inside the JS must
-        // not perturb either depth counter, or the following top-level
-        // <style> would be absorbed into the template.
+        // not open phantom elements or mustaches, or the following
+        // top-level <style> would be absorbed into the template.
         let src = "{#if x}<script>if (a<b) { run('</div>'); }</script>{/if}\n\
                    <style>p { color: red }</style>";
         let doc = parse_ok(src);
@@ -1294,10 +1063,10 @@ let x: number = 1;
     }
 
     #[test]
-    fn whitespace_padded_close_tag_keeps_block_depth_in_sync() {
+    fn whitespace_padded_close_tag_still_closes_block() {
         // The compiler allows whitespace after `{` in block tags;
-        // `{ /if}` must decrement like `{/if}` (classifier shared with
-        // scan_past_mustache so the two can't disagree).
+        // `{ /if}` must close the block like `{/if}` so the following
+        // script sits back at document level.
         let src = "{#if x}<p>hi</p>{ /if}\n<script>let x = 1;</script>";
         let doc = parse_ok(src);
         assert!(doc.instance_script.is_some());
@@ -1315,8 +1084,9 @@ let x: number = 1;
 
     #[test]
     fn top_level_style_after_closed_div_still_becomes_section() {
-        // `<div>hi</div><style>…</style>` is the common pattern —
-        // depth returns to 0 after the </div> so <style> is grabbed.
+        // `<div>hi</div><style>…</style>` is the common pattern — the
+        // closed div leaves the walk back at document level, so the
+        // <style> is grabbed.
         let src = "<div>hi</div><style>p { color: red; }</style>";
         let doc = parse_ok(src);
         let s = doc.style.expect("style section");
@@ -1326,7 +1096,7 @@ let x: number = 1;
     #[test]
     fn self_closing_svelte_options_keeps_document_level() {
         // `<svelte:options runes />` is self-closing and conventionally
-        // precedes the script. Depth must stay 0 after it.
+        // precedes the script; it must not leave a frame open.
         let src = "<svelte:options runes />\n<script>let x = 1;</script>";
         let doc = parse_ok(src);
         assert!(doc.instance_script.is_some());
@@ -1334,7 +1104,7 @@ let x: number = 1;
 
     #[test]
     fn self_closing_br_in_template_still_allows_later_style() {
-        // Void-ish / self-closed tags don't accumulate depth.
+        // Void-ish / self-closed tags never wait for a closing tag.
         let src = "<div><br /></div><style>p{}</style>";
         let doc = parse_ok(src);
         assert!(doc.style.is_some());
@@ -1342,11 +1112,10 @@ let x: number = 1;
 
     #[test]
     fn mustache_with_lt_gt_operators_does_not_confuse_depth() {
-        // `{a < b}` and `{a > b}` inside interpolations should not
-        // flip tag_depth. Without mustache-aware skipping we
-        // previously treated `<b>` inside an expression as an
-        // opening tag and consumed source through the next `>`,
-        // producing wildly wrong parse results downstream.
+        // `{a < b}` and `{a > b}` inside interpolations are operator
+        // tokens, not tag markers — treating `<b>` inside an
+        // expression as an opening tag would consume source through
+        // the next `>` and derail everything after it.
         let src = "<div>{a < b}</div><style>p{}</style>";
         let doc = parse_ok(src);
         assert!(
@@ -1357,12 +1126,10 @@ let x: number = 1;
 
     #[test]
     fn mustache_with_apostrophe_in_line_comment_does_not_run_off() {
-        // The bug that landed 15 new TS parse errors on a
-        // real-world bench: an apostrophe in `// don't` inside an
-        // attribute-value mustache opened a phantom string that
-        // never closed. Every subsequent `{` and `}` was eaten as
-        // part of the "string" and tag_depth desynced, leaving
-        // template runs misaligned.
+        // An apostrophe in `// don't` inside an attribute-value
+        // mustache must read as comment text, not a string opener — a
+        // phantom string that never closes would eat every subsequent
+        // `{` and `}` and leave the template runs misaligned.
         let src = "<div on:click={() => {\n\
                    // We don't close this comment with a quote\n\
                    doSomething();\n\
@@ -1400,8 +1167,8 @@ let x: number = 1;
     #[test]
     fn mustache_with_object_literal_in_attr_value() {
         // `use:dndzone={{ dragDisabled: !x }}` — outer `{` is
-        // mustache, inner `{` is an object literal. Depth counter
-        // correctly unwinds both.
+        // mustache, inner `{` is an object literal; both must unwind
+        // before the attribute value ends.
         let src = "<div use:dndzone={{ dragDisabled: !x, items: [1, 2] }}>y</div>\n\
                    <style>p{}</style>";
         let doc = parse_ok(src);
@@ -1411,10 +1178,8 @@ let x: number = 1;
     #[test]
     fn mustache_with_regex_containing_brace() {
         // `/}/ ` — a regex literal whose body is a `}` — must not end
-        // the mustache early. The old hand-rolled section scanner had no
-        // regex awareness and closed at the `}` inside the regex,
-        // desyncing the section walk so the trailing `<style>` was
-        // missed. Now unified on find_mustache_end.
+        // the mustache early; closing at the `}` inside the regex
+        // would desync the walk and miss the trailing `<style>`.
         let src = "<div title={x.replace(/}/g, '')}>y</div>\n\
                    <style>p{}</style>";
         let doc = parse_ok(src);
@@ -1423,9 +1188,8 @@ let x: number = 1;
 
     #[test]
     fn mustache_with_nested_if_block() {
-        // `{#if a}` / `{/if}` are Svelte block tags — each a
-        // balanced `{…}`. The sections scanner doesn't need to
-        // understand the block semantics, just count braces.
+        // A balanced `{#if}` / `{/if}` pair returns the walk to
+        // document level, so the trailing `<style>` is a section.
         let src = "{#if ready}<div>hi</div>{/if}<style>p{}</style>";
         let doc = parse_ok(src);
         assert!(doc.style.is_some());
@@ -1434,8 +1198,8 @@ let x: number = 1;
     #[test]
     fn script_with_generic_attr_and_quoted_value() {
         // `<script lang="ts" generics="S">` — `"` in attribute
-        // values must not be misread as tag-name chars or leak
-        // depth tracking.
+        // values must stay inside the attribute, not leak into the
+        // surrounding tag scan.
         let src = "<script lang=\"ts\" generics=\"S\">let x: S;</script>\n\
                    <div>hi</div>\n\
                    <style>p{}</style>";
@@ -1446,9 +1210,10 @@ let x: number = 1;
     }
 
     #[test]
-    fn unmatched_closing_tag_doesnt_underflow_depth() {
-        // `</div>` without a matching `<div>` — depth counter must
-        // saturate at 0, not wrap.
+    fn unmatched_closing_tag_doesnt_hide_later_script() {
+        // `</div>` without a matching `<div>` is a stray closing tag,
+        // not an enclosing scope — the script after it is still at
+        // document level.
         let src = "</div><script>let x = 1;</script>";
         let doc = parse_ok(src);
         assert!(doc.instance_script.is_some());

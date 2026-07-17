@@ -33,6 +33,7 @@ use crate::error::ParseError;
 use crate::html5::closing_tag_omitted;
 use crate::mustache::{MustacheSigil, classify_mustache_sigil, find_mustache_end};
 use crate::scanner::{Scanner, is_svelte_whitespace_at};
+use crate::sections::{SectionCollector, section_tag_at};
 
 /// Parse one template fragment out of the source string.
 ///
@@ -94,6 +95,35 @@ pub fn parse_all_template_runs(source: &str, runs: &[Range]) -> (Fragment, Vec<P
     )
 }
 
+/// Walk the whole source as one fragment in document mode, letting
+/// `collector` claim top-level `<script>`/`<style>` sections as they are
+/// encountered. Returns the collector holding the section layout and the
+/// text runs (everything not claimed).
+///
+/// The AST nodes and template-structure errors produced by this
+/// discovery walk are discarded: `parse_all_template_runs` re-parses the
+/// collector's text runs into the real fragment and re-derives the same
+/// errors with run-clamped recovery, so reporting them here would
+/// double them up. Only the collector's section layout and its
+/// section-level errors survive this pass.
+pub(crate) fn scan_document_sections<'src>(
+    source: &'src str,
+    collector: &mut SectionCollector<'src>,
+) {
+    let mut parser = TemplateParser::new(source, Range::new(0, source.len() as u32));
+    parser.sections = Some(&mut *collector);
+    loop {
+        // A stray `{:...}` / `{/...}` at document level is consumed and
+        // skipped; the run re-parse reports it.
+        let (_nodes, stop) = parser.parse_fragment_until(None);
+        if stop.is_none() {
+            break;
+        }
+    }
+    let end = parser.scanner.pos();
+    collector.finish(end);
+}
+
 /// Frame in the open-element stack, mirroring the roles upstream's
 /// parser stack plays in the implicit-close walks
 /// (`1-parse/state/element.js`).
@@ -111,7 +141,7 @@ enum OpenFrame {
     Block,
 }
 
-struct TemplateParser<'src> {
+struct TemplateParser<'src, 'col> {
     scanner: Scanner<'src>,
     fragment_range: Range,
     fragment_end: u32,
@@ -131,9 +161,16 @@ struct TemplateParser<'src> {
     /// closing tag is expected and no error is recorded — upstream emits
     /// just the `element_implicitly_closed` warning (svn-lint's concern).
     pending_auto_close: bool,
+    /// Document-mode section collector. `Some` only for the whole-source
+    /// walk driven by [`scan_document_sections`]: a `<script>`/`<style>`
+    /// open tag met while `open_elements` is empty is handed to the
+    /// collector as a top-level section instead of being parsed as a
+    /// template element. `None` for the per-run template parses, whose
+    /// runs already exclude the sections.
+    sections: Option<&'col mut SectionCollector<'src>>,
 }
 
-impl<'src> TemplateParser<'src> {
+impl<'src, 'col> TemplateParser<'src, 'col> {
     fn new(source: &'src str, range: Range) -> Self {
         let mut scanner = Scanner::new(source);
         scanner.set_pos(range.start);
@@ -145,6 +182,7 @@ impl<'src> TemplateParser<'src> {
             last_terminator_range: Range::new(range.start, range.start),
             open_elements: Vec::new(),
             pending_auto_close: false,
+            sections: None,
         }
     }
 
@@ -402,6 +440,23 @@ impl<'src> TemplateParser<'src> {
             }
 
             if self.scanner.peek_byte() == Some(b'<') {
+                // Document mode: a `<script>`/`<style>` open tag met while
+                // the open-frame stack is empty — no element open, no
+                // block open — is a top-level section. This is the Svelte
+                // compiler's own rule (`element.js`: sections iff
+                // `current.type === 'Root'`; elements and blocks both
+                // push a stack frame there, mirrored by `open_elements`
+                // here). Nested occurrences fall through to the element
+                // path below and stay raw-text template elements.
+                if self.open_elements.is_empty()
+                    && self.sections.is_some()
+                    && let Some(tag) = section_tag_at(&self.scanner)
+                {
+                    if let Some(collector) = self.sections.as_deref_mut() {
+                        collector.claim(&mut self.scanner, tag);
+                    }
+                    continue;
+                }
                 // A new opening tag implicitly closes the current element
                 // when HTML omits its closing tag (`<li>a<li>` — upstream
                 // checks closing_tag_omitted(parent, tag) before pushing

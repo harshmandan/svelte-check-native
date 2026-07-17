@@ -1,0 +1,5 @@
+{
+    "clean": true,
+    "warnings": [],
+    "_note": "Raw-text elements nested in the template (<style>/<script> inside <svelte:head>, <svg>, etc.) hold CSS/JSON/JS, not Svelte template syntax. The Svelte parser represents such a body as exactly one opaque Text child (present even when the body is empty); the braces inside must never parse as mustache interpolations or the {...} would fire phantom expression diagnostics. Our parser used to drop the body node entirely - same no-diagnostics outcome, but a skeleton divergence from the reference parser that scripts/diff-parse.mjs flagged on real code; the body is now the same single Text node upstream produces."
+}

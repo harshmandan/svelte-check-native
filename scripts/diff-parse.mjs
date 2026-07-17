@@ -632,7 +632,9 @@ function serialize(norm) {
 
 function collectSvelteFiles(root, out) {
     for (const entry of readdirSync(root)) {
-        if (entry === 'node_modules' || entry.startsWith('.')) continue;
+        // Keep dot-dirs like .svelte-kit — generated .svelte files are
+        // real checker inputs. Only dependency trees and VCS are skipped.
+        if (entry === 'node_modules' || entry === '.git') continue;
         const p = join(root, entry);
         const st = statSync(p, { throwIfNoEntry: false });
         if (!st) continue;
@@ -686,6 +688,7 @@ const dumps = runDump(files);
 let identical = 0;
 let divergent = 0;
 let allowlisted = 0;
+const allowlistedFiles = [];
 let upstreamRejected = 0;
 let bothRejected = 0;
 const rejectBuckets = new Map();
@@ -719,6 +722,7 @@ for (const file of files) {
         identical++;
     } else if (lines.every((l) => allowMatch(rel, l))) {
         allowlisted++;
+        allowlistedFiles.push({ rel, lines });
     } else {
         divergent++;
         divergentFiles.push({ rel, lines: lines.filter((l) => !allowMatch(rel, l)) });
@@ -729,8 +733,17 @@ console.log(`\n=== diff-parse sweep: ${files.length} files ===`);
 console.log(`identical:         ${identical}`);
 console.log(`allowlisted:       ${allowlisted}`);
 console.log(`divergent:         ${divergent}`);
-console.log(`upstream-rejected: ${upstreamRejected} (ours parsed them; likely pre-${compiler.VERSION} syntax)`);
+console.log(
+    `upstream-rejected: ${upstreamRejected} (ours tolerated; invalid embedded JS/TS or pre-${compiler.VERSION} syntax)`,
+);
 console.log(`both-rejected:     ${bothRejected}`);
+
+if (allowlistedFiles.length > 0) {
+    console.log('\nallowlisted files:');
+    for (const { rel, lines } of allowlistedFiles) {
+        console.log(`  ${rel}: ${lines[0]}${lines.length > 1 ? ` (+${lines.length - 1} more)` : ''}`);
+    }
+}
 
 if (rejectBuckets.size > 0) {
     console.log('\nupstream reject buckets:');

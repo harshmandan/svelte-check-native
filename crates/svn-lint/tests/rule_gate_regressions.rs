@@ -1118,3 +1118,130 @@ fn bidi_string_inside_new_spread_argument_fires() {
         codes(&warnings)
     );
 }
+
+// ----------------------------------------------------------------
+// Script-AST rule walker: enclosing-frame svelte-ignore lookups.
+// Upstream pushes an ignore frame at EVERY node with leading
+// comments and consults the whole stack, so an ignore above a
+// statement suppresses warnings anchored anywhere in its subtree.
+// Each case verified against svelte 5.56.5.
+// ----------------------------------------------------------------
+
+/// Ignore above `const x = "…"` — the warning anchors at the string
+/// literal, but the statement-level comment must suppress it.
+#[test]
+fn bidi_ignore_above_declaration_suppresses() {
+    let src = "\
+<script>
+\t// svelte-ignore bidirectional_control_characters
+\tconst x = '\u{202a}hidden';
+\tvoid x;
+</script>
+<p>hi</p>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"bidirectional_control_characters"),
+        "statement-level ignore must suppress the literal-anchored bidi warning, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Ignore above a function declaration suppresses
+/// perf_avoid_nested_class fired by a class nested in its body.
+#[test]
+fn perf_nested_class_ignore_above_function_suppresses() {
+    let src = "\
+<script>
+\tlet count = $state(0);
+\t// svelte-ignore perf_avoid_nested_class
+\tfunction make() {
+\t\tclass Inner {}
+\t\treturn Inner;
+\t}
+\tvoid make;
+</script>
+<button onclick={() => count++}>{count}</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        !codes(&warnings).contains(&"perf_avoid_nested_class"),
+        "function-level ignore must suppress the nested-class warning, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Control: without the ignore the nested class still fires.
+#[test]
+fn perf_nested_class_in_function_fires() {
+    let src = "\
+<script>
+\tlet count = $state(0);
+\tfunction make() {
+\t\tclass Inner {}
+\t\treturn Inner;
+\t}
+\tvoid make;
+</script>
+<button onclick={() => count++}>{count}</button>
+";
+    let warnings = lint(src, CompatFeatures::MODERN);
+    assert!(
+        codes(&warnings).contains(&"perf_avoid_nested_class"),
+        "nested class in a function body must fire, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Upstream fires legacy_component_creation from its
+/// ExpressionStatement visitor ONLY — `throw new App({target})` does
+/// NOT warn (verified against the compiler).
+#[test]
+fn legacy_component_creation_does_not_fire_on_throw() {
+    let src = "\
+<script>
+\timport App from './App.svelte';
+\tthrow new App({ target: document.body });
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(src);
+    assert!(
+        !codes(&warnings).contains(&"legacy_component_creation"),
+        "throw-new is not an expression statement upstream, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// Control: the plain expression-statement form fires and its
+/// statement-level ignore suppresses.
+#[test]
+fn legacy_component_creation_fires_and_ignores_at_statement() {
+    let fires = "\
+<script>
+\timport App from './App.svelte';
+\tnew App({ target: document.body });
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(fires);
+    assert!(
+        codes(&warnings).contains(&"legacy_component_creation"),
+        "expression-statement form must fire, got: {:?}",
+        codes(&warnings)
+    );
+    let ignored = "\
+<script>
+\timport App from './App.svelte';
+\t// svelte-ignore legacy_component_creation
+\tnew App({ target: document.body });
+</script>
+<p>hi</p>
+";
+    let warnings = lint_nonrunes(ignored);
+    assert!(
+        !codes(&warnings).contains(&"legacy_component_creation"),
+        "statement-level ignore must suppress, got: {:?}",
+        codes(&warnings)
+    );
+}

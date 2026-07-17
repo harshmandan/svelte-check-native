@@ -379,11 +379,6 @@ impl ScriptComments {
         codes
     }
 
-    pub(crate) fn has_leading_ignore(&self, content: &str, node_start: u32, code: &str) -> bool {
-        self.leading_ignores(content, node_start)
-            .iter()
-            .any(|c| c.as_str() == code)
-    }
 }
 
 /// Is the comment starting at `comment_start` a same-line trailing

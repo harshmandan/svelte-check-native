@@ -90,6 +90,7 @@ fn run_on_section(
         runes,
         script_comments,
         script_len: script.content.len() as u32,
+        ignore_frames: Vec::new(),
     };
     for stmt in &program.body {
         walker.visit_stmt(stmt);
@@ -114,10 +115,27 @@ struct ScriptWalker<'a, 'src> {
     /// Length of the script body in bytes; with `base_offset` this
     /// recovers the script-content slice of `ctx.source`.
     script_len: u32,
+    /// Live stack of ignore-code sets — one frame per node entered
+    /// with leading `// svelte-ignore` comments. Upstream pushes a
+    /// frame at EVERY node and consults the whole stack, so an
+    /// ignore above a statement suppresses warnings anchored
+    /// anywhere in the subtree (a nested class, a string literal, a
+    /// `new` expression). Rule sites read the flattened union via
+    /// [`Self::is_ignored`].
+    ignore_frames: Vec<Vec<smol_str::SmolStr>>,
 }
 
 impl<'a, 'src> ScriptWalker<'a, 'src> {
     fn visit_stmt(&mut self, stmt: &Statement<'_>) {
+        use oxc_span::GetSpan;
+        let pushed = self.push_leading_ignores(stmt.span().start);
+        self.visit_stmt_inner(stmt);
+        if pushed {
+            self.ignore_frames.pop();
+        }
+    }
+
+    fn visit_stmt_inner(&mut self, stmt: &Statement<'_>) {
         match stmt {
             // Classes.
             Statement::ClassDeclaration(cls) => {
@@ -145,10 +163,7 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
                         ScriptAstContext::Instance => 1,
                     };
                     if self.function_depth > allowed
-                        && !self.has_leading_ignore(
-                            cls.span.start,
-                            Code::perf_avoid_nested_class.as_str(),
-                        )
+                        && !self.is_ignored(Code::perf_avoid_nested_class.as_str())
                     {
                         let range = self.abs_range(cls.span.start, cls.span.end);
                         let msg = messages::perf_avoid_nested_class();
@@ -230,7 +245,11 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
                 }
             }
             Statement::ThrowStatement(t) => {
-                self.check_legacy_component_creation(&t.argument);
+                // legacy_component_creation deliberately NOT checked
+                // here — upstream fires it from its
+                // ExpressionStatement visitor only, so
+                // `throw new App({target})` does not warn (verified
+                // against the compiler).
                 self.visit_expr(&t.argument);
             }
             Statement::WhileStatement(w) => {
@@ -301,13 +320,19 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
     }
 
     fn visit_expr(&mut self, expr: &Expression<'_>) {
+        use oxc_span::GetSpan;
+        let pushed = self.push_leading_ignores(expr.span().start);
+        self.visit_expr_inner(expr);
+        if pushed {
+            self.ignore_frames.pop();
+        }
+    }
+
+    fn visit_expr_inner(&mut self, expr: &Expression<'_>) {
         match expr {
             Expression::StringLiteral(lit) => {
                 if has_bidi_char(&lit.value)
-                    && !self.has_leading_ignore(
-                        lit.span.start,
-                        Code::bidirectional_control_characters.as_str(),
-                    )
+                    && !self.is_ignored(Code::bidirectional_control_characters.as_str())
                 {
                     let range = self.abs_range(lit.span.start, lit.span.end);
                     let msg = messages::bidirectional_control_characters();
@@ -319,10 +344,7 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
                 for q in &tl.quasis {
                     if let Some(cooked) = q.value.cooked.as_deref() {
                         if has_bidi_char(cooked)
-                            && !self.has_leading_ignore(
-                                q.span.start,
-                                Code::bidirectional_control_characters.as_str(),
-                            )
+                            && !self.is_ignored(Code::bidirectional_control_characters.as_str())
                         {
                             let range = self.abs_range(q.span.start, q.span.end);
                             let msg = messages::bidirectional_control_characters();
@@ -406,10 +428,17 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
             }
             Expression::ObjectExpression(o) => {
                 for prop in &o.properties {
+                    // Frame anchors at the PROPERTY span — a comment
+                    // before `key:` must suppress inside the value.
+                    use oxc_span::GetSpan;
+                    let pushed = self.push_leading_ignores(prop.span().start);
                     if let oxc_ast::ast::ObjectPropertyKind::ObjectProperty(op) = prop {
                         self.visit_expr(&op.value);
                     } else if let oxc_ast::ast::ObjectPropertyKind::SpreadProperty(sp) = prop {
                         self.visit_expr(&sp.argument);
+                    }
+                    if pushed {
+                        self.ignore_frames.pop();
                     }
                 }
             }
@@ -425,6 +454,8 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
     fn visit_class_body(&mut self, body: &ClassBody<'_>) {
         for member in &body.body {
             use oxc_ast::ast::ClassElement;
+            use oxc_span::GetSpan;
+            let pushed = self.push_leading_ignores(member.span().start);
             match member {
                 ClassElement::MethodDefinition(m) => {
                     if let Some(body) = &m.value.body {
@@ -442,6 +473,9 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
                 }
                 _ => {}
             }
+            if pushed {
+                self.ignore_frames.pop();
+            }
         }
     }
 
@@ -451,7 +485,7 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
         // a ClassExpression.
         if self.function_depth > 0
             && let Expression::ClassExpression(_) = &ne.callee
-            && !self.has_leading_ignore(ne.span.start, Code::perf_avoid_inline_class.as_str())
+            && !self.is_ignored(Code::perf_avoid_inline_class.as_str())
         {
             let range = self.abs_range(ne.span.start, ne.span.end);
             let msg = messages::perf_avoid_inline_class();
@@ -476,13 +510,31 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
         }
     }
 
-    /// Does the comment run leading the node at `span_start`
-    /// (script-local offset) mention `code`?
-    fn has_leading_ignore(&self, span_start: u32, code: &str) -> bool {
+    /// Resolve the `// svelte-ignore …` run leading the node at
+    /// `span_start` (script-local offset) and push it as a new
+    /// ignore frame. Returns `true` if a frame was pushed so the
+    /// caller pops on exit.
+    fn push_leading_ignores(&mut self, span_start: u32) -> bool {
+        if !self.script_comments.has_ignores() {
+            return false;
+        }
         let content = &self.ctx.source
             [self.base_offset as usize..(self.base_offset + self.script_len) as usize];
-        self.script_comments
-            .has_leading_ignore(content, span_start, code)
+        let codes = self.script_comments.leading_ignores(content, span_start);
+        if codes.is_empty() {
+            false
+        } else {
+            self.ignore_frames.push(codes);
+            true
+        }
+    }
+
+    /// Does any active ignore frame mention `code`? Upstream's
+    /// per-node stack union.
+    fn is_ignored(&self, code: &str) -> bool {
+        self.ignore_frames
+            .iter()
+            .any(|frame| frame.iter().any(|c| c.as_str() == code))
     }
 
     fn visit_labeled(&mut self, lbl: &LabeledStatement<'_>) {
@@ -512,10 +564,8 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
                 // Honour a `// svelte-ignore reactive_declaration_invalid_placement`
                 // (or its legacy dashed equivalent) preceding this
                 // `$:` statement inside the same script body.
-                let is_ignored = self.has_leading_ignore(
-                    lbl.span.start,
-                    Code::reactive_declaration_invalid_placement.as_str(),
-                );
+                let is_ignored =
+                    self.is_ignored(Code::reactive_declaration_invalid_placement.as_str());
                 if !is_ignored {
                     let range = self.abs_range(lbl.span.start, lbl.span.end);
                     let msg = messages::reactive_declaration_invalid_placement();
@@ -584,10 +634,7 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
         if !matches {
             return;
         }
-        if self.has_leading_ignore(
-            ne.span.start,
-            crate::codes::Code::legacy_component_creation.as_str(),
-        ) {
+        if self.is_ignored(crate::codes::Code::legacy_component_creation.as_str()) {
             return;
         }
         let range = self.abs_range(ne.span.start, ne.span.end);

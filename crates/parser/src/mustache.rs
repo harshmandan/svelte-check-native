@@ -259,15 +259,31 @@ fn keyword_before_slash_can_start_regex(
         }
     }
 
+    // Keywords after which `/` opens a regex, mirroring acorn's
+    // `beforeExpr` keyword set (tokentype.js) plus the contextual
+    // `await`/`yield` (expression-position in async/generator bodies —
+    // and reserved words in module code, so they can't be identifiers
+    // ending an expression). `of` is contextual-only and stays out:
+    // `of / 2` must divide.
     let word = &bytes[start..=ident_end];
-    word == b"return"
-        || word == b"throw"
-        || word == b"case"
-        || word == b"delete"
-        || word == b"void"
-        || word == b"typeof"
-        || word == b"in"
-        || word == b"instanceof"
+    matches!(
+        word,
+        b"return"
+            | b"throw"
+            | b"case"
+            | b"default"
+            | b"delete"
+            | b"void"
+            | b"typeof"
+            | b"in"
+            | b"instanceof"
+            | b"new"
+            | b"do"
+            | b"else"
+            | b"extends"
+            | b"await"
+            | b"yield"
+    )
 }
 
 fn is_ascii_ident_continue(b: u8) -> bool {
@@ -443,6 +459,43 @@ mod tests {
     fn regex_literal_after_return_keyword() {
         let src = "{(() => { return /}/.test(value); })()}";
         assert_eq!(end_of(src), Some((src.len() - 1) as u32));
+    }
+
+    #[test]
+    fn regex_literal_after_await_keyword() {
+        // Async template expressions (Svelte 5.36+): `await` is
+        // expression-position, so a following `/` opens a regex.
+        let src = "{await /}/.test(s) ? 1 : 2}";
+        assert_eq!(end_of(src), Some((src.len() - 1) as u32));
+    }
+
+    #[test]
+    fn regex_literal_after_yield_keyword() {
+        let src = "{fn(function*() { yield /}/ })}";
+        assert_eq!(end_of(src), Some((src.len() - 1) as u32));
+    }
+
+    #[test]
+    fn regex_literal_after_do_and_else_keywords() {
+        let src = "{(() => { do /}/.test(s); while (0) })()}";
+        assert_eq!(end_of(src), Some((src.len() - 1) as u32));
+        let src = "{(() => { if (a) {} else /}/.test(s) })()}";
+        assert_eq!(end_of(src), Some((src.len() - 1) as u32));
+    }
+
+    #[test]
+    fn regex_literal_after_new_and_case_keywords() {
+        let src = "{fn(new /}/.constructor())}";
+        assert_eq!(end_of(src), Some((src.len() - 1) as u32));
+        let src = "{(() => { switch (x) { case /}/.source: return 1; } })()}";
+        assert_eq!(end_of(src), Some((src.len() - 1) as u32));
+    }
+
+    #[test]
+    fn keyword_named_property_before_division_still_divides() {
+        // `.await` / `.else` are property names — division, not regex.
+        assert_eq!(end_of("{obj.await / 2}"), Some(14));
+        assert_eq!(end_of("{obj.else / 2}"), Some(13));
     }
 
     #[test]

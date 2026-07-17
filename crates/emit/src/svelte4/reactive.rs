@@ -185,7 +185,27 @@ fn collect_top_level_var_names(program: &oxc_ast::ast::Program<'_>) -> HashSet<S
                     }
                 }
             }
-            _ => {}
+            // Top-level-only contract: this scan exists to tell a
+            // `$: x = …` DECLARATION from a re-assignment, and only
+            // `let`/`const`/`var` names participate in that decision
+            // (matching what the rewrite emits). Other declaration
+            // shapes are deliberately not collected — `$: f = …`
+            // against a same-named function/class/import is left to
+            // tsgo to diagnose as the redeclaration it is.
+            Statement::FunctionDeclaration(_)
+            | Statement::ClassDeclaration(_)
+            | Statement::ImportDeclaration(_)
+            | Statement::ExportAllDeclaration(_)
+            | Statement::ExportDefaultDeclaration(_)
+            | Statement::TSTypeAliasDeclaration(_)
+            | Statement::TSInterfaceDeclaration(_)
+            | Statement::TSEnumDeclaration(_)
+            | Statement::TSModuleDeclaration(_)
+            | Statement::TSGlobalDeclaration(_)
+            | Statement::TSImportEqualsDeclaration(_)
+            | Statement::TSExportAssignment(_)
+            | Statement::TSNamespaceExportDeclaration(_) => {}
+            svn_analyze::non_declaration_statement!() => {}
         }
     }
     out

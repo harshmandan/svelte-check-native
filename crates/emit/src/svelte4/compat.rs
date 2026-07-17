@@ -481,6 +481,12 @@ pub(crate) fn has_strict_slots_ast(parsed_instance: Option<&svn_parser::ParsedSc
 
 /// Generic helper: true when `stmt` is an `interface NAME` or
 /// `type NAME` declaration (with or without `export`).
+///
+/// Top-level-only contract: only the two type-declaration shapes (and
+/// their `export`-wrapped forms) can satisfy the check — every other
+/// declaration kind is enumerated below so the match stays exhaustive
+/// and a new oxc `Statement` variant fails compilation instead of
+/// silently reading as "not a type declaration".
 fn statement_declares_named_type(stmt: &oxc_ast::ast::Statement<'_>, name: &str) -> bool {
     use oxc_ast::ast::{Declaration, Statement};
     match stmt {
@@ -491,7 +497,19 @@ fn statement_declares_named_type(stmt: &oxc_ast::ast::Statement<'_>, name: &str)
             Some(Declaration::TSTypeAliasDeclaration(d)) => d.id.name.as_str() == name,
             _ => false,
         },
-        _ => false,
+        Statement::VariableDeclaration(_)
+        | Statement::FunctionDeclaration(_)
+        | Statement::ClassDeclaration(_)
+        | Statement::ImportDeclaration(_)
+        | Statement::ExportAllDeclaration(_)
+        | Statement::ExportDefaultDeclaration(_)
+        | Statement::TSEnumDeclaration(_)
+        | Statement::TSModuleDeclaration(_)
+        | Statement::TSGlobalDeclaration(_)
+        | Statement::TSImportEqualsDeclaration(_)
+        | Statement::TSExportAssignment(_)
+        | Statement::TSNamespaceExportDeclaration(_) => false,
+        svn_analyze::non_declaration_statement!() => false,
     }
 }
 

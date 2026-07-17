@@ -485,3 +485,41 @@ where
         walk_statement_descend(s, f);
     }
 }
+
+/// Pattern matching every [`Statement`] variant that can never
+/// introduce a top-level binding, type, or module-shape declaration:
+/// plain control-flow and expression statements.
+///
+/// Top-level-only scans (the shallow `for stmt in &program.body`
+/// pattern) use this as their "deliberately ignored" arm so the match
+/// stays exhaustive without hand-listing eighteen control-flow
+/// variants at every site. The payoff is the rule-#1a compiler
+/// guarantee: when oxc adds a NEW `Statement` variant, every such
+/// scan fails to compile until someone decides which bucket the
+/// variant belongs to — instead of silently falling through a `_`
+/// arm. Declaration-shaped variants a scan ignores ON PURPOSE must
+/// still be listed explicitly at the call site (with the reason), so
+/// the decision is visible in review.
+#[macro_export]
+macro_rules! non_declaration_statement {
+    () => {
+        ::oxc_ast::ast::Statement::BlockStatement(_)
+            | ::oxc_ast::ast::Statement::BreakStatement(_)
+            | ::oxc_ast::ast::Statement::ContinueStatement(_)
+            | ::oxc_ast::ast::Statement::DebuggerStatement(_)
+            | ::oxc_ast::ast::Statement::DoWhileStatement(_)
+            | ::oxc_ast::ast::Statement::EmptyStatement(_)
+            | ::oxc_ast::ast::Statement::ExpressionStatement(_)
+            | ::oxc_ast::ast::Statement::ForInStatement(_)
+            | ::oxc_ast::ast::Statement::ForOfStatement(_)
+            | ::oxc_ast::ast::Statement::ForStatement(_)
+            | ::oxc_ast::ast::Statement::IfStatement(_)
+            | ::oxc_ast::ast::Statement::LabeledStatement(_)
+            | ::oxc_ast::ast::Statement::ReturnStatement(_)
+            | ::oxc_ast::ast::Statement::SwitchStatement(_)
+            | ::oxc_ast::ast::Statement::ThrowStatement(_)
+            | ::oxc_ast::ast::Statement::TryStatement(_)
+            | ::oxc_ast::ast::Statement::WhileStatement(_)
+            | ::oxc_ast::ast::Statement::WithStatement(_)
+    };
+}

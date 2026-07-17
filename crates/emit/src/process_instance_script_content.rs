@@ -126,12 +126,28 @@ fn collect_module_block_type_idents(decl: &TSModuleDeclaration<'_>, out: &mut Ha
             Statement::ExportNamedDeclaration(e) => e.declaration.as_ref(),
             _ => stmt.as_declaration(),
         };
+        // Top-level-only contract: only type aliases and interfaces
+        // carry dependency idents that the declare-const stub pass
+        // needs; the remaining declaration kinds are enumerated so a
+        // new oxc `Declaration` variant fails compilation instead of
+        // silently contributing nothing.
         match decl {
-            Some(Declaration::TSTypeAliasDeclaration(d)) => out.extend(collect_alias_deps(d).idents),
+            Some(Declaration::TSTypeAliasDeclaration(d)) => {
+                out.extend(collect_alias_deps(d).idents)
+            }
             Some(Declaration::TSInterfaceDeclaration(d)) => {
                 out.extend(collect_interface_deps(d).idents)
             }
-            _ => {}
+            Some(
+                Declaration::VariableDeclaration(_)
+                | Declaration::FunctionDeclaration(_)
+                | Declaration::ClassDeclaration(_)
+                | Declaration::TSEnumDeclaration(_)
+                | Declaration::TSModuleDeclaration(_)
+                | Declaration::TSGlobalDeclaration(_)
+                | Declaration::TSImportEqualsDeclaration(_),
+            )
+            | None => {}
         }
     }
 }
@@ -471,7 +487,19 @@ pub fn split_imports(
                     });
                 }
             }
-            _ => {}
+            // Top-level-only contract: the shapes above are everything
+            // this splitter hoists or strips. The module-only TS forms
+            // below (`import x = require(…)`, `export =`, `declare
+            // global`) and `enum` are deliberately LEFT IN THE BODY —
+            // long-standing behavior locked here explicitly; hoisting
+            // them is a separate decision should a real project ever
+            // surface one inside a component script.
+            Statement::TSEnumDeclaration(_)
+            | Statement::TSGlobalDeclaration(_)
+            | Statement::TSImportEqualsDeclaration(_)
+            | Statement::TSExportAssignment(_)
+            | Statement::TSNamespaceExportDeclaration(_) => {}
+            svn_analyze::non_declaration_statement!() => {}
         }
     }
 

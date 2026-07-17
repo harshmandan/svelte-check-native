@@ -1241,16 +1241,25 @@ fn run_typecheck(
         // declared nowhere in the chain; a declared-but-empty include
         // compiles to an empty glob set that matches nothing (TS
         // replace-on-child: `"include": []` admits no files).
+        //
+        // Glob matching honours the filesystem's case sensitivity the
+        // way TypeScript's `useCaseSensitiveFileNames` does — tsgo
+        // resolves the overlay tsconfig itself, so a case-mismatched
+        // `include` on a case-insensitive disk (macOS/Windows default)
+        // still checks files; our scope filter must agree. Probe once
+        // against the tsconfig path (it exists and shares the mount
+        // with the files being matched).
+        let case_insensitive = discovery::path_fs_is_case_insensitive(tsconfig);
         let include =
             discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref())
                 .map(|pats| {
-                    discovery::build_glob_set_absolute(&pats)
+                    discovery::build_glob_set_absolute(&pats, case_insensitive)
                         .unwrap_or_else(globset::GlobSet::empty)
                 });
         let exclude =
             discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.exclude.as_deref())
                 .map(|pats| {
-                    discovery::build_glob_set_absolute(&pats)
+                    discovery::build_glob_set_absolute(&pats, case_insensitive)
                         .unwrap_or_else(globset::GlobSet::empty)
                 });
         // Files explicitly listed in tsconfig's `files` field bypass

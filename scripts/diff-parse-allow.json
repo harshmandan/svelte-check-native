@@ -1,0 +1,9 @@
+{
+  "comment": "Known-divergence allowlist for scripts/diff-parse.mjs. Hand-written only — every entry needs a reason, and entries must decay toward zero (the sweep warns when an entry no longer matches anything). Same philosophy as bench/.parity-exceptions.json. 'pattern' is a regex over a divergence line; optional 'files' is a regex over the repo-relative path.",
+  "allow": [
+    {
+      "pattern": "^ts-mode-flag:",
+      "reason": "Decided divergence: upstream sets TS mode once for the whole file from the FIRST lang= attribute regex match (svelte phases/1-parse/index.js regex_lang_attribute); we resolve lang per script section (AST-grounded). Only manifests on contrived files — lang=\"typescript\" spelled out (upstream counts only the literal 'ts'), or conflicting per-section langs. Keep ours."
+    }
+  ]
+}

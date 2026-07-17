@@ -1221,11 +1221,16 @@ impl<'src> TemplateParser<'src> {
             });
         };
 
-        // CSS is not Svelte template syntax. Keep the source range for
-        // diagnostics/future linting, but emit no child nodes until a CSS
-        // parser exists.
+        // CSS/JS raw content is not Svelte template syntax — never parse
+        // it for mustaches/tags. Represent it the way the Svelte parser
+        // does: exactly one Text child spanning the body, present even
+        // when the body is empty (upstream emits a zero-length Text node
+        // for `<svg><style></style></svg>`).
         self.scanner.set_pos(close_start);
         let children_end = close_start;
+        let raw_text = Node::Text(Text {
+            range: Range::new(children_start, children_end),
+        });
 
         if self.scanner.starts_with("</") {
             let close_start = self.scanner.pos();
@@ -1249,7 +1254,7 @@ impl<'src> TemplateParser<'src> {
         }
 
         Some(Fragment {
-            nodes: Vec::new(),
+            nodes: vec![raw_text],
             range: Range::new(children_start, children_end),
         })
     }
@@ -1467,10 +1472,16 @@ mod tests {
             .expect("expected style child");
 
         assert_eq!(style.name.as_str(), "style");
-        assert!(
-            style.children.nodes.is_empty(),
-            "style contents are CSS, not Svelte template expressions"
-        );
+        // The body is a single opaque Text node (mirroring the Svelte
+        // parser's raw-text elements) — the `{`/`}` in the CSS must NOT
+        // parse as mustache interpolations.
+        let [Node::Text(body)] = style.children.nodes.as_slice() else {
+            panic!(
+                "expected one raw Text child, got {:?}",
+                style.children.nodes
+            );
+        };
+        assert!(body.range.slice(src).contains("@keyframes"));
     }
 
     #[test]

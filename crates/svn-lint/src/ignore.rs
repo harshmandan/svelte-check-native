@@ -409,10 +409,65 @@ fn is_same_line_trailing(bytes: &[u8], comment_start: usize) -> bool {
             // trails that expression. A bare `(` (`take( // c`)
             // means the comment leads the first argument.
             b'(' => return skipped_close_paren,
-            b => return is_expression_end_byte(b),
+            b => return ends_expression_at(bytes, i, b),
         }
     }
     false
+}
+
+/// Does the byte `b` at index `i` end an expression, making a
+/// same-line comment after it trailing? Acorn anchors the gap check
+/// at node END positions, so beyond the single-byte class this looks
+/// one step further back for multi-byte enders whose node closes on
+/// their LAST byte — each verified against the real compiler:
+///
+/// - `i++ // c` — the UpdateExpression ends after the doubled
+///   operator (an INFIX `a + // c` keeps leading: single `+`).
+/// - `n! // c` — a TS non-null assertion glued to an expression end.
+/// - `1. // c` — a numeric literal's trailing dot.
+///
+/// Known residuals (undecidable or not worth the bytes): a regex
+/// literal's closing `/` should be trailing (`= /x/ // c`), but `/`
+/// is also the division operator before a line-broken RHS
+/// (`a / // c`), and telling them apart needs a lexer — we keep
+/// classifying `/` as leading, over-suppressing after a regex
+/// literal. A PREFIX operator dangling before the comment
+/// (`++ // c` with the operand on the next line) misreads as
+/// trailing.
+fn ends_expression_at(bytes: &[u8], i: usize, b: u8) -> bool {
+    if is_expression_end_byte(b) {
+        return true;
+    }
+    match b {
+        // Adjacent doubled bytes are the update operator; spaced
+        // runs (`a + + // c` unary chains) stay leading.
+        b'+' | b'-' => i > 0 && bytes[i - 1] == b,
+        // TS non-null: walk back over the `!` run (`x!!` stacks) and
+        // require an expression end right before it, so a bare
+        // prefix `!` awaiting its operand stays leading.
+        b'!' => {
+            let mut j = i;
+            while j > 0 && bytes[j - 1] == b'!' {
+                j -= 1;
+            }
+            j > 0 && is_expression_end_byte(bytes[j - 1])
+        }
+        // Numeric literal's trailing dot: a digit run glued to the
+        // dot that is NOT the tail of an identifier (`x1. // c` is a
+        // line-broken member access — leading) or of a literal that
+        // already contains a dot (`1.5. // c`).
+        b'.' => {
+            let mut j = i;
+            while j > 0 && bytes[j - 1].is_ascii_digit() {
+                j -= 1;
+            }
+            j < i
+                && !(j > 0
+                    && (bytes[j - 1].is_ascii_alphanumeric()
+                        || matches!(bytes[j - 1], b'_' | b'$' | b'.')))
+        }
+        _ => false,
+    }
 }
 
 fn is_expression_end_byte(b: u8) -> bool {

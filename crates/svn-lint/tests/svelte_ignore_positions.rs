@@ -465,3 +465,97 @@ fn export_let_unused_leading_ignore() {
     );
     let _ = Code::export_let_unused;
 }
+
+/// A comment after postfix `i++` is trailing of the UpdateExpression
+/// (acorn's gap check runs from the node END, which sits after the
+/// `++`) — the next statement is not suppressed.
+#[test]
+fn trailing_comment_after_postfix_increment_warns() {
+    assert_warns(
+        "<script lang=\"ts\">
+\tlet count = $state(0);
+\tlet i = 0;
+\ti++ // svelte-ignore state_referenced_locally
+\tconst snapshot = count;
+\tvoid snapshot; void i;
+</script>
+
+<button onclick={() => count++}>{count}</button>
+",
+        "trailing comment after postfix increment",
+    );
+}
+
+/// Prefix `--i` also ends at the operand — same trailing treatment.
+#[test]
+fn trailing_comment_after_prefix_decrement_warns() {
+    assert_warns(
+        "<script lang=\"ts\">
+\tlet count = $state(0);
+\tlet i = 0;
+\t--i // svelte-ignore state_referenced_locally
+\tconst snapshot = count;
+\tvoid snapshot; void i;
+</script>
+
+<button onclick={() => count++}>{count}</button>
+",
+        "trailing comment after prefix decrement",
+    );
+}
+
+/// A comment after a TS non-null assertion (`n!`) trails the
+/// TSNonNullExpression — the next statement is not suppressed.
+#[test]
+fn trailing_comment_after_ts_nonnull_warns() {
+    assert_warns(
+        "<script lang=\"ts\">
+\tlet count = $state(0);
+\tlet n: number | null = 5;
+\tn! // svelte-ignore state_referenced_locally
+\tconst snapshot = count;
+\tvoid snapshot; void n;
+</script>
+
+<button onclick={() => count++}>{count}</button>
+",
+        "trailing comment after TS non-null assertion",
+    );
+}
+
+/// A comment after a numeric literal ending in `.` (`1.`) trails the
+/// literal — the next statement is not suppressed.
+#[test]
+fn trailing_comment_after_numeric_dot_warns() {
+    assert_warns(
+        "<script lang=\"ts\">
+\tlet count = $state(0);
+\t1. // svelte-ignore state_referenced_locally
+\tconst snapshot = count;
+\tvoid snapshot;
+</script>
+
+<button onclick={() => count++}>{count}</button>
+",
+        "trailing comment after numeric literal dot",
+    );
+}
+
+/// Counter-lock: an INFIX `+` before the comment means the expression
+/// continues on the next line — the comment leads the continuation
+/// and suppresses inside it (verified upstream).
+#[test]
+fn infix_plus_comment_still_leads_continuation() {
+    assert_suppressed(
+        "<script lang=\"ts\">
+\tlet count = $state(0);
+\tconst sum = 1 + // svelte-ignore state_referenced_locally
+\tcount;
+\tvoid sum;
+</script>
+
+<button onclick={() => count++}>{count}</button>
+",
+        "infix plus keeps the comment leading",
+    );
+}

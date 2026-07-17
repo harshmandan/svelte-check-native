@@ -26,14 +26,18 @@
 //!       `trailingSlash`) get their fixed value-union types injected
 //!       on the declarator binding.
 //!
+//! `.js` route files receive the same injections in JSDoc form
+//! (mirrors upstream `upsertKitFile`'s `isTsFile` split): `@param`
+//! blocks for `load` handlers, `@type` casts for page options, a
+//! whole-function `@type` for `+server.js` handlers, and `@satisfies`
+//! casts for non-function `load` values.
+//!
 //! Deliberately NOT handled here (yet):
 //!
 //! - `actions` const satisfies pattern.
 //! - `entries` function in `+page.server.ts` / `+server.ts`.
 //! - `hooks.server.ts` / `hooks.client.ts` handler typing.
 //! - `src/params/*.ts` param matchers.
-//! - `.js` route files (needs JSDoc annotation injection, a
-//!   separate code path).
 //! - `+server.ts` page-option / `load` / `actions` / `entries`
 //!   typing. The `ServerEndpoint` branch below annotates HTTP
 //!   handler parameters and return types; it intentionally skips
@@ -74,31 +78,54 @@ enum KitFileKind {
 /// Classify `path` for kit_inject's purposes. Returns `None` for any
 /// shape we don't currently inject into:
 ///
-/// - `.js` route scripts (would need JSDoc; separate code path).
 /// - Hooks / params (recognised by discovery but no annotations
 ///   injected today).
 /// - Plain user files.
+///
+/// The second tuple element is `true` for `.ts` sources; `.js` route
+/// files get the same injections in JSDoc form (mirrors upstream
+/// `upsertKitFile`'s `isTsFile` split).
 ///
 /// Defaults are used for `KitFilesSettings` because kit_inject
 /// doesn't currently consult per-project overrides — only basename
 /// shape matters here, and the route-classification path inside
 /// `classify` doesn't read any of the settings fields. Centralising
 /// the defaults keeps the call site honest about that fact.
-fn kit_file_kind(path: &Path) -> Option<KitFileKind> {
+fn kit_file_kind(path: &Path) -> Option<(KitFileKind, bool)> {
     let kit = classify(path, &KitFilesSettings::default())?;
-    if !matches!(kit.lang, ScriptLang::Ts) {
-        return None;
-    }
+    let is_ts = matches!(kit.lang, ScriptLang::Ts);
     match kit.role {
-        KitRole::ServerEndpoint => Some(KitFileKind::ServerEndpoint),
-        KitRole::RouteScript { flavour } => Some(KitFileKind::Route {
-            is_layout: flavour.is_layout,
-            is_server: flavour.is_server,
-        }),
+        KitRole::ServerEndpoint => Some((KitFileKind::ServerEndpoint, is_ts)),
+        KitRole::RouteScript { flavour } => Some((
+            KitFileKind::Route {
+                is_layout: flavour.is_layout,
+                is_server: flavour.is_server,
+            },
+            is_ts,
+        )),
         // RouteComponent / Hooks / Params don't get annotations from
         // this pass — return None so the caller skips them.
         _ => None,
     }
+}
+
+/// JS-form gate mirroring upstream `findExports` / `hasTypedParameter`
+/// for non-TS files: an export whose statement is directly preceded by
+/// a JSDoc block carrying `@type` / `@param` / `@satisfies` counts as
+/// user-typed, and the injector must leave it alone (upstream checks
+/// `ts.getJSDocType` / `getJSDocParameterTags` / a `satisfies` tag).
+/// Comments aren't AST, so this is a bounded textual check on the
+/// bytes immediately before the statement.
+fn has_preceding_jsdoc_typing(source: &str, stmt_start: usize) -> bool {
+    let before = source[..stmt_start.min(source.len())].trim_end();
+    if !before.ends_with("*/") {
+        return false;
+    }
+    let Some(open) = before.rfind("/**") else {
+        return false;
+    };
+    let block = &before[open..];
+    block.contains("@type") || block.contains("@param") || block.contains("@satisfies")
 }
 
 /// Returns the modified source with injected type annotations, or
@@ -110,7 +137,7 @@ fn kit_file_kind(path: &Path) -> Option<KitFileKind> {
 /// additive, so diagnostic positions at lines unaffected by the
 /// inject still map 1:1 to the source.
 pub fn inject(path: &Path, source: &str) -> Option<String> {
-    let kind = kit_file_kind(path)?;
+    let (kind, is_ts) = kit_file_kind(path)?;
 
     let alloc = Allocator::default();
     let parsed = parse_script_body(&alloc, source, ParserScriptLang::Ts);
@@ -120,23 +147,44 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
         let Statement::ExportNamedDeclaration(export) = stmt else {
             continue;
         };
+        // JS sources: an export the user already JSDoc-typed is
+        // upstream's `hasTypeDefinition` — leave it untouched.
+        let js_user_typed =
+            !is_ts && has_preceding_jsdoc_typing(source, export.span.start as usize);
 
         match &export.declaration {
             Some(Declaration::FunctionDeclaration(func)) => {
                 let Some(name) = func.id.as_ref().map(|id| id.name.as_str()) else {
                     continue;
                 };
+                if js_user_typed {
+                    continue;
+                }
                 match &kind {
                     KitFileKind::ServerEndpoint => {
                         if !SERVER_HANDLER_NAMES.contains(&name) {
                             continue;
                         }
-                        collect_handler_insert(
-                            func,
-                            "import('./$types.js').RequestEvent",
-                            true,
-                            &mut insertions,
-                        );
+                        if is_ts {
+                            collect_handler_insert(
+                                func,
+                                "import('./$types.js').RequestEvent",
+                                true,
+                                &mut insertions,
+                            );
+                        } else {
+                            // JS: one `@type` covering param + return.
+                            // Upstream's addTypeToFunction JSDoc branch
+                            // builds `(arg0: <type>) => <returnType>`
+                            // (the async variant only exists on the TS
+                            // path).
+                            collect_js_fn_type_insert(
+                                func,
+                                export.span.start as usize,
+                                "(arg0: import('./$types.js').RequestEvent) => Response | Promise<Response>",
+                                &mut insertions,
+                            );
+                        }
                     }
                     KitFileKind::Route {
                         is_layout,
@@ -146,7 +194,20 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                             continue;
                         }
                         let event_type = load_event_type(*is_layout, *is_server);
-                        collect_handler_insert(func, &event_type, false, &mut insertions);
+                        if is_ts {
+                            collect_handler_insert(func, &event_type, false, &mut insertions);
+                        } else {
+                            // JS: `@param` on the (lone) event arg —
+                            // upstream's addJsDocParamToFunction. The
+                            // return stays untyped, same as the TS
+                            // branch.
+                            collect_js_param_insert(
+                                &func.params,
+                                export.span.start as usize,
+                                &event_type,
+                                &mut insertions,
+                            );
+                        }
                     }
                 }
             }
@@ -172,15 +233,27 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                     let BindingPattern::BindingIdentifier(id) = &declarator.id else {
                         continue;
                     };
+                    if js_user_typed {
+                        continue;
+                    }
 
                     // Page-option export (`prerender`, `ssr`, etc.):
-                    // splice `: type` after the identifier.
+                    // splice `: type` after the identifier (TS) or a
+                    // JSDoc cast around the initializer (JS —
+                    // upstream's addJsDocTypeToVariable).
                     if let Some(annot) = page_option_type(id.name.as_str()) {
                         if declarator.type_annotation.is_some() {
                             continue;
                         }
-                        let insert_at = id.span.end as usize;
-                        insertions.push((insert_at, format!(": {annot}")));
+                        if is_ts {
+                            let insert_at = id.span.end as usize;
+                            insertions.push((insert_at, format!(": {annot}")));
+                        } else if let Some(init) = declarator.init.as_ref() {
+                            let s = init.span();
+                            insertions
+                                .push((s.start as usize, format!("/** @type {{{annot}}} */ (")));
+                            insertions.push((s.end as usize, ")".to_string()));
+                        }
                         continue;
                     }
 
@@ -218,13 +291,40 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                             // unwrap is needed for the common case.
                             Expression::ArrowFunctionExpression(arrow) => {
                                 let event_type = load_event_type(*is_layout, *is_server);
-                                collect_arrow_handler_insert(arrow, &event_type, &mut insertions);
+                                if is_ts {
+                                    collect_arrow_handler_insert(
+                                        arrow,
+                                        &event_type,
+                                        &mut insertions,
+                                    );
+                                } else {
+                                    collect_js_param_insert(
+                                        &arrow.params,
+                                        arrow.span.start as usize,
+                                        &event_type,
+                                        &mut insertions,
+                                    );
+                                }
                             }
                             // Function-expression-form `load`
                             // (`export const load = function ({…}) {…}`).
                             Expression::FunctionExpression(func) => {
                                 let event_type = load_event_type(*is_layout, *is_server);
-                                collect_handler_insert(func, &event_type, false, &mut insertions);
+                                if is_ts {
+                                    collect_handler_insert(
+                                        func,
+                                        &event_type,
+                                        false,
+                                        &mut insertions,
+                                    );
+                                } else {
+                                    collect_js_param_insert(
+                                        &func.params,
+                                        func.span.start as usize,
+                                        &event_type,
+                                        &mut insertions,
+                                    );
+                                }
                             }
                             // Already `satisfies`-wrapped — upstream
                             // treats this as user-supplied typing, so
@@ -233,13 +333,23 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                             // Non-function `load` value (e.g. a
                             // re-exported imported loader). Mirror
                             // upstream's `type:'var'` branch: wrap the
-                            // value in `(...) satisfies <...>Load` (the
-                            // bare `Load` type, not `LoadEvent`).
+                            // value in `(...) satisfies <...>Load` (TS)
+                            // or a `@satisfies` JSDoc cast (JS —
+                            // upstream's addJsDocSatisfiesToVariable).
                             _ => {
                                 let load_ty = load_satisfies_type(*is_layout, *is_server);
                                 let s = init.span();
-                                insertions.push((s.start as usize, "(".to_string()));
-                                insertions.push((s.end as usize, format!(") satisfies {load_ty}")));
+                                if is_ts {
+                                    insertions.push((s.start as usize, "(".to_string()));
+                                    insertions
+                                        .push((s.end as usize, format!(") satisfies {load_ty}")));
+                                } else {
+                                    insertions.push((
+                                        s.start as usize,
+                                        format!("/** @satisfies {{{load_ty}}} */ ("),
+                                    ));
+                                    insertions.push((s.end as usize, ")".to_string()));
+                                }
                             }
                         }
                     }
@@ -336,6 +446,54 @@ fn collect_handler_insert(
         };
         insertions.push((body.span.start as usize, format!(": {return_type} ")));
     }
+}
+
+/// JS twin of [`collect_handler_insert`]'s param annotation: insert a
+/// `/** @param {<event_type>} <name> */ ` JSDoc block at
+/// `insert_at` (the export statement start for declarations, the
+/// function expression's own start for var-form initializers —
+/// mirroring upstream `addJsDocParamToFunction`'s `node.getStart()`).
+/// A binding-pattern param gets upstream's positional `arg0` stand-in
+/// name; TypeScript matches it to the first parameter.
+fn collect_js_param_insert(
+    params: &oxc_ast::ast::FormalParameters<'_>,
+    insert_at: usize,
+    event_type: &str,
+    insertions: &mut Vec<(usize, String)>,
+) {
+    if params.items.len() != 1 {
+        return;
+    }
+    let param = &params.items[0];
+    if param.type_annotation.is_some() {
+        return;
+    }
+    let name = match &param.pattern {
+        BindingPattern::BindingIdentifier(id) => id.name.as_str(),
+        _ => "arg0",
+    };
+    insertions.push((insert_at, format!("/** @param {{{event_type}}} {name} */ ")));
+}
+
+/// JS twin of the `+server` handler's param + return annotation: one
+/// `@type` JSDoc block typing the whole function —
+/// `(arg0: RequestEvent) => Response | Promise<Response>` — inserted
+/// before the export keyword (upstream `addTypeToFunction`'s JSDoc
+/// branch builds exactly this shape; the async `Promise<Response>`
+/// narrowing exists only on its TS path).
+fn collect_js_fn_type_insert(
+    func: &oxc_ast::ast::Function<'_>,
+    insert_at: usize,
+    fn_type: &str,
+    insertions: &mut Vec<(usize, String)>,
+) {
+    if func.params.items.len() != 1 {
+        return;
+    }
+    if func.params.items[0].type_annotation.is_some() {
+        return;
+    }
+    insertions.push((insert_at, format!("/** @type {{{fn_type}}} */ ")));
 }
 
 /// Arrow-function twin of [`collect_handler_insert`]. Used for
@@ -435,7 +593,8 @@ mod tests {
         // User-declared return type → we don't add a second one. The
         // param still gets `RequestEvent` (matches upstream's inner
         // `!fn.node.type` guard).
-        let source = "export async function GET({ url }): Promise<Response> { return new Response(''); }";
+        let source =
+            "export async function GET({ url }): Promise<Response> { return new Response(''); }";
         let got = inject(&server_path(), source).unwrap();
         assert!(got.contains("({ url }: import('./$types.js').RequestEvent)"));
         // No injected return annotation duplicated onto the body brace.
@@ -597,5 +756,110 @@ export async function POST({ request }) { return new Response(''); }
         // untouched even if the user happens to write one.
         let source = "export const ssr = true;";
         assert!(inject(&server_path(), source).is_none());
+    }
+
+    // .js route files — JSDoc-form injections (upstream's !isTsFile
+    // branches of upsertKitFile).
+
+    fn page_js_path() -> PathBuf {
+        PathBuf::from("src/routes/+page.js")
+    }
+    fn server_js_path() -> PathBuf {
+        PathBuf::from("src/routes/+server.js")
+    }
+
+    #[test]
+    fn js_load_function_gets_jsdoc_param() {
+        let source = "export function load({ params }) {\n\treturn {};\n}\n";
+        let got = inject(&page_js_path(), source).unwrap();
+        assert!(
+            got.starts_with(
+                "/** @param {import('./$types.js').PageLoadEvent} arg0 */ export function load"
+            ),
+            "got: {got}"
+        );
+    }
+
+    #[test]
+    fn js_load_identifier_param_keeps_its_name() {
+        let source = "export function load(event) { return {}; }";
+        let got = inject(&page_js_path(), source).unwrap();
+        assert!(
+            got.contains("/** @param {import('./$types.js').PageLoadEvent} event */ "),
+            "got: {got}"
+        );
+    }
+
+    #[test]
+    fn js_arrow_load_gets_jsdoc_param_before_arrow() {
+        let source = "export const load = async ({ fetch }) => ({});";
+        let got = inject(&page_js_path(), source).unwrap();
+        assert!(
+            got.contains(
+                "export const load = /** @param {import('./$types.js').PageLoadEvent} arg0 */ async ({ fetch }) =>"
+            ),
+            "got: {got}"
+        );
+    }
+
+    #[test]
+    fn js_page_option_gets_jsdoc_cast() {
+        let source = "export const prerender = 'sometimes';";
+        let got = inject(&page_js_path(), source).unwrap();
+        assert_eq!(
+            got,
+            "export const prerender = /** @type {boolean | 'auto'} */ ('sometimes');"
+        );
+    }
+
+    #[test]
+    fn js_non_function_load_gets_jsdoc_satisfies() {
+        let source = "export const load = loader;";
+        let got = inject(&page_js_path(), source).unwrap();
+        assert_eq!(
+            got,
+            "export const load = /** @satisfies {import('./$types.js').PageLoad} */ (loader);"
+        );
+    }
+
+    #[test]
+    fn js_server_handler_gets_whole_fn_jsdoc_type() {
+        let source = "export async function GET({ url }) { return 42; }";
+        let got = inject(&server_js_path(), source).unwrap();
+        assert!(
+            got.starts_with(
+                "/** @type {(arg0: import('./$types.js').RequestEvent) => Response | Promise<Response>} */ export async function GET"
+            ),
+            "got: {got}"
+        );
+    }
+
+    #[test]
+    fn js_user_jsdoc_typed_export_is_left_alone() {
+        // Upstream's hasTypeDefinition: an existing @type / @param /
+        // @satisfies JSDoc on the export means the user typed it.
+        for source in [
+            "/** @param {import('./$types').PageLoadEvent} event */\nexport function load(event) { return {}; }",
+            "/** @type {import('./$types').PageLoad} */\nexport const load = () => ({});",
+            "/** @type {boolean} */\nexport const ssr = true;",
+        ] {
+            assert!(
+                inject(&page_js_path(), source).is_none(),
+                "should not double-type: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn js_injections_add_no_lines() {
+        // Kit overlays map positions via an identity line map — a JS
+        // injection must never add or remove lines.
+        let source = "export function load({ params }) {\n\tvoid params.nope;\n\treturn {};\n}\n";
+        let got = inject(&page_js_path(), source).unwrap();
+        assert_eq!(
+            source.matches('\n').count(),
+            got.matches('\n').count(),
+            "JSDoc injection changed the line count"
+        );
     }
 }

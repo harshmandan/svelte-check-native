@@ -1,0 +1,7 @@
+{
+    "errors": [
+        { "file": "+page.js", "line": 1, "column": 13, "code": 2339 }
+    ],
+    "warnings": [],
+    "_note": "JS SvelteKit route files get the same $types injections as TS ones, in JSDoc form (upstream upsertKitFile's !isTsFile branches): an untyped `export function load({ params })` gains `/** @param {import('./$types.js').PageLoadEvent} arg0 */`, so the destructured event members are typed. Two observable effects, both verified byte-identical against upstream svelte-check on a live SvelteKit app: the real property error (TS2339 on `params.nope`) surfaces, and the phantom TS7031 ('Binding element params implicitly has an any type') that an un-injected strict checkJs run produces is gone."
+}

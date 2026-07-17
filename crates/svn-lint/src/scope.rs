@@ -44,8 +44,7 @@ use crate::scope_rune_detection::{
 };
 use crate::scope_util::{
     base_identifier, expression_from_default, expression_from_for_init,
-    expression_from_property_key, extract_base_ident, idents_in_pattern,
-    strip_comment_delimiters, unwrap_ts_wrappers,
+    expression_from_property_key, extract_base_ident, idents_in_pattern, unwrap_ts_wrappers,
 };
 
 // Public data types live in `scope_types.rs`. Re-export them so
@@ -162,7 +161,14 @@ pub fn build_with_template_and_runes(
     module_program: Option<&Program<'_>>,
     instance_program: Option<&Program<'_>>,
 ) -> ScopeTree {
-    let mut tree = build_with_template(doc, fragment, source, module_program, instance_program);
+    let mut tree = build_with_template(
+        doc,
+        fragment,
+        source,
+        runes,
+        module_program,
+        instance_program,
+    );
     if !runes {
         promote_non_runes_exports(&mut tree);
     }
@@ -284,6 +290,7 @@ pub fn build_with_template(
     doc: &Document<'_>,
     fragment: Option<&svn_parser::ast::Fragment>,
     source: &str,
+    runes: bool,
     module_program: Option<&Program<'_>>,
     instance_program: Option<&Program<'_>>,
 ) -> ScopeTree {
@@ -297,7 +304,7 @@ pub fn build_with_template(
     if let Some(script) = &doc.module_script
         && let Some(program) = module_program
     {
-        tree_builder.build_script(script, program, module_root);
+        tree_builder.build_script(script, program, module_root, runes);
     }
 
     let instance_root = tree_builder.new_scope(Some(module_root));
@@ -311,7 +318,7 @@ pub fn build_with_template(
         // root Fragment; our sections parser extracts it separately,
         // so we have to bridge the ignore forward explicitly.
         let leading = collect_preceding_template_ignores(doc.source, script.open_tag_range.start);
-        tree_builder.build_script_as_instance(script, program, instance_root, &leading);
+        tree_builder.build_script_as_instance(script, program, instance_root, runes, &leading);
     }
 
     if let Some(frag) = fragment {
@@ -470,6 +477,7 @@ impl TreeBuilder {
             prop_alias: None,
             bind_reference_count: 0,
             fires_state_referenced_locally: false,
+            ignored: None,
         });
         self.scopes[scope.0 as usize].declarations.insert(name, id);
         id
@@ -742,7 +750,7 @@ impl TreeBuilder {
             // Template expression slices rarely carry
             // `// svelte-ignore` comments (they're inside `{…}`),
             // so skip the precollect for perf.
-            script_ignore_comments: Vec::new(),
+            script_comments: crate::ignore::ScriptComments::empty(),
             script_content: effective_slice,
             ignore_frames: Vec::new(),
         };
@@ -888,8 +896,9 @@ impl TreeBuilder {
         script: &ScriptSection<'_>,
         program: &Program<'_>,
         root_scope: ScopeId,
+        runes: bool,
     ) {
-        self.build_script_inner(script, program, root_scope, false, &[]);
+        self.build_script_inner(script, program, root_scope, false, runes, &[]);
     }
 }
 
@@ -1103,9 +1112,10 @@ impl TreeBuilder {
         script: &ScriptSection<'_>,
         program: &Program<'_>,
         root_scope: ScopeId,
+        runes: bool,
         leading_ignores: &[SmolStr],
     ) {
-        self.build_script_inner(script, program, root_scope, true, leading_ignores);
+        self.build_script_inner(script, program, root_scope, true, runes, leading_ignores);
     }
 
     /// `program` is the pre-parsed body of `script` — parsed once by
@@ -1116,41 +1126,22 @@ impl TreeBuilder {
         program: &Program<'_>,
         root_scope: ScopeId,
         is_instance: bool,
+        runes: bool,
         leading_ignores: &[SmolStr],
     ) {
         let base = script.content_range.start;
         let start_depth = self.scopes[root_scope.0 as usize].function_depth;
-        // Pre-collect svelte-ignore comments by source position so
-        // the statement visitor can look up leading comments in
-        // O(log n) later. Spans are absolute byte offsets into the
-        // full .svelte source (not the script-local span).
-        let mut script_ignore_comments: Vec<IgnoreSpan> = Vec::new();
-        for c in &program.comments {
-            let text = &script.content[c.span.start as usize..c.span.end as usize];
-            let Some(body) = strip_comment_delimiters(text) else {
-                continue;
-            };
-            let trimmed = body.trim_start();
-            let Some(rest) = trimmed.strip_prefix("svelte-ignore") else {
-                continue;
-            };
-            let rest = match rest.chars().next() {
-                Some(ch) if ch.is_whitespace() => &rest[ch.len_utf8()..],
-                _ => continue,
-            };
-            // Runes-mode parsing only matters for our downstream
-            // consumer (fires legacy/unknown). The svelte-ignore-
-            // comment extraction here just needs to yield the codes
-            // that the comment intends to suppress, so use the
-            // lenient path.
-            let codes = crate::ignore::parse_ignore_codes_public(rest, true);
-            // script-local offset — matches stmt.span.start.
-            script_ignore_comments.push(IgnoreSpan {
-                span_end: c.span.end,
-                codes,
-            });
-        }
-        script_ignore_comments.sort_by_key(|c| c.span_end);
+        // Index every comment in the script body so the walker can
+        // resolve leading `// svelte-ignore …` runs per node. Offsets
+        // are script-local, matching oxc spans. Codes are parsed with
+        // the file's real runes flag — upstream's extract_svelte_ignore
+        // is strict in runes mode and lax (legacy dashed names accepted)
+        // otherwise.
+        let script_comments = crate::ignore::ScriptComments::build(
+            program.comments.iter().map(|c| (c.span.start, c.span.end)),
+            script.content,
+            runes,
+        );
         let mut walker = ScriptWalker {
             tree: self,
             base_offset: base,
@@ -1163,7 +1154,7 @@ impl TreeBuilder {
             in_reactive_statement: false,
             is_instance,
             program_depth: start_depth,
-            script_ignore_comments,
+            script_comments,
             script_content: script.content,
             ignore_frames: Vec::new(),
         };
@@ -1533,30 +1524,21 @@ struct ScriptWalker<'b, 'src> {
     /// `function_depth` value at the start of the current script —
     /// used to recognize "top-level of Program" for `$:` statements.
     program_depth: u32,
-    /// Pre-collected `// svelte-ignore …` / `/* svelte-ignore … */`
-    /// comments in the script body, sorted by `span_end`. Populated
-    /// from `parsed.program.comments` before the walk starts.
+    /// Index of every comment in the script body (built from
+    /// `parsed.program.comments` before the walk starts) — resolves
+    /// the leading `// svelte-ignore …` run for any node position.
     /// Offsets are script-local (oxc's span origin = script content
     /// start).
-    script_ignore_comments: Vec<IgnoreSpan>,
+    script_comments: crate::ignore::ScriptComments,
     /// Script source text (= `ScriptSection::content`) — needed so
-    /// `push_leading_ignores` can verify the gap between a comment's
-    /// `span_end` and its trailing statement is whitespace-only.
+    /// the leading-comment lookup can verify gaps and same-line
+    /// trailing positions against the raw bytes.
     script_content: &'src str,
-    /// Live stack of ignore-code sets — one frame per statement we
+    /// Live stack of ignore-code sets — one frame per node we
     /// entered that had leading `// svelte-ignore` comments. Active
     /// codes at any time = flatten all frames. Snapshot is cloned
     /// onto each `PendingRef` we record.
     ignore_frames: Vec<Vec<SmolStr>>,
-}
-
-/// One `// svelte-ignore …` / `/* … */` comment in a script body.
-struct IgnoreSpan {
-    /// Absolute byte offset (into the source) of the comment's end
-    /// — the character immediately after `*/` for block comments
-    /// or the `\n` for line comments.
-    span_end: u32,
-    codes: Vec<SmolStr>,
 }
 
 impl<'b, 'src> ScriptWalker<'b, 'src> {
@@ -1614,45 +1596,49 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         }
     }
 
-    /// Pull any pre-collected `// svelte-ignore …` comments whose
-    /// end-offset immediately precedes `stmt_start` (only whitespace
-    /// in between — matches upstream's leadingComments semantic).
-    /// Push them as a new ignore frame. Returns `true` if a frame
-    /// was pushed so the caller pops on exit.
-    fn push_leading_ignores(&mut self, stmt_start: Option<u32>) -> bool {
-        let Some(start) = stmt_start else {
+    /// Resolve the `// svelte-ignore …` run leading a node that
+    /// starts at `node_start` (upstream's leadingComments semantic —
+    /// see [`crate::ignore::ScriptComments`]) and push it as a new
+    /// ignore frame. Returns `true` if a frame was pushed so the
+    /// caller pops on exit.
+    fn push_leading_ignores(&mut self, node_start: Option<u32>) -> bool {
+        if !self.script_comments.has_ignores() {
+            return false;
+        }
+        let Some(start) = node_start else {
             return false;
         };
-        let start = start as usize;
-        let bytes = self.script_content.as_bytes();
-        let mut codes: Vec<SmolStr> = Vec::new();
-        // Iterate comments ending at-or-before `start`, most recent
-        // first. Stop as soon as we hit a comment whose gap to
-        // `start` contains a non-whitespace byte (= not leading).
-        for ig in self.script_ignore_comments.iter().rev() {
-            let span_end = ig.span_end as usize;
-            if span_end > start {
-                continue;
-            }
-            if span_end > bytes.len() || start > bytes.len() {
-                break;
-            }
-            let gap = &bytes[span_end..start];
-            if !gap.iter().all(|b| b.is_ascii_whitespace()) {
-                break;
-            }
-            for c in &ig.codes {
-                if !codes.contains(c) {
-                    codes.push(c.clone());
-                }
-            }
-        }
+        let codes = self
+            .script_comments
+            .leading_ignores(self.script_content, start);
         if codes.is_empty() {
             false
         } else {
             self.ignore_frames.push(codes);
             true
         }
+    }
+
+    /// Declare a binding from the script walk, stamping the active
+    /// ignore-frame snapshot onto it — upstream's `ignore_map` entry
+    /// for the declaring node. Declaration-anchored rules
+    /// (`non_reactive_update`, `export_let_unused`) read it to honor
+    /// leading `// svelte-ignore` comments on the declaration.
+    fn declare_with_ignores(
+        &mut self,
+        scope: ScopeId,
+        name: SmolStr,
+        range: Range,
+        kind: BindingKind,
+        declaration_kind: DeclarationKind,
+        initial: InitialKind,
+    ) -> BindingId {
+        let ignored = self.current_ignore_snapshot();
+        let id = self
+            .tree
+            .declare(scope, name, range, kind, declaration_kind, initial);
+        self.tree.bindings[id.0 as usize].ignored = ignored;
+        id
     }
 
     /// Flatten the active ignore-frames into a single snapshot vec.
@@ -1678,7 +1664,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             Statement::VariableDeclaration(vd) => self.visit_var_decl(vd),
             Statement::FunctionDeclaration(f) => {
                 if let Some(id) = &f.id {
-                    self.tree.declare(
+                    self.declare_with_ignores(
                         self.cur_scope(),
                         SmolStr::from(id.name.as_str()),
                         self.abs(id.span.start, id.span.end),
@@ -1713,7 +1699,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                                 (s.local.name.as_str(), s.local.span, false)
                             }
                         };
-                        self.tree.declare(
+                        self.declare_with_ignores(
                             self.cur_scope(),
                             SmolStr::from(name),
                             self.abs(span.start, span.end),
@@ -1735,7 +1721,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                         Declaration::VariableDeclaration(v) => self.visit_var_decl(v),
                         Declaration::FunctionDeclaration(f) => {
                             if let Some(id) = &f.id {
-                                self.tree.declare(
+                                self.declare_with_ignores(
                                     self.cur_scope(),
                                     SmolStr::from(id.name.as_str()),
                                     self.abs(id.span.start, id.span.end),
@@ -1893,7 +1879,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
 
     fn visit_class_decl(&mut self, cls: &Class<'_>) {
         if let Some(id) = &cls.id {
-            self.tree.declare(
+            self.declare_with_ignores(
                 self.cur_scope(),
                 SmolStr::from(id.name.as_str()),
                 self.abs(id.span.start, id.span.end),
@@ -1907,6 +1893,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
 
     fn visit_class_body(&mut self, body: &ClassBody<'_>) {
         for m in &body.body {
+            let pushed = self.push_leading_ignores(Some(m.span().start));
             match m {
                 ClassElement::MethodDefinition(md) => {
                     self.with_function(|w| {
@@ -1927,6 +1914,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 }
                 _ => {}
             }
+            if pushed {
+                self.ignore_frames.pop();
+            }
         }
     }
 
@@ -1944,6 +1934,17 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     }
 
     fn visit_declarator(&mut self, d: &VariableDeclarator<'_>, decl_kind: DeclarationKind) {
+        // A comment between the declaration keyword and the pattern
+        // (`const /* svelte-ignore … */ x = …`) leads the declarator
+        // node, whose span starts at the pattern.
+        let pushed = self.push_leading_ignores(Some(d.span.start));
+        self.visit_declarator_inner(d, decl_kind);
+        if pushed {
+            self.ignore_frames.pop();
+        }
+    }
+
+    fn visit_declarator_inner(&mut self, d: &VariableDeclarator<'_>, decl_kind: DeclarationKind) {
         // Detect rune call on init. Must happen BEFORE we walk the
         // id/init so the bindings get the correct kind. Upstream's
         // `remove_typescript_nodes` pass strips `as`/`satisfies`/
@@ -2094,7 +2095,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     ) {
         match pat {
             BindingPattern::BindingIdentifier(id) => {
-                self.tree.declare(
+                self.declare_with_ignores(
                     self.cur_scope(),
                     SmolStr::from(id.name.as_str()),
                     self.abs(id.span.start, id.span.end),
@@ -2241,7 +2242,21 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         }
     }
 
+    /// Every expression gets a leading-ignore frame — upstream's
+    /// analyze walk consults leadingComments at EVERY node, so a
+    /// `// svelte-ignore` before a call argument, array element,
+    /// object value, or initializer suppresses inside that subtree.
+    /// The frame push is gated on the script having any ignore
+    /// comment at all, so the common case adds one boolean check.
     fn visit_expr(&mut self, e: &Expression<'_>) {
+        let pushed = self.push_leading_ignores(Some(e.span().start));
+        self.visit_expr_inner(e);
+        if pushed {
+            self.ignore_frames.pop();
+        }
+    }
+
+    fn visit_expr_inner(&mut self, e: &Expression<'_>) {
         match e {
             Expression::Identifier(id) => self.record_ref(id, RefParentKind::Read),
             Expression::ArrowFunctionExpression(arr) => {
@@ -2286,7 +2301,15 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     // via spread-into-array.
                     use oxc_ast::ast::ArrayExpressionElement as AE;
                     match el {
-                        AE::SpreadElement(s) => self.visit_expr(&s.argument),
+                        AE::SpreadElement(s) => {
+                            // Anchor leading ignores at the `...`,
+                            // not the spread argument.
+                            let pushed = self.push_leading_ignores(Some(s.span.start));
+                            self.visit_expr(&s.argument);
+                            if pushed {
+                                self.ignore_frames.pop();
+                            }
+                        }
                         AE::Elision(_) => {}
                         other => {
                             if let Some(e) = other.as_expression() {
@@ -2323,17 +2346,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 }
             }
             Expression::ParenthesizedExpression(p) => {
-                // `(/* svelte-ignore CODE */ expr)` — honor per-node
-                // svelte-ignore comments attached to the inner
-                // expression. Statement-level leading-comment
-                // capture doesn't see these because the comment
-                // lives inside the parens, not before the statement.
-                // Mirrors upstream's per-node `ignore_map` model.
-                let pushed = self.push_leading_ignores(Some(p.expression.span().start));
+                // `(/* svelte-ignore CODE */ expr)` — the recursive
+                // visit_expr wrapper picks up comments leading the
+                // inner expression.
                 self.visit_expr(&p.expression);
-                if pushed {
-                    self.ignore_frames.pop();
-                }
             }
             Expression::TemplateLiteral(t) => {
                 for e in &t.expressions {
@@ -2401,6 +2417,11 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
 
     fn visit_object(&mut self, o: &ObjectExpression<'_>) {
         for p in &o.properties {
+            // Leading ignores anchor at the PROPERTY span (the key,
+            // or the `...` of a spread) — a comment before `open:`
+            // must suppress inside the value, whose own span starts
+            // after the key and colon.
+            let pushed = self.push_leading_ignores(Some(p.span().start));
             match p {
                 ObjectPropertyKind::ObjectProperty(op) => {
                     if op.computed {
@@ -2420,6 +2441,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 ObjectPropertyKind::SpreadProperty(s) => {
                     self.visit_expr(&s.argument);
                 }
+            }
+            if pushed {
+                self.ignore_frames.pop();
             }
         }
     }
@@ -2443,22 +2467,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         }
         for a in &c.arguments {
             if let Some(e) = a.as_expression() {
-                // Honour `// svelte-ignore CODE` comments that precede
-                // this argument — upstream attaches leading comments
-                // per-node, so a runed-rune call with the ignore
-                // between `(` and the expression silences a rule for
-                // references nested inside. Statement-level capture
-                // (which `visit_stmt` does) isn't enough here because
-                // the comment lives *inside* the surrounding
-                // declaration statement, not before it.
-                let pushed = self.push_leading_ignores(Some(e.span().start));
                 if push_state {
                     self.visit_arg_inside_state_call(e);
                 } else {
                     self.visit_expr(e);
-                }
-                if pushed {
-                    self.ignore_frames.pop();
                 }
             }
         }
@@ -2489,6 +2501,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     /// upstream's ancestor-walk bug where path[i+1] == undefined and
     /// "derived" is missed. See `notes/lint.md §4.4`.
     fn visit_arg_inside_state_call(&mut self, e: &Expression<'_>) {
+        // The direct-identifier branch bypasses the visit_expr
+        // wrapper, so pick up leading ignores here.
+        let pushed = self.push_leading_ignores(Some(e.span().start));
         match e {
             // Direct identifier / member at top level: NOT flagged
             // (mirrors upstream bug).
@@ -2499,6 +2514,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 self.visit_expr(e);
                 self.in_state_arg_nested = saved;
             }
+        }
+        if pushed {
+            self.ignore_frames.pop();
         }
     }
 

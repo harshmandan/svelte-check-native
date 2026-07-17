@@ -263,6 +263,164 @@ fn is_ident_char(b: u8) -> bool {
     (b as char).is_alphanumeric() || matches!(b, b'_' | b'-' | b'$')
 }
 
+/// Index of ALL comments in one script body, powering the
+/// leading-comment `svelte-ignore` lookup. Mirrors upstream's estree
+/// comment attachment (`phases/1-parse/acorn.js::add_comments`):
+/// every queued comment becomes a `leadingComment` of the next node
+/// whose start lies after it — no matter how many comments stack up,
+/// what separates them from each other, or whether blank lines
+/// intervene — EXCEPT a comment consumed as a `trailingComment` of
+/// the previous node: same line, separated from it only by `,`, `)`,
+/// spaces and tabs (acorn.js:210-212). The analyze walk then honors
+/// ignores from ALL leading comments of every node
+/// (`2-analyze/index.js:118-131`), which is why suppression works at
+/// arbitrary expression positions upstream.
+///
+/// Reproduced here as a backward chain scan from a node's start:
+/// hop over each comment whose gap to the current cursor is
+/// whitespace-only, collecting its codes, and stop at a comment that
+/// classifies as same-line trailing of whatever precedes it. Plain
+/// (non-ignore) comments still chain — that's what makes stacked
+/// comment runs work.
+pub(crate) struct ScriptComments {
+    /// Every comment in the script body, sorted by end offset.
+    /// Offsets are script-local, matching oxc spans (delimiters
+    /// included).
+    entries: Vec<CommentEntry>,
+    /// Fast gate: no svelte-ignore comment anywhere → every lookup
+    /// answers "no codes" without touching the entries.
+    has_ignores: bool,
+}
+
+struct CommentEntry {
+    start: u32,
+    end: u32,
+    /// Suppression codes when the comment is a `svelte-ignore`;
+    /// empty for every other comment.
+    codes: Vec<SmolStr>,
+}
+
+impl ScriptComments {
+    /// No comments at all — every lookup answers "no codes".
+    pub(crate) fn empty() -> Self {
+        Self {
+            entries: Vec::new(),
+            has_ignores: false,
+        }
+    }
+
+    /// `spans` are the (start, end) byte spans of every comment in
+    /// `content`, delimiters included (oxc's `Comment::span`).
+    pub(crate) fn build(
+        spans: impl Iterator<Item = (u32, u32)>,
+        content: &str,
+        runes: bool,
+    ) -> Self {
+        let mut entries: Vec<CommentEntry> = spans
+            .filter_map(|(start, end)| {
+                let text = content.get(start as usize..end as usize)?;
+                let codes = crate::scope_util::strip_comment_delimiters(text)
+                    .and_then(|body| {
+                        let trimmed = body.trim_start();
+                        let rest = trimmed.strip_prefix("svelte-ignore")?;
+                        match rest.chars().next() {
+                            Some(ch) if ch.is_whitespace() => {
+                                Some(parse_ignore_codes(&rest[ch.len_utf8()..], runes))
+                            }
+                            _ => None,
+                        }
+                    })
+                    .unwrap_or_default();
+                Some(CommentEntry { start, end, codes })
+            })
+            .collect();
+        entries.sort_by_key(|e| e.end);
+        let has_ignores = entries.iter().any(|e| !e.codes.is_empty());
+        Self {
+            entries,
+            has_ignores,
+        }
+    }
+
+    pub(crate) fn has_ignores(&self) -> bool {
+        self.has_ignores
+    }
+
+    /// Suppression codes of the comment run leading a node that
+    /// starts at `node_start` (script-local offset into `content`).
+    pub(crate) fn leading_ignores(&self, content: &str, node_start: u32) -> Vec<SmolStr> {
+        let mut codes: Vec<SmolStr> = Vec::new();
+        if !self.has_ignores {
+            return codes;
+        }
+        let bytes = content.as_bytes();
+        let mut cursor = (node_start as usize).min(bytes.len());
+        // Comments are disjoint, so after hopping to a comment's
+        // start every earlier entry ends at or before it — walk the
+        // sorted list leftward without re-searching.
+        let mut idx = self.entries.partition_point(|e| (e.end as usize) <= cursor);
+        while idx > 0 {
+            let entry = &self.entries[idx - 1];
+            let (start, end) = (entry.start as usize, entry.end as usize);
+            if !bytes[end..cursor].iter().all(|b| b.is_ascii_whitespace()) {
+                break;
+            }
+            if is_same_line_trailing(bytes, start) {
+                break;
+            }
+            for c in &entry.codes {
+                if !codes.contains(c) {
+                    codes.push(c.clone());
+                }
+            }
+            cursor = start;
+            idx -= 1;
+        }
+        codes
+    }
+
+    pub(crate) fn has_leading_ignore(&self, content: &str, node_start: u32, code: &str) -> bool {
+        self.leading_ignores(content, node_start)
+            .iter()
+            .any(|c| c.as_str() == code)
+    }
+}
+
+/// Is the comment starting at `comment_start` a same-line trailing
+/// comment of the token before it? Mirrors acorn.js:210-212, which
+/// consumes a comment as `trailingComments` of the previous node when
+/// only `[,) \t]*` separates them on one line. Scanning backward:
+/// hitting the line start first means nothing precedes on this line
+/// (leading); otherwise the first blocking byte decides — something
+/// that can end an expression (`1`, `'a'`, `]`, `;`, …) means the
+/// comment trails it, an opener/operator (`(`, `:`, `=`, …) means the
+/// comment leads whatever comes next.
+fn is_same_line_trailing(bytes: &[u8], comment_start: usize) -> bool {
+    let mut i = comment_start;
+    let mut skipped_close_paren = false;
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b'\n' => return false,
+            b')' => skipped_close_paren = true,
+            b',' | b' ' | b'\t' => {}
+            // A `(` reached after skipping a `)` is the opener of a
+            // completed call/group (`noop() // c`) — the comment
+            // trails that expression. A bare `(` (`take( // c`)
+            // means the comment leads the first argument.
+            b'(' => return skipped_close_paren,
+            b => return is_expression_end_byte(b),
+        }
+    }
+    false
+}
+
+fn is_expression_end_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric()
+        || b >= 0x80
+        || matches!(b, b'_' | b'$' | b'\'' | b'"' | b'`' | b']' | b'}' | b';')
+}
+
 /// Byte class of upstream's runes-mode token pattern `[\w$-]` (JS `\w`
 /// is ASCII-only).
 fn is_runes_token_byte(b: u8) -> bool {

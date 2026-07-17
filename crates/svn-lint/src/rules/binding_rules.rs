@@ -20,6 +20,16 @@ fn ref_ignores(r: &Reference, code: Code) -> bool {
     }
 }
 
+/// Same check against the snapshot captured at the binding's
+/// declaration site — for rules whose warning anchors on the
+/// declaration rather than a reference.
+fn binding_ignores(b: &crate::scope::Binding, code: Code) -> bool {
+    match &b.ignored {
+        None => false,
+        Some(list) => list.iter().any(|c| c == code.as_str()),
+    }
+}
+
 /// Driver: run every binding-driven rule. Called once per file
 /// from `walk::walk` after `ctx.scope_tree` is populated.
 pub fn visit(ctx: &mut LintContext<'_>) {
@@ -179,76 +189,17 @@ fn non_reactive_update(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
             if r.is_bind_this && !r.in_control_flow {
                 continue;
             }
-            // Honour `// svelte-ignore non_reactive_update` immediately
-            // preceding the declaration. Template `<!-- svelte-ignore -->`
-            // is handled by the LintContext ignore-stack; script
-            // comments aren't on that stack so we do the lookup here.
-            if has_script_leading_ignore(
-                ctx.source,
-                binding.range.start,
-                Code::non_reactive_update.as_str(),
-                ctx.runes,
-            ) {
+            // Honour `// svelte-ignore non_reactive_update` leading
+            // the declaration — the snapshot captured when the
+            // binding was declared (upstream: `ignore_map` at the
+            // declaration node).
+            if binding_ignores(binding, Code::non_reactive_update) {
                 break;
             }
             let msg = messages::non_reactive_update(binding.name.as_str());
             ctx.emit(Code::non_reactive_update, msg, binding.range);
             break;
         }
-    }
-}
-
-/// Scan the lines preceding `decl_start` for `// svelte-ignore CODE`
-/// comments mentioning `code`. A blank line between the comment and
-/// the declaration breaks the chain (matches upstream's trim-based
-/// `extract_svelte_ignore` behaviour at the statement level).
-fn has_script_leading_ignore(source: &str, decl_start: u32, code: &str, runes: bool) -> bool {
-    // Walk to the start of the line containing `decl_start`.
-    let bytes = source.as_bytes();
-    let mut line_start = decl_start as usize;
-    while line_start > 0 && bytes[line_start - 1] != b'\n' {
-        line_start -= 1;
-    }
-    // Iterate preceding lines in reverse.
-    loop {
-        if line_start == 0 {
-            return false;
-        }
-        // Previous line spans [prev_start, line_start - 1); `line_start
-        // - 1` is the `\n`, so trim it (and a preceding `\r` for CRLF)
-        // off the end before inspecting.
-        let mut prev_end = line_start - 1; // exclusive end (the `\n`)
-        if prev_end > 0 && bytes[prev_end - 1] == b'\r' {
-            prev_end -= 1;
-        }
-        let mut prev_start = if prev_end == 0 { 0 } else { prev_end };
-        while prev_start > 0 && bytes[prev_start - 1] != b'\n' {
-            prev_start -= 1;
-        }
-        let raw = &source[prev_start..prev_end];
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            // Blank line — chain broken.
-            return false;
-        }
-        // Accept both `// svelte-ignore X` and a single-line
-        // `/* svelte-ignore X */` block comment immediately preceding.
-        let comment_body = trimmed
-            .strip_prefix("//")
-            .or_else(|| trimmed.strip_prefix("/*").map(|r| r.trim_end_matches("*/")));
-        if let Some(rest) = comment_body
-            && let Some(body) = rest.trim_start().strip_prefix("svelte-ignore")
-            && body.chars().next().is_some_and(char::is_whitespace)
-        {
-            let codes = crate::ignore::parse_ignore_codes_public(body.trim().trim_end(), runes);
-            if codes.iter().any(|c| c == code) {
-                return true;
-            }
-            // svelte-ignore line but different code — keep scanning.
-            line_start = prev_start;
-            continue;
-        }
-        return false;
     }
 }
 
@@ -275,12 +226,7 @@ fn export_let_unused(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
             continue;
         }
         if binding.references.is_empty() {
-            if has_script_leading_ignore(
-                ctx.source,
-                binding.range.start,
-                Code::export_let_unused.as_str(),
-                ctx.runes,
-            ) {
+            if binding_ignores(binding, Code::export_let_unused) {
                 continue;
             }
             let msg = messages::export_let_unused(binding.name.as_str());

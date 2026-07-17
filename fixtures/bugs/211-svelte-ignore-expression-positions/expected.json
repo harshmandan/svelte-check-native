@@ -1,0 +1,5 @@
+{
+    "clean": true,
+    "warnings": [],
+    "_note": "`// svelte-ignore` comments in script bodies must be honored at every expression position, not just statement level. The svelte compiler attaches each comment as a leading comment of the next node (acorn onComment handlers) and its analyze walk consults leading comments at every node, so a svelte-ignore before an object property or stacked under another comment before a call/new argument suppresses the warning. Our walker previously matched only the single nearest comment against a handful of positions (statements, paren exprs, call args); the object-property and stacked-comment shapes here fired false state_referenced_locally warnings."
+}

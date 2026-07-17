@@ -218,6 +218,13 @@ pub struct Binding {
     /// Defaults to `false` in intermediate states; only consult after
     /// the scope tree is fully built.
     pub fires_state_referenced_locally: bool,
+    /// Ignore-stack snapshot at the binding's declaration site — same
+    /// semantic as `Reference::ignored`, but for rules that anchor
+    /// their warning on the declaration itself (`non_reactive_update`,
+    /// `export_let_unused`). Mirrors upstream's `ignore_map.get(node)`
+    /// for the declaring identifier. `None` for template-declared and
+    /// synthetic bindings.
+    pub ignored: Option<Vec<SmolStr>>,
 }
 
 #[derive(Clone, Debug)]

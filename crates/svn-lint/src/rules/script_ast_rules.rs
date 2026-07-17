@@ -16,14 +16,12 @@ use oxc_ast::ast::ClassBody;
 use oxc_ast::ast::{
     Declaration, Expression, ForStatementInit, LabeledStatement, NewExpression, Program, Statement,
 };
-use smol_str::SmolStr;
 use svn_core::Range;
 use svn_parser::document::{Document, ScriptSection};
 
 use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
-use crate::scope_util::strip_comment_delimiters;
 
 /// Entry point: run the JS-AST-dependent rules on both script
 /// sections. `module_program` / `instance_program` are the sections'
@@ -75,31 +73,14 @@ fn run_on_section(
         ScriptAstContext::Instance => 1,
     };
 
-    // Pre-scan leading `// svelte-ignore …` comments in the script
-    // body so visit_labeled can match on a statement's leading
-    // comment. Oxc exposes comments on the program.
-    let ignore_comments: Vec<IgnoreComment> = program
-        .comments
-        .iter()
-        .filter_map(|c| {
-            let text = &script.content[c.span.start as usize..c.span.end as usize];
-            // Oxc's comment span INCLUDES the `//` / `/* */`
-            // delimiters — strip them for matching.
-            let body = strip_comment_delimiters(text)?;
-            let trimmed = body.trim_start();
-            let rest = trimmed.strip_prefix("svelte-ignore")?;
-            // Require a whitespace char after the keyword.
-            let rest = match rest.chars().next() {
-                Some(ch) if ch.is_whitespace() => &rest[ch.len_utf8()..],
-                _ => return None,
-            };
-            let codes = crate::ignore::parse_ignore_codes_public(rest, runes);
-            Some(IgnoreComment {
-                span_end: c.span.end,
-                codes,
-            })
-        })
-        .collect();
+    // Index the script body's comments so rule sites can resolve a
+    // node's leading `// svelte-ignore …` run (shared semantics with
+    // the scope walker — see `crate::ignore::ScriptComments`).
+    let script_comments = crate::ignore::ScriptComments::build(
+        program.comments.iter().map(|c| (c.span.start, c.span.end)),
+        script.content,
+        runes,
+    );
 
     let mut walker = ScriptWalker {
         ctx,
@@ -107,7 +88,8 @@ fn run_on_section(
         base_offset,
         function_depth: starting_depth,
         runes,
-        ignore_comments,
+        script_comments,
+        script_len: script.content.len() as u32,
     };
     for stmt in &program.body {
         walker.visit_stmt(stmt);
@@ -120,25 +102,18 @@ fn has_bidi_char(s: &str) -> bool {
         .any(|c| matches!(c as u32, 0x202A..=0x202E | 0x2066..=0x2069))
 }
 
-#[derive(Debug, Clone)]
-struct IgnoreComment {
-    /// Byte offset (within the script body, pre-bias) of the
-    /// comment's END. Pairs with a statement whose span begins at
-    /// or just after this offset.
-    span_end: u32,
-    codes: Vec<SmolStr>,
-}
-
 struct ScriptWalker<'a, 'src> {
     ctx: &'a mut LintContext<'src>,
     script_ctx: ScriptAstContext,
     base_offset: u32,
     function_depth: u32,
     runes: bool,
-    /// Pre-collected `// svelte-ignore …` comments in the script,
-    /// sorted by increasing `span_end`. Used to decide whether a
-    /// given statement has a matching leading ignore directive.
-    ignore_comments: Vec<IgnoreComment>,
+    /// Comment index over the script body — resolves a node's
+    /// leading `// svelte-ignore …` run.
+    script_comments: crate::ignore::ScriptComments,
+    /// Length of the script body in bytes; with `base_offset` this
+    /// recovers the script-content slice of `ctx.source`.
+    script_len: u32,
 }
 
 impl<'a, 'src> ScriptWalker<'a, 'src> {
@@ -483,27 +458,13 @@ impl<'a, 'src> ScriptWalker<'a, 'src> {
         }
     }
 
-    /// Does any `// svelte-ignore …` comment ending before `span_start`
-    /// (and separated only by whitespace) mention `code`?
+    /// Does the comment run leading the node at `span_start`
+    /// (script-local offset) mention `code`?
     fn has_leading_ignore(&self, span_start: u32, code: &str) -> bool {
-        for c in &self.ignore_comments {
-            if c.span_end > span_start {
-                continue;
-            }
-            // Check the gap between c.span_end and span_start in
-            // the script source is whitespace-only.
-            let content = &self.ctx.source[self.base_offset as usize..];
-            let rel_start = c.span_end as usize;
-            let rel_end = span_start as usize;
-            if rel_end > content.len() || rel_start > rel_end {
-                continue;
-            }
-            let gap = &content[rel_start..rel_end];
-            if gap.chars().all(char::is_whitespace) && c.codes.iter().any(|k| k.as_str() == code) {
-                return true;
-            }
-        }
-        false
+        let content = &self.ctx.source
+            [self.base_offset as usize..(self.base_offset + self.script_len) as usize];
+        self.script_comments
+            .has_leading_ignore(content, span_start, code)
     }
 
     fn visit_labeled(&mut self, lbl: &LabeledStatement<'_>) {

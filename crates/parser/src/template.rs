@@ -728,7 +728,8 @@ impl<'src> TemplateParser<'src> {
     }
 
     fn parse_snippet_block(&mut self, block_start: u32) -> Option<Node> {
-        let (name, params_range) = parse_snippet_header(&mut self.scanner, &mut self.errors)?;
+        let (name, params_range, generics_range) =
+            parse_snippet_header(&mut self.scanner, &mut self.errors)?;
         let (body_nodes, term) = self.parse_fragment_until(None);
         let body = Fragment {
             nodes: body_nodes,
@@ -746,6 +747,7 @@ impl<'src> TemplateParser<'src> {
         Some(Node::SnippetBlock(Box::new(build_snippet_block(
             name,
             params_range,
+            generics_range,
             body,
             block_start,
             self.scanner.pos(),

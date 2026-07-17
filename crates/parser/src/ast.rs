@@ -630,6 +630,10 @@ pub struct SnippetBlock {
     /// Byte range of the parameter list (inside parens). Empty range if
     /// `{#snippet name()}` had no params.
     pub parameters_range: Range,
+    /// Byte range of the TS type-parameter list (inside the `<>`) for
+    /// `{#snippet name<T>(x: T)}`. `None` when the snippet has no
+    /// generic signature.
+    pub generics_range: Option<Range>,
     pub body: Fragment,
     pub range: Range,
 }

@@ -68,12 +68,25 @@ pub(crate) fn emit_snippet_const(
         .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
         .unwrap_or("")
         .trim();
+    // `{#snippet row<T>(x: T)}` — splice the generic signature onto the
+    // arrow so the type parameters bind at each `{@render}` call site.
+    // Upstream emits `<${typeParams}>` only under TS syntax
+    // (SnippetBlock.ts); an arrow generic is valid in a plain .ts
+    // overlay (no .tsx ambiguity).
+    let generics = if is_ts {
+        s.generics_range
+            .and_then(|r| source.get(r.start as usize..r.end as usize))
+            .map(|g| format!("<{}>", g.trim()))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     // Empty-params snippet: skip the `(params)` site entirely so an
     // unused-arrow-param lint doesn't fire on a synthetic empty
     // signature, AND no identifier needs to be `void`'d.
     if params.is_empty() {
         if is_ts {
-            let _ = writeln!(buf, "{decl}const {} = (): any => {{", s.name);
+            let _ = writeln!(buf, "{decl}const {} = {generics}(): any => {{", s.name);
         } else {
             let _ = writeln!(buf, "{decl}const {} = () => {{", s.name);
         }
@@ -103,7 +116,7 @@ pub(crate) fn emit_snippet_const(
     let leading_ws = (raw.len() - raw.trim_start().len()) as u32;
     let params_start = s.parameters_range.start + leading_ws;
     let params_range = svn_core::Range::new(params_start, params_start + params.len() as u32);
-    let _ = write!(buf, "{decl}const {} = (", s.name);
+    let _ = write!(buf, "{decl}const {} = {generics}(", s.name);
     buf.append_with_source(params, params_range);
     if is_ts {
         let _ = writeln!(buf, "): any => {{");

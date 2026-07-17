@@ -565,14 +565,17 @@ pub(crate) fn parse_key_header(
     parse_if_header(scanner, errors)
 }
 
-/// `{#snippet name(params)}` header.
+/// `{#snippet name(params)}` / `{#snippet name<T>(params)}` header.
 ///
-/// Returns `(name, params_range)` where `params_range` is the byte range of
-/// the parameter list (inside the parens, not including them).
+/// Returns `(name, params_range, generics_range)` where `params_range`
+/// is the byte range of the parameter list (inside the parens, not
+/// including them) and `generics_range` is the byte range of the
+/// optional TS type-parameter list (inside the `<>`, not including
+/// them).
 pub(crate) fn parse_snippet_header(
     scanner: &mut Scanner<'_>,
     errors: &mut Vec<ParseError>,
-) -> Option<(SmolStr, Range)> {
+) -> Option<(SmolStr, Range, Option<Range>)> {
     scanner.skip_ascii_whitespace();
 
     let name_start = scanner.pos();
@@ -593,6 +596,25 @@ pub(crate) fn parse_snippet_header(
     let name: SmolStr = scanner.source()[name_start as usize..name_end as usize].into();
 
     scanner.skip_ascii_whitespace();
+
+    // Optional TS generic signature between the name and the parameter
+    // list: `{#snippet row<T>(x: T)}` (Svelte 5.19+). Upstream matches
+    // a balanced `<...>` (match_bracket with `{'<': '>'}`) that skips
+    // quoted strings; nested angle pairs count, everything else doesn't.
+    let mut generics_range: Option<Range> = None;
+    if scanner.peek_byte() == Some(b'<') {
+        let open = scanner.pos();
+        let Some(close) = find_matching_angle_bracket(scanner.source(), open) else {
+            errors.push(ParseError::MalformedOpenTag {
+                range: Range::new(open, scanner.source().len() as u32),
+            });
+            return None;
+        };
+        generics_range = Some(Range::new(open + 1, close));
+        scanner.set_pos(close + 1);
+        scanner.skip_ascii_whitespace();
+    }
+
     if scanner.peek_byte() != Some(b'(') {
         errors.push(ParseError::MalformedOpenTag {
             range: Range::new(scanner.pos(), scanner.pos()),
@@ -708,7 +730,49 @@ pub(crate) fn parse_snippet_header(
     }
     scanner.advance_byte();
 
-    Some((name, Range::new(params_start, params_end)))
+    Some((name, Range::new(params_start, params_end), generics_range))
+}
+
+/// Find the `>` matching the `<` at `open`, counting nested angle pairs
+/// and skipping quoted/template strings — the same shape as upstream's
+/// `match_bracket` with the `{'<': '>'}` bracket set. Returns the byte
+/// offset of the matching `>`.
+fn find_matching_angle_bracket(src: &str, open: u32) -> Option<u32> {
+    let bytes = src.as_bytes();
+    debug_assert_eq!(bytes.get(open as usize), Some(&b'<'));
+    let mut depth: i32 = 0;
+    let mut i = open as usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'<' => {
+                depth += 1;
+                i += 1;
+            }
+            b'>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i as u32);
+                }
+                i += 1;
+            }
+            b'"' => i = skip_ascii_string(bytes, i + 1, b'"')?,
+            b'\'' => i = skip_ascii_string(bytes, i + 1, b'\'')?,
+            b'`' => {
+                // Template-literal type: scan to the closing backtick
+                // (may span lines, unlike the quote forms).
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'`' {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+                if i >= bytes.len() {
+                    return None;
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 // ===== Lexical helpers ===================================================
@@ -940,6 +1004,7 @@ pub(crate) fn build_key_block(
 pub(crate) fn build_snippet_block(
     name: SmolStr,
     parameters_range: Range,
+    generics_range: Option<Range>,
     body: Fragment,
     block_start: u32,
     block_end: u32,
@@ -947,6 +1012,7 @@ pub(crate) fn build_snippet_block(
     SnippetBlock {
         name,
         parameters_range,
+        generics_range,
         body,
         range: Range::new(block_start, block_end),
     }
@@ -1046,6 +1112,49 @@ mod tests {
     }
 
     #[test]
+    fn snippet_header_accepts_generics() {
+        // `{#snippet row<T>(x: T)}` — TS generic signature between the
+        // name and the parameter list (Svelte 5.19+).
+        let src = "row<T>(x: T)}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (name, params, generics) =
+            parse_snippet_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(name, "row");
+        assert_eq!(params.slice(src), "x: T");
+        assert_eq!(generics.map(|g| g.slice(src)), Some("T"));
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn snippet_generics_nested_angles_and_strings() {
+        let src = "row<A, B extends Map<A, 'x>y'>>(a: A, b: B)}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (name, params, generics) =
+            parse_snippet_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(name, "row");
+        assert_eq!(
+            generics.map(|g| g.slice(src)),
+            Some("A, B extends Map<A, 'x>y'>")
+        );
+        assert_eq!(params.slice(src), "a: A, b: B");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn snippet_header_without_generics_unchanged() {
+        let src = "item(x)}";
+        let mut scanner = Scanner::new(src);
+        let mut errors = Vec::new();
+        let (name, params, generics) =
+            parse_snippet_header(&mut scanner, &mut errors).expect("header parses");
+        assert_eq!(name, "item");
+        assert_eq!(params.slice(src), "x");
+        assert!(generics.is_none());
+    }
+
+    #[test]
     fn snippet_params_are_string_aware() {
         // `)` inside a default-value string must not close the params
         // early: `{#snippet s(a = ")")}`.
@@ -1053,7 +1162,7 @@ mod tests {
         let mut scanner = Scanner::new(src);
         let mut errors = Vec::new();
         let result = parse_snippet_header(&mut scanner, &mut errors);
-        let Some((name, params)) = result else {
+        let Some((name, params, _)) = result else {
             panic!("expected a snippet header, errors: {errors:?}");
         };
         assert_eq!(name, "s");
@@ -1068,7 +1177,7 @@ mod tests {
         let mut scanner = Scanner::new(src);
         let mut errors = Vec::new();
         let result = parse_snippet_header(&mut scanner, &mut errors);
-        let Some((name, params)) = result else {
+        let Some((name, params, _)) = result else {
             panic!("expected a snippet header, errors: {errors:?}");
         };
         assert_eq!(name, "s");
@@ -1083,7 +1192,7 @@ mod tests {
         let mut scanner = Scanner::new(src);
         let mut errors = Vec::new();
         let result = parse_snippet_header(&mut scanner, &mut errors);
-        let Some((name, params)) = result else {
+        let Some((name, params, _)) = result else {
             panic!("expected a snippet header, errors: {errors:?}");
         };
         assert_eq!(name, "s");

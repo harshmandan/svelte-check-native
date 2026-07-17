@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 16,
+            "column": 19,
+            "code": 2345
+        }
+    ],
+    "_note": "Snippets accept a TypeScript generic signature between the name and the parameter list: '{#snippet row<T>(item: T)}' (the compiler matches a balanced '<...>' before the parens when the file is TS). The snippet-header parser required '(' immediately after the name, so a generic snippet errored and the parser resumed mid-header, cascading phantom errors through the rest of the template. The header now accepts the balanced angle group (nested '<>' pairs and quoted strings respected) and emit splices it onto the arrow ('const row = <T>(item: T): any => ...') so type parameters bind at each {@render} call: the two 'row' renders infer T=number and T=string and check their format callbacks, and the 'keyed' render with a non-conforming argument fires TS2345 at the argument position, byte-identical to upstream svelte-check --tsgo."
+}

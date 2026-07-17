@@ -305,7 +305,7 @@ fixture that starts passing strict will fail the suite with `STALE:
 <name>` until removed from the list. Loose mode
 `LS_DIAGNOSTICS_LOOSE=1` falls back to `(file, code)` for envs
 that can't reach byte-perfect positions yet. Current scoreboard at
-HEAD: **53 / 78 passing, 25 skipped** (post-V5-Phase-5). Active
+HEAD: **56 / 80 passing, 24 skipped** (post-audit-sweep 2026-07). Active
 convergence workstreams live in `notes/LS_CONVERGENCE_NEXT_10.md`,
 `notes/LS_CONVERGENCE_NEXT_10_BATCH2.md`,
 `notes/LS_CONVERGENCE_NEXT_10_BATCH3.md`, and

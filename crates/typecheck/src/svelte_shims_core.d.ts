@@ -265,19 +265,15 @@ declare type $$Generic<T = any> = T;
 declare function __svn_invalidate<T>(fn: () => T): T;
 
 // @@STATE_AMBIENTS_BEGIN@@
-// `$state<T>` ambient declarations. Stripped when real svelte 5 is
-// installed — Svelte's `types/index.d.ts:3221-3222` declares the
-// same two overloads. Keeping both sets produces 4 identical
-// overloads, which poisons TS's overload resolution: a mismatch on
-// `$state<T>(initial: T)` reports TS2769 "No overload matches this
-// call" instead of the expected TS2741 "Property 'X' is missing in
-// type Y" that fires with 2 overloads. Minimal repro at
-// test_dup_overload.ts confirmed. Other rune ambients ($derived,
-// $effect, etc.) aren't stripped because either their single-overload
-// form is immune to the dedup issue or our shim carries extra
-// overloads (e.g. `$props<T = any>()`) that Svelte's simpler
-// declarations don't provide — stripping those would fire TS2558 on
-// user-authored `$props<MyShape>()` calls.
+// `$state` ambient declarations. Stripped when real Svelte 5 is
+// installed because its globals declare the same base overloads and
+// namespace members. Keeping both sets poisons overload resolution:
+// a mismatch reports TS2769 "No overload matches this call" instead
+// of the direct assignability diagnostic. Other rune ambients
+// ($derived, $effect, etc.) aren't stripped because either their
+// single-overload forms are immune to the duplication or our shim
+// carries extra overloads (e.g. `$props<T = any>()`) that Svelte's
+// simpler declarations don't provide.
 /** `$state<T>(initial?)` declares reactive state. Macro.
  *
  * Two overloads:
@@ -288,8 +284,9 @@ declare function __svn_invalidate<T>(fn: () => T): T;
  * Calls like `$state<T>(0)` where T is a generic parameter and 0 isn't
  * assignable to T fire TS2345 — matches Svelte's own behavior.
  *
- * Historical note: we previously had two additional overloads for
- * `initial: null` and `initial: undefined` literal types, there to
+ * Historical note: `$state` and `$state.raw` previously had two
+ * additional overloads for `initial: null` and `initial: undefined`,
+ * there to
  * preserve `T` against the variable's annotation in the bind:this
  * pattern (`let el: HTMLInputElement | null = $state(null)`). Those
  * overloads collide with TypeScript's overload resolution on
@@ -299,24 +296,20 @@ declare function __svn_invalidate<T>(fn: () => T): T;
  * the call's argument. The inner `new Promise(() => {})` then widens
  * to `Promise<unknown>` and no overload matches — TS2769. This is
  * TypeScript behavior across both tsc and tsgo, not a tsgo-only gap.
- * The emit crate now rewrites
- * `let X: Type = $state(null | undefined)` to
- * `let X: Type = $state<Type>(null | undefined)` (see
- * `state_nullish_rewrite`), which lets this single-T shim handle
- * both the bind:this pattern and the `$state<Promise<T>>(...)`
- * pattern without conflict.
+ * The emit crate now adds the annotated type as an explicit generic
+ * to typed nullish `$state(...)` and `$state.raw(...)` declarations
+ * (see `state_nullish_rewrite`). That preserves the nullish binding
+ * pattern without interfering with contextual typing.
  */
 declare function $state<T>(initial: T): T;
 declare function $state<T>(): T | undefined;
-// @@STATE_AMBIENTS_END@@
 declare namespace $state {
     function eager<T>(value: T): T;
-    function raw<T>(initial: null): T;
-    function raw<T>(initial: undefined): T;
     function raw<T>(initial: T): T;
     function raw<T>(): T | undefined;
     function snapshot<T>(value: T): T;
 }
+// @@STATE_AMBIENTS_END@@
 
 /** `$derived(expression)` re-evaluates whenever its dependencies change. */
 declare function $derived<T>(expression: T): T;
@@ -2463,4 +2456,3 @@ declare module 'svelte/compiler' {
     export function walk(ast: any, walker: any): any;
 }
 // @@FALLBACK_END@@
-

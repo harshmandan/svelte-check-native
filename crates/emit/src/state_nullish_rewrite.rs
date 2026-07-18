@@ -1,7 +1,8 @@
-//! Rewrite `let X: Type = $state(null | undefined)` declarations to include
-//! an explicit generic: `let X: Type = $state<Type>(null | undefined)`.
+//! Rewrite typed `$state(null | undefined)` and `$state.raw(null | undefined)`
+//! declarations to include an explicit generic.
 //!
-//! Context. Our shim previously declared
+//! Context. Our shim previously declared equivalent literal overloads
+//! for both `$state` and `$state.raw`:
 //!
 //! ```ts
 //! declare function $state<T>(initial: null): T;
@@ -18,22 +19,20 @@
 //! "Property X does not exist on type 'never'".
 //!
 //! But having those literal-type overloads trips a separate tsgo
-//! inference bug: `$state<Promise<T>>(new Promise(() => {}))` fails
-//! with TS2769 because the presence of the literal overloads
-//! disables contextual-type propagation from the explicit `<T>`
-//! through to the argument. `new Promise(() => {})` widens to
-//! `Promise<unknown>`, which doesn't fit `Promise<T>`.
+//! inference bug: explicit generic calls such as
+//! `$state<Promise<T>>(new Promise(() => {}))` and
+//! `$state.raw<ReadonlySet<string>>(new Set())` fail with TS2769
+//! because the literal overloads disable contextual-type propagation.
 //!
 //! Injecting the explicit generic from the variable's annotation
 //! lets us drop the literal-type overloads entirely. The
 //! bind:this pattern now works because `T` comes from the inserted
-//! `<Type>`, and the Promise pattern works because the remaining
-//! single `<T>(initial: T): T` overload lets tsgo propagate
-//! contextual typing without interference.
+//! `<Type>`, while ordinary explicit generics use the same overload
+//! shape as Svelte's declarations.
 //!
 //! Scope:
 //! - Only top-level `VariableDeclaration` statements.
-//! - Only `let X: Type = $state(null | undefined)` shape — one
+//! - Only `let X: Type = $state[.raw](null | undefined)` shape — one
 //!   declarator per call-site match, with a type annotation AND a
 //!   nullish-literal initializer AND no existing type parameters on
 //!   the call.
@@ -47,7 +46,7 @@ use oxc_ast::ast::{Argument, Expression, Statement, VariableDeclarator};
 use oxc_span::GetSpan;
 use svn_parser::{ScriptLang, parse_script_body};
 
-/// Walk top-level `let X: Type = $state(null | undefined)` declarations
+/// Walk top-level typed `$state[.raw](null | undefined)` declarations
 /// and return a new body string with explicit generics injected. When
 /// no such declaration is found, returns the input unchanged
 /// (cheap early-out via `to_string` clone — the common case on
@@ -89,8 +88,8 @@ pub fn rewrite(content: &str, lang: ScriptLang) -> String {
     out
 }
 
-/// If `declarator` is `let NAME: TYPE = $state(null | undefined)` with no
-/// existing type arguments on the call, return the byte position at which
+/// If `declarator` is `let NAME: TYPE = $state[.raw](null | undefined)` with
+/// no existing type arguments on the call, return the byte position at which
 /// to splice `<TYPE>` and the text to splice.
 fn detect_site(declarator: &VariableDeclarator<'_>, source: &str) -> Option<(usize, String)> {
     // Binding must carry a type annotation — that's where we pull the
@@ -99,17 +98,26 @@ fn detect_site(declarator: &VariableDeclarator<'_>, source: &str) -> Option<(usi
     let type_span = type_anno.type_annotation.span();
     let type_text = source.get(type_span.start as usize..type_span.end as usize)?;
 
-    // Initializer must be a `$state(...)` call.
+    // Initializer must be a `$state(...)` or `$state.raw(...)` call.
     let init = declarator.init.as_ref()?;
     let Expression::CallExpression(call) = init else {
         return None;
     };
-    let Expression::Identifier(callee_id) = &call.callee else {
-        return None;
+    let insert_at = match &call.callee {
+        Expression::Identifier(callee_id) if callee_id.name == "$state" => {
+            callee_id.span.end as usize
+        }
+        Expression::StaticMemberExpression(member) => {
+            let Expression::Identifier(object) = &member.object else {
+                return None;
+            };
+            if object.name != "$state" || member.property.name != "raw" {
+                return None;
+            }
+            member.property.span.end as usize
+        }
+        _ => return None,
     };
-    if callee_id.name != "$state" {
-        return None;
-    }
 
     // Don't double-specify: if the call already has explicit type
     // parameters, leave it alone. User wrote `$state<Foo>(...)` on
@@ -132,8 +140,7 @@ fn detect_site(declarator: &VariableDeclarator<'_>, source: &str) -> Option<(usi
         return None;
     }
 
-    // Splice after `$state`'s identifier span, before the `(`.
-    let insert_at = callee_id.span.end as usize;
+    // Splice after `$state` or `raw`, before the `(`.
     let insertion = format!("<{type_text}>");
     Some((insert_at, insertion))
 }
@@ -165,6 +172,24 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_typed_null_raw_state() {
+        let src = "let el: HTMLInputElement | null = $state.raw(null);";
+        assert_eq!(
+            ts(src),
+            "let el: HTMLInputElement | null = $state.raw<HTMLInputElement | null>(null);"
+        );
+    }
+
+    #[test]
+    fn rewrites_typed_undefined_raw_state() {
+        let src = "let value: string | undefined = $state.raw(undefined);";
+        assert_eq!(
+            ts(src),
+            "let value: string | undefined = $state.raw<string | undefined>(undefined);"
+        );
+    }
+
+    #[test]
     fn leaves_untyped_alone() {
         // No annotation → let tsgo infer from the argument literally.
         // `let x = $state(null)` → x: null is what the user asked for.
@@ -175,6 +200,12 @@ mod tests {
     #[test]
     fn leaves_explicit_generic_alone() {
         let src = "let el: Foo | null = $state<Bar>(null);";
+        assert_eq!(ts(src), src);
+    }
+
+    #[test]
+    fn leaves_explicit_raw_generic_alone() {
+        let src = "let el: Foo | null = $state.raw<Bar>(null);";
         assert_eq!(ts(src), src);
     }
 

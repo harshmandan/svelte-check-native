@@ -83,20 +83,19 @@ const STATE_AMBIENTS_END: &str = "// @@STATE_AMBIENTS_END@@";
 /// locals) as "this is our code, not the user's — don't surface
 /// errors here".
 /// Return the shim text with the fallback `declare module 'svelte/*'`
-/// block AND our `$state<T>` ambient overloads stripped when
+/// block AND our `$state` ambient declarations stripped when
 /// `keep_fallback` is false (i.e. real svelte is installed). Line
 /// count is preserved — stripped ranges are replaced with blank lines
 /// so diagnostic positions in the shim stay stable.
 ///
-/// Why strip `$state<T>`: Svelte 5's `types/index.d.ts:3221-3222`
-/// declares the same two overloads. Keeping both produces 4 identical
-/// overloads, which poisons TS's overload resolution — a mismatch
-/// reports TS2769 "No overload matches this call" instead of the
-/// expected TS2741 on structurally-incomplete initial values. Other
-/// rune ambients ($derived/$effect/$props/etc.) aren't stripped —
-/// either single-overload forms don't hit the dedup issue or our
-/// shim carries extra overloads (e.g. `$props<T>()`) that Svelte's
-/// simpler `$props(): any` doesn't provide.
+/// Why strip `$state`: Svelte 5 declares the same base overloads and
+/// namespace members. Keeping both poisons overload resolution — a
+/// mismatch reports TS2769 "No overload matches this call" instead
+/// of the direct assignability diagnostic. Other rune ambients
+/// ($derived/$effect/$props/etc.) aren't stripped — either their
+/// single-overload forms don't hit the dedup issue or our shim carries
+/// extra overloads (e.g. `$props<T>()`) that Svelte's simpler
+/// `$props(): any` doesn't provide.
 fn resolve_shim_text(keep_fallback: bool) -> String {
     if keep_fallback {
         return SVELTE_SHIMS.to_string();
@@ -1169,6 +1168,9 @@ mod tests {
         assert!(full.contains("declare module 'svelte/elements'"));
         // Core runes must remain.
         assert!(full.contains("$state"));
+        assert!(full.contains("function raw<T>(initial: T): T;"));
+        assert!(!full.contains("function raw<T>(initial: null): T;"));
+        assert!(!full.contains("function raw<T>(initial: undefined): T;"));
     }
 
     #[test]
@@ -1176,8 +1178,11 @@ mod tests {
         let stripped = resolve_shim_text(false);
         assert!(!stripped.contains("declare module 'svelte'"));
         assert!(!stripped.contains("declare module 'svelte/elements'"));
-        // Core runes still present.
-        assert!(stripped.contains("$state"));
+        // Svelte's installed declarations are authoritative for the
+        // complete $state surface, including namespace members.
+        assert!(!stripped.contains("declare function $state"));
+        assert!(!stripped.contains("declare namespace $state"));
+        assert!(!stripped.contains("function raw<T>"));
         // Line count preserved so diagnostic positions in the shim
         // stay stable across the two modes.
         let full_lines = resolve_shim_text(true).lines().count();

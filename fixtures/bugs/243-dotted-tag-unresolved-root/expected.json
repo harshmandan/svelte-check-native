@@ -1,0 +1,10 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 4, "column": 6, "code": 2339 },
+        { "file": "input.svelte", "line": 5, "column": 1, "code": 2304 },
+        { "file": "input.svelte", "line": 6, "column": 1, "code": 2552 },
+        { "file": "input.svelte", "line": 7, "column": 1, "code": 2304 }
+    ],
+    "warnings": [],
+    "_note": "A dotted component tag whose root identifier is unresolved must surface the engine's error instead of silently passing. The component name in the synthesized __svn_ensure_component(...) call was only source-mapped for simple identifiers; dotted names had no token-map entry, so the TS2304/2552 at the root (or the TS2339 at a member, like Body on the DOM Text constructor here) mapped to nothing and was dropped as synthesized scaffolding. The dotted name and its source span are equal-length, so the token map translates member-anchored positions byte-exactly — the 2339 lands on `Body`, matching upstream."
+}

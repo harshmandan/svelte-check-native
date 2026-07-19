@@ -269,14 +269,21 @@ pub(crate) fn emit_component_call(
     // name 'Component'") then reverse-maps to the user's
     // `<Component>` source span instead of getting dropped as
     // synth-scaffolding.
+    //
+    // Dotted names (`<Foo.Bar>`) also need source mapping. Without
+    // it, tsgo's TS2304 ("Cannot find name 'Foo'") fires at the `Foo`
+    // byte inside the synthesized `__svn_ensure_component(Foo.Bar)`
+    // call, but with no TokenMapEntry the diagnostic mapper returns
+    // None and drops the diagnostic — so an unimported `<Foo.Bar>`
+    // silently passes with zero errors and crashes at runtime.
+    // Mapping the whole `Foo.Bar` span back to source is coarser than
+    // ideal (a diagnostic on `.Bar` lands on the whole span) but
+    // matches the simple-identifier path's behavior and is enough to
+    // surface TS2304 on the root identifier.
     let _ = write!(buf, "{inner}const {local} = __svn_ensure_component(");
-    if is_simple_js_identifier(comp.as_str()) {
-        let name_start = inst.node_start.saturating_add(1);
-        let name_end = name_start.saturating_add(comp.len() as u32);
-        buf.append_with_source(comp.as_str(), svn_core::Range::new(name_start, name_end));
-    } else {
-        buf.push_str(comp.as_str());
-    }
+    let name_start = inst.node_start.saturating_add(1);
+    let name_end = name_start.saturating_add(comp.len() as u32);
+    buf.append_with_source(comp.as_str(), svn_core::Range::new(name_start, name_end));
     buf.push_str(");\n");
 
     // Implicit-children synthesis: when the user has non-snippet body

@@ -6,6 +6,13 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.1]
+
+Parity patch: fixes a false TS2769 on `$state.raw` explicit generics
+(#38, thanks @JanTuck) and removes our last deliberately-laxer-than-
+upstream behavior so annotated nullish state narrows exactly as it
+does under `svelte-check`.
+
 ### Fixed
 
 - **Explicit generics on `$state.raw` keep contextual typing.**

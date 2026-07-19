@@ -1,0 +1,25 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 12,
+            "code": 2339
+        }
+    ],
+    "warnings": [
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 5,
+            "code": "state_referenced_locally"
+        },
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 9,
+            "code": "state_referenced_locally"
+        }
+    ],
+    "_note": "An annotated nullish state declaration narrows exactly as it does upstream: `let el: T | null = $state(null)` initializes with a null-typed value, so a top-level `if (el)` guard narrows to never and member access errors TS2339 — which is also the runtime truth, since bind:this assigns during mount, after the script body ran. We previously auto-injected the annotation as an explicit generic ($state<T | null>(null)), silently suppressing this error and making us laxer than svelte-check. Matching upstream means users see the same error and apply the same documented fix (write the explicit generic themselves)."
+}

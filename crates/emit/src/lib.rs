@@ -73,7 +73,6 @@ mod render_function;
 mod rewrite_invariants;
 mod script_body_rewrites;
 mod script_template_analysis;
-mod state_nullish_rewrite;
 mod void_block;
 // SVELTE-4-COMPAT: droppable submodule for Svelte-4 emit rewrites.
 // See design/phase_g/DESIGN.md.
@@ -905,19 +904,7 @@ fn emit_document_with_render_name(
         } else {
             after_reactive
         };
-        // Rewrite `let X: Type = $state(null | undefined)` to
-        // `$state<Type>(null | undefined)` so the single-T `$state`
-        // shim overload picks `T` from the explicit generic (sourced
-        // from the annotation) rather than collapsing to `null` from
-        // the argument. See `state_nullish_rewrite` for the full
-        // reasoning — this pass is the reason we can keep `$state`
-        // as a single-T overload: the literal-type overloads we'd
-        // otherwise need for the bind:this pattern collide with
-        // TypeScript's overload resolution on
-        // `$state<Promise<T>>(new Promise(() => {}))`, where the
-        // explicit `<T>` no longer propagates as contextual type to
-        // the argument.
-        let after_state = state_nullish_rewrite::rewrite(&after_reactive, s.lang);
+        let after_state = after_reactive;
         // Reviewer follow-up #3b: when `interface $$Events` is
         // declared, rewrite untyped `createEventDispatcher()` calls
         // to `createEventDispatcher<__SvnCustomEvents<$$Events>>()`

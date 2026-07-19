@@ -289,22 +289,20 @@ declare function __svn_invalidate<T>(fn: () => T): T;
  * assignable to T fire TS2345 — matches Svelte's own behavior.
  *
  * Historical note: we previously had two additional overloads for
- * `initial: null` and `initial: undefined` literal types, there to
- * preserve `T` against the variable's annotation in the bind:this
- * pattern (`let el: HTMLInputElement | null = $state(null)`). Those
- * overloads collide with TypeScript's overload resolution on
- * `$state<Promise<T>>(new Promise(() => {}))`: when a generic
- * function's overload set includes literal-type parameters, the
- * explicit `<T>` argument no longer propagates as contextual type to
- * the call's argument. The inner `new Promise(() => {})` then widens
- * to `Promise<unknown>` and no overload matches — TS2769. This is
- * TypeScript behavior across both tsc and tsgo, not a tsgo-only gap.
- * The emit crate now rewrites
- * `let X: Type = $state(null | undefined)` to
- * `let X: Type = $state<Type>(null | undefined)` (see
- * `state_nullish_rewrite`), which lets this single-T shim handle
- * both the bind:this pattern and the `$state<Promise<T>>(...)`
- * pattern without conflict.
+ * `initial: null` and `initial: undefined` literal types, and later
+ * an emit-side rewrite injecting the variable's annotation as an
+ * explicit generic — both attempts to keep `let el: T | null =
+ * $state(null)` from narrowing `el` to `null` at the declaration.
+ * The overloads broke contextual typing of explicit generics
+ * (`$state<Promise<T>>(new Promise(() => {}))` → TS2769), and the
+ * rewrite made us LAXER than svelte-check: with Svelte's own
+ * declarations the initializer narrows, a top-level `if (el)` guard
+ * collapses to `never`, and member access errors — which is also
+ * the runtime truth at init time (bind:this assigns during mount,
+ * after the script body ran). We now mirror Svelte's declaration
+ * shape and let the same error surface; the fix users apply is the
+ * same one upstream users apply: write the explicit generic
+ * (`$state<T | null>(null)`).
  */
 declare function $state<T>(initial: T): T;
 declare function $state<T>(): T | undefined;

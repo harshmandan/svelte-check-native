@@ -6,6 +6,19 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Annotated nullish state declarations now narrow exactly as they
+  do under `svelte-check`.** `let el: T | null = $state(null)`
+  followed by a top-level truthiness guard reports the same
+  "Property … does not exist on type 'never'" error upstream reports
+  (which is also the runtime truth at init — `bind:this` assigns
+  during mount, after the script body ran). We previously injected
+  the annotation as an explicit generic into the overlay, silently
+  suppressing the error and making us laxer than upstream. The fix
+  is the same one upstream users apply: write the explicit generic
+  (`$state<T | null>(null)`).
+
 ## [1.1.0]
 
 Two user-reported false-positive fixes (#36, #37), a ~30-item parity

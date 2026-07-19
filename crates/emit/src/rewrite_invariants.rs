@@ -33,7 +33,6 @@ use smol_str::SmolStr;
 use svn_parser::ScriptLang;
 
 use crate::props_emit::inject_component_props_annotation;
-use crate::state_nullish_rewrite;
 use crate::svelte2tsx_nodes::component_events::rewrite_dispatcher_typing;
 use crate::svelte4::compat::{
     denarrow_typed_exported_props_in_place, rewrite_definite_assignment_in_place,
@@ -105,13 +104,6 @@ fn reactive_rewrite_preserves_line_count() {
                $: count = doubled - count;\n\
                $: {\n\tconsole.log(count);\n}\n";
     let (out, _) = rewrite_with_touched_names(src, ScriptLang::Ts);
-    assert_line_preserving_rewrite(src, &out);
-}
-
-#[test]
-fn state_nullish_rewrite_preserves_line_count() {
-    let src = "let el: HTMLElement | null = $state(null);\nel;\n";
-    let out = state_nullish_rewrite::rewrite(src, ScriptLang::Ts);
     assert_line_preserving_rewrite(src, &out);
 }
 

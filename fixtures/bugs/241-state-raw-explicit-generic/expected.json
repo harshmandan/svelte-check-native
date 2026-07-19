@@ -1,0 +1,12 @@
+{
+    "errors": [
+        {
+            "file": "Mismatch.svelte",
+            "line": 1,
+            "column": 37,
+            "code": 2345
+        }
+    ],
+    "warnings": [],
+    "_note": "An explicit generic on $state.raw must contextually type its argument, while genuinely incompatible arguments remain rejected. Literal null/undefined overloads in the native shim prevented contextual propagation, so new Set() widened and produced TS2769 even though Svelte's declaration accepts it."
+}

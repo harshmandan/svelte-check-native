@@ -265,19 +265,15 @@ declare type $$Generic<T = any> = T;
 declare function __svn_invalidate<T>(fn: () => T): T;
 
 // @@STATE_AMBIENTS_BEGIN@@
-// `$state<T>` ambient declarations. Stripped when real svelte 5 is
-// installed — Svelte's `types/index.d.ts:3221-3222` declares the
-// same two overloads. Keeping both sets produces 4 identical
-// overloads, which poisons TS's overload resolution: a mismatch on
-// `$state<T>(initial: T)` reports TS2769 "No overload matches this
-// call" instead of the expected TS2741 "Property 'X' is missing in
-// type Y" that fires with 2 overloads. Minimal repro at
-// test_dup_overload.ts confirmed. Other rune ambients ($derived,
-// $effect, etc.) aren't stripped because either their single-overload
-// form is immune to the dedup issue or our shim carries extra
-// overloads (e.g. `$props<T = any>()`) that Svelte's simpler
-// declarations don't provide — stripping those would fire TS2558 on
-// user-authored `$props<MyShape>()` calls.
+// `$state` ambient declarations. Stripped when real Svelte 5 is
+// installed because its globals declare the same base overloads and
+// namespace members. Keeping both sets poisons overload resolution:
+// a mismatch reports TS2769 "No overload matches this call" instead
+// of the direct assignability diagnostic. Other rune ambients
+// ($derived, $effect, etc.) aren't stripped because either their
+// single-overload forms are immune to the duplication or our shim
+// carries extra overloads (e.g. `$props<T = any>()`) that Svelte's
+// simpler declarations don't provide.
 /** `$state<T>(initial?)` declares reactive state. Macro.
  *
  * Two overloads:
@@ -288,33 +284,34 @@ declare function __svn_invalidate<T>(fn: () => T): T;
  * Calls like `$state<T>(0)` where T is a generic parameter and 0 isn't
  * assignable to T fire TS2345 — matches Svelte's own behavior.
  *
- * Historical note: we previously had two additional overloads for
- * `initial: null` and `initial: undefined` literal types, and later
- * an emit-side rewrite injecting the variable's annotation as an
- * explicit generic — both attempts to keep `let el: T | null =
- * $state(null)` from narrowing `el` to `null` at the declaration.
- * The overloads broke contextual typing of explicit generics
- * (`$state<Promise<T>>(new Promise(() => {}))` → TS2769), and the
- * rewrite made us LAXER than svelte-check: with Svelte's own
- * declarations the initializer narrows, a top-level `if (el)` guard
- * collapses to `never`, and member access errors — which is also
- * the runtime truth at init time (bind:this assigns during mount,
- * after the script body ran). We now mirror Svelte's declaration
- * shape and let the same error surface; the fix users apply is the
- * same one upstream users apply: write the explicit generic
- * (`$state<T | null>(null)`).
+ * Historical note: `$state` and `$state.raw` previously had two
+ * additional overloads for `initial: null` and `initial: undefined`
+ * literal types, and later an emit-side rewrite injecting the
+ * variable's annotation as an explicit generic — both attempts to
+ * keep `let el: T | null = $state(null)` from narrowing `el` to
+ * `null` at the declaration. The overloads broke contextual typing
+ * of explicit generics (`$state<Promise<T>>(new Promise(() => {}))`
+ * and `$state.raw<ReadonlySet<string>>(new Set())` → TS2769: when a
+ * generic overload set includes literal-type parameters, an explicit
+ * `<T>` no longer propagates as the argument's contextual type — on
+ * both tsc and tsgo). The rewrite made us LAXER than svelte-check:
+ * with Svelte's own declarations the initializer narrows, a
+ * top-level `if (el)` guard collapses to `never`, and member access
+ * errors — which is also the runtime truth at init time (bind:this
+ * assigns during mount, after the script body ran). We now mirror
+ * Svelte's declaration shape for both runes and let the same error
+ * surface; the fix users apply is the same one upstream users apply:
+ * write the explicit generic (`$state<T | null>(null)`).
  */
 declare function $state<T>(initial: T): T;
 declare function $state<T>(): T | undefined;
-// @@STATE_AMBIENTS_END@@
 declare namespace $state {
     function eager<T>(value: T): T;
-    function raw<T>(initial: null): T;
-    function raw<T>(initial: undefined): T;
     function raw<T>(initial: T): T;
     function raw<T>(): T | undefined;
     function snapshot<T>(value: T): T;
 }
+// @@STATE_AMBIENTS_END@@
 
 /** `$derived(expression)` re-evaluates whenever its dependencies change. */
 declare function $derived<T>(expression: T): T;
@@ -2461,4 +2458,3 @@ declare module 'svelte/compiler' {
     export function walk(ast: any, walker: any): any;
 }
 // @@FALLBACK_END@@
-

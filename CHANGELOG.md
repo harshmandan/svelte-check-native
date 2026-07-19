@@ -6,6 +6,17 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Explicit generics on `$state.raw` keep contextual typing.**
+  Calls such as `$state.raw<ReadonlySet<string>>(new Set())` no longer
+  produce a false TS2769. Native fallback shims now mirror Svelte's
+  overloads, installed Svelte declarations remain authoritative, and
+  genuinely incompatible arguments keep the engine's direct
+  assignability diagnostic (TS2345 for primitives, TS2740/2741 for
+  structural mismatches under tsgo) instead of the aggregate
+  "No overload matches this call".
+
 ### Changed
 
 - **Annotated nullish state declarations now narrow exactly as they

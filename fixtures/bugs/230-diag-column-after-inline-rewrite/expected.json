@@ -1,0 +1,12 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 3,
+            "column": 49,
+            "code": 2322
+        }
+    ],
+    "warnings": [],
+    "_note": "A diagnostic to the RIGHT of an in-line overlay rewrite on the same line must keep its exact source column. Here the untyped `createEventDispatcher()` call gains a `<__SvnCustomEvents<$$Events>>` type argument in the overlay (fires when `interface $$Events` is declared), shifting every later byte on the line; the TS2322 on `bad` still maps to the pre-shift column because the script-body splice records longest-common-prefix/suffix token-map entries, so byte-identical regions around an in-line rewrite keep exact column mapping instead of falling back to the line map's column passthrough."
+}

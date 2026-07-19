@@ -12,7 +12,23 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   Calls such as `$state.raw<ReadonlySet<string>>(new Set())` no longer
   produce a false TS2769. Native fallback shims now mirror Svelte's
   overloads, installed Svelte declarations remain authoritative, and
-  genuinely incompatible arguments still produce TS2345.
+  genuinely incompatible arguments keep the engine's direct
+  assignability diagnostic (TS2345 for primitives, TS2740/2741 for
+  structural mismatches under tsgo) instead of the aggregate
+  "No overload matches this call".
+
+### Changed
+
+- **Annotated nullish state declarations now narrow exactly as they
+  do under `svelte-check`.** `let el: T | null = $state(null)`
+  followed by a top-level truthiness guard reports the same
+  "Property … does not exist on type 'never'" error upstream reports
+  (which is also the runtime truth at init — `bind:this` assigns
+  during mount, after the script body ran). We previously injected
+  the annotation as an explicit generic into the overlay, silently
+  suppressing the error and making us laxer than upstream. The fix
+  is the same one upstream users apply: write the explicit generic
+  (`$state<T | null>(null)`).
 
 ## [1.1.0]
 

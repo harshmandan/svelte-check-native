@@ -285,21 +285,23 @@ declare function __svn_invalidate<T>(fn: () => T): T;
  * assignable to T fire TS2345 — matches Svelte's own behavior.
  *
  * Historical note: `$state` and `$state.raw` previously had two
- * additional overloads for `initial: null` and `initial: undefined`,
- * there to
- * preserve `T` against the variable's annotation in the bind:this
- * pattern (`let el: HTMLInputElement | null = $state(null)`). Those
- * overloads collide with TypeScript's overload resolution on
- * `$state<Promise<T>>(new Promise(() => {}))`: when a generic
- * function's overload set includes literal-type parameters, the
- * explicit `<T>` argument no longer propagates as contextual type to
- * the call's argument. The inner `new Promise(() => {})` then widens
- * to `Promise<unknown>` and no overload matches — TS2769. This is
- * TypeScript behavior across both tsc and tsgo, not a tsgo-only gap.
- * The emit crate now adds the annotated type as an explicit generic
- * to typed nullish `$state(...)` and `$state.raw(...)` declarations
- * (see `state_nullish_rewrite`). That preserves the nullish binding
- * pattern without interfering with contextual typing.
+ * additional overloads for `initial: null` and `initial: undefined`
+ * literal types, and later an emit-side rewrite injecting the
+ * variable's annotation as an explicit generic — both attempts to
+ * keep `let el: T | null = $state(null)` from narrowing `el` to
+ * `null` at the declaration. The overloads broke contextual typing
+ * of explicit generics (`$state<Promise<T>>(new Promise(() => {}))`
+ * and `$state.raw<ReadonlySet<string>>(new Set())` → TS2769: when a
+ * generic overload set includes literal-type parameters, an explicit
+ * `<T>` no longer propagates as the argument's contextual type — on
+ * both tsc and tsgo). The rewrite made us LAXER than svelte-check:
+ * with Svelte's own declarations the initializer narrows, a
+ * top-level `if (el)` guard collapses to `never`, and member access
+ * errors — which is also the runtime truth at init time (bind:this
+ * assigns during mount, after the script body ran). We now mirror
+ * Svelte's declaration shape for both runes and let the same error
+ * surface; the fix users apply is the same one upstream users apply:
+ * write the explicit generic (`$state<T | null>(null)`).
  */
 declare function $state<T>(initial: T): T;
 declare function $state<T>(): T | undefined;

@@ -272,3 +272,37 @@ fn invariants_no_script() {
 fn invariants_empty_file() {
     assert_map_invariants("", "empty_file");
 }
+
+#[test]
+fn dotted_component_name_maps_byte_exactly() {
+    // A dotted component tag's name must carry a token-map entry
+    // whose overlay text and source text are the same bytes — that
+    // equality is what lets the position mapper translate a
+    // diagnostic anchored at a MEMBER (`Bar` in `<Foo.Bar>`, e.g.
+    // TS2339 "Property 'Bar' does not exist") to its exact source
+    // column instead of dropping it as synthesized scaffolding.
+    let source =
+        "<script lang=\"ts\">\n\t// no imports\n</script>\n\n<Foo.Bar />\n<Ns.Deep.Widget />\n";
+    let (doc, parse_errors) = parse_sections(source);
+    assert!(parse_errors.is_empty(), "parse errors: {parse_errors:?}");
+    let (fragment, frag_errors) = parse_all_template_runs(source, &doc.template.text_runs);
+    assert!(frag_errors.is_empty(), "fragment errors: {frag_errors:?}");
+    let summary = svn_analyze::walk_template(&fragment, source);
+    let out = emit_document(&doc, &fragment, &summary, &PathBuf::from("test.svelte"));
+
+    for name in ["Foo.Bar", "Ns.Deep.Widget"] {
+        let entry = out.token_map.iter().find(|e| {
+            let ov = &out.typescript[e.overlay_byte_start as usize..e.overlay_byte_end as usize];
+            ov == name
+        });
+        let entry = entry
+            .unwrap_or_else(|| panic!("no token-map entry covering the overlay text {name:?}"));
+        let src = &source[entry.source_byte_start as usize..entry.source_byte_end as usize];
+        assert_eq!(
+            src, name,
+            "token-map entry for {name:?} must map to the identical source bytes \
+             (equal length is what makes member-anchored positions translate exactly)"
+        );
+    }
+    assert_map_invariants(source, "dotted_component_name");
+}

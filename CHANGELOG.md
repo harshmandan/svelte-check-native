@@ -6,6 +6,20 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.2]
+
+### Fixed
+
+- **Unimported dotted component tags (`<Foo.Bar>`) surface their
+  errors instead of silently passing** (#39, #40, thanks @febergs).
+  The component name in the synthesized instantiation was only
+  source-mapped for simple identifiers; dotted names had no token-map
+  entry, so the engine's "Cannot find name" (and member-anchored
+  "Property does not exist") diagnostics mapped to nothing and were
+  dropped as synthesized scaffolding — a runtime crash checking
+  clean. Codes, messages, and positions now match `svelte-check
+  --tsgo` byte-for-byte, including member-anchored positions.
+
 ## [1.1.1]
 
 Parity patch: fixes a false TS2769 on `$state.raw` explicit generics

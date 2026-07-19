@@ -63,8 +63,25 @@ for (const dir of platformDirs) {
   }
 }
 
+function alreadyPublished(dir) {
+  // A partial run leaves earlier packages live on the registry; npm
+  // refuses to publish over an existing version, so a plain re-run
+  // would die on the first already-published package and never reach
+  // the stragglers. Skip any package whose target version is already
+  // live — this makes the script resumable after a mid-run failure.
+  const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+  const result = spawnSync('npm', ['view', `${pkg.name}@${pkg.version}`, 'version'], {
+    encoding: 'utf8',
+  });
+  return result.status === 0 && result.stdout.trim() === pkg.version;
+}
+
 function publish(dir) {
   const name = dir.split('/').pop();
+  if (!dryRun && alreadyPublished(dir)) {
+    console.log(`\n--- ${name} already live at the target version; skipping`);
+    return;
+  }
   const header = dryRun ? `--- (dry-run) ${name}` : `--- publishing ${name}`;
   console.log(`\n${header}`);
   const args = ['publish', '--access', 'public'];

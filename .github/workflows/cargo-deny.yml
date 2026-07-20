@@ -55,7 +55,7 @@ jobs:
           - bans licenses sources
     steps:
       - uses: actions/checkout@v7.0.0
-      - uses: EmbarkStudios/cargo-deny-action@v2.0.20
+      - uses: EmbarkStudios/cargo-deny-action@v2.1.1
         with:
           command: check ${{ matrix.checks }}
           # The action pulls the latest cargo-deny release matching

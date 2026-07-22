@@ -6,6 +6,39 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0]
+
+### Added
+
+- **Missing `.svelte` imports now surface as `TS2307`**, matching the
+  default `svelte-check`. `--tsgo` (which we otherwise mirror) can't
+  report these: svelte's own `declare module '*.svelte'` wildcard makes
+  tsgo resolve every `.svelte` specifier — missing ones included — to
+  `any`, so a bad import checks clean. The upstream maintainer notes on
+  sveltejs/language-tools#2733 that tsgo's module resolution can't be
+  customised for Svelte files, so this stays broken there until a stable
+  TypeScript-Go resolution API ships. We recover parity ourselves for
+  **every** import form — relative (`./x.svelte`), aliased (`$lib/x.svelte`
+  via `tsconfig` `paths`), bare (`pkg/x.svelte` via node_modules +
+  package.json `exports`), and dynamic `import('./x.svelte')` — resolving
+  each with `oxc_resolver` so a diagnostic fires only on a genuine
+  on-disk miss. A workspace that declares its own `declare module
+  '*.svelte'` disables the check (the default engine keeps user wildcards,
+  so firing there would be a false positive).
+- **`--disable-enhance` flag** (and `SVN_DISABLE_ENHANCE` env var) to turn
+  off the tsgo-mode enhancement checks at runtime. These divergences from
+  `--tsgo` live in an isolated `svn-enhance` crate; the flag is a safety
+  valve while the layer exists.
+
+### Fixed
+
+- **No more false `TS2695` on Svelte-4 comma-separated reactive
+  statements** (`$: a, b, c, expr`) (#2973). The default `svelte-check`
+  filters "Left side of comma operator is unused" for reactive deps;
+  `--tsgo` leaks it. Our `$:` rewrite now turns the sequence's top-level
+  commas into semicolons so each dep is a referenced statement — no comma
+  operator, no diagnostic, type-checking unchanged.
+
 ## [1.1.2]
 
 ### Fixed

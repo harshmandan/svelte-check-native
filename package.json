@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "svelte-check-native-monorepo",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "Monorepo root for svelte-check-native \u2014 a fast CLI type-checker for Svelte 4 and Svelte 5 projects, written in Rust, powered by tsgo. The published npm package lives at npm/svelte-check-native/.",
   "keywords": [
     "svelte",

@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "The ambient guard. This workspace declares its OWN `declare module '*.svelte'` (svelte-shim.d.ts). The default `svelte-check` strips svelte's shipped wildcard but keeps a user-authored one, so it resolves every `.svelte` import and reports nothing for the missing `./Missing.svelte`. `svn_enhance`'s resolver can't see TS ambients, so `SvelteImportResolver::new` scans the workspace for a user `*.svelte` wildcard and, finding one, disables the check — keeping us faithful (no false positive). Regression lock for that guard."
+}

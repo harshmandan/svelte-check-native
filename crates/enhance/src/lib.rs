@@ -37,4 +37,6 @@
 
 mod missing_svelte_imports;
 
-pub use missing_svelte_imports::{EnhancementDiagnostic, missing_svelte_import_diagnostics};
+pub use missing_svelte_imports::{
+    EnhancementDiagnostic, SvelteImportResolver, missing_svelte_import_diagnostics,
+};

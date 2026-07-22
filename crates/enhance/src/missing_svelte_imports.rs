@@ -10,17 +10,37 @@
 //! recover parity with the default `svelte-check` by detecting the missing
 //! import ourselves and emitting the same `TS2307`.
 //!
-//! Scope: RELATIVE specifiers (`./x.svelte`, `../x.svelte`) only. Their
-//! resolution is unambiguous — relative to the importing file's directory
-//! — so a missing target can never be a false positive. Aliased
-//! (`$lib/...`) and bare (`some-lib/...`) `.svelte` specifiers depend on
-//! `tsconfig` `paths` / `node_modules` resolution and are handled
-//! elsewhere.
+//! ## Resolution
+//!
+//! We resolve every `.svelte` specifier — relative (`./x.svelte`), aliased
+//! (`$lib/x.svelte` via `tsconfig` `paths`), and bare
+//! (`some-lib/x.svelte` via node_modules + package.json `exports`) — with
+//! [`oxc_resolver`], the same bundler-grade resolver used across the oxc
+//! ecosystem. It performs the real TS/node resolution tsgo would, so a
+//! specifier fires `TS2307` only when genuinely unresolvable on disk. Only
+//! specifiers ending in `.svelte` are considered (a `Foo.svelte.ts` runes
+//! module ends in `.ts`, so it's excluded from collection and, when it
+//! exists as a sibling, satisfies `./Foo.svelte` through the resolver's
+//! extension list — matching TS).
+//!
+//! ## The ambient guard
+//!
+//! `oxc_resolver` is filesystem-only: it cannot see TypeScript ambient
+//! `declare module` declarations. The default `svelte-check` strips
+//! svelte's OWN `*.svelte` wildcard but keeps a USER-authored one, so a
+//! project that declares its own `declare module '*.svelte'` resolves
+//! every `.svelte` import and reports nothing. To avoid firing a false
+//! positive there, [`SvelteImportResolver::new`] scans the workspace for a
+//! user `*.svelte` wildcard and, if it finds one, disables the check
+//! entirely (the resolver holds `None`).
 
 use std::path::{Path, PathBuf};
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Statement;
+use oxc_resolver::{
+    ResolveOptions, Resolver, TsconfigDiscovery, TsconfigOptions, TsconfigReferences,
+};
 use svn_core::{PositionMap, Range};
 use svn_parser::{Document, parse_script_body};
 
@@ -37,26 +57,90 @@ pub struct EnhancementDiagnostic {
     pub message: String,
 }
 
-/// Produce a `TS2307` for every relative `.svelte` import in `doc` whose
-/// target file is missing on disk.
+/// A shared `.svelte`-import resolver, built once per run and passed by
+/// reference into the per-file pass (the inner resolver is thread-safe).
 ///
-/// Fires only when a relative specifier resolves to a path where NEITHER
-/// the `.svelte` component NOR any extension-appended sibling TS's module
-/// resolution would accept exists — so it can never false-positive on a
+/// Holds `None` — disabling the whole check — when the workspace declares
+/// its own `declare module '*.svelte'` wildcard (see the module docs' "The
+/// ambient guard").
+pub struct SvelteImportResolver {
+    inner: Option<Resolver>,
+}
+
+impl SvelteImportResolver {
+    /// Build the resolver from the user's `tsconfig` (for `paths`/`baseUrl`)
+    /// and workspace (for the ambient-wildcard guard).
+    pub fn new(workspace: &Path, tsconfig: &Path) -> Self {
+        if workspace_declares_svelte_wildcard(workspace) {
+            return Self { inner: None };
+        }
+        let options = ResolveOptions {
+            tsconfig: Some(TsconfigDiscovery::Manual(TsconfigOptions {
+                config_file: tsconfig.to_path_buf(),
+                references: TsconfigReferences::Auto,
+            })),
+            // `.svelte` resolves the component file; the TS extensions let
+            // `./Foo.svelte` also resolve a `Foo.svelte.ts` runes-module
+            // sibling (`Foo.svelte` + `.ts`), matching TS's own append.
+            extensions: [
+                ".svelte",
+                ".ts",
+                ".tsx",
+                ".d.ts",
+                ".js",
+                ".jsx",
+                ".svelte.ts",
+                ".svelte.js",
+            ]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+            // `svelte` first: component libraries expose their `.svelte`
+            // entry points under the `svelte` export condition.
+            condition_names: ["svelte", "types", "import", "default"]
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            ..ResolveOptions::default()
+        };
+        Self {
+            inner: Some(Resolver::new(options)),
+        }
+    }
+
+    /// `true` if the given specifier resolves to a real file from `dir`.
+    /// A disabled resolver (ambient guard tripped) reports everything as
+    /// resolvable, so nothing fires.
+    fn resolves(&self, dir: &Path, specifier: &str) -> bool {
+        match &self.inner {
+            None => true,
+            Some(resolver) => resolver.resolve(dir, specifier).is_ok(),
+        }
+    }
+}
+
+/// Produce a `TS2307` for every `.svelte` import in `doc` whose target
+/// module doesn't resolve on disk — via `oxc_resolver`, so relative,
+/// aliased, and bare specifiers are all covered faithfully. Fires only on
+/// a genuine resolution failure, so it can't false-positive on a
 /// resolvable import.
 pub fn missing_svelte_import_diagnostics(
     file: &Path,
     source: &str,
     doc: &Document<'_>,
+    resolver: &SvelteImportResolver,
 ) -> Vec<EnhancementDiagnostic> {
-    let refs = collect_relative_svelte_imports(doc);
+    if resolver.inner.is_none() {
+        return Vec::new();
+    }
+    let refs = collect_svelte_imports(doc);
     if refs.is_empty() {
         return Vec::new();
     }
     let dir = file.parent().unwrap_or_else(|| Path::new("."));
     let pm = PositionMap::new(source);
     refs.into_iter()
-        .filter(|r| !svelte_import_resolves(&dir.join(&r.specifier)))
+        .filter(|r| !resolver.resolves(dir, &r.specifier))
         .map(|r| {
             let (start, end) = pm.range_positions(Range::new(r.start, r.end));
             EnhancementDiagnostic {
@@ -76,8 +160,8 @@ pub fn missing_svelte_import_diagnostics(
         .collect()
 }
 
-/// A relative `.svelte` module specifier imported (or re-exported) by a
-/// component, carrying the byte span of its string literal — including the
+/// A `.svelte` module specifier imported (or re-exported) by a component,
+/// carrying the byte span of its string literal — including the
 /// surrounding quotes — in the ORIGINAL `.svelte` source.
 struct SvelteImportRef {
     specifier: String,
@@ -85,14 +169,14 @@ struct SvelteImportRef {
     end: u32,
 }
 
-/// Collect every relative `.svelte` specifier imported or re-exported at
-/// the top level of the instance and module scripts.
+/// Collect every `.svelte` specifier imported or re-exported at the top
+/// level of the instance and module scripts.
 ///
 /// Covers `import … from '…'`, `export … from '…'`, and `export * from
 /// '…'` — every statement form that carries a module specifier. Type-only
 /// imports are included: `import type X from './Missing.svelte'` fires
 /// `TS2307` upstream just like a value import.
-fn collect_relative_svelte_imports(doc: &Document<'_>) -> Vec<SvelteImportRef> {
+fn collect_svelte_imports(doc: &Document<'_>) -> Vec<SvelteImportRef> {
     let mut out = Vec::new();
     for section in [doc.instance_script.as_ref(), doc.module_script.as_ref()]
         .into_iter()
@@ -117,7 +201,7 @@ fn collect_relative_svelte_imports(doc: &Document<'_>) -> Vec<SvelteImportRef> {
             };
             if let Some(lit) = literal {
                 let spec = lit.value.as_str();
-                if is_relative_svelte(spec) {
+                if is_svelte_specifier(spec) {
                     out.push(SvelteImportRef {
                         specifier: spec.to_string(),
                         start: base + lit.span.start,
@@ -130,49 +214,49 @@ fn collect_relative_svelte_imports(doc: &Document<'_>) -> Vec<SvelteImportRef> {
     out
 }
 
-/// A relative import that names a Svelte component file: begins with `./`
-/// or `../` and ends in `.svelte`. Excludes `.svelte.ts` / `.svelte.js`
-/// runes-module specifiers (those end in `.ts` / `.js`).
-fn is_relative_svelte(spec: &str) -> bool {
-    (spec.starts_with("./") || spec.starts_with("../")) && spec.ends_with(".svelte")
+/// A specifier that names a Svelte component file: ends in `.svelte`.
+/// Excludes `.svelte.ts` / `.svelte.js` runes-module specifiers (those end
+/// in `.ts` / `.js`). Query-suffixed forms (`x.svelte?raw`) are excluded —
+/// they don't end in `.svelte` and aren't TS's concern.
+fn is_svelte_specifier(spec: &str) -> bool {
+    spec.ends_with(".svelte")
 }
 
-/// Whether a relative `.svelte` specifier resolving to `base` (a
-/// `…/Foo.svelte` path) is satisfiable by any file TS's module resolution
-/// would accept: the component itself, an extension-appended sibling (a
-/// `Foo.svelte.ts` runes module, a `.d.ts`, a plain JS pairing), or a
-/// directory index. Only when none exist is the import genuinely missing.
-fn svelte_import_resolves(base: &Path) -> bool {
-    // The component file itself. `is_file` (not `exists`): a *directory*
-    // named `Foo.svelte` doesn't satisfy `./Foo.svelte` unless it has an
-    // index (handled next) — TS would report TS2307 for an empty dir.
-    if base.is_file() {
-        return true;
-    }
-    // Directory-index resolution: `./Foo.svelte/index.{ts,…}`. Rare (a dir
-    // literally named `*.svelte`), but TS resolves it, so matching avoids a
-    // false positive.
-    if base.is_dir()
-        && [
-            "index.ts",
-            "index.tsx",
-            "index.d.ts",
-            "index.js",
-            "index.jsx",
-        ]
-        .iter()
-        .any(|idx| base.join(idx).is_file())
-    {
-        return true;
-    }
-    // Under bundler / `allowArbitraryExtensions` resolution TS appends each
-    // of these to `./Foo.svelte` before giving up.
-    let stem = base.as_os_str();
-    [".ts", ".tsx", ".d.ts", ".js", ".jsx"].iter().any(|ext| {
-        let mut p = stem.to_os_string();
-        p.push(ext);
-        Path::new(&p).is_file()
-    })
+/// Whether the workspace declares its own `declare module '*.svelte'`
+/// wildcard. When it does, the default `svelte-check` resolves every
+/// `.svelte` import through it (it strips svelte's OWN wildcard but not the
+/// user's), so we must not fire — see the module docs.
+///
+/// Walks the workspace, skipping `node_modules` (svelte's own wildcard
+/// lives there and the default engine strips it), the generated
+/// `.svelte-kit`, our cache, and VCS dirs. Only `.d.ts` files are read.
+fn workspace_declares_svelte_wildcard(workspace: &Path) -> bool {
+    let skip = |name: &str| {
+        matches!(
+            name,
+            "node_modules" | ".svelte-kit" | ".git" | ".cache" | ".svelte-check"
+        )
+    };
+    walkdir::WalkDir::new(workspace)
+        .into_iter()
+        .filter_entry(|e| !(e.file_type().is_dir() && e.file_name().to_str().is_some_and(skip)))
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.file_type().is_file() && e.file_name().to_str().is_some_and(|n| n.ends_with(".d.ts"))
+        })
+        .any(|e| {
+            std::fs::read_to_string(e.path())
+                .ok()
+                .is_some_and(|src| declares_svelte_wildcard(&src))
+        })
+}
+
+/// Cheap textual check for `declare module '*.svelte'` / `"*.svelte"`. A
+/// coarse scan is acceptable: the guard only needs to know the wildcard is
+/// present, and a false hit merely suppresses our check (never a false
+/// positive).
+fn declares_svelte_wildcard(src: &str) -> bool {
+    src.contains("declare module") && (src.contains("'*.svelte'") || src.contains("\"*.svelte\""))
 }
 
 #[cfg(test)]
@@ -181,16 +265,37 @@ mod tests {
 
     fn refs(src: &str) -> Vec<SvelteImportRef> {
         let (doc, _) = svn_parser::parse_sections(src);
-        collect_relative_svelte_imports(&doc)
+        collect_svelte_imports(&doc)
+    }
+
+    fn specifiers(src: &str) -> Vec<String> {
+        let mut v: Vec<String> = refs(src).into_iter().map(|r| r.specifier).collect();
+        v.sort();
+        v
     }
 
     #[test]
-    fn flags_relative_svelte_import() {
+    fn collects_relative_aliased_and_bare_svelte() {
+        let src = "<script lang=\"ts\">\n\
+            import R from './Rel.svelte'\n\
+            import L from '$lib/Lib.svelte'\n\
+            import B from 'some-lib/Bare.svelte'\n\
+            </script>\n";
+        assert_eq!(
+            specifiers(src),
+            vec![
+                "$lib/Lib.svelte".to_string(),
+                "./Rel.svelte".to_string(),
+                "some-lib/Bare.svelte".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn span_points_at_opening_quote() {
         let src = "<script lang=\"ts\">\nimport Foo from './Missing.svelte'\n</script>\n";
         let r = refs(src);
         assert_eq!(r.len(), 1);
-        assert_eq!(r[0].specifier, "./Missing.svelte");
-        // The recorded span points at the opening quote of the specifier.
         assert_eq!(
             &src[r[0].start as usize..r[0].end as usize],
             "'./Missing.svelte'"
@@ -198,33 +303,34 @@ mod tests {
     }
 
     #[test]
-    fn flags_parent_relative_and_export_from() {
-        let src = "<script lang=\"ts\">\nexport { default } from '../a/B.svelte'\n</script>\n";
-        let r = refs(src);
-        assert_eq!(r.len(), 1);
-        assert_eq!(r[0].specifier, "../a/B.svelte");
-    }
-
-    #[test]
-    fn ignores_aliased_and_bare_and_runes() {
+    fn excludes_runes_modules_and_non_svelte() {
         let src = "<script lang=\"ts\">\n\
-            import A from '$lib/A.svelte'\n\
-            import B from 'some-lib/B.svelte'\n\
             import C from './C.svelte.ts'\n\
             import D from './D.ts'\n\
+            import E from 'pkg'\n\
             </script>\n";
         assert!(refs(src).is_empty());
     }
 
     #[test]
-    fn collects_from_module_script_too() {
-        let src = "<script module lang=\"ts\">\nimport M from './M.svelte'\n</script>\n\
-            <script lang=\"ts\">\nimport I from './I.svelte'\n</script>\n";
-        let mut got: Vec<String> = refs(src).into_iter().map(|r| r.specifier).collect();
-        got.sort();
+    fn collects_export_from_and_module_script() {
+        let src = "<script module lang=\"ts\">\nexport * from './M.svelte'\n</script>\n\
+            <script lang=\"ts\">\nexport { default } from './I.svelte'\n</script>\n";
         assert_eq!(
-            got,
+            specifiers(src),
             vec!["./I.svelte".to_string(), "./M.svelte".to_string()]
         );
+    }
+
+    #[test]
+    fn wildcard_detection() {
+        assert!(declares_svelte_wildcard(
+            "declare module '*.svelte' { const c: any; export default c }"
+        ));
+        assert!(declares_svelte_wildcard(
+            "declare module \"*.svelte\" { export default 1 }"
+        ));
+        assert!(!declares_svelte_wildcard("declare module '*.css' {}"));
+        assert!(!declares_svelte_wildcard("import x from '*.svelte'"));
     }
 }

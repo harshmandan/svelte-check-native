@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A RESOLVABLE aliased import (`$lib/Foo.svelte` → `src/lib/Foo.svelte` via tsconfig `paths`). Guards against the broadened `svn_enhance` resolver false-positiving on a valid alias: oxc_resolver reads the same `paths`, resolves it, and fires nothing. No `svelte` install here so tsgo also resolves it via `paths` — clean either way."
+}

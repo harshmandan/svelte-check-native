@@ -940,8 +940,9 @@ fn missing_svelte_import_diagnostics(
     file: &Path,
     source: &str,
     doc: &svn_parser::Document<'_>,
+    resolver: &svn_enhance::SvelteImportResolver,
 ) -> Vec<svn_typecheck::CheckDiagnostic> {
-    svn_enhance::missing_svelte_import_diagnostics(file, source, doc)
+    svn_enhance::missing_svelte_import_diagnostics(file, source, doc, resolver)
         .into_iter()
         .map(|d| svn_typecheck::CheckDiagnostic {
             source_path: d.file,
@@ -1489,6 +1490,12 @@ fn run_typecheck(
             }
         };
         let session_ref = &session;
+        // TSGO-ENHANCEMENT: shared `.svelte`-import resolver, built once
+        // (tsconfig `paths` + node_modules + `exports`) and borrowed by the
+        // per-file pass below. Holds a disabled state when the workspace
+        // declares its own `*.svelte` wildcard, so nothing fires there.
+        let svelte_import_resolver = svn_enhance::SvelteImportResolver::new(workspace, tsconfig);
+        let svelte_import_resolver_ref = &svelte_import_resolver;
         // Per-file parse → analyze → emit is pure compute with no shared
         // mutable state (each iteration owns its own oxc Allocator inside
         // the called functions); the trailing `prepare` call writes only
@@ -1520,12 +1527,17 @@ fn run_typecheck(
                             compat,
                         )
                     });
-                // TSGO-ENHANCEMENT: missing relative `.svelte` imports
-                // (TS2307) — in-scope files only; the aux tail is present
-                // solely for tsgo's import-following and isn't reported on.
+                // TSGO-ENHANCEMENT: missing `.svelte` imports (TS2307) —
+                // in-scope files only; the aux tail is present solely for
+                // tsgo's import-following and isn't reported on.
                 let missing: Vec<svn_typecheck::CheckDiagnostic> =
                     if idx < svelte_sources_in_scope_end {
-                        missing_svelte_import_diagnostics(file, source, &doc)
+                        missing_svelte_import_diagnostics(
+                            file,
+                            source,
+                            &doc,
+                            svelte_import_resolver_ref,
+                        )
                     } else {
                         Vec::new()
                     };

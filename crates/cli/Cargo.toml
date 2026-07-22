@@ -20,6 +20,9 @@ svn-emit = { path = "../emit" }
 svn-svelte-compiler = { path = "../svelte-compiler" }
 svn-lint = { path = "../svn-lint" }
 svn-typecheck = { path = "../typecheck" }
+# TSGO-ENHANCEMENT: divergences from `svelte-check --tsgo` (see the crate
+# doc). Droppable once TS7.1's module-resolution API lands upstream.
+svn-enhance = { path = "../enhance" }
 clap.workspace = true
 anyhow.workspace = true
 tokio.workspace = true

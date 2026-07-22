@@ -58,6 +58,28 @@ Svelte-4 compat isolated: every Svelte-4-specific helper goes under
 callsite. When Svelte 4 is officially retired the removal is
 mechanical — delete the submodule and grep for the marker.
 
+**tsgo-mode enhancements isolated (`crates/enhance`).** Some checks the
+default `svelte-check` produces are impossible for the `--tsgo` command
+surface we otherwise mirror, because tsgo (driven as a subprocess) can't
+have its module resolution customised — the upstream maintainer states
+this directly on `sveltejs/language-tools#2733` ("no way for us to alter
+the module resolution to resolve Svelte files"). The canonical example:
+a missing `.svelte` import. The default engine reports `TS2307`; the
+`--tsgo` path can't, because svelte's own `declare module '*.svelte'`
+wildcard resolves every `.svelte` specifier (including missing ones) to
+`any` and swallows the error. Where we choose to match the **default**
+`svelte-check` rather than the reduced `--tsgo` surface, the logic lives
+in the isolated `svn-enhance` crate (`crates/enhance`) and every callsite
+in the core pipeline carries a `// TSGO-ENHANCEMENT` marker (the analogue
+of `// SVELTE-4-COMPAT`). These are temporary: once TypeScript 7.x ships
+a stable Go resolution API and upstream `--tsgo` resolves `.svelte`
+natively, removal is mechanical — delete `crates/enhance`, drop the
+`svn-enhance` dependency, and grep the marker to remove the callsites.
+Nothing in the core crates depends on that crate's types (it returns a
+neutral `EnhancementDiagnostic` the CLI lifts into `CheckDiagnostic`), so
+it stays cleanly excisable. Do NOT scatter these divergences into the
+core crates — they go in `crates/enhance`, marked.
+
 ## Commit-and-continue
 
 - **Commit after every meaningful local step,** even if code is broken or

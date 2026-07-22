@@ -64,7 +64,6 @@ mod htmlxtojsx_utils;
 mod is_ts;
 pub mod kit_inject;
 mod knownevents;
-mod missing_imports;
 mod nodes;
 mod process_instance_script_content;
 mod process_module_script_tag;
@@ -97,7 +96,6 @@ use props_emit::{
 use svelte4::compat::{emit_svelte4_ambients, has_strict_events_attr, is_runes_mode};
 use svn_analyze::should_synthesise_js_props;
 
-pub use missing_imports::{SvelteImportRef, collect_relative_svelte_imports};
 pub use util::compute_line_starts;
 use util::{blank_dollar_generic_decls, extract_generics_attr, render_function_name};
 

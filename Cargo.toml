@@ -8,6 +8,7 @@ members = [
     "crates/svn-lint",
     "crates/svelte-compiler",
     "crates/typecheck",
+    "crates/enhance",
     "crates/cli",
     "xtask",
 ]

@@ -1026,6 +1026,7 @@ dependencies = [
  "svn-analyze",
  "svn-core",
  "svn-emit",
+ "svn-enhance",
  "svn-lint",
  "svn-parser",
  "svn-svelte-compiler",
@@ -1075,6 +1076,16 @@ dependencies = [
  "oxc_span",
  "smol_str",
  "svn-analyze",
+ "svn-core",
+ "svn-parser",
+]
+
+[[package]]
+name = "svn-enhance"
+version = "1.1.2"
+dependencies = [
+ "oxc_allocator",
+ "oxc_ast",
  "svn-core",
  "svn-parser",
 ]

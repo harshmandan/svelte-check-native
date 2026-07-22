@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "App.svelte",
+            "line": 1,
+            "column": 14,
+            "code": 2307
+        }
+    ],
+    "_note": "Two `.svelte` imports on ONE source line, second missing (`./B.svelte`). No `svelte` install here, so no `*.svelte` wildcard: tsgo reports the 2307 itself, but the overlay line-map collapses the second statement's column onto the first's — while our native TSGO-ENHANCEMENT check maps to the true opening quote. A (path,line,column) dedup key would miss that mismatch and double-report; keying on (path,line,message) pins the module and collapses to the single expected error. Regression lock for the dedup-key fix."
+}

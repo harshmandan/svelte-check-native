@@ -395,6 +395,42 @@ fn classify_and_rewrite(
         }
     }
 
+    // Case 1c: comma-sequence `$: a, b, c, expr` — the Svelte-4
+    // comma-separated reactive-dependency idiom. Wrapped like Case 2, but
+    // the sequence's TOP-LEVEL commas are rewritten to semicolons so the
+    // bare-identifier deps don't fire TS2695 ("Left side of comma operator
+    // is unused and has no side effects"). The default `svelte-check`
+    // filters that diagnostic for reactive deps
+    // (`DiagnosticsProvider.resolveNoopsInReactiveStatements`); we prevent
+    // it at emit instead. `,`→`;` is length-preserving, so every source
+    // position (and the line/token map) is unchanged, and each dep stays a
+    // referenced expression statement so type-checking is identical.
+    //
+    // Only the sequence's own separators are touched — commas nested in a
+    // call (`$: foo(a, b), bar`) or an array live inside a child
+    // expression's span and are left alone, so the walk uses the AST spans
+    // rather than a text scan.
+    if let Statement::ExpressionStatement(expr_stmt) = &labeled.body
+        && let Expression::SequenceExpression(seq) = &expr_stmt.expression
+    {
+        let mut buf = content[full_start..full_end].to_string();
+        for pair in seq.expressions.windows(2) {
+            let gap_start = pair[0].span().end as usize;
+            let gap_end = (pair[1].span().start as usize).min(content.len());
+            if gap_start < gap_end
+                && let Some(off) = content[gap_start..gap_end].find(',')
+            {
+                let idx = gap_start + off - full_start;
+                buf.replace_range(idx..idx + 1, ";");
+            }
+        }
+        return Edit {
+            start: full_start,
+            end: full_end,
+            replacement: format!(";() => {{ {buf} }};"),
+        };
+    }
+
     // Case 2: anything else — block, expression statement without
     // `IDENT = expr`, etc. Wrap in `;() => { $: ORIGINAL };` — the
     // arrow form matches upstream svelte2tsx's emit (see its
@@ -496,6 +532,23 @@ mod tests {
 
     fn ts(src: &str) -> String {
         rewrite_with_touched_names(src, ScriptLang::Ts).0
+    }
+
+    #[test]
+    fn comma_sequence_reactive_uses_semicolons() {
+        // `$: a, b, c, expr` — the sequence's top-level commas become
+        // semicolons so bare-identifier reactive deps don't fire TS2695.
+        assert_eq!(
+            ts("$: button, prop, count, console.log(button);"),
+            ";() => { $: button; prop; count; console.log(button); };"
+        );
+    }
+
+    #[test]
+    fn comma_sequence_leaves_nested_commas() {
+        // Commas nested in a call/array are inside a child expression's
+        // span — only the sequence's OWN separators are rewritten.
+        assert_eq!(ts("$: foo(a, b), bar;"), ";() => { $: foo(a, b); bar; };");
     }
 
     #[test]

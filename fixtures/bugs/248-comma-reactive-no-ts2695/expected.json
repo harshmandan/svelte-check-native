@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Svelte-4 comma-separated reactive-dependency idiom `$: a, b, c, expr`. Under --tsgo this fires TS2695 (\"Left side of comma operator is unused\") on each bare-identifier dep (upstream language-tools#2973); the default svelte-check filters those for reactive deps. We prevent it at emit: the reactive rewrite turns the sequence's top-level commas into semicolons (length-preserving), so each dep is a referenced statement and no TS2695 fires."
+}

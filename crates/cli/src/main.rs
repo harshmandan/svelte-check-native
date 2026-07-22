@@ -932,6 +932,71 @@ fn native_diagnostics_for_parsed(
     }
 }
 
+/// Native `TS2307` diagnostics for relative `.svelte` imports whose
+/// target file is missing on disk.
+///
+/// The default `svelte-check` engine reports these; the tsgo engine can't
+/// (svelte's own `declare module '*.svelte'` wildcard swallows the
+/// unresolved specifier), so we recover parity ourselves — see
+/// [`svn_emit::collect_relative_svelte_imports`]. Fires only when a
+/// relative specifier resolves to a path where NEITHER the `.svelte`
+/// component NOR any extension-appended sibling TS would accept exists,
+/// so it can never false-positive on a resolvable import.
+fn missing_svelte_import_diagnostics(
+    file: &Path,
+    source: &str,
+    doc: &svn_parser::Document<'_>,
+) -> Vec<svn_typecheck::CheckDiagnostic> {
+    let refs = svn_emit::collect_relative_svelte_imports(doc);
+    if refs.is_empty() {
+        return Vec::new();
+    }
+    let dir = file.parent().unwrap_or_else(|| Path::new("."));
+    let pm = svn_core::PositionMap::new(source);
+    refs.into_iter()
+        .filter(|r| !svelte_import_resolves(&dir.join(&r.specifier)))
+        .map(|r| {
+            let (start, end) = pm.range_positions(svn_core::Range::new(r.start, r.end));
+            svn_typecheck::CheckDiagnostic {
+                source_path: file.to_path_buf(),
+                // PositionMap is 0-based; CheckDiagnostic is 1-based.
+                line: start.line.saturating_add(1),
+                column: start.character.saturating_add(1),
+                end_line: end.line.saturating_add(1),
+                end_column: end.character.saturating_add(1),
+                severity: svn_typecheck::Severity::Error,
+                code: svn_typecheck::DiagnosticCode::Numeric(2307),
+                message: format!(
+                    "Cannot find module '{}' or its corresponding type declarations.",
+                    r.specifier
+                ),
+                // Upstream classifies TS diagnostics under the `js` source.
+                source: svn_typecheck::DiagnosticSource::Js,
+                code_description_url: None,
+            }
+        })
+        .collect()
+}
+
+/// Whether a relative `.svelte` specifier resolving to `base` (a
+/// `…/Foo.svelte` path) is satisfiable by any file TS's module resolution
+/// would accept: the component itself, or an extension-appended sibling
+/// (a `Foo.svelte.ts` runes module, a `.d.ts`, a plain JS pairing). Only
+/// when none exist is the import genuinely missing.
+fn svelte_import_resolves(base: &Path) -> bool {
+    if base.exists() {
+        return true;
+    }
+    // Under bundler / `allowArbitraryExtensions` resolution TS appends
+    // each of these to `./Foo.svelte` before giving up.
+    let stem = base.as_os_str();
+    [".ts", ".tsx", ".d.ts", ".js", ".jsx"].iter().any(|ext| {
+        let mut p = stem.to_os_string();
+        p.push(ext);
+        Path::new(&p).exists()
+    })
+}
+
 /// Standalone parse + native-diagnostics pass for flows where the emit
 /// fan-out didn't run (tsgo skipped via `--diagnostic-sources`). The
 /// default flow computes the same per-file results inside the emit
@@ -1441,6 +1506,10 @@ fn run_typecheck(
     let native_compat = run_native.then(|| svn_lint::detect_for_workspace(workspace));
     let config_resolver_ref: &svelte_config::ConfigResolver = config_resolver;
     let mut native_results: Vec<Option<NativeFileDiagnostics>> = Vec::new();
+    // Native TS2307 for missing relative `.svelte` imports, keyed by file.
+    // Populated from the emit fan-out's single parse (below); merged into
+    // the diagnostics stream after tsgo, since it's a `js`-source error.
+    let mut missing_import_diags: Vec<svn_typecheck::CheckDiagnostic> = Vec::new();
     if sources.js {
         // Cache-global setup (cache dir, type shims) plus the
         // background `.svelte-kit/types/` mirror start here, BEFORE
@@ -1489,6 +1558,15 @@ fn run_typecheck(
                             compat,
                         )
                     });
+                // Missing relative `.svelte` imports (TS2307) — in-scope
+                // files only; the aux tail is present solely for tsgo's
+                // import-following and isn't reported on.
+                let missing: Vec<svn_typecheck::CheckDiagnostic> =
+                    if idx < svelte_sources_in_scope_end {
+                        missing_svelte_import_diagnostics(file, source, &doc)
+                    } else {
+                        Vec::new()
+                    };
                 let summary = svn_analyze::walk_template(&fragment, source);
                 // Overlay extension mirrors upstream svelte-check's
                 // `isTsSvelte(text)` per-file dispatch
@@ -1518,11 +1596,22 @@ fn run_typecheck(
                     kind,
                     is_ts_overlay: is_ts,
                 };
-                (session_ref.prepare(input), native)
+                (session_ref.prepare(input), (native, missing))
             })
             .unzip();
         let mut prepared = prepared_svelte;
-        native_results = natives;
+        // Split the per-file `(native, missing)` pairs back apart, keeping
+        // source order for the native merge and flattening the missing-
+        // import diagnostics into one stream.
+        let natives: Vec<(
+            Option<NativeFileDiagnostics>,
+            Vec<svn_typecheck::CheckDiagnostic>,
+        )> = natives;
+        native_results = Vec::with_capacity(natives.len());
+        for (native, missing) in natives {
+            native_results.push(native);
+            missing_import_diags.extend(missing);
+        }
 
         // Kit files (`+server.ts`, `+page.ts`, hooks, params): run them
         // through the inject pass to splice in `$types` imports so the
@@ -1644,6 +1733,27 @@ fn run_typecheck(
         (Vec::new(), None)
     };
     let t_typecheck = mark.elapsed();
+
+    // Merge native TS2307s for missing relative `.svelte` imports (empty
+    // unless the js/ts source ran). tsgo usually can't see these —
+    // svelte's own `declare module '*.svelte'` wildcard swallows the
+    // unresolved specifier — so this is what keeps us at parity with the
+    // default `svelte-check`. But when that wildcard ISN'T in scope (a
+    // minimal project that never imports `svelte`), tsgo reports the
+    // 2307 itself; dedup against tsgo's own diagnostics by
+    // (path, line, col) so we never double-report. Placed before the
+    // broken-file filter below so a missing import inside a syntactically
+    // broken file is dropped along with tsgo's other noise.
+    if !missing_import_diags.is_empty() {
+        let existing_2307: std::collections::HashSet<(PathBuf, u32, u32)> = diagnostics
+            .iter()
+            .filter(|d| matches!(d.code, svn_typecheck::DiagnosticCode::Numeric(2307)))
+            .map(|d| (d.source_path.clone(), d.line, d.column))
+            .collect();
+        missing_import_diags
+            .retain(|d| !existing_2307.contains(&(d.source_path.clone(), d.line, d.column)));
+        diagnostics.append(&mut missing_import_diags);
+    }
 
     // Compiler-warning bridge: ask the user's `svelte/compiler` for any
     // non-typecheck diagnostics (`state_referenced_locally`,

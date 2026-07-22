@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "+page.svelte",
+            "line": 4,
+            "column": 16,
+            "code": 2345
+        }
+    ],
+    "_note": "Zero-effort route-data typing. `+page.svelte`'s untyped `let { data } = $props()` must type `data` as `PageData` (via our `data: import('./$types.js').PageData` injection in sveltekit.rs), NOT `any`. Passing `data.title` (string) where a number is expected must therefore fire TS2345. Under --tsgo/--incremental upstream infers `data` as `any` and MISSES this (sveltejs/language-tools#3061); our own kit machinery types it correctly. Regression lock for that immunity."
+}

@@ -99,16 +99,16 @@ semver = "1"
 # JS/TS parser. Architecture rule: embedded JS/TS is parsed once into
 # a real AST and walked structurally — never scanned character-by-
 # character. oxc is the only parser in the workspace for this reason.
-oxc_allocator = "0.139"
-oxc_ast = "0.139"
-oxc_ast_visit = "0.139"
-oxc_diagnostics = "0.139"
-oxc_parser = "0.139"
-oxc_span = "0.139"
+oxc_allocator = "0.140"
+oxc_ast = "0.140"
+oxc_ast_visit = "0.140"
+oxc_diagnostics = "0.140"
+oxc_parser = "0.140"
+oxc_span = "0.140"
 # Unicode identifier tables (is_identifier_start/part) — already in the
 # dependency tree via oxc_parser, exposed directly for the template
 # parser's identifier reads (full-Unicode like upstream read_identifier).
-oxc_syntax = "0.139"
+oxc_syntax = "0.140"
 
 # Testing
 insta = { version = "1", features = ["yaml", "filters"] }

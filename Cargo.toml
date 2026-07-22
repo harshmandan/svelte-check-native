@@ -101,6 +101,7 @@ semver = "1"
 # character. oxc is the only parser in the workspace for this reason.
 oxc_allocator = "0.139"
 oxc_ast = "0.139"
+oxc_ast_visit = "0.139"
 oxc_diagnostics = "0.139"
 oxc_parser = "0.139"
 oxc_span = "0.139"

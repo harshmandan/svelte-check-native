@@ -27,6 +27,13 @@
 //! `svelte-check --tsgo` resolves `.svelte` natively, everything in this
 //! crate becomes redundant.
 //!
+//! ## Runtime kill-switch
+//!
+//! Because this layer intentionally diverges from `svelte-check --tsgo`,
+//! it can be turned off at runtime — without recompiling — via the CLI's
+//! `--disable-enhance` flag or the `SVN_DISABLE_ENHANCE` env var. Both
+//! route through `SvelteImportResolver::disabled()`.
+//!
 //! ## Removal is mechanical
 //!
 //! Every callsite in the core pipeline is tagged `// TSGO-ENHANCEMENT`

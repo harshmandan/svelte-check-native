@@ -228,6 +228,14 @@ struct Cli {
     /// etc.).
     #[arg(long = "include-suggestions", default_value_t = false)]
     include_suggestions: bool,
+
+    /// TSGO-ENHANCEMENT: turn off the tsgo-mode enhancement checks (the
+    /// `svn-enhance` divergences from `svelte-check --tsgo`, e.g. reporting
+    /// missing `.svelte` imports). Also settable via the `SVN_DISABLE_ENHANCE`
+    /// env var. A safety valve for a feature that intentionally diverges;
+    /// see the `svn-enhance` crate docs.
+    #[arg(long = "disable-enhance", default_value_t = false)]
+    disable_enhance: bool,
 }
 
 fn main() -> ExitCode {
@@ -519,6 +527,8 @@ fn main() -> ExitCode {
         &mut config_resolver,
         &kit_files_settings,
         cli.include_suggestions,
+        // TSGO-ENHANCEMENT: kill-switch — flag OR env var.
+        cli.disable_enhance || std::env::var_os("SVN_DISABLE_ENHANCE").is_some(),
     )
 }
 
@@ -1246,6 +1256,7 @@ fn run_typecheck(
     config_resolver: &mut svelte_config::ConfigResolver,
     kit_files_settings: &svn_core::sveltekit::KitFilesSettings,
     include_suggestions: bool,
+    disable_enhance: bool,
 ) -> ExitCode {
     let phase_start = std::time::Instant::now();
 
@@ -1492,9 +1503,14 @@ fn run_typecheck(
         let session_ref = &session;
         // TSGO-ENHANCEMENT: shared `.svelte`-import resolver, built once
         // (tsconfig `paths` + node_modules + `exports`) and borrowed by the
-        // per-file pass below. Holds a disabled state when the workspace
-        // declares its own `*.svelte` wildcard, so nothing fires there.
-        let svelte_import_resolver = svn_enhance::SvelteImportResolver::new(workspace, tsconfig);
+        // per-file pass below. Holds a disabled state — reporting nothing —
+        // when `--disable-enhance`/`SVN_DISABLE_ENHANCE` is set, or when the
+        // workspace declares its own `*.svelte` wildcard.
+        let svelte_import_resolver = if disable_enhance {
+            svn_enhance::SvelteImportResolver::disabled()
+        } else {
+            svn_enhance::SvelteImportResolver::new(workspace, tsconfig)
+        };
         let svelte_import_resolver_ref = &svelte_import_resolver;
         // Per-file parse → analyze → emit is pure compute with no shared
         // mutable state (each iteration owns its own oxc Allocator inside
@@ -2063,6 +2079,16 @@ mod tests {
         let cli = Cli::try_parse_from(["svelte-check-native", "--tsgo-experimental-api"])
             .expect("--tsgo-experimental-api should parse");
         assert!(cli.tsgo_experimental_api);
+    }
+
+    #[test]
+    fn disable_enhance_flag_is_parsed() {
+        // TSGO-ENHANCEMENT kill-switch. Off by default; the flag opts out.
+        let default = Cli::try_parse_from(["svelte-check-native"]).expect("parses");
+        assert!(!default.disable_enhance);
+        let cli = Cli::try_parse_from(["svelte-check-native", "--disable-enhance"])
+            .expect("--disable-enhance parses");
+        assert!(cli.disable_enhance);
     }
 
     // ---- parse_diagnostic_sources ----

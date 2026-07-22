@@ -78,7 +78,17 @@ natively, removal is mechanical — delete `crates/enhance`, drop the
 Nothing in the core crates depends on that crate's types (it returns a
 neutral `EnhancementDiagnostic` the CLI lifts into `CheckDiagnostic`), so
 it stays cleanly excisable. Do NOT scatter these divergences into the
-core crates — they go in `crates/enhance`, marked.
+core crates — they go in `crates/enhance`, marked. A runtime kill-switch
+(`--disable-enhance` flag / `SVN_DISABLE_ENHANCE` env var) turns the whole
+layer off without recompiling — a safety valve since it diverges from
+upstream. Resolution for the missing-import check is delegated to
+`oxc_resolver` (real `tsconfig` `paths` + node_modules + `exports`), never
+hand-rolled; it covers relative, aliased (`$lib`), and bare specifiers,
+static and dynamic (`import()`). Because `oxc_resolver` can't see TS
+`declare module` ambients, the crate scans the workspace for a
+user-authored `declare module '*.svelte'` and disables itself if one
+exists (the default engine keeps user wildcards, so firing there would be
+a false positive).
 
 ## Commit-and-continue
 

@@ -37,7 +37,11 @@
 use std::path::{Path, PathBuf};
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::Statement;
+use oxc_ast::ast::{
+    ExportAllDeclaration, ExportNamedDeclaration, Expression, ImportDeclaration, ImportExpression,
+    StringLiteral,
+};
+use oxc_ast_visit::{Visit, walk};
 use oxc_resolver::{
     ResolveOptions, Resolver, TsconfigDiscovery, TsconfigOptions, TsconfigReferences,
 };
@@ -68,6 +72,12 @@ pub struct SvelteImportResolver {
 }
 
 impl SvelteImportResolver {
+    /// A resolver that reports nothing — for the `--disable-enhance` flag /
+    /// `SVN_DISABLE_ENHANCE` env kill-switch. Skips even the workspace scan.
+    pub fn disabled() -> Self {
+        Self { inner: None }
+    }
+
     /// Build the resolver from the user's `tsconfig` (for `paths`/`baseUrl`)
     /// and workspace (for the ambient-wildcard guard).
     pub fn new(workspace: &Path, tsconfig: &Path) -> Self {
@@ -169,13 +179,14 @@ struct SvelteImportRef {
     end: u32,
 }
 
-/// Collect every `.svelte` specifier imported or re-exported at the top
-/// level of the instance and module scripts.
+/// Collect every `.svelte` specifier imported or re-exported anywhere in
+/// the instance and module scripts.
 ///
-/// Covers `import … from '…'`, `export … from '…'`, and `export * from
-/// '…'` — every statement form that carries a module specifier. Type-only
-/// imports are included: `import type X from './Missing.svelte'` fires
-/// `TS2307` upstream just like a value import.
+/// Covers static `import … from '…'`, `export … from '…'`, `export * from
+/// '…'`, AND dynamic `import('…')` (which can appear nested in any
+/// expression, so an AST walk — not a top-level statement scan — is
+/// required). Type-only imports are included: `import type X from
+/// './Missing.svelte'` fires `TS2307` upstream just like a value import.
 fn collect_svelte_imports(doc: &Document<'_>) -> Vec<SvelteImportRef> {
     let mut out = Vec::new();
     for section in [doc.instance_script.as_ref(), doc.module_script.as_ref()]
@@ -191,27 +202,60 @@ fn collect_svelte_imports(doc: &Document<'_>) -> Vec<SvelteImportRef> {
         }
         // oxc spans are relative to the script `content`; the section's
         // `content_range.start` translates them back to the full source.
-        let base = section.content_range.start;
-        for stmt in &parsed.program.body {
-            let literal = match stmt {
-                Statement::ImportDeclaration(decl) => Some(&decl.source),
-                Statement::ExportNamedDeclaration(decl) => decl.source.as_ref(),
-                Statement::ExportAllDeclaration(decl) => Some(&decl.source),
-                _ => None,
-            };
-            if let Some(lit) = literal {
-                let spec = lit.value.as_str();
-                if is_svelte_specifier(spec) {
-                    out.push(SvelteImportRef {
-                        specifier: spec.to_string(),
-                        start: base + lit.span.start,
-                        end: base + lit.span.end,
-                    });
-                }
-            }
-        }
+        let mut collector = ImportCollector {
+            base: section.content_range.start,
+            out: &mut out,
+        };
+        collector.visit_program(&parsed.program);
     }
     out
+}
+
+/// AST visitor that records every `.svelte` module specifier — static and
+/// dynamic — with its byte span translated back to the original source.
+struct ImportCollector<'o> {
+    /// `content_range.start` of the script section this program came from.
+    base: u32,
+    out: &'o mut Vec<SvelteImportRef>,
+}
+
+impl ImportCollector<'_> {
+    fn record(&mut self, lit: &StringLiteral<'_>) {
+        let spec = lit.value.as_str();
+        if is_svelte_specifier(spec) {
+            self.out.push(SvelteImportRef {
+                specifier: spec.to_string(),
+                start: self.base + lit.span.start,
+                end: self.base + lit.span.end,
+            });
+        }
+    }
+}
+
+impl<'a> Visit<'a> for ImportCollector<'_> {
+    fn visit_import_declaration(&mut self, it: &ImportDeclaration<'a>) {
+        self.record(&it.source);
+    }
+
+    fn visit_export_named_declaration(&mut self, it: &ExportNamedDeclaration<'a>) {
+        if let Some(source) = &it.source {
+            self.record(source);
+        }
+        // Recurse: `export const x = import('./y.svelte')` carries a
+        // dynamic import inside the declaration.
+        walk::walk_export_named_declaration(self, it);
+    }
+
+    fn visit_export_all_declaration(&mut self, it: &ExportAllDeclaration<'a>) {
+        self.record(&it.source);
+    }
+
+    fn visit_import_expression(&mut self, it: &ImportExpression<'a>) {
+        if let Expression::StringLiteral(lit) = &it.source {
+            self.record(lit);
+        }
+        walk::walk_import_expression(self, it);
+    }
 }
 
 /// A specifier that names a Svelte component file: ends in `.svelte`.
@@ -310,6 +354,16 @@ mod tests {
             import E from 'pkg'\n\
             </script>\n";
         assert!(refs(src).is_empty());
+    }
+
+    #[test]
+    fn collects_dynamic_import() {
+        // Dynamic import nested inside a function body — only an AST walk
+        // (not a top-level statement scan) finds it.
+        let src = "<script lang=\"ts\">\n\
+            async function load() { return import('./Lazy.svelte') }\n\
+            </script>\n";
+        assert_eq!(specifiers(src), vec!["./Lazy.svelte".to_string()]);
     }
 
     #[test]

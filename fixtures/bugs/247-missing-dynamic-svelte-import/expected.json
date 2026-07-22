@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "App.svelte",
+            "line": 2,
+            "column": 18,
+            "code": 2307
+        }
+    ],
+    "_note": "Dynamic `import('./Ghost.svelte')` nested in a function body — only the AST walk in `svn_enhance` (not a top-level statement scan) finds it. No `svelte` install here, so tsgo reports the 2307 natively too; the (path,line,message) dedup collapses ours into the single expected error. Locks dynamic-import coverage."
+}

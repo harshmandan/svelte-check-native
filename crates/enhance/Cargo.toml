@@ -13,6 +13,7 @@ svn-core = { path = "../core" }
 svn-parser = { path = "../parser" }
 oxc_allocator.workspace = true
 oxc_ast.workspace = true
+oxc_ast_visit.workspace = true
 # Real TS/node module resolution (tsconfig `paths`, node_modules,
 # package.json `exports`) so we resolve `.svelte` specifiers of every
 # form the way tsgo would — no hand-rolled resolution. See crate docs.

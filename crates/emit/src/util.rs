@@ -55,15 +55,38 @@ pub(crate) fn count_lines(text: &str) -> u32 {
     }
 }
 
-/// Derive a per-file render function name. Hash of the source path's
-/// canonical form prevents collisions when multiple components in the
-/// same overlay project would otherwise both produce `function $$render()`
+/// Workspace root that [`render_function_name`] relativizes against
+/// before hashing. Set once by the CLI before any (parallel) emit.
+static RENDER_HASH_ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Set the workspace root used to key `$$render_<hash>` names. Call once
+/// before emit (from the CLI, alongside `set_preserve_attribute_case`).
+/// Later calls are ignored — one root per process run.
+pub fn set_render_hash_root(root: &Path) {
+    let _ = RENDER_HASH_ROOT.set(root.to_path_buf());
+}
+
+/// Derive a per-file render function name. Hash of the source path
+/// prevents collisions when multiple components in the same overlay
+/// project would otherwise both produce `function $$render()`
 /// (TS2393 "Duplicate function implementation").
+///
+/// The hashed key is the path RELATIVE to the workspace root (with
+/// `/` separators), so the name depends only on the file's place in
+/// the project — not on where the checkout lives or the host OS. That
+/// keeps committed emit snapshots byte-identical across machines while
+/// preserving per-file uniqueness (two files under one root can't share
+/// a relative path). Files outside the root (or when no root was set,
+/// e.g. unit tests) fall back to the path as given.
 ///
 /// The hash is the first 8 hex chars of blake3 — collision-free for any
 /// realistic project size.
 pub(crate) fn render_function_name(source_path: &Path) -> SmolStr {
-    let bytes = source_path.as_os_str().to_string_lossy();
+    let rel = RENDER_HASH_ROOT
+        .get()
+        .and_then(|root| source_path.strip_prefix(root).ok())
+        .unwrap_or(source_path);
+    let bytes = rel.to_string_lossy().replace('\\', "/");
     let hash = blake3::hash(bytes.as_bytes());
     let hex = hash.to_hex();
     let short = &hex.as_str()[..8];

@@ -3,7 +3,7 @@
 
     import { } from 'svelte/action';
     import { } from 'svelte';
-async function $$render_a62de6f7() {
+async function $$render_e40e2c10() {
 
                              
     ;(async () => {
@@ -11,12 +11,12 @@ async function $$render_a62de6f7() {
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
-$$render_a62de6f7;
+$$render_e40e2c10;
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_a62de6f7>>['props']} __SvnDefaultProps
+ * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
  */
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_a62de6f7>>['exports']} __SvnDefaultExports
+ * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
  */
 /** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);

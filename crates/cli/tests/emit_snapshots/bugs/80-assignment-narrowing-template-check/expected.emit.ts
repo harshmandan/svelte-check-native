@@ -12,7 +12,7 @@ declare const children: { [key: string]: any } & ((...args: any[]) => any);
         project?: IProject;
         children?: import('svelte').Snippet<[{ project: IProject }]>;
     }
-async function $$render_5c0d1bcb() {
+async function $$render_e40e2c10() {
     type $$Events = {};
 
     // Threlte/theatre Project.svelte pattern: prop is optional, then
@@ -57,11 +57,11 @@ async function $$render_5c0d1bcb() {
     void project;
     return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings('project'), exports: undefined as any as ({}) };
 }
-$$render_5c0d1bcb;
+$$render_e40e2c10;
 const __svn_component_default: import('svelte').Component<
-    Awaited<ReturnType<typeof $$render_5c0d1bcb>>['props'],
-    Awaited<ReturnType<typeof $$render_5c0d1bcb>>['exports'],
-    Awaited<ReturnType<typeof $$render_5c0d1bcb>>['bindings']
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['props'],
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'],
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']
 > = null as any;
 type __svn_component_default = ReturnType<typeof __svn_component_default>;
 export default __svn_component_default;

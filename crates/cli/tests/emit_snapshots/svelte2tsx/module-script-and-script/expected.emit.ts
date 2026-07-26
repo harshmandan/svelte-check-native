@@ -3,7 +3,7 @@
 
     export function preload() {}
     let b = 5;
-async function $$render_2b6a336d() {
+async function $$render_e40e2c10() {
 
            let world = "name"
     ;(async () => {
@@ -14,12 +14,12 @@ async function $$render_2b6a336d() {
     void world;
     return { props: /** @type {{ world?: typeof world; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ world: typeof world; }} */ ({}) };
 }
-$$render_2b6a336d;
+$$render_e40e2c10;
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_2b6a336d>>['props']} __SvnDefaultProps
+ * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
  */
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_2b6a336d>>['exports']} __SvnDefaultExports
+ * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
  */
 /** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);

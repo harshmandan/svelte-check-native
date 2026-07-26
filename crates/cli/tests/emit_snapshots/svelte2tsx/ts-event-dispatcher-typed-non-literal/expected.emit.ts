@@ -7,7 +7,7 @@ declare const bye: { [key: string]: any } & ((...args: any[]) => any);
         bye: boolean;
         btn: string;
     };
-async function $$render_6194130b() {
+async function $$render_e40e2c10() {
     type $$Events = ({ [__svn_K in keyof ((Events))]: CustomEvent<((Events))[__svn_K]> }) & { [evt: string]: CustomEvent<any> };
 
                                                    
@@ -36,13 +36,13 @@ async function $$render_6194130b() {
     void dispatch;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
-$$render_6194130b;
+$$render_e40e2c10;
 interface $$IsomorphicComponent {
-    new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_6194130b>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_6194130b>>['props'], Awaited<ReturnType<typeof $$render_6194130b>>['events'], Awaited<ReturnType<typeof $$render_6194130b>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_6194130b>>['bindings'] } & Awaited<ReturnType<typeof $$render_6194130b>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_6194130b>>['props']): Awaited<ReturnType<typeof $$render_6194130b>>['exports'] & { $set?: any; $on?: any };
-    z_$$bindings?: Awaited<ReturnType<typeof $$render_6194130b>>['bindings'];
+    new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'] } & Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'];
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_e40e2c10>>['props']): Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'] & { $set?: any; $on?: any };
+    z_$$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'];
 }
-const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: Awaited<ReturnType<typeof $$render_6194130b>>['events'] } = null as any;
+const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: Awaited<ReturnType<typeof $$render_e40e2c10>>['events'] } = null as any;
 type __svn_component_default = InstanceType<typeof __svn_component_default>;
 export default __svn_component_default;
 

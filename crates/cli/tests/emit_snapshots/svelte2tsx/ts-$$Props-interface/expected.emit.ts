@@ -12,7 +12,7 @@ declare const name2: { [key: string]: any } & ((...args: any[]) => any);
         renamed1?: string;
         renamed2: string;
     }
-async function $$render_a154bb54() {
+async function $$render_e40e2c10() {
 
 
                     
@@ -59,11 +59,11 @@ async function $$render_a154bb54() {
     void renamebaz;
     return { props: undefined as any as ({ exported1: string; exported2?: string; name1?: string; name2: string; renamed1?: string; renamed2: string; Foo: any; bar: any; baz?: string; RenamedFoo: any; renamedbar: any; renamedbaz?: string; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ exported1: string; exported2: string; }) };
 }
-$$render_a154bb54;
+$$render_e40e2c10;
 interface $$IsomorphicComponent {
-    new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_a154bb54>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_a154bb54>>['props'], Awaited<ReturnType<typeof $$render_a154bb54>>['events'], Awaited<ReturnType<typeof $$render_a154bb54>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_a154bb54>>['bindings'] } & Awaited<ReturnType<typeof $$render_a154bb54>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_a154bb54>>['props']): Awaited<ReturnType<typeof $$render_a154bb54>>['exports'] & { $set?: any; $on?: any };
-    z_$$bindings?: Awaited<ReturnType<typeof $$render_a154bb54>>['bindings'];
+    new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'] } & Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'];
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_e40e2c10>>['props']): Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'] & { $set?: any; $on?: any };
+    z_$$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;
 type __svn_component_default = InstanceType<typeof __svn_component_default>;

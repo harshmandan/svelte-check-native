@@ -8,7 +8,7 @@
         'b': string;
         'c';
     }
-async function $$render_6ada794f() {
+async function $$render_e40e2c10() {
 
                         
            
@@ -23,11 +23,11 @@ async function $$render_6ada794f() {
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
-$$render_6ada794f;
+$$render_e40e2c10;
 interface $$IsomorphicComponent {
-    new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_6ada794f>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_6ada794f>>['props'], Awaited<ReturnType<typeof $$render_6ada794f>>['events'], Awaited<ReturnType<typeof $$render_6ada794f>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_6ada794f>>['bindings'] } & Awaited<ReturnType<typeof $$render_6ada794f>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_6ada794f>>['props']): Awaited<ReturnType<typeof $$render_6ada794f>>['exports'] & { $set?: any; $on?: any };
-    z_$$bindings?: Awaited<ReturnType<typeof $$render_6ada794f>>['bindings'];
+    new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'] } & Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'];
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_e40e2c10>>['props']): Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'] & { $set?: any; $on?: any };
+    z_$$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: $$Events } = null as any;
 type __svn_component_default = InstanceType<typeof __svn_component_default>;

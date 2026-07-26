@@ -6,7 +6,7 @@
     interface Props extends A {
         a: string;
     }
-async function $$render_f97f6f3e() {
+async function $$render_e40e2c10() {
     type $$Events = {};
 
                  
@@ -22,11 +22,11 @@ async function $$render_f97f6f3e() {
     });
     return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
-$$render_f97f6f3e;
+$$render_e40e2c10;
 const __svn_component_default: import('svelte').Component<
-    Awaited<ReturnType<typeof $$render_f97f6f3e>>['props'],
-    Awaited<ReturnType<typeof $$render_f97f6f3e>>['exports'],
-    Awaited<ReturnType<typeof $$render_f97f6f3e>>['bindings']
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['props'],
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'],
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']
 > = null as any;
 type __svn_component_default = ReturnType<typeof __svn_component_default>;
 export default __svn_component_default;

@@ -8,7 +8,7 @@
     /** @param {import('../../mhm'.mhm)} mhm */
     function f(mhm) {}
     import foo2 from '../../foo';
-async function $$render_43f719a8() {
+async function $$render_e40e2c10() {
 
                                  
     import('../../bar');
@@ -35,12 +35,12 @@ async function $$render_43f719a8() {
     void f;
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
-$$render_43f719a8;
+$$render_e40e2c10;
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_43f719a8>>['props']} __SvnDefaultProps
+ * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
  */
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_43f719a8>>['exports']} __SvnDefaultExports
+ * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
  */
 /** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);

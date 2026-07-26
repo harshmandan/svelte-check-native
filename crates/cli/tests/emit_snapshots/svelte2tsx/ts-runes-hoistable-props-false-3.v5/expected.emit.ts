@@ -3,7 +3,7 @@
 
     type SomeType<T extends boolean> = T;
     type T = unknown;
-async function $$render_cbdc5f31<T extends boolean>() {
+async function $$render_e40e2c10<T extends boolean>() {
     type $$ComponentProps = { someProp: SomeType<T>; };
     type $$Events = {};
 
@@ -13,20 +13,20 @@ async function $$render_cbdc5f31<T extends boolean>() {
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
-$$render_cbdc5f31;
-declare class __svn_Render_cbdc5f31<T extends boolean> {
-    props(): Awaited<ReturnType<typeof $$render_cbdc5f31<T>>>['props'];
-    events(): Awaited<ReturnType<typeof $$render_cbdc5f31<T>>>['events'];
-    slots(): Awaited<ReturnType<typeof $$render_cbdc5f31<T>>>['slots'];
-    bindings(): Awaited<ReturnType<typeof $$render_cbdc5f31<T>>>['bindings'];
-    exports(): Awaited<ReturnType<typeof $$render_cbdc5f31<T>>>['exports'];
+$$render_e40e2c10;
+declare class __svn_Render_e40e2c10<T extends boolean> {
+    props(): Awaited<ReturnType<typeof $$render_e40e2c10<T>>>['props'];
+    events(): Awaited<ReturnType<typeof $$render_e40e2c10<T>>>['events'];
+    slots(): Awaited<ReturnType<typeof $$render_e40e2c10<T>>>['slots'];
+    bindings(): Awaited<ReturnType<typeof $$render_e40e2c10<T>>>['bindings'];
+    exports(): Awaited<ReturnType<typeof $$render_e40e2c10<T>>>['exports'];
 }
 interface $$IsomorphicComponent {
-    new <T extends boolean>(options: import('svelte').ComponentConstructorOptions<ReturnType<__svn_Render_cbdc5f31<T>['props']>>): import('svelte').SvelteComponent<ReturnType<__svn_Render_cbdc5f31<T>['props']>, ReturnType<__svn_Render_cbdc5f31<T>['events']>, ReturnType<__svn_Render_cbdc5f31<T>['slots']>> & { $$bindings?: ReturnType<__svn_Render_cbdc5f31<T>['bindings']> } & ReturnType<__svn_Render_cbdc5f31<T>['exports']>;
-    <T extends boolean>(internal: unknown, props: ReturnType<__svn_Render_cbdc5f31<T>['props']>): ReturnType<__svn_Render_cbdc5f31<T>['exports']> & { $set?: any; $on?: any };
-    z_$$bindings?: ReturnType<__svn_Render_cbdc5f31<any>['bindings']>;
+    new <T extends boolean>(options: import('svelte').ComponentConstructorOptions<ReturnType<__svn_Render_e40e2c10<T>['props']>>): import('svelte').SvelteComponent<ReturnType<__svn_Render_e40e2c10<T>['props']>, ReturnType<__svn_Render_e40e2c10<T>['events']>, ReturnType<__svn_Render_e40e2c10<T>['slots']>> & { $$bindings?: ReturnType<__svn_Render_e40e2c10<T>['bindings']> } & ReturnType<__svn_Render_e40e2c10<T>['exports']>;
+    <T extends boolean>(internal: unknown, props: ReturnType<__svn_Render_e40e2c10<T>['props']>): ReturnType<__svn_Render_e40e2c10<T>['exports']> & { $set?: any; $on?: any };
+    z_$$bindings?: ReturnType<__svn_Render_e40e2c10<any>['bindings']>;
 }
-const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: Awaited<ReturnType<typeof $$render_cbdc5f31>>['events'] } = null as any;
+const __svn_component_default: $$IsomorphicComponent & { readonly __svn_events: Awaited<ReturnType<typeof $$render_e40e2c10>>['events'] } = null as any;
 type __svn_component_default<T extends boolean> = InstanceType<typeof __svn_component_default<T>>;
 export default __svn_component_default;
 

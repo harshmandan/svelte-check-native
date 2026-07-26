@@ -3,7 +3,7 @@
 
     // module script present but does not reference the snippet
     import type { Component } from 'svelte';
-async function $$render_cc1ab828() {
+async function $$render_e40e2c10() {
     type $$ComponentProps = { icon: Component<{ size: number }> };
     type $$Events = {};
     const iconSnippet: any = undefined as any;
@@ -27,11 +27,11 @@ async function $$render_cc1ab828() {
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
-$$render_cc1ab828;
+$$render_e40e2c10;
 const __svn_component_default: import('svelte').Component<
-    Awaited<ReturnType<typeof $$render_cc1ab828>>['props'],
-    Awaited<ReturnType<typeof $$render_cc1ab828>>['exports'],
-    Awaited<ReturnType<typeof $$render_cc1ab828>>['bindings']
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['props'],
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'],
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']
 > = null as any;
 type __svn_component_default = ReturnType<typeof __svn_component_default>;
 export default __svn_component_default;

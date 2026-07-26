@@ -7,7 +7,7 @@ namespace A {
 interface Abc {
     foo: A.Abc
 }
-async function $$render_384d5614() {
+async function $$render_e40e2c10() {
     type $$Events = {};
 
 const a = 1;
@@ -26,11 +26,11 @@ let {}: Abc = $props();
     });
     return { props: undefined as any as (Abc), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
-$$render_384d5614;
+$$render_e40e2c10;
 const __svn_component_default: import('svelte').Component<
-    Awaited<ReturnType<typeof $$render_384d5614>>['props'],
-    Awaited<ReturnType<typeof $$render_384d5614>>['exports'],
-    Awaited<ReturnType<typeof $$render_384d5614>>['bindings']
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['props'],
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'],
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']
 > = null as any;
 type __svn_component_default = ReturnType<typeof __svn_component_default>;
 export default __svn_component_default;

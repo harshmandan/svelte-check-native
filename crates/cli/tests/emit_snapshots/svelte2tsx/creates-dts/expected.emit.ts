@@ -3,7 +3,7 @@
 
     export const foo = 'foo';
   import { createEventDispatcher } from 'svelte';
-async function $$render_87d6d062() {
+async function $$render_e40e2c10() {
 
                                                  
 
@@ -24,12 +24,12 @@ async function $$render_87d6d062() {
     void foobar;
     return { props: /** @type {{ bar: any; foobar?: typeof foobar; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { bar: (bar) } }, bindings: /** @type {string} */ (''), exports: /** @type {{ bar: typeof bar; foobar: typeof foobar; }} */ ({}) };
 }
-$$render_87d6d062;
+$$render_e40e2c10;
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_87d6d062>>['props']} __SvnDefaultProps
+ * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
  */
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_87d6d062>>['exports']} __SvnDefaultExports
+ * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
  */
 /** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);

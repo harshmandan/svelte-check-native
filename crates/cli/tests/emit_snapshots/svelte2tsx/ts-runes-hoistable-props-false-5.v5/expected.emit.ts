@@ -3,7 +3,7 @@
 
     type Shadowed = string;
     type Shadowed = boolean;
-async function $$render_86a0cb14() {
+async function $$render_e40e2c10() {
     type $$ComponentProps = { someProp: Shadowed };
     type $$Events = {};
 
@@ -14,11 +14,11 @@ async function $$render_86a0cb14() {
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
-$$render_86a0cb14;
+$$render_e40e2c10;
 const __svn_component_default: import('svelte').Component<
-    Awaited<ReturnType<typeof $$render_86a0cb14>>['props'],
-    Awaited<ReturnType<typeof $$render_86a0cb14>>['exports'],
-    Awaited<ReturnType<typeof $$render_86a0cb14>>['bindings']
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['props'],
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'],
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']
 > = null as any;
 type __svn_component_default = ReturnType<typeof __svn_component_default>;
 export default __svn_component_default;

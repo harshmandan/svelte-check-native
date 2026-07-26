@@ -3,7 +3,7 @@
 
     import { store1 } from './somewhere';
     const store2 = '';
-async function $$render_386ab038() {
+async function $$render_e40e2c10() {
     /** @type {__SvnStoreValue<typeof store1>} */
     let $store1 = /** @type {any} */ (/** @type {any} */ (null));
     /** @type {__SvnStoreValue<typeof store2>} */
@@ -19,12 +19,12 @@ async function $$render_386ab038() {
     void store2;
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
-$$render_386ab038;
+$$render_e40e2c10;
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_386ab038>>['props']} __SvnDefaultProps
+ * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
  */
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_386ab038>>['exports']} __SvnDefaultExports
+ * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
  */
 /** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);

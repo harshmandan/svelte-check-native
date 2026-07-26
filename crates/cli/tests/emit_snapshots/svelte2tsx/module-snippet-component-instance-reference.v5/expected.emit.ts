@@ -3,7 +3,7 @@
 
   // ...
 /** @typedef {{icon: any}} $$ComponentProps */
-async function $$render_559c7716() {
+async function $$render_e40e2c10() {
     /** @type {any} */ const iconSnippet = /** @type {any} */ (undefined);
     void iconSnippet;
 
@@ -24,12 +24,12 @@ async function $$render_559c7716() {
     });
     return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
-$$render_559c7716;
+$$render_e40e2c10;
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_559c7716>>['props']} __SvnDefaultProps
+ * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
  */
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_559c7716>>['exports']} __SvnDefaultExports
+ * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
  */
 /** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
 export const __svn_component_default = /** @type {any} */ (null);

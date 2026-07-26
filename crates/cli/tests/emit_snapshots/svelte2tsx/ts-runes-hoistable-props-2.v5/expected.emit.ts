@@ -8,7 +8,7 @@ declare const b: { [key: string]: any } & ((...args: any[]) => any);
         a: number;
         b: typeof value;
     }
-async function $$render_07606356() {
+async function $$render_e40e2c10() {
     type $$ComponentProps = { a: Dependency, b: string };
     type $$Events = {};
 
@@ -23,11 +23,11 @@ async function $$render_07606356() {
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
-$$render_07606356;
+$$render_e40e2c10;
 const __svn_component_default: import('svelte').Component<
-    Awaited<ReturnType<typeof $$render_07606356>>['props'],
-    Awaited<ReturnType<typeof $$render_07606356>>['exports'],
-    Awaited<ReturnType<typeof $$render_07606356>>['bindings']
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['props'],
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'],
+    Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']
 > = null as any;
 type __svn_component_default = ReturnType<typeof __svn_component_default>;
 export default __svn_component_default;

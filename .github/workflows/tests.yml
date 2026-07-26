@@ -4,14 +4,15 @@
 #   - unit tests (`--lib`): line-map translation, path reverse,
 #     analyzer/emit internals — no subprocess, no fixtures.
 #   - emit_snapshots: the primary emit-shape gate. Spawns only our own
-#     binary (`--emit-ts`); no tsgo, no node, no submodule. Snapshot
-#     hashes are keyed to workspace-relative paths, so the committed
-#     `expected.emit.ts` files compare byte-identically on any checkout.
+#     binary (`--emit-ts`); no tsgo, no node. The svelte2tsx/htmlx2jsx
+#     sample INPUTS live in the language-tools submodule (hence the
+#     recursive checkout); the expected.emit.ts snapshots are in-repo
+#     and keyed to workspace-relative paths, so they compare
+#     byte-identically on any checkout.
 #
 # The tsgo-backed suites (bug_fixtures, ls_diagnostics, upstream_sanity)
-# need a node_modules with a native-compiler install plus the
-# language-tools submodule — they stay local until that setup is scripted
-# for CI.
+# need a node_modules with a native-compiler install — they stay local
+# until that setup is scripted for CI.
 
 name: tests
 
@@ -31,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.0
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Unit tests

@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "+page.svelte",
+            "line": 10,
+            "column": 16,
+            "code": 2345
+        }
+    ],
+    "_note": "Explicit-annotation route typing through the real generated chain (issue #44 investigation). SvelteKit's scaffolded pattern `import type { PageProps } from './$types'; let { data, form }: PageProps = $props();` must resolve `data` to the ACTUAL load return type, inferred through the generated proxy module: $types.d.ts derives PageData from `typeof import('./proxy+page.server.js').load` (SvelteKit 2.16+ shape, Kit helpers inlined) — nothing is hardcoded, unlike fixtures 55/56/249. The single expected TS2345 (`needsNumber(data.title)` — string into number) is the lock: it fires ONLY when the whole chain resolved (`data: { title: string; count: number }`). If PageData collapsed to `{}` the fixture fails with unexpected TS2339s on `data.title`/`data.count`; if it collapsed to `any` the expected TS2345 goes missing. `needsNumber(data.count)` and `form?.ok` (ActionData via Kit.AwaitedActions over the proxy's actions) must stay clean."
+}

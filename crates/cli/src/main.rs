@@ -2006,7 +2006,13 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
     // Same relative keying as the check path — `--emit-ts` output is what
     // the emit snapshots lock, so it must be checkout-location-independent.
     svn_emit::set_render_hash_root(workspace);
-    let files = discover_svelte_files(workspace);
+    let mut files = discover_svelte_files(workspace);
+    // Directory traversal order is filesystem-dependent (APFS yields
+    // sorted entries, ext4 hash order), so multi-file emits would print
+    // in a different order per OS. Sort so the snapshot output is
+    // deterministic everywhere. Debug flow only — the check path keeps
+    // upstream's discovery order.
+    files.sort();
     if files.is_empty() {
         eprintln!(
             "svelte-check-native: no .svelte files found under {}",

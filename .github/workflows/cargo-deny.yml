@@ -1,7 +1,9 @@
 # cargo-deny: supply-chain hygiene gate.
 #
-# Runs on every PR that touches Cargo.toml or Cargo.lock + weekly
-# (catches new advisories on un-touched deps) + manual dispatch.
+# Runs on every PR (unfiltered: both jobs are required checks in
+# branch protection, and a `paths:` filter leaves test-/docs-only PRs
+# blocked forever on checks that never report) + weekly (catches new
+# advisories on un-touched deps) + manual dispatch.
 #
 # Failure modes (per deny.toml):
 #   - advisories: vulnerability in any path -> hard fail
@@ -23,12 +25,6 @@ on:
       - "deny.toml"
       - ".github/workflows/cargo-deny.yml"
   pull_request:
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "crates/**/Cargo.toml"
-      - "deny.toml"
-      - ".github/workflows/cargo-deny.yml"
   schedule:
     # Weekly Monday 06:00 UTC — catches new advisories on stable deps
     # that haven't been touched in a regular PR.

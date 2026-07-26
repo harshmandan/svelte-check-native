@@ -194,7 +194,8 @@ pub fn collect_function_body_stmts<'a, 'b>(
         | Expression::RegExpLiteral(_)
         | Expression::StringLiteral(_)
         | Expression::Identifier(_)
-        | Expression::MetaProperty(_)
+        | Expression::ImportMeta(_)
+        | Expression::NewTarget(_)
         | Expression::Super(_)
         | Expression::ThisExpression(_) => {}
     }

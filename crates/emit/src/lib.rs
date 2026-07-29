@@ -330,7 +330,8 @@ fn emit_document_with_render_name(
     // decide whether to hoist bare `type`/`interface` declarations out
     // of the render body (they'd lose access to the `T` generic if
     // lifted to module scope).
-    let generics = extract_generics_attr(doc);
+    let generics_with_origin = extract_generics_attr(doc);
+    let generics = generics_with_origin.as_ref().map(|(g, _)| g.clone());
 
     // Parse the instance script exactly once up front. Every analyze
     // pass that needs the oxc AST of the ORIGINAL script (Props type
@@ -1060,13 +1061,55 @@ fn emit_document_with_render_name(
         props_info.type_text.clone()
     };
 
-    match &generics {
-        Some(g) => {
+    // The render-fn signature is synthesized whole, but it is not
+    // invisible to the type checker: it is where the component's props
+    // type surfaces, so a diagnostic about that type lands here rather
+    // than on anything the user typed. Under `declaration: true` the
+    // canonical case is TS4060 — a `generics="T">`-parameterised
+    // component whose props interface closes over `T` without declaring
+    // it, making the interface a function-local name the declaration
+    // writer cannot reference from module scope.
+    //
+    // Anchor the whole signature to the `<script>` tag's opening so
+    // those diagnostics keep a real source position instead of being
+    // dropped as unmapped scaffolding. The source span is the single
+    // byte after `<`, and the mapper clamps every overlay offset within
+    // the header into it, so any column on this line reports at the tag
+    // name. That is the position upstream lands on too: its source map
+    // carries a mapping at the head of this same generated line and
+    // nothing after it, so an unmapped column there resolves backwards
+    // to the tag.
+    let header_start = buf.as_str().len() as u32;
+    match &generics_with_origin {
+        // A `$$Generic`-synthesised parameter list is scaffolding: the
+        // user wrote `type T = $$Generic;` in the body, never a `<T>`
+        // here. TS would otherwise report the parameter as unused at
+        // this position, pointing at text that doesn't exist in the
+        // source. Fencing it off suppresses that class the same way
+        // upstream does (`Generics.toDefinitionString(true)` wraps the
+        // list in its own ignore comments for exactly this path, while
+        // an attribute-sourced list is left bare).
+        Some((g, util::GenericsOrigin::DollarGeneric)) => {
+            let _ = writeln!(
+                buf,
+                "async function {render_name}/*svn:ignore_start*/<{g}>/*svn:ignore_end*/() {{"
+            );
+        }
+        Some((g, util::GenericsOrigin::Attribute)) => {
             let _ = writeln!(buf, "async function {render_name}<{g}>() {{");
         }
         None => {
             let _ = writeln!(buf, "async function {render_name}() {{");
         }
+    }
+    if let Some(script) = doc.instance_script.as_ref() {
+        let tag_start = script.open_tag_range.start;
+        buf.push_token_map(TokenMapEntry {
+            overlay_byte_start: header_start,
+            overlay_byte_end: buf.as_str().len() as u32,
+            source_byte_start: tag_start.saturating_add(1),
+            source_byte_end: tag_start.saturating_add(2),
+        });
     }
     // Generic-scoped alias emission — see the `alias_body` decision above.
     // Lives at the very top of the render body so the destructure

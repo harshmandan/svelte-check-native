@@ -330,10 +330,26 @@ pub(crate) fn blank_dollar_generic_decls(script: &str) -> String {
     out
 }
 
-pub(crate) fn extract_generics_attr(doc: &Document<'_>) -> Option<SmolStr> {
+/// Where a render function's generic-parameter list came from.
+///
+/// The distinction decides whether the emitted `<...>` is treated as
+/// user-written text or as scaffolding: an attribute's parameters are
+/// something the user typed and can be diagnosed about, whereas a list
+/// synthesised from `$$Generic` declarations exists nowhere in the
+/// source, so diagnostics about it (e.g. "declared but never used")
+/// would point at a construct the user cannot see or fix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GenericsOrigin {
+    /// Copied from the `generics="..."` attribute on `<script>`.
+    Attribute,
+    /// Synthesised from `type NAME = $$Generic[<args>];` declarations.
+    DollarGeneric,
+}
+
+pub(crate) fn extract_generics_attr(doc: &Document<'_>) -> Option<(SmolStr, GenericsOrigin)> {
     let script = doc.instance_script.as_ref()?;
     if let Some(g) = script.generics.as_deref() {
-        return Some(SmolStr::from(g));
+        return Some((SmolStr::from(g), GenericsOrigin::Attribute));
     }
     // SVELTE-4-COMPAT: when no `<script generics="...">` attribute is
     // present, fall back to scanning for `type NAME = $$Generic[<args>];`
@@ -344,6 +360,7 @@ pub(crate) fn extract_generics_attr(doc: &Document<'_>) -> Option<SmolStr> {
     // type. Without this, `type A = $$Generic` resolves at module
     // scope as `$$Generic<any> = any`, defeating per-call binding.
     synthesise_generics_from_dollar_generic(script.content)
+        .map(|g| (g, GenericsOrigin::DollarGeneric))
 }
 
 /// Scan an instance-script body for `type NAME = $$Generic[<args>];`

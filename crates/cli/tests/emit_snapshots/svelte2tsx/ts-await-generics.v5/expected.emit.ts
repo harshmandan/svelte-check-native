@@ -32,6 +32,7 @@ async function $$render_e40e2c10<T>() {
             }
             for (const item of __svn_each_items(await promise)) {
                 const i: number = 0;
+                (item.x);
                 (item);
                 (i);
                 void item;

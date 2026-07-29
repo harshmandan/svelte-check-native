@@ -7,6 +7,7 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         { svelteHTML.createElement("ul", {});             for (const item of __svn_each_items(items)) {
                 const i: number = 0;
+                (item.id);
                 { svelteHTML.createElement("li", {});                     (i);
                     (item.name);
                 }

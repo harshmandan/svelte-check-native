@@ -63,6 +63,7 @@ async function $$render_e40e2c10() {
             }
             for (const item: string of __svn_each_items(items as [''])) {
                 const i: number = 0;
+                (item);
                 (item as string);
                 void item;
                 void i;

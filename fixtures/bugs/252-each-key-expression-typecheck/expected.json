@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "EachKey.svelte",
+            "line": 5,
+            "column": 28,
+            "code": 2345
+        }
+    ],
+    "_note": "The `(key)` expression of a keyed each block is real user code and gets type-checked like any other template expression: `EachKey.svelte` passes a `number` where the key function wants a `string`. It has to be emitted inside the loop body, since it is evaluated per iteration and may reference the item binding. `KeyUsesBinding.svelte` is the clean counterpart and locks the second half of the same behaviour: a prop referenced ONLY from a key expression counts as used, so `noUnusedLocals` must not report it — before the key was emitted at all, that prop looked dead and drew a false TS6133."
+}

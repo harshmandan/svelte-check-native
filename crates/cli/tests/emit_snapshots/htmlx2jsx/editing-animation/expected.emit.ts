@@ -4,6 +4,7 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         for (const item of __svn_each_items(list)) {
+            (item);
             { svelteHTML.createElement("li", {});                 (flip(__svn_map_element_tag('li'), __svn_AnimationMove, (opt?.)));
                 (item);
             }

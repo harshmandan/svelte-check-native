@@ -5,6 +5,7 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         for (const item of __svn_each_items(items)) {
             /** @type {number} */ const i = 0;
+            (item.id);
             { svelteHTML.createElement("div", {});                 (item);
                 (i);
             }

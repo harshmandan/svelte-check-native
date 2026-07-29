@@ -96,6 +96,22 @@ pub(crate) fn emit_each_block(
             let _ = writeln!(buf, "{indent}    /** @type {{number}} */ const {ix} = 0;");
         }
     }
+    // The `(key)` of a keyed each block is user code and gets checked
+    // like any other template expression. It belongs inside the loop
+    // because it is evaluated per iteration and typically references
+    // the item binding. Emitting it also makes anything used only from
+    // a key count as used, so `noUnusedLocals` doesn't report a prop
+    // that the key is the sole consumer of. Parenthesised so a key that
+    // is an object literal stays an expression instead of parsing as a
+    // block. Mirrors upstream EachBlock.ts, which appends `;` to the
+    // key in place at the same spot.
+    if let Some(key_range) = b.as_clause.as_ref().and_then(|c| c.key_range)
+        && let Some(key_text) = source.get(key_range.start as usize..key_range.end as usize)
+    {
+        let _ = write!(buf, "{indent}    (");
+        buf.append_with_source(key_text, key_range);
+        let _ = writeln!(buf, ");");
+    }
     emit_template_body(buf, source, &b.body, depth + 1, insts, action_counter);
     // Void every identifier that the binding pattern destructures, not
     // just the first. `[id, label]` and `[id, { label }]` both bind two

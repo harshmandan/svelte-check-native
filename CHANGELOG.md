@@ -6,6 +6,56 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.1]
+
+Parity patch: two classes of real error were being dropped before they
+could be reported. **Expect a project that checked clean on 1.2.0 to
+fail on 1.2.1 if it hits either pattern** — the errors were always
+there, we just weren't surfacing them. Both have small, local fixes,
+described below.
+
+### Fixed
+
+- **Errors on the generated render signature are reported instead of
+  discarded.** Under `declaration: true` (or `composite: true`) the
+  compiler must be able to name a component's props type in order to
+  write its `.d.ts`. A component that declares `generics="Row, Col">`
+  and a props interface closing over those parameters puts that
+  interface inside the render function's scope, where the declaration
+  writer can't reach it — `TS4060 Return type of exported function has
+  or is using private name 'Props'`. The diagnostic landed on the
+  synthesized `function $$render_<hash><…>()` line, which carried no
+  source anchor, so it was dropped as scaffolding and the component
+  checked clean while failing under upstream `svelte-check`. That line
+  now maps to the `<script>` tag, matching upstream's position
+  byte-for-byte. The fix in your own code is to declare the parameters
+  on the interface: `interface Props<Row, Col>` … `: Props<Row, Col>`.
+  Generic parameters synthesized from `type T = $$Generic;` are fenced
+  off, so unused-parameter hints about a `<T>` list you never wrote
+  stay suppressed — as upstream does.
+- **Keyed `{#each}` key expressions are type-checked.**
+  `{#each rows as row (rowKey(row))}` never emitted the key at all, so
+  type errors inside it were invisible, and anything referenced *only*
+  from a key looked dead — a prop whose sole consumer was the key drew
+  a false "declared but never read" under `noUnusedLocals`. The key is
+  now emitted inside the loop body, where it belongs.
+- **`--emit-ts` output is stable across machines.** The
+  `$$render_<hash>` token hashed the absolute source path, so emitted
+  overlays differed by checkout location; it is now keyed to the
+  workspace-relative path. Multi-file `--emit-ts` output is also sorted,
+  so filesystem traversal order (APFS vs ext4) no longer shuffles it.
+  Contributor-facing: it makes the emit snapshots portable.
+
+### Known limitation
+
+- Declaration-family errors (the `TS4060`/`TS4023`/`TS4025` group above)
+  come from the declaration writer, which the compiler only runs under
+  `noEmit` when the program is otherwise clean. So they stay hidden
+  behind any unrelated type error and surface once it's fixed — one
+  extra iteration, never a lost error. Upstream's default engine avoids
+  this by asking the language service per file; upstream `--tsgo` has
+  the same behaviour we do.
+
 ## [1.2.0]
 
 ### Added

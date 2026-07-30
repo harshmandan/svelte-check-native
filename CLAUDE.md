@@ -104,8 +104,12 @@ a false positive).
 
 ## Style & quality bar
 
-- **Rust edition 2024.** `rust-version = "1.85"` in every crate's
-  Cargo.toml (inherited from workspace).
+- **Rust edition 2024, MSRV 1.95.** Both are set once in the workspace
+  `Cargo.toml`; every crate picks them up with `edition.workspace = true`
+  / `rust-version.workspace = true`, so a bump is a one-line change at
+  the root. Nothing in CI enforces the MSRV — when a dependency bump
+  lands, check the new crates' own `rust-version` against ours rather
+  than trusting a green build on whatever toolchain the runner has.
 - `cargo fmt` clean. `cargo clippy --workspace --all-targets -- -D warnings`
   clean. `cargo test` — the scoreboard count must be monotonically
   non-decreasing per commit.

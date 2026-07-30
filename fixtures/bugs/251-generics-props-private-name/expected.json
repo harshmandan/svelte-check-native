@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "Table.svelte",
+            "line": 0,
+            "column": 1,
+            "code": 4060
+        }
+    ],
+    "_note": "Under `declaration: true` the compiler must be able to write a .d.ts for the component's default export, which means naming the render function's return type. When a component declares `generics=\"...\"` AND its props interface closes over those type parameters without declaring them itself, that interface is a function-local name the declaration writer cannot reference from module scope, so TS4060 fires. Two clean controls pin the boundary: `Plain.svelte` (no generics — the return type serialises as `typeof $$render` and never has to name `Props`) and `Parameterised.svelte` (the same component with `interface Props<Row, Col>` declared over its own parameters, which is the shape that resolves the error). The diagnostic anchors at the `<script>` tag because the render-function signature it fires on is entirely synthesised: emit maps that whole header span back to the script tag's opening, matching how upstream's source map resolves an unmapped position to the nearest preceding mapping on the same generated line."
+}

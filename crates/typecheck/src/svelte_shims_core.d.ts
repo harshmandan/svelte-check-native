@@ -1422,7 +1422,7 @@ declare module '*/css' {}
 
 declare module 'svelte' {
     export interface ComponentConstructorOptions<
-        Props extends Record<string, unknown> = Record<string, unknown>,
+        Props extends Record<string, any> = Record<string, any>,
     > {
         target: Element | Document | ShadowRoot;
         anchor?: Element;
@@ -1463,9 +1463,9 @@ declare module 'svelte' {
     }
 
     export class SvelteComponentTyped<
-        Props extends Record<string, unknown> = Record<string, unknown>,
-        Events extends Record<string, unknown> = Record<string, unknown>,
-        Slots extends Record<string, unknown> = Record<string, unknown>,
+        Props extends Record<string, any> = Record<string, any>,
+        Events extends Record<string, any> = Record<string, any>,
+        Slots extends Record<string, any> = Record<string, any>,
     > implements SvelteComponent<Props, Events, Slots>
     {
         constructor(options: ComponentConstructorOptions<Props>);
@@ -1546,7 +1546,7 @@ declare module 'svelte' {
     export function hasContext(key: any): boolean;
     export function getAllContexts<T extends Map<any, any> = Map<any, any>>(): T;
     export function createEventDispatcher<
-        Events extends Record<string, unknown> = Record<string, unknown>,
+        Events extends Record<string, any> = Record<string, any>,
     >(): <K extends Extract<keyof Events, string>>(type: K, detail?: Events[K]) => boolean;
 }
 

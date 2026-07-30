@@ -17,6 +17,7 @@ async function $$render_e40e2c10() {
         void __svn_action_attrs_0;
         for (const item of __svn_each_items(items)) {
             const index: number = 0;
+            (index);
             const label = `slide-${index}`;
             void label;
                 const __svn_action_0 = __svn_ensure_action(intersection(__svn_map_element_tag('div'), ({

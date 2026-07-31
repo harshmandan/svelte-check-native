@@ -47,8 +47,7 @@ fn collect_expression_attr(
     if let Some(head) = leading_identifier(trimmed)
         && shadow.lookup(head).is_some()
     {
-        if let Some(rewritten) =
-            crate::slot_attr_rewrite::rewrite_slot_attr_expr(trimmed, &lookup)
+        if let Some(rewritten) = crate::slot_attr_rewrite::rewrite_slot_attr_expr(trimmed, &lookup)
         {
             entries.push(SlotAttr::Prop {
                 name: name.clone(),

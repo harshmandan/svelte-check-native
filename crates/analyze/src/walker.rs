@@ -608,18 +608,16 @@ impl ResolverStack {
             .find(|(n, _)| n == name)
             .map(|(_, v)| v)
     }
-    /// `lookup`, flattened into the shape the slot-attr rewriter wants:
-    /// `Some(Some(text))` for a resolved type/value cast,
-    /// `Some(None)` for a shadowed-but-unresolvable name, `None` when
-    /// the name isn't in scope. Collapses `ResolvedSlotExpr::Type` and
-    /// `::Value` to their inner string since the rewriter splices the
-    /// text regardless of which kind it was.
-    pub(crate) fn lookup_resolved(&self, name: &str) -> Option<Option<String>> {
-        self.lookup(name).map(|v| match v {
-            Some(ResolvedSlotExpr::Type(t)) => Some(t.clone()),
-            Some(ResolvedSlotExpr::Value(v)) => Some(v.clone()),
-            None => None,
-        })
+    /// `lookup`, cloned into the shape the slot-attr rewriters want:
+    /// `Some(Some(resolution))` for a resolved name, `Some(None)` for
+    /// a shadowed-but-unresolvable name, `None` when the name isn't in
+    /// scope. The `Type` / `Value` distinction is preserved — the
+    /// rewriters splice the two kinds differently (`Type` text goes
+    /// behind an `undefined as any as (…)` cast; `Value` text — e.g.
+    /// the destructure-default IIFE — is already an expression and a
+    /// cast wrap would put it in a type position, which doesn't parse).
+    pub(crate) fn lookup_resolved(&self, name: &str) -> Option<Option<ResolvedSlotExpr>> {
+        self.lookup(name).cloned()
     }
 }
 

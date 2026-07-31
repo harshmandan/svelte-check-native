@@ -51,6 +51,8 @@ use oxc_allocator::Allocator;
 use oxc_ast::ast::{Expression, Statement};
 use svn_parser::{ScriptLang, parse_script_body};
 
+use crate::walker::ResolvedSlotExpr;
+
 /// Rewrite `text` (the source slice of a slot-attr expression) into
 /// a type-level form when its root identifier resolves through
 /// `lookup`. See module-level docs for the exact rules.
@@ -61,7 +63,7 @@ use svn_parser::{ScriptLang, parse_script_body};
 ///   - `None` — not in scope; not our identifier (let parent handle).
 pub fn rewrite_slot_attr_expr(
     text: &str,
-    lookup: &impl Fn(&str) -> Option<Option<String>>,
+    lookup: &impl Fn(&str) -> Option<Option<ResolvedSlotExpr>>,
 ) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -93,13 +95,18 @@ pub fn rewrite_slot_attr_expr(
 
 fn rewrite_expression(
     expr: &Expression<'_>,
-    lookup: &impl Fn(&str) -> Option<Option<String>>,
+    lookup: &impl Fn(&str) -> Option<Option<ResolvedSlotExpr>>,
 ) -> Option<String> {
     match expr {
         Expression::Identifier(id) => {
             let name = id.name.as_str();
             match lookup(name) {
-                Some(Some(resolved)) => Some(format!("({resolved})")),
+                Some(Some(ResolvedSlotExpr::Type(t))) => Some(format!("({t})")),
+                // Value-resolved (destructure-default IIFE) — an
+                // expression, not a type; it cannot be spliced into
+                // this rewriter's type-level output. Bail so the
+                // caller falls through to the value-level walker.
+                Some(Some(ResolvedSlotExpr::Value(_))) => None,
                 // Shadowed but unresolvable — bail.
                 Some(None) => None,
                 // Module-scope identifier — caller handles via the
@@ -138,13 +145,14 @@ fn rewrite_expression(
 /// bracket-notation chain on the way back up. Otherwise bail.
 fn rewrite_member_base(
     object: &Expression<'_>,
-    lookup: &impl Fn(&str) -> Option<Option<String>>,
+    lookup: &impl Fn(&str) -> Option<Option<ResolvedSlotExpr>>,
 ) -> Option<String> {
     match object {
         Expression::Identifier(id) => {
             let name = id.name.as_str();
             match lookup(name) {
-                Some(Some(resolved)) => Some(format!("({resolved})")),
+                Some(Some(ResolvedSlotExpr::Type(t))) => Some(format!("({t})")),
+                // Value-resolved roots bail — see `rewrite_expression`.
                 _ => None,
             }
         }
@@ -208,7 +216,7 @@ pub enum ValueRewrite {
 /// not guaranteed harmless.
 pub fn rewrite_slot_attr_expr_value(
     text: &str,
-    lookup: &impl Fn(&str) -> Option<Option<String>>,
+    lookup: &impl Fn(&str) -> Option<Option<ResolvedSlotExpr>>,
 ) -> ValueRewrite {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -271,7 +279,7 @@ pub fn rewrite_slot_attr_expr_value(
 
 fn walk_value_expr(
     expr: &Expression<'_>,
-    lookup: &impl Fn(&str) -> Option<Option<String>>,
+    lookup: &impl Fn(&str) -> Option<Option<ResolvedSlotExpr>>,
     // Round-12 follow-up #3: stack of identifier names introduced by
     // enclosing arrow/function expressions' params. When walking
     // their bodies, identifiers whose name is in this stack are NOT
@@ -296,10 +304,21 @@ fn walk_value_expr(
                 return;
             }
             match lookup(name) {
-                Some(Some(resolved)) => {
+                Some(Some(resolution)) => {
                     let start = id.span.start as usize;
                     let end = id.span.end as usize;
-                    edits.push((start, end, format!("(undefined as any as ({resolved}))")));
+                    // Type-resolved bindings splice behind a cast;
+                    // Value-resolved ones (the destructure-default
+                    // IIFE) already ARE expressions of the right type
+                    // — wrapping those in a cast would put the value
+                    // text in a type position, which doesn't parse.
+                    let replacement = match resolution {
+                        ResolvedSlotExpr::Type(t) => {
+                            format!("(undefined as any as ({t}))")
+                        }
+                        ResolvedSlotExpr::Value(v) => format!("({v})"),
+                    };
+                    edits.push((start, end, replacement));
                 }
                 Some(None) => {
                     *bail = true;
@@ -370,15 +389,22 @@ fn walk_value_expr(
                                 }
                                 if let Some(resolved) = lookup(name) {
                                     match resolved {
-                                        Some(resolved_text) => {
+                                        Some(resolution) => {
                                             let start = id.span.start as usize;
                                             let end = id.span.end as usize;
+                                            // Same Type-cast vs Value-splice
+                                            // split as the bare-identifier
+                                            // arm above.
+                                            let value_text = match resolution {
+                                                ResolvedSlotExpr::Type(t) => {
+                                                    format!("(undefined as any as ({t}))")
+                                                }
+                                                ResolvedSlotExpr::Value(v) => format!("({v})"),
+                                            };
                                             edits.push((
                                                 start,
                                                 end,
-                                                format!(
-                                                    "{name}: (undefined as any as ({resolved_text}))"
-                                                ),
+                                                format!("{name}: {value_text}"),
                                             ));
                                         }
                                         None => {
@@ -536,7 +562,7 @@ fn walk_value_expr(
 /// expression / variable-decl init / control-flow.
 fn walk_statement_for_value_rewrite(
     stmt: &oxc_ast::ast::Statement<'_>,
-    lookup: &impl Fn(&str) -> Option<Option<String>>,
+    lookup: &impl Fn(&str) -> Option<Option<ResolvedSlotExpr>>,
     shadowed: &mut Vec<String>,
     edits: &mut Vec<(usize, usize, String)>,
     bail: &mut bool,
@@ -961,11 +987,11 @@ fn collect_pattern_idents(pat: &oxc_ast::ast::BindingPattern<'_>, shadowed: &mut
 mod tests {
     use super::*;
 
-    fn lookup_fn(name: &str) -> Option<Option<String>> {
+    fn lookup_fn(name: &str) -> Option<Option<ResolvedSlotExpr>> {
         match name {
-            "item" => Some(Some(
+            "item" => Some(Some(ResolvedSlotExpr::Type(
                 "(typeof items) extends Iterable<infer T> ? T : never".to_string(),
-            )),
+            ))),
             "shadowed_unresolvable" => Some(None),
             _ => None,
         }
@@ -1038,10 +1064,10 @@ mod tests {
 
     // Round-7 follow-up #1 walker tests.
 
-    fn r7_lookup(name: &str) -> Option<Option<String>> {
+    fn r7_lookup(name: &str) -> Option<Option<ResolvedSlotExpr>> {
         match name {
-            "item" => Some(Some("ItemTy".to_string())),
-            "row" => Some(Some("RowTy".to_string())),
+            "item" => Some(Some(ResolvedSlotExpr::Type("ItemTy".to_string()))),
+            "row" => Some(Some(ResolvedSlotExpr::Type("RowTy".to_string()))),
             "drop" => Some(None),
             _ => None,
         }

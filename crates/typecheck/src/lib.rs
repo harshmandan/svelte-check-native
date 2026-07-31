@@ -269,9 +269,6 @@ pub struct PreparedInput {
     /// Original source of a mirror-overlay kind — joins the
     /// overlay tsconfig's `exclude` via `kit_overlay_sources`.
     kit_overlay_source: Option<PathBuf>,
-    /// `.svelte` source path (Svelte kinds) — joins
-    /// `source_svelte_paths`.
-    source_svelte_path: Option<PathBuf>,
     /// Whether `gen_path` is listed in the overlay tsconfig's
     /// `files` array.
     list_in_files: bool,
@@ -553,16 +550,15 @@ impl CheckSession {
         let is_js_overlay = matches!(input.kind, InputKind::Svelte | InputKind::SvelteAuxiliary)
             && !input.is_ts_overlay;
         let list_in_files = !matches!(input.kind, InputKind::SvelteAuxiliary) && !is_js_overlay;
-        let (kit_overlay_source, source_svelte_path) = match input.kind {
-            InputKind::Svelte | InputKind::SvelteAuxiliary => (None, Some(input.source_path)),
-            InputKind::KitFile | InputKind::UserTsOverlay => (Some(input.source_path), None),
+        let kit_overlay_source = match input.kind {
+            InputKind::Svelte | InputKind::SvelteAuxiliary => None,
+            InputKind::KitFile | InputKind::UserTsOverlay => Some(input.source_path),
         };
         Ok(PreparedInput {
             gen_path,
             map_data,
             ambient_path,
             kit_overlay_source,
-            source_svelte_path,
             list_in_files,
         })
     }
@@ -582,17 +578,6 @@ impl CheckSession {
         let layout = &self.layout;
         let mut generated_paths: Vec<PathBuf> = Vec::with_capacity(prepared.len());
         let mut kit_overlay_sources: Vec<PathBuf> = Vec::new();
-        // Source `.svelte` paths handed to the overlay's `exclude` so tsgo
-        // never tries to load the raw `.svelte` file from the user's tree —
-        // it always reaches the overlay through the `.d.svelte.ts`
-        // re-export chain (or, currently, through `compilerOptions.files`
-        // listing the `.svn.ts` directly). Mirrors upstream's
-        // `upsertedExcludes` at `incremental.ts:430-431`. Today this is a
-        // no-op (tsgo doesn't load `.svelte` files anyway because their
-        // extension isn't on its program-input list), but keeping it in
-        // place is the structural pre-req for moving overlays out of
-        // `files` while still keeping `.svelte` patterns in `include`.
-        let mut source_svelte_paths: Vec<PathBuf> = Vec::with_capacity(prepared.len());
         let mut map_data: std::collections::HashMap<PathBuf, MapData> =
             std::collections::HashMap::with_capacity(prepared.len());
         // Track every cache file this run touched. Anything in
@@ -611,9 +596,6 @@ impl CheckSession {
             }
             if let Some(kit_source) = p.kit_overlay_source {
                 kit_overlay_sources.push(kit_source);
-            }
-            if let Some(svelte_path) = p.source_svelte_path {
-                source_svelte_paths.push(svelte_path);
             }
             map_data.insert(p.gen_path.clone(), p.map_data);
             if p.list_in_files {
@@ -668,7 +650,6 @@ impl CheckSession {
             user_tsconfig,
             &generated_paths,
             &kit_overlay_sources,
-            &source_svelte_paths,
             kit_types_mirror.as_deref(),
             kit_app_ambients.as_deref(),
         );
@@ -707,6 +688,17 @@ impl CheckSession {
         // the noise filter needs it per diagnostic, and a realpath walk
         // per call adds up on diagnostic-heavy runs.
         let canonical_overlay_tsconfig = dunce::canonicalize(&layout.overlay_tsconfig).ok();
+        // Guard against a silently-empty run: when ANY file in the
+        // program fails to parse, TypeScript suppresses every semantic
+        // diagnostic program-wide and reports only the syntax errors —
+        // so a single malformed generated overlay would make the whole
+        // workspace read as clean. Detect TS1xxx syntax errors whose
+        // file is one of OUR generated overlays and surface a loud
+        // internal-error diagnostic per affected source file, so the
+        // run can't be mistaken for a real result. Syntax errors in
+        // user-authored files are not an internal error and pass
+        // through the normal mapping instead.
+        let overlay_syntax_failures = overlay_syntax_failures(&run.diagnostics, layout);
         // Probed once per run: upstream's message adjustments differ
         // between pre-5 and 5+ Svelte (see `adjust_message_if_necessary`).
         let svelte5_plus = filters::workspace_svelte_is_5_plus(&layout.workspace);
@@ -796,6 +788,13 @@ impl CheckSession {
                     .is_some_and(|lines| lines.contains(&d.line))
             });
         }
+        // Surface the internal-error diagnostics for overlays that
+        // failed to parse (computed above, before mapping). Appended
+        // last so the syntax errors themselves — mapped back to
+        // source positions like any other diagnostic — stay adjacent
+        // to their file's other output.
+        diagnostics.extend(overlay_syntax_failures);
+
         Ok(CheckOutput {
             diagnostics,
             extended_diagnostics: run.extended_diagnostics,
@@ -885,6 +884,92 @@ fn emit_space_overlay_text(
 /// are attributed to the MIRROR path and re-map to the original via
 /// `original_from_generated`, so real problems on those files still
 /// surface.
+/// One internal-error diagnostic per source file whose GENERATED
+/// overlay tsgo failed to parse (TS1xxx syntax class, error severity).
+/// See the callsite in [`CheckSession::finish`] for why this must be
+/// loud: one unparseable file suppresses every semantic diagnostic in
+/// the program. Syntax errors in user-authored files don't qualify —
+/// those pass through the normal mapping as the user's own errors.
+fn overlay_syntax_failures(
+    raw_diagnostics: &[RawDiagnostic],
+    layout: &CacheLayout,
+) -> Vec<CheckDiagnostic> {
+    // Codes the PARSER emits — the class whose presence makes
+    // TypeScript drop semantic diagnostics program-wide. The 1xxx
+    // range also contains checker-phase grammar errors (TS1117
+    // duplicate object keys, TS1184 modifiers-not-allowed, …) that
+    // do NOT suppress anything and legitimately occur on generated
+    // overlays that mirror upstream's emit (duplicate `on:click`
+    // keys, for one); those must not trip the guard. Allowlist the
+    // parser-level codes rather than denylist grammar codes: a
+    // missed parser code degrades to the status quo (silent empty
+    // run), while a false fire would fabricate an internal error on
+    // a healthy run.
+    const PARSER_SYNTAX_CODES: &[u32] = &[
+        1002, // unterminated string literal
+        1003, // identifier expected
+        1005, // '<token>' expected
+        1009, // trailing comma not allowed
+        1010, // '*/' expected
+        1011, // element access expression needs an argument
+        1109, // expression expected
+        1110, // type expected
+        1124, // digit expected
+        1126, // unexpected end of text
+        1127, // invalid character
+        1128, // declaration or statement expected
+        1131, // property or signature expected
+        1134, // variable declaration expected
+        1135, // argument expression expected
+        1136, // property assignment expected
+        1137, // expression or comma expected
+        1138, // parameter declaration expected
+        1141, // string literal expected
+        1160, // unterminated template literal
+        1161, // unterminated regular expression literal
+        1434, // unexpected keyword or identifier
+        1435, // unknown keyword or identifier
+        1436, // decorators must precede name and all keywords
+    ];
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    raw_diagnostics
+        .iter()
+        .filter(|d| {
+            matches!(d.severity, output::Severity::Error) && PARSER_SYNTAX_CODES.contains(&d.code)
+        })
+        .filter_map(|d| {
+            let abs = if d.file.is_absolute() {
+                d.file.clone()
+            } else {
+                layout.workspace.join(&d.file)
+            };
+            let abs = path_utils::lexical_normalise(&abs);
+            let source = layout.original_from_generated(&abs)?;
+            seen.insert(source.clone()).then(|| CheckDiagnostic {
+                source_path: source,
+                line: 1,
+                column: 1,
+                end_line: 1,
+                end_column: 1,
+                severity: output::Severity::Error,
+                code: DiagnosticCode::Slug("overlay-syntax-error".into()),
+                message: format!(
+                    "internal error: the generated TypeScript for this file \
+                     failed to parse (TS{} at overlay {}:{}). TypeScript \
+                     suppresses all semantic diagnostics while any file in \
+                     the program has a syntax error, so type errors across \
+                     the entire workspace are hidden until this is resolved. \
+                     Please report this at \
+                     https://github.com/harshmandan/svelte-check-native/issues",
+                    d.code, d.line, d.column
+                ),
+                source: DiagnosticSource::Js,
+                code_description_url: None,
+            })
+        })
+        .collect()
+}
+
 fn map_diagnostic(
     mut raw: RawDiagnostic,
     layout: &CacheLayout,
@@ -1288,6 +1373,60 @@ mod tests {
             },
         );
         m
+    }
+
+    #[test]
+    fn overlay_syntax_error_produces_loud_internal_diagnostic() {
+        let layout = CacheLayout::for_workspace("/p");
+        let gen_path = layout.generated_path(Path::new("/p/src/Foo.svelte"));
+        let raw = vec![RawDiagnostic {
+            file: gen_path,
+            line: 4,
+            column: 98,
+            severity: Severity::Error,
+            code: 1109, // "Expression expected."
+            message: "Expression expected.".into(),
+            span_length: None,
+        }];
+        let out = overlay_syntax_failures(&raw, &layout);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].source_path, Path::new("/p/src/Foo.svelte"));
+        assert!(matches!(out[0].severity, Severity::Error));
+        assert!(matches!(&out[0].code, DiagnosticCode::Slug(s) if s == "overlay-syntax-error"));
+        assert!(out[0].message.contains("TS1109 at overlay 4:98"));
+        assert!(
+            out[0]
+                .message
+                .contains("suppresses all semantic diagnostics")
+        );
+    }
+
+    #[test]
+    fn overlay_syntax_guard_dedupes_and_skips_user_files() {
+        let layout = CacheLayout::for_workspace("/p");
+        let gen_path = layout.generated_path(Path::new("/p/src/Foo.svelte"));
+        let mk = |file: PathBuf, code: u32, severity: Severity| RawDiagnostic {
+            file,
+            line: 1,
+            column: 1,
+            severity,
+            code,
+            message: String::new(),
+            span_length: None,
+        };
+        let raw = vec![
+            // Two syntax errors in the same overlay — one guard entry.
+            mk(gen_path.clone(), 1109, Severity::Error),
+            mk(gen_path.clone(), 1128, Severity::Error),
+            // Syntax error in a USER file — the user's own problem,
+            // not an internal error.
+            mk(PathBuf::from("/p/src/util.ts"), 1109, Severity::Error),
+            // Semantic error in the overlay — not a syntax failure.
+            mk(gen_path, 2322, Severity::Error),
+        ];
+        let out = overlay_syntax_failures(&raw, &layout);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].source_path, Path::new("/p/src/Foo.svelte"));
     }
 
     #[test]

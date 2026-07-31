@@ -23,10 +23,19 @@
 //!    `node_modules/@typescript/typescript-<platform>/lib/tsc[.exe]`
 //!    (the scoped platform packages only exist for 7+, so no version
 //!    gate is needed), then `node_modules/typescript/bin/tsc` gated
-//!    on the installed package's `version` being 7+.
+//!    on the installed package's `version` being 7+, then the same
+//!    wrapper at `node_modules/@typescript/native/bin/tsc` — the
+//!    npm-alias convention (`@typescript/native@npm:typescript@7`)
+//!    for projects that keep `typescript@6` as their own toolchain.
 //! 3. tsgo —
 //!    `node_modules/@typescript/native-preview-<platform>/lib/tsgo[.exe]`,
 //!    then `node_modules/@typescript/native-preview/bin/tsgo.js`.
+//!
+//! A wrapper hit at step 2 or 3 is upgraded to the platform-native
+//! binary sitting beside the wrapper's *canonical* location when one
+//! exists — symlinked stores (pnpm, bun) hoist only the wrapper
+//! package, keeping the version-matched platform package next to it
+//! inside the store entry.
 //! 4. pnpm / bun per-package-store fallbacks:
 //!    `node_modules/.pnpm/<pkg>@*/node_modules/...` and
 //!    `node_modules/.bun/<pkg>@*/node_modules/...`, same engine
@@ -110,8 +119,25 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
                 });
             }
         }
-        if let Some(found) = stable_typescript_wrapper(dir) {
-            return Some(found);
+        // Canonical `typescript` first, then the `@typescript/native`
+        // npm-alias convention for projects that pin `typescript` at 6
+        // and install the 7 engine under the alias.
+        for pkg_dir in ["typescript", "@typescript/native"] {
+            if let Some(found) = stable_typescript_wrapper(dir, pkg_dir) {
+                // Same store-sibling preference as the preview wrapper
+                // below: spawn the version-matched native binary
+                // directly when the wrapper's canonical location has
+                // one.
+                if let Some(native) =
+                    native_beside_wrapper(&found.path, native_relatives[0].as_ref())
+                {
+                    return Some(TsgoBinary {
+                        path: native,
+                        needs_node: false,
+                    });
+                }
+                return Some(found);
+            }
         }
         // tsgo (native-preview) fallback.
         if let Some(rel) = &native_relatives[1] {
@@ -125,6 +151,17 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
         }
         let preview_wrapper = dir.join("node_modules/@typescript/native-preview/bin/tsgo.js");
         if preview_wrapper.is_file() {
+            // Symlinked-store installs (pnpm, bun) hoist only the
+            // wrapper package; its platform-native sibling lives next
+            // to the wrapper's canonical location in the store.
+            if let Some(native) =
+                native_beside_wrapper(&preview_wrapper, native_relatives[1].as_ref())
+            {
+                return Some(TsgoBinary {
+                    path: native,
+                    needs_node: false,
+                });
+            }
             return Some(TsgoBinary {
                 path: preview_wrapper,
                 needs_node: true,
@@ -148,12 +185,20 @@ pub fn discover(workspace: &Path) -> Result<TsgoBinary, DiscoveryError> {
 /// most of them. A `typescript` install whose package.json is missing
 /// or unparseable is skipped for the same reason — we only ever spawn
 /// a wrapper we can positively identify as the native compiler.
-fn stable_typescript_wrapper(dir: &Path) -> Option<TsgoBinary> {
-    let wrapper = dir.join("node_modules/typescript/bin/tsc");
+///
+/// `pkg_dir` is the install directory under `node_modules` — the
+/// canonical `typescript`, or the `@typescript/native` npm-alias
+/// convention (`npm i typescript@~6 @typescript/native@npm:typescript@7`)
+/// that keeps TypeScript 6 as the project's own `typescript` while
+/// installing the 7 engine under the alias. An alias install is the
+/// real `typescript` package on disk, so the same layout and version
+/// gate apply verbatim.
+fn stable_typescript_wrapper(dir: &Path, pkg_dir: &str) -> Option<TsgoBinary> {
+    let wrapper = dir.join("node_modules").join(pkg_dir).join("bin/tsc");
     if !wrapper.is_file() {
         return None;
     }
-    let manifest = dir.join("node_modules/typescript/package.json");
+    let manifest = dir.join("node_modules").join(pkg_dir).join("package.json");
     let text = std::fs::read_to_string(manifest).ok()?;
     let pkg: serde_json::Value = serde_json::from_str(&text).ok()?;
     let version = semver::Version::parse(pkg.get("version")?.as_str()?).ok()?;
@@ -295,6 +340,38 @@ fn platform_tag() -> Option<&'static str> {
         ("windows", "x86_64") => Some("win32-x64"),
         _ => None,
     }
+}
+
+/// Resolve the platform-native binary that a JS wrapper would itself
+/// exec into, by mirroring node's module resolution from the wrapper's
+/// real location: canonicalize the wrapper (symlinked stores point
+/// `node_modules/<pkg>` into `.pnpm`/`.bun`), walk up to the nearest
+/// `node_modules` ancestor, and look for the platform package there.
+/// That is where the store keeps the version-matched sibling
+/// (`.bun/<pkg>@<v>/node_modules/@typescript/<pkg>-<platform>/…`), so
+/// this never mixes wrapper and binary from different versions. Spawning
+/// the native binary directly skips a Node.js startup (~40-80ms per
+/// run) the wrapper would spend before `execve`-ing into the same
+/// binary. `native_rel` is a `node_modules/…`-anchored relative path
+/// from the `*_platform_native_path` helpers. Returns `None` when no
+/// native sibling exists (platform without a native package) — the
+/// caller falls back to spawning the wrapper via `node`.
+fn native_beside_wrapper(wrapper: &Path, native_rel: Option<&PathBuf>) -> Option<PathBuf> {
+    let tail = native_rel?.strip_prefix("node_modules").ok()?;
+    let canonical = wrapper.canonicalize().ok()?;
+    // Strip `bin/<wrapper-file>` to reach the package dir, then walk
+    // up to the `node_modules` dir the package is installed in (one
+    // level for `typescript`, two for scoped `@typescript/*`).
+    let pkg_dir = canonical.parent()?.parent()?;
+    let mut dir = pkg_dir.parent()?;
+    for _ in 0..2 {
+        if dir.file_name().is_some_and(|n| n == "node_modules") {
+            let candidate = dir.join(tail);
+            return candidate.is_file().then_some(candidate);
+        }
+        dir = dir.parent()?;
+    }
+    None
 }
 
 /// Relative path to `@typescript/native-preview-<platform>`'s tsgo
@@ -445,6 +522,84 @@ mod tests {
 
         let found = discover(&nested).unwrap();
         assert_eq!(found.path, tsgo);
+    }
+
+    #[test]
+    fn typescript_native_alias_used_when_typescript_is_6() {
+        // The npm-alias convention: `typescript@6` stays as the
+        // project's own toolchain, the 7 engine installs under
+        // `@typescript/native` (`@typescript/native@npm:typescript@7`
+        // puts the real typescript package at that path).
+        let tmp = tempdir().unwrap();
+        write_typescript_pkg(tmp.path(), "6.0.4");
+        let alias_dir = tmp.path().join("node_modules/@typescript/native");
+        let alias_wrapper = alias_dir.join("bin/tsc");
+        fs::create_dir_all(alias_wrapper.parent().unwrap()).unwrap();
+        fs::write(&alias_wrapper, "#!/usr/bin/env node\n").unwrap();
+        fs::write(
+            alias_dir.join("package.json"),
+            r#"{"name":"typescript","version":"7.0.2"}"#,
+        )
+        .unwrap();
+
+        let found = discover(tmp.path()).unwrap();
+        assert_eq!(found.path, alias_wrapper);
+        assert!(found.needs_node);
+    }
+
+    #[test]
+    fn typescript_native_alias_below_7_is_skipped() {
+        // An alias install that itself resolves below 7 is the JS
+        // compiler — same gate as the canonical `typescript` path.
+        let tmp = tempdir().unwrap();
+        let alias_dir = tmp.path().join("node_modules/@typescript/native");
+        let alias_wrapper = alias_dir.join("bin/tsc");
+        fs::create_dir_all(alias_wrapper.parent().unwrap()).unwrap();
+        fs::write(&alias_wrapper, "#!/usr/bin/env node\n").unwrap();
+        fs::write(
+            alias_dir.join("package.json"),
+            r#"{"name":"typescript","version":"6.1.0"}"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            discover(tmp.path()),
+            Err(DiscoveryError::NotFound { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_store_wrapper_upgrades_to_native_sibling() {
+        // Symlinked-store layout (pnpm, bun): the hoisted wrapper
+        // package is a symlink into the store, and the version-matched
+        // platform package sits beside the wrapper's canonical
+        // location. Discovery should spawn that native binary, not the
+        // wrapper.
+        let Some(rel) = preview_platform_native_path() else {
+            return;
+        };
+        let tmp = tempdir().unwrap();
+        let store_entry = tmp
+            .path()
+            .join("node_modules/.bun/@typescript+native-preview@7.0.0-dev.1");
+        let canonical_pkg = store_entry.join("node_modules/@typescript/native-preview");
+        fs::create_dir_all(canonical_pkg.join("bin")).unwrap();
+        fs::write(canonical_pkg.join("bin/tsgo.js"), "// stub").unwrap();
+        let native = store_entry.join(&rel);
+        fs::create_dir_all(native.parent().unwrap()).unwrap();
+        fs::write(&native, b"\x7fELF stub").unwrap();
+
+        let scope_dir = tmp.path().join("node_modules/@typescript");
+        fs::create_dir_all(&scope_dir).unwrap();
+        std::os::unix::fs::symlink(&canonical_pkg, scope_dir.join("native-preview")).unwrap();
+
+        let found = discover(tmp.path()).unwrap();
+        assert_eq!(
+            found.path.canonicalize().unwrap(),
+            native.canonicalize().unwrap()
+        );
+        assert!(!found.needs_node);
     }
 
     #[test]

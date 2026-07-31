@@ -6,9 +6,8 @@ for the current scoreboard (`notes/ROADMAP.md`), open work
 (`notes/OPEN.md`), bench fleet (`notes/BENCH.md`), deferred items
 (`notes/DEFERRED.md`), chronological decision log
 (`notes/HISTORY.md`), the parity strategy
-(`notes/PARITY_TESTING_PLAN.md`), and any active convergence work
-(e.g. `notes/LS_CONVERGENCE_NEXT_10.md`,
-`notes/LS_CONVERGENCE_V5_PRIORITY.md`). This file is the shorter
+(`notes/PARITY_TESTING_PLAN.md`), and the active convergence work
+(`notes/LS_CONVERGENCE.md`). This file is the shorter
 "rules of engagement" layer on top of all of them.
 
 ## Project at a glance
@@ -340,13 +339,13 @@ one-line bucket reason and is gated by stale-skip detection — a
 fixture that starts passing strict will fail the suite with `STALE:
 <name>` until removed from the list. Loose mode
 `LS_DIAGNOSTICS_LOOSE=1` falls back to `(file, code)` for envs
-that can't reach byte-perfect positions yet. Current scoreboard at
-HEAD: **56 / 80 passing, 24 skipped** (post-audit-sweep 2026-07). Active
-convergence workstreams live in `notes/LS_CONVERGENCE_NEXT_10.md`,
-`notes/LS_CONVERGENCE_NEXT_10_BATCH2.md`,
-`notes/LS_CONVERGENCE_NEXT_10_BATCH3.md`, and
-`notes/LS_CONVERGENCE_V5_PRIORITY.md` (the V5 plan is complete —
-all three v5 fixtures closed via R-Conv #21 + #22).
+that can't reach byte-perfect positions yet. Current skip state:
+17 fixtures under `crates/cli/tests/ls_diagnostics/skips/` (the
+suite's own denominator is authoritative; run it for the live
+pass count). Per-fixture investigation profiles for every current
+skip live in `notes/LS_CONVERGENCE.md` (consolidated 2026-07-31
+from the former batch docs; the V5 workstream completed earlier —
+all three v5 fixtures closed).
 
 **End-to-end — `upstream_sanity`.** Reuses upstream's
 `test-sanity.js` unmodified via a node shim. Submodule bump =

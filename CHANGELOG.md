@@ -6,6 +6,56 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0]
+
+Performance release: warm no-change runs drop from ~1.4-1.8s to
+~0.25s on 1100-1350-file SvelteKit workspaces (5-7x), with
+byte-identical diagnostics. Plus one correctness guard and one emit
+fix.
+
+### Added
+
+- **No-change replay short-circuit.** When nothing the type-checker
+  reads has changed since the previous run — program files, tsconfig
+  chain, lockfiles, generated overlays, compiler binary — the tsgo
+  subprocess is skipped entirely and the previous run's diagnostics
+  replay through the live mapping pipeline. Validation is a parallel
+  `stat` pass (no file reads); any edited, created, or deleted input
+  falls back to a real run. `SVN_DISABLE_REPLAY=1` disables the
+  layer.
+- **`@typescript/native` alias discovery.** Projects that keep
+  `typescript@6` as their own toolchain can install the 7 engine as
+  `@typescript/native@npm:typescript@7`; discovery now finds it, with
+  the same >=7 version gate as the canonical package.
+- **Suppressed-semantics guard.** If the generated TypeScript for a
+  component fails to parse, TypeScript silently drops every semantic
+  diagnostic in the program — a bad emit used to read as a falsely
+  clean run. Such runs now surface a loud `overlay-syntax-error`
+  internal-error diagnostic pointing at the affected source file.
+
+### Fixed
+
+- **Slot-attr expressions bound to a destructure-default each-binding
+  emit as values, not types.** `{#each rows as { value = fallback }}`
+  + `<slot v={value}>` spliced the resolved IIFE into a type
+  position — a TS parse error in the generated overlay that
+  (per the guard above) suppressed all semantic diagnostics for the
+  project. The rewriters now preserve the value/type distinction.
+
+### Performance
+
+- Overlay tsconfig no longer lists every source `.svelte` file in
+  `exclude` — the entries changed nothing about the checked program
+  while holding tsgo's config phase at ~0.9s on a 1350-file
+  workspace; now ~0.05s.
+- Discovery upgrades a JS-wrapper hit to the version-matched
+  platform-native compiler binary beside the wrapper's canonical
+  store location (pnpm/bun symlinked installs), skipping a Node.js
+  startup per run.
+- tsgo spawns with `GOGC=off` + `GOMEMLIMIT=4GiB` (user-set values
+  win), recovering ~10% of wall time lost to GC page churn during
+  the parse burst.
+
 ## [1.2.1]
 
 Parity patch: two classes of real error were being dropped before they

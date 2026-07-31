@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 
 /// One diagnostic recovered from tsgo's stdout.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RawDiagnostic {
     /// Filename as printed by tsgo. May be a generated `.svelte.ts` path
     /// inside the cache; the orchestrator maps it back to the source.
@@ -38,7 +38,7 @@ pub struct RawDiagnostic {
     pub span_length: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Severity {
     Error,
     Warning,

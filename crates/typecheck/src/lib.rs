@@ -31,6 +31,7 @@ pub mod output;
 pub mod overlay;
 mod path_utils;
 mod position;
+mod replay;
 pub mod runner;
 mod types;
 
@@ -656,15 +657,38 @@ impl CheckSession {
         let overlay_text = serde_json::to_string_pretty(&overlay)?;
         write_if_changed(&layout.overlay_tsconfig, &overlay_text)?;
 
-        // Step 3: spawn tsgo.
+        // Step 3: spawn tsgo — unless nothing it reads has changed
+        // since the previous run, in which case that run's raw
+        // diagnostics replay through the live mapping pipeline below
+        // (see `replay` module docs; `SVN_DISABLE_REPLAY` opts out).
         let tsgo = discover(&layout.workspace)?;
-        let run = run_tsgo(
+        let replay_ctx = replay::ReplayContext::compute(
+            layout,
+            &overlay_text,
+            user_tsconfig,
             &tsgo,
-            &layout.overlay_tsconfig,
-            &layout.workspace,
-            extended_diagnostics,
             include_suggestions,
-        )?;
+            extended_diagnostics,
+        );
+        let run = match replay_ctx.as_ref().and_then(|ctx| ctx.try_load()) {
+            Some(diagnostics) => runner::RunOutput {
+                diagnostics,
+                extended_diagnostics: None,
+            },
+            None => {
+                let run = run_tsgo(
+                    &tsgo,
+                    &layout.overlay_tsconfig,
+                    &layout.workspace,
+                    extended_diagnostics,
+                    include_suggestions,
+                )?;
+                if let Some(ctx) = replay_ctx {
+                    ctx.save(layout, &run.diagnostics);
+                }
+                run
+            }
+        };
 
         // Kit / user-ts originals that received a mirror overlay: any
         // diagnostic tsgo attributes to one of these paths is dropped in

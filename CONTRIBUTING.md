@@ -100,7 +100,6 @@ exactly the expected codes at the expected positions.
   release time.
 - The `language-tools/` submodule pin — bumped separately, since it
   moves the parity baseline for every suite at once.
-- `notes/` — local, gitignored.
 - Broad refactors bundled with a fix. Keep PRs to one concern.
 
 ## Commits and comments

@@ -698,8 +698,38 @@ fn is_resolvable_types_entry(entry: &str, declaring_dir: &Path) -> bool {
         as_dts.as_mut_os_string().push(".d.ts");
         return as_dts.is_file();
     }
+    if package_like_types_dir_resolves(entry, declaring_dir) {
+        return true;
+    }
     let (pkg, _subpath) = split_package_entry(entry);
     package_types_entry_resolves(pkg, declaring_dir)
+}
+
+/// True when the entry names a directory under `node_modules` that ships
+/// an `index.d.ts` (or a sibling `.d.ts` of the same name), even though
+/// no `package.json` declares it a package.
+///
+/// Node-style directory resolution finds such a folder, so tsgo accepts
+/// the entry and the `package.json`-based check below would wrongly drop
+/// it. The case that forced this: SvelteKit 3 generates
+/// `node_modules/$app/types/index.d.ts` and puts `"types": ["$app/types"]`
+/// in its generated config, but writes no `package.json` alongside it.
+/// Dropping the entry costs the project its `App.*` interfaces and the
+/// `svelte/elements` augmentation.
+fn package_like_types_dir_resolves(entry: &str, declaring_dir: &Path) -> bool {
+    svn_core::walk_up_dirs(declaring_dir, |dir| {
+        let candidate = dir.join(svn_core::NODE_MODULES_DIR).join(entry);
+        if candidate.join("index.d.ts").is_file() {
+            return Some(());
+        }
+        let mut as_dts = candidate.into_os_string();
+        as_dts.push(".d.ts");
+        if PathBuf::from(as_dts).is_file() {
+            return Some(());
+        }
+        None
+    })
+    .is_some()
 }
 
 /// True when the entry should be treated as a filesystem path rather
@@ -1402,6 +1432,20 @@ mod tests {
         std::fs::create_dir_all(&pkg).unwrap();
         std::fs::write(pkg.join("package.json"), "{}").unwrap();
         assert!(is_resolvable_types_entry("@sveltejs/kit/types", tmp.path(),));
+    }
+
+    /// SvelteKit 3 writes `node_modules/$app/types/index.d.ts` and
+    /// declares `types: ["$app/types"]`, but never writes a
+    /// `package.json` beside it. Node-style directory resolution still
+    /// finds it, so tsgo accepts the entry — dropping it would cost the
+    /// project its `App.*` interfaces and `svelte/elements` augmentation.
+    #[test]
+    fn is_resolvable_types_entry_keeps_generated_dir_without_package_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("node_modules").join("$app").join("types");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.d.ts"), "export {};").unwrap();
+        assert!(is_resolvable_types_entry("$app/types", tmp.path()));
     }
 
     #[test]

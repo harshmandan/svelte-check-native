@@ -400,7 +400,7 @@ fn resolve_package_extends(reference: &str, start_dir: &Path) -> Result<PathBuf,
         let pkg_root = dir.join(crate::NODE_MODULES_DIR).join(pkg);
         if pkg_root.is_dir() {
             let resolved = if let Some(sp) = subpath {
-                pkg_root.join(sp)
+                package_subpath_config(&pkg_root, sp)
             } else {
                 resolve_package_root_config(&pkg_root)
             };
@@ -418,6 +418,30 @@ fn resolve_package_extends(reference: &str, start_dir: &Path) -> Result<PathBuf,
         reference: reference.to_string(),
         from: start_dir.to_path_buf(),
     })
+}
+
+/// Resolve a package extends that names a subpath (`<pkg>/<subpath>`) to
+/// a file inside the package.
+///
+/// TypeScript resolves such a reference as a module with the `.json`
+/// extension, so an extensionless subpath picks up `.json` — exactly the
+/// same append-don't-replace rule the relative branch applies. The
+/// literal path is tried first so a reference that already spells out
+/// `.json` (or names an extensionless file) still resolves.
+///
+/// This matters for SvelteKit 3, whose generated config lives at
+/// `node_modules/$app/tsconfig.json` and is referenced as
+/// `"extends": "$app/tsconfig"`. Without the append the chain breaks
+/// silently and the project loses the generated `rootDirs` — which is
+/// what makes `./$types` resolve from a route file.
+fn package_subpath_config(pkg_root: &Path, subpath: &str) -> PathBuf {
+    let literal = pkg_root.join(subpath);
+    if literal.is_file() || subpath.ends_with(".json") {
+        return literal;
+    }
+    let mut with_json = literal.into_os_string();
+    with_json.push(".json");
+    PathBuf::from(with_json)
 }
 
 /// Resolve a bare package extends (no subpath) to the config file at the
@@ -901,6 +925,55 @@ mod tests {
 
         let cfg = load(&ts).unwrap();
         assert_eq!(cfg.compiler_options.target.as_deref(), Some("ES2022"));
+    }
+
+    /// An extensionless package subpath picks up `.json`, the same
+    /// append-don't-replace rule the relative branch uses. SvelteKit 3
+    /// depends on it: `"extends": "$app/tsconfig"` names
+    /// `node_modules/$app/tsconfig.json`, and a sibling `tsconfig/`
+    /// directory (holding the service-worker config) sits next to it, so
+    /// the literal path exists as a directory and must not win.
+    #[test]
+    fn package_extends_subpath_appends_json() {
+        let tmp = tempdir().unwrap();
+        let pkg_dir = tmp.path().join("node_modules/$app");
+        fs::create_dir_all(pkg_dir.join("tsconfig")).unwrap();
+        write(
+            &pkg_dir.join("tsconfig.json"),
+            r#"{ "compilerOptions": { "rootDirs": ["../..", "../../.svelte-kit/types"] } }"#,
+        );
+        write(
+            &pkg_dir.join("tsconfig/service-worker.json"),
+            r#"{ "compilerOptions": { "target": "ES2015" } }"#,
+        );
+
+        let ts = tmp.path().join("tsconfig.json");
+        write(&ts, r#"{ "extends": "$app/tsconfig" }"#);
+
+        let cfg = load(&ts).unwrap();
+        assert_eq!(
+            cfg.compiler_options.root_dirs,
+            vec!["../..".to_string(), "../../.svelte-kit/types".to_string()]
+        );
+    }
+
+    /// The append only fires when the literal path isn't already a file,
+    /// so a reference that spells out `.json` still resolves.
+    #[test]
+    fn package_extends_subpath_with_json_suffix_resolves_literally() {
+        let tmp = tempdir().unwrap();
+        let pkg_dir = tmp.path().join("node_modules/$app/tsconfig");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        write(
+            &pkg_dir.join("service-worker.json"),
+            r#"{ "compilerOptions": { "target": "ES2015" } }"#,
+        );
+
+        let ts = tmp.path().join("tsconfig.json");
+        write(&ts, r#"{ "extends": "$app/tsconfig/service-worker.json" }"#);
+
+        let cfg = load(&ts).unwrap();
+        assert_eq!(cfg.compiler_options.target.as_deref(), Some("ES2015"));
     }
 
     #[test]

@@ -42,6 +42,26 @@ declare module '$app/environment' {
     export const version: string;
 }
 
+// SvelteKit 3 renamed '$app/environment' to '$app/env'. Both are
+// declared so one fallback covers either major.
+declare module '$app/env' {
+    export const browser: boolean;
+    export const building: boolean;
+    export const dev: boolean;
+    export const version: string;
+}
+
+declare module '$app/manifest' {
+    export const assets: any;
+    export const immutable: any;
+    export const prerendered: any;
+    export const routes: any;
+}
+
+declare module '$app/service-worker' {
+    export const self: any;
+}
+
 declare module '$app/forms' {
     export const applyAction: any;
     export const deserialize: any;
@@ -63,9 +83,14 @@ declare module '$app/navigation' {
 }
 
 declare module '$app/paths' {
+    // `base` / `assets` / `resolveRoute` are the SvelteKit 2 surface;
+    // `asset` / `resolve` / `match` replace them in SvelteKit 3.
     export const base: string;
     export const assets: string;
     export const resolveRoute: any;
+    export const asset: any;
+    export const resolve: any;
+    export const match: any;
 }
 
 declare module '$app/state' {
@@ -120,13 +145,26 @@ pub fn write_ambients(layout: &CacheLayout) -> std::io::Result<Option<PathBuf>> 
 }
 
 /// Heuristic: does this workspace look like a SvelteKit project?
-/// True when EITHER `.svelte-kit/types/` exists OR a top-level
-/// `svelte.config.{js,mjs,ts}` references `@sveltejs/kit`.
+/// True when `.svelte-kit/types/` exists, or a top-level config file
+/// references `@sveltejs/kit`.
+///
+/// The config probe covers `vite.config.*` as well as `svelte.config.*`
+/// because SvelteKit 3 drops `svelte.config.js` entirely — its settings
+/// move into the `sveltekit()` plugin call in the Vite config, so a
+/// fresh SvelteKit 3 checkout has no `svelte.config.*` to find.
 fn is_kit_project(workspace: &std::path::Path) -> bool {
     if workspace.join(".svelte-kit").join("types").is_dir() {
         return true;
     }
-    for filename in ["svelte.config.js", "svelte.config.mjs", "svelte.config.ts"] {
+    for filename in [
+        "svelte.config.js",
+        "svelte.config.mjs",
+        "svelte.config.ts",
+        "vite.config.js",
+        "vite.config.mjs",
+        "vite.config.ts",
+        "vite.config.mts",
+    ] {
         let path = workspace.join(filename);
         if let Ok(content) = std::fs::read_to_string(&path) {
             if content.contains("@sveltejs/kit") {

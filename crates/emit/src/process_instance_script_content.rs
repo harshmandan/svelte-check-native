@@ -24,10 +24,7 @@
 use std::collections::HashSet;
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{
-    BindingPattern, Declaration, ImportOrExportKind, Statement, TSModuleBlock,
-    TSNamespaceDeclarationBody,
-};
+use oxc_ast::ast::{BindingPattern, Declaration, ImportOrExportKind, Statement};
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
 use svn_parser::{ScriptLang, parse_script_body};
@@ -109,45 +106,6 @@ struct PendingType {
     end: usize,
     name: SmolStr,
     deps: TypeDeps,
-}
-
-/// Collect type-dependency identifiers from a `namespace`/`module`
-/// block's top-level type aliases and interfaces, feeding the
-/// declare-const stub pass — the AST equivalent of scanning a hoisted
-/// namespace span. (Namespaces hoist verbatim; their nested type decls
-/// can reference body-local names that need a module-scope stub.)
-fn collect_module_block_type_idents(block: &TSModuleBlock<'_>, out: &mut HashSet<SmolStr>) {
-    for stmt in &block.body {
-        // Unwrap a bare or `export`-ed type alias / interface.
-        let decl: Option<&Declaration<'_>> = match stmt {
-            Statement::ExportDeclaration(e) => Some(&e.declaration),
-            _ => stmt.as_declaration(),
-        };
-        // Top-level-only contract: only type aliases and interfaces
-        // carry dependency idents that the declare-const stub pass
-        // needs; the remaining declaration kinds are enumerated so a
-        // new oxc `Declaration` variant fails compilation instead of
-        // silently contributing nothing.
-        match decl {
-            Some(Declaration::TSTypeAliasDeclaration(d)) => {
-                out.extend(collect_alias_deps(d).idents)
-            }
-            Some(Declaration::TSInterfaceDeclaration(d)) => {
-                out.extend(collect_interface_deps(d).idents)
-            }
-            Some(
-                Declaration::VariableDeclaration(_)
-                | Declaration::FunctionDeclaration(_)
-                | Declaration::ClassDeclaration(_)
-                | Declaration::TSEnumDeclaration(_)
-                | Declaration::TSExternalModuleDeclaration(_)
-                | Declaration::TSNamespaceDeclaration(_)
-                | Declaration::TSGlobalDeclaration(_)
-                | Declaration::TSImportEqualsDeclaration(_),
-            )
-            | None => {}
-        }
-    }
 }
 
 /// Split out every module-level statement (imports, exports of all
@@ -326,6 +284,9 @@ pub fn split_imports(
     // hoist spans. Value-shape hoists (imports, `export … from`) can't
     // reference body locals, so they contribute nothing and are skipped.
     let mut hoisted_type_idents: HashSet<SmolStr> = HashSet::new();
+    // Names of namespaces declared in the instance script — un-hoistable,
+    // along with anything that depends on them.
+    let mut namespace_names: Vec<SmolStr> = Vec::new();
 
     for stmt in &parsed.program.body {
         match stmt {
@@ -445,28 +406,32 @@ pub fn split_imports(
             Statement::ExportAllDeclaration(decl) => {
                 hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
             }
-            // TypeScript `namespace Foo { ... }` (and the equivalent
-            // `module Foo { ... }`). Allowed only at the module level
-            // (TS1235 inside a function); hoist verbatim.
+            // `namespace Foo { ... }` / `module Foo { ... }`. A
+            // namespace is invalid inside a function, and the instance
+            // script becomes one — so TS1235 is the correct diagnostic
+            // for writing one here, and upstream lets it fire rather
+            // than hoisting the namespace out to dodge it
+            // (`HoistableInterfaces.analyzeInstanceScriptNode`:
+            // "namespace declaration should not be in the instance
+            // script"). It records the name as un-hoistable instead,
+            // so a type that depends on the namespace stays in the body
+            // beside it rather than hoisting to a scope where the
+            // namespace isn't visible.
+            //
+            // Recording the name is all we do here; leaving the
+            // statement out of `hoist_spans` keeps it in the body.
+            // The dotted form (`namespace Foo.Bar { }`) is nested
+            // declarations whose outer name is still the plain
+            // identifier `Foo`, so it needs no special handling.
             Statement::TSNamespaceDeclaration(decl) => {
-                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
-                // Namespaces always hoist; feed their top-level type
-                // declarations' deps to the declare-const stub pass.
-                // A dotted namespace (`namespace Foo.Bar {}`) nests
-                // another declaration rather than a block, and its
-                // inner types were never collected — left that way.
-                if let TSNamespaceDeclarationBody::TSModuleBlock(block) = &decl.body {
-                    collect_module_block_type_idents(block, &mut hoisted_type_idents);
-                }
+                namespace_names.push(SmolStr::from(decl.id.name.as_str()));
             }
-            // `declare module 'foo' { ... }`. Split off from the
-            // namespace form upstream; both hoist verbatim.
-            Statement::TSExternalModuleDeclaration(decl) => {
-                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
-                if let Some(block) = &decl.body {
-                    collect_module_block_type_idents(block, &mut hoisted_type_idents);
-                }
-            }
+            // `declare module 'foo' { ... }` — a string-named external
+            // module rather than a namespace. Also stays in the body,
+            // but it introduces no name a local type could depend on
+            // (upstream's `ts.isIdentifier(node.name)` guard skips it
+            // for the same reason).
+            Statement::TSExternalModuleDeclaration(_) => {}
             // `type Foo = ...` and `interface Foo { ... }` — hoist so
             // the emitted default-export's `Component<Foo>` at module
             // scope can reference them.
@@ -650,6 +615,10 @@ pub fn split_imports(
     }
 
     let mut must_stay_body: HashSet<SmolStr> = HashSet::new();
+    // A namespace declared in the instance script never leaves it, so
+    // nothing that references one may hoist either. Seeded before the
+    // rules below so the transitive pass carries it to dependents.
+    must_stay_body.extend(namespace_names);
     for pending in &pending_type_spans {
         if body_names_set.is_empty() {
             continue;
@@ -1060,23 +1029,81 @@ let x = 1;
         assert!(!s.body.contains("export"));
     }
 
+    /// A namespace is illegal inside a function, and the instance
+    /// script becomes one — so TS1235 is the right answer for writing
+    /// one there. Hoisting the namespace out would suppress a
+    /// diagnostic the user should see, which is why upstream leaves it
+    /// in place (`HoistableInterfaces.analyzeInstanceScriptNode`) and
+    /// its `ts-runes-hoistable-props-false-12.v5` fixture shows the
+    /// namespace still inside `$$render()`. We match that.
     #[test]
-    fn typescript_namespace_is_hoisted() {
-        // `namespace Foo { ... }` is illegal inside a function (TS1235);
-        // must be lifted to module level.
+    fn instance_script_namespace_stays_in_the_body() {
         let src = "let x = 1;\nnamespace Foo { export type Bar = number; }";
         let s = split_imports(src, ScriptLang::Ts, false, None);
         assert!(
-            s.hoisted.contains("namespace Foo"),
-            "namespace must be hoisted:\n{}",
+            !s.hoisted.contains("namespace Foo"),
+            "namespace must not be hoisted:\n{}",
             s.hoisted
         );
         assert!(
-            !s.body.contains("namespace"),
-            "blanked from body:\n{}",
+            s.body.contains("namespace Foo"),
+            "namespace must survive in the body:\n{}",
             s.body
         );
         assert!(s.body.contains("let x = 1;"));
+    }
+
+    /// The other half of upstream's rule: a type that depends on an
+    /// instance-script namespace has to stay beside it, since hoisting
+    /// it would move it to a scope where the namespace isn't visible.
+    #[test]
+    fn types_depending_on_a_namespace_stay_in_the_body() {
+        let src = "namespace A { export type Abc = number; }\ninterface Props { foo: A.Abc }";
+        let s = split_imports(src, ScriptLang::Ts, false, None);
+        assert!(
+            !s.hoisted.contains("interface Props"),
+            "dependent interface must not be hoisted:\n{}",
+            s.hoisted
+        );
+        assert!(s.body.contains("interface Props"));
+    }
+
+    /// The dotted form nests declarations rather than holding a block,
+    /// so a reader looking for the namespace's contents finds something
+    /// different in shape. Nothing here depends on the contents, and
+    /// the outer name is a plain identifier either way.
+    #[test]
+    fn dotted_and_nested_namespaces_behave_like_the_flat_form() {
+        for src in [
+            "const a = 1;\nnamespace Outer.Inner { export type C = typeof a; }",
+            "const a = 1;\nnamespace Outer { export namespace Inner { export type C = typeof a; } }",
+        ] {
+            let s = split_imports(src, ScriptLang::Ts, false, None);
+            assert!(
+                !s.hoisted.contains("namespace"),
+                "must not be hoisted:\n{}",
+                s.hoisted
+            );
+            // No `declare const a` stub either: nothing was hoisted, so
+            // nothing needs a module-scope stand-in for the body local.
+            assert!(
+                !s.hoisted.contains("declare const a"),
+                "no stub should be synthesised:\n{}",
+                s.hoisted
+            );
+            assert!(s.body.contains("namespace Outer"));
+        }
+    }
+
+    /// `declare module 'foo'` is a string-named external module, not a
+    /// namespace. It stays in the body too, and introduces no name a
+    /// local type could depend on.
+    #[test]
+    fn external_module_declaration_stays_in_the_body() {
+        let src = "declare module 'foo' { export const x: number; }\nlet y = 1;";
+        let s = split_imports(src, ScriptLang::Ts, false, None);
+        assert!(!s.hoisted.contains("declare module"));
+        assert!(s.body.contains("declare module 'foo'"));
     }
 
     #[test]

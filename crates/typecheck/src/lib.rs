@@ -516,6 +516,10 @@ impl CheckSession {
             overlay_text,
             source_text,
             identity_map: matches!(input.kind, InputKind::KitFile | InputKind::UserTsOverlay),
+            // For Svelte inputs this IS the script's language; the
+            // other kinds are always TS overlays and are decided by
+            // their source path's extension instead.
+            svelte_script_is_ts: input.is_ts_overlay,
             kit_col_shifts: input.kit_col_shifts,
             ignore_regions,
             pug_template_ranges,
@@ -995,6 +999,27 @@ fn overlay_syntax_failures(
         .collect()
 }
 
+/// Which language a diagnostic is attributed to — the `(ts)` / `(js)`
+/// suffix in human output and the `source` field in machine output.
+///
+/// Mirrors upstream svelte-check, which decides it per reported file:
+/// a script file by its extension (`isTypescriptFile`, `incremental.ts`),
+/// and a `.svelte` file by its own `<script>` language
+/// (`DiagnosticsProvider.mapAndFilterDiagnostics`, keyed on the
+/// snapshot's `ScriptKind`) — the extension can't say for a component,
+/// since every `.svelte` file shares one.
+///
+/// Note this is upstream's `--tsgo` behaviour specifically. Its default
+/// engine labels everything `js`, which is what we used to do
+/// unconditionally; the CLI surface we mirror is the `--tsgo` one.
+pub fn diagnostic_source(path: &Path, svelte_script_is_ts: bool) -> DiagnosticSource {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("ts" | "tsx" | "mts" | "cts") => DiagnosticSource::Ts,
+        Some("svelte") if svelte_script_is_ts => DiagnosticSource::Ts,
+        _ => DiagnosticSource::Js,
+    }
+}
+
 fn map_diagnostic(
     mut raw: RawDiagnostic,
     layout: &CacheLayout,
@@ -1024,7 +1049,12 @@ fn map_diagnostic(
     if excluded_kit_sources.contains(&absolute_file) {
         return None;
     }
-    let (source_path, line, column) = match layout.original_from_generated(&absolute_file) {
+    // The tuple carries `svelte_script_is_ts` out of the overlay arm so
+    // the `ts`/`js` label can be decided below without a second
+    // `map_data` lookup — only that arm has the snapshot that knows.
+    let (source_path, line, column, svelte_script_is_ts) = match layout
+        .original_from_generated(&absolute_file)
+    {
         Some(orig) => {
             // For overlay files, require the position to resolve to a
             // verbatim user-source origin OR a token-map entry.
@@ -1184,7 +1214,7 @@ fn map_diagnostic(
                     {
                         return None;
                     }
-                    (orig, mapped_line, mapped_col)
+                    (orig, mapped_line, mapped_col, data.svelte_script_is_ts)
                 }
                 None => return None,
             }
@@ -1195,13 +1225,16 @@ fn map_diagnostic(
         // real `.svelte-kit/types/...` tree — upstream svelte-check
         // reports them there because its program loads the user tree
         // directly. The mirror rewrite never adds or removes lines, so
-        // positions pass through unchanged.
+        // positions pass through unchanged. Nothing here is a
+        // `.svelte` file either, so the `ts`/`js` flag goes unread and
+        // the extension decides on its own.
         None => match layout.original_from_kit_types_mirror(&absolute_file) {
-            Some(orig) => (orig, raw.line, raw.column),
-            None => (absolute_file, raw.line, raw.column),
+            Some(orig) => (orig, raw.line, raw.column, false),
+            None => (absolute_file, raw.line, raw.column, false),
         },
     };
     let span = raw.span_length.unwrap_or(0);
+    let source = diagnostic_source(&source_path, svelte_script_is_ts);
     Some(CheckDiagnostic {
         source_path,
         line,
@@ -1213,9 +1246,7 @@ fn map_diagnostic(
         severity: raw.severity,
         code: DiagnosticCode::Numeric(raw.code),
         message: raw.message,
-        // Both TS and JS diagnostics from tsgo are classified as `js`
-        // by upstream svelte-check (same backend).
-        source: DiagnosticSource::Js,
+        source,
         // tsgo doesn't supply doc URLs in its compact output; we'd
         // need a static lookup table per error code to fill these in
         // (typescript.tv has them but mapping isn't 1-to-1). Leave
@@ -1228,6 +1259,36 @@ fn map_diagnostic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `(ts)` / `(js)` label upstream puts on each diagnostic. A
+    /// script file is decided by its extension; a component by its own
+    /// `<script>` language, since every component shares one extension.
+    #[test]
+    fn diagnostic_source_follows_the_file_it_reports_against() {
+        let ts = |p: &str, svelte_ts: bool| diagnostic_source(Path::new(p), svelte_ts);
+
+        // Script files: extension decides, and the flag is irrelevant.
+        for ext in ["ts", "tsx", "mts", "cts"] {
+            assert_eq!(ts(&format!("/w/src/a.{ext}"), false), DiagnosticSource::Ts);
+        }
+        for ext in ["js", "mjs", "cjs"] {
+            assert_eq!(ts(&format!("/w/src/a.{ext}"), true), DiagnosticSource::Js);
+        }
+
+        // Components: the script's language decides.
+        assert_eq!(ts("/w/src/A.svelte", true), DiagnosticSource::Ts);
+        assert_eq!(ts("/w/src/A.svelte", false), DiagnosticSource::Js);
+
+        // Kit files land here by extension too — a `.js` hooks file is
+        // `js` even though we always generate a TypeScript overlay for it.
+        assert_eq!(ts("/w/src/hooks.server.ts", false), DiagnosticSource::Ts);
+        assert_eq!(ts("/w/src/hooks.server.js", true), DiagnosticSource::Js);
+
+        // Anything unrecognised falls back to `js`, as upstream's
+        // regex-based check does.
+        assert_eq!(ts("/w/src/a.json", false), DiagnosticSource::Js);
+        assert_eq!(ts("/w/src/noext", false), DiagnosticSource::Js);
+    }
     use std::collections::{HashMap, HashSet};
     // Tests of moved helpers reference them via their new module
     // paths. Pulled in here so the test bodies stay verbatim.

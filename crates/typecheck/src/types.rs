@@ -108,6 +108,11 @@ pub struct MapData {
     /// the original source plus sparse `: T` insertions that never add
     /// lines — diagnostics against unmodified regions line up 1:1.
     pub identity_map: bool,
+    /// Whether the `.svelte` source this overlay came from has a
+    /// TypeScript `<script>`. Only consulted for `.svelte` paths, where
+    /// the extension alone can't say — see
+    /// [`crate::diagnostic_source`].
+    pub svelte_script_is_ts: bool,
     /// See [`CheckInput::kit_col_shifts`]. Sorted by line, then column.
     pub kit_col_shifts: Vec<(u32, u32, u32)>,
     /// Byte-offset ranges (start, end) in the overlay where emit has
@@ -284,6 +289,7 @@ impl std::fmt::Display for DiagnosticCode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSource {
     Js,
+    Ts,
     Svelte,
     Css,
 }
@@ -292,6 +298,7 @@ impl DiagnosticSource {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Js => "js",
+            Self::Ts => "ts",
             Self::Svelte => "svelte",
             Self::Css => "css",
         }

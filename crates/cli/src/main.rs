@@ -956,9 +956,13 @@ fn missing_svelte_import_diagnostics(
     doc: &svn_parser::Document<'_>,
     resolver: &svn_enhance::SvelteImportResolver,
 ) -> Vec<svn_typecheck::CheckDiagnostic> {
+    let script_is_ts = matches!(doc.script_lang(), svn_parser::ScriptLang::Ts);
     svn_enhance::missing_svelte_import_diagnostics(file, source, doc, resolver)
         .into_iter()
         .map(|d| svn_typecheck::CheckDiagnostic {
+            // Same `ts`/`js` rule as the tsgo-mapped diagnostics: these
+            // land on a `.svelte` file, so the script's language decides.
+            source: svn_typecheck::diagnostic_source(&d.file, script_is_ts),
             source_path: d.file,
             line: d.line,
             column: d.column,
@@ -967,8 +971,6 @@ fn missing_svelte_import_diagnostics(
             severity: svn_typecheck::Severity::Error,
             code: svn_typecheck::DiagnosticCode::Numeric(d.code),
             message: d.message,
-            // Upstream classifies TS diagnostics under the `js` source.
-            source: svn_typecheck::DiagnosticSource::Js,
             code_description_url: None,
         })
         .collect()

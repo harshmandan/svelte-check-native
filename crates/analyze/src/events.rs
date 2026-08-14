@@ -1272,4 +1272,33 @@ mod tests {
             vec!["inner"]
         );
     }
+
+    /// A concise arrow body (`() => dispatch('x')`) holds an expression
+    /// where a braced one holds statements. The walkers reach inside
+    /// both, and the every-day way to write a handler is the concise
+    /// form — so a descent that only understands blocks would go on
+    /// compiling while silently finding no events here.
+    #[test]
+    fn dispatch_found_in_concise_arrow_bodies() {
+        let setup = "import { createEventDispatcher } from 'svelte';\nconst dispatch = createEventDispatcher();\n";
+        assert_eq!(
+            dispatched_names(&format!("{setup}const go = () => dispatch('go');")),
+            vec!["go"]
+        );
+        // Nested one level down, as a callback argument.
+        assert_eq!(
+            dispatched_names(&format!(
+                "{setup}const all = items.map((i) => dispatch('each'));"
+            )),
+            vec!["each"]
+        );
+        // Concise body wrapping a braced one — the inner block still
+        // has to be reached through the outer expression.
+        assert_eq!(
+            dispatched_names(&format!(
+                "{setup}const go = () => run(() => {{ dispatch('deep'); }});"
+            )),
+            vec!["deep"]
+        );
+    }
 }

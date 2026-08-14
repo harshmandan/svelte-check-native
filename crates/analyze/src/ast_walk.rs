@@ -544,3 +544,59 @@ macro_rules! non_declaration_statement {
             | ::oxc_ast::ast::Statement::WithStatement(_)
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxc_allocator::Allocator;
+    use svn_parser::{ScriptLang, parse_script_body};
+
+    /// Statements recovered from the initializer of the program's
+    /// single `const`, as source text.
+    fn recovered(src: &str) -> Vec<String> {
+        let alloc = Allocator::default();
+        let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
+        let mut out = Vec::new();
+        for stmt in &parsed.program.body {
+            if let Statement::VariableDeclaration(decl) = stmt {
+                for d in &decl.declarations {
+                    if let Some(init) = &d.init {
+                        collect_function_body_stmts(init, &mut out);
+                    }
+                }
+            }
+        }
+        out.iter()
+            .map(|s| {
+                let span = oxc_span::GetSpan::span(*s);
+                src[span.start as usize..span.end as usize].to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn braced_arrow_bodies_yield_their_statements() {
+        assert_eq!(recovered("const f = () => { let a = 1; };"), ["let a = 1;"]);
+    }
+
+    /// A concise body holds an expression, not statements — but the
+    /// bodies we're after can be nested inside that expression, and an
+    /// arrow written concisely is the common case. An implementation
+    /// that only understood braced bodies would return nothing here
+    /// and never fail to compile.
+    #[test]
+    fn concise_arrow_bodies_are_still_descended_into() {
+        assert_eq!(
+            recovered("const f = () => run(() => { let a = 1; });"),
+            ["let a = 1;"]
+        );
+        // Two concise levels before the braced one.
+        assert_eq!(
+            recovered("const f = () => (() => run(() => { let b = 2; }))();"),
+            ["let b = 2;"]
+        );
+        // A concise body with nothing to find yields nothing, rather
+        // than misreporting the expression as a statement.
+        assert!(recovered("const f = () => 1 + 1;").is_empty());
+    }
+}

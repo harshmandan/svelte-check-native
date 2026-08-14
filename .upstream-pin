@@ -7,8 +7,8 @@
 # manual review pass confirms no behavior gap or test gap.
 
 [language-tools]
-sha = "d6536401ce7d367c94d0710e24255a6728d3c0ed"
-note = "svelte-check@4.7.2 — zero-config +error.svelte props (#3076), tsgo bin via package.json (#3074), tsconfig errors in experimental-api (#3070)"
+sha = "0bab63aeb29da335c96480701d8f16f592b4a529"
+note = "svelte-check@4.7.4 — SvelteKit 3 support: kit options merged at the top level of the vite plugin config (#3104), hooks types imported from @sveltejs/kit/hooks (#3106), tsgo located via the @typescript/native npm alias (#3073)"
 
 [svelte-compiler]
 # The Svelte compiler repo tracked locally under

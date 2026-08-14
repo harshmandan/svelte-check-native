@@ -6,6 +6,84 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0]
+
+SvelteKit 3 RC compatibility, plus two parity corrections and a
+dependency port. Nothing here changes the CLI surface, but two of the
+fixes make errors appear that previously did not — see the note at the
+end.
+
+### Added
+
+- **SvelteKit hooks and param matchers are typed.** `hooks.server.ts`,
+  `hooks.client.ts`, the universal hooks file (and their configured or
+  directory forms), and `src/params/*` matchers now receive the same
+  annotations upstream splices in: the handler type projected onto both
+  the parameter (`Parameters<T>[0]`) and the return (`ReturnType<T>`),
+  and `string`-in / `boolean`-out for a matcher's `match`. Previously
+  these files were recognised but left untyped, so an ordinary
+  `export const handle = async ({ event, resolve }) => …` produced two
+  implicit-`any` errors that upstream does not report, while missing
+  the one it does. Which module the hook types come from follows the
+  installed SvelteKit — `@sveltejs/kit` before 3, `@sveltejs/kit/hooks`
+  from 3 on.
+
+### Fixed
+
+- **SvelteKit 3's `"extends": "$app/tsconfig"` resolves.** Kit 3 moves
+  its generated config from `.svelte-kit/tsconfig.json` to
+  `node_modules/$app/tsconfig.json`. We only tried the literal path,
+  which is a directory there, so the whole parent config was skipped
+  and the project silently lost its generated `rootDirs` — the thing
+  that makes `./$types` resolve from a route file. Every route-typed
+  diagnostic disappeared. Package-subpath `extends` now picks up
+  `.json` the way TypeScript does.
+- **`types: ["$app/types"]` is kept.** Kit 3 generates
+  `node_modules/$app/types/index.d.ts` with no `package.json` beside
+  it; the entry was being dropped as unresolvable, costing the project
+  its `App.*` interfaces and `svelte/elements` augmentation.
+- **`$app/*` fallback ambients know SvelteKit 3.** The fallback used
+  in workspaces where `@sveltejs/kit` isn't reachable was shaped
+  entirely around Kit 2 — it declared `$app/environment` but not its
+  `$app/env` replacement, missed `$app/manifest` and
+  `$app/service-worker`, and knew only the removed half of
+  `$app/paths`. Kit-project detection also probed only
+  `svelte.config.*`, which Kit 3 removes, so a fresh Kit 3 checkout
+  looked like a non-Kit project.
+- **Instance-script namespaces stay in the render body.** A namespace
+  is illegal inside a function and the instance script becomes one, so
+  TS1235 is the correct diagnostic; hoisting the namespace out
+  suppressed it and caused knock-on problems — `typeof local` inside
+  the namespace resolved to a synthetic stub's shape, and the dotted
+  (`namespace Foo.Bar {}`) and nested forms failed to resolve at all.
+  Matches upstream, which declines to hoist for the same reason.
+- **Diagnostics are labelled `ts` or `js` per file.** Every
+  tsgo-derived diagnostic was hardcoded to `js`. Upstream's `--tsgo`
+  surface decides per reported file — a script file by its extension, a
+  component by its own `<script>` language — so a type error in a
+  `lang="ts"` component read `(js)` where upstream says `(ts)`, in
+  human output and the machine format's `source` field alike.
+
+### Changed
+
+- **oxc 0.142 → 0.144.** Named exports split into three AST node kinds,
+  arrow bodies stopped being normalised into blocks, and TS module
+  declarations split into external-module and namespace forms. Ported
+  with no emit change: all 18 bench workspaces produce byte-identical
+  diagnostics, and the emit snapshot corpus is unchanged.
+- **Upstream `language-tools` submodule → svelte-check 4.7.4**
+  (`d6536401` → `0bab63ae`), which is the tip of upstream's own
+  SvelteKit 3 work.
+
+### Note on new errors
+
+Two fixes here cause errors to be reported that earlier versions
+missed: TS1235 on a namespace declared in an instance `<script>`, and
+upstream's return-type diagnostic on an untyped hooks handler. Both
+match what `svelte-check --tsgo` reports on the same input, so this is
+the tool converging on upstream rather than becoming stricter than it —
+but a project sitting on either shape may see CI go red on upgrade.
+
 ## [1.3.0]
 
 Performance release: warm no-change runs drop from ~1.4-1.8s to

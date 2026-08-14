@@ -20,6 +20,7 @@ fetch from git history if you need them.
 
 | Dir | What it validates | Shipped via |
 |---|---|---|
+| `kit_hooks_params/` | Hooks / param-matcher annotation shape — `Parameters<T>[0]` in, `ReturnType<T>` out, from `@sveltejs/kit/hooks` on SvelteKit 3 | hooks + params kit_inject branch |
 | `gap_e_snippet_typing/` | Charter exception — ours more correct than upstream on snippet-receiver typing. WORKING AS EXPECTED. | n/a (charter) |
 | `js_render_full_projection/` | JS-overlay render return `{ props, events, slots, bindings, exports }` + `Component<Props, Exports>` default-export projection | JS-mode exports surface |
 | `precise_event_typing/` | `<Child on:NAME />` typed event-name narrowing | R-Conv #12 (Cluster B) |

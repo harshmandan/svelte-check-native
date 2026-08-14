@@ -1230,6 +1230,45 @@ fn escape_solution_tsconfig(candidate: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Convert `kit_inject`'s byte-offset splices into the `(line, column,
+/// length)` triples the diagnostic mapper subtracts, so a diagnostic on
+/// an annotated line reports the column the user typed rather than the
+/// one our annotation pushed it to.
+///
+/// Columns are UTF-16 code units, matching what tsgo reports. The
+/// spliced text is always ASCII, so its own length needs no conversion;
+/// the text BEFORE it on the line does, since a hook parameter can be
+/// preceded by anything.
+fn kit_inject_col_shifts(injected: &svn_emit::kit_inject::Injected) -> Vec<(u32, u32, u32)> {
+    let text = &injected.text;
+    let mut shifts = Vec::with_capacity(injected.insertions.len());
+    let mut line = 1u32;
+    let mut line_start = 0usize;
+    let mut scanned = 0usize;
+
+    for &(offset, len) in &injected.insertions {
+        // Advance the line counter to the splice, remembering where its
+        // line began. Insertions arrive in ascending offset order, so
+        // this scans the text once overall rather than once per splice.
+        for (i, byte) in text.as_bytes()[scanned..offset].iter().enumerate() {
+            if *byte == b'\n' {
+                line += 1;
+                line_start = scanned + i + 1;
+            }
+        }
+        scanned = offset;
+        // 1-based, to match the columns tsgo reports and the mapper
+        // compares against.
+        let column = text[line_start..offset]
+            .chars()
+            .map(char::len_utf16)
+            .sum::<usize>()
+            + 1;
+        shifts.push((line, column as u32, len as u32));
+    }
+    shifts
+}
+
 /// Default flow: parse + emit each .svelte file, hand the lot to tsgo,
 /// format diagnostics, exit with the appropriate code.
 ///
@@ -1583,6 +1622,7 @@ fn run_typecheck(
                     source_path: file.clone(),
                     source: source.clone(),
                     generated_ts: emitted.typescript,
+                    kit_col_shifts: Vec::new(),
                     line_map: emitted.line_map,
                     token_map: emitted.token_map,
                     overlay_line_starts: emitted.overlay_line_starts,
@@ -1618,16 +1658,25 @@ fn run_typecheck(
         // out over rayon like the `.svelte` emit above. rayon's Vec
         // collect preserves the caller's order, so `inputs` stays
         // deterministic.
+        // Resolved once per run rather than per file: which module the
+        // hook types live in is a property of the installed SvelteKit,
+        // and every kit file in a workspace resolves the same one.
+        let kit_inject_opts = svn_emit::kit_inject::KitInjectOptions {
+            settings: kit_files_settings,
+            hooks_types_module: svn_core::sveltekit::hooks_types_module(workspace),
+        };
         prepared.extend(
             kit_files
                 .par_iter()
                 .filter_map(|file| {
                     let source = std::fs::read_to_string(file).ok()?;
-                    let generated = svn_emit::kit_inject::inject(file, &source)?;
+                    let injected = svn_emit::kit_inject::inject(file, &source, &kit_inject_opts)?;
+                    let kit_col_shifts = kit_inject_col_shifts(&injected);
                     Some(session_ref.prepare(svn_typecheck::CheckInput {
                         source_path: file.clone(),
                         source: "".into(),
-                        generated_ts: generated,
+                        generated_ts: injected.text,
+                        kit_col_shifts,
                         line_map: Vec::new(),
                         token_map: Vec::new(),
                         overlay_line_starts: Vec::new(),
@@ -1684,6 +1733,7 @@ fn run_typecheck(
                             source_path: (*file).clone(),
                             source: "".into(),
                             generated_ts: rewritten,
+                            kit_col_shifts: Vec::new(),
                             line_map: Vec::new(),
                             token_map: Vec::new(),
                             overlay_line_starts: Vec::new(),

@@ -66,11 +66,10 @@ pub fn sync_mirror(layout: &CacheLayout) -> std::io::Result<Option<PathBuf>> {
     // Pull the user-source needle list from the centralised primitive
     // so the rewriter stays in lockstep with discovery's classifier.
     // Defaults are used here because `sync_mirror`'s call chain
-    // (`typecheck::check`) doesn't currently thread the parsed
-    // svelte.config.js settings down — fine today since today's
-    // `user_source_needles` doesn't read any settings field. When
-    // hooks/params get added (and the cache copies catch up), the
-    // settings need to be plumbed through this call site.
+    // (`typecheck::check`) doesn't thread the parsed config settings
+    // down — fine as long as `user_source_needles` reads no settings
+    // field. The day it does, this call site needs the real settings
+    // plumbed to it.
     let settings = KitFilesSettings::default();
     let needles = user_source_needles(&settings);
     // Enumerate mirror candidates serially (directory traversal is
@@ -136,18 +135,16 @@ pub fn sync_mirror(layout: &CacheLayout) -> std::io::Result<Option<PathBuf>> {
 /// becomes `svelte/src/routes/`, redirecting the chain into the
 /// cache's typed Kit-file copies.
 ///
-/// Hooks (`src/hooks.{server,client,…}.{js,ts}`) and param matchers
-/// (`src/params/<matcher>.{js,ts}`) are deliberately NOT rewritten:
-/// `kit_inject` doesn't materialise cache copies for those (it only
-/// classifies `+server` / `+page` / `+layout` shapes today), so a
-/// rewritten chain points at a non-existent `<cache>/svelte/src/hooks…`.
-/// tsgo's rootDirs fallback would still reach the user-tree source
-/// via `<workspace>/src/hooks…`, but only by accident — leaving the
-/// chain as-is keeps resolution direct and avoids the rootDirs round-
-/// trip entirely. When `kit_inject` learns to type hooks/params (the
-/// `Handle` / `HandleFetch` / `HandleServerError` / `ParamMatcher`
-/// surfaces upstream svelte2tsx covers), the cache copy will appear
-/// and we can extend the rewriter at the same time.
+/// Only route chains are rewritten, because only route chains occur:
+/// SvelteKit's generated `$types.d.ts` reaches back into the user tree
+/// for route modules (`import('../../../src/routes/…')`) and nothing
+/// else. Hooks and param matchers are named from the `@sveltejs/kit`
+/// package instead, never by user-tree path, so there is no chain to
+/// redirect — even though `kit_inject` does now produce cache copies
+/// of them. Should a future SvelteKit start pointing generated types
+/// at a user's hooks or params file, this rewriter and
+/// `user_source_needles` are the two places that would need to learn
+/// about it together.
 ///
 /// Conservative substring match: only rewrites occurrences preceded
 /// by `../` (i.e. inside an existing relative-walk chain). A literal
@@ -270,8 +267,9 @@ mod tests {
     fn rewrites_routes_alongside_unmodified_hooks() {
         // Mixed input: hooks and params chains appear alongside a
         // routes chain in the same file. Only the routes chain is
-        // redirected; hooks/params stay pointing at the user tree
-        // because `kit_inject` doesn't produce cache copies for them.
+        // redirected; a hooks path is left alone because generated
+        // types never reach for one, so redirecting it would be a
+        // rewrite with no reader.
         let input =
             "x: import('../../src/hooks.server.js'); y: import('../../src/routes/a/+page.js');";
         let want = "x: import('../../src/hooks.server.js'); y: import('../../svelte/src/routes/a/+page.js');";

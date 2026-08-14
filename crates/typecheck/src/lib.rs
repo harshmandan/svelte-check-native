@@ -516,6 +516,7 @@ impl CheckSession {
             overlay_text,
             source_text,
             identity_map: matches!(input.kind, InputKind::KitFile | InputKind::UserTsOverlay),
+            kit_col_shifts: input.kit_col_shifts,
             ignore_regions,
             pug_template_ranges,
         };
@@ -2180,6 +2181,7 @@ mod tests {
             source_path,
             source: "".into(),
             generated_ts: emit_text.clone(),
+            kit_col_shifts: Vec::new(),
             line_map: Vec::new(),
             token_map: Vec::new(),
             overlay_line_starts: Vec::new(),

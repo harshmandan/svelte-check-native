@@ -108,6 +108,8 @@ pub struct MapData {
     /// the original source plus sparse `: T` insertions that never add
     /// lines — diagnostics against unmodified regions line up 1:1.
     pub identity_map: bool,
+    /// See [`CheckInput::kit_col_shifts`]. Sorted by line, then column.
+    pub kit_col_shifts: Vec<(u32, u32, u32)>,
     /// Byte-offset ranges (start, end) in the overlay where emit has
     /// marked scaffolding with `IGNORE_START_MARKER` / `IGNORE_END_MARKER`.
     /// Diagnostics whose start position falls inside any of these
@@ -178,6 +180,12 @@ pub struct CheckInput {
     /// load-bearing for third-party-integration clusters like the
     /// CodeMirror.svelte wrapper pattern.
     pub is_ts_overlay: bool,
+    /// Where `kit_inject` spliced annotations into a Kit file, as
+    /// `(1-based line, 0-based UTF-16 column in the overlay, inserted
+    /// UTF-16 length)`. Diagnostic mapping subtracts these from an
+    /// overlay column to recover the user's. Empty for every other
+    /// kind, and for Kit files whose overlay is a pure copy.
+    pub kit_col_shifts: Vec<(u32, u32, u32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

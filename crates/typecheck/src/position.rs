@@ -116,15 +116,38 @@ pub(crate) fn translate_position(
         return Some((mapped, overlay_col));
     }
     // Identity-map kit files: `kit_inject` splices `: T` annotations on
-    // existing lines — overlay never adds lines. Diagnostics against
-    // unmodified regions (the common case) line up 1:1 on both axes;
-    // on-insertion-line columns may drift but tsgo's diagnostics
-    // against kit files are rare and the approximation is better than
-    // dropping them entirely.
+    // existing lines and never adds one, so the line passes through and
+    // only the column can move — by exactly the length of whatever was
+    // spliced earlier on that same line.
     if data.identity_map {
-        return Some((overlay_line, overlay_col));
+        return Some((
+            overlay_line,
+            unshift_column(&data.kit_col_shifts, overlay_line, overlay_col),
+        ));
     }
     None
+}
+
+/// Walk an overlay column back to the source column by subtracting the
+/// annotations spliced ahead of it on the same line.
+///
+/// A column that lands *inside* a splice has no source counterpart —
+/// the text there is ours, not the user's — so it collapses to the
+/// splice's start, which is the character the user actually wrote at
+/// that point.
+fn unshift_column(shifts: &[(u32, u32, u32)], line: u32, col: u32) -> u32 {
+    let mut shifted = col;
+    for &(shift_line, shift_col, len) in shifts {
+        if shift_line != line || shift_col > col {
+            continue;
+        }
+        shifted = shifted.saturating_sub(if shift_col + len > col {
+            col - shift_col
+        } else {
+            len
+        });
+    }
+    shifted
 }
 
 /// Find the tightest [`TokenMapEntry`] whose overlay byte span
@@ -244,4 +267,52 @@ pub(crate) fn byte_to_position(line_starts: &[u32], text: &str, byte: u32) -> (u
         units = units.saturating_add(ch.len_utf16() as u32);
     }
     (line, units + 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unshift_column;
+
+    /// The two splices `kit_inject` makes in
+    ///
+    ///     export const handle = async ({ event, resolve }) => {
+    ///
+    /// against SvelteKit 3: a 53-unit parameter annotation at column 48
+    /// (just past the destructure's `}`), then a 51-unit return
+    /// annotation at column 103 (where `=>` sat, pushed right by the
+    /// first splice). Measured from a real overlay, not invented.
+    const HOOK_SPLICES: [(u32, u32, u32); 2] = [(1, 48, 53), (1, 103, 51)];
+
+    #[test]
+    fn columns_before_every_splice_are_untouched() {
+        assert_eq!(unshift_column(&HOOK_SPLICES, 1, 1), 1);
+        assert_eq!(unshift_column(&HOOK_SPLICES, 1, 32), 32);
+    }
+
+    #[test]
+    fn a_column_past_both_splices_loses_both_lengths() {
+        // Overlay column 105 is the `ReturnType` the async-return
+        // diagnostic fires on; the user wrote `=>` at column 50 there,
+        // which is where upstream reports it.
+        assert_eq!(unshift_column(&HOOK_SPLICES, 1, 105), 50);
+    }
+
+    #[test]
+    fn a_column_between_the_splices_loses_only_the_first() {
+        // Overlay column 101 is the `)` closing the parameter list.
+        assert_eq!(unshift_column(&HOOK_SPLICES, 1, 101), 48);
+    }
+
+    #[test]
+    fn columns_inside_a_splice_collapse_to_where_it_starts() {
+        // There is no user text under a splice, so the honest answer is
+        // the character the user wrote at that point.
+        assert_eq!(unshift_column(&HOOK_SPLICES, 1, 60), 48);
+        assert_eq!(unshift_column(&HOOK_SPLICES, 1, 100), 48);
+    }
+
+    #[test]
+    fn only_splices_on_the_same_line_apply() {
+        assert_eq!(unshift_column(&HOOK_SPLICES, 2, 105), 105);
+    }
 }

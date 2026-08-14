@@ -39,11 +39,10 @@
 //! ### `.js` route file note
 //!
 //! `+page.js` / `+layout.js` / `+server.js` are recognised by
-//! [`classify`] (`lang == ScriptLang::Js`). Today, `kit_inject` only
-//! injects type annotations into `.ts` files — `.js` overlays would
-//! need JSDoc-form annotations, which is a separate code path. The
-//! classifier doesn't filter `.js` out at this layer; downstream
-//! consumers gate on `lang` if they care.
+//! [`classify`] (`lang == ScriptLang::Js`). They are annotated too,
+//! but in JSDoc form rather than with TS syntax, which is why the
+//! classifier reports the language instead of filtering `.js` out —
+//! downstream consumers gate on `lang` to pick the right form.
 
 use std::borrow::Cow;
 use std::path::Path;
@@ -83,8 +82,7 @@ impl Default for KitFilesSettings {
 pub enum ScriptLang {
     /// `.ts` — kit_inject injects `: import('./$types.js').…` annotations.
     Ts,
-    /// `.js` — kit_inject doesn't run today (JSDoc form is a separate
-    /// code path); the file passes through to tsgo as-is.
+    /// `.js` — kit_inject annotates these too, in JSDoc form.
     Js,
     /// `.svelte` — handled by emit's overlay pipeline, not kit_inject.
     Svelte,
@@ -121,9 +119,8 @@ pub enum HooksScope {
 /// acts on the file:
 ///
 /// - `RouteComponent` → emit's overlay pipeline (`sveltekit.rs`).
-/// - `RouteScript` / `ServerEndpoint` → `kit_inject`.
-/// - `Hooks` / `Params` → discovery only today; `kit_inject` doesn't
-///   type them yet (parity with upstream's `defaultKitFilesSettings`).
+/// - Everything else → `kit_inject`, which splices the type
+///   annotations SvelteKit's own tooling would supply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KitRole {
     /// `+page.svelte` / `+layout.svelte` / `+error.svelte`.
@@ -416,13 +413,50 @@ fn normalise_path_seps(path: &str) -> Cow<'_, str> {
 /// `src/routes-extra/` typo.
 pub fn user_source_needles(_settings: &KitFilesSettings) -> Vec<String> {
     // Settings-derived hooks/params entries are intentionally NOT
-    // emitted — kit_inject doesn't materialise cache copies for
-    // those, so the rewriter must leave them pointing at user-tree.
+    // emitted: SvelteKit's generated types name those from the
+    // `@sveltejs/kit` package rather than by user-tree path, so there
+    // is no chain pointing at them to redirect.
     // The `_settings` parameter is kept on the signature so callers
     // pass it through (and so a future expansion that needs the
     // configured params/hooks paths doesn't require a signature
     // bump on every consumer).
     vec!["src/routes/".to_string()]
+}
+
+/// The module that exports SvelteKit's hook types (`Handle`,
+/// `HandleFetch`, `HandleServerError`, `HandleClientError`, `Reroute`).
+///
+/// SvelteKit 3 moved them out of the package root into a `hooks`
+/// subpath; before that they lived at the root. Which one is right
+/// depends on the version installed in the workspace, so read it from
+/// the resolved `@sveltejs/kit/package.json`. Mirrors upstream
+/// svelte2tsx `helpers/sveltekit.ts::getKitTypeImportPath`, including
+/// its fallback: anything unreadable or unparseable means "assume
+/// pre-3", because that's the reading that was correct for years and a
+/// wrong guess here shows up as an unresolved-import cascade.
+pub fn hooks_types_module(from: &Path) -> &'static str {
+    const ROOT: &str = "@sveltejs/kit";
+    const SUBPATH: &str = "@sveltejs/kit/hooks";
+
+    let major = crate::walk_up_dirs(from, |dir| {
+        let manifest = dir
+            .join(crate::NODE_MODULES_DIR)
+            .join("@sveltejs")
+            .join("kit")
+            .join("package.json");
+        let contents = std::fs::read_to_string(manifest).ok()?;
+        let parsed: serde_json::Value = serde_json::from_str(&contents).ok()?;
+        let version = parsed.get("version")?.as_str()?;
+        // `parse` on the leading numeric run — a version is
+        // `3.0.0-next.23` as often as `3.0.0`.
+        let digits: String = version.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse::<u32>().ok()
+    });
+
+    match major {
+        Some(major) if major >= 3 => SUBPATH,
+        _ => ROOT,
+    }
 }
 
 #[cfg(test)]

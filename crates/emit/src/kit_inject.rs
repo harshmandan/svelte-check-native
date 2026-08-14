@@ -25,6 +25,14 @@
 //!     - SvelteKit page-option exports (`ssr`, `csr`, `prerender`,
 //!       `trailingSlash`) get their fixed value-union types injected
 //!       on the declarator binding.
+//! - Hooks files (`src/hooks.server.ts` / `hooks.client.ts` /
+//!   `hooks.ts`, and their configured or directory forms) — each
+//!   recognised hook export gets its handler type projected onto both
+//!   the parameter (`Parameters<T>[0]`) and the return (`ReturnType<T>`).
+//!   Which module `T` comes from depends on the installed SvelteKit:
+//!   `@sveltejs/kit` before 3, `@sveltejs/kit/hooks` from 3 on.
+//! - Param matchers (`src/params/*.ts`) — `match` gets the one
+//!   concrete pair upstream uses, `string` in and `boolean` out.
 //!
 //! `.js` route files receive the same injections in JSDoc form
 //! (mirrors upstream `upsertKitFile`'s `isTsFile` split): `@param`
@@ -36,8 +44,6 @@
 //!
 //! - `actions` const satisfies pattern.
 //! - `entries` function in `+page.server.ts` / `+server.ts`.
-//! - `hooks.server.ts` / `hooks.client.ts` handler typing.
-//! - `src/params/*.ts` param matchers.
 //! - `+server.ts` page-option / `load` / `actions` / `entries`
 //!   typing. The `ServerEndpoint` branch below annotates HTTP
 //!   handler parameters and return types; it intentionally skips
@@ -50,7 +56,7 @@ use oxc_allocator::Allocator;
 use oxc_ast::ast::{BindingPattern, Declaration, Statement};
 use oxc_span::GetSpan;
 use std::path::Path;
-use svn_core::sveltekit::{KitFilesSettings, KitRole, ScriptLang, classify};
+use svn_core::sveltekit::{HooksScope, KitFilesSettings, KitRole, ScriptLang, classify};
 use svn_parser::{ScriptLang as ParserScriptLang, parse_script_body};
 
 /// HTTP method names that `+server.ts` may export as handler functions,
@@ -73,26 +79,54 @@ enum KitFileKind {
     /// consts get their fixed-union types. Sub-classification feeds
     /// the load-event name computation.
     Route { is_layout: bool, is_server: bool },
+    /// `src/hooks.server.ts` / `src/hooks.client.ts` / `src/hooks.ts`
+    /// (and the `<hooks-path>/index.ts` directory form). Each named
+    /// hook export gets its handler type projected onto the parameter
+    /// and the return.
+    Hooks { scope: HooksScope },
+    /// `src/params/<matcher>.ts`. Only `match` is typed: `string` in,
+    /// `boolean` out.
+    Params,
 }
 
-/// Classify `path` for kit_inject's purposes. Returns `None` for any
-/// shape we don't currently inject into:
+/// The hook exports each scope recognises, paired with the type name
+/// to project. Mirrors upstream svelte2tsx's `upsertKitServerHooksFile`
+/// / `upsertKitClientHooksFile` / `upsertKitUniversalHooksFile` — the
+/// set is closed, and an export outside it is left exactly as written.
+fn hook_type_name(scope: HooksScope, export_name: &str) -> Option<&'static str> {
+    match (scope, export_name) {
+        (HooksScope::Server, "handleError") => Some("HandleServerError"),
+        (HooksScope::Server, "handle") => Some("Handle"),
+        (HooksScope::Server, "handleFetch") => Some("HandleFetch"),
+        (HooksScope::Client, "handleError") => Some("HandleClientError"),
+        (HooksScope::Universal, "reroute") => Some("Reroute"),
+        _ => None,
+    }
+}
+
+/// Everything the inject pass needs beyond the file itself.
 ///
-/// - Hooks / params (recognised by discovery but no annotations
-///   injected today).
-/// - Plain user files.
+/// `settings` matters because hooks and param-matcher paths are
+/// user-configurable (`kit.files.hooks` / `kit.files.params`); route
+/// files are pure basename shapes and ignore it.
+#[derive(Debug, Clone, Copy)]
+pub struct KitInjectOptions<'a> {
+    pub settings: &'a KitFilesSettings,
+    /// Module the hook types are imported from — `@sveltejs/kit` before
+    /// SvelteKit 3, `@sveltejs/kit/hooks` from 3 on. Resolve it with
+    /// `svn_core::sveltekit::hooks_types_module`.
+    pub hooks_types_module: &'a str,
+}
+
+/// Classify `path` for kit_inject's purposes. Returns `None` for
+/// route components (they go through emit's overlay pipeline instead)
+/// and plain user files.
 ///
 /// The second tuple element is `true` for `.ts` sources; `.js` route
 /// files get the same injections in JSDoc form (mirrors upstream
 /// `upsertKitFile`'s `isTsFile` split).
-///
-/// Defaults are used for `KitFilesSettings` because kit_inject
-/// doesn't currently consult per-project overrides — only basename
-/// shape matters here, and the route-classification path inside
-/// `classify` doesn't read any of the settings fields. Centralising
-/// the defaults keeps the call site honest about that fact.
-fn kit_file_kind(path: &Path) -> Option<(KitFileKind, bool)> {
-    let kit = classify(path, &KitFilesSettings::default())?;
+fn kit_file_kind(path: &Path, settings: &KitFilesSettings) -> Option<(KitFileKind, bool)> {
+    let kit = classify(path, settings)?;
     let is_ts = matches!(kit.lang, ScriptLang::Ts);
     match kit.role {
         KitRole::ServerEndpoint => Some((KitFileKind::ServerEndpoint, is_ts)),
@@ -103,9 +137,11 @@ fn kit_file_kind(path: &Path) -> Option<(KitFileKind, bool)> {
             },
             is_ts,
         )),
-        // RouteComponent / Hooks / Params don't get annotations from
+        KitRole::Hooks { scope } => Some((KitFileKind::Hooks { scope }, is_ts)),
+        KitRole::Params => Some((KitFileKind::Params, is_ts)),
+        // Route components go through emit's overlay pipeline, not
         // this pass — return None so the caller skips them.
-        _ => None,
+        KitRole::RouteComponent { .. } => None,
     }
 }
 
@@ -128,16 +164,46 @@ fn has_preceding_jsdoc_typing(source: &str, stmt_start: usize) -> bool {
     block.contains("@type") || block.contains("@param") || block.contains("@satisfies")
 }
 
+/// A kit file's overlay: the user's source with type annotations
+/// spliced in, plus where they went.
+pub struct Injected {
+    /// The overlay text.
+    pub text: String,
+    /// Every splice, as `(byte offset in `text`, byte length)`, in
+    /// ascending offset order. Diagnostic mapping subtracts these to
+    /// recover the user's column — without them a diagnostic reported
+    /// against an annotated line points past where the user typed.
+    pub insertions: Vec<(usize, usize)>,
+}
+
 /// Returns the modified source with injected type annotations, or
 /// `None` if no injections were needed (no handlers matched OR all
 /// handlers already carry explicit types).
 ///
 /// The returned string preserves the original source's byte layout
 /// except at the insertion points — every insertion is purely
-/// additive, so diagnostic positions at lines unaffected by the
-/// inject still map 1:1 to the source.
-pub fn inject(path: &Path, source: &str) -> Option<String> {
-    let (kind, is_ts) = kit_file_kind(path)?;
+/// additive and none contains a newline, so line numbers are identical
+/// on both sides and only columns after a splice move.
+pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<Injected> {
+    let (kind, is_ts) = kit_file_kind(path, opts.settings)?;
+
+    // The type pair for a named export of a hooks / params file, or
+    // `None` when the export isn't one this file's role recognises.
+    let handler_types = |name: &str| -> Option<HandlerTypes> {
+        match kind {
+            KitFileKind::Hooks { scope } => hook_type_name(scope, name).map(|ty| {
+                let module = opts.hooks_types_module;
+                HandlerTypes::Projected {
+                    handler: format!("import('{module}').{ty}"),
+                }
+            }),
+            KitFileKind::Params if name == "match" => Some(HandlerTypes::Concrete {
+                param: "string",
+                ret: "boolean",
+            }),
+            _ => None,
+        }
+    };
 
     let alloc = Allocator::default();
     let parsed = parse_script_body(&alloc, source, ParserScriptLang::Ts);
@@ -186,6 +252,29 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                             );
                         }
                     }
+                    KitFileKind::Hooks { .. } | KitFileKind::Params => {
+                        let Some(types) = handler_types(name) else {
+                            continue;
+                        };
+                        if is_ts {
+                            collect_projected_handler_insert(
+                                &func.params,
+                                func.return_type
+                                    .is_none()
+                                    .then(|| func.body.as_ref().map(|b| b.span.start as usize))
+                                    .flatten(),
+                                &types,
+                                &mut insertions,
+                            );
+                        } else {
+                            collect_js_fn_type_insert(
+                                func,
+                                export.span.start as usize,
+                                &types.jsdoc_type(),
+                                &mut insertions,
+                            );
+                        }
+                    }
                     KitFileKind::Route {
                         is_layout,
                         is_server,
@@ -212,13 +301,6 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                 }
             }
             Some(Declaration::VariableDeclaration(var_decl)) => {
-                let KitFileKind::Route {
-                    is_layout,
-                    is_server,
-                } = &kind
-                else {
-                    continue;
-                };
                 // Upstream's findExports only registers single-declarator
                 // export const statements (declarations.length === 1); a
                 // multi-declarator list is ignored entirely, so skip it
@@ -236,6 +318,34 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
                     if js_user_typed {
                         continue;
                     }
+
+                    // Hooks and param matchers export function values
+                    // only, so they're fully handled here — nothing
+                    // below this point applies to them.
+                    if matches!(kind, KitFileKind::Hooks { .. } | KitFileKind::Params) {
+                        // An annotated variable (`export const handle:
+                        // Handle = …`) is upstream's `hasTypeDefinition`
+                        // — the user has taken responsibility for the
+                        // signature.
+                        if declarator.type_annotation.is_some() {
+                            continue;
+                        }
+                        let Some(types) = handler_types(id.name.as_str()) else {
+                            continue;
+                        };
+                        if let Some(init) = declarator.init.as_ref() {
+                            collect_fn_value_insert(init, source, is_ts, &types, &mut insertions);
+                        }
+                        continue;
+                    }
+
+                    let KitFileKind::Route {
+                        is_layout,
+                        is_server,
+                    } = &kind
+                    else {
+                        continue;
+                    };
 
                     // Page-option export (`prerender`, `ssr`, etc.):
                     // splice `: type` after the identifier (TS) or a
@@ -363,12 +473,28 @@ pub fn inject(path: &Path, source: &str) -> Option<String> {
         return None;
     }
 
-    insertions.sort_by_key(|(pos, _)| std::cmp::Reverse(*pos));
-    let mut out = source.to_string();
-    for (pos, text) in insertions {
-        out.insert_str(pos, &text);
+    // Splice back-to-front so each insertion's source offset is still
+    // valid when it happens, then walk forward once to record where
+    // each landed in the OUTPUT — which is the source offset shifted by
+    // everything spliced ahead of it.
+    insertions.sort_by_key(|(pos, _)| *pos);
+    let mut out = String::with_capacity(
+        source.len() + insertions.iter().map(|(_, t)| t.len()).sum::<usize>(),
+    );
+    let mut placed = Vec::with_capacity(insertions.len());
+    let mut cursor = 0usize;
+    for (pos, text) in &insertions {
+        out.push_str(&source[cursor..*pos]);
+        placed.push((out.len(), text.len()));
+        out.push_str(text);
+        cursor = *pos;
     }
-    Some(out)
+    out.push_str(&source[cursor..]);
+
+    Some(Injected {
+        text: out,
+        insertions: placed,
+    })
 }
 
 /// Mirrors upstream's load-event naming matrix. Server-side gets
@@ -496,6 +622,193 @@ fn collect_js_fn_type_insert(
     insertions.push((insert_at, format!("/** @type {{{fn_type}}} */ ")));
 }
 
+/// The type pair a hooks / param-matcher export gets. Upstream's
+/// `addTypeToFunction` takes an optional concrete return type and
+/// branches on it: with one, the parameter and return are annotated
+/// with the given types directly; without one, both are *projected*
+/// off a single handler type via `Parameters<T>[0]` and `ReturnType<T>`.
+///
+/// Hooks take the projecting form (one handler type each); a param
+/// matcher takes the concrete form (`string` in, `boolean` out).
+enum HandlerTypes {
+    Projected {
+        handler: String,
+    },
+    Concrete {
+        param: &'static str,
+        ret: &'static str,
+    },
+}
+
+impl HandlerTypes {
+    fn param_annotation(&self) -> String {
+        match self {
+            Self::Projected { handler } => format!(": Parameters<{handler}>[0]"),
+            Self::Concrete { param, .. } => format!(": {param}"),
+        }
+    }
+
+    fn return_annotation(&self) -> String {
+        match self {
+            Self::Projected { handler } => format!(": ReturnType<{handler}> "),
+            Self::Concrete { ret, .. } => format!(": {ret} "),
+        }
+    }
+
+    /// The JSDoc `@type` for the `.js` form. Upstream collapses the
+    /// pair into one function type when a concrete return exists, and
+    /// otherwise names the handler type directly.
+    fn jsdoc_type(&self) -> String {
+        match self {
+            Self::Projected { handler } => handler.clone(),
+            Self::Concrete { param, ret } => format!("(arg0: {param}) => {ret}"),
+        }
+    }
+}
+
+/// Splice a handler type onto a lone untyped parameter and, when the
+/// function has no return type of its own, onto its return position.
+///
+/// `return_insert_at` is where the return annotation goes — the body's
+/// opening brace for a function, the `=>` token for an arrow — or
+/// `None` when the function already declares a return type (or has no
+/// body, e.g. an overload signature). Mirrors upstream svelte2tsx
+/// `helpers/sveltekit.ts::addTypeToFunction`.
+fn collect_projected_handler_insert(
+    params: &oxc_ast::ast::FormalParameters<'_>,
+    return_insert_at: Option<usize>,
+    types: &HandlerTypes,
+    insertions: &mut Vec<(usize, String)>,
+) {
+    if params.items.len() != 1 {
+        return;
+    }
+    let param = &params.items[0];
+    if param.type_annotation.is_some() {
+        return;
+    }
+    insertions.push((param.pattern.span().end as usize, types.param_annotation()));
+    if let Some(pos) = return_insert_at {
+        insertions.push((pos, types.return_annotation()));
+    }
+}
+
+/// Splice a handler type onto a `export const <name> = <fn>` form,
+/// where `<fn>` is an arrow or a function expression. Any other
+/// initializer — an identifier, a `satisfies` wrapper, a call — is
+/// left alone: upstream's `findExports` only registers the two
+/// function forms as typeable, and a `satisfies` wrapper is
+/// user-supplied typing besides.
+fn collect_fn_value_insert(
+    init: &oxc_ast::ast::Expression<'_>,
+    source: &str,
+    is_ts: bool,
+    types: &HandlerTypes,
+    insertions: &mut Vec<(usize, String)>,
+) {
+    use oxc_ast::ast::Expression;
+    match init {
+        Expression::ArrowFunctionExpression(arrow) => {
+            if is_ts {
+                let return_at = arrow.return_type.is_none().then(|| {
+                    arrow_token_pos(
+                        source,
+                        arrow.params.span.end as usize,
+                        arrow.body.span.start as usize,
+                    )
+                });
+                collect_projected_handler_insert(
+                    &arrow.params,
+                    return_at.flatten(),
+                    types,
+                    insertions,
+                );
+            } else {
+                collect_js_value_fn_type_insert(
+                    &arrow.params,
+                    arrow.span.start as usize,
+                    types,
+                    insertions,
+                );
+            }
+        }
+        Expression::FunctionExpression(func) => {
+            if is_ts {
+                collect_projected_handler_insert(
+                    &func.params,
+                    func.return_type
+                        .is_none()
+                        .then(|| func.body.as_ref().map(|b| b.span.start as usize))
+                        .flatten(),
+                    types,
+                    insertions,
+                );
+            } else {
+                collect_js_value_fn_type_insert(
+                    &func.params,
+                    func.span.start as usize,
+                    types,
+                    insertions,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// JS twin of [`collect_fn_value_insert`]: one `@type` JSDoc block in
+/// front of the function value, mirroring upstream
+/// `addJsDocTypeToFunction`, which anchors on the function node's own
+/// start rather than the export statement's.
+fn collect_js_value_fn_type_insert(
+    params: &oxc_ast::ast::FormalParameters<'_>,
+    insert_at: usize,
+    types: &HandlerTypes,
+    insertions: &mut Vec<(usize, String)>,
+) {
+    if params.items.len() != 1 || params.items[0].type_annotation.is_some() {
+        return;
+    }
+    insertions.push((
+        insert_at,
+        format!("/** @type {{{}}} */ ", types.jsdoc_type()),
+    ));
+}
+
+/// Byte offset of an arrow function's `=>` token — where its return
+/// annotation has to go, since anything later would land inside the
+/// body.
+///
+/// Only the span between the parameter list and the body is scanned,
+/// and comments are skipped so that a `// x => y` note between the two
+/// can't be mistaken for the token. Callers only reach this when the
+/// arrow has no return type of its own, so nothing but whitespace,
+/// comments and the token itself can appear in that span.
+fn arrow_token_pos(source: &str, params_end: usize, body_start: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut i = params_end;
+    while i + 1 < body_start.min(bytes.len()) {
+        match (bytes[i], bytes[i + 1]) {
+            (b'/', b'/') => {
+                i += 2;
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            (b'/', b'*') => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 2;
+            }
+            (b'=', b'>') => return Some(i),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
 /// Arrow-function twin of [`collect_handler_insert`]. Used for
 /// `export const load = async ({…}) => {…}` form on `+page.ts` /
 /// `+page.server.ts` / `+layout.ts` / `+layout.server.ts`. Same
@@ -521,6 +834,21 @@ fn collect_arrow_handler_insert(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// Default settings plus the pre-SvelteKit-3 hook-types module.
+    /// Tests that care about the SvelteKit 3 module say so explicitly.
+    fn opts() -> KitInjectOptions<'static> {
+        static SETTINGS: std::sync::LazyLock<KitFilesSettings> =
+            std::sync::LazyLock::new(KitFilesSettings::default);
+        KitInjectOptions {
+            settings: &SETTINGS,
+            hooks_types_module: "@sveltejs/kit",
+        }
+    }
+
+    fn inject(path: &Path, source: &str) -> Option<String> {
+        super::inject(path, source, &opts()).map(|i| i.text)
+    }
 
     fn server_path() -> PathBuf {
         PathBuf::from("src/routes/+server.ts")
@@ -848,6 +1176,177 @@ export async function POST({ request }) { return new Response(''); }
                 "should not double-type: {source}"
             );
         }
+    }
+
+    // ===== Hooks and param matchers =====================================
+    //
+    // The expected strings below are not invented: they were taken from
+    // what upstream svelte-check --tsgo actually wrote to
+    // `.svelte-kit/.svelte-check/svelte/src/…` for these exact inputs.
+    // The spacing is upstream's too — the return annotation carries a
+    // leading space (it lands before the `=>` or `{`, which the source
+    // already separated with one) and a trailing one.
+
+    fn hooks_server_path() -> PathBuf {
+        PathBuf::from("src/hooks.server.ts")
+    }
+    fn hooks_client_path() -> PathBuf {
+        PathBuf::from("src/hooks.client.ts")
+    }
+    fn hooks_universal_path() -> PathBuf {
+        PathBuf::from("src/hooks.ts")
+    }
+    fn params_path() -> PathBuf {
+        PathBuf::from("src/params/fruit.ts")
+    }
+
+    #[test]
+    fn server_hooks_arrow_gets_param_and_return() {
+        let source =
+            "export const handle = async ({ event, resolve }) => {\n\treturn resolve(event);\n};\n";
+        let got = inject(&hooks_server_path(), source).unwrap();
+        assert_eq!(
+            got,
+            "export const handle = async ({ event, resolve }: Parameters<import('@sveltejs/kit').Handle>[0]) : ReturnType<import('@sveltejs/kit').Handle> => {\n\treturn resolve(event);\n};\n"
+        );
+    }
+
+    #[test]
+    fn server_hooks_function_declaration_gets_param_and_return() {
+        let source =
+            "export function handleFetch({ request, fetch }) {\n\treturn fetch(request);\n}\n";
+        let got = inject(&hooks_server_path(), source).unwrap();
+        assert_eq!(
+            got,
+            "export function handleFetch({ request, fetch }: Parameters<import('@sveltejs/kit').HandleFetch>[0]) : ReturnType<import('@sveltejs/kit').HandleFetch> {\n\treturn fetch(request);\n}\n"
+        );
+    }
+
+    #[test]
+    fn hooks_types_module_follows_the_installed_kit_major() {
+        let source = "export const reroute = ({ url }) => url.pathname;\n";
+        let settings = KitFilesSettings::default();
+        let got = super::inject(
+            &hooks_universal_path(),
+            source,
+            &KitInjectOptions {
+                settings: &settings,
+                hooks_types_module: "@sveltejs/kit/hooks",
+            },
+        )
+        .unwrap()
+        .text;
+        assert_eq!(
+            got,
+            "export const reroute = ({ url }: Parameters<import('@sveltejs/kit/hooks').Reroute>[0]) : ReturnType<import('@sveltejs/kit/hooks').Reroute> => url.pathname;\n"
+        );
+    }
+
+    #[test]
+    fn client_hooks_type_error_differs_from_server() {
+        let source = "export const handleError = ({ error, event }) => ({ message: 'oops' });\n";
+        let got = inject(&hooks_client_path(), source).unwrap();
+        assert!(
+            got.contains("HandleClientError") && !got.contains("HandleServerError"),
+            "client hooks must project HandleClientError: {got}"
+        );
+    }
+
+    #[test]
+    fn param_matcher_gets_concrete_string_to_boolean() {
+        let source = "export function match(param) {\n\treturn param === 'apple';\n}\n";
+        let got = inject(&params_path(), source).unwrap();
+        assert_eq!(
+            got,
+            "export function match(param: string) : boolean {\n\treturn param === 'apple';\n}\n"
+        );
+    }
+
+    #[test]
+    fn hook_exports_outside_the_known_set_are_left_alone() {
+        // `handle` belongs to server hooks, not client hooks; `match`
+        // belongs to params, not hooks. An export the role doesn't
+        // recognise is user code and stays untouched.
+        assert!(
+            inject(
+                &hooks_client_path(),
+                "export const handle = (input) => input;\n"
+            )
+            .is_none()
+        );
+        assert!(
+            inject(
+                &hooks_server_path(),
+                "export function match(p) { return !!p; }\n"
+            )
+            .is_none()
+        );
+        assert!(inject(&hooks_server_path(), "export const helper = (x) => x;\n").is_none());
+    }
+
+    #[test]
+    fn user_typed_hooks_are_left_alone() {
+        // An annotated variable is upstream's `hasTypeDefinition`; so is
+        // a `satisfies` wrapper. Either way the user owns the signature.
+        for source in [
+            "export const handle: import('@sveltejs/kit').Handle = ({ event, resolve }) => resolve(event);\n",
+            "export const handle = (({ event, resolve }) => resolve(event)) satisfies import('@sveltejs/kit').Handle;\n",
+            "export const handle = async ({ event, resolve }: any) => resolve(event);\n",
+        ] {
+            assert!(
+                inject(&hooks_server_path(), source).is_none(),
+                "should not re-type: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn multi_parameter_hooks_are_left_alone() {
+        // Upstream's gate is `parameters.length === 1`. A hook written
+        // with a second parameter isn't the shape the type describes,
+        // and annotating it would report the wrong error.
+        let source = "export const handle = ({ event }, extra) => extra;\n";
+        assert!(inject(&hooks_server_path(), source).is_none());
+    }
+
+    #[test]
+    fn arrow_token_is_found_past_a_comment_containing_one() {
+        // The `=>` inside the comment must not be mistaken for the
+        // token, or the annotation lands mid-comment and corrupts it.
+        let source = "export const reroute = ({ url }) /* a => b */ => url.pathname;\n";
+        let got = inject(&hooks_universal_path(), source).unwrap();
+        assert_eq!(
+            got,
+            "export const reroute = ({ url }: Parameters<import('@sveltejs/kit').Reroute>[0]) /* a => b */ : ReturnType<import('@sveltejs/kit').Reroute> => url.pathname;\n"
+        );
+    }
+
+    #[test]
+    fn js_hooks_get_a_jsdoc_type_instead() {
+        let source = "export const handle = async ({ event, resolve }) => resolve(event);\n";
+        let got = inject(&PathBuf::from("src/hooks.server.js"), source).unwrap();
+        assert_eq!(
+            got,
+            "export const handle = /** @type {import('@sveltejs/kit').Handle} */ async ({ event, resolve }) => resolve(event);\n"
+        );
+    }
+
+    #[test]
+    fn js_param_matcher_gets_a_function_type_jsdoc() {
+        let source = "export function match(param) {\n\treturn !!param;\n}\n";
+        let got = inject(&PathBuf::from("src/params/fruit.js"), source).unwrap();
+        assert_eq!(
+            got,
+            "/** @type {(arg0: string) => boolean} */ export function match(param) {\n\treturn !!param;\n}\n"
+        );
+    }
+
+    #[test]
+    fn hooks_injections_add_no_lines() {
+        let source =
+            "export const handle = async ({ event, resolve }) => {\n\treturn resolve(event);\n};\n";
+        let got = inject(&hooks_server_path(), source).unwrap();
+        assert_eq!(source.matches('\n').count(), got.matches('\n').count());
     }
 
     #[test]

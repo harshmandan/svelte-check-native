@@ -346,10 +346,22 @@ fn synthesize_props_type_from_export_let(
     }
     let mut parts: Vec<String> = Vec::new();
     for stmt in &program.body {
-        let Statement::ExportNamedDeclaration(export_decl) = stmt else {
+        // `export { name as alias, ... }` specifier form. Svelte 4
+        // components use this to expose a local under a JS reserved
+        // name, most commonly `export { className as class }` so
+        // consumers can pass `class={...}` without hitting `class`
+        // being a keyword in the source. Each specifier contributes
+        // one prop; the local's declared type (if any) is preserved.
+        if let Statement::ExportNamedDeclaration(export_decl) = stmt {
+            for spec in &export_decl.specifiers {
+                append_prop_from_export_specifier(spec, program, source, &mut parts);
+            }
+            continue;
+        }
+        let Statement::ExportDeclaration(export_decl) = stmt else {
             continue;
         };
-        if let Some(Declaration::VariableDeclaration(var_decl)) = &export_decl.declaration {
+        if let Declaration::VariableDeclaration(var_decl) = &export_decl.declaration {
             append_props_from_var_decl(var_decl, source, &mut parts);
         }
         // SVELTE-4-COMPAT: `export function NAME(...)` / `export class
@@ -362,7 +374,7 @@ fn synthesize_props_type_from_export_let(
         // shape (`createReturnElements(names, …)` enumerates ALL
         // exports for the non-`$$Props` path), with optional `?:`
         // markers since the consumer may omit them.
-        if let Some(Declaration::FunctionDeclaration(f)) = &export_decl.declaration
+        if let Declaration::FunctionDeclaration(f) = &export_decl.declaration
             && let Some(id) = &f.id
         {
             parts.push(format!(
@@ -371,7 +383,7 @@ fn synthesize_props_type_from_export_let(
                 id.name.as_str()
             ));
         }
-        if let Some(Declaration::ClassDeclaration(c)) = &export_decl.declaration
+        if let Declaration::ClassDeclaration(c) = &export_decl.declaration
             && let Some(id) = &c.id
         {
             parts.push(format!(
@@ -379,15 +391,6 @@ fn synthesize_props_type_from_export_let(
                 id.name.as_str(),
                 id.name.as_str()
             ));
-        }
-        // `export { name as alias, ... }` specifier form. Svelte 4
-        // components use this to expose a local under a JS reserved
-        // name, most commonly `export { className as class }` so
-        // consumers can pass `class={...}` without hitting `class`
-        // being a keyword in the source. Each specifier contributes
-        // one prop; the local's declared type (if any) is preserved.
-        for spec in &export_decl.specifiers {
-            append_prop_from_export_specifier(spec, program, source, &mut parts);
         }
     }
     if parts.is_empty() {

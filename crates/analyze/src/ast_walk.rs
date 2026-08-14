@@ -8,7 +8,9 @@
 //! land its descent fix in two places. Keeping the recursion in one
 //! module means a new oxc enum variant only adds one match arm, not seven.
 
-use oxc_ast::ast::{Declaration, Expression, ForStatementInit, Statement, VariableDeclaration};
+use oxc_ast::ast::{
+    ArrowFunctionBody, Declaration, Expression, ForStatementInit, Statement, VariableDeclaration,
+};
 
 /// Walk an expression looking for nested function/arrow bodies — including
 /// those passed as call arguments (`setTimeout(() => { … })`) and reachable
@@ -26,11 +28,22 @@ pub fn collect_function_body_stmts<'a, 'b>(
     out: &mut Vec<&'a Statement<'b>>,
 ) {
     match expr {
-        Expression::ArrowFunctionExpression(arrow) => {
-            for s in &arrow.body.statements {
-                out.push(s);
+        Expression::ArrowFunctionExpression(arrow) => match &arrow.body {
+            ArrowFunctionBody::FunctionBody(body) => out.extend(body.statements.iter()),
+            // A concise body (`() => foo`) holds an expression, not
+            // statements. There is nothing to push, but the expression
+            // can still contain the function bodies we're after —
+            // `() => items.map(x => { … })` being the everyday case.
+            // Recursing preserves what the old normalised-into-a-
+            // synthetic-ExpressionStatement shape used to give us: the
+            // statement walker's `ExpressionStatement` arm descended
+            // right back into here.
+            other => {
+                if let Some(expr) = other.as_expression() {
+                    collect_function_body_stmts(expr, out);
+                }
             }
-        }
+        },
         Expression::FunctionExpression(fe) => {
             if let Some(body) = &fe.body {
                 for s in &body.statements {
@@ -313,15 +326,18 @@ where
                 }
             }
         }
-        Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
-            Some(Declaration::FunctionDeclaration(fd)) => {
+        // `export const x = …` / `export function f() {}`. The
+        // declaration used to hang off `ExportNamedDeclaration` as an
+        // `Option`; it is its own statement kind now.
+        Statement::ExportDeclaration(ed) => match &ed.declaration {
+            Declaration::FunctionDeclaration(fd) => {
                 if let Some(body) = &fd.body {
                     for s in &body.statements {
                         walk_statement_descend(s, f);
                     }
                 }
             }
-            Some(Declaration::VariableDeclaration(decl)) => {
+            Declaration::VariableDeclaration(decl) => {
                 for d in &decl.declarations {
                     if let Some(init) = &d.init {
                         collect_function_body_stmts(init, &mut iife_stmts);
@@ -330,6 +346,9 @@ where
             }
             _ => {}
         },
+        // `export { x }` and `export { x } from 'm'` — specifier lists
+        // with no declaration and so no body to descend into.
+        Statement::ExportNamedDeclaration(_) | Statement::ExportFromDeclaration(_) => {}
         Statement::IfStatement(s) => {
             collect_function_body_stmts(&s.test, &mut iife_stmts);
             walk_statement_descend(&s.consequent, f);
@@ -478,7 +497,8 @@ where
         Statement::TSTypeAliasDeclaration(_)
         | Statement::TSInterfaceDeclaration(_)
         | Statement::TSEnumDeclaration(_)
-        | Statement::TSModuleDeclaration(_)
+        | Statement::TSExternalModuleDeclaration(_)
+        | Statement::TSNamespaceDeclaration(_)
         | Statement::TSGlobalDeclaration(_)
         | Statement::TSImportEqualsDeclaration(_) => {}
     }

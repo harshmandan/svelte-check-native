@@ -74,9 +74,8 @@ pub fn find_dispatcher_event_type_sources(
             crate::ast_walk::WalkNode::Statement(Statement::VariableDeclaration(decl)) => {
                 handle_var_decl(decl);
             }
-            crate::ast_walk::WalkNode::Statement(Statement::ExportNamedDeclaration(ed)) => {
-                if let Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) = &ed.declaration
-                {
+            crate::ast_walk::WalkNode::Statement(Statement::ExportDeclaration(ed)) => {
+                if let oxc_ast::ast::Declaration::VariableDeclaration(decl) = &ed.declaration {
                     handle_var_decl(decl);
                 }
             }
@@ -209,9 +208,8 @@ fn collect_dispatcher_locals_via_walker(
             crate::ast_walk::WalkNode::Statement(Statement::VariableDeclaration(decl)) => {
                 handle_var_decl(decl);
             }
-            crate::ast_walk::WalkNode::Statement(Statement::ExportNamedDeclaration(ed)) => {
-                if let Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) = &ed.declaration
-                {
+            crate::ast_walk::WalkNode::Statement(Statement::ExportDeclaration(ed)) => {
+                if let oxc_ast::ast::Declaration::VariableDeclaration(decl) = &ed.declaration {
                     handle_var_decl(decl);
                 }
             }
@@ -240,7 +238,9 @@ fn collect_dispatcher_locals_via_walker(
 /// would force dispatcher detection, event surface synthesis, and
 /// the iso default-export shape on a value that has no actual
 /// Svelte event semantics.
-pub fn collect_ctor_locals(program: &oxc_ast::ast::Program<'_>) -> std::collections::HashSet<String> {
+pub fn collect_ctor_locals(
+    program: &oxc_ast::ast::Program<'_>,
+) -> std::collections::HashSet<String> {
     use std::collections::HashSet;
     let mut ctor_locals: HashSet<String> = HashSet::new();
     for stmt in &program.body {
@@ -369,9 +369,8 @@ pub fn find_dispatched_event_names(program: &oxc_ast::ast::Program<'_>) -> Vec<S
                     &mut out,
                 );
             }
-            crate::ast_walk::WalkNode::Statement(Statement::ExportNamedDeclaration(ed)) => {
-                if let Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) = &ed.declaration
-                {
+            crate::ast_walk::WalkNode::Statement(Statement::ExportDeclaration(ed)) => {
+                if let oxc_ast::ast::Declaration::VariableDeclaration(decl) = &ed.declaration {
                     scan_var_decl(
                         decl,
                         &mut dispatcher_locals_seen,
@@ -664,11 +663,32 @@ fn scan_expression_for_dispatched_names(
                 }
             }
         }
-        Expression::ArrowFunctionExpression(arrow) => {
-            for s in &arrow.body.statements {
-                scan_statement_for_dispatched_names(s, dispatcher_locals, literal_vars, seen, out);
+        Expression::ArrowFunctionExpression(arrow) => match &arrow.body {
+            oxc_ast::ast::ArrowFunctionBody::FunctionBody(body) => {
+                for s in &body.statements {
+                    scan_statement_for_dispatched_names(
+                        s,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
+                }
             }
-        }
+            // A concise body is an expression, and a dispatch can hide
+            // in it (`() => dispatch('x')`), so scan it as one.
+            other => {
+                if let Some(expr) = other.as_expression() {
+                    scan_expression_for_dispatched_names(
+                        expr,
+                        dispatcher_locals,
+                        literal_vars,
+                        seen,
+                        out,
+                    );
+                }
+            }
+        },
         Expression::FunctionExpression(fe) => {
             if let Some(body) = &fe.body {
                 for s in &body.statements {
@@ -912,8 +932,8 @@ fn statement_local_exprs<'a, 'b>(stmt: &'a Statement<'b>) -> Vec<&'a Expression<
             .filter_map(|d| d.init.as_ref())
             .collect(),
         Statement::ExpressionStatement(es) => vec![&es.expression],
-        Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
-            Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) => decl
+        Statement::ExportDeclaration(ed) => match &ed.declaration {
+            oxc_ast::ast::Declaration::VariableDeclaration(decl) => decl
                 .declarations
                 .iter()
                 .filter_map(|d| d.init.as_ref())
@@ -1028,9 +1048,8 @@ pub fn collect_inline_typed_dispatcher_member_names(
             crate::ast_walk::WalkNode::Statement(Statement::VariableDeclaration(decl)) => {
                 handle_var_decl(decl);
             }
-            crate::ast_walk::WalkNode::Statement(Statement::ExportNamedDeclaration(ed)) => {
-                if let Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) = &ed.declaration
-                {
+            crate::ast_walk::WalkNode::Statement(Statement::ExportDeclaration(ed)) => {
+                if let oxc_ast::ast::Declaration::VariableDeclaration(decl) = &ed.declaration {
                     handle_var_decl(decl);
                 }
             }
@@ -1060,8 +1079,8 @@ fn collect_top_level_string_const_literals(
         // skipped the export form entirely.
         let decl = match stmt {
             Statement::VariableDeclaration(decl) => decl.as_ref(),
-            Statement::ExportNamedDeclaration(ed) => match &ed.declaration {
-                Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) => decl.as_ref(),
+            Statement::ExportDeclaration(ed) => match &ed.declaration {
+                oxc_ast::ast::Declaration::VariableDeclaration(decl) => decl.as_ref(),
                 _ => continue,
             },
             _ => continue,
@@ -1173,9 +1192,8 @@ pub fn has_inline_typed_dispatcher_members(program: &oxc_ast::ast::Program<'_>) 
                         found = true;
                     }
                 }
-                crate::ast_walk::WalkNode::Statement(Statement::ExportNamedDeclaration(ed)) => {
-                    if let Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) =
-                        &ed.declaration
+                crate::ast_walk::WalkNode::Statement(Statement::ExportDeclaration(ed)) => {
+                    if let oxc_ast::ast::Declaration::VariableDeclaration(decl) = &ed.declaration
                         && check_var_decl(decl)
                     {
                         found = true;

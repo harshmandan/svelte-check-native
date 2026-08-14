@@ -479,9 +479,20 @@ fn walk_value_expr(
             // Mirroring JS hoisting at function-body entry keeps the
             // bindings alive for the whole function until our
             // `shadowed.truncate(before)` on body exit.
-            collect_hoisted_for_function_body(&arrow.body.statements, shadowed);
-            for stmt in &arrow.body.statements {
-                walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
+            match &arrow.body {
+                oxc_ast::ast::ArrowFunctionBody::FunctionBody(body) => {
+                    collect_hoisted_for_function_body(&body.statements, shadowed);
+                    for stmt in &body.statements {
+                        walk_statement_for_value_rewrite(stmt, lookup, shadowed, edits, bail);
+                    }
+                }
+                // A concise body (`() => expr`) declares nothing to
+                // hoist, but the expression still needs rewriting.
+                other => {
+                    if let Some(expr) = other.as_expression() {
+                        walk_value_expr(expr, lookup, shadowed, edits, bail, false);
+                    }
+                }
             }
             shadowed.truncate(before);
         }
@@ -796,7 +807,8 @@ fn walk_statement_for_value_rewrite(
         Statement::TSTypeAliasDeclaration(_)
         | Statement::TSInterfaceDeclaration(_)
         | Statement::TSEnumDeclaration(_)
-        | Statement::TSModuleDeclaration(_)
+        | Statement::TSExternalModuleDeclaration(_)
+        | Statement::TSNamespaceDeclaration(_)
         | Statement::TSGlobalDeclaration(_)
         | Statement::TSImportEqualsDeclaration(_) => {}
         // Module-boundary statements: only appear at the program
@@ -806,6 +818,8 @@ fn walk_statement_for_value_rewrite(
         | Statement::ExportAllDeclaration(_)
         | Statement::ExportDefaultDeclaration(_)
         | Statement::ExportNamedDeclaration(_)
+        | Statement::ExportFromDeclaration(_)
+        | Statement::ExportDeclaration(_)
         | Statement::TSExportAssignment(_)
         | Statement::TSNamespaceExportDeclaration(_) => {}
         // `with` is deprecated; its dynamic-scope semantics aren't
@@ -940,13 +954,16 @@ fn collect_hoisted_in_stmt(stmt: &oxc_ast::ast::Statement<'_>, shadowed: &mut Ve
         Statement::TSTypeAliasDeclaration(_)
         | Statement::TSInterfaceDeclaration(_)
         | Statement::TSEnumDeclaration(_)
-        | Statement::TSModuleDeclaration(_)
+        | Statement::TSExternalModuleDeclaration(_)
+        | Statement::TSNamespaceDeclaration(_)
         | Statement::TSGlobalDeclaration(_)
         | Statement::TSImportEqualsDeclaration(_) => {}
         Statement::ImportDeclaration(_)
         | Statement::ExportAllDeclaration(_)
         | Statement::ExportDefaultDeclaration(_)
         | Statement::ExportNamedDeclaration(_)
+        | Statement::ExportFromDeclaration(_)
+        | Statement::ExportDeclaration(_)
         | Statement::TSExportAssignment(_)
         | Statement::TSNamespaceExportDeclaration(_) => {}
         Statement::WithStatement(_) => {}

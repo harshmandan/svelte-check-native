@@ -141,8 +141,8 @@ pub fn collect_rune_scan_context(
     for stmt in &program.body {
         walk_statement_descend(stmt, &mut |node| match node {
             WalkNode::Statement(Statement::VariableDeclaration(decl)) => on_decl(&mut ctx, decl),
-            WalkNode::Statement(Statement::ExportNamedDeclaration(ed)) => {
-                if let Some(Declaration::VariableDeclaration(decl)) = &ed.declaration {
+            WalkNode::Statement(Statement::ExportDeclaration(ed)) => {
+                if let Declaration::VariableDeclaration(decl) = &ed.declaration {
                     on_decl(&mut ctx, decl);
                 }
             }
@@ -679,11 +679,7 @@ fn collect_from_statement(stmt: &Statement<'_>, out: &mut HashSet<String>) {
                 }
             }
         }
-        Statement::ExportNamedDeclaration(decl) => {
-            if let Some(d) = &decl.declaration {
-                collect_from_declaration(d, out);
-            }
-        }
+        Statement::ExportDeclaration(decl) => collect_from_declaration(&decl.declaration, out),
         _ => {}
     }
 }

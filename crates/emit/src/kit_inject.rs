@@ -210,7 +210,9 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
 
     let mut insertions: Vec<(usize, String)> = Vec::new();
     for stmt in &parsed.program.body {
-        let Statement::ExportNamedDeclaration(export) = stmt else {
+        // Only the declaration form carries something to annotate; a
+        // bare specifier list (`export { handle }`) declares nothing.
+        let Statement::ExportDeclaration(export) = stmt else {
             continue;
         };
         // JS sources: an export the user already JSDoc-typed is
@@ -219,7 +221,7 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
             !is_ts && has_preceding_jsdoc_typing(source, export.span.start as usize);
 
         match &export.declaration {
-            Some(Declaration::FunctionDeclaration(func)) => {
+            Declaration::FunctionDeclaration(func) => {
                 let Some(name) = func.id.as_ref().map(|id| id.name.as_str()) else {
                     continue;
                 };
@@ -300,7 +302,7 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                     }
                 }
             }
-            Some(Declaration::VariableDeclaration(var_decl)) => {
+            Declaration::VariableDeclaration(var_decl) => {
                 // Upstream's findExports only registers single-declarator
                 // export const statements (declarations.length === 1); a
                 // multi-declarator list is ignored entirely, so skip it
@@ -714,7 +716,7 @@ fn collect_fn_value_insert(
                     arrow_token_pos(
                         source,
                         arrow.params.span.end as usize,
-                        arrow.body.span.start as usize,
+                        arrow.body.span().start as usize,
                     )
                 });
                 collect_projected_handler_insert(

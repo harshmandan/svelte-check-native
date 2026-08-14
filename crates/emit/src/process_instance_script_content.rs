@@ -25,8 +25,8 @@ use std::collections::HashSet;
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    BindingPattern, Declaration, ImportOrExportKind, Statement, TSModuleDeclaration,
-    TSModuleDeclarationBody,
+    BindingPattern, Declaration, ImportOrExportKind, Statement, TSModuleBlock,
+    TSNamespaceDeclarationBody,
 };
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
@@ -116,14 +116,11 @@ struct PendingType {
 /// declare-const stub pass — the AST equivalent of scanning a hoisted
 /// namespace span. (Namespaces hoist verbatim; their nested type decls
 /// can reference body-local names that need a module-scope stub.)
-fn collect_module_block_type_idents(decl: &TSModuleDeclaration<'_>, out: &mut HashSet<SmolStr>) {
-    let Some(TSModuleDeclarationBody::TSModuleBlock(block)) = &decl.body else {
-        return;
-    };
+fn collect_module_block_type_idents(block: &TSModuleBlock<'_>, out: &mut HashSet<SmolStr>) {
     for stmt in &block.body {
         // Unwrap a bare or `export`-ed type alias / interface.
         let decl: Option<&Declaration<'_>> = match stmt {
-            Statement::ExportNamedDeclaration(e) => e.declaration.as_ref(),
+            Statement::ExportDeclaration(e) => Some(&e.declaration),
             _ => stmt.as_declaration(),
         };
         // Top-level-only contract: only type aliases and interfaces
@@ -143,7 +140,8 @@ fn collect_module_block_type_idents(decl: &TSModuleDeclaration<'_>, out: &mut Ha
                 | Declaration::FunctionDeclaration(_)
                 | Declaration::ClassDeclaration(_)
                 | Declaration::TSEnumDeclaration(_)
-                | Declaration::TSModuleDeclaration(_)
+                | Declaration::TSExternalModuleDeclaration(_)
+                | Declaration::TSNamespaceDeclaration(_)
                 | Declaration::TSGlobalDeclaration(_)
                 | Declaration::TSImportEqualsDeclaration(_),
             )
@@ -359,9 +357,12 @@ pub fn split_imports(
                     body_decl_names.push(SmolStr::from(id.name.as_str()));
                 }
             }
-            Statement::ExportNamedDeclaration(decl) => {
+            // `export const/type/function/...` — one declaration, no
+            // specifiers. Its own statement kind since oxc 0.143.
+            Statement::ExportDeclaration(decl) => {
                 let span = (decl.span.start as usize, decl.span.end as usize);
-                if let Some(d) = &decl.declaration {
+                {
+                    let d = &decl.declaration;
                     // `export type Foo = ...` / `export interface Foo { ... }` —
                     // pure type-namespace declarations. Hoist the whole
                     // statement (including the `export` keyword) so the
@@ -404,11 +405,16 @@ pub fn split_imports(
                     // `declare` stub just like for a non-exported
                     // body-level const.
                     collect_declaration_names(d, &mut body_decl_names);
-                } else if decl.source.is_some() {
-                    // `export { x } from 'mod'` — pure module re-export,
-                    // no local name references. Hoist.
-                    hoist_spans.push(span);
-                } else {
+                }
+            }
+            // `export { x } from 'mod'` — pure module re-export, no
+            // local name references. Hoist.
+            Statement::ExportFromDeclaration(decl) => {
+                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+            }
+            Statement::ExportNamedDeclaration(decl) => {
+                let span = (decl.span.start as usize, decl.span.end as usize);
+                {
                     // `export { x, y }` (no `from`) — local name re-export.
                     // Drop the statement, but the names ARE exported, so
                     // record them for void-emission.
@@ -442,11 +448,24 @@ pub fn split_imports(
             // TypeScript `namespace Foo { ... }` (and the equivalent
             // `module Foo { ... }`). Allowed only at the module level
             // (TS1235 inside a function); hoist verbatim.
-            Statement::TSModuleDeclaration(decl) => {
+            Statement::TSNamespaceDeclaration(decl) => {
                 hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
                 // Namespaces always hoist; feed their top-level type
                 // declarations' deps to the declare-const stub pass.
-                collect_module_block_type_idents(decl, &mut hoisted_type_idents);
+                // A dotted namespace (`namespace Foo.Bar {}`) nests
+                // another declaration rather than a block, and its
+                // inner types were never collected — left that way.
+                if let TSNamespaceDeclarationBody::TSModuleBlock(block) = &decl.body {
+                    collect_module_block_type_idents(block, &mut hoisted_type_idents);
+                }
+            }
+            // `declare module 'foo' { ... }`. Split off from the
+            // namespace form upstream; both hoist verbatim.
+            Statement::TSExternalModuleDeclaration(decl) => {
+                hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
+                if let Some(block) = &decl.body {
+                    collect_module_block_type_idents(block, &mut hoisted_type_idents);
+                }
             }
             // `type Foo = ...` and `interface Foo { ... }` — hoist so
             // the emitted default-export's `Component<Foo>` at module

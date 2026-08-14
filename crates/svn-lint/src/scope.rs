@@ -1243,10 +1243,12 @@ impl TreeBuilder {
         // statement matching exactly.
         if is_instance {
             for stmt in &program.body {
-                let Statement::ExportNamedDeclaration(end) = stmt else {
-                    continue;
-                };
-                if let Some(oxc_ast::ast::Declaration::VariableDeclaration(v)) = &end.declaration {
+                // `export let x` (a Svelte 4 prop) and `export { x as
+                // y }` (a rename) are separate statement kinds now.
+                if let Statement::ExportDeclaration(end) = stmt {
+                    let oxc_ast::ast::Declaration::VariableDeclaration(v) = &end.declaration else {
+                        continue;
+                    };
                     // `export const` doesn't become a prop.
                     if matches!(v.kind, oxc_ast::ast::VariableDeclarationKind::Const) {
                         continue;
@@ -1256,7 +1258,12 @@ impl TreeBuilder {
                             self.nonrunes_export_idents.push(SmolStr::from(name));
                         }
                     }
-                } else if end.declaration.is_none() {
+                    continue;
+                }
+                {
+                    let Statement::ExportNamedDeclaration(end) = stmt else {
+                        continue;
+                    };
                     for spec in &end.specifiers {
                         use oxc_ast::ast::ModuleExportName;
                         let local = match &spec.local {
@@ -1808,8 +1815,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     }
                 }
             }
-            Statement::ExportNamedDeclaration(end) => {
-                if let Some(decl) = &end.declaration {
+            Statement::ExportDeclaration(end) => {
+                {
+                    let decl = &end.declaration;
                     // Re-wrap as a statement-like visit.
                     use oxc_ast::ast::Declaration;
                     match decl {
@@ -2040,8 +2048,11 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     /// body references resolve outward (verified against the
     /// compiler) — which is why this helper never touches `cls.id`.
     fn visit_class_common(&mut self, cls: &Class<'_>) {
-        if let Some(sup) = &cls.super_class {
-            self.visit_expr(sup);
+        // The superclass expression moved under a `heritage` grouping
+        // that also carries its type arguments; only the expression
+        // holds value references.
+        if let Some(heritage) = &cls.heritage {
+            self.visit_expr(&heritage.expression);
         }
         self.visit_class_body(&cls.body);
     }
@@ -2450,8 +2461,19 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     for p in &arr.params.items {
                         w.declare_pattern(&p.pattern, DeclarationKind::Param);
                     }
-                    for s in &arr.body.statements {
-                        w.visit_stmt(s);
+                    match &arr.body {
+                        oxc_ast::ast::ArrowFunctionBody::FunctionBody(body) => {
+                            for s in &body.statements {
+                                w.visit_stmt(s);
+                            }
+                        }
+                        // A concise body holds an expression, which
+                        // still references names the scope tree needs.
+                        other => {
+                            if let Some(expr) = other.as_expression() {
+                                w.visit_expr(expr);
+                            }
+                        }
                     }
                 });
             }

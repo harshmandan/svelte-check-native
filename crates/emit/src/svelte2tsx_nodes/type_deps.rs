@@ -253,9 +253,9 @@ fn walk(ty: &TSType<'_>, out: &mut TypeDeps) {
 fn walk_signature(sig: &TSSignature<'_>, out: &mut TypeDeps) {
     match sig {
         TSSignature::TSIndexSignature(s) => {
-            for param in &s.parameters {
-                walk_type_annotation(&param.type_annotation, out);
-            }
+            // An index signature takes exactly one parameter, and oxc
+            // now models it as one rather than a list.
+            walk_type_annotation(&s.parameter.type_annotation, out);
             walk_type_annotation(&s.type_annotation, out);
         }
         TSSignature::TSPropertySignature(s) => {
@@ -338,10 +338,13 @@ fn walk_tuple_element(el: &TSTupleElement<'_>, out: &mut TypeDeps) {
     }
 }
 
-/// Walk an interface `extends` clause: the heritage expression's root
+/// Walk an interface `extends` clause: the heritage name's root
 /// identifier and its type arguments.
 fn walk_heritage(heritage: &TSInterfaceHeritage<'_>, out: &mut TypeDeps) {
-    if let Some(root) = expr_root(&heritage.expression) {
+    // The heritage clause is a type name, not an arbitrary expression —
+    // so the same left-most-identifier rule as any other type reference
+    // applies to it.
+    if let Some(root) = entity_name_root(&heritage.type_name) {
         out.idents.insert(root);
     }
     if let Some(args) = &heritage.type_arguments {
@@ -405,18 +408,19 @@ fn entity_name_root(tn: &TSTypeName<'_>) -> Option<SmolStr> {
         .map(|r| SmolStr::from(r.name.as_str()))
 }
 
-/// Root identifier of a `typeof` query's entity name. Returns `None`
-/// for `typeof import('mod')` (no entity-name root).
-fn type_query_root(expr: &TSTypeQueryExprName<'_>) -> Option<SmolStr> {
-    expr.as_ts_type_name().and_then(entity_name_root)
-}
-
-/// Root identifier of a heritage expression — `Base` / `ns.Base` →
-/// the left-most name.
+/// Left-most identifier of a value expression — `A` / `ns.A` → `A`.
+/// Used for computed property keys, the one place a type position
+/// still holds an arbitrary expression.
 fn expr_root(e: &Expression<'_>) -> Option<SmolStr> {
     match e {
         Expression::Identifier(id) => Some(SmolStr::from(id.name.as_str())),
         Expression::StaticMemberExpression(m) => expr_root(&m.object),
         _ => None,
     }
+}
+
+/// Root identifier of a `typeof` query's entity name. Returns `None`
+/// for `typeof import('mod')` (no entity-name root).
+fn type_query_root(expr: &TSTypeQueryExprName<'_>) -> Option<SmolStr> {
+    expr.as_ts_type_name().and_then(entity_name_root)
 }

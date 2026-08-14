@@ -38,10 +38,10 @@ use std::path::{Path, PathBuf};
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    ArrayExpression, ArrayExpressionElement, ArrowFunctionExpression, BinaryOperator,
-    CallExpression, ChainElement, ExportDefaultDeclarationKind, Expression, FormalParameter,
-    FunctionBody, IfStatement, LogicalOperator, ObjectExpression, ObjectPropertyKind, PropertyKey,
-    Statement, UnaryOperator, VariableDeclaration,
+    ArrayExpression, ArrayExpressionElement, ArrowFunctionBody, ArrowFunctionExpression,
+    BinaryOperator, CallExpression, ChainElement, ExportDefaultDeclarationKind, Expression,
+    FormalParameter, FunctionBody, IfStatement, LogicalOperator, ObjectExpression,
+    ObjectPropertyKind, PropertyKey, Statement, UnaryOperator, VariableDeclaration,
 };
 use oxc_parser::Parser;
 use oxc_span::SourceType;
@@ -816,23 +816,15 @@ fn analyse_arrow<'a>(
     param: &str,
     source: &str,
 ) -> WarningFilterPlan {
-    // Arrow expression-body: the body is a Block whose single
-    // statement is a ReturnStatement wrapping the expression.
-    let body = &af.body;
-    if af.expression {
-        // Arrow expression-body form.
-        if let Some(Statement::ExpressionStatement(es)) = body.statements.first() {
-            return from_keep_expr(&es.expression, param, source);
-        }
-        // Some versions wrap the expression-body as a ReturnStatement.
-        if let Some(Statement::ReturnStatement(ret)) = body.statements.first()
-            && let Some(arg) = &ret.argument
-        {
-            return from_keep_expr(arg, param, source);
-        }
-        return WarningFilterPlan::partial("empty arrow body");
+    // A concise body (`(w) => !ignore.includes(w.code)`) carries the
+    // expression directly; a braced body is a block to walk.
+    match &af.body {
+        ArrowFunctionBody::FunctionBody(block) => analyse_block(block, param, source),
+        other => match other.as_expression() {
+            Some(expr) => from_keep_expr(expr, param, source),
+            None => WarningFilterPlan::partial("empty arrow body"),
+        },
     }
-    analyse_block(body, param, source)
 }
 
 fn analyse_block<'a>(block: &'a FunctionBody<'a>, param: &str, source: &str) -> WarningFilterPlan {

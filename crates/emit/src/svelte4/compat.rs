@@ -492,11 +492,12 @@ fn statement_declares_named_type(stmt: &oxc_ast::ast::Statement<'_>, name: &str)
     match stmt {
         Statement::TSInterfaceDeclaration(d) => d.id.name.as_str() == name,
         Statement::TSTypeAliasDeclaration(d) => d.id.name.as_str() == name,
-        Statement::ExportNamedDeclaration(e) => match &e.declaration {
-            Some(Declaration::TSInterfaceDeclaration(d)) => d.id.name.as_str() == name,
-            Some(Declaration::TSTypeAliasDeclaration(d)) => d.id.name.as_str() == name,
+        Statement::ExportDeclaration(e) => match &e.declaration {
+            Declaration::TSInterfaceDeclaration(d) => d.id.name.as_str() == name,
+            Declaration::TSTypeAliasDeclaration(d) => d.id.name.as_str() == name,
             _ => false,
         },
+        Statement::ExportNamedDeclaration(_) | Statement::ExportFromDeclaration(_) => false,
         Statement::VariableDeclaration(_)
         | Statement::FunctionDeclaration(_)
         | Statement::ClassDeclaration(_)
@@ -504,7 +505,8 @@ fn statement_declares_named_type(stmt: &oxc_ast::ast::Statement<'_>, name: &str)
         | Statement::ExportAllDeclaration(_)
         | Statement::ExportDefaultDeclaration(_)
         | Statement::TSEnumDeclaration(_)
-        | Statement::TSModuleDeclaration(_)
+        | Statement::TSExternalModuleDeclaration(_)
+        | Statement::TSNamespaceDeclaration(_)
         | Statement::TSGlobalDeclaration(_)
         | Statement::TSImportEqualsDeclaration(_)
         | Statement::TSExportAssignment(_)

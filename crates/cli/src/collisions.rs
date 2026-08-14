@@ -72,10 +72,13 @@ pub(crate) fn rewrite_svelte_imports_for_collisions(
                 decl.source.span.end as usize,
                 decl.source.value.as_str(),
             ),
-            Statement::ExportNamedDeclaration(decl) => match &decl.source {
-                Some(s) => (s.span.start as usize, s.span.end as usize, s.value.as_str()),
-                None => continue,
-            },
+            // `export { X } from './Y.svelte'`. A specifier list with
+            // no `from` names no module, and is a different node kind.
+            Statement::ExportFromDeclaration(decl) => (
+                decl.source.span.start as usize,
+                decl.source.span.end as usize,
+                decl.source.value.as_str(),
+            ),
             Statement::ExportAllDeclaration(decl) => (
                 decl.source.span.start as usize,
                 decl.source.span.end as usize,

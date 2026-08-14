@@ -177,14 +177,15 @@ fn collect_top_level_var_names(program: &oxc_ast::ast::Program<'_>) -> HashSet<S
             // after our process_instance_script_content strips the export keyword, so a
             // subsequent `$: X = …` must be treated as re-assignment
             // (drop the label) rather than a fresh declaration.
-            Statement::ExportNamedDeclaration(decl) => {
-                if let Some(oxc_ast::ast::Declaration::VariableDeclaration(vd)) = &decl.declaration
-                {
+            Statement::ExportDeclaration(decl) => {
+                if let oxc_ast::ast::Declaration::VariableDeclaration(vd) = &decl.declaration {
                     for d in &vd.declarations {
                         collect_binding_names(d, &mut out);
                     }
                 }
             }
+            // `export { x }` / `export { x } from 'm'` declare nothing.
+            Statement::ExportNamedDeclaration(_) | Statement::ExportFromDeclaration(_) => {}
             // Top-level-only contract: this scan exists to tell a
             // `$: x = …` DECLARATION from a re-assignment, and only
             // `let`/`const`/`var` names participate in that decision
@@ -200,7 +201,8 @@ fn collect_top_level_var_names(program: &oxc_ast::ast::Program<'_>) -> HashSet<S
             | Statement::TSTypeAliasDeclaration(_)
             | Statement::TSInterfaceDeclaration(_)
             | Statement::TSEnumDeclaration(_)
-            | Statement::TSModuleDeclaration(_)
+            | Statement::TSExternalModuleDeclaration(_)
+            | Statement::TSNamespaceDeclaration(_)
             | Statement::TSGlobalDeclaration(_)
             | Statement::TSImportEqualsDeclaration(_)
             | Statement::TSExportAssignment(_)

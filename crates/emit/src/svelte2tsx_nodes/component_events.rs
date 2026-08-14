@@ -91,9 +91,8 @@ pub(crate) fn rewrite_dispatcher_typing(content: &str, lang: ScriptLang) -> Stri
             WalkNode::Statement(Statement::VariableDeclaration(decl)) => {
                 handle_var_decl(decl, &mut insertions);
             }
-            WalkNode::Statement(Statement::ExportNamedDeclaration(ed)) => {
-                if let Some(oxc_ast::ast::Declaration::VariableDeclaration(decl)) = &ed.declaration
-                {
+            WalkNode::Statement(Statement::ExportDeclaration(ed)) => {
+                if let oxc_ast::ast::Declaration::VariableDeclaration(decl) = &ed.declaration {
                     handle_var_decl(decl, &mut insertions);
                 }
             }

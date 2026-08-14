@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    ExportAllDeclaration, ExportNamedDeclaration, Expression, ImportDeclaration, ImportExpression,
+    ExportAllDeclaration, ExportFromDeclaration, Expression, ImportDeclaration, ImportExpression,
     StringLiteral,
 };
 use oxc_ast_visit::{Visit, walk};
@@ -237,13 +237,13 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
         self.record(&it.source);
     }
 
-    fn visit_export_named_declaration(&mut self, it: &ExportNamedDeclaration<'a>) {
-        if let Some(source) = &it.source {
-            self.record(source);
-        }
-        // Recurse: `export const x = import('./y.svelte')` carries a
-        // dynamic import inside the declaration.
-        walk::walk_export_named_declaration(self, it);
+    /// `export { Foo } from './Foo.svelte'`. This is its own node kind;
+    /// a specifier list with no `from` clause (`ExportNamedDeclaration`)
+    /// names no module and needs no visitor, and the declaration form
+    /// (`ExportDeclaration`, e.g. `export const x =
+    /// import('./y.svelte')`) is reached by the default walk.
+    fn visit_export_from_declaration(&mut self, it: &ExportFromDeclaration<'a>) {
+        self.record(&it.source);
     }
 
     fn visit_export_all_declaration(&mut self, it: &ExportAllDeclaration<'a>) {

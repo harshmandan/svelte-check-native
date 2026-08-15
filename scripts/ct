@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+#
+# Run a cargo command such that it cannot outlive the thing that started
+# it, and cannot collide with another run.
+#
+# Why this exists
+# ---------------
+# Concurrent cargo invocations are this repo's most expensive failure
+# mode: a `cargo test --workspace` that takes 29s on a quiet machine was
+# measured at 574s with one competing release build. Nothing recompiled
+# and no lock was contended — the test binaries were simply starved of
+# cores. See CLAUDE.md, "One cargo at a time".
+#
+# The usual defences do not survive the case that actually causes it: an
+# agent session that dies, is disconnected, or is killed mid-build. A
+# shell trap does not run on SIGKILL. An editor hook does not run if the
+# editor is gone. Whatever cleans up must therefore not depend on the
+# previous run still being alive to do it.
+#
+# So cleanup is owned two ways:
+#
+#   1. While alive — the cargo child runs in its own process group, and
+#      traps on EXIT/INT/TERM/HUP kill that whole group. Covers ctrl-c,
+#      a closed terminal, and an ordinary agent stop.
+#   2. After death — the lock records the pid and process group. The NEXT
+#      run notices the owner is gone, kills the orphaned group, and takes
+#      over. This is the path that survives SIGKILL, a lost connection,
+#      or a hard reboot of the agent.
+#
+# Only the recorded process group is ever killed, and only after checking
+# it still contains cargo/rustc processes — a recycled pgid belonging to
+# something else is never touched. A cargo you started yourself in
+# another terminal is never killed either, only waited on.
+#
+# Usage:
+#   scripts/ct test --workspace
+#   scripts/ct clippy --workspace --all-targets -- -D warnings
+#   scripts/ct build --release
+#
+#   CT_WAIT=1 scripts/ct test      # wait for a live run instead of refusing
+#   CT_TIMEOUT=900 scripts/ct test # give up waiting after N seconds
+
+set -uo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Outside target/ on purpose: `scripts/ct clean` must not delete the
+# very lock that is serialising it.
+lock_dir="${repo_root}/.ct.lock"
+wait_for_lock="${CT_WAIT:-0}"
+wait_timeout="${CT_TIMEOUT:-1800}"
+
+if [ "$#" -eq 0 ]; then
+    echo "usage: scripts/ct <cargo-subcommand> [args...]" >&2
+    exit 2
+fi
+
+# The pid identity is (pid, start time): kill -0 alone would make a
+# recycled pid look like a live owner forever.
+proc_start() {
+    ps -o lstart= -p "$1" 2>/dev/null
+}
+
+# `mkdir` is atomic on every filesystem we care about, so it is the
+# lock; the pid identity goes inside it immediately after.
+take_lock() {
+    mkdir "$lock_dir" 2>/dev/null || return 1
+    echo "$$" > "${lock_dir}/pid"
+    proc_start "$$" > "${lock_dir}/start"
+}
+
+lock_age() {
+    local mt now
+    mt="$(stat -f %m "$lock_dir" 2>/dev/null || stat -c %Y "$lock_dir" 2>/dev/null)" || { echo 0; return; }
+    now="$(date +%s)"
+    echo $((now - mt))
+}
+
+# Is the recorded owner still running? A lock without a pid file yet is
+# an owner mid-take_lock — treat it as live while the directory is
+# young, stale only once it is old enough that the write can't still be
+# in flight (a SIGKILL between mkdir and the pid write leaves exactly
+# this shape behind). Same pid with a different start time is a
+# recycled pid, i.e. a dead owner.
+owner_alive() {
+    local pid recorded current
+    pid="$(cat "${lock_dir}/pid" 2>/dev/null)"
+    if [ -z "$pid" ]; then
+        [ "$(lock_age)" -lt 15 ]
+        return
+    fi
+    kill -0 "$pid" 2>/dev/null || return 1
+    recorded="$(cat "${lock_dir}/start" 2>/dev/null)"
+    [ -z "$recorded" ] && return 0
+    current="$(proc_start "$pid")"
+    [ "$recorded" = "$current" ]
+}
+
+# Take over a dead owner's lock. The claim is the atomic step: rename
+# the lock aside, and whichever racer's mv succeeds owns the cleanup;
+# everyone else loops back to take_lock. This is what prevents two
+# takeovers from each deleting the other's freshly won lock.
+reap_stale() {
+    local claim="${lock_dir}.reap.$$" pgid
+    mv "$lock_dir" "$claim" 2>/dev/null || return 0
+    pgid="$(cat "${claim}/pgid" 2>/dev/null)"
+    if [ -n "${pgid:-}" ] && kill -0 "-${pgid}" 2>/dev/null; then
+        # Only kill a group that still looks like a build — a recycled
+        # pgid full of unrelated processes is left alone.
+        if pgrep -g "$pgid" -l 2>/dev/null | grep -qE '(cargo|rustc|rustdoc)'; then
+            echo "ct: previous run (pgid ${pgid}) died without cleaning up — killing its processes" >&2
+            kill -TERM "-${pgid}" 2>/dev/null
+            # Give it a moment to go quietly, then insist.
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+                kill -0 "-${pgid}" 2>/dev/null || break
+                sleep 0.3
+            done
+            kill -KILL "-${pgid}" 2>/dev/null
+        else
+            echo "ct: stale lock's pgid ${pgid} was recycled by unrelated processes — dropping the lock only" >&2
+        fi
+    fi
+    rm -rf "$claim"
+}
+
+waited=0
+until take_lock; do
+    if ! owner_alive; then
+        reap_stale
+        continue
+    fi
+    if [ "$wait_for_lock" != "1" ]; then
+        echo "ct: another cargo run is active (pid $(cat "${lock_dir}/pid" 2>/dev/null))." >&2
+        echo "ct: concurrent builds starve each other — 29s becomes ~570s." >&2
+        echo "ct: wait for it, re-run with CT_WAIT=1, or kill it and retry." >&2
+        exit 75    # EX_TEMPFAIL — a retry may succeed
+    fi
+    if [ "$waited" -ge "$wait_timeout" ]; then
+        echo "ct: gave up waiting after ${wait_timeout}s for pid $(cat "${lock_dir}/pid" 2>/dev/null)" >&2
+        exit 75
+    fi
+    [ "$waited" -eq 0 ] && echo "ct: waiting for the active cargo run to finish..." >&2
+    sleep 2
+    waited=$((waited + 2))
+done
+
+child_pgid=""
+cleanup() {
+    local status=$?
+    trap - EXIT INT TERM HUP
+    if [ -n "$child_pgid" ] && kill -0 "-${child_pgid}" 2>/dev/null; then
+        kill -TERM "-${child_pgid}" 2>/dev/null
+        for _ in 1 2 3 4 5; do
+            kill -0 "-${child_pgid}" 2>/dev/null || break
+            sleep 0.2
+        done
+        kill -KILL "-${child_pgid}" 2>/dev/null
+    fi
+    rm -rf "$lock_dir"
+    exit "$status"
+}
+trap cleanup EXIT INT TERM HUP
+
+# Job control puts the child in its own process group, which is what
+# makes `kill -- -PGID` reach cargo *and* every rustc it spawned.
+set -m
+cargo "$@" &
+child_pid=$!
+child_pgid="$child_pid"
+echo "$child_pgid" > "${lock_dir}/pgid"
+set +m
+
+wait "$child_pid"
+exit $?

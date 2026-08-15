@@ -106,15 +106,28 @@ line-by-line attribution.
 The release profile is the worst offender: `lto = "thin"` with
 `codegen-units = 1` pins all cores for minutes.
 
-Before running anything cargo-based:
+**Run cargo through `scripts/ct`,** which makes this structural rather
+than a rule to remember:
 
 ```sh
-pgrep -fl "cargo|rustc"     # must be empty
+scripts/ct test --workspace
+scripts/ct clippy --workspace --all-targets -- -D warnings
+CT_WAIT=1 scripts/ct test        # queue behind an active run instead of refusing
 ```
 
-If a long build genuinely has to run in the background, `nice -n 10` it so
-it cannot starve a foreground run, and kill it when done rather than
-leaving it to finish silently.
+It takes an exclusive lock, so a second run refuses (exit 75) instead of
+competing. It runs cargo in its own process group and kills that group on
+EXIT/INT/TERM/HUP, so ctrl-c or a closed terminal takes the build with it.
+
+And — the case that matters for agents — if the session is SIGKILLed or
+the connection drops, no trap can run, so cleanup cannot depend on the
+dead run performing it. The lock records the pid and process group, and
+the NEXT invocation notices the owner is gone, kills the orphaned group,
+and takes over. Verified: killing the wrapper mid-build left 1 cargo and
+2 rustc orphaned, and the next `scripts/ct` reaped them and proceeded.
+
+Only the recorded process group is ever killed — a cargo you started
+yourself elsewhere is never touched.
 
 Symptoms that this is happening rather than a real slowdown:
 

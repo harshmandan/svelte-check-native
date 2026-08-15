@@ -273,3 +273,61 @@ fn type_errors_surface_for_every_diagnostic_source_selection() {
         );
     }
 }
+
+/// Symlinked files count and get checked; symlinked directories do not.
+///
+/// We walk with `follow_links = false`, so a symlink to a file reports
+/// `is_symlink()` rather than `is_file()` — a bare `is_file()` filter
+/// dropped it entirely, meaning a symlinked `+page.svelte` got no
+/// overlay, was never type-checked, and lost its route autotyping.
+/// Upstream's `fdir` admits symlinked files (`utils.ts:63-75`) while
+/// descending neither side's symlinked directories.
+#[cfg(unix)]
+#[test]
+fn symlinked_files_are_discovered_but_symlinked_dirs_are_not() {
+    let bin = env!("CARGO_BIN_EXE_svelte-check-native");
+    let ws = workspace_temp();
+    let root = ws.path();
+
+    write(
+        &root.join("tsconfig.json"),
+        r#"{ "include": ["src/**/*"] }"#,
+    );
+    write(
+        &root.join("real/Linked.svelte"),
+        "<script>let a = 1;</script><p>{a}</p>",
+    );
+    write(
+        &root.join("outside/Hidden.svelte"),
+        "<script>let b = 2;</script><p>{b}</p>",
+    );
+    write(
+        &root.join("src/App.svelte"),
+        "<script>let c = 3;</script><p>{c}</p>",
+    );
+    std::os::unix::fs::symlink("../real/Linked.svelte", root.join("src/Linked.svelte"))
+        .expect("file symlink");
+    std::os::unix::fs::symlink("../outside", root.join("src/linkeddir")).expect("dir symlink");
+
+    let output = Command::new(bin)
+        .args([
+            "--workspace",
+            root.to_str().unwrap(),
+            "--tsconfig",
+            root.join("tsconfig.json").to_str().unwrap(),
+            "--output",
+            "machine",
+        ])
+        .output()
+        .expect("binary should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // real/Linked.svelte, outside/Hidden.svelte, src/App.svelte and the
+    // symlink src/Linked.svelte — but NOT a second copy of Hidden.svelte
+    // reached by descending src/linkeddir.
+    assert_eq!(
+        completed_files(&stdout),
+        Some(4),
+        "symlinked files must count once; symlinked dirs must not be descended. stdout:\n{stdout}"
+    );
+}

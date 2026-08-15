@@ -86,7 +86,20 @@ pub(crate) fn discover_relevant_files_with_settings(
         // us at it deliberately). Pruning the root yields zero files.
         .filter_entry(|e| e.depth() == 0 || !e.file_type().is_dir() || !is_excluded_dir(e.path()))
         .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
+        // A symlink POINTING AT a file counts as a file. We walk with
+        // `follow_links = false`, so such an entry reports
+        // `is_symlink()` rather than `is_file()` and a bare `is_file()`
+        // test drops it — a symlinked `+page.svelte` then gets no
+        // overlay, is never checked, and loses its route autotyping.
+        //
+        // Upstream's `fdir` admits an entry when
+        // `isFile() || (isSymbolicLink() && !resolveSymlinks &&
+        // !excludeSymlinks)`, and `findFiles` sets neither option
+        // (`utils.ts:63-75`). Symlinked DIRECTORIES stay excluded on
+        // both sides — fdir needs `resolveSymlink` to descend one, and
+        // `filter_entry` above only prunes `is_dir()` entries, which a
+        // symlinked dir is not, so it is never descended here either.
+        .filter(|e| e.file_type().is_file() || e.file_type().is_symlink())
     {
         let path = e.path();
         let ext = path.extension().and_then(|s| s.to_str());

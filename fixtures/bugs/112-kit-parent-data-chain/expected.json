@@ -1,0 +1,12 @@
+{
+    "keep_svelte_kit": true,
+    "errors": [
+        {
+            "file": "src/routes/[view=view]/child/input.svelte",
+            "line": 7,
+            "column": 10,
+            "code": 2322
+        }
+    ],
+    "_note": "A child route's generated $types.d.ts reaches its parent through a sibling chain: import('../$types.js').RouteParams. The mirror re-anchors that chain onto the parent's MIRRORED copy — the un-mirrored original under .svelte-kit/types/ carries unrewritten chains of its own, so anchoring there pulls the raw user tree back into the program. This fixture locks the two-hop resolution end to end: child $types -> mirrored parent $types -> re-anchored matcher chain -> user matcher. If either hop lands on a wrong path the matched param widens to any and the expected TS2322 vanishes."
+}

@@ -17,6 +17,11 @@ dist-packs/
 # Generated cache dirs (produced by the tool itself while dogfooding)
 .svelte-check/
 .svelte-kit/
+# ...except where a fixture COMMITS a generated types tree as the input
+# under test: the kit types mirror reads only from `.svelte-kit/types/`,
+# so there is nowhere else to put it.
+!fixtures/bugs/**/.svelte-kit/
+!fixtures/bugs/**/.svelte-kit/**
 
 # Insta snapshot pending files
 *.snap.new

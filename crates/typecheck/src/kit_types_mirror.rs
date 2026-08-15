@@ -35,7 +35,7 @@
 //! user hasn't run `svelte-kit sync` yet, or the project isn't a
 //! SvelteKit project at all).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 use svn_core::sveltekit::{KitFilesSettings, user_source_needles};
@@ -100,8 +100,16 @@ pub fn sync_mirror(layout: &CacheLayout) -> std::io::Result<Option<PathBuf>> {
                 Err(_) => return None,
             };
             let out = mirror_root.join(rel);
+            let original_dir = path.parent().unwrap_or(&user_types_root).to_path_buf();
             Some(std::fs::read_to_string(&path).and_then(|content| {
-                let rewritten = rewrite_user_source_chain(&content, &needles);
+                let rewritten = rewrite_relative_chains(
+                    &content,
+                    &original_dir,
+                    &user_types_root,
+                    &mirror_root,
+                    layout,
+                    &needles,
+                );
                 write_if_changed(&out, &rewritten)?;
                 Ok(out)
             }))
@@ -129,65 +137,154 @@ pub fn sync_mirror(layout: &CacheLayout) -> std::io::Result<Option<PathBuf>> {
     Ok(if wrote_any { Some(mirror_root) } else { None })
 }
 
-/// Rewrite every `'../(…/)src/routes/'` substring inside the file to
-/// `'../(…/)svelte/src/routes/'`. The leading `'../'` chain length
-/// is preserved — only the segment NAME is shifted: `src/routes/`
-/// becomes `svelte/src/routes/`, redirecting the chain into the
-/// cache's typed Kit-file copies.
+/// Re-anchor every relative module specifier in a generated
+/// `$types.d.ts` so that copying the file into the cache cannot change
+/// what it points at.
 ///
-/// Only route chains are rewritten, because only route chains occur:
-/// SvelteKit's generated `$types.d.ts` reaches back into the user tree
-/// for route modules (`import('../../../src/routes/…')`) and nothing
-/// else. Hooks and param matchers are named from the `@sveltejs/kit`
-/// package instead, never by user-tree path, so there is no chain to
-/// redirect — even though `kit_inject` does now produce cache copies
-/// of them. Should a future SvelteKit start pointing generated types
-/// at a user's hooks or params file, this rewriter and
-/// `user_source_needles` are the two places that would need to learn
-/// about it together.
+/// This is the invariant the mirror lives or dies by: **no relative
+/// specifier may survive a directory move unrewritten.** The copy sits
+/// at the same depth relative to the cache mirror root as the original
+/// does to `.svelte-kit/types/`, but those two roots are at different
+/// depths in the tree, so an untouched `../../../x` walks out to a
+/// completely different place.
 ///
-/// Conservative substring match: only rewrites occurrences preceded
-/// by `../` (i.e. inside an existing relative-walk chain). A literal
-/// `src/routes/` in a comment won't false-match because it lacks the
-/// leading `../` that the SvelteKit-generated chains always have.
+/// Three destinations:
 ///
-/// `needles` comes from `svn_core::sveltekit::user_source_needles` so
-/// the rewriter's recognition list tracks the centralised classifier
-/// rather than being hardcoded.
-fn rewrite_user_source_chain(text: &str, needles: &[String]) -> String {
-    let mut out = String::with_capacity(text.len() + 32);
-    let mut rest = text;
-    while let Some(idx) = find_user_source_segment(rest, needles) {
-        out.push_str(&rest[..idx]);
-        out.push_str("svelte/");
-        rest = &rest[idx..];
+/// - A specifier landing on a user-source path we generate typed
+///   overlays for (the `needles`, e.g. `src/routes/`) is redirected to
+///   that overlay under `<cache>/svelte/`. This is the mirror's whole
+///   purpose — without it the chain walks back to the user's untyped
+///   source and the typing we generated is ignored.
+/// - A specifier landing back inside the generated tree we mirror from
+///   (sibling/ancestor `$types.js` chains — a child route's
+///   `import('../$types.js').LayoutData` reaching its parent) is
+///   re-anchored onto the corresponding copy under the mirror root.
+///   Pointing it at the un-mirrored original instead would re-open the
+///   leak: the original's own chains are unrewritten, so they walk back
+///   to the very un-typed user source this whole module exists to
+///   shadow.
+/// - Anything else is rewritten to the absolute path of the file the
+///   compiler would have loaded had the `$types.d.ts` stayed put.
+///
+/// The last case is not hypothetical, and the previous rewriter's
+/// claim that only route chains occur was wrong. SvelteKit names param
+/// matchers by user-tree path: a `[foo=matcher]` route generates
+/// `MatcherParam<typeof import('../../../src/params/foo.js').match>`.
+/// Left dangling, that import resolved to nothing, the matched param
+/// silently widened to `any`, and every misuse of it went unreported —
+/// or, with `skipLibCheck` off, surfaced as a TS2307 against a
+/// generated file the user cannot edit.
+fn rewrite_relative_chains(
+    text: &str,
+    original_dir: &Path,
+    source_root: &Path,
+    mirror_root: &Path,
+    layout: &CacheLayout,
+    needles: &[String],
+) -> String {
+    let mut out = String::with_capacity(text.len() + 64);
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        // Copy everything up to the next quote verbatim, as a slice —
+        // never byte-by-byte, which would decode multibyte UTF-8 as one
+        // mangled char per byte. Quotes are ASCII, so the found offset
+        // is always a char boundary.
+        let Some(rel_quote) = text[i..].find(['\'', '"']) else {
+            out.push_str(&text[i..]);
+            break;
+        };
+        out.push_str(&text[i..i + rel_quote]);
+        i += rel_quote;
+        // A quoted run. Find its close on the same line; an unterminated
+        // quote is not something a generated file produces, but bail
+        // safely rather than scanning to EOF.
+        let quote = bytes[i];
+        let Some(rel_end) = text[i + 1..].find([quote as char, '\n']) else {
+            out.push_str(&text[i..]);
+            return out;
+        };
+        let end = i + 1 + rel_end;
+        if bytes[end] != quote {
+            out.push_str(&text[i..=end]);
+            i = end + 1;
+            continue;
+        }
+        let inner = &text[i + 1..end];
+        match reanchor_specifier(
+            inner,
+            original_dir,
+            source_root,
+            mirror_root,
+            layout,
+            needles,
+        ) {
+            Some(replacement) => {
+                out.push(quote as char);
+                out.push_str(&replacement);
+                out.push(quote as char);
+            }
+            None => out.push_str(&text[i..=end]),
+        }
+        i = end + 1;
     }
-    out.push_str(rest);
     out
 }
 
-/// Find the byte offset of the earliest user-source substring in
-/// `text` preceded by `../` (the SvelteKit chain signature). Returns
-/// the START of that segment; the caller inserts `svelte/` at that
-/// position.
-fn find_user_source_segment(text: &str, needles: &[String]) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let mut best: Option<usize> = None;
+/// Resolve one specifier against the original file's directory and
+/// return its replacement, or `None` to leave it untouched (bare
+/// package specifiers, non-paths, anything outside the workspace).
+fn reanchor_specifier(
+    spec: &str,
+    original_dir: &Path,
+    source_root: &Path,
+    mirror_root: &Path,
+    layout: &CacheLayout,
+    needles: &[String],
+) -> Option<String> {
+    if !(spec.starts_with("./") || spec.starts_with("../")) {
+        return None;
+    }
+    let resolved = lexically_normalise(&original_dir.join(spec));
+    let rel = resolved.strip_prefix(&layout.workspace).ok()?;
+    let rel_str = rel.to_string_lossy().replace('\\', "/");
     for needle in needles {
-        let mut i = 0usize;
-        while let Some(rel) = text[i..].find(needle.as_str()) {
-            let pos = i + rel;
-            if pos >= 3 && &bytes[pos - 3..pos] == b"../" {
-                best = match best {
-                    Some(prev) if prev <= pos => Some(prev),
-                    _ => Some(pos),
-                };
-                break; // earliest hit FOR THIS NEEDLE; later ones can't beat it
-            }
-            i = pos + needle.len();
+        if let Some(stripped) = rel_str.strip_prefix(needle.as_str()) {
+            let mut target = layout.svelte_dir.join(needle.trim_end_matches('/'));
+            target.push(stripped);
+            return Some(target.to_string_lossy().replace('\\', "/"));
         }
     }
-    best
+    // A chain between generated files (a child route's
+    // `import('../$types.js')` reaching its parent's `$types.d.ts`)
+    // must stay inside the mirror. The un-mirrored original at the
+    // same spot carries unrewritten chains of its own, so anchoring
+    // there would pull the raw user tree back into the program.
+    if let Ok(inside) = resolved.strip_prefix(source_root) {
+        return Some(
+            mirror_root
+                .join(inside)
+                .to_string_lossy()
+                .replace('\\', "/"),
+        );
+    }
+    Some(resolved.to_string_lossy().replace('\\', "/"))
+}
+
+/// `..`/`.` collapsing without touching the filesystem — the targets
+/// are generated paths that need not exist yet.
+fn lexically_normalise(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -200,93 +297,147 @@ mod tests {
         user_source_needles(&KitFilesSettings::default())
     }
 
-    #[test]
-    fn rewrites_simple_routes_chain() {
-        let input = "typeof import('../../../../../../../src/routes/foo/+page.js').load";
-        let want = "typeof import('../../../../../../../svelte/src/routes/foo/+page.js').load";
-        assert_eq!(rewrite_user_source_chain(input, &needles()), want);
+    /// Stand-in layout. `/ws` is the workspace; the cache and its
+    /// `svelte/` overlay dir hang off it as they do in a real run.
+    fn layout() -> CacheLayout {
+        CacheLayout::for_workspace("/ws")
+    }
+
+    /// A generated `$types.d.ts` lives this deep under the user's
+    /// `.svelte-kit/types/`, so its chains walk up from here. Five
+    /// segments below the workspace (`.svelte-kit`, `types`, `src`,
+    /// `routes`, `foo`), which is why the fixtures below use five
+    /// `../` to reach user source — the same shape SvelteKit emits.
+    fn original_dir() -> PathBuf {
+        PathBuf::from("/ws/.svelte-kit/types/src/routes/foo")
+    }
+
+    fn rewrite(input: &str) -> String {
+        rewrite_from(input, &original_dir())
+    }
+
+    /// Like [`rewrite`] but with the original file placed elsewhere in
+    /// the generated tree — for exercising sibling/ancestor chains
+    /// between routes at different depths.
+    fn rewrite_from(input: &str, original_dir: &Path) -> String {
+        let layout = layout();
+        let source_root = PathBuf::from("/ws/.svelte-kit/types");
+        let mirror_root = layout.kit_types_mirror_dir();
+        rewrite_relative_chains(
+            input,
+            original_dir,
+            &source_root,
+            &mirror_root,
+            &layout,
+            &needles(),
+        )
     }
 
     #[test]
-    fn rewrites_layout_parent_data_chain() {
-        let input = "type PageParentData = EnsureDefined<import('../../../../../src/routes/+page.js').load>;";
-        let want = "type PageParentData = EnsureDefined<import('../../../../../svelte/src/routes/+page.js').load>;";
-        assert_eq!(rewrite_user_source_chain(input, &needles()), want);
+    fn route_chains_are_redirected_to_the_generated_overlay() {
+        // `src/routes/` is a needle: the chain must land on our typed
+        // copy under `<cache>/svelte/`, not on the user's source, or
+        // the typing the mirror exists to install is ignored.
+        let input = "typeof import('../../../../../src/routes/foo/+page.js').load";
+        let got = rewrite(input);
+        assert!(
+            got.contains("/ws/.svelte-check/svelte/src/routes/foo/+page.js"),
+            "route chain not redirected into the cache: {got}"
+        );
     }
 
     #[test]
-    fn leaves_relative_dollar_types_imports_alone() {
-        // `import('../$types.js')` walks within the mirror itself —
-        // must not be rewritten, otherwise it'd land in svelte/$types
-        // which doesn't exist.
+    fn param_matcher_chains_are_re_anchored_on_the_user_source() {
+        // The case the old rewriter left dangling. `src/params/` is not
+        // a needle — there is no generated overlay for it — so the
+        // chain must point at the real file by absolute path. Left
+        // relative, it walked out of the cache to nowhere and the
+        // matched param silently widened to `any`.
+        let input = "import('../../../../../src/params/videoId.js').match";
+        let got = rewrite(input);
+        assert!(
+            got.contains("'/ws/src/params/videoId.js'"),
+            "param matcher chain not re-anchored: {got}"
+        );
+    }
+
+    #[test]
+    fn hooks_chains_are_re_anchored_on_the_user_source() {
+        let input = "typeof import('../../../../../src/hooks.server.js').handle";
+        let got = rewrite(input);
+        assert!(
+            got.contains("'/ws/src/hooks.server.js'"),
+            "hooks chain not re-anchored: {got}"
+        );
+    }
+
+    #[test]
+    fn sibling_dollar_types_imports_stay_inside_the_mirror() {
+        // `import('../$types.js')` refers to another generated file —
+        // a child route reaching its parent's `$types.d.ts`. It must
+        // land on the parent's MIRRORED copy: the un-mirrored original
+        // under `.svelte-kit/types/` carries unrewritten chains of its
+        // own, so anchoring there would pull the raw user tree back
+        // into the program.
         let input = "type X = import('../$types.js').LayoutData;";
-        assert_eq!(rewrite_user_source_chain(input, &needles()), input);
+        let got = rewrite(input);
+        assert!(
+            got.contains("'/ws/.svelte-check/svelte-kit/types/src/routes/$types.js'"),
+            "sibling $types import not re-anchored into the mirror: {got}"
+        );
     }
 
     #[test]
-    fn rewrites_multiple_chains_in_one_file() {
-        let input =
-            "import('../../../src/routes/a/+page.js'); import('../../../src/routes/b/+page.js');";
-        let want = "import('../../../svelte/src/routes/a/+page.js'); import('../../../svelte/src/routes/b/+page.js');";
-        assert_eq!(rewrite_user_source_chain(input, &needles()), want);
+    fn ancestor_dollar_types_chains_re_anchor_into_the_mirror() {
+        // A deeper route reaching two levels up stays inside the
+        // mirror too — depth within the generated tree is irrelevant,
+        // only which tree the resolved path lands in.
+        let dir = PathBuf::from("/ws/.svelte-kit/types/src/routes/foo/bar");
+        let input = "type X = import('../../$types.js').LayoutData;";
+        let got = rewrite_from(input, &dir);
+        assert!(
+            got.contains("'/ws/.svelte-check/svelte-kit/types/src/routes/$types.js'"),
+            "ancestor $types import not re-anchored into the mirror: {got}"
+        );
     }
 
     #[test]
-    fn leaves_hooks_chain_alone() {
-        // Hooks are intentionally NOT rewritten — `kit_inject` doesn't
-        // materialise a `<cache>/svelte/src/hooks.*` copy, so redirecting
-        // the chain there would dangle. See `rewrite_user_source_chain`
-        // doc comment for the future-extension note.
-        let input = "typeof import('../../src/hooks.server.js').handle";
-        assert_eq!(rewrite_user_source_chain(input, &needles()), input);
+    fn multibyte_text_survives_byte_identically() {
+        // The scanner copies text between quoted runs as slices; a
+        // byte-at-a-time copy would decode each UTF-8 continuation
+        // byte as its own mangled Latin-1 char.
+        let input = "// naïve Präfix — 路由テスト 🚀\ntype Msg = 'Grüße';";
+        assert_eq!(rewrite(input), input);
     }
 
     #[test]
-    fn leaves_params_chain_alone() {
-        let input = "import('../../src/params/videoId.js').match";
-        assert_eq!(rewrite_user_source_chain(input, &needles()), input);
+    fn rewrites_every_chain_in_a_file() {
+        let input = "import('../../../../../src/routes/a/+page.js'); import('../../../../../src/routes/b/+page.js');";
+        let got = rewrite(input);
+        assert!(got.contains("svelte/src/routes/a/+page.js"), "{got}");
+        assert!(got.contains("svelte/src/routes/b/+page.js"), "{got}");
     }
 
     #[test]
-    fn does_not_rewrite_bare_src_routes_without_dotdot() {
-        // A literal occurrence not preceded by `../` is not a chain
-        // segment we should touch.
-        let input = "// in src/routes/ we keep things tidy";
-        assert_eq!(rewrite_user_source_chain(input, &needles()), input);
+    fn bare_package_specifiers_are_left_alone() {
+        let input = "import type { Foo } from '@sveltejs/kit';";
+        assert_eq!(rewrite(input), input);
     }
 
     #[test]
-    fn idempotent_after_one_pass() {
-        let input = "import('../../../src/routes/foo/+page.js');";
-        let once = rewrite_user_source_chain(input, &needles());
-        let twice = rewrite_user_source_chain(&once, &needles());
-        assert_eq!(once, twice);
+    fn non_specifier_quoted_text_is_left_alone() {
+        // A quoted string that isn't a relative path must survive
+        // untouched — the scanner rewrites only `./` and `../` starts.
+        let input = "type Msg = 'src/routes/not-a-path';";
+        assert_eq!(rewrite(input), input);
     }
 
     #[test]
-    fn rewrites_routes_alongside_unmodified_hooks() {
-        // Mixed input: hooks and params chains appear alongside a
-        // routes chain in the same file. Only the routes chain is
-        // redirected; a hooks path is left alone because generated
-        // types never reach for one, so redirecting it would be a
-        // rewrite with no reader.
-        let input =
-            "x: import('../../src/hooks.server.js'); y: import('../../src/routes/a/+page.js');";
-        let want = "x: import('../../src/hooks.server.js'); y: import('../../svelte/src/routes/a/+page.js');";
-        assert_eq!(rewrite_user_source_chain(input, &needles()), want);
-    }
-
-    #[test]
-    fn parametric_custom_needles_are_honoured() {
-        // Sanity check that the rewriter consumes the needles slice
-        // (rather than a hardcoded list). When the centralised
-        // `user_source_needles` grows hooks/params support, this same
-        // slice plumbing carries the new needles through with no
-        // additional rewriter changes.
-        let input = "import('../../src/myroutes/foo/+page.js');";
-        let want = "import('../../svelte/src/myroutes/foo/+page.js');";
-        let custom = vec!["src/myroutes/".to_string()];
-        assert_eq!(rewrite_user_source_chain(input, &custom), want);
+    fn specifiers_outside_the_workspace_are_left_alone() {
+        // A chain escaping above the workspace has no meaningful
+        // re-anchor and is left as written rather than guessed at.
+        let input = "import('../../../../../../../../outside/thing.js')";
+        assert_eq!(rewrite(input), input);
     }
 }
 

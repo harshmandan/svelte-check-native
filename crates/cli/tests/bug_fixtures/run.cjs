@@ -17,6 +17,12 @@
 //   { "warnings": [{file,line,column,code}] }
 //       → additionally assert the exact set of WARNINGs; may accompany
 //         "clean" or "errors" (when absent, warnings are ignored)
+//   { "keep_svelte_kit": true }
+//       → do NOT wipe the fixture's `.svelte-kit/` before running.
+//         For fixtures that COMMIT a generated `.svelte-kit/types/`
+//         tree as the input under test (the kit types mirror reads
+//         only from there). The wipe exists so a stale tree from a
+//         previous run can't leak in; a committed one is the point.
 //   { "expect_failure": true }
 //       → assert the binary exits non-zero AND emits a FAILURE record.
 //         For runs that must NOT be reported as a clean 0-error result,
@@ -84,7 +90,9 @@ function runFixture(name, fixtureDir) {
 
     // Wipe any leftover cache between runs for determinism.
     rmSync(path.join(fixtureDir, '.svelte-check'), { recursive: true, force: true });
-    rmSync(path.join(fixtureDir, '.svelte-kit'), { recursive: true, force: true });
+    if (expected.keep_svelte_kit !== true) {
+        rmSync(path.join(fixtureDir, '.svelte-kit'), { recursive: true, force: true });
+    }
 
     const tsconfig = path.join(fixtureDir, 'tsconfig.json');
     const tsconfigExists = existsSync(tsconfig);

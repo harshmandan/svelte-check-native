@@ -1,0 +1,12 @@
+{
+    "keep_svelte_kit": true,
+    "errors": [
+        {
+            "file": "src/routes/[view=view]/input.svelte",
+            "line": 5,
+            "column": 10,
+            "code": 2322
+        }
+    ],
+    "_note": "SvelteKit names param matchers by user-tree path, so a [foo=matcher] route generates a chain like import('../../../src/params/foo.js'). The mirror copies generated $types.d.ts into the cache at the same depth relative to a root that sits at a different depth in the tree, so any relative chain it does not rewrite lands somewhere else entirely. The rewriter only handled src/routes/ chains, on the stated premise that no others occur — which real generated output disproves. The dangling import made the matched param widen to any, hiding every misuse of it, or surfaced as a TS2307 against a generated file when skipLibCheck was off. Every relative specifier is now re-anchored: onto the generated overlay when one exists, otherwise onto the real file by absolute path."
+}

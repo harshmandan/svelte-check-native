@@ -66,6 +66,10 @@ pub fn build(
     if let Some(path) = kit_app_ambients {
         files.push(path.to_string_lossy().into_owned());
     }
+    // The user's own `files` entries are appended further down, once the
+    // extends chain has been loaded — see `user_files`. They cannot be
+    // left to inherit: `files` is replace-on-child, so the array we write
+    // here shadows theirs completely.
 
     // Walk the user's extends chain once via the canonical loader.
     // Every derived field the overlay needs (paths, rootDirs, include,
@@ -565,6 +569,32 @@ pub fn build(
     let cache_dts_glob = format!("{}/**/*.d.svelte.ts", layout.svelte_dir.to_string_lossy());
     if !user_includes.contains(&cache_dts_glob) {
         user_includes.push(cache_dts_glob);
+    }
+
+    // The user's `files`, rebased onto the config that declared them.
+    //
+    // `files` is replace-on-child, so the array we write shadows theirs
+    // entirely — leaving it to inherit means their entries never reach
+    // the program at all. Two ways that shows up, in opposite
+    // directions: a project loading globals via `files: ["./ambient.d.ts"]`
+    // gets a spurious "Cannot find name" at every use of them, and a
+    // `files`-only project (no `include`, a deliberate closed world) has
+    // its listed entry files silently unchecked while we check a
+    // different set entirely.
+    //
+    // `.svelte` entries are swapped for their generated `.d.svelte.ts`
+    // sidecar: the compiler can't parse a raw `.svelte` file and would
+    // answer TS6054. Upstream does the same swap (`incremental.ts:409-411`).
+    for entry in winning_patterns_absolute(&chain, |f| f.files.as_deref()) {
+        let mapped = match entry.strip_suffix(".svelte") {
+            Some(_) => project_to_virtual_svelte_dts(layout, &entry),
+            None => Some(entry),
+        };
+        if let Some(m) = mapped
+            && !files.contains(&m)
+        {
+            files.push(m);
+        }
     }
 
     let mut overlay = serde_json::Map::new();

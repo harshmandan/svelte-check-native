@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "`files` is replace-on-child, so the array the overlay writes for its generated .svelte overlays shadowed the user's entirely and their entries never reached the program. A project that loads globals through `files` then got a spurious 'Cannot find name' at every use of them. The entries are now rebased onto the config that declared them and appended to the overlay's own list."
+}

@@ -348,13 +348,30 @@ pub fn build(
     // entry (resolvable from `cfg/`) is TS2688, while `./typedefs/x`
     // (resolvable from the entry dir) is clean.
     let entry_dir = user_tsconfig.parent().unwrap_or(layout.workspace.as_path());
+    // `typeRoots`, unlike `types`, IS an `isFilePath` option — TS rebases
+    // it against the config that declared it during the extends merge, so
+    // each entry anchors on its own declaring directory. We never re-emit
+    // it (it inherits correctly through `extends`); we resolve it here
+    // only so the `types` filter below looks where TS would look.
+    let type_roots: Vec<PathBuf> = chain
+        .iter()
+        .find(|f| f.compiler_options.type_roots.is_some())
+        .and_then(|f| {
+            f.compiler_options.type_roots.as_ref().map(|list| {
+                let dir = f.config_dir();
+                list.iter()
+                    .map(|r| normalize(&dir.join(r)))
+                    .collect::<Vec<_>>()
+            })
+        })
+        .unwrap_or_default();
     let user_types: Option<Vec<String>> = chain
         .iter()
         .find(|f| f.compiler_options.types.is_some())
         .and_then(|f| {
             f.compiler_options.types.as_ref().map(|list| {
                 list.iter()
-                    .filter(|t| is_resolvable_types_entry(t, entry_dir))
+                    .filter(|t| is_resolvable_types_entry(t, entry_dir, &type_roots))
                     .map(|t| overlay_types_entry(t, entry_dir))
                     .collect::<Vec<_>>()
             })
@@ -368,11 +385,11 @@ pub fn build(
         for sibling in &sibling_refs {
             let sibling_dir = sibling.project_dir.as_path();
             for entry in &sibling.types {
-                if !is_resolvable_types_entry(entry, sibling_dir) {
+                if !is_resolvable_types_entry(entry, sibling_dir, &type_roots) {
                     continue;
                 }
                 let resolved = overlay_types_entry(entry, sibling_dir);
-                if merged_types.iter().any(|e| *e == resolved) {
+                if merged_types.contains(&resolved) {
                     continue;
                 }
                 merged_types.push(resolved);
@@ -696,12 +713,21 @@ where
 /// diagnostics for the entire program. The classifier has to keep
 /// genuinely-installed entries (including subpaths like `vite/client`)
 /// or user code loses its ambient types.
-fn is_resolvable_types_entry(entry: &str, declaring_dir: &Path) -> bool {
+///
+/// `type_roots` is the effective `compilerOptions.typeRoots`, already
+/// absolutised. When the user declares it, it REPLACES the default
+/// `node_modules/@types` walk-up as the place bare entries are looked
+/// for — so a probe that only knows about `node_modules` would classify
+/// a perfectly good entry as dead and drop it. Dropping one entry also
+/// empties the list when it was the only one, and an empty `types` array
+/// suppresses automatic @types inclusion outright, so the cost of a
+/// wrong "unresolvable" verdict is every ambient in the project.
+fn is_resolvable_types_entry(entry: &str, anchor_dir: &Path, type_roots: &[PathBuf]) -> bool {
     if is_filesystem_types_entry(entry) {
         let candidate = if Path::new(entry).is_absolute() {
             PathBuf::from(entry)
         } else {
-            declaring_dir.join(entry)
+            anchor_dir.join(entry)
         };
         if candidate.is_file() {
             return true;
@@ -710,11 +736,33 @@ fn is_resolvable_types_entry(entry: &str, declaring_dir: &Path) -> bool {
         as_dts.as_mut_os_string().push(".d.ts");
         return as_dts.is_file();
     }
-    if package_like_types_dir_resolves(entry, declaring_dir) {
+    if type_roots.iter().any(|root| {
+        types_package_dir_resolves(&root.join(entry)) || {
+            let mut as_dts = root.join(entry).into_os_string();
+            as_dts.push(".d.ts");
+            PathBuf::from(as_dts).is_file()
+        }
+    }) {
+        return true;
+    }
+    // A user-declared `typeRoots` replaces the default lookup, so once
+    // we've missed there, the node_modules probes below would be looking
+    // somewhere TypeScript isn't. Keep them for the unset case only.
+    if !type_roots.is_empty() {
+        return false;
+    }
+    if package_like_types_dir_resolves(entry, anchor_dir) {
         return true;
     }
     let (pkg, _subpath) = split_package_entry(entry);
-    package_types_entry_resolves(pkg, declaring_dir)
+    package_types_entry_resolves(pkg, anchor_dir)
+}
+
+/// True when `dir` is a directory TypeScript would accept as a types
+/// package: it ships an `index.d.ts`, or a `package.json` naming the
+/// declaration entry point.
+fn types_package_dir_resolves(dir: &Path) -> bool {
+    dir.join("index.d.ts").is_file() || dir.join("package.json").is_file()
 }
 
 /// Rewrite one surviving `types` entry into the form the overlay
@@ -1463,8 +1511,8 @@ mod tests {
         let pkg = tmp.path().join("node_modules").join("vite");
         std::fs::create_dir_all(&pkg).unwrap();
         std::fs::write(pkg.join("package.json"), "{}").unwrap();
-        assert!(is_resolvable_types_entry("vite/client", tmp.path()));
-        assert!(is_resolvable_types_entry("vite", tmp.path()));
+        assert!(is_resolvable_types_entry("vite/client", tmp.path(), &[]));
+        assert!(is_resolvable_types_entry("vite", tmp.path(), &[]));
     }
 
     #[test]
@@ -1477,7 +1525,11 @@ mod tests {
             .join("kit");
         std::fs::create_dir_all(&pkg).unwrap();
         std::fs::write(pkg.join("package.json"), "{}").unwrap();
-        assert!(is_resolvable_types_entry("@sveltejs/kit/types", tmp.path(),));
+        assert!(is_resolvable_types_entry(
+            "@sveltejs/kit/types",
+            tmp.path(),
+            &[]
+        ));
     }
 
     /// SvelteKit 3 writes `node_modules/$app/types/index.d.ts` and
@@ -1491,7 +1543,7 @@ mod tests {
         let dir = tmp.path().join("node_modules").join("$app").join("types");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("index.d.ts"), "export {};").unwrap();
-        assert!(is_resolvable_types_entry("$app/types", tmp.path()));
+        assert!(is_resolvable_types_entry("$app/types", tmp.path(), &[]));
     }
 
     #[test]
@@ -1502,8 +1554,8 @@ mod tests {
         // our error count. Same applies to uninstalled subpaths.
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("node_modules")).unwrap();
-        assert!(!is_resolvable_types_entry("node", tmp.path()));
-        assert!(!is_resolvable_types_entry("vite/client", tmp.path()));
+        assert!(!is_resolvable_types_entry("node", tmp.path(), &[]));
+        assert!(!is_resolvable_types_entry("vite/client", tmp.path(), &[]));
     }
 
     #[test]
@@ -1511,9 +1563,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dts = tmp.path().join("types.d.ts");
         std::fs::write(&dts, "").unwrap();
-        assert!(is_resolvable_types_entry("./types.d.ts", tmp.path()));
+        assert!(is_resolvable_types_entry("./types.d.ts", tmp.path(), &[]));
         // Extensionless form also accepted (tsgo appends .d.ts).
-        assert!(is_resolvable_types_entry("./types", tmp.path()));
+        assert!(is_resolvable_types_entry("./types", tmp.path(), &[]));
     }
 
     /// The overlay tsconfig lives in a cache directory, not beside the
@@ -1549,9 +1601,51 @@ mod tests {
         );
     }
 
+    /// A user-declared `typeRoots` is where TS looks for bare entries.
+    /// Probing only `node_modules` classified these as dead and dropped
+    /// them, emptying `types` and taking every ambient with it.
+    #[test]
+    fn is_resolvable_types_entry_honours_declared_type_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("typings");
+        let pkg = root.join("globals");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("index.d.ts"), "declare const G: string;").unwrap();
+        // Sibling `.d.ts` form, no directory.
+        std::fs::write(root.join("flat.d.ts"), "declare const F: string;").unwrap();
+        let roots = vec![root];
+
+        assert!(is_resolvable_types_entry("globals", tmp.path(), &roots));
+        assert!(is_resolvable_types_entry("flat", tmp.path(), &roots));
+        assert!(!is_resolvable_types_entry("absent", tmp.path(), &roots));
+        // Without the typeRoots the same entry is correctly unresolvable.
+        assert!(!is_resolvable_types_entry("globals", tmp.path(), &[]));
+    }
+
+    /// A declared `typeRoots` REPLACES the default `node_modules/@types`
+    /// lookup, so an installed package that isn't under one of the roots
+    /// is genuinely unresolvable — keeping it would re-introduce the
+    /// fatal TS2688 the filter exists to prevent.
+    #[test]
+    fn is_resolvable_types_entry_declared_type_roots_replace_node_modules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("node_modules").join("@types").join("node");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("package.json"), "{}").unwrap();
+        let root = tmp.path().join("typings");
+        std::fs::create_dir_all(&root).unwrap();
+
+        assert!(is_resolvable_types_entry("node", tmp.path(), &[]));
+        assert!(!is_resolvable_types_entry("node", tmp.path(), &[root]));
+    }
+
     #[test]
     fn is_resolvable_types_entry_drops_missing_relative_file() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(!is_resolvable_types_entry("./does-not-exist", tmp.path()));
+        assert!(!is_resolvable_types_entry(
+            "./does-not-exist",
+            tmp.path(),
+            &[]
+        ));
     }
 }

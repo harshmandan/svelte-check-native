@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A declared `typeRoots` is where TypeScript looks up bare `types` entries, replacing the default node_modules/@types walk-up. Probing only node_modules classified `myglobals` as unresolvable and dropped it; since it was the sole entry the overlay then carried an empty `types` array, which also switches off automatic @types inclusion. Every reference to the ambient became a spurious TS2304 on code that type-checks cleanly under tsgo."
+}

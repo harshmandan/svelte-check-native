@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A tsconfig's include/exclude scoping reached .ts files but never the .svelte ones. Two causes had to be fixed together: exclude patterns were not projected into the cache tree the way include patterns are, so a pattern naming a .svelte source never matched the .d.svelte.ts sidecar our program actually contains; and an unconditional cache-wide glob re-admitted every generated overlay regardless. The glob is only needed when the config declares neither include nor files — the case TypeScript answers by scanning everything — so it is now emitted only then. Both files here would otherwise be type-checked and report errors on code the project deliberately does not check."
+}

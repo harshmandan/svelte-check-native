@@ -566,9 +566,26 @@ pub fn build(
     // with no `include`. Different cache location is the structural
     // divergence; this glob is its workaround. Documented as the
     // third intentional divergence in `notes/PARITY_REFACTOR.md`.
-    let cache_dts_glob = format!("{}/**/*.d.svelte.ts", layout.svelte_dir.to_string_lossy());
-    if !user_includes.contains(&cache_dts_glob) {
-        user_includes.push(cache_dts_glob);
+    //
+    // It is emitted ONLY when the user's chain declares neither
+    // `include` nor `files`, which is exactly the case TypeScript
+    // answers by scanning everything under the config directory. When
+    // they DO declare one, the projection above already covers every
+    // overlay their config admits, and adding the catch-all on top
+    // re-admits the ones it doesn't: a `.svelte` file under an
+    // `exclude`d directory, or outside a narrow `include`, came back
+    // into the program through its `.d.svelte.ts` sidecar and got
+    // type-checked anyway. That inflated both the error count and the
+    // FILES denominator on any project whose include is narrower than
+    // its workspace.
+    let declares_file_set = svn_core::tsconfig::winning_patterns(&chain, |f| f.include.as_deref())
+        .is_some()
+        || svn_core::tsconfig::winning_patterns(&chain, |f| f.files.as_deref()).is_some();
+    if !declares_file_set {
+        let cache_dts_glob = format!("{}/**/*.d.svelte.ts", layout.svelte_dir.to_string_lossy());
+        if !user_includes.contains(&cache_dts_glob) {
+            user_includes.push(cache_dts_glob);
+        }
     }
 
     // The user's `files`, rebased onto the config that declared them.
@@ -639,6 +656,23 @@ pub fn build(
             }
         }
     }
+    // Project the excludes into the cache tree, the same way includes
+    // are projected. Without this counterpart an `exclude` never
+    // reached the generated overlays: the pattern named the user's
+    // `.svelte` source, our program contains its `.d.svelte.ts`
+    // sidecar under the cache instead, and the file was type-checked
+    // despite the user having excluded it. Upstream projects them too
+    // (`virtualExclude`, `incremental.ts:415-420`).
+    let mut projected_excludes: Vec<String> = Vec::new();
+    for pat in &excludes {
+        if let Some(p) = project_to_virtual_svelte_dts(layout, pat)
+            && !excludes.contains(&p)
+            && !projected_excludes.contains(&p)
+        {
+            projected_excludes.push(p);
+        }
+    }
+    excludes.extend(projected_excludes);
     for p in kit_overlay_sources {
         excludes.push(p.to_string_lossy().into_owned());
     }

@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A path-shaped `types` entry anchors on the directory of the root config being compiled, not on the directory of whichever config in the extends chain wrote it. Here the base config in cfg/ writes `./typedefs/amb.d.ts`, which resolves only from the entry tsconfig's own directory one level up. Anchoring on the declaring directory instead looked for cfg/typedefs/amb.d.ts, dropped the entry as unresolvable, and emitted an empty `types` array — which additionally suppresses every automatic @types package, so the ambient vanished and each use of it became a spurious TS2304."
+}

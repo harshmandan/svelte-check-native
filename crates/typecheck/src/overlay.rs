@@ -337,15 +337,25 @@ pub fn build(
     // otherwise see the extension's `.ts` files type-checked without
     // the `chrome` namespace (TS2304 "Cannot find namespace 'chrome'"
     // all over extension/background.ts). Union here, de-duped.
+    //
+    // Path-shaped entries anchor on the ENTRY config's directory, not on
+    // the directory of whichever config in the chain wrote them. TS
+    // resolves `types` against the root config being compiled — it is not
+    // one of the `isFilePath` options that `extends` rebases per-file —
+    // so a base config declaring `"./globals.d.ts"` means "next to the
+    // tsconfig the user is compiling", however deep the chain goes.
+    // Verified against tsgo: with the base in `cfg/`, a `../typedefs/x`
+    // entry (resolvable from `cfg/`) is TS2688, while `./typedefs/x`
+    // (resolvable from the entry dir) is clean.
+    let entry_dir = user_tsconfig.parent().unwrap_or(layout.workspace.as_path());
     let user_types: Option<Vec<String>> = chain
         .iter()
         .find(|f| f.compiler_options.types.is_some())
         .and_then(|f| {
             f.compiler_options.types.as_ref().map(|list| {
-                let dir = f.config_dir();
                 list.iter()
-                    .filter(|t| is_resolvable_types_entry(t, dir))
-                    .map(|t| overlay_types_entry(t, dir))
+                    .filter(|t| is_resolvable_types_entry(t, entry_dir))
+                    .map(|t| overlay_types_entry(t, entry_dir))
                     .collect::<Vec<_>>()
             })
         });
@@ -711,22 +721,24 @@ fn is_resolvable_types_entry(entry: &str, declaring_dir: &Path) -> bool {
 /// tsconfig must carry.
 ///
 /// TypeScript resolves a path-shaped `types` entry (`"./worker.d.ts"`,
-/// `"../shared/globals"`) against the directory of the config file that
-/// DECLARED it. Our overlay tsconfig lives somewhere else entirely —
+/// `"../shared/globals"`) against the directory of the ROOT config being
+/// compiled. Our overlay tsconfig lives somewhere else entirely —
 /// `<workspace>/node_modules/.cache/svelte-check-native/` (or
-/// `<workspace>/.svelte-check/`) — so copying the entry across verbatim
-/// silently repoints it at the cache directory, where the file doesn't
-/// exist. tsgo then fires a fatal TS2688 ("Cannot find type definition
-/// file for ...") and stops emitting diagnostics for the rest of the
-/// program, so every real error in the project disappears at once.
+/// `<workspace>/.svelte-check/`) — and, being what tsgo is pointed at, it
+/// IS that root. So copying the entry across verbatim silently repoints
+/// it at the cache directory, where the file doesn't exist. tsgo then
+/// fires a fatal TS2688 ("Cannot find type definition file for ...") and
+/// stops emitting diagnostics for the rest of the program, so every real
+/// error in the project disappears at once.
 ///
-/// Absolutising against the declaring directory preserves the meaning
-/// the user wrote regardless of where the overlay sits. Package-style
-/// entries (`"node"`, `"vite/client"`, `"@types/foo"`) are left alone:
-/// they resolve by walking `node_modules` upwards, and the cache dir is
-/// nested inside the workspace, so that walk still reaches the same
-/// packages.
-fn overlay_types_entry(entry: &str, declaring_dir: &Path) -> String {
+/// `anchor_dir` is therefore the directory of the user's entry tsconfig —
+/// the root tsgo would have compiled had we not interposed — which
+/// reproduces the meaning the user wrote wherever the overlay sits.
+/// Package-style entries (`"node"`, `"vite/client"`, `"@types/foo"`) are
+/// left alone: they resolve by walking `node_modules` upwards, and the
+/// cache dir is nested inside the workspace, so that walk still reaches
+/// the same packages.
+fn overlay_types_entry(entry: &str, anchor_dir: &Path) -> String {
     if !is_filesystem_types_entry(entry) {
         return entry.to_string();
     }
@@ -734,7 +746,7 @@ fn overlay_types_entry(entry: &str, declaring_dir: &Path) -> String {
     if path.is_absolute() {
         return entry.to_string();
     }
-    normalize(&declaring_dir.join(path))
+    normalize(&anchor_dir.join(path))
         .to_string_lossy()
         .into_owned()
 }
@@ -1505,8 +1517,9 @@ mod tests {
     }
 
     /// The overlay tsconfig lives in a cache directory, not beside the
-    /// user's tsconfig, so a relative entry copied across verbatim
-    /// resolves against the wrong directory and fatally TS2688s.
+    /// user's tsconfig, and it is the root tsgo compiles — so a relative
+    /// entry copied across verbatim anchors on the cache dir and fatally
+    /// TS2688s. The anchor passed here is the user's entry-config dir.
     #[test]
     fn overlay_types_entry_absolutises_relative_paths() {
         let dir = Path::new("/proj/apps/dash");

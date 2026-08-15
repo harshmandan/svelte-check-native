@@ -1271,7 +1271,39 @@ fn map_diagnostic(
                     }
                     (orig, mapped_line, mapped_col, data.svelte_script_is_ts)
                 }
-                None => return None,
+                // No token-map or line-map entry covers this position,
+                // which means it sits in code we generated rather than
+                // in anything the user wrote — drop it, as upstream
+                // drops diagnostics that map into generated code.
+                //
+                // This fires constantly and legitimately: slot wrappers,
+                // `$$slot_def` scaffolding and the `$$_$$` dummy all
+                // draw errors at positions with no user counterpart. A
+                // survey across the fixture corpus found 30 fixtures
+                // relying on it, every one of them error-severity, so
+                // surfacing these instead (at line 1, say) would
+                // manufacture false positives by the dozen.
+                //
+                // The residual risk is real but unmeasured: a genuine
+                // gap in our partial map is indistinguishable here from
+                // generated code, and upstream's map is total so it
+                // never faces the question. `SVN_PROBE_MAP_MISS=1`
+                // prints what was dropped, which is the first thing to
+                // reach for when a diagnostic the compiler produced
+                // never reaches the user.
+                None => {
+                    if std::env::var("SVN_PROBE_MAP_MISS").is_ok() {
+                        eprintln!(
+                            "[map-miss] code={} sev={:?} file={} line={} col={}",
+                            raw.code,
+                            raw.severity,
+                            absolute_file.display(),
+                            raw.line,
+                            raw.column
+                        );
+                    }
+                    return None;
+                }
             }
         }
         // Not an overlay path. Diagnostics tsgo attributes to the

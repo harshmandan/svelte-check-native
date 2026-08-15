@@ -204,9 +204,20 @@ pub(crate) fn inject_component_props_annotation(
             // assumes 1:1 source/overlay line correspondence. Without
             // padding, every declaration after the rewrite drifts by
             // (literal-line-count - 1) lines in mapped diagnostics.
-            // Pad newlines INSIDE the ignore-marker span — diagnostics
-            // on those lines are dropped by the mapper, but the
-            // line-count parity restores correct positions downstream.
+            // Pad newlines INSIDE the marker span so the line count is
+            // preserved.
+            //
+            // The `Ω`-spelled markers are emit-shape parity with
+            // upstream svelte2tsx, which brackets the same replacement
+            // the same way. They are NOT the markers our own diagnostic
+            // mapper scans for — that is the ASCII
+            // `IGNORE_START_MARKER` / `IGNORE_END_MARKER` pair — so
+            // nothing here suppresses diagnostics. What keeps positions
+            // right is the line-count parity alone.
+            //
+            // Do not "unify" the two spellings by teaching the scanner
+            // this one: a user's own error inside a `$props()` type
+            // annotation would start disappearing.
             let dropped_newlines = content[start..end].matches('\n').count();
             out.push_str(&content[..start]);
             out.push_str(": /*\u{03A9}ignore_start\u{03A9}*/$$ComponentProps");

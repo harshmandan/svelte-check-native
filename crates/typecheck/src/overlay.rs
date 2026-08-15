@@ -148,53 +148,49 @@ pub fn build(
         }
     }
 
-    // Path aliases: walk the chain and apply per-pattern first-wins
-    // (inner config beats outer for the same key — the walker is BFS
-    // from the entry, so chain[0] is the innermost). Prepend a
-    // cache-mirror candidate to each value-list so a path-mapped import
-    // like `$lib/foo/Bar.svelte.ts` first tries our generated overlay
-    // file and falls back to the source location if not found.
-    // Without this, path-mapped Svelte imports skip rootDirs entirely
-    // and never reach our overlay (rootDirs only kicks in for raw
-    // relative paths).
+    // Path aliases. Prepend a cache-mirror candidate to each value-list
+    // so a path-mapped import like `$lib/foo/Bar.svelte.ts` first tries
+    // our generated overlay file and falls back to the source location
+    // if not found. Without this, path-mapped Svelte imports skip
+    // rootDirs entirely and never reach our overlay (rootDirs only
+    // kicks in for raw relative paths).
     let mut paths_map: serde_json::Map<String, Value> = serde_json::Map::new();
     let mut paths_keys_order: Vec<String> = Vec::new();
-    // Per-pattern accumulator: ordered Vec for emit-stable output
-    // alongside a parallel HashSet so dedup-on-insert is O(1) instead
-    // of the O(n²) `Vec::contains` scan the previous design used.
+    // Ordered Vec for emit-stable output alongside a parallel HashSet so
+    // dedup-on-insert is O(1) instead of an O(n²) `Vec::contains` scan.
     let mut paths_accumulated: std::collections::HashMap<String, (Vec<String>, HashSet<String>)> =
         std::collections::HashMap::new();
-    for file in &chain {
+    // `paths` is REPLACE-when-specified, not a per-pattern merge: the
+    // first config in the chain that declares it wins outright and the
+    // rest of the chain's patterns are discarded. TypeScript is
+    // explicit about this, and it bites in a shape SvelteKit users hit
+    // constantly — `$lib/*` comes from `.svelte-kit/tsconfig.json`, the
+    // user adds an alias of their own without spreading Kit's, and
+    // every `$lib` import stops resolving. Accumulating across the
+    // chain resolved those imports and reported a clean run where the
+    // compiler reports TS2307 on each one.
+    //
+    // Precedence, not load order — see `winning_field`.
+    if let Some((file, file_paths)) =
+        svn_core::tsconfig::winning_field(&chain, |f| f.compiler_options.paths.as_ref())
+    {
         let dir = file.config_dir();
-        // baseUrl (if set) resolves relative `paths` values.
-        let base_url = match file.compiler_options.base_url.as_deref() {
-            Some(b) if Path::new(b).is_absolute() => PathBuf::from(b),
-            Some(b) => dir.join(b),
-            None => dir.to_path_buf(),
-        };
-        // `paths` is replace-when-specified (TS semantics). An explicit
-        // `"paths": {}` blanks any parent's paths, so stop walking the
-        // chain at the first config that declares an empty `paths`
-        // (l103); `None` (absent) keeps inheriting. For non-empty, keep
-        // the per-pattern first-wins union (a deliberate widening that
-        // lets path-mapped imports resolve when a child partially
-        // restates `paths`).
-        let Some(file_paths) = file.compiler_options.paths.as_ref() else {
-            continue;
-        };
-        if file_paths.is_empty() {
-            break;
-        }
+        // Relative `paths` values anchor on the DECLARING config's
+        // directory — nothing else. The engine we drive is tsgo, and
+        // TypeScript 7 removed `baseUrl` outright: a config that still
+        // sets one draws a fatal TS5102, and a bare non-`./` value
+        // draws TS5090, so the TS≤6 rule of re-anchoring values on an
+        // effective `baseUrl` from elsewhere in the chain does not
+        // exist on this surface. (Verified against tsgo directly:
+        // `./`-prefixed values resolve against the config file that
+        // declares them, wherever it sits in the extends chain.)
         for (pattern, values) in file_paths {
-            if paths_accumulated.contains_key(pattern) {
-                continue; // inner wins per pattern
-            }
             let mut entry: (Vec<String>, HashSet<String>) = (Vec::new(), HashSet::new());
             for v in values {
                 let abs = if Path::new(v).is_absolute() {
                     PathBuf::from(v)
                 } else {
-                    base_url.join(v)
+                    dir.join(v)
                 };
                 let s = normalize(&abs).to_string_lossy().into_owned();
                 if entry.1.insert(s.clone()) {
@@ -207,6 +203,7 @@ pub fn build(
             }
         }
     }
+
     // Sibling-project paths: COMBINE values across siblings (from
     // explicit TS `references[]`) for the same pattern. tsgo tries
     // each value in order and uses the first that resolves to an
@@ -314,9 +311,11 @@ pub fn build(
     //
     // NodeNext requires `module: NodeNext` too, so we only override
     // `module` when we override `moduleResolution`.
-    let effective_resolution = chain
-        .iter()
-        .find_map(|c| c.compiler_options.module_resolution);
+    // Precedence, not load order: the entry config wins if it declares
+    // the field, otherwise later `extends` entries beat earlier ones.
+    let effective_resolution =
+        svn_core::tsconfig::winning_field(&chain, |c| c.compiler_options.module_resolution)
+            .map(|(_, v)| v);
     if matches!(effective_resolution, Some(ModuleResolution::Node)) {
         compiler_options.insert("moduleResolution".into(), json!("bundler"));
         compiler_options.insert("module".into(), json!("esnext"));
@@ -364,18 +363,15 @@ pub fn build(
     // inherited `"${configDir}/typings"` silently became a path inside
     // the cache directory. Every entry under it then failed to resolve —
     // a fatal TS2688 that took the project's ambients with it.
-    let type_roots: Vec<PathBuf> = chain
-        .iter()
-        .find(|f| f.compiler_options.type_roots.is_some())
-        .and_then(|f| {
-            f.compiler_options.type_roots.as_ref().map(|list| {
+    let type_roots: Vec<PathBuf> =
+        svn_core::tsconfig::winning_field(&chain, |f| f.compiler_options.type_roots.as_deref())
+            .map(|(f, list)| {
                 let dir = f.config_dir();
                 list.iter()
                     .map(|r| normalize(&dir.join(r)))
                     .collect::<Vec<_>>()
             })
-        })
-        .unwrap_or_default();
+            .unwrap_or_default();
     // Emitted only when the chain actually declared it — `typeRoots`
     // REPLACES the default `node_modules/@types` walk-up, so writing one
     // where the user had none would narrow the lookup rather than
@@ -398,27 +394,48 @@ pub fn build(
     // The loader records which raw keys it resolved; re-emit those, with
     // the value it already computed against the user's entry config.
     // Options we set deliberately above win.
-    for file in chain.iter() {
-        for key in &file.config_dir_keys {
-            if compiler_options.contains_key(key) {
-                continue;
-            }
-            if let Some(value) = file.compiler_options.raw.get(key) {
-                compiler_options.insert(key.clone(), value.clone());
+    //
+    // Re-emitted per extends PRECEDENCE, not chain load order: the
+    // winner for a key is whichever declaration TypeScript would let
+    // win. And only when that winner itself used `${configDir}` — if
+    // the winning declaration is a plain value (say a base declares
+    // `"rootDir": "${configDir}/src"` but the entry overrides it with
+    // `"rootDir": "."`), the overlay's `extends` already inherits it
+    // correctly, and writing the base's resolved value here would
+    // shadow the override.
+    let mut config_dir_key_order: Vec<&String> = Vec::new();
+    {
+        let mut seen: HashSet<&str> = HashSet::new();
+        for file in chain.iter() {
+            for key in &file.config_dir_keys {
+                if seen.insert(key.as_str()) {
+                    config_dir_key_order.push(key);
+                }
             }
         }
     }
-    let user_types: Option<Vec<String>> = chain
-        .iter()
-        .find(|f| f.compiler_options.types.is_some())
-        .and_then(|f| {
-            f.compiler_options.types.as_ref().map(|list| {
+    for key in config_dir_key_order {
+        if compiler_options.contains_key(key) {
+            continue;
+        }
+        let Some((file, value)) =
+            svn_core::tsconfig::winning_field(&chain, |f| f.compiler_options.raw.get(key))
+        else {
+            continue;
+        };
+        if file.config_dir_keys.contains(key) {
+            compiler_options.insert(key.clone(), value.clone());
+        }
+    }
+    let user_types: Option<Vec<String>> =
+        svn_core::tsconfig::winning_field(&chain, |f| f.compiler_options.types.as_deref()).map(
+            |(_, list)| {
                 list.iter()
                     .filter(|t| is_resolvable_types_entry(t, entry_dir, &type_roots))
                     .map(|t| overlay_types_entry(t, entry_dir))
                     .collect::<Vec<_>>()
-            })
-        });
+            },
+        );
     // Only override the inherited `types` when the user's chain
     // explicitly set it — leaving it unset means "tsgo loads all
     // available @types/*", and narrowing that to just sibling entries
@@ -1346,11 +1363,22 @@ mod tests {
     }
 
     #[test]
-    fn build_overlay_preserves_array_extends_merge_order() {
-        // `extends: ["./a.json", "./b.json"]` — TS 5.0+ semantics walk
-        // left-to-right; the entry itself wins over array members, and
-        // later array entries override earlier ones. The overlay's
-        // `paths` first-wins should reflect BFS order: entry > b > a.
+    fn build_overlay_applies_array_extends_precedence_to_paths() {
+        // `extends: ["./a.json", "./b.json"]` — later array entries beat
+        // earlier ones, and `paths` is REPLACE-when-specified rather
+        // than a per-pattern merge. So `b`'s map wins outright and
+        // `from-a` does not survive.
+        //
+        // Verified against tsc --showConfig on this exact shape:
+        // paths = {"from-b": ["./b-target"]}.
+        //
+        // This test previously asserted the opposite — that both
+        // patterns flow through — which is what our per-pattern union
+        // produced. That union made unresolvable imports resolve: the
+        // SvelteKit shape where `$lib/*` comes from
+        // `.svelte-kit/tsconfig.json` and the user restates `paths`
+        // without spreading it reports TS2307 from the compiler and a
+        // clean run from us.
         let tmp = tempdir().unwrap();
         let ws = tmp.path().canonicalize().unwrap();
 
@@ -1378,16 +1406,14 @@ mod tests {
         let overlay = build(&layout, &user_ts, &[], &[], None, None);
 
         let paths = overlay["compilerOptions"]["paths"].as_object().unwrap();
-        // Both entries flow through to the overlay — BFS per-pattern
-        // first-wins means patterns declared in either base survive.
         assert!(
-            paths.contains_key("from-a"),
-            "from-a missing from paths; got {:?}",
+            paths.contains_key("from-b"),
+            "the later extends entry must win; got {:?}",
             paths.keys().collect::<Vec<_>>(),
         );
         assert!(
-            paths.contains_key("from-b"),
-            "from-b missing from paths; got {:?}",
+            !paths.contains_key("from-a"),
+            "paths is replaced, not merged, so from-a must not survive; got {:?}",
             paths.keys().collect::<Vec<_>>(),
         );
     }

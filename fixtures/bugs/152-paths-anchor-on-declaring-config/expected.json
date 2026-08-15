@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Relative paths values anchor on the directory of the config that declares them, wherever it sits in the extends chain. tsgo (TypeScript 7) removed baseUrl outright — a config that sets one draws fatal TS5102 and bare non-./ values draw TS5090 — so the old TS<=6 effective-baseUrl re-anchoring has no equivalent on this surface. Here the base config under cfg/ declares $util/* pointing at its own sibling util/ directory; anchoring anywhere else (the entry config's dir, the workspace root) leaves the import unresolvable and fails this fixture with TS2307."
+}

@@ -174,27 +174,46 @@ pub fn winning_patterns<'a, F>(
 where
     F: Fn(&'a TsConfigFile) -> Option<&'a [String]>,
 {
-    let entry = chain.first()?;
-    let mut visited: HashSet<&Path> = HashSet::new();
-    winning_patterns_from(chain, entry, &get, &mut visited)
+    winning_field(chain, get)
 }
 
-fn winning_patterns_from<'a, F>(
+/// Like [`winning_patterns`] but for any field, not just pattern lists.
+///
+/// Same precedence walk: the entry config wins whenever it declares the
+/// field, otherwise LATER `extends` entries beat earlier ones, each
+/// resolved recursively through its own parents.
+///
+/// Scalar `compilerOptions` need this too. Reading them by scanning the
+/// chain in BFS order — which is what several callers used to do — picks
+/// whichever config appears first in the load order, not the one TS
+/// would let win. For `extends: ["./a.json", "./b.json"]` where `a`
+/// declares a field directly and `b` inherits it from its own parent,
+/// BFS yields `a` and TypeScript yields `b`'s parent.
+pub fn winning_field<'a, T, F>(chain: &'a [TsConfigFile], get: F) -> Option<(&'a TsConfigFile, T)>
+where
+    F: Fn(&'a TsConfigFile) -> Option<T>,
+{
+    let entry = chain.first()?;
+    let mut visited: HashSet<&Path> = HashSet::new();
+    winning_field_from(chain, entry, &get, &mut visited)
+}
+
+fn winning_field_from<'a, T, F>(
     chain: &'a [TsConfigFile],
     file: &'a TsConfigFile,
     get: &F,
     visited: &mut HashSet<&'a Path>,
-) -> Option<(&'a TsConfigFile, &'a [String])>
+) -> Option<(&'a TsConfigFile, T)>
 where
-    F: Fn(&'a TsConfigFile) -> Option<&'a [String]>,
+    F: Fn(&'a TsConfigFile) -> Option<T>,
 {
     if !visited.insert(file.path.as_path()) {
         // Extends cycle — load_chain already de-duplicated the files, so
         // revisiting can only happen through a cyclic reference; stop.
         return None;
     }
-    if let Some(patterns) = get(file) {
-        return Some((file, patterns));
+    if let Some(value) = get(file) {
+        return Some((file, value));
     }
     // Later extends entries override earlier ones (TS array-extends), so
     // probe the parents in reverse: the first hit is the winner.
@@ -211,7 +230,7 @@ where
         let Some(parent) = chain.iter().find(|f| f.path == canon) else {
             continue;
         };
-        if let Some(hit) = winning_patterns_from(chain, parent, get, visited) {
+        if let Some(hit) = winning_field_from(chain, parent, get, visited) {
             return Some(hit);
         }
     }

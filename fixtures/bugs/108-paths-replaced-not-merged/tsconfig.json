@@ -1,0 +1,7 @@
+{
+    "extends": "./base.json",
+    "compilerOptions": {
+        "paths": { "@ui/*": ["./src/ui/*"] }
+    },
+    "include": ["src/**/*"]
+}

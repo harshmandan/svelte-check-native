@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "The entry config overrides an inherited option whose base declaration used ${configDir} (rootDir here). TypeScript gives the entry's plain value precedence, and since it carries no placeholder the overlay must emit nothing and let extends-inheritance deliver it. Re-emitting the base's resolved value shadowed the override: rootDir snapped back to <entry>/src and every file outside src/ fired TS6059."
+}

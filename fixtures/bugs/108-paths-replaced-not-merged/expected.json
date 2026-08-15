@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "src/input.svelte",
+            "line": 3,
+            "column": 22,
+            "code": 2307
+        }
+    ],
+    "_note": "compilerOptions.paths is replaced wholesale by the first config in the chain that declares it, never merged per pattern. We accumulated across the whole chain instead, so aliases the user's own config had discarded kept resolving and the run came back clean where the compiler reports TS2307. The shape is common in SvelteKit: $lib/* is declared by the generated .svelte-kit/tsconfig.json and a user who adds an alias without spreading it loses $lib entirely."
+}

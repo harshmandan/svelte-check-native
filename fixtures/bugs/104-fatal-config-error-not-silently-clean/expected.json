@@ -1,0 +1,4 @@
+{
+    "expect_failure": true,
+    "_note": "`declarationMap` without `declaration`/`composite` is a compiler-option error. It is attributed to the generated overlay tsconfig — the overlay is the root config the compiler is given — and the compiler then abandons the program without checking anything. Because diagnostics on our own overlay are filtered as structural noise, the run surfaced nothing and exited 0: a false-clean indistinguishable from a healthy check, hiding the real error in input.svelte. The run must fail loudly instead."
+}

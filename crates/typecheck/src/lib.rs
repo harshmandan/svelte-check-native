@@ -679,6 +679,9 @@ impl CheckSession {
             Some(diagnostics) => runner::RunOutput {
                 diagnostics,
                 extended_diagnostics: None,
+                // A replay stands in for a previously-completed run;
+                // treat it as having nothing unexplained to account for.
+                nonzero_exit: false,
             },
             None => {
                 let run = run_tsgo(
@@ -731,6 +734,10 @@ impl CheckSession {
         // Probed once per run: upstream's message adjustments differ
         // between pre-5 and 5+ Svelte (see `adjust_message_if_necessary`).
         let svelte5_plus = filters::workspace_svelte_is_5_plus(&layout.workspace);
+        // Counted so the post-filter guard below can tell "the compiler
+        // had something to say and we dropped it as our own overlay's
+        // noise" from "the compiler genuinely had nothing to say".
+        let mut dropped_overlay_config = 0usize;
         let mut diagnostics: Vec<CheckDiagnostic> = run
             .diagnostics
             .into_iter()
@@ -746,11 +753,15 @@ impl CheckSession {
                 d
             })
             .filter(|d| {
-                !filters::is_overlay_tsconfig_noise(
+                let noise = filters::is_overlay_tsconfig_noise(
                     d,
                     layout,
                     canonical_overlay_tsconfig.as_deref(),
-                )
+                );
+                if noise {
+                    dropped_overlay_config += 1;
+                }
+                !noise
             })
             .filter_map(|d| {
                 map_diagnostic(d, layout, &map_data, &excluded_kit_sources, svelte5_plus)
@@ -823,6 +834,33 @@ impl CheckSession {
         // source positions like any other diagnostic — stay adjacent
         // to their file's other output.
         diagnostics.extend(overlay_syntax_failures);
+
+        // Guard against a filtered-to-nothing run. `run` already rejects
+        // an abnormal exit that produced no diagnostics at all, but a
+        // fatal config error is a diagnostic — tsgo reports it, abandons
+        // the program, and prints nothing else. Attributed to our overlay
+        // tsconfig (it is the root config tsgo compiled), it can then be
+        // dropped as overlay noise, leaving an abnormal exit reported as
+        // a clean run: `0 ERRORS`, exit 0, indistinguishable from a
+        // healthy check. That is the worst failure mode this tool has —
+        // it was how a mis-anchored `types` entry hid every error in a
+        // project for two releases.
+        //
+        // Keying on the exit code rather than on a list of fatal codes is
+        // deliberate: any code we haven't enumerated is exactly the one
+        // that will bite next.
+        if diagnostics.is_empty() && run.nonzero_exit && dropped_overlay_config > 0 {
+            return Err(CheckError::Run(RunError::AllDiagnosticsFiltered(format!(
+                "the compiler reported {dropped_overlay_config} diagnostic(s) against the \
+                 generated overlay tsconfig and nothing else, so every diagnostic in this run \
+                 was discarded as overlay noise. Reporting 0 errors here would be wrong: a \
+                 compiler-option error makes the compiler abandon the program before checking \
+                 anything, so nothing was actually checked.\n\nThe option is almost always \
+                 inherited from your own tsconfig. To see it, run the compiler directly \
+                 against {}",
+                layout.overlay_tsconfig.display()
+            ))));
+        }
 
         Ok(CheckOutput {
             diagnostics,

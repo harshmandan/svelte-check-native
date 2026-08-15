@@ -49,6 +49,13 @@ pub enum RunError {
     /// tsgo did not finish within the configured timeout and was killed.
     #[error("tsgo timed out after {}s and was killed", .0.as_secs())]
     Timeout(Duration),
+    /// The compiler reported diagnostics, every one of them was filtered
+    /// out as overlay noise, and nothing was left to show. Reporting that
+    /// as a clean run is the worst thing this tool can do — a config
+    /// error aborts the whole program, so "0 errors" would mean "nothing
+    /// was checked", and in CI the two look identical.
+    #[error("{0}")]
+    AllDiagnosticsFiltered(String),
 }
 
 /// tsc/tsgo exit-code semantics (`ExitStatus`): `0` = success, `1` =
@@ -68,6 +75,16 @@ fn exited_abnormally(code: Option<i32>) -> bool {
 #[derive(Debug)]
 pub struct RunOutput {
     pub diagnostics: Vec<RawDiagnostic>,
+    /// True when the compiler exited non-zero — i.e. it reported at
+    /// least one diagnostic (exit 1), or failed outright (2+/signal).
+    /// Exit 0 is the only "nothing to say" status.
+    ///
+    /// The caller needs this to notice that the compiler had something
+    /// to report and our filters then swallowed all of it. Note the
+    /// engines disagree on the code for a fatal config error —
+    /// `@typescript/native-preview` exits 2, `typescript@7`'s `tsc`
+    /// exits 1 — so only "non-zero" is portable, not any specific code.
+    pub nonzero_exit: bool,
     /// `--extendedDiagnostics` block captured verbatim from tsgo's
     /// stdout tail. `Some(text)` iff the caller requested extended
     /// diagnostics AND tsgo emitted a recognizable block. Text is the
@@ -202,7 +219,8 @@ pub fn run(
     // keep diagnostics from a normal exit-1 ("found errors") run, and
     // also keep whatever partial diagnostics an abnormal exit managed
     // to print rather than discarding a near-complete stream.
-    if exited_abnormally(status.code()) && diagnostics.is_empty() {
+    let abnormal = exited_abnormally(status.code());
+    if abnormal && diagnostics.is_empty() {
         let tail = stderr_tail(&stderr);
         return Err(RunError::Failed {
             code: status.code(),
@@ -213,6 +231,7 @@ pub fn run(
     Ok(RunOutput {
         diagnostics,
         extended_diagnostics: extended_diag_text,
+        nonzero_exit: !matches!(status.code(), Some(0)),
     })
 }
 

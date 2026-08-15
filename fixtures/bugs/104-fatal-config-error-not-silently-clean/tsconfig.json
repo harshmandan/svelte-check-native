@@ -1,0 +1,7 @@
+{
+    "extends": "../_shared/tsconfig.base.json",
+    "compilerOptions": {
+        "declarationMap": true
+    },
+    "include": ["src/**/*"]
+}

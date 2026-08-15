@@ -17,6 +17,11 @@
 //   { "warnings": [{file,line,column,code}] }
 //       → additionally assert the exact set of WARNINGs; may accompany
 //         "clean" or "errors" (when absent, warnings are ignored)
+//   { "expect_failure": true }
+//       → assert the binary exits non-zero AND emits a FAILURE record.
+//         For runs that must NOT be reported as a clean 0-error result,
+//         e.g. a fatal compiler-option error that stops the program
+//         before anything is checked.
 //   { "emit_contains": ["..."], "emit_not_contains": ["..."] }
 //       → run binary with `--emit-ts`; capture stdout as generated TS;
 //         assert substring presence/absence on the emitted code
@@ -148,9 +153,11 @@ function runFixture(name, fixtureDir) {
         let stdout = '';
         let crashed = false;
         let crashErr = null;
+        let exitStatus = 0;
         try {
             stdout = execFileSync(BIN, args, { encoding: 'utf-8', timeout: 60_000, env: CHILD_ENV });
         } catch (err) {
+            exitStatus = err.status ?? -1;
             // Errors-with-stdout = expected (the binary exits non-zero
             // on diagnostic errors). Empty-stdout = crashed; surface it
             // instead of letting an empty actualErrors list falsely
@@ -193,6 +200,21 @@ function runFixture(name, fixtureDir) {
                     column: entry.start?.character ?? -1,
                     code: entry.code
                 });
+            }
+        }
+
+        if (expected.expect_failure === true) {
+            const sawFailure = stdout.includes('"type":"FAILURE"') || stdout.includes('FAILURE');
+            if (exitStatus === 0) {
+                issues.push(
+                    `expected a failed run, got exit 0 with ${actualErrors.length} error(s). ` +
+                        'A run that checked nothing must not be reported as clean.'
+                );
+            } else if (!sawFailure) {
+                issues.push(
+                    `exited ${exitStatus} but emitted no FAILURE record; machine consumers ` +
+                        'would see a silent stop.'
+                );
             }
         }
 

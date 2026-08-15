@@ -1,4 +1,6 @@
 {
-    "expect_failure": true,
-    "_note": "`declarationMap` without `declaration`/`composite` is a compiler-option error. It is attributed to the generated overlay tsconfig — the overlay is the root config the compiler is given — and the compiler then abandons the program without checking anything. Because diagnostics on our own overlay are filtered as structural noise, the run surfaced nothing and exited 0: a false-clean indistinguishable from a healthy check, hiding the real error in input.svelte. The run must fail loudly instead."
+    "errors": [
+        { "file": ".svelte-check/tsconfig.json", "line": 2, "column": 2, "code": 5069 }
+    ],
+    "_note": "`declarationMap` without `declaration`/`composite` is a compiler-option error inherited from the user's tsconfig. It is attributed to the generated overlay — the overlay is the root config the compiler is given — and the compiler then abandons the program without checking anything. Diagnostics on the overlay used to survive only if their code appeared in a seven-entry allowlist, so this one was dropped and the run reported 0 errors and exited 0: a false-clean indistinguishable from a healthy check. Every diagnostic on the overlay now surfaces; a probe across the whole fixture corpus and both parity suites found no structural noise for the allowlist to have been protecting against. Upstream likewise reports these against its own overlay path."
 }

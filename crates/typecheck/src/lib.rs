@@ -705,10 +705,6 @@ impl CheckSession {
         // matching upstream `svelte-check --tsgo`. See
         // `filters::is_overlay_tsconfig_noise`.
         //
-        // The overlay tsconfig's canonical path is resolved once here —
-        // the noise filter needs it per diagnostic, and a realpath walk
-        // per call adds up on diagnostic-heavy runs.
-        let canonical_overlay_tsconfig = dunce::canonicalize(&layout.overlay_tsconfig).ok();
         // Guard against a silently-empty run: when ANY file in the
         // program fails to parse, TypeScript suppresses every semantic
         // diagnostic program-wide and reports only the syntax errors —
@@ -723,10 +719,29 @@ impl CheckSession {
         // Probed once per run: upstream's message adjustments differ
         // between pre-5 and 5+ Svelte (see `adjust_message_if_necessary`).
         let svelte5_plus = filters::workspace_svelte_is_5_plus(&layout.workspace);
-        // Counted so the post-filter guard below can tell "the compiler
-        // had something to say and we dropped it as our own overlay's
-        // noise" from "the compiler genuinely had nothing to say".
-        let mut dropped_overlay_config = 0usize;
+        // Diagnostics the compiler produced against files OUTSIDE our
+        // cache — i.e. the user's own sources. The guard after the
+        // pipeline compares this against what survived.
+        //
+        // Diagnostics on cache files are excluded because a healthy run
+        // routinely produces them and they are legitimately dropped: our
+        // generated `.d.svelte.ts` sidecars draw TS7016 for re-exporting
+        // a `.svn.js` overlay, on every project. Counting those made
+        // "everything was filtered" the normal case rather than the
+        // alarming one. The excluded kit originals are out for the same
+        // reason: `map_diagnostic` drops them by design, so a run whose
+        // only raw diagnostics sit on those files is healthy, not
+        // suspicious.
+        // tsgo emits paths relative to its cwd, which `run_tsgo` sets to
+        // the workspace — resolve AND lexically normalise before
+        // comparing, exactly as `map_diagnostic` does: tsgo's relative
+        // paths can carry `..` segments, and an unnormalised join never
+        // prefix-matches `layout.root`.
+        let raw_user_diagnostic_count = run
+            .diagnostics
+            .iter()
+            .filter(|d| counts_as_user_diagnostic(&d.file, layout, &excluded_kit_sources))
+            .count();
         let mut diagnostics: Vec<CheckDiagnostic> = run
             .diagnostics
             .into_iter()
@@ -740,17 +755,6 @@ impl CheckSession {
                     d.file = user_tsconfig.to_path_buf();
                 }
                 d
-            })
-            .filter(|d| {
-                let noise = filters::is_overlay_tsconfig_noise(
-                    d,
-                    layout,
-                    canonical_overlay_tsconfig.as_deref(),
-                );
-                if noise {
-                    dropped_overlay_config += 1;
-                }
-                !noise
             })
             .filter_map(|d| {
                 map_diagnostic(d, layout, &map_data, &excluded_kit_sources, svelte5_plus)
@@ -838,15 +842,16 @@ impl CheckSession {
         // Keying on the exit code rather than on a list of fatal codes is
         // deliberate: any code we haven't enumerated is exactly the one
         // that will bite next.
-        if diagnostics.is_empty() && run.nonzero_exit && dropped_overlay_config > 0 {
+        if diagnostics.is_empty() && run.nonzero_exit && raw_user_diagnostic_count > 0 {
             return Err(CheckError::Run(RunError::AllDiagnosticsFiltered(format!(
-                "the compiler reported {dropped_overlay_config} diagnostic(s) against the \
-                 generated overlay tsconfig and nothing else, so every diagnostic in this run \
-                 was discarded as overlay noise. Reporting 0 errors here would be wrong: a \
-                 compiler-option error makes the compiler abandon the program before checking \
-                 anything, so nothing was actually checked.\n\nThe option is almost always \
-                 inherited from your own tsconfig. To see it, run the compiler directly \
-                 against {}",
+                "the compiler reported {raw_user_diagnostic_count} diagnostic(s) against your \
+                 own files and every one of \
+                 them was filtered out, leaving nothing to show for a run that exited non-zero.\n\n\
+                 Reporting 0 errors here would be wrong. The usual cause is a compiler-option \
+                 error: it lands on the generated overlay tsconfig, because that is the root \
+                 config the compiler is given, and it makes the compiler abandon the program \
+                 before checking anything — so nothing was actually checked. Run the compiler \
+                 directly against {} to see it.",
                 layout.overlay_tsconfig.display()
             ))));
         }
@@ -1045,6 +1050,29 @@ pub fn diagnostic_source(path: &Path, svelte_script_is_ts: bool) -> DiagnosticSo
         Some("svelte") if svelte_script_is_ts => DiagnosticSource::Ts,
         _ => DiagnosticSource::Js,
     }
+}
+
+/// Does a raw diagnostic sit on the user's own sources (as opposed to
+/// our cache tree or an excluded kit original)? Feeds the
+/// all-diagnostics-filtered guard: only diagnostics that count here can
+/// legitimately demand a survivor after mapping.
+///
+/// Path handling must mirror `map_diagnostic` exactly — absolutise
+/// against the workspace, then lexically normalise, because tsgo's
+/// relative paths can carry `..` segments that would otherwise never
+/// prefix-match `layout.root`.
+fn counts_as_user_diagnostic(
+    file: &Path,
+    layout: &CacheLayout,
+    excluded_kit_sources: &std::collections::HashSet<PathBuf>,
+) -> bool {
+    let abs = if file.is_absolute() {
+        file.to_path_buf()
+    } else {
+        layout.workspace.join(file)
+    };
+    let abs = path_utils::lexical_normalise(&abs);
+    !abs.starts_with(&layout.root) && !excluded_kit_sources.contains(&abs)
 }
 
 fn map_diagnostic(
@@ -1512,6 +1540,47 @@ mod tests {
                 .message
                 .contains("suppresses all semantic diagnostics")
         );
+    }
+
+    #[test]
+    fn user_diagnostic_count_normalises_dotdot_cache_paths() {
+        // tsgo can report a cache file through a `..`-laden relative
+        // path; an unnormalised join would never prefix-match the cache
+        // root and the diagnostic would wrongly count as the user's.
+        let layout = CacheLayout::for_workspace("/p");
+        let gen_path = layout.generated_path(Path::new("/p/src/Foo.svelte"));
+        let root_rel = gen_path.strip_prefix("/p").unwrap();
+        let dotdot_rel = Path::new("src/..").join(root_rel);
+        let none = std::collections::HashSet::new();
+        assert!(!counts_as_user_diagnostic(&dotdot_rel, &layout, &none));
+        assert!(!counts_as_user_diagnostic(&gen_path, &layout, &none));
+        assert!(counts_as_user_diagnostic(
+            Path::new("src/App.svelte"),
+            &layout,
+            &none
+        ));
+    }
+
+    #[test]
+    fn user_diagnostic_count_skips_excluded_kit_originals() {
+        // Excluded kit originals are dropped by design in mapping, so a
+        // run whose only diagnostics sit on them must not trip the
+        // all-diagnostics-filtered guard.
+        let layout = CacheLayout::for_workspace("/p");
+        let excluded: std::collections::HashSet<PathBuf> =
+            [PathBuf::from("/p/src/routes/+page.ts")]
+                .into_iter()
+                .collect();
+        assert!(!counts_as_user_diagnostic(
+            Path::new("src/routes/../routes/+page.ts"),
+            &layout,
+            &excluded
+        ));
+        assert!(counts_as_user_diagnostic(
+            Path::new("src/routes/+page.svelte"),
+            &layout,
+            &excluded
+        ));
     }
 
     #[test]

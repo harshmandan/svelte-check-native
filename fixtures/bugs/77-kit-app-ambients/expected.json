@@ -1,4 +1,7 @@
 {
-    "clean": true,
-    "_note": "Round 2 #6: SvelteKit `$app/*` virtual-module ambient declarations. Pre-2026-04-26 monorepo layouts where `@sveltejs/kit` is at the workspace root (not the per-app `node_modules`) hit TS2307 'Cannot find module' on every `import { dev } from '$app/environment'` site. Now `crates/typecheck/src/kit_app_ambients.rs` writes a fallback declarations file into the cache and includes it in the overlay tsconfig — fires only when `.svelte-kit/types/` exists (the project IS Kit) AND `@sveltejs/kit` types aren't reachable via Node module resolution (real types win when present). This fixture stages that scenario by creating an empty `.svelte-kit/types/` dir; the imports below would fail TS2307 without the fallback ambient."
+    "errors": [
+        { "file": "input.svelte", "line": 1, "column": 24, "code": 2307 },
+        { "file": "input.svelte", "line": 2, "column": 25, "code": 2307 }
+    ],
+    "_note": "When `@sveltejs/kit` is not resolvable, `$app/*` imports have no declarations and both upstream engines report TS2307. We used to synthesise a fallback declarations file instead, which suppressed those errors and replaced the real types with loose ones — `page` became `any`, so every misuse of it went unreported too. The fallback was written for monorepos with Kit at the repo root rather than in the app's node_modules, but the reachability probe walks up parent directories and already covers that, leaving the fallback to fire only when Kit is genuinely absent. Inventing types to silence an error upstream reports is exactly the divergence the parity rule rules out, so the layer is gone and this fixture now locks the upstream behaviour."
 }

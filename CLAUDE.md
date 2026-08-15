@@ -106,8 +106,10 @@ line-by-line attribution.
 The release profile is the worst offender: `lto = "thin"` with
 `codegen-units = 1` pins all cores for minutes.
 
-**Run cargo through `scripts/ct`,** which makes this structural rather
-than a rule to remember:
+**Cargo runs through `scripts/ct`.** A PreToolUse hook rewrites plain
+`cargo ...` into it automatically, so this holds without anyone
+remembering — but invoke it directly when writing scripts or CI, which
+the hook does not cover:
 
 ```sh
 scripts/ct test --workspace
@@ -115,8 +117,10 @@ scripts/ct clippy --workspace --all-targets -- -D warnings
 CT_WAIT=1 scripts/ct test        # queue behind an active run instead of refusing
 ```
 
-It takes an exclusive lock, so a second run refuses (exit 75) instead of
-competing. It runs cargo in its own process group and kills that group on
+It takes an exclusive lock, so concurrent runs serialise instead of
+competing: with `CT_WAIT=1` (which the hook sets) a second run queues
+behind the first; without it, it refuses with exit 75. Verified with
+three simultaneous runs — two queued, all three completed, exit 0. It runs cargo in its own process group and kills that group on
 EXIT/INT/TERM/HUP, so ctrl-c or a closed terminal takes the build with it.
 
 And — the case that matters for agents — if the session is SIGKILLed or

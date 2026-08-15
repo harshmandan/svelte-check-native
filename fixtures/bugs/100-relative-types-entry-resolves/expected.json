@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A relative `compilerOptions.types` entry (`./worker-configuration.d.ts`) resolves against the directory of the tsconfig that declared it. The overlay tsconfig lives in a cache directory elsewhere, so copying the entry across verbatim repointed it at the cache dir where the file does not exist, and tsgo answered with a fatal TS2688 attributed to the user's own tsconfig. Absolutising the entry against its declaring directory keeps the user's meaning wherever the overlay sits."
+}

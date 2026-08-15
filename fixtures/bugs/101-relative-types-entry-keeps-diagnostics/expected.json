@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 8, "column": 39, "code": 2322 }
+    ],
+    "_note": "A fatal TS2688 from an unresolvable `compilerOptions.types` entry does not just add one diagnostic — tsgo stops emitting diagnostics for the whole program, so every genuine type error in the project silently vanishes. This fixture pairs the relative types entry with an ordinary assignability error and asserts the real error still arrives, which is the behaviour the TS2688 was masking."
+}

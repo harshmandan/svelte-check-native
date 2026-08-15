@@ -345,7 +345,7 @@ pub fn build(
                 let dir = f.config_dir();
                 list.iter()
                     .filter(|t| is_resolvable_types_entry(t, dir))
-                    .cloned()
+                    .map(|t| overlay_types_entry(t, dir))
                     .collect::<Vec<_>>()
             })
         });
@@ -358,12 +358,14 @@ pub fn build(
         for sibling in &sibling_refs {
             let sibling_dir = sibling.project_dir.as_path();
             for entry in &sibling.types {
-                if merged_types.iter().any(|e| e == entry) {
+                if !is_resolvable_types_entry(entry, sibling_dir) {
                     continue;
                 }
-                if is_resolvable_types_entry(entry, sibling_dir) {
-                    merged_types.push(entry.clone());
+                let resolved = overlay_types_entry(entry, sibling_dir);
+                if merged_types.iter().any(|e| *e == resolved) {
+                    continue;
                 }
+                merged_types.push(resolved);
             }
         }
         compiler_options.insert("types".into(), json!(merged_types));
@@ -703,6 +705,38 @@ fn is_resolvable_types_entry(entry: &str, declaring_dir: &Path) -> bool {
     }
     let (pkg, _subpath) = split_package_entry(entry);
     package_types_entry_resolves(pkg, declaring_dir)
+}
+
+/// Rewrite one surviving `types` entry into the form the overlay
+/// tsconfig must carry.
+///
+/// TypeScript resolves a path-shaped `types` entry (`"./worker.d.ts"`,
+/// `"../shared/globals"`) against the directory of the config file that
+/// DECLARED it. Our overlay tsconfig lives somewhere else entirely —
+/// `<workspace>/node_modules/.cache/svelte-check-native/` (or
+/// `<workspace>/.svelte-check/`) — so copying the entry across verbatim
+/// silently repoints it at the cache directory, where the file doesn't
+/// exist. tsgo then fires a fatal TS2688 ("Cannot find type definition
+/// file for ...") and stops emitting diagnostics for the rest of the
+/// program, so every real error in the project disappears at once.
+///
+/// Absolutising against the declaring directory preserves the meaning
+/// the user wrote regardless of where the overlay sits. Package-style
+/// entries (`"node"`, `"vite/client"`, `"@types/foo"`) are left alone:
+/// they resolve by walking `node_modules` upwards, and the cache dir is
+/// nested inside the workspace, so that walk still reaches the same
+/// packages.
+fn overlay_types_entry(entry: &str, declaring_dir: &Path) -> String {
+    if !is_filesystem_types_entry(entry) {
+        return entry.to_string();
+    }
+    let path = Path::new(entry);
+    if path.is_absolute() {
+        return entry.to_string();
+    }
+    normalize(&declaring_dir.join(path))
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// True when the entry names a directory under `node_modules` that ships
@@ -1468,6 +1502,38 @@ mod tests {
         assert!(is_resolvable_types_entry("./types.d.ts", tmp.path()));
         // Extensionless form also accepted (tsgo appends .d.ts).
         assert!(is_resolvable_types_entry("./types", tmp.path()));
+    }
+
+    /// The overlay tsconfig lives in a cache directory, not beside the
+    /// user's tsconfig, so a relative entry copied across verbatim
+    /// resolves against the wrong directory and fatally TS2688s.
+    #[test]
+    fn overlay_types_entry_absolutises_relative_paths() {
+        let dir = Path::new("/proj/apps/dash");
+        assert_eq!(
+            overlay_types_entry("./worker-configuration.d.ts", dir),
+            "/proj/apps/dash/worker-configuration.d.ts"
+        );
+        assert_eq!(
+            overlay_types_entry("../shared/globals", dir),
+            "/proj/apps/shared/globals"
+        );
+    }
+
+    /// Package specs resolve by walking `node_modules` upwards, and the
+    /// cache dir is nested inside the workspace, so that walk still
+    /// finds the same packages — leave them untouched. Already-absolute
+    /// entries are unambiguous wherever they sit.
+    #[test]
+    fn overlay_types_entry_leaves_packages_and_absolute_paths_alone() {
+        let dir = Path::new("/proj/apps/dash");
+        assert_eq!(overlay_types_entry("node", dir), "node");
+        assert_eq!(overlay_types_entry("vite/client", dir), "vite/client");
+        assert_eq!(overlay_types_entry("@types/foo", dir), "@types/foo");
+        assert_eq!(
+            overlay_types_entry("/abs/globals.d.ts", dir),
+            "/abs/globals.d.ts"
+        );
     }
 
     #[test]

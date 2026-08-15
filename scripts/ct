@@ -27,6 +27,12 @@
 #      over. This is the path that survives SIGKILL, a lost connection,
 #      or a hard reboot of the agent.
 #
+# A cargo started by hand in a terminal doesn't take this lock, so it is
+# detected instead: before spawning, ct looks for any live cargo process
+# whose working directory is inside this repo and waits for it (or
+# refuses, without CT_WAIT) rather than piling on. Nothing to install,
+# nothing on PATH.
+#
 # Only the recorded process group is ever killed, and only after checking
 # it still contains cargo/rustc processes — a recycled pgid belonging to
 # something else is never touched. A cargo you started yourself in
@@ -122,6 +128,20 @@ reap_stale() {
     rm -rf "$claim"
 }
 
+# Cargo processes that did NOT come through ct: anything named cargo
+# whose working directory is inside this repo, minus our own child
+# group. These hold no lock, so they are waited on, never killed.
+foreign_cargo() {
+    local p cwd
+    for p in $(pgrep -x cargo 2>/dev/null); do
+        cwd="$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+        case "$cwd" in
+            "$repo_root" | "$repo_root"/*) echo "$p"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
 waited=0
 until take_lock; do
     if ! owner_alive; then
@@ -160,10 +180,27 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
+# Lock held; now also wait out any hand-started cargo working in this
+# repo. It cannot be told to queue, so we are the ones who yield.
+while pid="$(foreign_cargo)"; do
+    if [ "$wait_for_lock" != "1" ]; then
+        echo "ct: a cargo started outside ct is running in this repo (pid ${pid})." >&2
+        echo "ct: wait for it, re-run with CT_WAIT=1, or kill it and retry." >&2
+        exit 75
+    fi
+    if [ "$waited" -ge "$wait_timeout" ]; then
+        echo "ct: gave up waiting after ${waited}s for outside cargo (pid ${pid})" >&2
+        exit 75
+    fi
+    [ "$waited" -eq 0 ] && echo "ct: waiting for an outside cargo run (pid ${pid}) to finish..." >&2
+    sleep 2
+    waited=$((waited + 2))
+done
+
 # Job control puts the child in its own process group, which is what
 # makes `kill -- -PGID` reach cargo *and* every rustc it spawned.
 set -m
-cargo "$@" &
+"${CT_CARGO:-cargo}" "$@" &
 child_pid=$!
 child_pgid="$child_pid"
 echo "$child_pgid" > "${lock_dir}/pgid"

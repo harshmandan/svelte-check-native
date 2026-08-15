@@ -133,6 +133,17 @@ and takes over. Verified: killing the wrapper mid-build left 1 cargo and
 Only the recorded process group is ever killed — a cargo you started
 yourself elsewhere is never touched.
 
+**Your own terminal.** The hook only sees commands an agent runs through
+its Bash tool, so a `cargo` you type yourself bypasses the lock. `ct`
+compensates from its side: before spawning, it looks for any live cargo
+whose working directory is inside this repo and waits for it (refuses
+with exit 75 without `CT_WAIT`) instead of piling on. Nothing to
+install, nothing on PATH. A hand-started cargo is only ever waited on,
+never killed.
+
+CI needs nothing: each workflow runs on its own fresh runner with its own
+target directory, so there is no contention to serialise.
+
 Symptoms that this is happening rather than a real slowdown:
 
 - `user + sys` far below `real` in `/usr/bin/time -p` output.

@@ -81,7 +81,7 @@ impl SvelteImportResolver {
     /// Build the resolver from the user's `tsconfig` (for `paths`/`baseUrl`)
     /// and workspace (for the ambient-wildcard guard).
     pub fn new(workspace: &Path, tsconfig: &Path) -> Self {
-        if workspace_declares_svelte_wildcard(workspace) {
+        if any_wildcard_in_scope(workspace, tsconfig) {
             return Self { inner: None };
         }
         let options = ResolveOptions {
@@ -124,7 +124,11 @@ impl SvelteImportResolver {
     fn resolves(&self, dir: &Path, specifier: &str) -> bool {
         match &self.inner {
             None => true,
-            Some(resolver) => resolver.resolve(dir, specifier).is_ok(),
+            Some(resolver) => {
+                resolver.resolve(dir, specifier).is_ok()
+                    || sidecar_specifier(specifier)
+                        .is_some_and(|sidecar| resolver.resolve(dir, &sidecar).is_ok())
+            }
         }
     }
 }
@@ -258,6 +262,26 @@ impl<'a> Visit<'a> for ImportCollector<'_> {
     }
 }
 
+/// The declaration-sidecar specifier for a `.svelte` specifier:
+/// `x.svelte` → `x.d.svelte.ts`.
+///
+/// `allowArbitraryExtensions` lets a user satisfy `import
+/// './Generated.svelte'` with a `Generated.d.svelte.ts` and no component
+/// file at all — TypeScript's own documented mechanism (`x.css` looks up
+/// `x.d.css.ts`), and the one our generated overlays rely on. The
+/// resolver has no notion of it, so without this the import looked
+/// unresolvable and we invented a TS2307 on code the compiler accepts.
+///
+/// The rewritten specifier is resolved through the SAME resolver as the
+/// original, so the sidecar is found wherever the compiler would find
+/// it: beside a relative target, behind a `tsconfig` `paths` alias, or
+/// inside a package (node_modules + `exports`) — not just as a sibling
+/// of a `./`-relative import.
+fn sidecar_specifier(specifier: &str) -> Option<String> {
+    let stem = specifier.strip_suffix(".svelte")?;
+    Some(format!("{stem}.d.svelte.ts"))
+}
+
 /// A specifier that names a Svelte component file: ends in `.svelte`.
 /// Excludes `.svelte.ts` / `.svelte.js` runes-module specifiers (those end
 /// in `.ts` / `.js`). Query-suffixed forms (`x.svelte?raw`) are excluded —
@@ -266,22 +290,112 @@ fn is_svelte_specifier(spec: &str) -> bool {
     spec.ends_with(".svelte")
 }
 
-/// Whether the workspace declares its own `declare module '*.svelte'`
-/// wildcard. When it does, the default `svelte-check` resolves every
-/// `.svelte` import through it (it strips svelte's OWN wildcard but not the
-/// user's), so we must not fire — see the module docs.
+/// Whether a `declare module '*.svelte'` wildcard is live anywhere in
+/// the program. When one is, the default `svelte-check` resolves every
+/// `.svelte` import through it — it strips svelte's OWN wildcard but not
+/// a user's — so we must not fire, or we invent an error the compiler
+/// does not produce. See the module docs.
 ///
-/// Walks the workspace, skipping `node_modules` (svelte's own wildcard
-/// lives there and the default engine strips it), the generated
-/// `.svelte-kit`, our cache, and VCS dirs. Only `.d.ts` files are read.
-fn workspace_declares_svelte_wildcard(workspace: &Path) -> bool {
+/// The question is "is a wildcard in the PROGRAM", not "is a wildcard
+/// under this directory". Scanning a directory got that wrong in both
+/// directions of the monorepo shape: a shared `.d.ts` sitting above the
+/// workspace and pulled in by the tsconfig's own `include` was missed
+/// entirely, so every `.svelte` import in that project reported a
+/// TS2307 the user could do nothing about — they had already declared
+/// the wildcard.
+///
+/// So: walk the directories the tsconfig actually admits (its
+/// `include` roots, plus the workspace itself), not just the workspace
+/// subtree. `node_modules` is still skipped wholesale — svelte's own
+/// wildcard lives there and the default engine strips exactly that
+/// one, so honouring it would suppress the check for every project.
+fn any_wildcard_in_scope(workspace: &Path, tsconfig: &Path) -> bool {
+    scan_roots(workspace, tsconfig_include_roots(tsconfig))
+        .iter()
+        .any(|r| dir_declares_svelte_wildcard(r))
+}
+
+/// Collapse the workspace plus the include roots into a minimal set of
+/// directories to walk. Containment is honoured in BOTH directions: a
+/// new root inside an existing one is skipped (its subtree is walked
+/// anyway), and a new root ABOVE an existing one replaces it — e.g. an
+/// include of `..` subsumes the workspace itself, and keeping both
+/// would re-traverse the whole workspace subtree a second time.
+fn scan_roots(workspace: &Path, include_roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = vec![workspace.to_path_buf()];
+    for root in include_roots {
+        if roots.iter().any(|r| root.starts_with(r)) {
+            continue;
+        }
+        roots.retain(|r| !r.starts_with(&root));
+        roots.push(root);
+    }
+    roots
+}
+
+/// The directory prefixes of a tsconfig's `include` patterns —
+/// relative patterns resolved against the config's own directory,
+/// absolute ones taken as-is. A pattern's leading literal segments are
+/// what we can cheaply turn into a directory to scan; everything from
+/// the first wildcard segment on is dropped.
+fn tsconfig_include_roots(tsconfig: &Path) -> Vec<PathBuf> {
+    let Ok(chain) = svn_core::tsconfig::load_chain(tsconfig) else {
+        return Vec::new();
+    };
+    let Some((winner, patterns)) =
+        svn_core::tsconfig::winning_patterns(&chain, |f| f.include.as_deref())
+    else {
+        return Vec::new();
+    };
+    let base = winner.config_dir();
+    let mut out = Vec::new();
+    for pattern in patterns {
+        let literal: Vec<&str> = pattern
+            .split('/')
+            .take_while(|segment| !segment.contains('*') && !segment.contains('?'))
+            .collect();
+        let literal = literal.join("/");
+        let candidate = Path::new(&literal);
+        // An absolute pattern is already anchored at the filesystem
+        // root; gluing it under the config dir would fabricate a path
+        // that exists nowhere and get the root silently dropped.
+        let dir = if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            base.join(candidate)
+        };
+        let dir = normalise(&dir);
+        if dir.is_dir() && !out.contains(&dir) {
+            out.push(dir);
+        }
+    }
+    out
+}
+
+/// `..`/`.` collapsing without touching the filesystem.
+fn normalise(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Does any `.d.ts` under `dir` declare the wildcard?
+fn dir_declares_svelte_wildcard(dir: &Path) -> bool {
     let skip = |name: &str| {
         matches!(
             name,
             "node_modules" | ".svelte-kit" | ".git" | ".cache" | ".svelte-check"
         )
     };
-    walkdir::WalkDir::new(workspace)
+    walkdir::WalkDir::new(dir)
         .into_iter()
         .filter_entry(|e| !(e.file_type().is_dir() && e.file_name().to_str().is_some_and(skip)))
         .filter_map(Result::ok)
@@ -386,5 +500,152 @@ mod tests {
         ));
         assert!(!declares_svelte_wildcard("declare module '*.css' {}"));
         assert!(!declares_svelte_wildcard("import x from '*.svelte'"));
+    }
+    /// A wildcard in a shared `.d.ts` ABOVE the workspace, pulled into
+    /// the program by the tsconfig's own `include`, still counts.
+    ///
+    /// Scanning only the workspace subtree missed it, and every
+    /// `.svelte` import in that project then reported a TS2307 the user
+    /// could do nothing about — they had already declared the wildcard.
+    #[test]
+    fn wildcard_above_the_workspace_is_seen_when_the_tsconfig_includes_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        std::fs::create_dir_all(root.join("app/src")).unwrap();
+        std::fs::write(
+            root.join("shared/global.d.ts"),
+            "declare module '*.svelte' { const c: any; export default c; }",
+        )
+        .unwrap();
+        let tsconfig = root.join("app/tsconfig.json");
+        std::fs::write(
+            &tsconfig,
+            r#"{ "include": ["src/**/*", "../shared/**/*"] }"#,
+        )
+        .unwrap();
+
+        assert!(
+            any_wildcard_in_scope(&root.join("app"), &tsconfig),
+            "wildcard reachable through the tsconfig include was not seen"
+        );
+    }
+
+    /// The guard must not over-suppress: with no wildcard anywhere in
+    /// scope the check has to stay live, or the whole layer goes quiet.
+    #[test]
+    fn no_wildcard_in_scope_leaves_the_check_live() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("app/src")).unwrap();
+        let tsconfig = root.join("app/tsconfig.json");
+        std::fs::write(&tsconfig, r#"{ "include": ["src/**/*"] }"#).unwrap();
+
+        assert!(!any_wildcard_in_scope(&root.join("app"), &tsconfig));
+    }
+
+    #[test]
+    fn sidecar_specifier_rewrites_only_svelte() {
+        assert_eq!(
+            sidecar_specifier("./Gen.svelte").as_deref(),
+            Some("./Gen.d.svelte.ts")
+        );
+        assert_eq!(
+            sidecar_specifier("$gen/Gen.svelte").as_deref(),
+            Some("$gen/Gen.d.svelte.ts")
+        );
+        assert_eq!(sidecar_specifier("./Gen.svelte.ts"), None);
+        assert_eq!(sidecar_specifier("pkg"), None);
+    }
+
+    /// `allowArbitraryExtensions` lets a hand-written
+    /// `<name>.d.svelte.ts` satisfy a `.svelte` import with no component
+    /// file present. The sidecar is looked up through the same resolver
+    /// as the import itself, so it works wherever the compiler would
+    /// find it — beside a relative target AND behind a `paths` alias.
+    #[test]
+    fn declaration_sidecar_satisfies_relative_and_aliased_specifiers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("src/gen")).unwrap();
+        std::fs::write(
+            root.join("src/gen/Gen.d.svelte.ts"),
+            "declare const c: unknown; export default c;",
+        )
+        .unwrap();
+        let tsconfig = root.join("tsconfig.json");
+        std::fs::write(
+            &tsconfig,
+            r#"{ "compilerOptions": { "paths": { "$gen/*": ["./src/gen/*"] } } }"#,
+        )
+        .unwrap();
+
+        let resolver = SvelteImportResolver::new(root, &tsconfig);
+        let src = root.join("src");
+        assert!(resolver.resolves(&src, "./gen/Gen.svelte"));
+        assert!(resolver.resolves(&src, "$gen/Gen.svelte"));
+        assert!(!resolver.resolves(&src, "./gen/Absent.svelte"));
+        assert!(!resolver.resolves(&src, "$gen/Absent.svelte"));
+    }
+
+    /// An absolute `include` pattern is anchored at the filesystem
+    /// root. Resolving it against the config dir fabricated
+    /// `<configdir>/abs/...`, which failed the directory probe — so a
+    /// wildcard reachable only through the absolute include stayed
+    /// invisible and the ambient guard never disabled the check.
+    #[test]
+    fn absolute_include_pattern_reaches_its_wildcard() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        std::fs::write(
+            root.join("shared/global.d.ts"),
+            "declare module '*.svelte' { const c: any; export default c; }",
+        )
+        .unwrap();
+        let tsconfig = root.join("app/tsconfig.json");
+        let abs_pattern = root.join("shared").join("**/*");
+        std::fs::write(
+            &tsconfig,
+            format!(r#"{{ "include": ["{}"] }}"#, abs_pattern.display()),
+        )
+        .unwrap();
+
+        assert!(
+            any_wildcard_in_scope(&root.join("app"), &tsconfig),
+            "wildcard behind an absolute include pattern was not seen"
+        );
+    }
+
+    /// Root dedup is bidirectional: a root above the workspace (e.g.
+    /// an include of `..`) subsumes it, so the workspace subtree must
+    /// not be kept as a second root and walked twice.
+    #[test]
+    fn scan_roots_collapses_containment_both_ways() {
+        let ws = PathBuf::from("/repo/app");
+        // Below the workspace: contributes nothing.
+        assert_eq!(
+            scan_roots(&ws, vec![PathBuf::from("/repo/app/src")]),
+            vec![ws.clone()]
+        );
+        // Above the workspace: replaces it.
+        assert_eq!(
+            scan_roots(&ws, vec![PathBuf::from("/repo")]),
+            vec![PathBuf::from("/repo")]
+        );
+        // Disjoint: both kept.
+        assert_eq!(
+            scan_roots(&ws, vec![PathBuf::from("/shared")]),
+            vec![ws.clone(), PathBuf::from("/shared")]
+        );
+        // A later, wider root also swallows earlier include roots.
+        assert_eq!(
+            scan_roots(
+                &ws,
+                vec![PathBuf::from("/repo/shared"), PathBuf::from("/repo")]
+            ),
+            vec![PathBuf::from("/repo")]
+        );
     }
 }

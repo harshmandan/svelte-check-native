@@ -42,6 +42,7 @@
 //! dependency, and `grep -r TSGO-ENHANCEMENT` to remove the (few) marked
 //! callsites. Nothing in the core crates depends on this one's types.
 
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 mod missing_svelte_imports;
 
 pub use missing_svelte_imports::{

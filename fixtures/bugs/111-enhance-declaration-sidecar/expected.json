@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "The missing-import check resolves .svelte specifiers with a real resolver, which has no notion of TypeScript's allowArbitraryExtensions declaration sidecars. A hand-written <name>.d.svelte.ts satisfying an import with no component file present therefore looked unresolvable and we invented a TS2307 on code the compiler accepts. It is the same mechanism our own generated overlays rely on."
+}

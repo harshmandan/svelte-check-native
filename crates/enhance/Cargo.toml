@@ -19,3 +19,6 @@ oxc_ast_visit.workspace = true
 # form the way tsgo would — no hand-rolled resolution. See crate docs.
 oxc_resolver = "11"
 walkdir.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

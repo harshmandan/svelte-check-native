@@ -1297,6 +1297,7 @@ dependencies = [
  "oxc_resolver",
  "svn-core",
  "svn-parser",
+ "tempfile",
  "walkdir",
 ]
 

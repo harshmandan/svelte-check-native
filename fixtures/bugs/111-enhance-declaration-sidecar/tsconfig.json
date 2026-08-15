@@ -1,0 +1,8 @@
+{
+    "extends": "../_shared/tsconfig.base.json",
+    "compilerOptions": {
+        "allowArbitraryExtensions": true,
+        "paths": { "$gen/*": ["./src/gen/*"] }
+    },
+    "include": ["src/**/*"]
+}

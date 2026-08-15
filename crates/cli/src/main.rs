@@ -375,12 +375,46 @@ fn main() -> ExitCode {
     // directory. The overlay cache, kit-file discovery, and diagnostic
     // path-relativization all follow workspace.
     //
-    // Gated on `escaped_solution`: an explicit `--tsconfig` pointing
-    // into a subdirectory must NOT relocate the workspace — that would
-    // silently change the discovery root and the `<N> FILES`
-    // denominator. Upstream keeps workspace and tsconfig independent.
+    // Gated on `escaped_solution` AND on the tsconfig having been
+    // DISCOVERED rather than named: an explicit `--tsconfig` must not
+    // relocate the workspace, because that silently changes the
+    // discovery root and the `<N> FILES` denominator. Upstream keeps
+    // workspace and tsconfig independent and has no solution-escape at
+    // all, so `--workspace sol --tsconfig sol/tsconfig.json` finds every
+    // app under `sol`; relocating to the first referenced project
+    // dropped the rest of them from the run entirely.
+    //
+    // The escape itself still applies to an explicit solution config —
+    // the overlay cannot usefully extend a `files: []` solution — but it
+    // only changes which config we compile with, not where we look for
+    // files.
+    let relocate = escaped_solution && cli.tsconfig.is_none();
+    // Explicit --tsconfig naming a solution root: the workspace is NOT
+    // relocated (the denominator must keep covering every app), but
+    // checking runs per referenced project so each app's files see
+    // their own config, cache anchor, and node_modules. See
+    // `run_typecheck`'s solution branch.
+    let solution_projects: Option<(PathBuf, Vec<(PathBuf, PathBuf)>)> =
+        if escaped_solution && cli.tsconfig.is_some() {
+            cli.tsconfig.as_deref().and_then(|p| {
+                let resolved = if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    workspace.join(p)
+                };
+                let named = dunce::canonicalize(&resolved).unwrap_or(resolved);
+                let projects = solution_reference_configs(&named);
+                if projects.is_empty() {
+                    None
+                } else {
+                    Some((named, projects))
+                }
+            })
+        } else {
+            None
+        };
     let (workspace, solution_root_tsconfig) = match tsconfig.parent() {
-        Some(dir) if escaped_solution && dir != workspace && dir.starts_with(&workspace) => {
+        Some(dir) if relocate && dir != workspace && dir.starts_with(&workspace) => {
             eprintln!(
                 "svelte-check-native: redirected workspace to {} (parent of {}) — original looked like a TS project-references solution",
                 dir.display(),
@@ -516,6 +550,7 @@ fn main() -> ExitCode {
 
     run_typecheck(
         &workspace,
+        solution_projects.as_ref(),
         solution_root_tsconfig.as_deref(),
         &tsconfig,
         &output,
@@ -718,12 +753,16 @@ struct DiagnosticSources {
 /// When `spec` is `None`, all currently-supported sources are enabled.
 fn parse_diagnostic_sources(spec: Option<&str>) -> Result<DiagnosticSources, String> {
     let Some(spec) = spec else {
-        // Default = everything we actually support. `css` is reserved
-        // and stays off so we don't claim to lint CSS when we don't.
+        // Default = upstream's `['js', 'css', 'svelte']`. `css` carries
+        // no CSS linting on our side (out of scope), but it is not
+        // inert: it is half the condition that decides whether entry
+        // records are seeded, and therefore the `<N> FILES`
+        // denominator. Defaulting it off left our option set differing
+        // from upstream's for no benefit.
         return Ok(DiagnosticSources {
             js: true,
             svelte: true,
-            css: false,
+            css: true,
         });
     };
     let mut sources = DiagnosticSources {
@@ -736,17 +775,14 @@ fn parse_diagnostic_sources(spec: Option<&str>) -> Result<DiagnosticSources, Str
         match entry.as_str() {
             "js" | "ts" | "javascript" | "typescript" => sources.js = true,
             "svelte" => sources.svelte = true,
-            "css" | "scss" | "sass" | "less" | "postcss" => {
-                // Accept silently — CSS linting isn't yet implemented,
-                // but rejecting outright blocks monorepo CI scripts
-                // that pass `--diagnostic-sources ts,svelte,css`
-                // template-fashion (a real-world pattern when porting
-                // configs from upstream svelte-check). Match upstream's
-                // user-visible behaviour: the flag is accepted; in our
-                // case it's a no-op until the css source path lands.
-                // Track in notes/ARCH_PARITY.md (Round 2 #1).
-                sources.css = true;
-            }
+            // Only the exact spelling `css` counts, matching upstream's
+            // `filter(s => ['js','css','svelte'].includes(s))`. The
+            // `scss`/`sass`/`less`/`postcss` spellings used to map here
+            // too, which seeded entry records — and so changed the FILES
+            // denominator — where upstream drops them as unknown. CSS
+            // linting itself remains out of scope; the source only gates
+            // entry seeding.
+            "css" => sources.css = true,
             "" => {}
             // Unknown entries are dropped silently, matching upstream's
             // `.filter(s => diagnosticSources.includes(s))` (options.ts).
@@ -1253,8 +1289,157 @@ fn kit_inject_col_shifts(injected: &svn_emit::kit_inject::Injected) -> Vec<(u32,
 /// human output; `timings` prints a phase-by-phase breakdown when
 /// true.
 #[allow(clippy::too_many_arguments)]
+/// One project's completed pipeline output, before rendering: the
+/// mapped diagnostics (absolute `source_path`s) and the discovered
+/// entry files that count toward the `<N> FILES` denominator.
+struct ProjectRun {
+    diagnostics: Vec<svn_typecheck::CheckDiagnostic>,
+    entries: Vec<PathBuf>,
+}
+
+/// Merge one or more project runs and render the single
+/// START/diagnostics/COMPLETED sequence, computing counts and the exit
+/// code exactly as the single-project flow always has. Multi-run input
+/// is the solution-root case: sub-project programs can overlap on
+/// shared sources (two apps importing the same package file), so
+/// diagnostics deduplicate on identity before counting.
+fn render_runs(
+    workspace: &Path,
+    runs: Vec<ProjectRun>,
+    output_format: &str,
+    color: ColorMode,
+    threshold: &str,
+    fail_on_warnings: bool,
+) -> ExitCode {
+    use std::collections::HashSet;
+    let mut diagnostics: Vec<svn_typecheck::CheckDiagnostic> = Vec::new();
+    let mut seen: HashSet<(PathBuf, u32, u32, String)> = HashSet::new();
+    let mut entry_set: HashSet<PathBuf> = HashSet::new();
+    for run in runs {
+        for d in run.diagnostics {
+            let key = (
+                d.source_path.clone(),
+                d.line,
+                d.column,
+                format!("{:?}|{}", d.code, d.message),
+            );
+            if seen.insert(key) {
+                diagnostics.push(d);
+            }
+        }
+        entry_set.extend(run.entries);
+    }
+
+    // NOTE: `--threshold error` is a PRINT-TIME filter only — applied
+    // per-diagnostic inside `print_diagnostics`. The counts and exit
+    // code below are computed from the FULL set, mirroring upstream
+    // (the COMPLETED line reports the true warning count and
+    // `--fail-on-warnings` still fires). Filtering here instead would
+    // zero out `warning_count` and make `--threshold error
+    // --fail-on-warnings` exit 0 with warnings present.
+    let error_count = diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, svn_typecheck::Severity::Error))
+        .count();
+    let warning_count = diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, svn_typecheck::Severity::Warning))
+        .count();
+
+    // `<N> FILES` mirrors upstream svelte-check's denominator exactly:
+    // `|entries ∪ files-with-diagnostics|`, deduplicated on
+    // source_path. The entries half was collected per run (already
+    // gated on the svelte/css sources there).
+    let files_for_completed: usize = {
+        let mut seen: HashSet<&Path> = HashSet::new();
+        seen.extend(entry_set.iter().map(PathBuf::as_path));
+        for d in &diagnostics {
+            seen.insert(d.source_path.as_path());
+        }
+        seen.len()
+    };
+    print_diagnostics(
+        workspace,
+        &diagnostics,
+        output_format,
+        color,
+        files_for_completed,
+        threshold,
+    );
+
+    if error_count > 0 || (fail_on_warnings && warning_count > 0) {
+        ExitCode::from(1)
+    } else {
+        ExitCode::from(0)
+    }
+}
+
+/// Every referenced project of a solution-style tsconfig whose config
+/// resolves and loads: `(project_dir, config_path)` per reference,
+/// deduplicated on directory (a solution can reference several configs
+/// in the same project — `tsconfig.playwright.json` next to
+/// `tsconfig.build.json` — and checking the same tree twice under
+/// different options would double every diagnostic; first reference
+/// wins, matching `escape_solution_tsconfig`'s ordering).
+fn solution_reference_configs(candidate: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let Ok(parsed) = svn_core::tsconfig::parse_file(candidate) else {
+        return Vec::new();
+    };
+    if !parsed.is_solution_style() {
+        return Vec::new();
+    }
+    let Some(parent) = candidate.parent() else {
+        return Vec::new();
+    };
+    let mut out: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut seen_dirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    for reference in &parsed.references {
+        let ref_path = parent.join(&reference.path);
+        let config_path = if ref_path.is_file() {
+            ref_path
+        } else if ref_path.is_dir() {
+            let default = ref_path.join("tsconfig.json");
+            if !default.is_file() {
+                continue;
+            }
+            default
+        } else {
+            continue;
+        };
+        let config_path = dunce::canonicalize(&config_path).unwrap_or(config_path);
+        if svn_core::tsconfig::load_chain(&config_path).is_err() {
+            continue;
+        }
+        let Some(dir) = config_path.parent().map(Path::to_path_buf) else {
+            continue;
+        };
+        if seen_dirs.insert(dir.clone()) {
+            out.push((dir, config_path));
+        }
+    }
+    out
+}
+
+/// The svelte/vite config summary for one sub-project directory —
+/// the same vite-plugin-first, svelte.config-fallback chain the
+/// workspace-level resolution in `main` uses, so each referenced
+/// project's Kit `files` settings drive its own kit-file discovery.
+fn analyse_dir_svelte_config(dir: &Path) -> svelte_config::SvelteConfigSummary {
+    if let Some(summary) =
+        svelte_config::find_vite_config(dir).and_then(|p| svelte_config::analyse_vite_config(&p))
+    {
+        summary
+    } else if let Some(path) = svelte_config::find_svelte_config(dir) {
+        svelte_config::analyse(&path)
+    } else {
+        svelte_config::SvelteConfigSummary::default()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_typecheck(
     workspace: &Path,
+    solution_projects: Option<&(PathBuf, Vec<(PathBuf, PathBuf)>)>,
     solution_root_tsconfig: Option<&Path>,
     tsconfig: &Path,
     output_format: &str,
@@ -1272,6 +1457,121 @@ fn run_typecheck(
     include_suggestions: bool,
     disable_enhance: bool,
 ) -> ExitCode {
+    let Some((solution_root, projects)) = solution_projects else {
+        // Ordinary single-project run.
+        return match check_project(
+            workspace,
+            solution_root_tsconfig,
+            tsconfig,
+            output_format,
+            sources,
+            compiler_overrides,
+            timings,
+            tsgo_diagnostics,
+            svelte_warnings_mode,
+            ignore_node_modules_warnings,
+            config_resolver,
+            kit_files_settings,
+            include_suggestions,
+            disable_enhance,
+        ) {
+            Ok(run) => render_runs(
+                workspace,
+                vec![run],
+                output_format,
+                color,
+                threshold,
+                fail_on_warnings,
+            ),
+            Err(code) => code,
+        };
+    };
+
+    // Solution root named explicitly: the workspace (and therefore the
+    // discovery denominator and diagnostic path base) stays at the
+    // root, but each referenced project is CHECKED in its own context —
+    // its own tsconfig, its own directory as the cache/module-
+    // resolution anchor, its own svelte config for kit-file discovery.
+    // One program anchored at the root checked every app's files under
+    // the first reference's options, which invented resolution errors
+    // no upstream engine reports (bare workspace deps resolvable only
+    // from the owning app's node_modules).
+    //
+    // Only projects that CONTAIN a discovered `.svelte` file get a
+    // sub-run: svelte-check's surface is components plus whatever they
+    // import, so a pure-TS referenced project is reached through the
+    // importing app's program (where the compiler attributes its
+    // errors) rather than checked as a project of its own — surfacing
+    // a backend package's internal test errors is something no
+    // upstream engine's output does.
+    //
+    // The denominator stays a single root-wide enumeration — upstream's
+    // findFiles counts from the workspace root with no project scoping,
+    // so per-project discovery must not add to it (kit-file
+    // classification differs per anchor and would inflate the count).
+    let (root_svelte, root_kit, _runes, _user_ts) = discover_relevant_files(workspace);
+    let mut runs: Vec<ProjectRun> = Vec::new();
+    for (project_dir, project_config) in projects {
+        if !root_svelte.iter().any(|f| f.starts_with(project_dir)) {
+            continue;
+        }
+        let sub_summary = analyse_dir_svelte_config(project_dir);
+        match check_project(
+            project_dir,
+            Some(solution_root.as_path()),
+            project_config,
+            output_format,
+            sources,
+            compiler_overrides,
+            timings,
+            tsgo_diagnostics,
+            svelte_warnings_mode,
+            ignore_node_modules_warnings,
+            config_resolver,
+            &sub_summary.kit_files_settings,
+            include_suggestions,
+            disable_enhance,
+        ) {
+            Ok(run) => runs.push(ProjectRun {
+                diagnostics: run.diagnostics,
+                entries: Vec::new(),
+            }),
+            Err(code) => return code,
+        }
+    }
+    if sources.svelte || sources.css {
+        runs.push(ProjectRun {
+            diagnostics: Vec::new(),
+            entries: root_svelte.into_iter().chain(root_kit).collect(),
+        });
+    }
+    render_runs(
+        workspace,
+        runs,
+        output_format,
+        color,
+        threshold,
+        fail_on_warnings,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_project(
+    workspace: &Path,
+    solution_root_tsconfig: Option<&Path>,
+    tsconfig: &Path,
+    output_format: &str,
+    sources: DiagnosticSources,
+    compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
+    timings: bool,
+    tsgo_diagnostics: bool,
+    svelte_warnings_mode: SvelteWarningsMode,
+    ignore_node_modules_warnings: bool,
+    config_resolver: &mut svelte_config::ConfigResolver,
+    kit_files_settings: &svn_core::sveltekit::KitFilesSettings,
+    include_suggestions: bool,
+    disable_enhance: bool,
+) -> Result<ProjectRun, ExitCode> {
     let phase_start = std::time::Instant::now();
 
     let mark = std::time::Instant::now();
@@ -1516,7 +1816,7 @@ fn run_typecheck(
                 // Machine consumers key off a FAILURE line; emit one so
                 // a fatal check error isn't a silent stop on stdout.
                 print_machine_failure(output_format, &message);
-                return ExitCode::from(2);
+                return Err(ExitCode::from(2));
             }
         };
         let session_ref = &session;
@@ -1746,7 +2046,7 @@ fn run_typecheck(
                 // Machine consumers key off a FAILURE line; emit one so
                 // a fatal check error isn't a silent stop on stdout.
                 print_machine_failure(output_format, &message);
-                return ExitCode::from(2);
+                return Err(ExitCode::from(2));
             }
         }
     } else {
@@ -1925,59 +2225,6 @@ fn run_typecheck(
         !plan.should_drop(code, Some(&d.source_path))
     });
 
-    // NOTE: `--threshold error` is a PRINT-TIME filter only — applied
-    // per-diagnostic inside `print_diagnostics`. The counts and exit
-    // code below are computed from the FULL set, mirroring upstream
-    // (the COMPLETED line reports the true warning count and
-    // `--fail-on-warnings` still fires). Filtering here instead would
-    // zero out `warning_count` and make `--threshold error
-    // --fail-on-warnings` exit 0 with warnings present.
-    let error_count = diagnostics
-        .iter()
-        .filter(|d| matches!(d.severity, svn_typecheck::Severity::Error))
-        .count();
-    let warning_count = diagnostics
-        .iter()
-        .filter(|d| matches!(d.severity, svn_typecheck::Severity::Warning))
-        .count();
-
-    // `<N> FILES` in the COMPLETED line mirrors upstream svelte-check's
-    // denominator exactly: `|entries ∪ files-with-diagnostics|`
-    // (index.ts `writeDiagnostics` over the map
-    // `getSvelteDiagnosticsForIncremental` seeds), where `entries` is
-    // every `.svelte` + SvelteKit "Kit file" (route modules like
-    // `+page.ts`, hooks, params) that `findFiles` discovers
-    // WORKSPACE-WIDE — only node_modules/dot-dir filtering, no tsconfig
-    // `include`/`exclude` scoping (incremental.ts deliberately doesn't
-    // use them to filter virtualized files) — and files-with-diagnostics
-    // adds any NON-entry file that picked up a TS diagnostic at tsgo
-    // time (typically `tsconfig.json`-level errors). The entry half
-    // exists only while a `svelte` or `css` source is enabled: with
-    // js-only sources upstream's per-entry seeding early-returns
-    // (index.ts:324-330) and the count collapses to just the
-    // diagnostic-bearing files. Both sets deduplicated against
-    // source_path.
-    let files_for_completed: usize = {
-        use std::collections::HashSet;
-        let mut seen: HashSet<&Path> = HashSet::new();
-        if sources.svelte || sources.css {
-            seen.extend(svelte_files_all.iter().map(PathBuf::as_path));
-            seen.extend(kit_files_raw.iter().map(PathBuf::as_path));
-        }
-        for d in &diagnostics {
-            seen.insert(d.source_path.as_path());
-        }
-        seen.len()
-    };
-    print_diagnostics(
-        workspace,
-        &diagnostics,
-        output_format,
-        color,
-        files_for_completed,
-        threshold,
-    );
-
     // `--tsgo-diagnostics` block — printed to stderr so machine-output
     // consumers parsing stdout (editors, CI wrappers) don't have to
     // skip past perf stats. Same stream choice as `--timings`.
@@ -1988,6 +2235,14 @@ fn run_typecheck(
     }
 
     if timings {
+        let error_count = diagnostics
+            .iter()
+            .filter(|d| matches!(d.severity, svn_typecheck::Severity::Error))
+            .count();
+        let warning_count = diagnostics
+            .iter()
+            .filter(|d| matches!(d.severity, svn_typecheck::Severity::Warning))
+            .count();
         let total = phase_start.elapsed();
         eprintln!();
         eprintln!("Phase                        Duration");
@@ -2006,11 +2261,19 @@ fn run_typecheck(
         );
     }
 
-    if error_count > 0 || (fail_on_warnings && warning_count > 0) {
-        ExitCode::from(1)
-    } else {
-        ExitCode::from(0)
+    // Denominator entries: every discovered `.svelte` + Kit file counts
+    // toward `<N> FILES` while a `svelte` or `css` source is enabled —
+    // upstream's per-entry seeding early-returns for js-only selections
+    // and the count collapses to diagnostic-bearing files.
+    let mut entries: Vec<PathBuf> = Vec::new();
+    if sources.svelte || sources.css {
+        entries.extend(svelte_files_all.iter().cloned());
+        entries.extend(kit_files_raw.iter().cloned());
     }
+    Ok(ProjectRun {
+        diagnostics,
+        entries,
+    })
 }
 
 /// `--emit-ts` flow: discover `.svelte` files, parse, emit, print to stdout
@@ -2125,9 +2388,13 @@ mod tests {
     // ---- parse_diagnostic_sources ----
 
     #[test]
-    fn diagnostic_sources_default_no_css() {
+    fn diagnostic_sources_default_matches_upstream() {
+        // Upstream's default is `['js', 'css', 'svelte']`. `css` carries
+        // no CSS linting here, but it is half the condition that decides
+        // whether entry records are seeded — and so the FILES
+        // denominator — which is why the default has to match.
         let s = parse_diagnostic_sources(None).unwrap();
-        assert!(s.js && s.svelte && !s.css);
+        assert!(s.js && s.svelte && s.css);
     }
 
     #[test]
@@ -2138,16 +2405,22 @@ mod tests {
 
     #[test]
     fn diagnostic_sources_css_accepted_no_op() {
-        // Round 2 #1: css/scss/sass/less/postcss accept silently
-        // (was a hard error pre-2026-04-26). Many monorepo CI scripts
-        // pass `ts,svelte,css` template-fashion; rejecting outright
-        // blocked migrations from upstream svelte-check.
+        // `css` accepts silently (it was a hard error pre-2026-04-26).
+        // Many monorepo CI scripts pass `ts,svelte,css` template-fashion,
+        // and rejecting outright blocked migrations from upstream.
         let s = parse_diagnostic_sources(Some("ts,svelte,css")).unwrap();
         assert!(s.js && s.svelte && s.css);
-        // scss / sass / less / postcss aliases all route to css.
+    }
+
+    #[test]
+    fn diagnostic_sources_css_dialect_aliases_are_unknown() {
+        // Upstream filters against exactly `['js', 'css', 'svelte']`, so
+        // `scss`/`sass`/`less`/`postcss` are dropped as unknown. Routing
+        // them to `css` seeded entry records and moved the FILES
+        // denominator where upstream leaves it alone.
         for alias in ["scss", "sass", "less", "postcss"] {
             let s = parse_diagnostic_sources(Some(alias)).unwrap();
-            assert!(s.css, "{alias} should set css=true");
+            assert!(!s.css, "{alias} must not enable the css source");
         }
     }
 

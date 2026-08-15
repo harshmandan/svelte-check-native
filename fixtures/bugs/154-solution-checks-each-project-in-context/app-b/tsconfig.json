@@ -1,0 +1,7 @@
+{
+    "extends": "../../_shared/tsconfig.base.json",
+    "compilerOptions": {
+        "paths": { "#b/*": ["./lib-b/*"] }
+    },
+    "include": ["src/**/*", "lib-b/**/*"]
+}

@@ -474,6 +474,17 @@ fn resolve_package_extends(reference: &str, start_dir: &Path) -> Result<PathBuf,
 /// silently and the project loses the generated `rootDirs` — which is
 /// what makes `./$types` resolve from a route file.
 fn package_subpath_config(pkg_root: &Path, subpath: &str) -> PathBuf {
+    // `exports` first, when the package declares one for this subpath.
+    // A package that maps `"./base"` to `"./src/base.json"` is resolved
+    // by TypeScript through that map; probing the literal layout instead
+    // finds nothing, and `load_chain` skips a base it cannot resolve —
+    // so the consumer silently loses everything that base declared.
+    if let Some(target) = package_subpath_export(pkg_root, subpath) {
+        let candidate = pkg_root.join(target);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
     let literal = pkg_root.join(subpath);
     if literal.is_file() || subpath.ends_with(".json") {
         return literal;
@@ -481,6 +492,20 @@ fn package_subpath_config(pkg_root: &Path, subpath: &str) -> PathBuf {
     let mut with_json = literal.into_os_string();
     with_json.push(".json");
     PathBuf::from(with_json)
+}
+
+/// The `exports` target for `./<subpath>`, if the package declares one.
+fn package_subpath_export(pkg_root: &Path, subpath: &str) -> Option<String> {
+    let contents = std::fs::read_to_string(pkg_root.join("package.json")).ok()?;
+    let Value::Object(obj) = serde_json::from_str::<Value>(&contents).ok()? else {
+        return None;
+    };
+    let exports = obj.get("exports")?.as_object()?;
+    // Try the subpath as written and with the `./` prefix `exports` keys
+    // conventionally carry.
+    let key = format!("./{}", subpath.trim_start_matches("./"));
+    let entry = exports.get(key.as_str()).or_else(|| exports.get(subpath))?;
+    resolve_export_target(entry).map(str::to_string)
 }
 
 /// Resolve a bare package extends (no subpath) to the config file at the

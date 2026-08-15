@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "An explicit --tsconfig naming a solution root keeps the workspace (and the FILES denominator) at the root, but each referenced project must be CHECKED in its own context. Compiling every app's files in one program under the first reference's config invented resolution errors the compiler never reports for either app on its own: here app-b's #b alias exists only in app-b's tsconfig, so the single-program shape fired TS2307 on it. Each app checks clean under its own config, and both apps' files count toward the denominator."
+}

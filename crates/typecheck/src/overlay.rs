@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use svn_core::tsconfig::{
-    FlattenedReference, ModuleResolution, TsConfigFile, flatten_references_from_chain, load_chain,
+    FlattenedReference, TsConfigFile, flatten_references_from_chain, load_chain,
 };
 
 use crate::cache::CacheLayout;
@@ -273,31 +273,19 @@ pub fn build(
     // upstream caught it, we silently passed). Users who want the
     // skip behaviour can set `"skipLibCheck": true` in their own
     // tsconfig.
-    // tsgo has removed the legacy `node`/`node10` moduleResolution
-    // values. Only force `bundler` in the overlay when the user's
-    // effective moduleResolution is the unsupported legacy — for
-    // `node16`/`nodenext`/`bundler`/unset we inherit so the user's
-    // runtime module-graph shape carries through. Overriding
-    // unconditionally changed how packages with differing
-    // `main`/`module`/`types` package.json entries resolved under the
-    // overlay; concretely, a user who wrote `// @ts-expect-error`
-    // above a call that's an error under their actual setup (e.g.
-    // typed as `unknown` or with a subset overload) would see our
-    // overlay widen the type and fire TS2578 "Unused directive".
-    // Inheriting matches upstream svelte-check and lets the directive
-    // consume the underlying error the user expected.
+    // `moduleResolution` is INHERITED, never rewritten. TypeScript 7
+    // removed the legacy `node`/`node10` value outright and answers
+    // TS5108 "Option 'moduleResolution=node10' has been removed",
+    // abandoning the program — upstream surfaces exactly that and
+    // reports nothing else.
     //
-    // NodeNext requires `module: NodeNext` too, so we only override
-    // `module` when we override `moduleResolution`.
-    // Precedence, not load order: the entry config wins if it declares
-    // the field, otherwise later `extends` entries beat earlier ones.
-    let effective_resolution =
-        svn_core::tsconfig::winning_field(&chain, |c| c.compiler_options.module_resolution)
-            .map(|(_, v)| v);
-    if matches!(effective_resolution, Some(ModuleResolution::Node)) {
-        compiler_options.insert("moduleResolution".into(), json!("bundler"));
-        compiler_options.insert("module".into(), json!("esnext"));
-    }
+    // We used to silently rewrite the legacy value to `bundler` (and
+    // `module` to `esnext` with it), which was friendlier but wrong in
+    // two ways: it hid a config error the user has to fix, and it
+    // type-checked their code under different resolution semantics
+    // (`exports` handling, extension rules) than the ones they
+    // configured. Per the parity rule we are neither stricter nor
+    // laxer than upstream, and this was laxer.
     compiler_options.insert("rootDirs".into(), json!(root_dirs));
     // Filter the user's `types` to drop entries that don't resolve.
     // tsgo treats a missing `types` entry as a fatal TS2688 and stops

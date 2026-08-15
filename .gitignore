@@ -55,3 +55,9 @@ bench/*
 
 # Private working notes
 notes/
+
+# Scratch workspaces created inside the repo by crates/cli/tests/files_denominator.rs
+# (they need the repo's node_modules to find a compiler). Normally removed on
+# drop; this keeps a panicked run from leaving the tree dirty.
+denominator-scratch-*/
+svelte-config-scratch-*/

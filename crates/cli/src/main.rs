@@ -976,37 +976,6 @@ fn missing_svelte_import_diagnostics(
         .collect()
 }
 
-/// Standalone parse + native-diagnostics pass for flows where the emit
-/// fan-out didn't run (tsgo skipped via `--diagnostic-sources`). The
-/// default flow computes the same per-file results inside the emit
-/// fan-out from its single parse.
-fn collect_native_diagnostics(
-    svelte_sources: &[(PathBuf, std::sync::Arc<str>)],
-    config_resolver: &svelte_config::ConfigResolver,
-    compat: svn_lint::CompatFeatures,
-) -> Vec<NativeFileDiagnostics> {
-    // Per-file work is pure compute with no shared mutable state — fan
-    // out over rayon. `collect` preserves source order for the merge.
-    svelte_sources
-        .par_iter()
-        .map(|(path, source)| {
-            let (doc, section_errors) = svn_parser::parse_sections(source);
-            let (fragment, template_errors) =
-                svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
-            native_diagnostics_for_parsed(
-                path,
-                source,
-                &doc,
-                &fragment,
-                &section_errors,
-                &template_errors,
-                config_resolver,
-                compat,
-            )
-        })
-        .collect()
-}
-
 /// Merge per-file native diagnostics into the output vec in the
 /// two-phase emission order documented on [`NativeFileDiagnostics`].
 fn merge_native_diagnostics(
@@ -1498,12 +1467,17 @@ fn run_typecheck(
         }
     }
 
-    // The whole parse → analyze → emit + kit-inject + collision-
-    // rewrite pipeline only feeds tsgo. When --diagnostic-sources
-    // excludes `js`, tsgo is skipped entirely, so this work would
-    // be discarded — gate it on `sources.js` to skip it up front.
-    // The svelte/compiler bridge below still runs (it consumes
-    // `svelte_sources`, not the prepared inputs).
+    // The parse → analyze → emit + kit-inject + collision-rewrite
+    // pipeline feeds tsgo, and it runs unconditionally.
+    //
+    // `--diagnostic-sources` does NOT gate it. On the command surface we
+    // mirror, upstream calls `runTypeScriptDiagnostics` every time and
+    // consults `diagnosticSources` only to decide whether svelte/css
+    // records get seeded (`index.ts:444-510` vs `:324-330`); its writer
+    // applies no source filter at all. Gating here meant
+    // `--diagnostic-sources svelte` reported zero type errors and exited
+    // 0 on a workspace full of them, where upstream fails the build —
+    // a clean-looking run that checked nothing.
     //
     // Overlay cache writes happen INSIDE the fan-outs below via
     // `CheckSession::prepare` — each task writes its generated TS to
@@ -1513,7 +1487,7 @@ fn run_typecheck(
     // plus the per-input results (in input order) to the
     // `CheckSession::finish` call after `t_emit`.
     type PreparedResults = Vec<Result<svn_typecheck::PreparedInput, svn_typecheck::CheckError>>;
-    let mut checker: Option<(svn_typecheck::CheckSession, PreparedResults)> = None;
+    let mut checker: Option<(svn_typecheck::CheckSession, PreparedResults)>;
     // Native Svelte diagnostics (fatal parse errors + lint warnings).
     // Decided up front because the default flow computes them INSIDE
     // the emit fan-out below, from the same parse that feeds emit —
@@ -1524,12 +1498,12 @@ fn run_typecheck(
     let run_native = sources.svelte && matches!(svelte_warnings_mode, SvelteWarningsMode::Native);
     let native_compat = run_native.then(|| svn_lint::detect_for_workspace(workspace));
     let config_resolver_ref: &svelte_config::ConfigResolver = config_resolver;
-    let mut native_results: Vec<Option<NativeFileDiagnostics>> = Vec::new();
+    let mut native_results: Vec<Option<NativeFileDiagnostics>>;
     // TSGO-ENHANCEMENT: native TS2307 for missing relative `.svelte`
     // imports. Collected during the emit fan-out (below) and merged into
     // the diagnostics stream after tsgo, since it's a `js`-source error.
     let mut missing_import_diags: Vec<svn_typecheck::CheckDiagnostic> = Vec::new();
-    if sources.js {
+    {
         // Cache-global setup (cache dir, type shims) plus the
         // background `.svelte-kit/types/` mirror start here, BEFORE
         // the emit fan-out, so the mirror's tree walk overlaps the
@@ -1835,19 +1809,11 @@ fn run_typecheck(
             // their tsgo noise is dropped below; analyze-phase structural
             // errors like gh#30's const placement → not broken, tsgo still
             // runs) AND lint warnings, all from a single parse per file.
-            let per_file: Vec<NativeFileDiagnostics> = if sources.js {
-                // Already computed inside the emit fan-out from its
-                // parse; the aux tail's `None`s flatten away and
-                // in-scope source order is preserved.
-                native_results.into_iter().flatten().collect()
-            } else {
-                // tsgo (and with it the emit fan-out) was skipped —
-                // parse here instead. Invariant: `native_compat` is
-                // Some whenever `run_native` is true.
-                let compat =
-                    native_compat.unwrap_or_else(|| svn_lint::detect_for_workspace(workspace));
-                collect_native_diagnostics(&svelte_sources, config_resolver, compat)
-            };
+            // Already computed inside the emit fan-out from its parse
+            // (which always runs); the aux tail's `None`s flatten away
+            // and in-scope source order is preserved.
+            let per_file: Vec<NativeFileDiagnostics> =
+                native_results.into_iter().flatten().collect();
             merge_native_diagnostics(
                 per_file,
                 compiler_overrides,

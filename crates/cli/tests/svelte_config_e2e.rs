@@ -14,6 +14,25 @@
 
 use std::fs;
 use std::path::Path;
+
+/// A scratch workspace created INSIDE the repo, so the compiler is
+/// discoverable by the usual `node_modules` walk-up.
+///
+/// These tests are about `svelte.config.js` resolution, not about type
+/// checking — but the type-check pass runs on every invocation now (it
+/// is not gated on `--diagnostic-sources`, matching upstream), so a
+/// workspace in the system temp dir has no engine and the run fails
+/// before reaching what the test asserts.
+fn workspace_temp() -> tempfile::TempDir {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("repo root");
+    tempfile::Builder::new()
+        .prefix("svelte-config-scratch-")
+        .tempdir_in(repo_root)
+        .expect("tempdir in repo")
+}
 use std::process::Command;
 
 fn write(path: &Path, content: &str) {
@@ -51,7 +70,7 @@ fn config_runes_true_forces_runes_mode_lints() {
     let component = "<script>let a = 1;</script><p>{a}</p><slot></slot>";
 
     // Control: no config → auto-detect says legacy → no deprecation.
-    let ws = tempfile::tempdir().expect("tempdir");
+    let ws = workspace_temp();
     write(&ws.path().join("tsconfig.json"), "{}");
     write(&ws.path().join("src/App.svelte"), component);
     let stdout = run_svelte_only(ws.path());
@@ -61,7 +80,7 @@ fn config_runes_true_forces_runes_mode_lints() {
     );
 
     // With `runes: true` the same component is compiled in runes mode.
-    let ws = tempfile::tempdir().expect("tempdir");
+    let ws = workspace_temp();
     write(&ws.path().join("tsconfig.json"), "{}");
     write(
         &ws.path().join("svelte.config.js"),
@@ -82,7 +101,7 @@ fn config_runes_true_forces_runes_mode_lints() {
 /// runes-only lints.
 #[test]
 fn config_runes_false_keeps_legacy_mode_lints_off() {
-    let ws = tempfile::tempdir().expect("tempdir");
+    let ws = workspace_temp();
     write(&ws.path().join("tsconfig.json"), "{}");
     write(
         &ws.path().join("svelte.config.js"),
@@ -107,7 +126,7 @@ fn nested_config_warning_filter_applies_to_nearest_files_only() {
     // `<img src="x">` fires the a11y_missing_attribute warning (alt).
     let component = r#"<img src="x" />"#;
 
-    let ws = tempfile::tempdir().expect("tempdir");
+    let ws = workspace_temp();
     write(&ws.path().join("tsconfig.json"), "{}");
     write(&ws.path().join("root/Root.svelte"), component);
     write(&ws.path().join("packages/app/src/App.svelte"), component);
@@ -134,7 +153,7 @@ fn nested_config_warning_filter_applies_to_nearest_files_only() {
 fn nested_config_runes_applies_per_file() {
     let component = "<script>let a = 1;</script><slot></slot>";
 
-    let ws = tempfile::tempdir().expect("tempdir");
+    let ws = workspace_temp();
     write(&ws.path().join("tsconfig.json"), "{}");
     write(&ws.path().join("legacy/Legacy.svelte"), component);
     write(&ws.path().join("modern/Modern.svelte"), component);
@@ -161,7 +180,7 @@ fn nested_config_runes_applies_per_file() {
 fn explicit_config_flag_ignores_nested_configs() {
     let component = r#"<img src="x" />"#;
 
-    let ws = tempfile::tempdir().expect("tempdir");
+    let ws = workspace_temp();
     write(&ws.path().join("tsconfig.json"), "{}");
     write(&ws.path().join("packages/app/src/App.svelte"), component);
     // Nested config would drop a11y warnings…

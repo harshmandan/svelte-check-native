@@ -30,6 +30,26 @@ fn write(path: &Path, content: &str) {
     fs::write(path, content).expect("write fixture file");
 }
 
+/// A scratch workspace created INSIDE the repo.
+///
+/// The compiler is discovered by walking up for `node_modules`, so a
+/// workspace in the system temp dir has no engine to check with. These
+/// tests used to dodge that by passing `--diagnostic-sources svelte`,
+/// which skipped tsgo entirely — an idiom built on the very divergence
+/// from upstream that has since been fixed, and one that made this
+/// suite structurally unable to notice it. Rooting the scratch dir in
+/// the repo lets the real engine run, the way every fixture suite does.
+fn workspace_temp() -> tempfile::TempDir {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("repo root");
+    tempfile::Builder::new()
+        .prefix("denominator-scratch-")
+        .tempdir_in(repo_root)
+        .expect("tempdir in repo")
+}
+
 /// Extract `N` from the machine-output `… COMPLETED N FILES …` line.
 fn completed_files(stdout: &str) -> Option<u64> {
     let line = stdout.lines().find(|l| l.contains("COMPLETED"))?;
@@ -51,7 +71,7 @@ fn completed_files(stdout: &str) -> Option<u64> {
 #[test]
 fn scoped_tsconfig_include_does_not_shrink_the_denominator() {
     let bin = env!("CARGO_BIN_EXE_svelte-check-native");
-    let ws = tempfile::tempdir().expect("tempdir");
+    let ws = workspace_temp();
     let root = ws.path();
 
     // Include covers only src/**; the .svelte file under other/ is
@@ -74,9 +94,10 @@ fn scoped_tsconfig_include_does_not_shrink_the_denominator() {
         "export function load() { return {}; }\n",
     );
 
-    // `--diagnostic-sources svelte` skips tsgo entirely, so this runs
-    // hermetically (no node_modules needed) while still exercising the
-    // entries half of the denominator.
+    // `--diagnostic-sources svelte` exercises the entries half of the
+    // denominator. It no longer skips tsgo — TS diagnostics run on every
+    // source selection, matching upstream — so the count below is the
+    // real discovery count, not an artefact of a skipped phase.
     let output = Command::new(bin)
         .args([
             "--workspace",
@@ -146,7 +167,7 @@ fn solution_escape_picks_first_reference_with_paths_and_reports_it() {
     // announce itself on stderr naming the chosen sub-project so a
     // two-app monorepo user can see which app was (and wasn't) checked.
     let bin = env!("CARGO_BIN_EXE_svelte-check-native");
-    let ws = tempfile::tempdir().expect("tempdir");
+    let ws = workspace_temp();
     let root = ws.path();
 
     write(
@@ -205,4 +226,50 @@ fn solution_escape_picks_first_reference_with_paths_and_reports_it() {
         Some(1),
         "only the first referenced app's files enter the denominator. stdout:\n{stdout}"
     );
+}
+
+/// Every `--diagnostic-sources` selection still runs the type checker.
+///
+/// On the command surface we mirror, upstream calls
+/// `runTypeScriptDiagnostics` unconditionally and consults
+/// `diagnosticSources` only for seeding svelte/css records
+/// (`index.ts:444-510` vs `:324-330`). We used to gate the whole
+/// emit->tsgo pipeline on the `js` source, so `--diagnostic-sources
+/// svelte` reported zero type errors and exited 0 on a workspace full of
+/// them — a run that checked nothing, indistinguishable from a clean one.
+#[test]
+fn type_errors_surface_for_every_diagnostic_source_selection() {
+    let bin = env!("CARGO_BIN_EXE_svelte-check-native");
+    let ws = workspace_temp();
+    let root = ws.path();
+
+    write(
+        &root.join("tsconfig.json"),
+        r#"{ "extends": "../fixtures/bugs/_shared/tsconfig.base.json", "include": ["src/**/*"] }"#,
+    );
+    write(
+        &root.join("src/bad.ts"),
+        "export const x: number = \"not a number\";\n",
+    );
+
+    for sources in ["js", "svelte", "css", "ts"] {
+        let output = Command::new(bin)
+            .args([
+                "--workspace",
+                root.to_str().unwrap(),
+                "--tsconfig",
+                root.join("tsconfig.json").to_str().unwrap(),
+                "--output",
+                "machine",
+                "--diagnostic-sources",
+                sources,
+            ])
+            .output()
+            .expect("binary should run");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("ERROR"),
+            "--diagnostic-sources {sources} reported no type error. stdout:\n{stdout}"
+        );
+    }
 }

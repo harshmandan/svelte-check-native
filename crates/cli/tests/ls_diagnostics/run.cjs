@@ -19,7 +19,7 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
-const { readdirSync, readFileSync, statSync, rmSync, existsSync, copyFileSync } = require('fs');
+const { readdirSync, readFileSync, statSync, rmSync, existsSync } = require('fs');
 const path = require('path');
 
 const BIN = process.env.SVELTE_CHECK_BIN;
@@ -326,7 +326,18 @@ function runFixture(name, fixtureDir) {
 
 console.log('svelte-check-native LS diagnostic fixtures\n');
 
-const entries = readdirSync(FIXTURES_DIR).sort();
+// Sharding — see `bug_fixtures/run.cjs` for the rationale. Each shard
+// reports its own tally and its own stale-skip list; the Rust side sums
+// them, so a SKIP_LIST entry that has started passing is still caught
+// no matter which shard its fixture lands in.
+//
+// Defaults to a single shard, so running this file by hand is unchanged.
+const SHARD_COUNT = Math.max(1, Number(process.env.SHARD_COUNT) || 1);
+const SHARD_INDEX = Math.max(0, Number(process.env.SHARD_INDEX) || 0);
+
+const entries = readdirSync(FIXTURES_DIR)
+    .sort()
+    .filter((_, i) => i % SHARD_COUNT === SHARD_INDEX);
 for (const entry of entries) {
     if (entry.startsWith('_') || entry === 'tsconfig.json') continue;
     const dir = path.join(FIXTURES_DIR, entry);

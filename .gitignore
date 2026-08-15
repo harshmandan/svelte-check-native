@@ -66,3 +66,6 @@ notes/
 # drop; this keeps a panicked run from leaving the tree dirty.
 denominator-scratch-*/
 svelte-config-scratch-*/
+
+# Local performance notes — machine-specific measurements, not shipped.
+TEST-SPEED.md

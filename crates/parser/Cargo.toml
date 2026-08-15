@@ -19,3 +19,10 @@ oxc_syntax.workspace = true
 smol_str.workspace = true
 thiserror.workspace = true
 memchr.workspace = true
+
+# No doctests in this crate. Building the rustdoc harness for every crate
+# cost roughly 40s on a full `cargo test --workspace` — most of the run —
+# for a workspace that has exactly one real doctest, in svn-core. That one
+# still runs; these do not need to.
+[lib]
+doctest = false

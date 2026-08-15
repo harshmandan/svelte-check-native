@@ -266,7 +266,22 @@ function runFixture(name, fixtureDir) {
 
 console.log('svelte-check-native bug fixtures\n');
 
-const entries = readdirSync(FIXTURES_DIR).sort();
+// Sharding. The Rust side spawns several copies of this runner over
+// disjoint subsets of the fixtures, because each fixture spends nearly
+// all of its time waiting on a compiler subprocess — one process
+// walking them in sequence leaves the machine idle. Fixtures are
+// independent (each owns its directory and its own cache), so the split
+// is a pure scheduling change: same fixtures, same assertions, same
+// per-fixture output lines.
+//
+// Defaults to a single shard, so running this file by hand behaves
+// exactly as before.
+const SHARD_COUNT = Math.max(1, Number(process.env.SHARD_COUNT) || 1);
+const SHARD_INDEX = Math.max(0, Number(process.env.SHARD_INDEX) || 0);
+
+const entries = readdirSync(FIXTURES_DIR)
+    .sort()
+    .filter((_, i) => i % SHARD_COUNT === SHARD_INDEX);
 for (const entry of entries) {
     if (entry.startsWith('_')) continue; // skip _shared/, _templates/
     const dir = path.join(FIXTURES_DIR, entry);

@@ -17,3 +17,10 @@ oxc_allocator.workspace = true
 oxc_ast.workspace = true
 oxc_span.workspace = true
 blake3.workspace = true
+
+# No doctests in this crate. Building the rustdoc harness for every crate
+# cost roughly 40s on a full `cargo test --workspace` — most of the run —
+# for a workspace that has exactly one real doctest, in svn-core. That one
+# still runs; these do not need to.
+[lib]
+doctest = false

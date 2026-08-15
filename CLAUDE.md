@@ -89,6 +89,45 @@ user-authored `declare module '*.svelte'` and disables itself if one
 exists (the default engine keeps user wildcards, so firing there would be
 a false positive).
 
+## One cargo at a time
+
+**Never start a cargo command while another is still running.** Not in a
+background job, not in a second pane, not "just a quick `cargo build
+--release` while the tests run."
+
+This is the single most common way a session goes wrong, and it is
+expensive: a `cargo test --workspace` that takes 29 seconds on a quiet
+machine took **574 seconds** with a concurrent release build competing for
+cores. Nothing was recompiled and no lock was contended — the test
+binaries were simply starved. Pure-Rust unit-test binaries that finish in
+0.00s took 25-30 seconds each. See `TEST-SPEED.md` (gitignored) for the
+line-by-line attribution.
+
+The release profile is the worst offender: `lto = "thin"` with
+`codegen-units = 1` pins all cores for minutes.
+
+Before running anything cargo-based:
+
+```sh
+pgrep -fl "cargo|rustc"     # must be empty
+```
+
+If a long build genuinely has to run in the background, `nice -n 10` it so
+it cannot starve a foreground run, and kill it when done rather than
+leaving it to finish silently.
+
+Symptoms that this is happening rather than a real slowdown:
+
+- `user + sys` far below `real` in `/usr/bin/time -p` output.
+- Unrelated test binaries all inflated by a similar amount.
+- `cargo` printing `Blocking waiting for file lock on build directory`
+  (that one is the same-target-dir case, which adds waiting on top).
+
+Do not go looking for compiler flags, linkers, or runner changes until
+`pgrep` comes back empty. Every "the build is slow" theory tested here —
+`lld`, `split-debuginfo`, Rosetta — turned out to be already-true or
+no-op on this machine.
+
 ## Commit-and-continue
 
 - **Commit after every meaningful local step,** even if code is broken or

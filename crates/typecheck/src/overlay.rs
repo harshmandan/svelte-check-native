@@ -350,9 +350,16 @@ pub fn build(
     let entry_dir = user_tsconfig.parent().unwrap_or(layout.workspace.as_path());
     // `typeRoots`, unlike `types`, IS an `isFilePath` option — TS rebases
     // it against the config that declared it during the extends merge, so
-    // each entry anchors on its own declaring directory. We never re-emit
-    // it (it inherits correctly through `extends`); we resolve it here
-    // only so the `types` filter below looks where TS would look.
+    // each entry anchors on its own declaring directory.
+    //
+    // We resolve it for two reasons: the `types` filter below has to look
+    // where TS would look, and the resolved value is re-emitted so the
+    // overlay doesn't depend on TS re-deriving it. Re-emitting matters
+    // because of `${configDir}`: TS substitutes that placeholder against
+    // the ROOT config being compiled, which is our overlay, so an
+    // inherited `"${configDir}/typings"` silently became a path inside
+    // the cache directory. Every entry under it then failed to resolve —
+    // a fatal TS2688 that took the project's ambients with it.
     let type_roots: Vec<PathBuf> = chain
         .iter()
         .find(|f| f.compiler_options.type_roots.is_some())
@@ -365,6 +372,38 @@ pub fn build(
             })
         })
         .unwrap_or_default();
+    // Emitted only when the chain actually declared it — `typeRoots`
+    // REPLACES the default `node_modules/@types` walk-up, so writing one
+    // where the user had none would narrow the lookup rather than
+    // preserve it.
+    if !type_roots.is_empty() {
+        compiler_options.insert(
+            "typeRoots".into(),
+            json!(
+                type_roots
+                    .iter()
+                    .map(|r| r.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+            ),
+        );
+    }
+    // Any OTHER inherited option carrying `${configDir}` has the same
+    // problem, and enumerating which ones matter is hopeless — `rootDir`
+    // is not even a field we parse, yet an inherited `"${configDir}/src"`
+    // resolves into the cache and fires TS6059 on every source file.
+    // The loader records which raw keys it resolved; re-emit those, with
+    // the value it already computed against the user's entry config.
+    // Options we set deliberately above win.
+    for file in chain.iter() {
+        for key in &file.config_dir_keys {
+            if compiler_options.contains_key(key) {
+                continue;
+            }
+            if let Some(value) = file.compiler_options.raw.get(key) {
+                compiler_options.insert(key.clone(), value.clone());
+            }
+        }
+    }
     let user_types: Option<Vec<String>> = chain
         .iter()
         .find(|f| f.compiler_options.types.is_some())

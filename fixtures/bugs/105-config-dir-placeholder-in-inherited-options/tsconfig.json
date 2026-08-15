@@ -1,0 +1,9 @@
+{
+    "extends": "../_shared/tsconfig.base.json",
+    "compilerOptions": {
+        "typeRoots": ["${configDir}/typings"],
+        "types": ["myglobals"],
+        "rootDir": "${configDir}/src"
+    },
+    "include": ["src/**/*"]
+}

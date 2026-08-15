@@ -50,6 +50,18 @@ pub struct TsConfigFile {
     pub files: Option<Vec<String>>,
 
     pub references: Vec<Reference>,
+
+    /// Raw `compilerOptions` keys whose value contained `${configDir}`
+    /// and was resolved by the loader.
+    ///
+    /// The overlay has to re-emit exactly these. Our overlay tsconfig is
+    /// the root config the compiler is handed, and the compiler resolves
+    /// `${configDir}` against the root — so a value left to inherit
+    /// through `extends` gets re-resolved against the cache directory
+    /// instead of the user's project. Emitting the already-resolved
+    /// value is what stops that. Keys we resolved but whose value the
+    /// user wrote absolutely are harmless to re-emit: same value.
+    pub config_dir_keys: Vec<String>,
 }
 
 impl TsConfigFile {

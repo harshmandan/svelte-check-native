@@ -45,7 +45,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use super::parse::{ParseError, parse_file};
 use super::{CompilerOptions, TsConfigFile};
@@ -276,9 +276,14 @@ fn load_recursive(path: &Path, seen: &mut HashSet<PathBuf>) -> Result<TsConfigFi
 fn substitute_config_dir(file: &mut TsConfigFile, entry_dir: &Path) {
     let dir = entry_dir.to_string_lossy().into_owned();
 
+    // TypeScript honours the placeholder only when it STARTS the value —
+    // `"./x/${configDir}/y"` is left literal. Substituting anywhere would
+    // invent a meaning the compiler doesn't give it.
     let sub = |s: &mut String| {
-        if s.contains("${configDir}") {
-            *s = s.replace("${configDir}", &dir);
+        if let Some(rest) = s.strip_prefix(CONFIG_DIR) {
+            let mut out = dir.clone();
+            out.push_str(rest);
+            *s = out;
         }
     };
     let sub_opt = |s: &mut Option<String>| {
@@ -306,39 +311,54 @@ fn substitute_config_dir(file: &mut TsConfigFile, entry_dir: &Path) {
     sub_opt_vec(&mut co.types);
 
     // Walk unknown compilerOptions values too — users can put ${configDir} in
-    // anything and we have to pass it through correctly.
-    walk_raw(&mut co.raw, &dir);
+    // anything and we have to pass it through correctly. Record which keys
+    // were touched: the overlay must re-emit exactly those, because the
+    // compiler would otherwise re-resolve the placeholder against the
+    // overlay's own directory. See `TsConfigFile::config_dir_keys`.
+    for (key, value) in co.raw.iter_mut() {
+        if walk_value(value, &dir) {
+            file.config_dir_keys.push(key.clone());
+        }
+    }
 
     sub_opt_vec(&mut file.include);
     sub_opt_vec(&mut file.exclude);
     sub_opt_vec(&mut file.files);
-    for r in &mut file.references {
-        sub(&mut r.path);
-    }
+    // NOT substituted in `references[].path`: TypeScript leaves the
+    // placeholder literal there, and `extends` is resolved before this
+    // pass runs, so both match the compiler by construction.
 }
 
-fn walk_raw(map: &mut Map<String, Value>, dir: &str) {
-    for v in map.values_mut() {
-        walk_value(v, dir);
-    }
-}
+const CONFIG_DIR: &str = "${configDir}";
 
-fn walk_value(v: &mut Value, dir: &str) {
+/// Substitute `${configDir}` throughout `v`. Returns true if anything
+/// changed.
+fn walk_value(v: &mut Value, dir: &str) -> bool {
     match v {
-        Value::String(s) if s.contains("${configDir}") => {
-            *s = s.replace("${configDir}", dir);
+        Value::String(s) => {
+            if let Some(rest) = s.strip_prefix(CONFIG_DIR) {
+                let mut out = dir.to_string();
+                out.push_str(rest);
+                *s = out;
+                return true;
+            }
+            false
         }
         Value::Array(arr) => {
+            let mut hit = false;
             for x in arr {
-                walk_value(x, dir);
+                hit |= walk_value(x, dir);
             }
+            hit
         }
-        Value::Object(obj) => {
-            for x in obj.values_mut() {
-                walk_value(x, dir);
+        Value::Object(map) => {
+            let mut hit = false;
+            for x in map.values_mut() {
+                hit |= walk_value(x, dir);
             }
+            hit
         }
-        _ => {}
+        _ => false,
     }
 }
 

@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "TypeScript resolves ${configDir} against the root config being compiled. Our overlay IS that root, so any inherited option carrying the placeholder silently resolved into the cache directory: typeRoots pointed at a directory that does not exist, taking the project's ambients with it via a fatal TS2688, and rootDir pointed there too, which fired TS6059 on every source file. The loader records which options it resolved and the overlay re-emits them already resolved, so the compiler never re-resolves the placeholder against the wrong root."
+}

@@ -69,6 +69,7 @@ pub fn parse_str(source: &str, path: PathBuf) -> Result<TsConfigFile, ParseError
     let references = take_references(&mut root);
 
     Ok(TsConfigFile {
+        config_dir_keys: Vec::new(),
         path,
         extends,
         compiler_options,

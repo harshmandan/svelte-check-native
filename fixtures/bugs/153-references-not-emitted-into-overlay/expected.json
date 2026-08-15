@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "The entry config references an unbuilt composite project and a component imports one of its sources. Emitting the entry's references into the overlay makes tsgo enforce the composite contract: TS6305 'output file has not been built' on the import (plus knock-on resolution errors), 75 of them on one real monorepo bench. Neither upstream engine's observable output contains any of that - the default engine redirects references to their sources, and upstream's --tsgo overlay kills its own run with TS6379 before reporting anything. The overlay therefore omits the reference graph; the sibling include-widening admits the referenced sources as ordinary source files, which both satisfies composite's file-list rule and reproduces the default engine's source-redirect semantics."
+}

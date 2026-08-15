@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "TypeScript reads `references` only from the config being loaded — it is not inherited through `extends`, and our own loader already implemented that. The reference flattener contradicted it by seeding from every config in the chain, so a monorepo whose base config carries a references[] array pulled whole sibling projects into the overlay and reported their errors for a graph the compiler never traverses. The sibling error here is invisible to tsc and must be invisible to us."
+}

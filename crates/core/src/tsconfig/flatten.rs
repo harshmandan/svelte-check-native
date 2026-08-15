@@ -13,8 +13,11 @@
 //! requires pre-built `.d.ts` outputs from each composite project.
 //! Instead, we project each referenced project's OWN tsconfig into a
 //! flattened shape and the overlay unions sibling-project
-//! `include`/`exclude`/`paths` on top of the sub-project's own, so
-//! sibling source files match an `include` glob and tsgo admits them.
+//! `include`/`exclude` on top of the sub-project's own, so sibling
+//! source files match an `include` glob and tsgo admits them. A
+//! referenced project's `paths` are deliberately NOT projected — they
+//! have no effect on the project referencing it (the compiler applies
+//! only the compiling project's own map).
 //!
 //! The overlay ONLY consumes references that point at a directory (or
 //! its default `tsconfig.json`). References pointing at a specific
@@ -24,7 +27,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::load::{LoadError, load_chain};
+use super::load::{LoadError, load_chain, winning_field, winning_patterns};
 use super::{TsConfigFile, parse_file};
 
 /// One entry per reference in a solution-style tsconfig, with the
@@ -46,33 +49,32 @@ pub struct FlattenedReference {
     /// parent). Overlay uses this as the anchor for relative
     /// `include` / `exclude` patterns.
     pub project_dir: PathBuf,
-    /// Effective `include` patterns from the first config in the
-    /// reference's chain that declares them, as the user wrote them.
-    /// Empty vec when no config in the chain declared `include` — the
-    /// overlay should fall back to a sensible default like
-    /// `**/*.ts` + `**/*.d.ts` rooted at `project_dir`.
+    /// Effective `include` patterns from the innermost config in the
+    /// reference's chain that declares the field, as the user wrote
+    /// them. A declared-but-empty `include: []` wins over a base's
+    /// non-empty one (TS replaces the field wholesale on redeclare).
+    /// Empty vec when either no config declared `include` or the
+    /// innermost declaration was empty — in both cases the overlay
+    /// falls back to a sensible default like `**/*.ts` + `**/*.d.ts`
+    /// rooted at `project_dir`.
     pub include: Vec<String>,
     /// Effective `exclude` patterns. Same resolution rules as include.
     pub exclude: Vec<String>,
-    /// Path aliases. Each value is an absolute path — resolved against
-    /// the declaring config's `baseUrl` (or its dir when baseUrl is
-    /// absent). BFS per-pattern first-wins across the reference's
-    /// extends chain.
-    pub paths: std::collections::BTreeMap<String, Vec<PathBuf>>,
-    /// Effective `compilerOptions.types` from the first config in the
-    /// reference's chain that declares them. Empty when no config in
-    /// the chain sets `types`. Overlay unions these with the user
-    /// workspace's own `types` so sibling projects that depend on
-    /// `@types/<pkg>` (e.g. the `chrome` extension namespace) see
-    /// their ambient declarations when tsgo checks files pulled in
-    /// from them.
+    /// Effective `compilerOptions.types` from the innermost config in
+    /// the reference's chain that declares the field. Empty when no
+    /// config in the chain sets `types` (or the innermost declaration
+    /// was empty). Overlay unions these with the user workspace's own
+    /// `types` so sibling projects that depend on `@types/<pkg>`
+    /// (e.g. the `chrome` extension namespace) see their ambient
+    /// declarations when tsgo checks files pulled in from them.
     pub types: Vec<String>,
-    /// Effective `compilerOptions.lib` — same first-non-empty rule as
-    /// `types`. Each sibling may declare a different lib set (a web
-    /// project using `["DOM"]` next to an extension project using
-    /// `["WebWorker"]`), and the overlay unions them so symbols from
-    /// either lib resolve when sibling files are checked.
-    pub lib: Vec<String>,
+    /// Effective `compilerOptions.typeRoots` from the reference's own
+    /// chain, resolved to absolute paths against the declaring config's
+    /// directory. Empty when no config in the chain sets `typeRoots`.
+    /// The overlay probes this project's `types` entries in THESE
+    /// roots — a sibling keeping ambients in a custom directory must
+    /// not have them filtered against the entry chain's roots.
+    pub type_roots: Vec<PathBuf>,
 }
 
 /// Parse a solution-style tsconfig, walk its `references[]`, and
@@ -144,10 +146,19 @@ pub fn flatten_references_from_chain(entry: &Path) -> Vec<FlattenedReference> {
             queue.push_back((raw.to_string(), dir.to_path_buf()));
         }
     };
-    // Seed with direct refs from every config in the entry's chain.
-    for file in &chain {
-        let dir = file.config_dir().to_path_buf();
-        for reference in &file.references {
+    // Seed with the ENTRY config's own references only.
+    //
+    // `references` is not inherited through `extends` — TypeScript reads
+    // it from the config being loaded and nothing else, which
+    // `load.rs`'s merge already implements (`base.references =
+    // child.references`). Seeding from every config in the chain
+    // contradicted that: a monorepo whose tsconfig.base.json carries a
+    // references[] array pulled whole sibling projects' files, paths and
+    // types into the overlay, and reported their errors, for a graph the
+    // compiler does not traverse at all.
+    if let Some(entry) = chain.first() {
+        let dir = entry.config_dir().to_path_buf();
+        for reference in &entry.references {
             push(&mut queue, &mut enqueued, &reference.path, &dir);
         }
     }
@@ -165,17 +176,14 @@ pub fn flatten_references_from_chain(entry: &Path) -> Vec<FlattenedReference> {
         if !seen.insert(r.config_path.clone()) {
             continue;
         }
-        // Enqueue the flattened ref's OWN transitive references.
-        // Re-loading the chain here is cheap — parse_file is fast
-        // and we want the full extends chain's references[] mixed in
-        // (a ref's tsconfig may extend a base that declares more
-        // references).
-        if let Ok(ref_chain) = load_chain(&r.config_path) {
-            for rf in &ref_chain {
-                let dir = rf.config_dir().to_path_buf();
-                for reference in &rf.references {
-                    push(&mut queue, &mut enqueued, &reference.path, &dir);
-                }
+        // Enqueue the flattened ref's OWN transitive references — again
+        // only the ones it declares itself, for the same reason.
+        if let Ok(ref_chain) = load_chain(&r.config_path)
+            && let Some(entry) = ref_chain.first()
+        {
+            let dir = entry.config_dir().to_path_buf();
+            for reference in &entry.references {
+                push(&mut queue, &mut enqueued, &reference.path, &dir);
             }
         }
         out.push(r);
@@ -211,99 +219,45 @@ fn resolve_reference(raw_path: &str, declaring_dir: &Path) -> Option<FlattenedRe
         return None;
     }
     let chain = load_chain(&config_path).ok()?;
-    let include = first_non_empty(&chain, |f| f.include.as_deref()).unwrap_or_default();
-    let exclude = first_non_empty(&chain, |f| f.exclude.as_deref()).unwrap_or_default();
-    let paths = resolve_paths_bfs(&chain);
-    let types =
-        first_non_empty(&chain, |f| f.compiler_options.types.as_deref()).unwrap_or_default();
-    let lib = first_non_empty_raw_strings(&chain, "lib");
+    // `winning_patterns` applies TS's replace-on-redeclare precedence:
+    // the innermost config that DECLARES the field wins, including a
+    // declared-but-empty `[]` — which replaces a base's non-empty
+    // value rather than falling through to it.
+    let declared = |get: fn(&TsConfigFile) -> Option<&[String]>| {
+        winning_patterns(&chain, get)
+            .map(|(_, values)| values.to_vec())
+            .unwrap_or_default()
+    };
+    let include = declared(|f| f.include.as_deref());
+    let exclude = declared(|f| f.exclude.as_deref());
+    let types = declared(|f| f.compiler_options.types.as_deref());
+    // The sibling's own `typeRoots`, anchored on the config that
+    // declares them — the sibling's `types` entries must be probed in
+    // ITS roots, not the entry chain's, or a sibling that keeps its
+    // ambients in a custom directory gets them all filtered out.
+    let type_roots = winning_field(&chain, |f| f.compiler_options.type_roots.as_deref())
+        .map(|(f, roots)| {
+            let dir = f.config_dir();
+            roots
+                .iter()
+                .map(|r| {
+                    if Path::new(r).is_absolute() {
+                        normalize(Path::new(r))
+                    } else {
+                        normalize(&dir.join(r))
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     Some(FlattenedReference {
         config_path,
         project_dir,
         include,
         exclude,
-        paths,
         types,
-        lib,
+        type_roots,
     })
-}
-
-/// Pull a string-array compilerOption out of the typed struct's `raw`
-/// passthrough — for fields we don't explicitly parse. `lib` is the
-/// common one; tsgo's list of accepted values is large and versioned,
-/// so we just echo the user's exact entries.
-fn first_non_empty_raw_strings(chain: &[TsConfigFile], key: &str) -> Vec<String> {
-    for file in chain {
-        if let Some(serde_json::Value::Array(a)) = file.compiler_options.raw.get(key) {
-            let values: Vec<String> = a
-                .iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect();
-            if !values.is_empty() {
-                return values;
-            }
-        }
-    }
-    Vec::new()
-}
-
-/// Return the first-declaring config's values for a multi-string
-/// field (include, exclude). Matches TS's semantics where the field
-/// is replaced wholesale by the inner config when set.
-fn first_non_empty<F>(chain: &[TsConfigFile], get: F) -> Option<Vec<String>>
-where
-    F: Fn(&TsConfigFile) -> Option<&[String]>,
-{
-    for file in chain {
-        if let Some(values) = get(file)
-            && !values.is_empty()
-        {
-            return Some(values.to_vec());
-        }
-    }
-    None
-}
-
-/// BFS per-pattern first-wins across the chain, resolving each value
-/// to an absolute path against the declaring config's baseUrl (or
-/// dir when baseUrl is absent).
-fn resolve_paths_bfs(chain: &[TsConfigFile]) -> std::collections::BTreeMap<String, Vec<PathBuf>> {
-    use std::collections::BTreeMap;
-    let mut out: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-    for file in chain {
-        let dir = file.config_dir();
-        let base_url = match file.compiler_options.base_url.as_deref() {
-            Some(b) if Path::new(b).is_absolute() => PathBuf::from(b),
-            Some(b) => dir.join(b),
-            None => dir.to_path_buf(),
-        };
-        let Some(file_paths) = file.compiler_options.paths.as_ref() else {
-            continue;
-        };
-        if file_paths.is_empty() {
-            break; // explicit `{}` blanks parent paths (l103)
-        }
-        for (pattern, values) in file_paths {
-            if out.contains_key(pattern) {
-                continue; // inner wins
-            }
-            let resolved: Vec<PathBuf> = values
-                .iter()
-                .map(|v| {
-                    if Path::new(v).is_absolute() {
-                        PathBuf::from(v)
-                    } else {
-                        base_url.join(v)
-                    }
-                })
-                .map(|p| normalize(&p))
-                .collect();
-            if !resolved.is_empty() {
-                out.insert(pattern.clone(), resolved);
-            }
-        }
-    }
-    out
 }
 
 /// Collapse `..` segments without filesystem access. Duplicated from
@@ -355,8 +309,7 @@ mod tests {
     #[test]
     fn dir_reference_uses_default_tsconfig_and_pulls_its_include() {
         // Solution → { path: "./sub" } → sub/tsconfig.json with its
-        // own include/exclude/paths. Flattened form carries those
-        // through.
+        // own include/exclude. Flattened form carries those through.
         let tmp = tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
 
@@ -364,10 +317,6 @@ mod tests {
         write(
             &sub_ts,
             r#"{
-                "compilerOptions": {
-                    "baseUrl": ".",
-                    "paths": { "@app/*": ["./src/*"] }
-                },
                 "include": ["src/**/*.ts", "types/**/*.d.ts"],
                 "exclude": ["src/fixtures/**/*"]
             }"#,
@@ -392,8 +341,6 @@ mod tests {
         );
         assert_eq!(r.include, vec!["src/**/*.ts", "types/**/*.d.ts"]);
         assert_eq!(r.exclude, vec!["src/fixtures/**/*"]);
-        let app_paths = r.paths.get("@app/*").unwrap();
-        assert_eq!(app_paths, &[root.join("sub/src/*")]);
     }
 
     #[test]
@@ -466,33 +413,27 @@ mod tests {
     }
 
     #[test]
-    fn paths_inherit_through_reference_chain() {
-        // The referenced project extends a base that declares paths.
-        // Flattened form picks up inherited paths via BFS first-wins.
+    fn declared_empty_include_wins_over_base() {
+        // TS `extends` semantics are replace-on-redeclare: a child
+        // that writes `"include": []` has DECLARED the field, and its
+        // empty value replaces the base's non-empty one. Falling
+        // through to the base here would admit files the compiler
+        // does not include.
         let tmp = tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
 
         write(
             &root.join("tsconfig.base.json"),
             r#"{
-                "compilerOptions": {
-                    "baseUrl": ".",
-                    "paths": {
-                        "inherited/*": ["./base-target/*"]
-                    }
-                }
+                "include": ["src/**/*.ts"]
             }"#,
         );
         write(
             &root.join("sub/tsconfig.json"),
             r#"{
                 "extends": "../tsconfig.base.json",
-                "compilerOptions": {
-                    "paths": {
-                        "own/*": ["./src/*"]
-                    }
-                },
-                "include": ["src/**/*"]
+                "include": [],
+                "files": ["main.ts"]
             }"#,
         );
         write(
@@ -505,22 +446,16 @@ mod tests {
 
         let refs = flatten_references(&root.join("tsconfig.json")).unwrap();
         assert_eq!(refs.len(), 1);
-        let r = &refs[0];
-        // Own paths from sub itself.
-        assert!(r.paths.contains_key("own/*"));
-        // Inherited paths from base, resolved against base's dir (not
-        // sub's).
-        assert!(r.paths.contains_key("inherited/*"));
-        assert_eq!(
-            r.paths["inherited/*"],
-            vec![root.join("base-target/*")],
-            "inherited path should resolve against base's dir, not sub's",
+        assert!(
+            refs[0].include.is_empty(),
+            "child's explicit `include: []` must replace the base's, got {:?}",
+            refs[0].include,
         );
     }
 
     #[test]
-    fn types_and_lib_flow_through_reference_chain() {
-        // Sibling extension project declaring its own types + lib.
+    fn types_flow_through_reference_chain() {
+        // Sibling extension project declaring its own types.
         // Real-world pattern: a web app references an extension
         // sub-project (which wants @types/chrome); the overlay needs
         // to carry those through.
@@ -531,8 +466,7 @@ mod tests {
             &root.join("extension/tsconfig.json"),
             r#"{
                 "compilerOptions": {
-                    "types": ["chrome", "node"],
-                    "lib": ["ES2024", "DOM"]
+                    "types": ["chrome", "node"]
                 },
                 "include": ["**/*.ts"]
             }"#,
@@ -549,6 +483,39 @@ mod tests {
         assert_eq!(refs.len(), 1);
         let r = &refs[0];
         assert_eq!(r.types, vec!["chrome".to_string(), "node".to_string()]);
-        assert_eq!(r.lib, vec!["ES2024".to_string(), "DOM".to_string()]);
+        // No typeRoots declared anywhere in the sibling's chain.
+        assert!(r.type_roots.is_empty());
+    }
+
+    #[test]
+    fn type_roots_anchor_on_the_declaring_sibling_config() {
+        // A sibling keeping ambients in its own typings/ dir: its
+        // `types` entries must be probed in ITS roots, so the roots are
+        // projected absolute against the sibling config's directory.
+        let tmp = tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+
+        write(
+            &root.join("extension/tsconfig.json"),
+            r#"{
+                "compilerOptions": {
+                    "typeRoots": ["./typings"],
+                    "types": ["globals"]
+                },
+                "include": ["**/*.ts"]
+            }"#,
+        );
+        write(
+            &root.join("tsconfig.json"),
+            r#"{
+                "files": [],
+                "references": [{ "path": "./extension" }]
+            }"#,
+        );
+
+        let refs = flatten_references(&root.join("tsconfig.json")).unwrap();
+        assert_eq!(refs.len(), 1);
+        let r = &refs[0];
+        assert_eq!(r.type_roots, vec![root.join("extension/typings")]);
     }
 }

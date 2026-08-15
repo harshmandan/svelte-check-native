@@ -204,33 +204,15 @@ pub fn build(
         }
     }
 
-    // Sibling-project paths: COMBINE values across siblings (from
-    // explicit TS `references[]`) for the same pattern. tsgo tries
-    // each value in order and uses the first that resolves to an
-    // existing file. Empty for flat-project runs; only populated when
-    // the user's tsconfig has a real `references[]` array.
-    for sibling in &sibling_refs {
-        for (pattern, values) in &sibling.paths {
-            if values.is_empty() {
-                continue;
-            }
-            // Track key ordering for first-time-seen patterns; the
-            // entry API can't side-effect that, so do the lookup
-            // before falling through to or_insert_with.
-            if !paths_accumulated.contains_key(pattern) {
-                paths_keys_order.push(pattern.clone());
-            }
-            let entry = paths_accumulated
-                .entry(pattern.clone())
-                .or_insert_with(|| (Vec::new(), HashSet::new()));
-            for v in values {
-                let s = v.to_string_lossy().into_owned();
-                if entry.1.insert(s.clone()) {
-                    entry.0.push(s);
-                }
-            }
-        }
-    }
+    // Sibling-project `paths` are deliberately NOT merged in. A
+    // referenced project's `paths` have no effect on the project that
+    // references it — TypeScript applies only the compiling project's
+    // own map — so unioning them let imports resolve that the compiler
+    // reports TS2307 on. Sibling `include`/`exclude` widening below is a
+    // different matter: it exists so a transitive import into a
+    // referenced project's SOURCE doesn't trip "File not listed within
+    // project", and it does not change how specifiers resolve.
+
     for pattern in paths_keys_order {
         let (values, _) = paths_accumulated.remove(&pattern).unwrap_or_default();
         // Each pattern's value list runs through two passes: the
@@ -445,7 +427,12 @@ pub fn build(
         for sibling in &sibling_refs {
             let sibling_dir = sibling.project_dir.as_path();
             for entry in &sibling.types {
-                if !is_resolvable_types_entry(entry, sibling_dir, &type_roots) {
+                // Probed in the SIBLING's own typeRoots: its `types`
+                // entries resolve in its compilation, not the entry
+                // chain's — with none declared, the empty list falls
+                // back to the default node_modules/@types walk-up from
+                // the sibling's directory.
+                if !is_resolvable_types_entry(entry, sibling_dir, &sibling.type_roots) {
                     continue;
                 }
                 let resolved = overlay_types_entry(entry, sibling_dir);
@@ -630,6 +617,24 @@ pub fn build(
             files.push(m);
         }
     }
+
+    // The entry config's `references` are deliberately NOT emitted
+    // into the overlay, even though upstream's overlay carries them.
+    // With them, tsgo enforces the composite contract on every import
+    // into a referenced project — TS6305 "output file has not been
+    // built" per import when the reference's outputs don't exist,
+    // plus knock-on resolution errors — 75 of them on one real
+    // monorepo bench. Neither upstream engine's OBSERVABLE output
+    // contains any of that: the default engine redirects references
+    // to their sources (language-service behaviour, no output
+    // enforcement), and the --tsgo overlay kills its own run with
+    // TS6379 (`incremental: false` against an inherited `composite`)
+    // before tsgo reports anything. Omitting the graph makes tsgo
+    // treat sibling files admitted by the include-widening below as
+    // ordinary sources — the same source-redirect semantics the
+    // default engine applies, verified against tsgo on the
+    // with/without shapes (composite entry included; the widened
+    // include is what keeps composite's file-list rule satisfied).
 
     let mut overlay = serde_json::Map::new();
     overlay.insert("extends".into(), Value::String(extends_rel));
@@ -1513,9 +1518,16 @@ mod tests {
             "expected sibling-services exclude {expected_services_exclude:?}, got {excludes:?}",
         );
 
-        // `paths`: console's `@` survives + services' `~/*` was
-        // merged in (inner-wins per pattern — both declare disjoint
-        // keys, both should appear).
+        // `paths`: console's own `@` survives, and services' `~/*` is
+        // NOT merged in. A referenced project's `paths` have no effect
+        // on the project being compiled — TypeScript applies only the
+        // compiling project's own map — so merging them made specifiers
+        // resolve that the compiler reports TS2307 on.
+        //
+        // The sibling include/exclude widening asserted above is a
+        // different mechanism and stays: it keeps a transitive import
+        // into a sibling's SOURCE from tripping "File not listed within
+        // project", without changing how any specifier resolves.
         let paths = overlay["compilerOptions"]["paths"].as_object().unwrap();
         assert!(
             paths.contains_key("@"),
@@ -1523,8 +1535,8 @@ mod tests {
             paths.keys().collect::<Vec<_>>()
         );
         assert!(
-            paths.contains_key("~/*"),
-            "services' ~/* missing: {:?}",
+            !paths.contains_key("~/*"),
+            "services' ~/* must not be merged into console's paths: {:?}",
             paths.keys().collect::<Vec<_>>()
         );
     }

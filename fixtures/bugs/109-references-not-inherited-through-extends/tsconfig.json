@@ -1,0 +1,4 @@
+{
+    "extends": "./cfg/base.json",
+    "include": ["app/src/**/*"]
+}

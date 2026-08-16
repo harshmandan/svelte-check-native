@@ -6,6 +6,78 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.5.0]
+
+A config-resolution parity release: the tsconfig chain — `extends`
+through package `exports`, `types`/`typeRoots`, `files`,
+`include`/`exclude`, `paths` precedence, `${configDir}`, project
+references — now behaves the way the compiler's own config lookup
+does, verified case-by-case against tsgo and the upstream source.
+Several classes of both invented and swallowed diagnostics disappear.
+
+### Fixed
+
+- **`extends` through package `exports` matches the compiler.** A
+  condition or array entry whose target file is missing or invalid
+  (escaping the package, `node_modules` segments, not `./`-anchored)
+  now falls through to the next candidate instead of killing the whole
+  base config — previously the project silently lost every option the
+  base declared while tsgo happily used the fallback branch. Directory
+  keys (`"./cfg/": "./configs/"`), versioned `types@>=5.2`-style
+  condition keys, and exclusive-root semantics (a package with
+  `exports` resolves only through it) all now behave as tsgo does.
+- **`types` entries resolve where TypeScript looks.** Relative entries
+  are absolutised and anchored on the entry config; declared
+  `typeRoots` are probed before an entry is dropped; scoped entries
+  are looked up under `node_modules/@types` roots by their mangled
+  directory name (`@scope/pkg` → `scope__pkg`). Each of these
+  previously classified a resolvable entry as dead — and dropping the
+  sole entry also switched off automatic `@types` inclusion, turning
+  every ambient reference into a spurious TS2304.
+- **The user's `files` array reaches the program.** Ambient `.d.ts`
+  entries loaded via `files` no longer vanish behind the overlay's own
+  file set; `.svelte` entries swap to their generated sidecar the way
+  upstream does. A files-listed component outside the workspace is
+  reported on stderr instead of silently unchecked.
+- **`include`/`exclude` scoping, `extends` precedence, and
+  `${configDir}` are honoured.** `.svelte` files outside the tsconfig's
+  scope are no longer type-checked into the error count (they still
+  get compiler lints, matching upstream); scalar options and `paths`
+  follow extends precedence rather than load order; `${configDir}` is
+  substituted against the entry config rather than leaking into the
+  overlay's cache directory.
+- **Project references behave the way svelte-check observably does** —
+  referenced projects' files are checked as ordinary sources, and a
+  solution-root invocation checks each referenced app in its own
+  config context instead of compiling everything under the first
+  reference's options.
+- **SvelteKit generated types survive deeper route shapes.** Relative
+  import chains in the `.svelte-kit/types` mirror are re-anchored, so
+  param-matcher routes and `parent()` data chains type correctly.
+- **Diagnostics are neither invented nor swallowed.** The missing
+  `.svelte`-import check no longer fires when a declaration sidecar
+  (`Comp.d.svelte.ts`) satisfies the import or when the project
+  declares its own `declare module '*.svelte'` wildcard — wherever the
+  tsconfig pulls it in (`include`, `files`, or `typeRoots`). In the
+  other direction, every diagnostic the compiler attributes to the
+  overlay tsconfig is surfaced (config-validation errors were
+  filtered as noise), the synthesised `$app/*` ambient fallback is
+  gone (upstream reports TS2307 there, so we do too), and a run whose
+  diagnostics were all filtered fails loudly instead of reporting
+  clean.
+- **Discovery counts what upstream counts.** Symlinked files are
+  included in the `<N> FILES` denominator, matching upstream's
+  `findFiles`; every discovered component is compiler-linted, not just
+  tsconfig-scoped ones; and the type checker runs for every
+  `--diagnostic-sources` selection, as upstream's does.
+
+### Internal
+
+- The warm test suite dropped from 71s to 27s (doctest pruning plus
+  sharded fixture runners), and cargo/tsgo/svelte-check invocations
+  now serialise through `scripts/ct` so concurrent runs cannot starve
+  each other.
+
 ## [1.4.0]
 
 SvelteKit 3 RC compatibility, plus two parity corrections and a

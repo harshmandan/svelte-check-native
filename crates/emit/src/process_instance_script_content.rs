@@ -48,6 +48,14 @@ pub struct SplitScript {
     pub body: String,
     pub exported_locals: Vec<SmolStr>,
     pub hoisted_byte_offsets: Vec<u32>,
+    /// Byte span of each hoisted statement INSIDE `hoisted` (trailing
+    /// newline included), parallel to `hoisted_byte_offsets`. The
+    /// emit-side line-map builder walks these spans verbatim instead of
+    /// re-deriving statement boundaries from the concatenated text —
+    /// boundary heuristics broke on indented statements, collapsing the
+    /// whole region into one entry anchored at the first import, which
+    /// shifted every diagnostic after a blank source line by one.
+    pub hoisted_stmt_spans: Vec<(usize, usize)>,
     /// Byte offset inside `hoisted` where the real hoisted statements
     /// start. Lines before this are synthetic `declare const ...` stubs
     /// with no source-line mapping — emit's line-map builder must skip
@@ -223,6 +231,7 @@ pub fn split_imports(
             body: content.to_string(),
             exported_locals: Vec::new(),
             hoisted_byte_offsets: Vec::new(),
+            hoisted_stmt_spans: Vec::new(),
             stub_prefix_len: 0,
             export_type_infos: Vec::new(),
             hoisted_type_names: HashSet::new(),
@@ -693,6 +702,7 @@ pub fn split_imports(
             body: content.to_string(),
             exported_locals,
             hoisted_byte_offsets: Vec::new(),
+            hoisted_stmt_spans: Vec::new(),
             stub_prefix_len: 0,
             export_type_infos,
             hoisted_type_names: HashSet::new(),
@@ -706,6 +716,7 @@ pub fn split_imports(
     // diagnostics inside should map back to the right source line.
     let mut hoisted = String::new();
     let mut hoisted_byte_offsets: Vec<u32> = Vec::with_capacity(hoist_spans.len());
+    let mut hoisted_stmt_spans: Vec<(usize, usize)> = Vec::with_capacity(hoist_spans.len());
 
     // `declare const` stubs for body-level names referenced from inside
     // hoisted type aliases / interfaces. The stubs go FIRST (ahead of
@@ -788,10 +799,12 @@ pub fn split_imports(
             }
         }
         hoisted_byte_offsets.push(effective_start as u32);
+        let stmt_hoisted_start = hoisted.len();
         hoisted.push_str(&content[effective_start..end]);
         if !content[effective_start..end].ends_with('\n') {
             hoisted.push('\n');
         }
+        hoisted_stmt_spans.push((stmt_hoisted_start, hoisted.len()));
     }
 
     // Body with hoisted + strip-keyword + dropped regions all blanked.
@@ -830,6 +843,7 @@ pub fn split_imports(
         body,
         exported_locals,
         hoisted_byte_offsets,
+        hoisted_stmt_spans,
         stub_prefix_len,
         export_type_infos,
         hoisted_type_names,

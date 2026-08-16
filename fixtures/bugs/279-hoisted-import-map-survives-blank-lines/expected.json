@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "src/input.svelte", "line": 3, "column": 30, "code": 2307 }
+    ],
+    "_note": "The TS2307 must anchor on the import that actually fails — line 3, the `not-a-real-pkg` specifier — not one line above it. Hoisted statements are emitted contiguously (blank source lines between them are not carried), and the line map's statement-boundary heuristic expected the next statement to start with an alphabetic character at column 0; indented statements never matched, so the whole hoist region collapsed into one map entry anchored at the first import, and every diagnostic after a blank source line landed one line high."
+}

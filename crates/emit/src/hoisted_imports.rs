@@ -54,43 +54,18 @@ pub(crate) fn emit_hoisted_imports(
         // in JS mode (no stubs emitted).
         let mut overlay_cursor =
             current_line(buf.as_str()) + if is_ts { stub_line_count_ts } else { 0 };
-        let bytes = s.hoisted.as_bytes();
-        let mut byte = s.stub_prefix_len.min(bytes.len());
-        for &source_offset in &s.hoisted_byte_offsets {
-            // Each hoisted statement runs until either the next `\n`
-            // followed by a non-blank line, or the next hoisted
-            // offset's projection in the concatenated string. Simplest:
-            // count lines until we hit the next statement (we know
-            // there's an extra `\n` between statements).
-            let stmt_start_byte = byte;
-            while byte < bytes.len() && bytes[byte] != b'\n' {
-                byte += 1;
-            }
-            // Multi-line imports: keep walking while indented
-            // continuations or close-brace tokens follow.
-            while byte < bytes.len() {
-                let next = byte + 1;
-                if next >= bytes.len() {
-                    break;
-                }
-                let after_nl = bytes[next];
-                if after_nl == b'\n' {
-                    // Blank line — definitely end of statement.
-                    byte += 1;
-                    break;
-                }
-                // Heuristic: if the line starts with an alpha character
-                // at column 0, it's a new statement.
-                if after_nl.is_ascii_alphabetic() {
-                    byte += 1;
-                    break;
-                }
-                byte += 1;
-                while byte < bytes.len() && bytes[byte] != b'\n' {
-                    byte += 1;
-                }
-            }
-            let stmt_text = &s.hoisted[stmt_start_byte..byte];
+        // Each statement's extent inside `hoisted` was recorded when it
+        // was concatenated, so the walk is exact. Re-deriving the
+        // boundaries from the text used to require a next-statement
+        // heuristic ("alpha at column 0"), which never matched hoisted
+        // statements that keep their source indentation — the whole
+        // region collapsed into one entry anchored at the first
+        // import, and a blank source line between imports shifted
+        // every diagnostic after it by one.
+        for (&source_offset, &(stmt_start, stmt_end)) in
+            s.hoisted_byte_offsets.iter().zip(&s.hoisted_stmt_spans)
+        {
+            let stmt_text = &s.hoisted[stmt_start..stmt_end];
             let stmt_line_count = count_lines(stmt_text).max(1);
             let source_line =
                 source_line_at(doc.source, instance.content_range.start + source_offset);
@@ -100,10 +75,6 @@ pub(crate) fn emit_hoisted_imports(
                 source_start_line: source_line,
             });
             overlay_cursor += stmt_line_count;
-            // Skip the trailing newline we wrote.
-            if byte < bytes.len() && bytes[byte] == b'\n' {
-                byte += 1;
-            }
         }
     }
     if is_ts {

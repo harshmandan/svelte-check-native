@@ -109,7 +109,11 @@ The release profile is the worst offender: `lto = "thin"` with
 **Cargo runs through `scripts/ct`.** A PreToolUse hook rewrites plain
 `cargo ...` into it automatically, so this holds without anyone
 remembering — but invoke it directly when writing scripts or CI, which
-the hook does not cover:
+the hook does not cover. The hook touches only single-line commands:
+a multiline input (a heredoc, a `git commit -F -` body) is left
+entirely alone, because a line-by-line rewrite once corrupted heredoc
+text — so in multiline scripts write `ct` yourself; ct's pre-spawn
+wait still backstops an unwrapped run from the other side:
 
 ```sh
 scripts/ct test --workspace
@@ -139,10 +143,13 @@ elsewhere is only waited on, for as long as its shell lives.
 **Your own terminal.** The hook only sees commands an agent runs through
 its Bash tool, so a `cargo` you type yourself bypasses the lock. `ct`
 compensates from its side: before spawning, it looks for any live
-heavy job — cargo, tsgo, a svelte-check binary — whose working
+heavy job — cargo, tsgo, a svelte-check run (the native binary by
+name, upstream's node-driven default engine by argv) — whose working
 directory is inside this repo and waits for it (refuses with exit 75
 without `CT_WAIT`) instead of piling on. Nothing to install, nothing
 on PATH. A hand-started job is only ever waited on, never killed.
+Orphans that ignore TERM are escalated to KILL after three passes, so
+the sweep can never stall the run behind a process it just condemned.
 
 **Heavy non-cargo jobs go through the same lock.** The lock guards
 CORES, not cargo specifically: a bench sweep, an upstream `svelte-check`

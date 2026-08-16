@@ -136,6 +136,61 @@ reap_stale() {
     rm -rf "$claim"
 }
 
+# Pids the scanners below must never act on: ourselves, our ancestor
+# shells (whose argv repeats the very command line we are running, so
+# an argv scan would otherwise see the launcher as the job), and any
+# other ct wrapper (a queued ct names its job in its argv too;
+# ordering between ct instances is the lock's business, and treating
+# a politely-waiting ct as a foreign job would deadlock both).
+self_chain="$$"
+_anc="$$"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    _anc="$(ps -o ppid= -p "$_anc" 2>/dev/null | tr -d ' ')"
+    if [ -z "$_anc" ] || [ "$_anc" = "0" ] || [ "$_anc" = "1" ]; then
+        break
+    fi
+    self_chain="${self_chain} ${_anc}"
+done
+
+skip_pid() {
+    case " ${self_chain} " in *" $1 "*) return 0 ;; esac
+    case "$(ps -o command= -p "$1" 2>/dev/null)" in *scripts/ct*) return 0 ;; esac
+    return 1
+}
+
+# Upstream's default-engine svelte-check runs as a plain `node`
+# process, invisible to the name scans (and matching all of node would
+# stall forever on editor language servers, which park their cwd in
+# the repo). Match the argv instead: a process executing a
+# `svelte-check` script. The delimiters keep this repo's own
+# svelte-check-native paths from matching.
+node_svelte_check() {
+    pgrep -f '(^|[/ ])svelte-check(\.[cm]?js)?( |$)' 2>/dev/null
+}
+
+# Every heavy process working inside this repo, minus skip_pid's
+# exclusions. $1 picks the name set: "reap" adds rustc/rustdoc (a
+# dead cargo's children must die with it); "wait" keys on the parent
+# processes only.
+heavy_in_repo() {
+    local p cwd
+    for p in $(pgrep -x cargo 2>/dev/null; pgrep -x tsgo 2>/dev/null;                pgrep -x svelte-check-native 2>/dev/null; pgrep -x svelte-check 2>/dev/null;                node_svelte_check;                if [ "$1" = "reap" ]; then pgrep -x rustc 2>/dev/null; pgrep -x rustdoc 2>/dev/null; fi); do
+        skip_pid "$p" && continue
+        cwd="$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+        case "$cwd" in
+            "$repo_root" | "$repo_root"/*) echo "$p" ;;
+        esac
+    done
+}
+
+orphaned_heavy() {
+    local p ppid
+    for p in $(heavy_in_repo reap); do
+        ppid="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+        [ "$ppid" = "1" ] && echo "$p"
+    done
+}
+
 # Kill true orphans: heavy processes that have reparented to launchd
 # (ppid 1 — their session is dead, nothing will ever reap them) and
 # whose working directory is inside this repo. A live agent's build
@@ -143,41 +198,38 @@ reap_stale() {
 # concurrent work. Killing a parent surfaces its children as new
 # ppid-1 orphans, hence the passes.
 reap_orphans() {
-    local pass p ppid cwd killed
+    local pass p found
     for pass in 1 2 3; do
-        killed=0
-        for p in $(pgrep -x cargo 2>/dev/null; pgrep -x rustc 2>/dev/null;                    pgrep -x rustdoc 2>/dev/null; pgrep -x tsgo 2>/dev/null;                    pgrep -x svelte-check-native 2>/dev/null; pgrep -x svelte-check 2>/dev/null); do
-            ppid="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
-            [ "$ppid" = "1" ] || continue
-            cwd="$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
-            case "$cwd" in
-                "$repo_root" | "$repo_root"/*) ;;
-                *) continue ;;
-            esac
+        found=0
+        for p in $(orphaned_heavy); do
             echo "ct: reaping orphaned process ${p} ($(ps -o comm= -p "$p" 2>/dev/null)) — its session is dead" >&2
             kill -TERM "$p" 2>/dev/null
-            killed=1
+            found=1
         done
-        [ "$killed" = "0" ] && break
+        [ "$found" = "0" ] && return
         sleep 0.3
     done
+    # Still matching after three TERM passes: the orphan ignores TERM
+    # or is slow dying, and leaving it would make the pre-spawn scan
+    # below stall behind a process this very sweep condemned.
+    for p in $(orphaned_heavy); do
+        echo "ct: orphan ${p} survived TERM — escalating to KILL" >&2
+        kill -KILL "$p" 2>/dev/null
+    done
+    sleep 0.3
 }
 
 # Heavy processes that did NOT come through ct: cargo, tsgo, or a
-# svelte-check binary whose working directory is inside this repo,
-# minus our own child group (the check runs before we spawn, so our
-# own children cannot exist yet). These hold no lock, so they are
-# waited on, never killed. Plain `node` is deliberately NOT matched:
-# editor language servers park their cwd in the repo and would make
-# this wait forever; a bench sweep's heavy children are the names
-# above anyway.
+# svelte-check run (native binary or upstream's node-driven default
+# engine) whose working directory is inside this repo, minus our own
+# child group (the check runs before we spawn, so our own children
+# cannot exist yet). These hold no lock, so they are waited on, never
+# killed.
 foreign_heavy() {
-    local p cwd
-    for p in $(pgrep -x cargo 2>/dev/null; pgrep -x tsgo 2>/dev/null;                pgrep -x svelte-check-native 2>/dev/null; pgrep -x svelte-check 2>/dev/null); do
-        cwd="$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
-        case "$cwd" in
-            "$repo_root" | "$repo_root"/*) echo "$p"; return 0 ;;
-        esac
+    local p
+    for p in $(heavy_in_repo wait); do
+        echo "$p"
+        return 0
     done
     return 1
 }

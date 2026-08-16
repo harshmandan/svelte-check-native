@@ -664,7 +664,7 @@ impl CheckSession {
             include_suggestions,
             extended_diagnostics,
         );
-        let run = match replay_ctx.as_ref().and_then(|ctx| ctx.try_load()) {
+        let mut run = match replay_ctx.as_ref().and_then(|ctx| ctx.try_load()) {
             Some(diagnostics) => runner::RunOutput {
                 diagnostics,
                 extended_diagnostics: None,
@@ -735,6 +735,21 @@ impl CheckSession {
         // comparing, exactly as `map_diagnostic` does: tsgo's relative
         // paths can carry `..` segments, and an unnormalised join never
         // prefix-matches `layout.root`.
+        // Bare-form diagnostics (config-level, no file/position — e.g.
+        // TS2688 for an unresolvable `types` entry) are dropped before
+        // anything counts them, because upstream observably drops them:
+        // its mapper has a tsconfig-attribution fallback in the code,
+        // but the diagnostic never reaches its output — verified on a
+        // real workspace where raw tsgo fires the bare TS2688 against
+        // upstream's own generated tsconfig and `svelte-check --tsgo`
+        // still reports 0 errors while the check completes in full.
+        // POSITION-ANCHORED config errors are different: upstream
+        // reports those against its overlay path, and so do we (the
+        // fatal-config-error fixture locks that). Dropping before the
+        // user-diagnostic count keeps the everything-was-filtered guard
+        // meaningful: a run whose only diagnostic was a bare config
+        // note DID check the program, and upstream reports it clean.
+        run.diagnostics.retain(|d| !d.file.as_os_str().is_empty());
         let raw_user_diagnostic_count = run
             .diagnostics
             .iter()
@@ -743,17 +758,6 @@ impl CheckSession {
         let mut diagnostics: Vec<CheckDiagnostic> = run
             .diagnostics
             .into_iter()
-            .map(|mut d| {
-                // Bare-form diagnostics (config-level, no position) come out
-                // of the parser with an empty `file`. Substitute the user's
-                // tsconfig path so downstream attribution treats them as
-                // belonging to that config — mirrors upstream svelte-check's
-                // `mapCliDiagnosticsToLsp(.., opts.tsconfig)` fallback.
-                if d.file.as_os_str().is_empty() {
-                    d.file = user_tsconfig.to_path_buf();
-                }
-                d
-            })
             .filter_map(|d| {
                 map_diagnostic(d, layout, &map_data, &excluded_kit_sources, svelte5_plus)
             })

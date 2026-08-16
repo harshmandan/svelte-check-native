@@ -420,6 +420,16 @@ pub fn build(
                     continue;
                 }
                 let resolved = overlay_types_entry(entry, sibling_dir);
+                // ...and again from the ENTRY anchor, because the union
+                // is emitted into one merged overlay that tsgo resolves
+                // from the entry program's context. A bare name
+                // satisfied only by the sibling's own node_modules
+                // chain (pnpm keeps transitive packages unhoisted) has
+                // no spelling that resolves here — carrying it verbatim
+                // just makes tsgo fail the entry, so it is dropped.
+                if !is_resolvable_types_entry(&resolved, entry_dir, &type_roots) {
+                    continue;
+                }
                 if merged_types.contains(&resolved) {
                     continue;
                 }

@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "The `types` entry resolves for our probe through pnpm's hidden fallback (node_modules/.pnpm/node_modules/@types), so it survives into the overlay — but tsgo cannot reach that directory from the overlay's location and emits a bare, file-less TS2688. Upstream `svelte-check --tsgo` observably drops file-less diagnostics (verified: raw tsgo fires the same TS2688 against upstream's own generated tsconfig while its output reports 0 errors and the check completes), so we drop them too. Position-anchored config errors are unaffected — fixture 257 locks those staying surfaced."
+}

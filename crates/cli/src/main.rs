@@ -1509,7 +1509,8 @@ fn run_typecheck(
     // findFiles counts from the workspace root with no project scoping,
     // so per-project discovery must not add to it (kit-file
     // classification differs per anchor and would inflate the count).
-    let (root_svelte, root_kit, _runes, _user_ts) = discover_relevant_files(workspace);
+    let (root_svelte, root_kit, _runes, _user_ts) =
+        discovery::discover_relevant_files_with_settings(workspace, kit_files_settings);
     let mut runs: Vec<ProjectRun> = Vec::new();
     for (project_dir, project_config) in projects {
         if !root_svelte.iter().any(|f| f.starts_with(project_dir)) {

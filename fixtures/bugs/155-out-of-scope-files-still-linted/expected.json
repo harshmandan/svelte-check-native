@@ -1,0 +1,12 @@
+{
+    "clean": true,
+    "warnings": [
+        {
+            "file": "legacy/Old.svelte",
+            "line": 4,
+            "column": 0,
+            "code": "a11y_missing_attribute"
+        }
+    ],
+    "_note": "legacy/Old.svelte sits outside the tsconfig's include, so it is excluded from the TypeScript program - but svelte compiler warnings are NOT tsconfig-scoped: upstream derives them straight from the compiler for every discovered file, with no include/exclude filtering (the same no-scoping rule its FILES denominator follows). The native lint used to run on in-scope sources only, so a narrow include silently swallowed compiler warnings - observed on a monorepo whose chosen config included only e2e globs, where two runes warnings upstream reports simply vanished."
+}

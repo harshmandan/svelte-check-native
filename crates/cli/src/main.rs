@@ -1846,22 +1846,28 @@ fn check_project(
                     svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
                 // Fused native pass: derive fatal/lint diagnostics from
                 // THIS parse instead of re-parsing the corpus after
-                // tsgo. Only in-scope sources are linted — the aux tail
-                // exists solely for tsgo's import-following.
-                let native = native_compat
-                    .filter(|_| idx < svelte_sources_in_scope_end)
-                    .map(|compat| {
-                        native_diagnostics_for_parsed(
-                            file,
-                            source,
-                            &doc,
-                            &fragment,
-                            &section_errors,
-                            &template_errors,
-                            config_resolver_ref,
-                            compat,
-                        )
-                    });
+                // tsgo. EVERY discovered source is linted, including the
+                // out-of-tsconfig-scope aux tail: upstream's svelte
+                // diagnostics come straight from the compiler with no
+                // tsconfig include/exclude filtering (the same
+                // no-scoping rule its findFiles denominator follows),
+                // so a narrow include must not silence compiler
+                // warnings — observed as runes warnings vanishing on a
+                // monorepo whose chosen config included only e2e
+                // globs. Bridge mode already lints the full set;
+                // native now agrees.
+                let native = native_compat.map(|compat| {
+                    native_diagnostics_for_parsed(
+                        file,
+                        source,
+                        &doc,
+                        &fragment,
+                        &section_errors,
+                        &template_errors,
+                        config_resolver_ref,
+                        compat,
+                    )
+                });
                 // TSGO-ENHANCEMENT: missing `.svelte` imports (TS2307) —
                 // in-scope files only; the aux tail is present solely for
                 // tsgo's import-following and isn't reported on.

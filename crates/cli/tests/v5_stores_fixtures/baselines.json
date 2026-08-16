@@ -1,8 +1,8 @@
 {
-    "_doc": "Same baseline format as v5_fixtures/baselines.json — exact-shape `expected_errors` list per entry. These are hand-converted Svelte-5 ports of upstream svelte2tsx store fixtures that test verbatim-emit behavior: preserving user code character-for-character even when the user's code references undefined names, unresolved modules, or other things TS would flag. Regenerate with `CAPTURE_BASELINES=1` on the runner when an emit change deliberately shifts the error shape; always `git diff` before committing.",
+    "_doc": "Same baseline format as v5_fixtures/baselines.json \u2014 exact-shape `expected_errors` list per entry. These are hand-converted Svelte-5 ports of upstream svelte2tsx store fixtures that test verbatim-emit behavior: preserving user code character-for-character even when the user's code references undefined names, unresolved modules, or other things TS would flag. Regenerate with `CAPTURE_BASELINES=1` on the runner when an emit change deliberately shifts the error shape; always `git diff` before committing.",
     "verbatim_emit_fixtures": {
         "$store-as-directive": {
-            "reason": "Tests store-name-as-directive emit shape; user code has TS oddities (unused comma operator side) that svelte2tsx preserves verbatim. Round 2 #4 + #5 (2026-04-26) added type-checking for use: / animate: / transition: / in: / out: directive calls — the user's stores in this fixture are declared `null`, so each directive call now correctly fires TS2721 'Cannot invoke an object which is possibly null'. These are real type errors tsgo identifies; we accept them as the new baseline.",
+            "reason": "Tests store-name-as-directive emit shape; user code has TS oddities (unused comma operator side) that svelte2tsx preserves verbatim. Round 2 #4 + #5 (2026-04-26) added type-checking for use: / animate: / transition: / in: / out: directive calls \u2014 the user's stores in this fixture are declared `null`, so each directive call now correctly fires TS2721 'Cannot invoke an object which is possibly null'. These are real type errors tsgo identifies; we accept them as the new baseline.",
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
@@ -117,7 +117,7 @@
             ]
         },
         "binding-group-store": {
-            "reason": "No <script>, so `compile_options` is undeclared. l136 added the bind:group widening `$compile_options.generate = __svn_any(null)` (upstream Binding.ts:99-109); the reference to the undeclared store correctly fires TS2304 — same as upstream's transform under tsgo. Verbatim-emit fixture preserves the undeclared name.",
+            "reason": "No <script>, so `compile_options` is undeclared. l136 added the bind:group widening `$compile_options.generate = __svn_any(null)` (upstream Binding.ts:99-109); the reference to the undeclared store correctly fires TS2304 \u2014 same as upstream's transform under tsgo. Verbatim-emit fixture preserves the undeclared name.",
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
@@ -225,13 +225,13 @@
                 {
                     "file": "src/input.svelte",
                     "line": 0,
-                    "column": 0,
+                    "column": 8,
                     "code": 2304
                 },
                 {
                     "file": "src/input.svelte",
                     "line": 0,
-                    "column": 3,
+                    "column": 11,
                     "code": 2304
                 },
                 {
@@ -255,19 +255,25 @@
             ]
         },
         "typeof-$store": {
-            "reason": "`typeof $foo` with no `foo` store declared in the fixture — verbatim preservation of the undeclared reference.",
+            "reason": "`typeof $foo` with no `foo` store declared in the fixture \u2014 verbatim preservation of the undeclared reference.",
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
-                    "line": 2,
+                    "line": 3,
                     "column": 19,
                     "code": 2304
                 }
             ]
         },
         "uses-$store-in-event-binding": {
-            "reason": "`<svelte:options runes />` + `on:event` directives referencing Component-typed expressions with no Svelte type imports. Mix of user-code-without-imports and Svelte-4 on-directive handling our emit doesn't yet cover (see phase G design doc for the full plan).",
+            "reason": "`<svelte:options runes />` + `on:event` directives referencing Component-typed expressions with no Svelte type imports. Mix of user-code-without-imports and Svelte-4 on-directive handling our emit doesn't yet cover (see phase G design doc for the full plan). The undeclared `Component` tag itself also fires TS2304 at 0:1 now that hoist-region positions map truthfully.",
             "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 1,
+                    "code": 2304
+                },
                 {
                     "file": "src/input.svelte",
                     "line": 0,

@@ -36,6 +36,28 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   reference is now merged into the overlay only when it resolves from
   the overlay's own context — a name satisfied only by the sibling's
   unhoisted pnpm store had no spelling that could resolve there.
+- **Diagnostics in hoisted-import regions anchor on the right line.**
+  The per-statement line map re-derived statement boundaries with a
+  heuristic that never matched indented statements, so the whole
+  hoisted region collapsed into one map entry and every diagnostic
+  after a blank source line between imports landed one line high —
+  verified byte-identical against upstream after the fix on a
+  workspace whose five missing-module errors all pointed at the
+  wrong import.
+- **Narrowing flows into `{#await}` branches.** The `{:then}` branch
+  was wrapped in an async arrow purely to give `await` a legal
+  context; TypeScript drops narrowing for reassigned variables at
+  closure boundaries, so `{#if x}` around `{#await x.p}` fired
+  invented possibly-undefined errors inside the branch. The await now
+  emits inline, and snippet bodies carry upstream's inner async
+  wrapper so an await inside a snippet keeps its context.
+- **`$props()` types that reference body values via `typeof` stay
+  body-scoped.** The annotation type was force-hoisted to module
+  scope with a lossy callable stub standing in for each referenced
+  value, so rendering a snippet with the real, non-callable value
+  fired an invented type mismatch. Nothing at module scope needs the
+  type by name — the default export projects through the render
+  function's return type.
 
 ## [1.5.0]
 

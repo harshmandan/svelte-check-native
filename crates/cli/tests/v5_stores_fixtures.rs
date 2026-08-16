@@ -68,7 +68,7 @@ fn v5_stores_fixtures_suite() {
     eprintln!("\n{summary_line}");
 
     let (passed, failed, skipped) = parse_summary(summary_line);
-    const MIN_PASSED: usize = 18;
+    const MIN_PASSED: usize = 20;
     const MAX_FAILED: usize = 6;
     assert!(
         passed >= MIN_PASSED,

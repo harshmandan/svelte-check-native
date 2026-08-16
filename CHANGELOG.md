@@ -6,6 +6,14 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.5.1]
+
+A same-day bugfix release: a parity hunt across the bench fleet after
+v1.5.0 turned up seven of our own bugs — five classes of invented
+diagnostics, one class of swallowed ones, and misanchored positions —
+each verified against upstream before and after the fix. No CLI or
+behavioral surface changes beyond the diagnostics themselves.
+
 ### Fixed
 
 - **A project reference no longer hides the tsconfig's `paths` from

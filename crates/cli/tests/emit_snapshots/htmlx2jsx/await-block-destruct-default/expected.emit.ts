@@ -4,24 +4,21 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { const $$_promise = (object);
-        ;(async () => {
             const $$_await = await $$_promise; const { a = 3, b = 4, c } = $$_await;
             void a;
             void b;
             void c;
-        }); }
+        }
         { const $$_promise = (array);
-        ;(async () => {
             const $$_await = await $$_promise; const [a, b, c = 3] = $$_await;
             void a;
             void b;
             void c;
-        }); }
+        }
         { const $$_promise = (objectReject);
-        ;(async () => {
             const $$_await = await $$_promise; const value = $$_await;
             void value;
-        }); }
+        }
         {
             const a = __svn_any();
             const b = __svn_any();
@@ -31,10 +28,9 @@ async function $$render_e40e2c10() {
             void c;
         }
         { const $$_promise = (arrayReject);
-        ;(async () => {
             const $$_await = await $$_promise; const value = $$_await;
             void value;
-        }); }
+        }
         {
             const a = __svn_any();
             const b = __svn_any();

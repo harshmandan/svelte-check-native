@@ -10,17 +10,19 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const row = (b): any => {
+            const row = (b): any => { async () => {
                 { svelteHTML.createElement("p", {});                     (b);
                 }
+                };
                 void b;
                 return null as any;
             };
             void row;
-            const pair = (a = 1 < 2, b): any => {
+            const pair = (a = 1 < 2, b): any => { async () => {
                 { svelteHTML.createElement("p", {});                     (a);
                     (b);
                 }
+                };
                 void a;
                 void b;
                 return null as any;

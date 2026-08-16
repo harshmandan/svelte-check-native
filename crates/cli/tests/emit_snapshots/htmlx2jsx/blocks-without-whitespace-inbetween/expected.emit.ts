@@ -10,10 +10,9 @@ async function $$render_e40e2c10() {
             void y;
         }
         { const $$_promise = (x);
-        ;(async () => {
             const $$_await = await $$_promise; const y = $$_await;
             void y;
-        }); }
+        }
         if ((bla)) {
             void [bla];
         }

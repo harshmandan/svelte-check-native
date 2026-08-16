@@ -11,17 +11,19 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const row = <T>(item: T, format: (v: T) => string): any => {
+            const row = <T>(item: T, format: (v: T) => string): any => { async () => {
                 { svelteHTML.createElement("li", {});                     (format(item));
                 }
+                };
                 void item;
                 void format;
                 return null as any;
             };
             void row;
-            const keyed = <T extends { id: number }>(item: T): any => {
+            const keyed = <T extends { id: number }>(item: T): any => { async () => {
                 { svelteHTML.createElement("li", {});                     (item.id);
                 }
+                };
                 void item;
                 return null as any;
             };

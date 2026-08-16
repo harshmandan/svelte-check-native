@@ -11,8 +11,9 @@ async function $$render_e40e2c10<T>() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const foo = (bar) => {
+            const foo = (bar) => { async () => {
                 (bar);
+                };
                 void bar;
                 return null;
             };

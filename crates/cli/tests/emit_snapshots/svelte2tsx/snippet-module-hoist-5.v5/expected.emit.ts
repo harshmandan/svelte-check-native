@@ -8,7 +8,8 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const foo = () => {
+            const foo = () => { async () => {
+                };
                 return null;
             };
             void foo;

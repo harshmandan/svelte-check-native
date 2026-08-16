@@ -6,24 +6,28 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const snippetBlock = () => {
+            const snippetBlock = () => { async () => {
                 {
-                    const foo = () => {
+                    const foo = () => { async () => {
+                        };
                         return null;
                     };
                     void foo;
-                    const foo2 = () => {
+                    const foo2 = () => { async () => {
+                        };
                         return null;
                     };
                     void foo2;
                     (foo());
                 }
+                };
                 return null;
             };
             void snippetBlock;
             if ((true)) {
                 {
-                    const foo = () => {
+                    const foo = () => { async () => {
+                        };
                         return null;
                     };
                     void foo;
@@ -32,7 +36,8 @@ async function $$render_e40e2c10() {
             }
             for (const item of __svn_each_items(arr)) {
                 {
-                    const foo = () => {
+                    const foo = () => { async () => {
+                        };
                         return null;
                     };
                     void foo;
@@ -42,26 +47,28 @@ async function $$render_e40e2c10() {
             }
             ;(key);
             {
-                const foo = () => {
+                const foo = () => { async () => {
+                    };
                     return null;
                 };
                 void foo;
                 (foo());
             }
             { const $$_promise = (Promise.resolve());
-            ;(async () => {
                 const $$_await = await $$_promise; const bar = $$_await;
                 {
-                    const foo = () => {
+                    const foo = () => { async () => {
+                        };
                         return null;
                     };
                     void foo;
                     (foo());
                 }
                 void bar;
-            }); }
+            }
             { svelteHTML.createElement("div", {});                 {
-                    const foo = () => {
+                    const foo = () => { async () => {
+                        };
                         return null;
                     };
                     void foo;

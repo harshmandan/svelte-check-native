@@ -4,19 +4,17 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { const $$_promise = (promise);
-        ;(async () => {
             const $$_await = await $$_promise; const value = $$_await;
             void value;
-        }); }
+        }
         {
             const err = __svn_any();
             void err;
         }
         { const $$_promise = (promise2);
-        ;(async () => {
             const $$_await = await $$_promise; const { b } = $$_await;
             void b;
-        }); }
+        }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: /** @type {((Awaited<typeof promise>))} */ (/** @type {any} */ (null)) }, 'err': { err: /** @type {(any)} */ (/** @type {any} */ (null)) }, 'second': { a: /** @type {((Awaited<typeof promise2>)["b"])} */ (/** @type {any} */ (null)) } }, bindings: /** @type {string} */ (''), exports: {} };
 }

@@ -85,12 +85,23 @@ pub(crate) fn emit_snippet_const(
     // unused-arrow-param lint doesn't fire on a synthetic empty
     // signature, AND no identifier needs to be `void`'d.
     if params.is_empty() {
+        // The body sits inside an inner `async () =>` wrapper —
+        // upstream's "inner async function for potential #await
+        // blocks" (`SnippetBlock.ts:70`) — so `{#await}` blocks emit
+        // their `await` inline (see `await_pending_catch_block.rs`)
+        // and still have an async context inside the sync snippet
+        // arrow.
         if is_ts {
-            let _ = writeln!(buf, "{decl}const {} = {generics}(): any => {{", s.name);
+            let _ = writeln!(
+                buf,
+                "{decl}const {} = {generics}(): any => {{ async () => {{",
+                s.name
+            );
         } else {
-            let _ = writeln!(buf, "{decl}const {} = () => {{", s.name);
+            let _ = writeln!(buf, "{decl}const {} = () => {{ async () => {{", s.name);
         }
         emit_template_body(buf, source, &s.body, body_depth, insts, action_counter);
+        let _ = writeln!(buf, "{body_i}}};");
         if is_ts {
             let _ = writeln!(buf, "{body_i}return null as any;");
         } else {
@@ -118,12 +129,18 @@ pub(crate) fn emit_snippet_const(
     let params_range = svn_core::Range::new(params_start, params_start + params.len() as u32);
     let _ = write!(buf, "{decl}const {} = {generics}(", s.name);
     buf.append_with_source(params, params_range);
+    // Inner `async () =>` wrapper: upstream's "inner async function
+    // for potential #await blocks" (`SnippetBlock.ts:70`), giving
+    // inline-emitted `await`s an async context inside the sync
+    // snippet arrow. The param `void`s and the return stay in the
+    // OUTER arrow, whose scope the params belong to.
     if is_ts {
-        let _ = writeln!(buf, "): any => {{");
+        let _ = writeln!(buf, "): any => {{ async () => {{");
     } else {
-        let _ = writeln!(buf, ") => {{");
+        let _ = writeln!(buf, ") => {{ async () => {{");
     }
     emit_template_body(buf, source, &s.body, body_depth, insts, action_counter);
+    let _ = writeln!(buf, "{body_i}}};");
     for ident in &idents {
         if *ident == "__svn_each_unused" {
             continue;

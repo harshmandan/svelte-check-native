@@ -61,18 +61,23 @@ pub(crate) fn emit_branch_with_binding(
 /// Emit `{:then v}` branch with upstream's await-binding shape:
 ///
 /// ```text
-///     ;async () => {
-///         const $$_await = await (PROMISE_EXPR);
-///         { const v = $$_await; ...body... }
-///     };
+///     { const $$_promise = (PROMISE_EXPR);
+///     const $$_await = await $$_promise; const v = $$_await;
+///     ...body... }
 /// ```
 ///
 /// so `v`'s type flows from the promise's resolved value (matches
-/// upstream svelte2tsx's `AwaitPendingCatchBlock.ts`). The outer
-/// `async () => {}` is a bare expression-statement — never called,
-/// just provides the async context TS's `await` requires. Necessary
-/// because `{#await}` can nest inside a sync snippet callback
-/// (`children: () => {…}`), where bare `await` fires TS1375.
+/// upstream svelte2tsx's `AwaitPendingCatchBlock.ts`). The `await` is
+/// emitted INLINE — no wrapping closure — so control-flow narrowing
+/// from enclosing template blocks (`{#if changelog}` around
+/// `{#await changelog.page}`) survives into the branch body; a
+/// closure here re-widened reassigned `let`s and fired TS18048 on
+/// accesses upstream accepts. The async context comes from the
+/// surroundings, exactly as upstream arranges it: the render function
+/// is `async`, and snippet bodies open their own inner `async () =>`
+/// wrapper (see `snippet_block.rs`, mirroring upstream
+/// `SnippetBlock.ts`'s "inner async function for potential #await
+/// blocks").
 ///
 /// For `{:then {a, b, c}}` destructure patterns the binding text is
 /// emitted verbatim as the destructure target.
@@ -130,7 +135,6 @@ pub(crate) fn emit_await_then_branch(
     let _ = write!(buf, "{indent}{{ const $$_promise = (");
     buf.append_with_source(promise_text, promise_range);
     buf.push_str(");\n");
-    let _ = writeln!(buf, "{indent};(async () => {{");
     match binding_text {
         Some(bind) => {
             let idents = all_identifiers(bind);
@@ -151,7 +155,7 @@ pub(crate) fn emit_await_then_branch(
             emit_template_body(buf, source, body, depth + 1, insts, action_counter);
         }
     }
-    let _ = writeln!(buf, "{indent}}}); }}");
+    let _ = writeln!(buf, "{indent}}}");
 }
 
 /// Dispatch a full `{#await PROMISE}…{:then v}…{:catch e}…{/await}`

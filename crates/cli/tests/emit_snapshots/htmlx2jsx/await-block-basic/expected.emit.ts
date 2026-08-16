@@ -4,17 +4,15 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { const $$_promise = (somePromise);
-        ;(async () => {
             const $$_await = await $$_promise; const value = $$_await;
             { svelteHTML.createElement("h1", {});             }
             void value;
-        }); }
+        }
         { svelteHTML.createElement("h1", {});         }
         { const $$_promise = (somePromise);
-        ;(async () => {
             const $$_await = await $$_promise; void $$_await;
             { svelteHTML.createElement("h1", {});             }
-        }); }
+        }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

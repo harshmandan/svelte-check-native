@@ -14,37 +14,41 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const foo = (x) => {
+            const foo = (x) => { async () => {
                 { svelteHTML.createElement("div", {});                     (x);
                 }
+                };
                 void x;
                 return null;
             };
             void foo;
-            const bar = () => {
+            const bar = () => { async () => {
                 { svelteHTML.createElement("div", {});                 }
+                };
                 return null;
             };
             void bar;
-            const await_inside = () => {
+            const await_inside = () => { async () => {
                 { const $$_promise = (foo);
-                ;(async () => {
                     const $$_await = await $$_promise; const bar = $$_await;
                     (bar);
                     void bar;
-                }); }
+                }
+                };
                 return null;
             };
             void await_inside;
-            const defaultValue = (x = '') => {
+            const defaultValue = (x = '') => { async () => {
                 { svelteHTML.createElement("div", {});                     (x);
                 }
+                };
                 void x;
                 return null;
             };
             void defaultValue;
-            const jsDoc = (/**@type {number}*/a) => {
+            const jsDoc = (/**@type {number}*/a) => { async () => {
                 (a);
+                };
                 void a;
                 return null;
             };
@@ -84,11 +88,10 @@ async function $$render_e40e2c10() {
                         },
                         await_inside: () => {
                             { const $$_promise = (foo);
-                            ;(async () => {
                                 const $$_await = await $$_promise; const bar = $$_await;
                                 (bar);
                                 void bar;
-                            }); }
+                            }
                             return __svn_snippet_return();
                         },
                     },

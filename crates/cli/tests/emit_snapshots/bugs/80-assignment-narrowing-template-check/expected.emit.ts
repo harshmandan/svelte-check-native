@@ -49,10 +49,9 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { const $$_promise = (project.ready);
-        ;(async () => {
             const $$_await = await $$_promise; void $$_await;
             (children?.({ project }));
-        }); }
+        }
     });
     void project;
     return { props: undefined as any as (Props), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings('project'), exports: undefined as any as ({}) };

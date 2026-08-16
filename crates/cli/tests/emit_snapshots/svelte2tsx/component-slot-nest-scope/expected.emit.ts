@@ -19,11 +19,10 @@ async function $$render_e40e2c10() {
             }
         }
         { const $$_promise = (promise);
-        ;(async () => {
             const $$_await = await $$_promise; const d = $$_await;
             (d);
             void d;
-        }); }
+        }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: /** @type {__SvnEachItem<typeof item>["a"]} */ (/** @type {any} */ (null)) }, 'second': { a: (a) }, 'third': { d: (d), c: (c) } }, bindings: /** @type {string} */ (''), exports: {} };
 }

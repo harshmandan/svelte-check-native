@@ -12,14 +12,16 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const hoistable = (): any => {
+            const hoistable = (): any => { async () => {
                 { svelteHTML.createElement("div", {});                 }
+                };
                 return null as any;
             };
             void hoistable;
-            const not_hoistable = (): any => {
+            const not_hoistable = (): any => { async () => {
                 { svelteHTML.createElement("div", {});                     (foo);
                 }
+                };
                 return null as any;
             };
             void not_hoistable;

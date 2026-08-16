@@ -32,74 +32,85 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const hoistable1 = (): any => {
+            const hoistable1 = (): any => { async () => {
                 { svelteHTML.createElement("div", {});                 }
+                };
                 return null as any;
             };
             void hoistable1;
-            const hoistable2 = (bar): any => {
+            const hoistable2 = (bar): any => { async () => {
                 { svelteHTML.createElement("div", {});                     (bar);
                 }
+                };
                 void bar;
                 return null as any;
             };
             void hoistable2;
-            const hoistable3 = (bar: string): any => {
+            const hoistable3 = (bar: string): any => { async () => {
                 { svelteHTML.createElement("div", {});                     (bar);
                 }
+                };
                 void bar;
                 return null as any;
             };
             void hoistable3;
-            const hoistable4 = (foo): any => {
+            const hoistable4 = (foo): any => { async () => {
                 { svelteHTML.createElement("div", {});                     (foo);
                 }
+                };
                 void foo;
                 return null as any;
             };
             void hoistable4;
-            const hoistable5 = (): any => {
+            const hoistable5 = (): any => { async () => {
                 { svelteHTML.createElement("button", {
                     "onclick": (e => e),
                 });
                 }
+                };
                 return null as any;
             };
             void hoistable5;
-            const hoistable6 = (): any => {
+            const hoistable6 = (): any => { async () => {
                 { svelteHTML.createElement("div", {});                     (module);
                 }
+                };
                 return null as any;
             };
             void hoistable6;
-            const hoistable7 = (): any => {
+            const hoistable7 = (): any => { async () => {
                 { svelteHTML.createElement("div", {});                     (imported);
                 }
+                };
                 return null as any;
             };
             void hoistable7;
-            const hoistable8 = (): any => {
+            const hoistable8 = (): any => { async () => {
                 { svelteHTML.createElement("div", {});                     (global);
                 }
+                };
                 return null as any;
             };
             void hoistable8;
-            const hoistable9 = (props: HTMLAttributes<HTMLDivElement>): any => {
+            const hoistable9 = (props: HTMLAttributes<HTMLDivElement>): any => { async () => {
+                };
                 void props;
                 return null as any;
             };
             void hoistable9;
-            const hoistable10 = (foo): any => {
+            const hoistable10 = (foo): any => { async () => {
                 const bar = foo;
                 void bar;
                 (bar);
+                };
                 void foo;
                 return null as any;
             };
             void hoistable10;
-            const not_hoistable = (): any => {
+            const not_hoistable = (): any => { async () => {
                 { svelteHTML.createElement("div", {});                     (foo);
                 }
+                };
                 return null as any;
             };
             void not_hoistable;

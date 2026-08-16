@@ -9,14 +9,16 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const generic = <T extends string>(val: T): any => {
+            const generic = <T extends string>(val: T): any => { async () => {
                 (val);
+                };
                 void val;
                 return null as any;
             };
             void generic;
-            const complex_generic = <T extends { bracket: "<" } | "<" | Set<"<>">>(val: T): any => {
+            const complex_generic = <T extends { bracket: "<" } | "<" | Set<"<>">>(val: T): any => { async () => {
                 (val);
+                };
                 void val;
                 return null as any;
             };

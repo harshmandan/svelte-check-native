@@ -17,13 +17,15 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const _foo = () => {
+            const _foo = () => { async () => {
                 ($store);
+                };
                 return null;
             };
             void _foo;
-            const _foo2 = () => {
+            const _foo2 = () => { async () => {
                 ($store2);
+                };
                 return null;
             };
             void _foo2;

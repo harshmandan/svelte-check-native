@@ -12,8 +12,9 @@ async function $$render_e40e2c10<T>() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const x = (): any => {
+            const x = (): any => { async () => {
                 (await promise);
+                };
                 return null as any;
             };
             void x;

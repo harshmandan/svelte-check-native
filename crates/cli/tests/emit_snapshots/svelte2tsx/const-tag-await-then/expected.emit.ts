@@ -12,7 +12,6 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { const $$_promise = (promise1);
-        ;(async () => {
             const $$_await = await $$_promise; const box = $$_await;
             const {area, volume} = calculate(box.width, box.height, constant);
             void area;
@@ -31,7 +30,7 @@ async function $$render_e40e2c10() {
                 (sum);
             }
             void box;
-        }); }
+        }
         {
             const box = __svn_any();
             const {area, volume} = calculate(box.width, box.height, constant);

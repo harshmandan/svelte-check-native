@@ -11,11 +11,12 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const iconSnippet = () => {
+            const iconSnippet = () => { async () => {
                 {
                     const __svn_C_76 = __svn_ensure_component(Icon);
                     new __svn_C_76({ target: __svn_any(), props: {"size": (16)} });
                 }
+                };
                 return null;
             };
             void iconSnippet;

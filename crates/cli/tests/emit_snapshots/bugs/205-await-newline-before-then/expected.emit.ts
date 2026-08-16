@@ -13,12 +13,11 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { const $$_promise = (p);
-        ;(async () => {
             const $$_await = await $$_promise; const v = $$_await;
             { svelteHTML.createElement("span", {});                 (v.toFixed(2));
             }
             void v;
-        }); }
+        }
         {
             const e = __svn_any();
             { svelteHTML.createElement("span", {});                 (String(e));
@@ -29,12 +28,11 @@ async function $$render_e40e2c10() {
     'https://example.com',
     3
 ));
-        ;(async () => {
             const $$_await = await $$_promise; const ok = $$_await;
             { svelteHTML.createElement("span", {});                 (ok ? 'yes' : 'no');
             }
             void ok;
-        }); }
+        }
     });
     void p;
     void q;

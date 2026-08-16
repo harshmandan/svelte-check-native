@@ -6,34 +6,30 @@ async function $$render_e40e2c10() {
         if ((hello)) {
             void [hello];
             { const $$_promise = (aPromise);
-            ;(async () => {
                 const $$_await = await $$_promise; const hello = $$_await;
                 (hello);
                 void hello;
-            }); }
+            }
             (hello);
             { const $$_promise = (aPromise);
-            ;(async () => {
                 const $$_await = await $$_promise; const foo = $$_await;
                 const hello = foo;
                 void hello;
                 (hello);
                 void foo;
-            }); }
+            }
             (hello);
             { const $$_promise = (aPromise);
-            ;(async () => {
                 const $$_await = await $$_promise; const hi = $$_await;
                 (hello);
                 void hi;
-            }); }
+            }
             {
                 const hello = __svn_any();
                 (hello);
                 void hello;
             }
             { const $$_promise = (hello);
-            ;(async () => {
                 const $$_await = await $$_promise; const hello = $$_await;
                 (hello);
                 if ((hello)) {
@@ -46,16 +42,14 @@ async function $$render_e40e2c10() {
                         void hello;
                     }
                     { const $$_promise = (x);
-                    ;(async () => {
                         const $$_await = await $$_promise; const hello = $$_await;
                         if ((hello)) {
                             void [hello];
                             (hello);
                         }
                         void hello;
-                    }); }
+                    }
                     { const $$_promise = (x);
-                    ;(async () => {
                         const $$_await = await $$_promise; const foo = $$_await;
                         const hello = foo;
                         void hello;
@@ -64,18 +58,17 @@ async function $$render_e40e2c10() {
                             (hello);
                         }
                         void foo;
-                    }); }
+                    }
                 }
                 void hello;
-            }); }
+            }
             if ((hi && bye)) {
                 void [hi, bye];
                 { const $$_promise = (x);
-                ;(async () => {
                     const $$_await = await $$_promise; const bye = $$_await;
                     (bye);
                     void bye;
-                }); }
+                }
                 {
                     const hello = __svn_any();
                     if ((hello)) {
@@ -87,34 +80,31 @@ async function $$render_e40e2c10() {
             } else if ((cool)) {
                 void [cool];
                 { const $$_promise = (cool);
-                ;(async () => {
                     const $$_await = await $$_promise; const cool = $$_await;
                     if ((cool)) {
                         void [cool];
                         (cool);
                     }
                     void cool;
-                }); }
+                }
                 {
                     const cool = __svn_any();
                     void cool;
                 }
                 { const $$_promise = (aPromise);
-                ;(async () => {
                     const $$_await = await $$_promise; const cool = $$_await;
                     (cool);
                     void cool;
-                }); }
+                }
             } else {
                 { const $$_promise = (x);
-                ;(async () => {
                     const $$_await = await $$_promise; const hello = $$_await;
                     if ((hello)) {
                         void [hello];
                         (hello);
                     }
                     void hello;
-                }); }
+                }
             }
         }
         if ((cool)) {
@@ -125,7 +115,6 @@ async function $$render_e40e2c10() {
             (hello);
         }
         { const $$_promise = (cool);
-        ;(async () => {
             const $$_await = await $$_promise; const cool = $$_await;
             if ((cool)) {
                 void [cool];
@@ -135,7 +124,7 @@ async function $$render_e40e2c10() {
                 (hello);
             }
             void cool;
-        }); }
+        }
         {
             const cool = __svn_any();
             if ((cool)) {

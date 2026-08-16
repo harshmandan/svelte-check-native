@@ -4,11 +4,10 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { const $$_promise = (thePromise);
-        ;(async () => {
             const $$_await = await $$_promise; const [ a, b ] = $$_await;
             void a;
             void b;
-        }); }
+        }
         {
             const c = __svn_any();
             const d = __svn_any();

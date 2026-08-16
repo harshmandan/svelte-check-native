@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Narrowing from {#if box} must survive into {#await box.page}'s {:then} branch, for a reassigned `let`. The then-branch used to be wrapped in an async arrow purely to give `await` a legal context; TypeScript discards narrowing for reassigned variables across closures, so `box.version` in the branch fired TS18048 on code upstream accepts. Upstream awaits inline — the render function is async, and snippet bodies open one inner async wrapper (its SnippetBlock's 'inner async function for potential #await blocks') — so the await block itself introduces no closure. The snippet case locks that an inline await inside a snippet still has an async context."
+}

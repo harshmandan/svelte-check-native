@@ -16,24 +16,28 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const chain = () => {
+            const chain = () => { async () => {
                 { svelteHTML.createElement("div", {});                     (foo);
                 }
+                };
                 return null;
             };
             void chain;
-            const chain2 = () => {
+            const chain2 = () => { async () => {
                 (chain());
+                };
                 return null;
             };
             void chain2;
-            const chain3 = () => {
+            const chain3 = () => { async () => {
                 (chain2());
+                };
                 return null;
             };
             void chain3;
-            const hoistable = () => {
+            const hoistable = () => { async () => {
                 { svelteHTML.createElement("h1", {});                 }
+                };
                 return null;
             };
             void hoistable;

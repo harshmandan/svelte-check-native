@@ -5,10 +5,9 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         (console.log(''.));
         { const $$_promise = (Promise.resolve(''.));
-        ;(async () => {
             const $$_await = await $$_promise; const value = $$_await;
             void value;
-        }); }
+        }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

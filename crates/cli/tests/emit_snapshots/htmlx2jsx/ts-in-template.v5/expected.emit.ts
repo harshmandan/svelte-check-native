@@ -19,38 +19,45 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         {
-            const foo = (bar: string): any => {
+            const foo = (bar: string): any => { async () => {
+                };
                 void bar;
                 return null as any;
             };
             void foo;
-            const foo2 = (bar : string): any => {
+            const foo2 = (bar : string): any => { async () => {
+                };
                 void bar;
                 return null as any;
             };
             void foo2;
-            const foo3 = (bar    : string | number): any => {
+            const foo3 = (bar    : string | number): any => { async () => {
+                };
                 void bar;
                 return null as any;
             };
             void foo3;
-            const foo4 = (bar    : string | number, baz     : (str: string)=>void): any => {
+            const foo4 = (bar    : string | number, baz     : (str: string)=>void): any => { async () => {
+                };
                 void bar;
                 void baz;
                 return null as any;
             };
             void foo4;
-            const foo5 = (bar: {baz: string}): any => {
+            const foo5 = (bar: {baz: string}): any => { async () => {
+                };
                 void bar;
                 return null as any;
             };
             void foo5;
-            const foo6 = (bar?: string): any => {
+            const foo6 = (bar?: string): any => { async () => {
+                };
                 void bar;
                 return null as any;
             };
             void foo6;
-            const foo7 = (bar, baz = ''): any => {
+            const foo7 = (bar, baz = ''): any => { async () => {
+                };
                 void bar;
                 void baz;
                 return null as any;
@@ -69,10 +76,9 @@ async function $$render_e40e2c10() {
                 void i;
             }
             { const $$_promise = (foo as Promise<void>);
-            ;(async () => {
                 const $$_await = await $$_promise; const result: any = $$_await;
                 void result;
-            }); }
+            }
             {
                 const error = __svn_any();
                 void error;

@@ -5,12 +5,11 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         { svelteHTML.createElement("h1", {});         }
         { const $$_promise = (somePromise);
-        ;(async () => {
             const $$_await = await $$_promise; const value = $$_await;
             { svelteHTML.createElement("h1", {});                 (value);
             }
             void value;
-        }); }
+        }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

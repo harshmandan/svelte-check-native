@@ -8,11 +8,10 @@ async function $$render_e40e2c10() {
         });
         }
         { const $$_promise = (Promise.resolve(0));
-        ;(async () => {
             const $$_await = await $$_promise; const n = $$_await;
             (n);
             void n;
-        }); }
+        }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': {  } }, bindings: /** @type {string} */ (''), exports: {} };
 }

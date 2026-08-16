@@ -6,41 +6,36 @@ async function $$render_e40e2c10() {
         if ((hello)) {
             void [hello];
             { const $$_promise = (hello.foo);
-            ;(async () => {
                 const $$_await = await $$_promise; const y = $$_await;
                 (y);
                 void y;
-            }); }
+            }
             { const $$_promise = (x);
-            ;(async () => {
                 const $$_await = await $$_promise; const y = $$_await;
                 (y);
                 void y;
-            }); }
+            }
             (hello);
             if ((hi && bye)) {
                 void [hi, bye];
                 { const $$_promise = (x);
-                ;(async () => {
                     const $$_await = await $$_promise; const y = $$_await;
                     (y);
                     void y;
-                }); }
+                }
             } else if ((cool)) {
                 void [cool];
                 { const $$_promise = (x);
-                ;(async () => {
                     const $$_await = await $$_promise; const y = $$_await;
                     (y);
                     void y;
-                }); }
+                }
             } else {
                 { const $$_promise = (x);
-                ;(async () => {
                     const $$_await = await $$_promise; const y = $$_await;
                     (y);
                     void y;
-                }); }
+                }
             }
         }
     });

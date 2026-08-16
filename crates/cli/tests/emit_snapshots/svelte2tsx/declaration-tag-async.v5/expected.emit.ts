@@ -14,10 +14,11 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         for (const box of __svn_each_items(boxes)) {
             {
-                const foo = (): any => {
+                const foo = (): any => { async () => {
                     const area = await 'snippet';
                     void area;
                     (area);
+                    };
                     return null as any;
                 };
                 void foo;

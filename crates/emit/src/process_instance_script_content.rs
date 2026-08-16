@@ -1237,58 +1237,52 @@ let x = 1;
     }
 
     #[test]
-    fn hoisted_type_referencing_body_const_emits_declare_stub() {
+    fn props_type_with_typeof_body_const_stays_body_scoped() {
         // `type X` references `typeof arr` where `arr` is a body-local
-        // const. When X is Props-reachable (passed as `props_type_root`),
-        // the hoist-decision pass forces hoisting X to module scope AND
-        // emits a `declare const arr` stub so the `typeof` inside X
-        // resolves. Without Props-reachability, X would stay in body
-        // (preserving exact `typeof` precision) — covered by
-        // `body_typeof_const_stays_in_body` below.
-        //
-        // Stub type uses `{ [key: string]: any } & ((...args: any[]) =>
-        // any)` rather than plain `any` so `keyof typeof arr` stays
-        // `string` (avoiding TS1023 "symbol cannot be used as an index
-        // type" on user `arr[key]` subscripts) and callable forms
-        // (`typeof fn`) still satisfy `... => any`.
+        // const. Even as the `$props()` annotation type, X stays in the
+        // body: the reference then resolves against the REAL const
+        // (preserving `as const` literal precision) instead of a lossy
+        // module-scope stub whose callable intersection also broke the
+        // in-component snippet-render check for non-callable values.
         let src = "const arr = [1, 2, 3] as const;\ntype X = (typeof arr)[number];";
         let s = split_imports(src, ScriptLang::Ts, false, Some("X"));
         assert!(
-            s.hoisted.contains("declare const arr:"),
-            "expected declare stub for body-local const:\n{}",
+            !s.hoisted.contains("type X ="),
+            "props type with typeof-body reference must stay body-scoped:\n{}",
             s.hoisted
         );
         assert!(
-            s.hoisted.contains("type X ="),
-            "type alias should still be hoisted:\n{}",
+            !s.hoisted.contains("declare const arr"),
+            "no stub when the referring type is body-scoped:\n{}",
             s.hoisted
         );
-        // Stub must come before the type alias so the reference resolves.
-        let stub_pos = s.hoisted.find("declare const arr").unwrap();
-        let type_pos = s.hoisted.find("type X").unwrap();
-        assert!(stub_pos < type_pos);
-        // Rich stub type (callable-intersection + index-signature)
-        // not plain `any` — preserves `keyof typeof arr`.
-        assert!(
-            s.hoisted
-                .contains("{ [key: string]: any } & ((...args: any[]) => any)"),
-            "stub must use callable-intersection type:\n{}",
-            s.hoisted
-        );
+        assert!(s.body.contains("type X ="));
     }
 
     #[test]
-    fn hoisted_type_referencing_body_function_emits_declare_stub() {
-        // `typeof foo` inside a hoisted interface resolves once the
-        // interface is Props-reachable and the module-level stub emits.
+    fn props_type_with_typeof_body_function_stays_body_scoped() {
+        // A `$props()` annotation type referencing a body value via
+        // `typeof` stays in the body, so the reference resolves
+        // against the REAL declaration. It used to be force-hoisted
+        // with a `declare const foo: {...} & ((...args) => any)` stub
+        // whose callable intersection made the in-component
+        // `{@render children(realValue)}` check fail for any
+        // non-callable value. Module scope doesn't need the type by
+        // name — the default export projects through
+        // `ReturnType<typeof $$render>`.
         let src = "async function foo() { return 1; }\ninterface Props { cb: typeof foo }\n";
         let s = split_imports(src, ScriptLang::Ts, false, Some("Props"));
         assert!(
-            s.hoisted.contains("declare const foo:"),
-            "expected declare stub for body-local function:\n{}",
+            !s.hoisted.contains("interface Props"),
+            "props type with typeof-body reference must stay body-scoped:\n{}",
             s.hoisted
         );
-        assert!(s.hoisted.contains("interface Props"));
+        assert!(
+            !s.hoisted.contains("declare const foo:"),
+            "no stub when the referring type is body-scoped:\n{}",
+            s.hoisted
+        );
+        assert!(s.body.contains("interface Props"));
     }
 
     #[test]

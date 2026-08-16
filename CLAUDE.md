@@ -125,13 +125,16 @@ EXIT/INT/TERM/HUP, so ctrl-c or a closed terminal takes the build with it.
 
 And — the case that matters for agents — if the session is SIGKILLed or
 the connection drops, no trap can run, so cleanup cannot depend on the
-dead run performing it. The lock records the pid and process group, and
-the NEXT invocation notices the owner is gone, kills the orphaned group,
-and takes over. Verified: killing the wrapper mid-build left 1 cargo and
-2 rustc orphaned, and the next `scripts/ct` reaped them and proceeded.
+dead run performing it. A dead session's processes reparent to launchd,
+so "ppid 1 + working directory inside this repo" identifies a true
+orphan with certainty (a live agent's build always has a live parent
+shell). Every ct start sweeps and kills exactly those, then discards
+any lock whose recorded owner is gone. Verified: SIGKILLing the
+wrapper mid-run left a stale lock and a ppid-1 orphan; the next
+`scripts/ct` reaped the orphan, dropped the lock, and proceeded clean.
 
-Only the recorded process group is ever killed — a cargo you started
-yourself elsewhere is never touched.
+Nothing with a live parent is ever killed — a job you started yourself
+elsewhere is only waited on, for as long as its shell lives.
 
 **Your own terminal.** The hook only sees commands an agent runs through
 its Bash tool, so a `cargo` you type yourself bypasses the lock. `ct`

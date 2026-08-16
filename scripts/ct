@@ -22,10 +22,13 @@
 #   1. While alive — the cargo child runs in its own process group, and
 #      traps on EXIT/INT/TERM/HUP kill that whole group. Covers ctrl-c,
 #      a closed terminal, and an ordinary agent stop.
-#   2. After death — the lock records the pid and process group. The NEXT
-#      run notices the owner is gone, kills the orphaned group, and takes
-#      over. This is the path that survives SIGKILL, a lost connection,
-#      or a hard reboot of the agent.
+#   2. After death — a dead session's processes reparent to launchd, so
+#      "ppid 1 + working directory inside this repo" identifies a true
+#      orphan with certainty: a LIVE agent's build always has a live
+#      parent shell. Every ct start sweeps and kills exactly those,
+#      then discards any lock whose recorded owner is gone. This is the
+#      path that survives SIGKILL, a lost connection, or a hard reboot
+#      of the agent — and it can never kill another agent's active run.
 #
 # A cargo started by hand in a terminal doesn't take this lock, so it is
 # detected instead: before spawning, ct looks for any live cargo process
@@ -33,10 +36,10 @@
 # refuses, without CT_WAIT) rather than piling on. Nothing to install,
 # nothing on PATH.
 #
-# Only the recorded process group is ever killed, and only after checking
-# it still contains cargo/rustc processes — a recycled pgid belonging to
-# something else is never touched. A cargo you started yourself in
-# another terminal is never killed either, only waited on.
+# While alive, only our own child process group is ever killed. The
+# orphan sweep kills only processes whose parent is gone (ppid 1) with
+# their cwd in this repo — a job you started yourself in another
+# terminal is waited on, never killed, for as long as its shell lives.
 #
 # The lock guards CORES, not just cargo: bench sweeps, upstream
 # svelte-check comparisons, and standalone tsgo runs starve a test run
@@ -123,31 +126,41 @@ owner_alive() {
     [ "$recorded" = "$current" ]
 }
 
-# Take over a dead owner's lock. The claim is the atomic step: rename
-# the lock aside, and whichever racer's mv succeeds owns the cleanup;
-# everyone else loops back to take_lock. This is what prevents two
-# takeovers from each deleting the other's freshly won lock.
+# Discard a dead owner's lock. The orphan sweep below already handles
+# the dead run's PROCESSES (by parent-death, not by recorded pgid), so
+# taking over is just removing the directory — rename it aside first so
+# two racers can't each delete the other's freshly won lock.
 reap_stale() {
-    local claim="${lock_dir}.reap.$$" pgid
+    local claim="${lock_dir}.reap.$$"
     mv "$lock_dir" "$claim" 2>/dev/null || return 0
-    pgid="$(cat "${claim}/pgid" 2>/dev/null)"
-    if [ -n "${pgid:-}" ] && kill -0 "-${pgid}" 2>/dev/null; then
-        # Only kill a group that still looks like a build — a recycled
-        # pgid full of unrelated processes is left alone.
-        if pgrep -g "$pgid" -l 2>/dev/null | grep -qE '(cargo|rustc|rustdoc)'; then
-            echo "ct: previous run (pgid ${pgid}) died without cleaning up — killing its processes" >&2
-            kill -TERM "-${pgid}" 2>/dev/null
-            # Give it a moment to go quietly, then insist.
-            for _ in 1 2 3 4 5 6 7 8 9 10; do
-                kill -0 "-${pgid}" 2>/dev/null || break
-                sleep 0.3
-            done
-            kill -KILL "-${pgid}" 2>/dev/null
-        else
-            echo "ct: stale lock's pgid ${pgid} was recycled by unrelated processes — dropping the lock only" >&2
-        fi
-    fi
     rm -rf "$claim"
+}
+
+# Kill true orphans: heavy processes that have reparented to launchd
+# (ppid 1 — their session is dead, nothing will ever reap them) and
+# whose working directory is inside this repo. A live agent's build
+# always has a live parent shell, so this can never take legitimate
+# concurrent work. Killing a parent surfaces its children as new
+# ppid-1 orphans, hence the passes.
+reap_orphans() {
+    local pass p ppid cwd killed
+    for pass in 1 2 3; do
+        killed=0
+        for p in $(pgrep -x cargo 2>/dev/null; pgrep -x rustc 2>/dev/null;                    pgrep -x rustdoc 2>/dev/null; pgrep -x tsgo 2>/dev/null;                    pgrep -x svelte-check-native 2>/dev/null; pgrep -x svelte-check 2>/dev/null); do
+            ppid="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+            [ "$ppid" = "1" ] || continue
+            cwd="$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+            case "$cwd" in
+                "$repo_root" | "$repo_root"/*) ;;
+                *) continue ;;
+            esac
+            echo "ct: reaping orphaned process ${p} ($(ps -o comm= -p "$p" 2>/dev/null)) — its session is dead" >&2
+            kill -TERM "$p" 2>/dev/null
+            killed=1
+        done
+        [ "$killed" = "0" ] && break
+        sleep 0.3
+    done
 }
 
 # Heavy processes that did NOT come through ct: cargo, tsgo, or a
@@ -168,6 +181,8 @@ foreign_heavy() {
     done
     return 1
 }
+
+reap_orphans
 
 waited=0
 until take_lock; do
@@ -234,7 +249,6 @@ else
 fi
 child_pid=$!
 child_pgid="$child_pid"
-echo "$child_pgid" > "${lock_dir}/pgid"
 set +m
 
 wait "$child_pid"

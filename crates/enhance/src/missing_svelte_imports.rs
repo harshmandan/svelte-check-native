@@ -305,12 +305,20 @@ fn is_svelte_specifier(spec: &str) -> bool {
 /// the wildcard.
 ///
 /// So: walk the directories the tsconfig actually admits (its
-/// `include` roots, plus the workspace itself), not just the workspace
-/// subtree. `node_modules` is still skipped wholesale — svelte's own
-/// wildcard lives there and the default engine strips exactly that
-/// one, so honouring it would suppress the check for every project.
+/// `include` roots and declared `typeRoots`, plus the workspace
+/// itself) and scan its `files` entries individually — a lone ambient
+/// `.d.ts` is commonly pulled in through `files` and may live outside
+/// every include root. `node_modules` is still skipped wholesale —
+/// svelte's own wildcard lives there and the default engine strips
+/// exactly that one, so honouring it would suppress the check for
+/// every project.
 fn any_wildcard_in_scope(workspace: &Path, tsconfig: &Path) -> bool {
-    scan_roots(workspace, tsconfig_include_roots(tsconfig))
+    let scope = tsconfig_scope(tsconfig);
+    scope.files.iter().any(|f| {
+        std::fs::read_to_string(f)
+            .ok()
+            .is_some_and(|src| declares_svelte_wildcard(&src))
+    }) || scan_roots(workspace, scope.dirs)
         .iter()
         .any(|r| dir_declares_svelte_wildcard(r))
 }
@@ -333,43 +341,78 @@ fn scan_roots(workspace: &Path, include_roots: Vec<PathBuf>) -> Vec<PathBuf> {
     roots
 }
 
-/// The directory prefixes of a tsconfig's `include` patterns —
-/// relative patterns resolved against the config's own directory,
-/// absolute ones taken as-is. A pattern's leading literal segments are
-/// what we can cheaply turn into a directory to scan; everything from
-/// the first wildcard segment on is dropped.
-fn tsconfig_include_roots(tsconfig: &Path) -> Vec<PathBuf> {
+/// What a tsconfig admits into the program beyond the workspace
+/// subtree: directories to walk and individual files to scan.
+struct TsconfigScope {
+    dirs: Vec<PathBuf>,
+    files: Vec<PathBuf>,
+}
+
+/// Derive the scan scope from the tsconfig chain.
+///
+/// Directories: the leading literal segments of each `include` pattern
+/// (everything from the first wildcard segment on is dropped) —
+/// relative patterns resolved against the winning config's directory,
+/// absolute ones taken as-is — plus each declared `typeRoots` entry,
+/// anchored on its declaring config the way TS rebases file-path
+/// options. Files: each `files` entry, likewise anchored.
+fn tsconfig_scope(tsconfig: &Path) -> TsconfigScope {
+    let mut scope = TsconfigScope {
+        dirs: Vec::new(),
+        files: Vec::new(),
+    };
     let Ok(chain) = svn_core::tsconfig::load_chain(tsconfig) else {
-        return Vec::new();
+        return scope;
     };
-    let Some((winner, patterns)) =
+    if let Some((winner, patterns)) =
         svn_core::tsconfig::winning_patterns(&chain, |f| f.include.as_deref())
-    else {
-        return Vec::new();
-    };
-    let base = winner.config_dir();
-    let mut out = Vec::new();
-    for pattern in patterns {
-        let literal: Vec<&str> = pattern
-            .split('/')
-            .take_while(|segment| !segment.contains('*') && !segment.contains('?'))
-            .collect();
-        let literal = literal.join("/");
-        let candidate = Path::new(&literal);
-        // An absolute pattern is already anchored at the filesystem
-        // root; gluing it under the config dir would fabricate a path
-        // that exists nowhere and get the root silently dropped.
-        let dir = if candidate.is_absolute() {
-            candidate.to_path_buf()
-        } else {
-            base.join(candidate)
-        };
-        let dir = normalise(&dir);
-        if dir.is_dir() && !out.contains(&dir) {
-            out.push(dir);
+    {
+        let base = winner.config_dir();
+        for pattern in patterns {
+            let literal: Vec<&str> = pattern
+                .split('/')
+                .take_while(|segment| !segment.contains('*') && !segment.contains('?'))
+                .collect();
+            let literal = literal.join("/");
+            let candidate = Path::new(&literal);
+            // An absolute pattern is already anchored at the filesystem
+            // root; gluing it under the config dir would fabricate a
+            // path that exists nowhere and get the root silently
+            // dropped.
+            let dir = if candidate.is_absolute() {
+                candidate.to_path_buf()
+            } else {
+                base.join(candidate)
+            };
+            let dir = normalise(&dir);
+            if dir.is_dir() && !scope.dirs.contains(&dir) {
+                scope.dirs.push(dir);
+            }
         }
     }
-    out
+    if let Some((winner, roots)) =
+        svn_core::tsconfig::winning_field(&chain, |f| f.compiler_options.type_roots.as_deref())
+    {
+        let base = winner.config_dir();
+        for root in roots {
+            let dir = normalise(&base.join(root));
+            if dir.is_dir() && !scope.dirs.contains(&dir) {
+                scope.dirs.push(dir);
+            }
+        }
+    }
+    if let Some((winner, entries)) =
+        svn_core::tsconfig::winning_patterns(&chain, |f| f.files.as_deref())
+    {
+        let base = winner.config_dir();
+        for entry in entries {
+            let file = normalise(&base.join(entry));
+            if file.is_file() && !scope.files.contains(&file) {
+                scope.files.push(file);
+            }
+        }
+    }
+    scope
 }
 
 /// `..`/`.` collapsing without touching the filesystem.
@@ -528,6 +571,59 @@ mod tests {
         assert!(
             any_wildcard_in_scope(&root.join("app"), &tsconfig),
             "wildcard reachable through the tsconfig include was not seen"
+        );
+    }
+
+    /// A wildcard pulled in solely through the tsconfig's `files`
+    /// array — reachable through no include root — still lives in the
+    /// program, so it must disable the check.
+    #[test]
+    fn wildcard_in_files_entry_outside_include_roots_is_seen() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        std::fs::create_dir_all(root.join("app/src")).unwrap();
+        std::fs::write(
+            root.join("shared/svelte-shim.d.ts"),
+            "declare module '*.svelte' { const c: any; export default c; }",
+        )
+        .unwrap();
+        let tsconfig = root.join("app/tsconfig.json");
+        std::fs::write(
+            &tsconfig,
+            r#"{ "include": ["src/**/*"], "files": ["../shared/svelte-shim.d.ts"] }"#,
+        )
+        .unwrap();
+
+        assert!(
+            any_wildcard_in_scope(&root.join("app"), &tsconfig),
+            "wildcard reachable only through the files array was not seen"
+        );
+    }
+
+    /// Same for a wildcard living under a declared typeRoot outside
+    /// the workspace and every include root.
+    #[test]
+    fn wildcard_under_declared_type_root_is_seen() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("typings/shims")).unwrap();
+        std::fs::create_dir_all(root.join("app/src")).unwrap();
+        std::fs::write(
+            root.join("typings/shims/index.d.ts"),
+            "declare module '*.svelte' { const c: any; export default c; }",
+        )
+        .unwrap();
+        let tsconfig = root.join("app/tsconfig.json");
+        std::fs::write(
+            &tsconfig,
+            r#"{ "include": ["src/**/*"], "compilerOptions": { "typeRoots": ["../typings"] } }"#,
+        )
+        .unwrap();
+
+        assert!(
+            any_wildcard_in_scope(&root.join("app"), &tsconfig),
+            "wildcard under a declared typeRoot was not seen"
         );
     }
 

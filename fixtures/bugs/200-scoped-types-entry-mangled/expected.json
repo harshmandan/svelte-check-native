@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "TypeScript looks a scoped `types` entry up under a node_modules/@types typeRoot as its mangled directory name (`@myscope/mypkg` -> `myscope__mypkg`). Probing the literal scoped path classified the entry as unresolvable and dropped it; as the sole entry that emptied the overlay's `types` array, which also switches off automatic @types inclusion, so every reference to the ambient became a spurious TS2304 on code tsgo checks cleanly."
+}

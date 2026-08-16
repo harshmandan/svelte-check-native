@@ -846,8 +846,9 @@ fn is_resolvable_types_entry(entry: &str, anchor_dir: &Path, type_roots: &[PathB
         return as_dts.is_file();
     }
     if type_roots.iter().any(|root| {
-        types_package_dir_resolves(&root.join(entry)) || {
-            let mut as_dts = root.join(entry).into_os_string();
+        let candidate = root.join(type_root_lookup_name(entry, root).as_ref());
+        types_package_dir_resolves(&candidate) || {
+            let mut as_dts = candidate.into_os_string();
             as_dts.push(".d.ts");
             PathBuf::from(as_dts).is_file()
         }
@@ -872,6 +873,27 @@ fn is_resolvable_types_entry(entry: &str, anchor_dir: &Path, type_roots: &[PathB
 /// declaration entry point.
 fn types_package_dir_resolves(dir: &Path) -> bool {
     dir.join("index.d.ts").is_file() || dir.join("package.json").is_file()
+}
+
+/// The directory name a `types` entry is looked up under within one
+/// typeRoot. TS mangles scoped names — `@scope/pkg` becomes
+/// `scope__pkg`, first separator only — when and only when the root is
+/// a `node_modules/@types` directory (`getCandidateFromTypeRoot`).
+fn type_root_lookup_name<'e>(entry: &'e str, root: &Path) -> std::borrow::Cow<'e, str> {
+    let mut comps = root.components().rev();
+    let is_at_types_root = matches!(
+        (comps.next(), comps.next()),
+        (Some(std::path::Component::Normal(a)), Some(std::path::Component::Normal(b)))
+            if a == "@types" && b == "node_modules"
+    );
+    if is_at_types_root
+        && let Some(scoped) = entry.strip_prefix('@')
+        && scoped.contains('/')
+    {
+        std::borrow::Cow::Owned(scoped.replacen('/', "__", 1))
+    } else {
+        std::borrow::Cow::Borrowed(entry)
+    }
 }
 
 /// Rewrite one surviving `types` entry into the form the overlay

@@ -88,8 +88,11 @@ function runFixture(name, fixtureDir) {
         return;
     }
 
-    // Wipe any leftover cache between runs for determinism.
+    // Wipe any leftover cache between runs for determinism. A fixture
+    // that ships its own node_modules gets the cache placed there
+    // instead of .svelte-check/, so clear both layouts.
     rmSync(path.join(fixtureDir, '.svelte-check'), { recursive: true, force: true });
+    rmSync(path.join(fixtureDir, 'node_modules', '.cache', 'svelte-check-native'), { recursive: true, force: true });
     if (expected.keep_svelte_kit !== true) {
         rmSync(path.join(fixtureDir, '.svelte-kit'), { recursive: true, force: true });
     }

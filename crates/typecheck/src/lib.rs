@@ -698,12 +698,10 @@ impl CheckSession {
             .collect();
 
         // Step 4: map diagnostics back to source paths + apply line map.
-        // Drop only the STRUCTURAL noise our overlay tsconfig produces
-        // (artifacts of the generated `files` / rewritten `paths`); a
-        // compiler-option validation error attributed to the overlay is
-        // inherited from the user's tsconfig via `extends` and is surfaced,
-        // matching upstream `svelte-check --tsgo`. See
-        // `filters::is_overlay_tsconfig_noise`.
+        // Every diagnostic the compiler attributes to the overlay
+        // tsconfig is surfaced — a compiler-option validation error
+        // there is inherited from the user's tsconfig via `extends`,
+        // and upstream `svelte-check --tsgo` surfaces it too.
         //
         // Guard against a silently-empty run: when ANY file in the
         // program fails to parse, TypeScript suppresses every semantic

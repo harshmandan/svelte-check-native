@@ -847,13 +847,9 @@ fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Opti
 }
 
 /// Native Svelte diagnostics — fatal compile errors AND lint warnings
-/// — for every in-scope source, from a SINGLE parse per file. In the
-/// default flow that parse IS the emit fan-out's parse (the fused
-/// closure in `run_typecheck` calls [`native_diagnostics_for_parsed`]
-/// on the artifacts it already has); [`collect_native_diagnostics`]
-/// exists for the tsgo-skipped flow (`--diagnostic-sources` without
-/// `js`), where no emit fan-out runs and the corpus is parsed here
-/// instead.
+/// — for every discovered component, from a SINGLE parse per file: the
+/// emit fan-out's parse (the fused closure in `run_typecheck` calls
+/// [`native_diagnostics_for_parsed`] on the artifacts it already has).
 ///
 /// Per file the shared computation covers:
 ///
@@ -1276,19 +1272,6 @@ fn kit_inject_col_shifts(injected: &svn_emit::kit_inject::Injected) -> Vec<(u32,
     shifts
 }
 
-/// Default flow: parse + emit each .svelte file, hand the lot to tsgo,
-/// format diagnostics, exit with the appropriate code.
-///
-/// `threshold` controls which diagnostics are kept: `error` filters out
-/// warnings; `warning` keeps both. `fail_on_warnings` makes warnings
-/// participate in the exit-code decision (matching upstream
-/// svelte-check). `sources` opts diagnostics in/out per source family
-/// (`js`/`svelte`/`css`). `compiler_overrides` reclassifies individual
-/// compiler warnings (e.g. `css-unused-selector:error`). `ignore` is a
-/// pre-built glob set for path filtering; `color` controls ANSI in
-/// human output; `timings` prints a phase-by-phase breakdown when
-/// true.
-#[allow(clippy::too_many_arguments)]
 /// One project's completed pipeline output, before rendering: the
 /// mapped diagnostics (absolute `source_path`s) and the discovered
 /// entry files that count toward the `<N> FILES` denominator.
@@ -1436,6 +1419,19 @@ fn analyse_dir_svelte_config(dir: &Path) -> svelte_config::SvelteConfigSummary {
     }
 }
 
+/// Default flow: parse + emit each .svelte file, hand the lot to tsgo,
+/// format diagnostics, exit with the appropriate code. A named
+/// solution root fans out into one `check_project` sub-run per
+/// referenced project that contains a discovered component.
+///
+/// `threshold` controls which diagnostics are kept: `error` filters out
+/// warnings; `warning` keeps both. `fail_on_warnings` makes warnings
+/// participate in the exit-code decision (matching upstream
+/// svelte-check). `sources` opts diagnostics in/out per source family
+/// (`js`/`svelte`/`css`). `compiler_overrides` reclassifies individual
+/// compiler warnings (e.g. `css-unused-selector:error`). `color`
+/// controls ANSI in human output; `timings` prints a phase-by-phase
+/// breakdown when true.
 #[allow(clippy::too_many_arguments)]
 fn run_typecheck(
     workspace: &Path,

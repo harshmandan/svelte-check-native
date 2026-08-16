@@ -442,9 +442,8 @@ pub fn build(
         // Note: if the USER's tsconfig sets `baseUrl`, tsgo fires a
         // TS5102 attributed to our overlay (inherited via `extends`).
         // That is user-caused and upstream `svelte-check --tsgo`
-        // surfaces it, so we surface it too — it is NOT filtered as
-        // overlay noise. Only structural overlay artifacts are dropped
-        // (see `filters::is_overlay_tsconfig_noise`).
+        // surfaces it, so we surface it too — every diagnostic the
+        // compiler attributes to the overlay tsconfig is surfaced.
     }
 
     // Pull the user's `include` patterns into our overlay so tsgo also

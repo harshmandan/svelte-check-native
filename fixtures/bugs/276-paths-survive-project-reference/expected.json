@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A project reference must not shadow the entry tsconfig's paths for the entry project's own files. The import resolver's automatic reference handling scoped path mappings by the referenced project's directory; a composite reference sitting beside the entry config (a common scaffold convention) covered the whole workspace with its empty paths, so every aliased .svelte import fired an invented TS2307. TypeScript resolves a project's own imports with that project's paths, references or not."
+}

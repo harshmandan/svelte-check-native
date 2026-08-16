@@ -6,6 +6,18 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A project reference no longer hides the tsconfig's `paths` from
+  the missing-import check.** The check's resolver followed project
+  references and scoped path mappings by the referenced project's
+  directory, so a composite reference sitting beside the entry config
+  (a common scaffold convention: `"references": [{ "path":
+  "./tsconfig.node.json" }]`) covered the whole workspace with its own
+  empty `paths` — every aliased `.svelte` import (`$lib/…`) fired an
+  invented TS2307. TypeScript resolves a project's own imports with
+  that project's paths regardless of references, and so do we now.
+
 ## [1.5.0]
 
 A config-resolution parity release: the tsconfig chain — `extends`

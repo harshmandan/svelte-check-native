@@ -87,7 +87,17 @@ impl SvelteImportResolver {
         let options = ResolveOptions {
             tsconfig: Some(TsconfigDiscovery::Manual(TsconfigOptions {
                 config_file: tsconfig.to_path_buf(),
-                references: TsconfigReferences::Auto,
+                // Never follow project references: Auto scopes paths
+                // by the referenced project's directory, so a
+                // composite reference sitting beside the entry config
+                // (a common scaffold shape) covers the whole
+                // workspace with its own — usually empty — paths and
+                // shadows the entry config's aliases, inventing
+                // TS2307s. TypeScript resolves a project's own
+                // imports with that project's paths regardless of
+                // references, and every check runs with its own
+                // project's tsconfig here.
+                references: TsconfigReferences::Disabled,
             })),
             // `.svelte` resolves the component file; the TS extensions let
             // `./Foo.svelte` also resolve a `Foo.svelte.ts` runes-module

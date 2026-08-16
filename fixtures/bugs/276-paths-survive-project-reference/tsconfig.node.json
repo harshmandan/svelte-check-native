@@ -1,0 +1,4 @@
+{
+    "include": ["vite.config.*"],
+    "compilerOptions": { "composite": true, "noEmit": false }
+}

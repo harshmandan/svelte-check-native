@@ -441,9 +441,11 @@ fn resolve_package_extends(reference: &str, start_dir: &Path) -> Result<PathBuf,
             let resolved = if let Some(sp) = subpath {
                 package_subpath_config(&pkg_root, sp)
             } else {
-                resolve_package_root_config(&pkg_root)
+                Some(resolve_package_root_config(&pkg_root))
             };
-            if resolved.is_file() {
+            if let Some(resolved) = resolved
+                && resolved.is_file()
+            {
                 return Ok(resolved);
             }
             // Fall through to keep walking up — a closer ancestor might have
@@ -473,39 +475,107 @@ fn resolve_package_extends(reference: &str, start_dir: &Path) -> Result<PathBuf,
 /// `"extends": "$app/tsconfig"`. Without the append the chain breaks
 /// silently and the project loses the generated `rootDirs` — which is
 /// what makes `./$types` resolve from a route file.
-fn package_subpath_config(pkg_root: &Path, subpath: &str) -> PathBuf {
-    // `exports` first, when the package declares one for this subpath.
-    // A package that maps `"./base"` to `"./src/base.json"` is resolved
-    // by TypeScript through that map; probing the literal layout instead
-    // finds nothing, and `load_chain` skips a base it cannot resolve —
-    // so the consumer silently loses everything that base declared.
-    if let Some(target) = package_subpath_export(pkg_root, subpath) {
-        let candidate = pkg_root.join(target);
-        if candidate.is_file() {
-            return candidate;
-        }
+fn package_subpath_config(pkg_root: &Path, subpath: &str) -> Option<PathBuf> {
+    // `exports` first, when the package declares one. A package that maps
+    // `"./base"` to `"./src/base.json"` is resolved by TypeScript through
+    // that map; probing the literal layout instead finds nothing, and
+    // `load_chain` skips a base it cannot resolve — so the consumer
+    // silently loses everything that base declared.
+    //
+    // And the map is exclusive, per Node's exports semantics: when a
+    // package declares `exports`, a subpath the map doesn't cover is
+    // unreachable — no falling back to the literal file layout. The
+    // literal probe applies only to packages with no `exports` at all.
+    match package_subpath_export(pkg_root, subpath) {
+        SubpathExport::Resolved(target) => return Some(pkg_root.join(target)),
+        SubpathExport::NotExported => return None,
+        SubpathExport::NoExports => {}
     }
     let literal = pkg_root.join(subpath);
     if literal.is_file() || subpath.ends_with(".json") {
-        return literal;
+        return Some(literal);
     }
     let mut with_json = literal.into_os_string();
     with_json.push(".json");
-    PathBuf::from(with_json)
+    Some(PathBuf::from(with_json))
 }
 
-/// The `exports` target for `./<subpath>`, if the package declares one.
-fn package_subpath_export(pkg_root: &Path, subpath: &str) -> Option<String> {
-    let contents = std::fs::read_to_string(pkg_root.join("package.json")).ok()?;
-    let Value::Object(obj) = serde_json::from_str::<Value>(&contents).ok()? else {
-        return None;
+/// Outcome of consulting a package's `exports` map for a subpath.
+enum SubpathExport {
+    /// No `package.json`, unparseable JSON, or no `exports` field —
+    /// legacy file-layout probing applies.
+    NoExports,
+    /// `exports` maps the subpath to this package-relative target.
+    Resolved(String),
+    /// `exports` is present but does not export the subpath (or its
+    /// target resolves to nothing usable). Resolution through this
+    /// package must fail — `exports` is exclusive.
+    NotExported,
+}
+
+/// Consult the package's `exports` map for `./<subpath>`.
+///
+/// Mirrors Node's `PACKAGE_EXPORTS_RESOLVE`: an exact subpath key wins;
+/// otherwise single-`*` pattern keys are matched, best match being the
+/// longest text before the `*` (ties broken toward the longer key), and
+/// the captured remainder is substituted into the target.
+fn package_subpath_export(pkg_root: &Path, subpath: &str) -> SubpathExport {
+    let Ok(contents) = std::fs::read_to_string(pkg_root.join("package.json")) else {
+        return SubpathExport::NoExports;
     };
-    let exports = obj.get("exports")?.as_object()?;
-    // Try the subpath as written and with the `./` prefix `exports` keys
-    // conventionally carry.
+    let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(&contents) else {
+        return SubpathExport::NoExports;
+    };
+    let Some(exports) = obj.get("exports") else {
+        return SubpathExport::NoExports;
+    };
+    // The sugar forms (`"exports": "./x.json"`, or an object with no
+    // dot-prefixed keys, i.e. a bare condition map) export only `"."` —
+    // every subpath is unexported.
+    let Some(map) = exports
+        .as_object()
+        .filter(|m| m.keys().any(|k| k.starts_with('.')))
+    else {
+        return SubpathExport::NotExported;
+    };
+
+    // Normalize to the `./` prefix `exports` keys carry.
     let key = format!("./{}", subpath.trim_start_matches("./"));
-    let entry = exports.get(key.as_str()).or_else(|| exports.get(subpath))?;
-    resolve_export_target(entry).map(str::to_string)
+    if let Some(entry) = map.get(key.as_str()) {
+        return match resolve_export_target(entry, None) {
+            Some(target) => SubpathExport::Resolved(target),
+            None => SubpathExport::NotExported,
+        };
+    }
+
+    // Pattern keys. Node's `PATTERN_KEY_COMPARE`: longest prefix before
+    // the `*` wins; equal prefixes break toward the longer key. Keys
+    // with more than one `*` are invalid and ignored.
+    let mut best: Option<(usize, usize, &str, &Value)> = None;
+    for (k, entry) in map {
+        let Some(star) = k.find('*') else { continue };
+        let (prefix, suffix) = (&k[..star], &k[star + 1..]);
+        if suffix.contains('*') {
+            continue;
+        }
+        if key.len() >= prefix.len() + suffix.len()
+            && key.starts_with(prefix)
+            && key.ends_with(suffix)
+        {
+            let capture = &key[prefix.len()..key.len() - suffix.len()];
+            let rank = (prefix.len(), k.len());
+            if best.is_none_or(|(pl, kl, ..)| rank > (pl, kl)) {
+                best = Some((prefix.len(), k.len(), capture, entry));
+            }
+        }
+    }
+    if let Some((_, _, capture, entry)) = best {
+        return match resolve_export_target(entry, Some(capture)) {
+            Some(target) => SubpathExport::Resolved(target),
+            None => SubpathExport::NotExported,
+        };
+    }
+    SubpathExport::NotExported
 }
 
 /// Resolve a bare package extends (no subpath) to the config file at the
@@ -549,25 +619,50 @@ fn resolve_package_root_config(pkg_root: &Path) -> PathBuf {
 /// target. Handles the bare-string form (`"exports": "./tsconfig.json"`),
 /// the `{ ".": <target> }` subpath form, and condition objects. Only
 /// targets ending in `.json` are candidates.
-fn resolve_dot_export(exports: &Value) -> Option<&str> {
-    if let Value::String(s) = exports {
-        return s.ends_with(".json").then_some(s.as_str());
-    }
-    let obj = exports.as_object()?;
+fn resolve_dot_export(exports: &Value) -> Option<String> {
     // Use the explicit `"."` subpath when present; otherwise treat the whole
-    // object as the condition map for `"."`.
-    let dot = obj.get(".").unwrap_or(exports);
-    resolve_export_target(dot)
+    // value (bare string or condition map) as the target for `"."`.
+    let dot = exports
+        .as_object()
+        .and_then(|obj| obj.get("."))
+        .unwrap_or(exports);
+    resolve_export_target(dot, None)
 }
 
-/// Resolve one `exports` target, walking the conditions TS considers for
-/// JSON config resolution (`types`, `require`, `node`, then `default`).
-fn resolve_export_target(target: &Value) -> Option<&str> {
+/// The conditions active for tsconfig-`extends` resolution. TypeScript
+/// resolves the reference as a CommonJS-style module, so `require` and
+/// `node` apply (plus `types`); `default` always matches.
+const ACTIVE_CONDITIONS: [&str; 3] = ["types", "require", "node"];
+
+/// Resolve one `exports` target to a package-relative `.json` path.
+///
+/// Condition objects are walked in OBJECT KEY ORDER — the order the
+/// package author wrote them — taking the first key in the active
+/// condition set (Node and TS both iterate `getOwnKeys` order, never a
+/// fixed priority list). Nested condition objects resolve recursively;
+/// array targets take the first entry that resolves. Like TS (and unlike
+/// Node, which commits to the first matching condition), a matching
+/// branch that yields nothing falls through to the next candidate.
+///
+/// `pattern_match` is the `*` capture from a pattern subpath key; it is
+/// substituted into string targets before the `.json` filter applies.
+fn resolve_export_target(target: &Value, pattern_match: Option<&str>) -> Option<String> {
     match target {
-        Value::String(s) => s.ends_with(".json").then_some(s.as_str()),
-        Value::Object(conds) => ["types", "require", "node", "default"]
-            .into_iter()
-            .find_map(|c| conds.get(c).and_then(resolve_export_target)),
+        Value::String(s) => {
+            let resolved = match pattern_match {
+                Some(capture) => s.replace('*', capture),
+                None => s.clone(),
+            };
+            resolved.ends_with(".json").then_some(resolved)
+        }
+        Value::Object(conds) => conds.iter().find_map(|(cond, value)| {
+            (cond == "default" || ACTIVE_CONDITIONS.contains(&cond.as_str()))
+                .then(|| resolve_export_target(value, pattern_match))
+                .flatten()
+        }),
+        Value::Array(candidates) => candidates
+            .iter()
+            .find_map(|candidate| resolve_export_target(candidate, pattern_match)),
         _ => None,
     }
 }
@@ -1055,6 +1150,231 @@ mod tests {
         fs::create_dir_all(&project).unwrap();
         let ts = project.join("tsconfig.json");
         write(&ts, r#"{ "extends": "my-tsconfig" }"#);
+
+        let cfg = load(&ts).unwrap();
+        assert_eq!(cfg.compiler_options.strict, Some(true));
+    }
+
+    /// Conditions resolve in object key order, not a fixed priority
+    /// list: `import` is inactive (skip), then `default` matches —
+    /// before `require` is ever considered.
+    #[test]
+    fn package_exports_conditions_resolve_in_object_order() {
+        let tmp = tempdir().unwrap();
+        let pkg_dir = tmp.path().join("node_modules/cfg");
+        write(
+            &pkg_dir.join("package.json"),
+            r#"{ "exports": { ".": {
+                "import": "./a.json",
+                "default": "./b.json",
+                "require": "./c.json"
+            } } }"#,
+        );
+        write(
+            &pkg_dir.join("a.json"),
+            r#"{ "compilerOptions": { "target": "ES2015" } }"#,
+        );
+        write(
+            &pkg_dir.join("b.json"),
+            r#"{ "compilerOptions": { "target": "ES2020" } }"#,
+        );
+        write(
+            &pkg_dir.join("c.json"),
+            r#"{ "compilerOptions": { "target": "ES2022" } }"#,
+        );
+
+        let ts = tmp.path().join("tsconfig.json");
+        write(&ts, r#"{ "extends": "cfg" }"#);
+
+        let cfg = load(&ts).unwrap();
+        assert_eq!(cfg.compiler_options.target.as_deref(), Some("ES2020"));
+    }
+
+    /// Nested condition objects resolve recursively, again in object
+    /// order: `node` matches, then inside it `import` is skipped and
+    /// `require` wins.
+    #[test]
+    fn package_exports_nested_conditions_resolve_recursively() {
+        let tmp = tempdir().unwrap();
+        let pkg_dir = tmp.path().join("node_modules/cfg");
+        write(
+            &pkg_dir.join("package.json"),
+            r#"{ "exports": { ".": { "node": {
+                "import": "./esm.json",
+                "require": "./cjs.json"
+            } } } }"#,
+        );
+        write(
+            &pkg_dir.join("esm.json"),
+            r#"{ "compilerOptions": { "target": "ES2015" } }"#,
+        );
+        write(
+            &pkg_dir.join("cjs.json"),
+            r#"{ "compilerOptions": { "target": "ES2022" } }"#,
+        );
+
+        let ts = tmp.path().join("tsconfig.json");
+        write(&ts, r#"{ "extends": "cfg" }"#);
+
+        let cfg = load(&ts).unwrap();
+        assert_eq!(cfg.compiler_options.target.as_deref(), Some("ES2022"));
+    }
+
+    /// Array targets take the first entry that resolves — here the
+    /// condition object only offers the inactive `import`, so the
+    /// string fallback wins.
+    #[test]
+    fn package_exports_array_target_takes_first_resolvable() {
+        let tmp = tempdir().unwrap();
+        let pkg_dir = tmp.path().join("node_modules/cfg");
+        write(
+            &pkg_dir.join("package.json"),
+            r#"{ "exports": { ".": [
+                { "import": "./esm.json" },
+                "./fallback.json"
+            ] } }"#,
+        );
+        write(
+            &pkg_dir.join("esm.json"),
+            r#"{ "compilerOptions": { "target": "ES2015" } }"#,
+        );
+        write(
+            &pkg_dir.join("fallback.json"),
+            r#"{ "compilerOptions": { "target": "ES2022" } }"#,
+        );
+
+        let ts = tmp.path().join("tsconfig.json");
+        write(&ts, r#"{ "extends": "cfg" }"#);
+
+        let cfg = load(&ts).unwrap();
+        assert_eq!(cfg.compiler_options.target.as_deref(), Some("ES2022"));
+    }
+
+    /// A `*` pattern key captures the subpath remainder and substitutes
+    /// it into the target.
+    #[test]
+    fn package_exports_wildcard_subpath_substitutes() {
+        let tmp = tempdir().unwrap();
+        let pkg_dir = tmp.path().join("node_modules/cfg");
+        write(
+            &pkg_dir.join("package.json"),
+            r#"{ "exports": { "./*": "./configs/*.json" } }"#,
+        );
+        write(
+            &pkg_dir.join("configs/base.json"),
+            r#"{ "compilerOptions": { "strict": true } }"#,
+        );
+
+        let ts = tmp.path().join("tsconfig.json");
+        write(&ts, r#"{ "extends": "cfg/base" }"#);
+
+        let cfg = load(&ts).unwrap();
+        assert_eq!(cfg.compiler_options.strict, Some(true));
+    }
+
+    /// Among matching pattern keys the longest prefix before the `*`
+    /// wins, per Node's PATTERN_KEY_COMPARE — regardless of the order
+    /// the keys were written in.
+    #[test]
+    fn package_exports_longest_wildcard_prefix_wins() {
+        let tmp = tempdir().unwrap();
+        let pkg_dir = tmp.path().join("node_modules/cfg");
+        write(
+            &pkg_dir.join("package.json"),
+            r#"{ "exports": {
+                "./*": "./loose/*.json",
+                "./strict/*": "./strict/*.json"
+            } }"#,
+        );
+        write(
+            &pkg_dir.join("loose/strict/base.json"),
+            r#"{ "compilerOptions": { "strict": false } }"#,
+        );
+        write(
+            &pkg_dir.join("strict/base.json"),
+            r#"{ "compilerOptions": { "strict": true } }"#,
+        );
+
+        let ts = tmp.path().join("tsconfig.json");
+        write(&ts, r#"{ "extends": "cfg/strict/base" }"#);
+
+        let cfg = load(&ts).unwrap();
+        assert_eq!(cfg.compiler_options.strict, Some(true));
+    }
+
+    /// Pattern targets resolve conditions the same way exact targets do,
+    /// with the capture substituted inside the winning branch.
+    #[test]
+    fn package_exports_wildcard_with_conditions() {
+        let tmp = tempdir().unwrap();
+        let pkg_dir = tmp.path().join("node_modules/cfg");
+        write(
+            &pkg_dir.join("package.json"),
+            r#"{ "exports": { "./*": {
+                "import": "./esm/*.json",
+                "default": "./any/*.json"
+            } } }"#,
+        );
+        write(
+            &pkg_dir.join("esm/base.json"),
+            r#"{ "compilerOptions": { "target": "ES2015" } }"#,
+        );
+        write(
+            &pkg_dir.join("any/base.json"),
+            r#"{ "compilerOptions": { "target": "ES2022" } }"#,
+        );
+
+        let ts = tmp.path().join("tsconfig.json");
+        write(&ts, r#"{ "extends": "cfg/base" }"#);
+
+        let cfg = load(&ts).unwrap();
+        assert_eq!(cfg.compiler_options.target.as_deref(), Some("ES2022"));
+    }
+
+    /// `exports` is exclusive: a subpath the map doesn't cover fails
+    /// even though the file exists at the literal layout position.
+    #[test]
+    fn package_exports_uncovered_subpath_fails_despite_literal_file() {
+        let tmp = tempdir().unwrap();
+        let pkg_dir = tmp.path().join("node_modules/cfg");
+        write(
+            &pkg_dir.join("package.json"),
+            r#"{ "exports": { "./other": "./other.json" } }"#,
+        );
+        write(
+            &pkg_dir.join("other.json"),
+            r#"{ "compilerOptions": { "strict": true } }"#,
+        );
+        // Exists on disk, but the exports map doesn't cover it.
+        write(
+            &pkg_dir.join("base.json"),
+            r#"{ "compilerOptions": { "strict": true } }"#,
+        );
+
+        let ts = tmp.path().join("tsconfig.json");
+        write(&ts, r#"{ "extends": "cfg/base.json" }"#);
+
+        let err = load(&ts).unwrap_err();
+        assert!(
+            matches!(err, LoadError::ExtendsNotFound { .. }),
+            "expected ExtendsNotFound, got {err:?}"
+        );
+    }
+
+    /// A package.json WITHOUT `exports` keeps the legacy file-layout
+    /// probing (with the `.json` append).
+    #[test]
+    fn package_without_exports_still_probes_layout() {
+        let tmp = tempdir().unwrap();
+        let pkg_dir = tmp.path().join("node_modules/cfg");
+        write(&pkg_dir.join("package.json"), r#"{ "name": "cfg" }"#);
+        write(
+            &pkg_dir.join("base.json"),
+            r#"{ "compilerOptions": { "strict": true } }"#,
+        );
+
+        let ts = tmp.path().join("tsconfig.json");
+        write(&ts, r#"{ "extends": "cfg/base" }"#);
 
         let cfg = load(&ts).unwrap();
         assert_eq!(cfg.compiler_options.strict, Some(true));

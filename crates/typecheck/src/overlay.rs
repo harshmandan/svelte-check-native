@@ -592,7 +592,26 @@ pub fn build(
     // answer TS6054. Upstream does the same swap (`incremental.ts:409-411`).
     for entry in winning_patterns_absolute(&chain, |f| f.files.as_deref()) {
         let mapped = match entry.strip_suffix(".svelte") {
-            Some(_) => project_to_virtual_svelte_dts(layout, &entry),
+            Some(_) => {
+                let mapped = project_to_virtual_svelte_dts(layout, &entry);
+                if mapped.is_none() {
+                    // Upstream checks a files-listed component wherever
+                    // it lives — verified against default-engine
+                    // svelte-check on an app whose `files` names
+                    // `../shared/Comp.svelte` (the component's own
+                    // errors are reported, relative filename and all).
+                    // Our sidecar mirror only spans the workspace
+                    // subtree, so an out-of-tree component has no
+                    // overlay slot yet; surface the skip instead of
+                    // silently checking a smaller program. Tracked in
+                    // notes/OPEN.md.
+                    eprintln!(
+                        "svelte-check-native: warning: `files` entry {entry} lies outside the \
+                         workspace and was not type-checked"
+                    );
+                }
+                mapped
+            }
             None => Some(entry),
         };
         if let Some(m) = mapped

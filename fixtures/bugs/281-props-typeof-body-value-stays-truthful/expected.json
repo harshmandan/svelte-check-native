@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A `$props()` annotation type that references a body value via `typeof` must stay body-scoped so the reference resolves against the real declaration. It used to be force-hoisted to module scope with a synthesized `declare const tagInfo: { [key: string]: any } & ((...args: any[]) => any)` stub standing in for the value; the stub's callable intersection meant the in-component `{@render children({ tag: tagInfo })}` compared the REAL, non-callable object against the stub's shape and fired an invented TS2322. Nothing at module scope needs the type by name — the default export projects through ReturnType of the render function."
+}

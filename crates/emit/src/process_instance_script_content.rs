@@ -206,7 +206,12 @@ pub fn split_imports(
     content: &str,
     _lang: ScriptLang,
     has_generics: bool,
-    props_type_root: Option<&str>,
+    // No longer consulted: the `$props()` annotation type stopped
+    // getting hoist priority when the module-scope default export
+    // moved to the `ReturnType<typeof $$render>` projection — kept in
+    // the signature because the callers' value documents which type
+    // the annotation names.
+    _props_type_root: Option<&str>,
 ) -> SplitScript {
     // Always parse as TypeScript — TS is a superset of JS for our
     // purposes (we're identifying statement spans, not generating
@@ -511,17 +516,14 @@ pub fn split_imports(
     // (matching inside nested types that aren't indexed) are
     // acceptable — worst case, a hoistable type stays body-scoped.
     // Hoist decision per pending type:
-    //   - If the type IS the Props annotation (`let {...}: Foo =
-    //     $props()` → props_type_root = "Foo"), always hoist.
-    //     Consumers need Props visible at module scope for typed
-    //     contextual flow, and the declare-const stub path below
-    //     covers typeof references at the cost of some `keyof`
-    //     precision inside the component's body — an acceptable
-    //     trade for preserving consumer typing.
-    //   - Otherwise, if the type body references a body-local via
+    //   - If the type body references a body-local via
     //     `typeof <name>`, KEEP in body. `keyof typeof X` then
     //     evaluates against the real body-scoped declaration rather
     //     than the lossy stub, preserving literal-keyed precision.
+    //     This applies to the `$props()` annotation type too:
+    //     consumer typing flows through the module-scope
+    //     `ReturnType<typeof $$render>` projection, which reads the
+    //     body-scoped type just fine.
     //   - Types that don't reference body locals via typeof hoist
     //     normally.
     // Hoist decision per type, distinguishing two independent causes:
@@ -579,14 +581,20 @@ pub fn split_imports(
     // chain: `type Variant = ...keyof...typeof style...` → Variant
     // must stay body; `type Props = { variant?: Variant }` references
     // Variant by name → Props joins.
-    // Types transitively reachable from the Props type root MUST
-    // hoist — they show up in the hoisted `Component<Props>`
-    // default-export declaration, and body-scoped types would fire
-    // TS2304 there. Collect the reachable set by fixed-point walk.
+    // Types the emit references BY NAME at module scope must hoist:
+    // the Svelte-4 path synthesizes Props from exported locals'
+    // annotations there, so those annotation types (and everything
+    // they reference) join the set. The Svelte-5 `$props()` root does
+    // NOT: since the iso-port, the module-scope default export
+    // projects everything through
+    // `Awaited<ReturnType<typeof $$render>>['props']`, so the Props
+    // interface itself may stay body-scoped — and when it references
+    // body values via `typeof`, it MUST, or the lossy module-scope
+    // stub replaces the real type. The stub is an intersection with a
+    // callable, so the in-component `{@render children(realValue)}`
+    // check compared the REAL value against the stub's callable shape
+    // and fired an invented TS2322 whenever the value wasn't callable.
     let mut props_reachable: HashSet<SmolStr> = HashSet::new();
-    if let Some(root) = props_type_root {
-        props_reachable.insert(SmolStr::from(root));
-    }
     // Svelte-4-style: `export let state: TypeFilter | undefined`.
     // No single `Props` root — each exported local's annotation
     // contributes type names to the reachable set. The emit
@@ -675,9 +683,6 @@ pub fn split_imports(
             break;
         }
     }
-    // `props_type_root` IS used above — to compute `props_reachable`
-    // for the hoist-decision logic. Types in that set bypass the
-    // plain-typeof body-keep rule.
     let mut hoisted_type_names: HashSet<SmolStr> = HashSet::new();
     for pending in pending_type_spans {
         if !must_stay_body.contains(&pending.name) {

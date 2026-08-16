@@ -38,10 +38,20 @@
 # something else is never touched. A cargo you started yourself in
 # another terminal is never killed either, only waited on.
 #
+# The lock guards CORES, not just cargo: bench sweeps, upstream
+# svelte-check comparisons, and standalone tsgo runs starve a test run
+# exactly the way a second cargo does — the 10-minute suite this rule
+# exists to prevent was last reproduced by a cargo test running
+# concurrently with a 7000-file upstream comparison, no second cargo
+# anywhere. `exec` routes any such heavy job through the same lock,
+# process group, and cleanup.
+#
 # Usage:
 #   scripts/ct test --workspace
 #   scripts/ct clippy --workspace --all-targets -- -D warnings
 #   scripts/ct build --release
+#   scripts/ct exec node scripts/bench.mjs --target bench/foo
+#   scripts/ct exec ./node_modules/.bin/svelte-check --tsgo
 #
 #   CT_WAIT=1 scripts/ct test      # wait for a live run instead of refusing
 #   CT_TIMEOUT=900 scripts/ct test # give up waiting after N seconds
@@ -56,8 +66,20 @@ wait_for_lock="${CT_WAIT:-0}"
 wait_timeout="${CT_TIMEOUT:-1800}"
 
 if [ "$#" -eq 0 ]; then
-    echo "usage: scripts/ct <cargo-subcommand> [args...]" >&2
+    echo "usage: scripts/ct <cargo-subcommand> [args...] | scripts/ct exec <command> [args...]" >&2
     exit 2
+fi
+
+# `exec` mode: serialise an arbitrary heavy command under the same
+# lock instead of a cargo subcommand.
+exec_mode=0
+if [ "$1" = "exec" ]; then
+    exec_mode=1
+    shift
+    if [ "$#" -eq 0 ]; then
+        echo "usage: scripts/ct exec <command> [args...]" >&2
+        exit 2
+    fi
 fi
 
 # The pid identity is (pid, start time): kill -0 alone would make a
@@ -128,12 +150,17 @@ reap_stale() {
     rm -rf "$claim"
 }
 
-# Cargo processes that did NOT come through ct: anything named cargo
-# whose working directory is inside this repo, minus our own child
-# group. These hold no lock, so they are waited on, never killed.
-foreign_cargo() {
+# Heavy processes that did NOT come through ct: cargo, tsgo, or a
+# svelte-check binary whose working directory is inside this repo,
+# minus our own child group (the check runs before we spawn, so our
+# own children cannot exist yet). These hold no lock, so they are
+# waited on, never killed. Plain `node` is deliberately NOT matched:
+# editor language servers park their cwd in the repo and would make
+# this wait forever; a bench sweep's heavy children are the names
+# above anyway.
+foreign_heavy() {
     local p cwd
-    for p in $(pgrep -x cargo 2>/dev/null); do
+    for p in $(pgrep -x cargo 2>/dev/null; pgrep -x tsgo 2>/dev/null;                pgrep -x svelte-check-native 2>/dev/null; pgrep -x svelte-check 2>/dev/null); do
         cwd="$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
         case "$cwd" in
             "$repo_root" | "$repo_root"/*) echo "$p"; return 0 ;;
@@ -180,19 +207,19 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
-# Lock held; now also wait out any hand-started cargo working in this
-# repo. It cannot be told to queue, so we are the ones who yield.
-while pid="$(foreign_cargo)"; do
+# Lock held; now also wait out any hand-started heavy job working in
+# this repo. It cannot be told to queue, so we are the ones who yield.
+while pid="$(foreign_heavy)"; do
     if [ "$wait_for_lock" != "1" ]; then
-        echo "ct: a cargo started outside ct is running in this repo (pid ${pid})." >&2
+        echo "ct: a heavy job started outside ct is running in this repo (pid ${pid})." >&2
         echo "ct: wait for it, re-run with CT_WAIT=1, or kill it and retry." >&2
         exit 75
     fi
     if [ "$waited" -ge "$wait_timeout" ]; then
-        echo "ct: gave up waiting after ${waited}s for outside cargo (pid ${pid})" >&2
+        echo "ct: gave up waiting after ${waited}s for outside job (pid ${pid})" >&2
         exit 75
     fi
-    [ "$waited" -eq 0 ] && echo "ct: waiting for an outside cargo run (pid ${pid}) to finish..." >&2
+    [ "$waited" -eq 0 ] && echo "ct: waiting for an outside heavy job (pid ${pid}) to finish..." >&2
     sleep 2
     waited=$((waited + 2))
 done
@@ -200,7 +227,11 @@ done
 # Job control puts the child in its own process group, which is what
 # makes `kill -- -PGID` reach cargo *and* every rustc it spawned.
 set -m
-"${CT_CARGO:-cargo}" "$@" &
+if [ "$exec_mode" = "1" ]; then
+    "$@" &
+else
+    "${CT_CARGO:-cargo}" "$@" &
+fi
 child_pid=$!
 child_pgid="$child_pid"
 echo "$child_pgid" > "${lock_dir}/pgid"

@@ -135,11 +135,34 @@ yourself elsewhere is never touched.
 
 **Your own terminal.** The hook only sees commands an agent runs through
 its Bash tool, so a `cargo` you type yourself bypasses the lock. `ct`
-compensates from its side: before spawning, it looks for any live cargo
-whose working directory is inside this repo and waits for it (refuses
-with exit 75 without `CT_WAIT`) instead of piling on. Nothing to
-install, nothing on PATH. A hand-started cargo is only ever waited on,
-never killed.
+compensates from its side: before spawning, it looks for any live
+heavy job — cargo, tsgo, a svelte-check binary — whose working
+directory is inside this repo and waits for it (refuses with exit 75
+without `CT_WAIT`) instead of piling on. Nothing to install, nothing
+on PATH. A hand-started job is only ever waited on, never killed.
+
+**Heavy non-cargo jobs go through the same lock.** The lock guards
+CORES, not cargo specifically: a bench sweep, an upstream `svelte-check`
+comparison, or a standalone tsgo run starves a test suite exactly the
+way a second cargo does — a warm 30s `cargo test --workspace` was last
+measured at ~10 minutes while a 7000-file upstream comparison ran
+beside it, with no second cargo anywhere. Exec mode routes them
+through the same lock:
+
+```sh
+CT_WAIT=1 scripts/ct exec node scripts/bench.mjs --target bench/foo
+CT_WAIT=1 scripts/ct exec ./node_modules/.bin/svelte-check --tsgo
+```
+
+This holds without discipline the same two ways the cargo rule does:
+the PreToolUse hook rewrites direct agent invocations of
+`svelte-check-native` / `svelte-check` / `tsgo` / `node …bench.mjs`
+into `ct exec` automatically, and ct itself waits for any such process
+already running in the repo before spawning. The hook cannot see a
+binary held in a shell variable (`"$TSGO" -p …`) — write `ct exec`
+yourself in scripts and for variable-held paths. Quick one-file probes
+(a single `tsgo -p` on a fixture, diff-emit on one component) don't
+need it; sustained multi-file sweeps do.
 
 CI needs nothing: each workflow runs on its own fresh runner with its own
 target directory, so there is no contention to serialise.

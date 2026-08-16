@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 mod flatten;
 mod load;
 mod parse;
+mod version_range;
 
 pub use flatten::{FlattenedReference, flatten_references, flatten_references_from_chain};
 pub use load::{LoadError, load, load_chain, winning_field, winning_patterns};

@@ -24,6 +24,18 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   and aria attribute values escaped type-checking entirely. Together
   with the project-references fix this closes a 95-errors-vs-0
   divergence against upstream on a real workspace: all 95 were ours.
+- **File-less config diagnostics are dropped, matching upstream's
+  output.** tsgo reports an unresolvable `types` entry as a bare
+  `error TS2688: …` with no file or position; upstream
+  `svelte-check --tsgo` observably never surfaces these (verified: raw
+  tsgo fires one against upstream's own generated tsconfig while its
+  output reports 0 errors and the check completes), but we attributed
+  them to the tsconfig and reported an error upstream does not.
+  Position-anchored config errors still surface exactly as before.
+  Relatedly, a `types` entry contributed by a sibling project
+  reference is now merged into the overlay only when it resolves from
+  the overlay's own context — a name satisfied only by the sibling's
+  unhoisted pnpm store had no spelling that could resolve there.
 
 ## [1.5.0]
 

@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "aria-* attributes must be emitted into the createElement attribute object like any other attribute — upstream svelte2tsx has no aria skip; its only aria special-casing is the number-typed value list. Dropping them lost the value expressions, so identifiers used only in aria attributes fired invented TS6133, and aria values escaped type-checking entirely."
+}

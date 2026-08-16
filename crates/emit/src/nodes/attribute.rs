@@ -137,9 +137,6 @@ pub(crate) fn transform_attribute_case(name: &str, should_lowercase: bool) -> Co
 /// `data-sveltekit-*` is the carve-out: those are typed in svelte-jsx
 /// directly so the wrap would add noise — pass them through unwrapped.
 pub(crate) fn should_skip(name: &str) -> bool {
-    if name.starts_with("aria-") {
-        return true;
-    }
     if name.starts_with("--") {
         return true;
     }

@@ -17,6 +17,13 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
   empty `paths` — every aliased `.svelte` import (`$lib/…`) fired an
   invented TS2307. TypeScript resolves a project's own imports with
   that project's paths regardless of references, and so do we now.
+- **`aria-*` attributes are emitted and type-checked.** The emit
+  silently dropped every `aria-*` attribute — upstream svelte2tsx has
+  no such skip — so identifiers used only as aria values
+  (`aria-label={label}`) fired invented TS6133 under `noUnusedLocals`,
+  and aria attribute values escaped type-checking entirely. Together
+  with the project-references fix this closes a 95-errors-vs-0
+  divergence against upstream on a real workspace: all 95 were ours.
 
 ## [1.5.0]
 

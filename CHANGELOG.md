@@ -6,6 +6,53 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.5.2]
+
+A one-bug fix release completing v1.5.1's `{#await}` change: the same
+inner async wrapper that standalone `{#snippet}` declarations gained
+was missing on snippets written as component children, so those
+reported an error on code that type-checks. No CLI or behavioral
+surface changes.
+
+### Fixed
+
+- **`{#await}` inside a snippet passed to a component no longer
+  invents TS1308.** A `{#snippet}` written as a direct child of a
+  component emits as an arrow-function property on that component's
+  props object, and `{#await}` emits its `await` inline — so without
+  an inner `async () => {}` the overlay held an `await` inside a sync
+  function and tsgo reported "'await' expressions are only allowed
+  within async functions", anchored at the component's opening tag.
+  Standalone snippet declarations already opened that wrapper;
+  upstream svelte2tsx opens it for both. Any component taking snippet
+  children (`{#snippet children()}`, a `Snippet` prop, `<svelte:boundary>`'s
+  `failed`/`pending`) with an await block anywhere beneath it was
+  affected.
+
+### Internal
+
+- **The build directory, not the test suite, was making
+  `cargo test --workspace` take eleven minutes.** Cargo never removes
+  anything from `target/`, and macOS defaults dev and test builds to
+  `split-debuginfo = "unpacked"`, which leaves one codegen object per
+  unit in `deps/` for the linked binary to reference; the directory had
+  reached 552,838 files. On macOS the first execution of a newly linked
+  binary blocks while its directory is scanned, scaling with the sibling
+  count (0.2s in an empty directory, 21.6s at 552k), and that is paid
+  once per freshly linked test binary. The profiles now use
+  `split-debuginfo = "packed"`, and the same suite runs in 1m10s.
+- **`scripts/ct sweep` clears the build directory by reachability.**
+  Each binary's debug map names the objects it needs, so artifacts are
+  kept or dropped on evidence rather than age; `--deep` additionally
+  asks cargo which artifacts the current workspace claims. Both passes
+  abort rather than delete when their evidence comes back empty.
+- **`scripts/ct` narrates itself.** Every run appends a timestamped
+  trail to `.ct.log` and stderr — what it took the lock for, who it
+  queued behind, a heartbeat naming the busy processes with the run's
+  CPU and any outside process competing for the machine, and a closing
+  summary splitting wall clock into queued-vs-ran, written on ctrl-c
+  and kill as well as clean exit. `scripts/ct status` replays it.
+
 ## [1.5.1]
 
 A same-day bugfix release: a parity hunt across the bench fleet after

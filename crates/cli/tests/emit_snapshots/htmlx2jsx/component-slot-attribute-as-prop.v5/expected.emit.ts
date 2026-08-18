@@ -8,7 +8,7 @@ async function $$render_e40e2c10() {
             const __svn_inst_0 = new __svn_C_0({
                 target: __svn_any(),
                 props: {
-                    badge: () => {
+                    badge: () => { async () => {
                         {
                             const __svn_C_28 = __svn_ensure_component(ButtonBadge);
                             new __svn_C_28({ target: __svn_any(), props: {} });
@@ -25,6 +25,7 @@ async function $$render_e40e2c10() {
                                 }
                             }
                         }
+                        };
                         return __svn_snippet_return();
                     },
                 },

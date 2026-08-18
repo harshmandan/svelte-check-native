@@ -791,11 +791,19 @@ fn write_quoted_prop_key_with_source(
 /// props object:
 ///
 /// ```ts
-///     name: (params) => {
+///     name: (params) => { async () => {
 ///         <snippet body>
+///     };
 ///         return __svn_snippet_return();
 ///     }
 /// ```
+///
+/// The body sits inside an inner `async () =>` wrapper so an
+/// `{#await}` block anywhere under the snippet — which emits its
+/// `await` inline, not inside a generated async callback — still has an
+/// async context to sit in. Without it the overlay reads as `await`
+/// inside a sync arrow and TypeScript fires TS1308. Standalone
+/// `{#snippet}` declarations open the same wrapper.
 ///
 /// The parameter text is spliced verbatim from the source — that
 /// preserves user-provided type annotations, destructure patterns,
@@ -820,14 +828,16 @@ pub(crate) fn write_snippet_arrow_prop(
         .trim();
     write_object_key(buf, &s.name);
     if params_text.is_empty() {
-        let _ = writeln!(buf, ": () => {{");
+        let _ = writeln!(buf, ": () => {{ async () => {{");
         emit_template_body(buf, source, &s.body, depth + 1, insts, action_counter);
+        let _ = writeln!(buf, "{body_indent}}};");
         let _ = writeln!(buf, "{body_indent}return __svn_snippet_return();");
         let _ = write!(buf, "{indent}}}");
         return;
     }
-    let _ = writeln!(buf, ": ({params_text}) => {{");
+    let _ = writeln!(buf, ": ({params_text}) => {{ async () => {{");
     emit_template_body(buf, source, &s.body, depth + 1, insts, action_counter);
+    let _ = writeln!(buf, "{body_indent}}};");
     for ident in all_identifiers(params_text) {
         let _ = writeln!(buf, "{body_indent}void {ident};");
     }

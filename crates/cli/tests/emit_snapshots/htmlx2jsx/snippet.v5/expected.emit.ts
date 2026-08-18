@@ -61,9 +61,10 @@ async function $$render_e40e2c10() {
                 const __svn_inst_122 = new __svn_C_122({
                     target: __svn_any(),
                     props: {
-                        bar: (x) => {
+                        bar: (x) => { async () => {
                             { svelteHTML.createElement("div", {});                                 (x);
                             }
+                            };
                             void x;
                             return __svn_snippet_return();
                         },
@@ -81,17 +82,19 @@ async function $$render_e40e2c10() {
                     target: __svn_any(),
                     props: {
                         "data": ([1, 2, 3]),
-                        row: (item) => {
+                        row: (item) => { async () => {
                             (item);
+                            };
                             void item;
                             return __svn_snippet_return();
                         },
-                        await_inside: () => {
+                        await_inside: () => { async () => {
                             { const $$_promise = (foo);
                                 const $$_await = await $$_promise; const bar = $$_await;
                                 (bar);
                                 void bar;
                             }
+                            };
                             return __svn_snippet_return();
                         },
                     },
@@ -110,13 +113,15 @@ async function $$render_e40e2c10() {
                     target: __svn_any(),
                     props: {
                         "data": ([1, 2, 3]),
-                        row1: (item) => {
+                        row1: (item) => { async () => {
                             (item);
+                            };
                             void item;
                             return __svn_snippet_return();
                         },
-                        row2: (item) => {
+                        row2: (item) => { async () => {
                             (item);
+                            };
                             void item;
                             return __svn_snippet_return();
                         },

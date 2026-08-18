@@ -13,11 +13,12 @@ async function $$render_e40e2c10() {
             const __svn_inst_72 = new __svn_C_72({
                 target: __svn_any(),
                 props: {
-                    badge: () => {
+                    badge: () => { async () => {
                         {
                             const __svn_C_9a = __svn_ensure_component(ButtonBadge);
                             new __svn_C_9a({ target: __svn_any(), props: {} });
                         }
+                        };
                         return __svn_snippet_return();
                     },
                 },

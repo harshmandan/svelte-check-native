@@ -5,9 +5,10 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         { svelteHTML.createElement("svelte:boundary", {
             "onerror": (e => e),
-            failed: (e) => {
+            failed: (e) => { async () => {
                 { svelteHTML.createElement("p", {});                     (e);
                 }
+                };
                 void e;
                 return __svn_snippet_return();
             },

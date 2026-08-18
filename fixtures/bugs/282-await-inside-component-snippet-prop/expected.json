@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A `{#snippet}` written as a direct child of a component becomes an arrow-function property on that component's props object. `{#await}` emits its `await` inline, so that arrow has to open an inner `async () => {}` wrapper the same way a standalone snippet declaration does — without it the overlay holds `await` inside a sync arrow and TypeScript fires TS1308 ('await expressions are only allowed within async functions'), a pure false positive at the component's opening tag."
+}

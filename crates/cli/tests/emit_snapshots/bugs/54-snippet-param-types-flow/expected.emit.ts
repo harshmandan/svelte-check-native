@@ -49,17 +49,19 @@ async function $$render_e40e2c10() {
             const __svn_inst_f9 = new __svn_C_f9({
                 target: __svn_any(),
                 props: {
-                    row: ({ id, label }) => {
+                    row: ({ id, label }) => { async () => {
                         { svelteHTML.createElement("p", {});                             (formatId(id));
                             (label.toUpperCase());
                         }
+                        };
                         void id;
                         void label;
                         return __svn_snippet_return();
                     },
-                    header: (columns) => {
+                    header: (columns) => { async () => {
                         { svelteHTML.createElement("h1", {});                             (joinLabels(columns));
                         }
+                        };
                         void columns;
                         return __svn_snippet_return();
                     },

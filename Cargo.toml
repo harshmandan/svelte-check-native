@@ -125,7 +125,21 @@ debug = "full"
 strip = "none"
 
 [profile.dev]
-# keep default
+# macOS defaults to `split-debuginfo = "unpacked"`, which leaves the
+# DWARF for every codegen unit in a `.rcgu.o` file inside
+# `target/debug/deps` and points the linked binary at it. Cargo never
+# deletes the previous generation, so the directory grows without bound
+# — half a million objects here before this was found. That is not just
+# disk: on macOS the FIRST execution of a newly linked binary blocks
+# while its directory is scanned, and the cost scales with the sibling
+# count (measured: 0.2s in an empty directory, 2.4s at 209k files, 21.6s
+# at 552k), which is paid once per freshly linked test binary and turned
+# a one-minute `cargo test --workspace` into eleven.
+#
+# "packed" collects the debug info into a `.dSYM` bundle at link time
+# instead, so the objects are deleted once linking is done and the
+# directory stays small. It costs a dsymutil pass per binary.
+split-debuginfo = "packed"
 
 [profile.test]
 # Slim debug-info to "line-tables-only" so test-binary linking is
@@ -135,6 +149,9 @@ strip = "none"
 # alone are enough for backtraces in panics, which is what tests
 # actually need.
 debug = "line-tables-only"
+# Same reason as the dev profile above: keep the codegen objects out of
+# `target/debug/deps` so freshly linked test binaries start instantly.
+split-debuginfo = "packed"
 
 [profile.bench]
 lto = "thin"

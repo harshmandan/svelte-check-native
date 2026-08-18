@@ -72,3 +72,6 @@ TEST-SPEED.md
 
 # scripts/ct lock (and its takeover scratch dirs)
 /.ct.lock*
+
+# scripts/ct run trail
+/.ct.log

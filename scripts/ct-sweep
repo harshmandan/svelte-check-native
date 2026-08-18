@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+#
+# Delete build artifacts nothing can still be using, by reachability
+# rather than by age.
+#
+# Why not by age
+# --------------
+# Cargo never removes anything from `target/`: every rebuild writes a
+# new hash-named artifact and orphans the previous one. On macOS the
+# dev and test profiles keep one `.rcgu.o` per codegen unit next to the
+# binary that references it, so the orphans arrive in the hundreds of
+# thousands — 552,838 files here before this was noticed, of which
+# 19,392 were reachable.
+#
+# That is a wall-clock problem, not a disk one: the first execution of
+# a newly linked binary blocks while its directory is scanned, and the
+# cost scales with the sibling count (0.2s in an empty directory, 0.7s
+# at 19k files, 21.6s at 552k). Paid once per freshly linked test
+# binary, it turned a green `cargo test --workspace` into eleven
+# minutes of mostly waiting.
+#
+# The obvious cleanup — delete what is older than N days — is wrong in
+# both directions: it removes objects belonging to a crate that simply
+# has not changed in months, and it keeps this morning's dead
+# generations. Every linked binary records the exact object files it
+# needs, so "does anything reference this" is a question with a real
+# answer, and that is what this script asks.
+#
+# What it deletes
+# ---------------
+# Default: loose codegen objects in the profile's `deps/` that no
+# binary present references. Provably safe — a binary that exists keeps
+# its objects, whatever its age, and nothing is deleted on a product we
+# could not read.
+#
+# `--deep` additionally asks cargo which artifacts belong to the
+# current workspace (`--message-format=json`) and removes the rest:
+# rlibs and binaries left behind by dependency versions and feature
+# sets you no longer build. That reclaims the gigabytes rather than the
+# file count, at the cost of rebuilding anything the probe build did
+# not cover.
+#
+# Usage:
+#   scripts/ct sweep                # objects only, debug profile
+#   scripts/ct sweep --dry-run      # report, delete nothing
+#   scripts/ct sweep --release      # sweep target/release instead
+#   scripts/ct sweep --deep         # also drop artifacts cargo no longer claims
+
+set -uo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+target_root="${CARGO_TARGET_DIR:-${repo_root}/target}"
+profile="debug"
+dry_run=0
+deep=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --dry-run|-n) dry_run=1 ;;
+        --release) profile="release" ;;
+        --deep) deep=1 ;;
+        -h|--help)
+            sed -n '3,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        *)
+            echo "ct sweep: unknown argument '$1'" >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
+deps_dir="${target_root}/${profile}/deps"
+if [ ! -d "$deps_dir" ]; then
+    echo "ct sweep: nothing to do — ${deps_dir} does not exist"
+    exit 0
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/ct-sweep.XXXXXX")" || exit 1
+
+# "Nothing needed deleting" is as much a completed sweep as one that
+# freed gigabytes, so the stamp is written on any successful non-dry
+# run rather than only where deletion happens — otherwise a clean tree
+# reports as never swept forever. Its mtime is the whole record;
+# `ct status` reads it so nobody has to remember.
+finish() {
+    local status=$?
+    rm -rf "$work"
+    if [ "$status" = "0" ] && [ "$dry_run" = "0" ]; then
+        touch "${target_root}/.ct-last-sweep" 2>/dev/null
+    fi
+    exit "$status"
+}
+trap finish EXIT INT TERM HUP
+
+say() { echo "ct sweep: $1"; }
+
+# One listing for the whole run: on a bloated directory this alone
+# takes tens of seconds, so nothing below re-reads it.
+( cd "$deps_dir" && ls -f ) > "${work}/all.txt"
+say "$(wc -l < "${work}/all.txt" | tr -d ' ') entries in ${profile}/deps"
+
+grep '\.o$' "${work}/all.txt" | sort > "${work}/objects.txt"
+object_count="$(wc -l < "${work}/objects.txt" | tr -d ' ')"
+if [ "$object_count" -eq 0 ] && [ "$deep" = "0" ]; then
+    say "no loose codegen objects — nothing to sweep"
+    exit 0
+fi
+
+# Products are the things that can reference an object: executables and
+# dylibs. Everything cargo writes with a known artifact extension is
+# excluded by name, which is cheaper and more reliable than probing
+# half a million files for their type.
+grep -v -E '\.(o|d|rlib|rmeta|dSYM|json|timestamp)$' "${work}/all.txt" | sort > "${work}/products.txt"
+
+# An object's filename carries the product it was built for, so an
+# object whose product is gone is orphaned without reading anything.
+# This is what makes the sweep affordable: the expensive per-product
+# step below only runs for products that still exist.
+awk '{ n = $0; sub(/\..*/, "", n); print n }' "${work}/objects.txt" | sort -u > "${work}/object-owners.txt"
+comm -12 "${work}/object-owners.txt" "${work}/products.txt" > "${work}/live-products.txt"
+live_product_count="$(wc -l < "${work}/live-products.txt" | tr -d ' ')"
+say "${object_count} codegen objects across $(wc -l < "${work}/object-owners.txt" | tr -d ' ') products, ${live_product_count} of those products still present"
+
+# Ask each surviving binary which objects it needs. A product whose
+# debug map cannot be read is recorded rather than assumed empty —
+# assuming empty would delete objects that are actually in use.
+: > "${work}/live-objects.txt"
+: > "${work}/unreadable.txt"
+if [ "$live_product_count" -gt 0 ]; then
+    say "reading debug maps (this is the slow part)"
+    # `xargs -I` is not usable here: BSD xargs assembles the whole
+    # replacement into one command line and refuses a script this long,
+    # which fails the read for every product at once. `-n 1` with the
+    # filename as a positional keeps the script out of the substitution.
+    ( cd "$deps_dir" && xargs -P 4 -n 1 sh -c '
+        map="$(dsymutil --dump-debug-map "$1" 2>/dev/null | sed -n "s/.*filename: *.\(.*\)./\1/p" | sed "s|.*/||" | grep "\.o$")"
+        if [ -z "$map" ]; then echo "UNREADABLE $1"; else printf "%s\n" "$map"; fi
+    ' sh < "${work}/live-products.txt" ) > "${work}/raw-map.txt"
+    grep '^UNREADABLE ' "${work}/raw-map.txt" | sed 's/^UNREADABLE //' | sort -u > "${work}/unreadable.txt"
+    grep -v '^UNREADABLE ' "${work}/raw-map.txt" | sort -u > "${work}/live-objects.txt"
+fi
+
+unreadable_count="$(wc -l < "${work}/unreadable.txt" | tr -d ' ')"
+if [ "$unreadable_count" -gt 0 ]; then
+    say "${unreadable_count} products had no readable debug map — keeping every object of theirs"
+    # Their objects rejoin the live set by name, so the sweep stays
+    # conservative exactly where its evidence ran out.
+    while read -r p; do
+        grep "^${p}\." "${work}/objects.txt"
+    done < "${work}/unreadable.txt" >> "${work}/live-objects.txt"
+    sort -u -o "${work}/live-objects.txt" "${work}/live-objects.txt"
+fi
+
+# A binary that links objects and reports needing none is not a binary
+# with no objects — it is a read that failed. Without this check the
+# sweep's answer to a broken toolchain, a permissions problem, or a
+# malformed command line is "delete everything", which is the one
+# outcome this script must never produce by accident.
+if [ "$live_product_count" -gt 0 ] && [ ! -s "${work}/live-objects.txt" ]; then
+    say "ABORT: ${live_product_count} products are present but not one named an object it needs."
+    say "ABORT: that is a failed read, not an empty result — nothing deleted."
+    exit 1
+fi
+
+comm -23 "${work}/objects.txt" "${work}/live-objects.txt" > "${work}/garbage.txt"
+
+if [ "$deep" = "1" ]; then
+    # Cargo is the only thing that knows which rlibs and binaries the
+    # current workspace resolves to; the reverse question (is this
+    # rlib obsolete?) has no answer from the filesystem alone. A probe
+    # build with JSON output names them, and anything else in deps/ is
+    # left over from a dependency version or feature set that is no
+    # longer part of the build.
+    say "asking cargo which artifacts the current workspace claims"
+    claim_flags="--workspace --all-targets --message-format=json"
+    [ "$profile" = "release" ] && claim_flags="${claim_flags} --release"
+    # shellcheck disable=SC2086
+    "${CT_CARGO:-cargo}" build $claim_flags 2>/dev/null |
+        sed -n 's/.*"filenames":\[\([^]]*\)\].*/\1/p' | tr ',' '\n' | tr -d '"' |
+        sed 's|.*/||' | sort -u > "${work}/claimed.txt"
+    if [ ! -s "${work}/claimed.txt" ]; then
+        say "cargo named no artifacts — skipping the deep pass rather than guessing"
+    else
+        say "cargo claims $(wc -l < "${work}/claimed.txt" | tr -d ' ') artifacts"
+        # Products keep their own objects and dep-info alive, so match
+        # on the product stem rather than the exact filename.
+        awk '{ n = $0; sub(/\.[^.]*$/, "", n); print n }' "${work}/claimed.txt" | sort -u > "${work}/claimed-stems.txt"
+        grep -E '\.(rlib|rmeta)$' "${work}/all.txt" | sort > "${work}/libs.txt"
+        awk '{ n = $0; sub(/\.[^.]*$/, "", n); print n }' "${work}/libs.txt" | sort -u > "${work}/lib-stems.txt"
+        comm -23 "${work}/lib-stems.txt" "${work}/claimed-stems.txt" > "${work}/stale-stems.txt"
+        while read -r stem; do
+            grep "^${stem}\." "${work}/libs.txt"
+        done < "${work}/stale-stems.txt" >> "${work}/garbage.txt"
+        sort -u -o "${work}/garbage.txt" "${work}/garbage.txt"
+
+        # The whole deep pass rests on one claim: nothing cargo just
+        # named can end up on the delete list. Check it against the
+        # list itself rather than trusting the set arithmetic that
+        # produced it — a stem-matching slip here deletes artifacts the
+        # current build depends on.
+        if comm -12 "${work}/claimed.txt" "${work}/garbage.txt" | grep -q .; then
+            say "ABORT: the delete list contains artifacts cargo just claimed — nothing deleted."
+            comm -12 "${work}/claimed.txt" "${work}/garbage.txt" | head -3 | sed 's/^/     /'
+            exit 1
+        fi
+    fi
+fi
+
+garbage_count="$(wc -l < "${work}/garbage.txt" | tr -d ' ')"
+kept=$((object_count - $(comm -12 "${work}/objects.txt" "${work}/garbage.txt" | wc -l | tr -d ' ')))
+if [ "$garbage_count" -eq 0 ]; then
+    say "nothing unreachable — ${object_count} objects all in use"
+    exit 0
+fi
+
+bytes="$( ( cd "$deps_dir" && tr '\n' '\0' < "${work}/garbage.txt" | xargs -0 stat -f %z 2>/dev/null ) | awk '{ s += $1 } END { printf "%d", s / 1048576 }')"
+say "${garbage_count} unreachable artifacts (~${bytes}MB); ${kept} objects stay because something references them"
+
+if [ "$dry_run" = "1" ]; then
+    say "dry run — nothing deleted. First few:"
+    head -5 "${work}/garbage.txt" | sed 's/^/     /'
+    exit 0
+fi
+
+( cd "$deps_dir" && tr '\n' '\0' < "${work}/garbage.txt" | xargs -0 rm -f )
+say "deleted ${garbage_count} artifacts; ${profile}/deps now holds $( ( cd "$deps_dir" && ls -f ) | wc -l | tr -d ' ') entries"
+say "directory inode is now $(stat -f %z "$deps_dir" 2>/dev/null || echo '?') bytes — the number that governs how long a freshly linked binary takes to start"

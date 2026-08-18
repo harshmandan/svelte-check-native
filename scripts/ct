@@ -58,6 +58,29 @@
 #
 #   CT_WAIT=1 scripts/ct test      # wait for a live run instead of refusing
 #   CT_TIMEOUT=900 scripts/ct test # give up waiting after N seconds
+#
+# Knowing what it is doing
+# ------------------------
+# A run that takes ten minutes looks identical from outside to a run
+# stuck behind the lock, so ct narrates itself. Every run appends a
+# timestamped trail to `.ct.log` — lock taken or waited for and behind
+# whom, the job spawned, a heartbeat naming the processes actually
+# running, and a closing summary with the wall-clock split between
+# waiting and working. The same lines go to stderr as they happen
+# (`CT_QUIET=1` silences that half; the log is always written).
+#
+# The trail is on disk, so it answers the question AFTER the fact too —
+# including when the run was ctrl-c'd or killed outright, which is
+# exactly when nothing was on screen to read:
+#
+#   scripts/ct status      # who holds the lock now + the recent trail
+#   scripts/ct status -f   # follow it live from another terminal
+#
+# Heartbeat samples name the busiest processes, so a slow run reports
+# where its time went ("test binary X for 4m") instead of leaving the
+# reader to guess between a stall, a queue, and honest work.
+#
+#   CT_HEARTBEAT=10 scripts/ct test  # sample every N seconds (default 20)
 
 set -uo pipefail
 
@@ -65,12 +88,102 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Outside target/ on purpose: `scripts/ct clean` must not delete the
 # very lock that is serialising it.
 lock_dir="${repo_root}/.ct.lock"
+log_file="${repo_root}/.ct.log"
 wait_for_lock="${CT_WAIT:-0}"
 wait_timeout="${CT_TIMEOUT:-1800}"
+heartbeat_secs="${CT_HEARTBEAT:-20}"
+quiet="${CT_QUIET:-0}"
 
 if [ "$#" -eq 0 ]; then
     echo "usage: scripts/ct <cargo-subcommand> [args...] | scripts/ct exec <command> [args...]" >&2
+    echo "       scripts/ct status [-f]" >&2
     exit 2
+fi
+
+# --- narration -------------------------------------------------------
+#
+# Two destinations on purpose: stderr is for whoever is watching now,
+# the log is for whoever asks later — after a ctrl-c, after a killed
+# agent session, or from a second terminal while the run is still going.
+
+# Trim on entry rather than on write, so a long run never pays for it.
+if [ -f "$log_file" ] && [ "$(wc -c < "$log_file" 2>/dev/null || echo 0)" -gt 1000000 ]; then
+    tail -n 2000 "$log_file" > "${log_file}.trim" 2>/dev/null && mv "${log_file}.trim" "$log_file"
+fi
+
+note() {
+    [ "$quiet" = "1" ] || echo "ct: $1" >&2
+    printf '%s [%d] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$$" "$1" >> "$log_file" 2>/dev/null
+}
+
+# Log-only: heartbeat detail that would be noise on screen but is the
+# whole point of the trail when reconstructing a run afterwards.
+note_log() {
+    printf '%s [%d] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$$" "$1" >> "$log_file" 2>/dev/null
+}
+
+hms() {
+    local s="$1"
+    if [ "$s" -ge 60 ]; then
+        printf '%dm%02ds' $((s / 60)) $((s % 60))
+    else
+        printf '%ds' "$s"
+    fi
+}
+
+# `status`: what is happening right now, plus the recent trail. This is
+# the answer to "it sat there for ten minutes and I have nothing".
+if [ "$1" = "status" ]; then
+    if [ -d "$lock_dir" ]; then
+        owner="$(cat "${lock_dir}/pid" 2>/dev/null || echo '?')"
+        owner_cmd="$(cat "${lock_dir}/cmd" 2>/dev/null || echo '?')"
+        if kill -0 "$owner" 2>/dev/null; then
+            echo "ct: lock held by pid ${owner} (running ${owner_cmd}), up $(ps -o etime= -p "$owner" 2>/dev/null | tr -d ' ')"
+            # The job lives in its own process group (that is what makes
+            # it killable as a unit), so list by that, not by the
+            # wrapper's pid.
+            group="$(cat "${lock_dir}/pgid" 2>/dev/null || echo "$owner")"
+            echo "ct: processes in that run:"
+            ps -eo pgid=,pid=,pcpu=,etime=,command= 2>/dev/null |
+                awk -v g="$group" '$1 == g { $1 = ""; print "     " $0 }' | head -20
+        else
+            echo "ct: lock directory exists but its owner (pid ${owner}) is gone — the next run will reclaim it"
+        fi
+    else
+        echo "ct: no run is holding the lock"
+    fi
+    # Build-directory health, since "why is this slow" is usually
+    # answered here and the numbers are free to read.
+    status_deps="${CARGO_TARGET_DIR:-${repo_root}/target}/debug/deps"
+    if [ -d "$status_deps" ]; then
+        size="$(stat -f %z "$status_deps" 2>/dev/null || stat -c %s "$status_deps" 2>/dev/null || echo 0)"
+        printf 'ct: debug/deps directory entries occupy %sKB' "$((size / 1000))"
+        [ "$size" -gt 2000000 ] && printf ' — bloated; run scripts/ct sweep'
+        printf '\n'
+    fi
+    stamp="${CARGO_TARGET_DIR:-${repo_root}/target}/.ct-last-sweep"
+    if [ -f "$stamp" ]; then
+        echo "ct: last swept $(( ( $(date +%s) - $(stat -f %m "$stamp" 2>/dev/null || stat -c %Y "$stamp" 2>/dev/null || date +%s) ) / 86400 )) days ago"
+    else
+        echo "ct: never swept (scripts/ct sweep --dry-run reports without deleting)"
+    fi
+    echo "ct: --- ${log_file} ---"
+    if [ "${2:-}" = "-f" ]; then
+        tail -n 20 -f "$log_file" 2>/dev/null
+    else
+        tail -n 40 "$log_file" 2>/dev/null || echo "ct: (no log yet)"
+    fi
+    exit 0
+fi
+
+# `sweep` is the build-directory cleaner. It reads every product's
+# debug map and can delete a lot, so it runs through the same lock as
+# everything else — a sweep racing a build would read a half-written
+# artifact set. Expressed as an exec so the locking, process group, and
+# narration below apply unchanged.
+if [ "$1" = "sweep" ]; then
+    shift
+    set -- exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ct-sweep" "$@"
 fi
 
 # `exec` mode: serialise an arbitrary heavy command under the same
@@ -91,12 +204,22 @@ proc_start() {
     ps -o lstart= -p "$1" 2>/dev/null
 }
 
+if [ "$exec_mode" = "1" ]; then
+    job_desc="exec $*"
+else
+    job_desc="${CT_CARGO:-cargo} $*"
+fi
+started_at="$(date +%s)"
+
 # `mkdir` is atomic on every filesystem we care about, so it is the
 # lock; the pid identity goes inside it immediately after.
 take_lock() {
     mkdir "$lock_dir" 2>/dev/null || return 1
     echo "$$" > "${lock_dir}/pid"
     proc_start "$$" > "${lock_dir}/start"
+    # So a waiter can name what it is queued behind, and `ct status`
+    # can say what the machine is busy with.
+    echo "$job_desc" > "${lock_dir}/cmd"
 }
 
 lock_age() {
@@ -236,32 +359,52 @@ foreign_heavy() {
 
 reap_orphans
 
+note "start: ${job_desc}"
+
 waited=0
+lock_waited=0
 until take_lock; do
     if ! owner_alive; then
         reap_stale
         continue
     fi
+    holder="$(cat "${lock_dir}/pid" 2>/dev/null)"
+    holder_cmd="$(cat "${lock_dir}/cmd" 2>/dev/null || echo 'a cargo run')"
     if [ "$wait_for_lock" != "1" ]; then
-        echo "ct: another cargo run is active (pid $(cat "${lock_dir}/pid" 2>/dev/null))." >&2
+        note "refusing: pid ${holder} is already running ${holder_cmd}"
         echo "ct: concurrent builds starve each other — 29s becomes ~570s." >&2
         echo "ct: wait for it, re-run with CT_WAIT=1, or kill it and retry." >&2
         exit 75    # EX_TEMPFAIL — a retry may succeed
     fi
     if [ "$waited" -ge "$wait_timeout" ]; then
-        echo "ct: gave up waiting after ${wait_timeout}s for pid $(cat "${lock_dir}/pid" 2>/dev/null)" >&2
+        note "gave up waiting after $(hms "$waited") for pid ${holder} (${holder_cmd})"
         exit 75
     fi
-    [ "$waited" -eq 0 ] && echo "ct: waiting for the active cargo run to finish..." >&2
+    # Re-announce on a cadence: a silent wait and a silent run look the
+    # same from outside, and the difference is the whole diagnosis.
+    if [ $((waited % heartbeat_secs)) -lt 2 ]; then
+        note "queued $(hms "$waited") behind pid ${holder} (${holder_cmd}) — waiting for it to finish"
+    fi
     sleep 2
     waited=$((waited + 2))
+    lock_waited="$waited"
 done
+[ "$lock_waited" -gt 0 ] && note "lock acquired after $(hms "$lock_waited") of waiting"
 
 child_pgid=""
+heartbeat_pid=""
+spawned_at=""
+# Where the heartbeat records who was busy, so the closing summary can
+# attribute the wall clock instead of just reporting its size.
+sample_file="${TMPDIR:-/tmp}/ct.samples.$$"
+hog_file="${TMPDIR:-/tmp}/ct.hogs.$$"
+
 cleanup() {
     local status=$?
     trap - EXIT INT TERM HUP
+    [ -n "$heartbeat_pid" ] && kill "$heartbeat_pid" 2>/dev/null
     if [ -n "$child_pgid" ] && kill -0 "-${child_pgid}" 2>/dev/null; then
+        note "stopping ${job_desc} (process group ${child_pgid})"
         kill -TERM "-${child_pgid}" 2>/dev/null
         for _ in 1 2 3 4 5; do
             kill -0 "-${child_pgid}" 2>/dev/null || break
@@ -270,26 +413,63 @@ cleanup() {
         kill -KILL "-${child_pgid}" 2>/dev/null
     fi
     rm -rf "$lock_dir"
+    summarise "$status"
+    rm -f "$sample_file" "$hog_file"
     exit "$status"
+}
+
+# The closing line every run leaves behind, whichever way it ended:
+# how long, how much of that was queueing rather than working, and
+# which processes the heartbeat kept finding busy.
+summarise() {
+    local total ran busiest hogs
+    total=$(( $(date +%s) - started_at ))
+    if [ -n "$spawned_at" ]; then
+        ran=$(( $(date +%s) - spawned_at ))
+    else
+        ran=0
+    fi
+    busiest=""
+    if [ -s "$sample_file" ]; then
+        busiest="$(sort "$sample_file" | uniq -c | sort -rn | head -4 |
+            awk -v i="$heartbeat_secs" '{ printf "%s ~%ds, ", $2, $1 * i }' | sed 's/, $//')"
+    fi
+    hogs=""
+    if [ -s "$hog_file" ]; then
+        hogs="$(sort "$hog_file" | uniq -c | sort -rn | head -3 |
+            awk -v i="$heartbeat_secs" '{ printf "%s ~%ds, ", $2, $1 * i }' | sed 's/, $//')"
+    fi
+    note "done: ${job_desc} — exit ${1}, total $(hms "$total") (queued $(hms "$((total - ran))"), ran $(hms "$ran"))"
+    [ -n "$busiest" ] && note "where the time went: ${busiest}"
+    # Named separately from our own processes: this is the answer when
+    # the run is slow but its own CPU number stayed low the whole time.
+    [ -n "$hogs" ] && note "competing for the machine meanwhile: ${hogs}"
+    note "trail: ${log_file} — replay with 'scripts/ct status'"
 }
 trap cleanup EXIT INT TERM HUP
 
 # Lock held; now also wait out any hand-started heavy job working in
 # this repo. It cannot be told to queue, so we are the ones who yield.
+foreign_waited=0
 while pid="$(foreign_heavy)"; do
+    outside_cmd="$(ps -o command= -p "$pid" 2>/dev/null | cut -c1-90)"
     if [ "$wait_for_lock" != "1" ]; then
-        echo "ct: a heavy job started outside ct is running in this repo (pid ${pid})." >&2
+        note "refusing: a heavy job started outside ct is running here — pid ${pid} (${outside_cmd})"
         echo "ct: wait for it, re-run with CT_WAIT=1, or kill it and retry." >&2
         exit 75
     fi
     if [ "$waited" -ge "$wait_timeout" ]; then
-        echo "ct: gave up waiting after ${waited}s for outside job (pid ${pid})" >&2
+        note "gave up waiting after $(hms "$waited") for outside job pid ${pid} (${outside_cmd})"
         exit 75
     fi
-    [ "$waited" -eq 0 ] && echo "ct: waiting for an outside heavy job (pid ${pid}) to finish..." >&2
+    if [ $((foreign_waited % heartbeat_secs)) -lt 2 ]; then
+        note "queued $(hms "$foreign_waited") behind an outside job — pid ${pid} (${outside_cmd})"
+    fi
     sleep 2
     waited=$((waited + 2))
+    foreign_waited=$((foreign_waited + 2))
 done
+[ "$foreign_waited" -gt 0 ] && note "outside job finished after $(hms "$foreign_waited") — proceeding"
 
 # Job control puts the child in its own process group, which is what
 # makes `kill -- -PGID` reach cargo *and* every rustc it spawned.
@@ -302,6 +482,89 @@ fi
 child_pid=$!
 child_pgid="$child_pid"
 set +m
+spawned_at="$(date +%s)"
+echo "$child_pgid" > "${lock_dir}/pgid" 2>/dev/null
+note "running: ${job_desc} (pid ${child_pid})"
+
+# A build directory that has accumulated hundreds of thousands of stale
+# artifacts makes every FRESHLY LINKED binary slow to start: the first
+# execution of a new file blocks while the system scans the directory it
+# lives in, and that cost scales with the number of siblings. Measured
+# here at ~16-22s per binary against 552k files, versus 0.2s for the
+# same binary in an empty directory — which turns a test run that
+# should take a minute into ten, with the run's own CPU sitting near
+# zero the whole time and nothing in cargo's output to explain it.
+#
+# The directory inode's own size is a free proxy for how many entries
+# it holds (17MB at 552k files, under 1KB when healthy), so this costs
+# nothing to check on every run; counting the entries would itself take
+# 40 seconds.
+deps_dir="${CARGO_TARGET_DIR:-${repo_root}/target}/debug/deps"
+if [ "$exec_mode" != "1" ] && [ -d "$deps_dir" ]; then
+    deps_size="$(stat -f %z "$deps_dir" 2>/dev/null || stat -c %s "$deps_dir" 2>/dev/null || echo 0)"
+    if [ "${deps_size:-0}" -gt 2000000 ]; then
+        note "warning: ${deps_dir} is bloated (~$((deps_size / 1000000))MB of directory entries; a healthy one here is ~0.03MB)."
+        # Deliberately not 'cargo clean': that also discards the live
+        # cache, so the next build pays a full rebuild for a problem
+        # caused entirely by dead artifacts. The sweep keeps what is
+        # still referenced.
+        note "warning: newly linked binaries will stall on first run. 'scripts/ct sweep' clears the dead artifacts and keeps the cache."
+    fi
+fi
+
+# Names of the processes in the run's group, busiest first, path
+# stripped — a cargo test spends its wall clock inside test binaries and
+# rustc, and naming them turns "it has been eight minutes" into "it has
+# been eight minutes in this suite".
+active_names() {
+    ps -eo pgid=,pcpu=,comm= 2>/dev/null |
+        awk -v g="$child_pgid" '$1 == g { name = $3; sub(/.*\//, "", name); sub(/-[0-9a-f]{8,}$/, "", name); print $2, name }' |
+        sort -rn | awk '{ print $2 }' | head -4
+}
+
+# Total CPU the run is drawing, as a percentage of one core. A number
+# far below 100 on a job that should be compute-bound means it is
+# waiting, not working — the single most useful number for telling a
+# slow build apart from a starved one.
+run_cpu() {
+    ps -eo pgid=,pcpu= 2>/dev/null |
+        awk -v g="$child_pgid" '$1 == g { sum += $2 } END { printf "%d", sum }'
+}
+
+# The other side of that question: who else is eating this machine.
+# Anything heavy outside our process group gets named, because a run
+# competing with a 1.3-core emulator is slow for a reason that no
+# amount of staring at cargo will explain. Threshold keeps idle
+# desktop processes out of the log.
+outside_hogs() {
+    ps -eo pgid=,pcpu=,comm= 2>/dev/null |
+        awk -v g="$child_pgid" '$1 != g && $2 >= 25 { name = $3; sub(/.*\//, "", name); printf "%s %d\n", name, $2 }' |
+        sort -k2 -rn | head -3
+}
+
+# Heartbeat: one line every CT_HEARTBEAT seconds for as long as the job
+# lives, so a run is never silent for longer than that interval, and the
+# log holds a sampled record of where the time actually went.
+(
+    while kill -0 "$child_pid" 2>/dev/null; do
+        sleep "$heartbeat_secs"
+        kill -0 "$child_pid" 2>/dev/null || break
+        busy="$(active_names | tr '\n' ' ')"
+        [ -n "$busy" ] && printf '%s\n' $busy >> "$sample_file" 2>/dev/null
+        cpu="$(run_cpu)"
+        hogs="$(outside_hogs)"
+        line="[$(hms $(( $(date +%s) - spawned_at )))] ${job_desc} — cpu ${cpu}% — busy: ${busy:-(nothing running; waiting on I/O)}"
+        if [ -n "$hogs" ]; then
+            printf '%s\n' "$hogs" | awk '{ print $1 }' >> "$hog_file" 2>/dev/null
+            line="${line}— competing for the machine: $(printf '%s\n' "$hogs" | awk '{ printf "%s %s%%, ", $1, $2 }' | sed 's/, $//')"
+        fi
+        note "$line"
+    done
+) &
+heartbeat_pid=$!
+# Off the job table: killing it at cleanup is bookkeeping, and bash
+# would otherwise print a "Terminated" notice over the run's own output.
+disown "$heartbeat_pid" 2>/dev/null
 
 wait "$child_pid"
 exit $?

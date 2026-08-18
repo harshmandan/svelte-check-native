@@ -127,6 +127,56 @@ behind the first; without it, it refuses with exit 75. Verified with
 three simultaneous runs — two queued, all three completed, exit 0. It runs cargo in its own process group and kills that group on
 EXIT/INT/TERM/HUP, so ctrl-c or a closed terminal takes the build with it.
 
+**A ct run narrates itself.** A queued run and a slow one look identical
+from outside — both are just silence — so ct says which it is, on
+stderr as it happens and in `.ct.log` (gitignored) permanently. Every
+run logs the job it took the lock for, who it queued behind and for how
+long, a heartbeat every `CT_HEARTBEAT` seconds (default 20) naming the
+processes actually burning time, and a closing summary splitting the
+wall clock into queued-vs-ran plus the busiest processes it sampled.
+The summary is written on ctrl-c and kill too, not only on clean exit:
+
+```sh
+scripts/ct status        # who holds the lock now + the recent trail
+scripts/ct status -f     # follow it live from another terminal
+CT_QUIET=1 scripts/ct …  # log only, nothing on stderr
+```
+
+**`scripts/ct sweep` clears the build directory by reachability.**
+Cargo never removes anything from `target/`, and on macOS the dev and
+test profiles used to leave one `.rcgu.o` per codegen unit beside the
+binary referencing it — 552,838 files and 15GB here before it was
+noticed. That is a wall-clock problem, not a disk one: the first run of
+a newly linked binary blocks while its directory is scanned, and the
+cost scales with the sibling count (0.2s empty, 0.7s at 19k, 21.6s at
+552k), paid once per freshly linked test binary. `split-debuginfo =
+"packed"` in the workspace profiles stops new objects accumulating; the
+sweep removes what is already there and the stale libraries beside it:
+
+```sh
+scripts/ct sweep --dry-run   # report, delete nothing
+scripts/ct sweep             # unreferenced codegen objects (no build needed)
+scripts/ct sweep --deep      # also artifacts cargo no longer claims (~5GB here)
+```
+
+Reachability, never age: a binary's debug map names the exact objects it
+needs, so an object belonging to a crate untouched for months is kept
+while this morning's dead generation goes. The default pass never
+deletes an object any present binary references; `--deep` runs a probe
+build so cargo itself names the current artifacts, and anything it did
+not cover rebuilds next time. Both passes abort rather than delete if
+their evidence comes back empty — a product that names no objects is a
+failed read, not an empty result.
+
+Two traps for agents specifically. Piping ct's output through a filter
+(`scripts/ct test 2>&1 | grep …`) discards the narration along with
+everything else it doesn't match — read `.ct.log` instead of
+re-running. And `cargo test` stops at the first failing test binary, so
+a red workspace finishes in seconds while a fully green one runs every
+suite; a run getting *slower* after a fix usually means it is now
+getting further, not that ct is stuck. `scripts/ct status` tells the
+two apart in one command.
+
 And — the case that matters for agents — if the session is SIGKILLed or
 the connection drops, no trap can run, so cleanup cannot depend on the
 dead run performing it. A dead session's processes reparent to launchd,

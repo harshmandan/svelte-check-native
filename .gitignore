@@ -76,5 +76,7 @@ TEST-SPEED.md
 # scripts/ct run trail
 /.ct.log
 
-# Local LSP spike (narrow-scope language server experiment) — not shipped.
-spike/
+# Experiment write-ups that compare against third-party projects. The
+# experiments themselves are tracked; measurements of other people's software,
+# taken on one machine at one version, are not something to publish from here.
+experiments/*.local.md

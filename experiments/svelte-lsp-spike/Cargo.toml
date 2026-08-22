@@ -1,0 +1,22 @@
+[workspace]
+
+[package]
+name = "svelte-lsp-spike"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "svelte-lsp-spike"
+path = "src/main.rs"
+
+[dependencies]
+svn-typecheck = { path = "../../crates/typecheck" }
+svn-parser = { path = "../../crates/parser" }
+svn-analyze = { path = "../../crates/analyze" }
+svn-emit = { path = "../../crates/emit" }
+svn-lint = { path = "../../crates/svn-lint" }
+svn-core = { path = "../../crates/core" }
+serde_json = "1"
+
+[profile.release]
+opt-level = 2

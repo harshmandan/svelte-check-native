@@ -1280,6 +1280,29 @@ fn map_diagnostic(
                 }
                 filters::adjust_message_if_necessary(raw.code, &mut raw.message, svelte5_plus);
             }
+            // A pug template makes unused-name diagnostics unreliable for
+            // the WHOLE file. Our overlay does not consume the pug body, so
+            // an import referenced only from pug — `A` in
+            // `A(a='{a.toFixed(2)}')` — reads as unused and draws TS6133 or
+            // TS6192 on the import line rather than inside the template. The
+            // positional pug filter below therefore never sees them.
+            //
+            // Upstream drops exactly these two for a pug file, in
+            // `isNoPugFalsePositive` (`language-server/src/plugins/typescript/
+            // features/DiagnosticsProvider.ts:394-401`), whose doc line reads
+            // "All diagnostics inside the template tag AND the unused
+            // import/variable diagnostics are marked as false positive".
+            // Confirmed against `svelte-check` 4.4.6 on a `noUnusedLocals`
+            // project: no unused diagnostics on the pug file, reported
+            // normally for a non-pug component in the same run.
+            //
+            // The cost is a genuinely-unused import going unreported in a pug
+            // file — the trade upstream already makes, and the one parity
+            // requires. 6196 is deliberately absent: upstream lists only
+            // NEVER_READ and ALL_IMPORTS_UNUSED.
+            if !data.pug_template_ranges.is_empty() && matches!(raw.code, 6133 | 6192) {
+                return None;
+            }
             match position::translate_position(data, raw.line, raw.column) {
                 Some((mapped_line, mapped_col)) => {
                     // R-Conv #20 (B2 #1): drop diagnostics inside
@@ -1288,12 +1311,13 @@ fn map_diagnostic(
                     // (DiagnosticsProvider.ts:391-401): pug bodies
                     // type-check via the same overlay walker upstream
                     // svelte2tsx uses for HTML markup, but pug is a
-                    // different syntax (indent-based). Suppress every
-                    // resulting diagnostic except `6133` (NEVER_READ)
-                    // and `6192` / `6196` (ALL_IMPORTS_UNUSED) which
-                    // are script-side hints upstream allows through.
+                    // different syntax (indent-based), so every
+                    // diagnostic landing inside one is noise.
+                    //
+                    // TS6133 / TS6192 are handled separately, above —
+                    // those land on the SCRIPT, outside every pug
+                    // range, so this positional check never sees them.
                     if !data.pug_template_ranges.is_empty()
-                        && !matches!(raw.code, 6133 | 6192 | 6196)
                         && let Some(byte) = position::position_to_byte(
                             &data.source_line_starts,
                             &data.source_text,
@@ -2306,6 +2330,70 @@ mod tests {
         assert_eq!(mapped.line, 5, "line must follow the token span");
         assert_eq!(mapped.column, 5, "column must follow the token span");
         assert_eq!(mapped.end_column, 9, "end column = column + span_length");
+    }
+
+    #[test]
+    fn unused_name_diagnostics_are_dropped_in_a_pug_file() {
+        // An import referenced only from a `<template lang="pug">` body
+        // reads as unused in our overlay, because the overlay does not
+        // consume pug. The resulting TS6133 / TS6192 land on the import
+        // line — outside every pug range, so the positional pug filter
+        // never sees them. Upstream reports no unused diagnostics at all
+        // for a file with a pug template; this drops the family so we
+        // match.
+        let gen_path = "/proj/.svelte-check/svelte/src/P.svelte.ts";
+        let layout = CacheLayout::for_workspace("/proj");
+        let mut m = HashMap::new();
+        m.insert(
+            PathBuf::from(gen_path),
+            MapData {
+                line_map: vec![LineMapEntry {
+                    overlay_start_line: 1,
+                    overlay_end_line: 4,
+                    source_start_line: 1,
+                }],
+                overlay_line_starts: vec![0, 10, 20, 30],
+                source_line_starts: vec![0, 10, 20, 30],
+                overlay_text: "0123456789".repeat(4).into(),
+                source_text: "0123456789".repeat(4).into(),
+                // A pug container further down the file — deliberately
+                // nowhere near the import line the diagnostic sits on.
+                pug_template_ranges: vec![(30, 40)],
+                ..Default::default()
+            },
+        );
+
+        for code in [6133, 6192] {
+            let raw = RawDiagnostic {
+                file: PathBuf::from(gen_path),
+                line: 2,
+                column: 4,
+                severity: Severity::Hint,
+                code,
+                message: "unused".to_string(),
+                span_length: Some(3),
+            };
+            assert!(
+                map_diagnostic(raw, &layout, &m, &HashSet::new(), true).is_none(),
+                "TS{code} must not survive in a file with a pug template",
+            );
+        }
+
+        // Everything else on the same line still comes through: the
+        // suppression is scoped to the unused family, not to the file.
+        let real = RawDiagnostic {
+            file: PathBuf::from(gen_path),
+            line: 2,
+            column: 4,
+            severity: Severity::Error,
+            code: 2322,
+            message: "not assignable".to_string(),
+            span_length: Some(3),
+        };
+        assert!(
+            map_diagnostic(real, &layout, &m, &HashSet::new(), true).is_some(),
+            "a real error outside the pug body must still surface",
+        );
     }
 
     /// Map fixture for the `__svn_ensure_transition` TS2554 filter

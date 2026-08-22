@@ -436,7 +436,7 @@ pub(crate) fn adjust_message_if_necessary(code: u32, message: &mut String, svelt
 /// `"version"` major. Unknown (no svelte install, unreadable
 /// manifest) reports `false`, mirroring upstream's
 /// `isSvelte5Plus = Number(undefined) >= 5` fallthrough.
-pub(crate) fn workspace_svelte_is_5_plus(workspace: &Path) -> bool {
+pub fn workspace_svelte_is_5_plus(workspace: &Path) -> bool {
     let mut dir = Some(workspace);
     while let Some(d) = dir {
         let manifest = d.join("node_modules").join("svelte").join("package.json");

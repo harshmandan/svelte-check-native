@@ -75,3 +75,6 @@ TEST-SPEED.md
 
 # scripts/ct run trail
 /.ct.log
+
+# Local LSP spike (narrow-scope language server experiment) — not shipped.
+spike/

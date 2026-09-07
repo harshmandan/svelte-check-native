@@ -378,7 +378,6 @@ impl ScriptComments {
         }
         codes
     }
-
 }
 
 /// Is the comment starting at `comment_start` a same-line trailing

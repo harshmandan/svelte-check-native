@@ -59,11 +59,7 @@ fn walk_directive(
 /// or None if the attribute is absent, quoted with an expression
 /// interpolation, or bound via `name={expr}`. Used for context-aware
 /// bind dispatch (`<input type="number" bind:value={...}>`).
-pub fn literal_attr_value<'a>(
-    attrs: &[Attribute],
-    name: &str,
-    source: &'a str,
-) -> Option<&'a str> {
+pub fn literal_attr_value<'a>(attrs: &[Attribute], name: &str, source: &'a str) -> Option<&'a str> {
     for attr in attrs {
         let Attribute::Plain(p) = attr else {
             continue;

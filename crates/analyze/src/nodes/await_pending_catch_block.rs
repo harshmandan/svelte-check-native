@@ -36,8 +36,9 @@ pub(crate) fn enter_then(v: &mut AnalyzeVisitor<'_>, bindings: &[BoundIdent]) {
             // matching the each-block branch.
             if b.has_default
                 && let Some(pat_range) = b.pattern_source_range
-                && let Some(pat_source) =
-                    v.source.get(pat_range.start as usize..pat_range.end as usize)
+                && let Some(pat_source) = v
+                    .source
+                    .get(pat_range.start as usize..pat_range.end as usize)
             {
                 return ResolvedSlotExpr::Value(format!(
                     "(({pat}) => {leaf})(undefined as any as ({unwrapped}))",

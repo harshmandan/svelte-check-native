@@ -6,6 +6,14 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **MSRV 1.95 → 1.96.** Required by oxc 0.148, which needs Rust 1.96.
+  `rust-toolchain.toml` moves to 1.96 with it, and the whole lockfile
+  is refreshed. oxc 0.144 → 0.148 brings only parser bug fixes for the
+  crates we use (stricter rejection of malformed input, a panic fix on
+  escaped string export names); no emit change, all snapshots stable.
+
 ## [1.5.2]
 
 A one-bug fix release completing v1.5.1's `{#await}` change: the same

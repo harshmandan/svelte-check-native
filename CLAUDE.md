@@ -253,7 +253,7 @@ no-op on this machine.
 
 ## Style & quality bar
 
-- **Rust edition 2024, MSRV 1.95.** Both are set once in the workspace
+- **Rust edition 2024, MSRV 1.96.** Both are set once in the workspace
   `Cargo.toml`; every crate picks them up with `edition.workspace = true`
   / `rust-version.workspace = true`, so a bump is a one-line change at
   the root. Nothing in CI enforces the MSRV — when a dependency bump

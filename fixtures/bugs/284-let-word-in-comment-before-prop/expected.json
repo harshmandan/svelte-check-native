@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A typed Svelte-4 prop without a default (`export let xyz: string;`) is assigned by the parent at runtime, so the overlay marks it `let xyz!: string;` to stop TS2454 ('used before being assigned') at template reads. The word `let` inside a comment above the prop, followed by an unclosed `<` or `(`, must not be read as a declaration: doing so swallowed the real one and the `!` was never added."
+}

@@ -827,7 +827,16 @@ pub fn split_imports(
     let mut cursor = 0;
     for &(start, end) in &blank_spans {
         body.push_str(&content[cursor..start]);
-        for ch in content[start..end].chars() {
+        // A statement written without a semicolon takes the next `;` as
+        // its end, even one on a later line. That `;` often guards the
+        // code after it (`export { a as b }` followed by the reactive
+        // rewrite's `;() => { $: … }`), so it stays; blanking it would
+        // glue that code onto the statement before the blanked one.
+        let span = &content[start..end];
+        let keep_semicolon = span
+            .strip_suffix(';')
+            .is_some_and(|rest| rest.trim_end_matches([' ', '\t']).ends_with(['\n', '\r']));
+        for ch in span.chars() {
             if ch == '\n' || ch == '\r' {
                 body.push(ch);
             } else if ch.is_ascii() {
@@ -838,6 +847,10 @@ pub fn split_imports(
                     body.push(' ');
                 }
             }
+        }
+        if keep_semicolon {
+            body.pop();
+            body.push(';');
         }
         cursor = end;
     }
@@ -1147,6 +1160,21 @@ let x = 1;
         let s = split_imports(src, ScriptLang::Ts, false, None);
         let new_x_line = s.body.lines().position(|l| l.contains("let x")).unwrap();
         assert_eq!(new_x_line, original_x_line);
+    }
+
+    #[test]
+    fn blanking_keeps_a_semicolon_borrowed_from_a_later_line() {
+        // Without its own `;`, the export list ends at the `;` that starts
+        // the next line. That `;` separates `let a = ''` from the arrow.
+        let src = "let a = ''\nexport { a as b }\n;() => {};\n";
+        let s = split_imports(src, ScriptLang::Ts, false, None);
+        assert_eq!(s.body, "let a = ''\n                 \n;() => {};\n");
+        assert_eq!(s.body.len(), src.len());
+
+        // A statement's own `;` is still blanked.
+        let src = "let a = ''\nexport { a as b };\n() => {};\n";
+        let s = split_imports(src, ScriptLang::Ts, false, None);
+        assert_eq!(s.body, "let a = ''\n                  \n() => {};\n");
     }
 
     #[test]

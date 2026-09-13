@@ -27,6 +27,7 @@
 //! — both the type-widen and definite-assign semantics in a form
 //! that survives `.svelte.svn.js` parsing without firing TS8010.
 
+use std::ops::Range;
 use std::path::Path;
 
 use smol_str::SmolStr;
@@ -54,7 +55,7 @@ use svn_analyze::collect_typed_top_level_lets;
 pub(crate) fn apply_script_body_rewrites<'alloc>(
     buf: &mut EmitBuffer,
     summary: &svn_analyze::TemplateSummary,
-    split: Option<&process_instance_script_content::SplitScript>,
+    split: Option<(&process_instance_script_content::SplitScript, Range<usize>)>,
     store_refs: &[SmolStr],
     reactive_touched_names: &[SmolStr],
     parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
@@ -65,7 +66,7 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
         .iter()
         .map(|t| t.name.clone())
         .collect();
-    if let Some(s) = split {
+    if let Some((s, _)) = &split {
         for name in &s.exported_locals {
             if !def_assign_names.iter().any(|n| n == name) {
                 def_assign_names.push(name.clone());
@@ -107,17 +108,31 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
     // script reverse-maps to the wrong column (or line, once a trailer
     // lands inside the mapped span).
     let route_kind = sveltekit::route_kind(source_path);
+    // The declaration rewrites only touch the spliced instance script.
+    // Each pass grows the body by what it inserted, so the range is
+    // re-extended before the next pass reads it.
+    let Some((s, mut body)) = split else {
+        let edits = rewrite_void_sequence_to_array(buf.raw_string_mut());
+        buf.adjust_token_map_for_insertions(&edits);
+        return;
+    };
+    let apply = |buf: &mut EmitBuffer, body: &mut Range<usize>, edits: Vec<(u32, u32)>| {
+        body.end += edits.iter().map(|&(_, len)| len as usize).sum::<usize>();
+        buf.adjust_token_map_for_insertions(&edits);
+    };
     if emit_is_ts() {
-        if let Some(s) = split {
+        {
             let edits = widen_untyped_exported_props_in_place(
                 buf.raw_string_mut(),
+                &body,
                 &s.exported_locals,
                 route_kind,
             );
-            buf.adjust_token_map_for_insertions(&edits);
+            apply(buf, &mut body, edits);
         }
-        let edits = rewrite_definite_assignment_in_place(buf.raw_string_mut(), &def_assign_names);
-        buf.adjust_token_map_for_insertions(&edits);
+        let edits =
+            rewrite_definite_assignment_in_place(buf.raw_string_mut(), &body, &def_assign_names);
+        apply(buf, &mut body, edits);
     } else {
         // JS overlay: a single inline-initializer rewrite replaces
         // both TS-mode passes. `let NAME;` → `let NAME = /** @type
@@ -127,10 +142,11 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
         // firing TS8010.
         let edits = widen_untyped_exports_jsdoc_in_place(
             buf.raw_string_mut(),
+            &body,
             &def_assign_names,
             route_kind,
         );
-        buf.adjust_token_map_for_insertions(&edits);
+        apply(buf, &mut body, edits);
     }
     // SVELTE-4-COMPAT de-narrow: typed exported props with literal
     // initializers (`export let size: Size = 'medium'`) AND body-local
@@ -143,9 +159,7 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
     // JS-overlay paths go through `widen_untyped_exports_jsdoc_in_place`
     // above, which emits the equivalent JSDoc-cast form that survives
     // `.svelte.svn.js` parsing without firing TS8010.
-    if emit_is_ts()
-        && let Some(s) = split
-    {
+    if emit_is_ts() {
         let mut denarrow_targets: Vec<SmolStr> = s.exported_locals.clone();
         if let Some(parsed_orig) = parsed_instance {
             let mut typed_lets: Vec<SmolStr> = Vec::new();
@@ -156,8 +170,9 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
                 }
             }
         }
-        let edits = denarrow_typed_exported_props_in_place(buf.raw_string_mut(), &denarrow_targets);
-        buf.adjust_token_map_for_insertions(&edits);
+        let edits =
+            denarrow_typed_exported_props_in_place(buf.raw_string_mut(), &body, &denarrow_targets);
+        apply(buf, &mut body, edits);
     }
     // SVELTE-4-COMPAT: rewrite `void (a, b, c)` (the dependency-list
     // idiom for `$:` reactive blocks) to `void [a, b, c]`. The

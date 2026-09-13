@@ -17,11 +17,11 @@ async function $$render_e40e2c10() {
     /**
      * d
      */
-           let d,
+           let d = /** @type {any} */ (null),
     /**
      * e
      */
-     e;
+     e = /** @type {any} */ (null);
     ;(async () => {
         // template type-check body (incremental)
     });

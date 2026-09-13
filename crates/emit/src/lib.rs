@@ -1333,6 +1333,7 @@ fn emit_document_with_render_name(
     // are still emitted via the inner hoist in `emit_template_body`.
     emit_top_level_snippet_forward_decls(&mut buf, doc.source, fragment, is_ts);
 
+    let mut instance_body: Option<std::ops::Range<usize>> = None;
     if let Some(s) = &split {
         if let Some(instance) = &doc.instance_script {
             // Resync the buffer's internal line counter — `emit_svelte4_ambients`
@@ -1397,14 +1398,16 @@ fn emit_document_with_render_name(
                     });
                 }
             }
+            let body_start = buf.raw_string_mut().len();
             buf.append_verbatim(text, doc.source, instance.content_range);
+            instance_body = Some(body_start..body_start + text.len());
         }
     }
 
     script_body_rewrites::apply_script_body_rewrites(
         &mut buf,
         summary,
-        split.as_ref(),
+        split.as_ref().zip(instance_body),
         &store_refs,
         &reactive_touched_names,
         parsed_instance.as_ref(),
@@ -1819,14 +1822,14 @@ mod tests {
     fn def_assign(src: &str, targets: &[&str]) -> String {
         let mut out = String::from(src);
         let targets: Vec<SmolStr> = targets.iter().map(|s| SmolStr::from(*s)).collect();
-        rewrite_definite_assignment_in_place(&mut out, &targets);
+        rewrite_definite_assignment_in_place(&mut out, &(0..src.len()), &targets);
         out
     }
 
     fn widen(src: &str, targets: &[&str]) -> String {
         let mut out = String::from(src);
         let targets: Vec<SmolStr> = targets.iter().map(|s| SmolStr::from(*s)).collect();
-        widen_untyped_exported_props_in_place(&mut out, &targets, None);
+        widen_untyped_exported_props_in_place(&mut out, &(0..src.len()), &targets, None);
         out
     }
 
@@ -1955,8 +1958,9 @@ mod tests {
         // `let data;` → `let data: any;` (widen) → `let data!: any;` (def_assign).
         let mut out = String::from("let data;");
         let targets: Vec<SmolStr> = vec![SmolStr::from("data")];
-        widen_untyped_exported_props_in_place(&mut out, &targets, None);
-        rewrite_definite_assignment_in_place(&mut out, &targets);
+        let edits = widen_untyped_exported_props_in_place(&mut out, &(0..9), &targets, None);
+        let body = 0..9 + edits.iter().map(|&(_, len)| len as usize).sum::<usize>();
+        rewrite_definite_assignment_in_place(&mut out, &body, &targets);
         assert_eq!(out, "let data!: any;");
     }
 
@@ -2089,6 +2093,44 @@ mod tests {
     fn def_assign_preserves_surrounding_content() {
         let got = def_assign("before();\nlet name: string;\nafter();\n", &["name"]);
         assert_eq!(got, "before();\nlet name!: string;\nafter();\n");
+    }
+
+    #[test]
+    fn def_assign_not_fooled_by_let_in_comment() {
+        // An unclosed `<` or `(` after the word `let` in a comment must
+        // not swallow the real declaration below it.
+        let src = "// let the parent pick a class for the <span\n\
+                   /* We let consumers decide (e.g. \"big\" */\n\
+                   let xyz: string;\n";
+        let got = def_assign(src, &["xyz"]);
+        assert!(got.contains("let xyz!: string;"), "got: {got:?}");
+    }
+
+    #[test]
+    fn def_assign_leaves_nested_shadowing_let_alone() {
+        // A function-local `let` of the same name is a different variable;
+        // TS2454 on it is a real error.
+        let src = "let el: HTMLElement;\nfunction f() { let el: HTMLElement; return el; }\n";
+        let got = def_assign(src, &["el"]);
+        assert_eq!(
+            got,
+            "let el!: HTMLElement;\nfunction f() { let el: HTMLElement; return el; }\n"
+        );
+    }
+
+    #[test]
+    fn denarrow_trailer_follows_multiline_initializer() {
+        let src = "let label: string =\n\t'a' +\n\t'b';\nlabel;\n";
+        let mut out = String::from(src);
+        crate::svelte4::compat::denarrow_typed_exported_props_in_place(
+            &mut out,
+            &(0..src.len()),
+            &[SmolStr::from("label")],
+        );
+        assert_eq!(
+            out,
+            "let label: string =\n\t'a' +\n\t'b'; label = undefined as any;\nlabel;\n"
+        );
     }
 
     fn emit_str(src: &str) -> String {

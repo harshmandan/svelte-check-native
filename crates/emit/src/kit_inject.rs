@@ -356,6 +356,38 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                         continue;
                     }
 
+                    // `export const GET = (event) => …` on `+server`:
+                    // upstream's `findExports` registers the arrow /
+                    // function-expression value as a function and
+                    // `insertApiMethod` types it like the declaration
+                    // form.
+                    if matches!(kind, KitFileKind::ServerEndpoint) {
+                        use oxc_ast::ast::Expression;
+                        if !SERVER_HANDLER_NAMES.contains(&id.name.as_str())
+                            || declarator.type_annotation.is_some()
+                        {
+                            continue;
+                        }
+                        let Some(init) = declarator.init.as_ref() else {
+                            continue;
+                        };
+                        let is_async = match init {
+                            Expression::ArrowFunctionExpression(a) => a.r#async,
+                            Expression::FunctionExpression(f) => f.r#async,
+                            _ => false,
+                        };
+                        let types = HandlerTypes::Concrete {
+                            param: "import('./$types.js').RequestEvent",
+                            ret: if is_async {
+                                "Promise<Response>"
+                            } else {
+                                "Response | Promise<Response>"
+                            },
+                        };
+                        collect_fn_value_insert(init, source, is_ts, &types, &mut insertions);
+                        continue;
+                    }
+
                     let KitFileKind::Route {
                         is_layout,
                         is_server,
@@ -918,6 +950,23 @@ mod tests {
             got.contains("({ url }: import('./$types.js').RequestEvent) : Promise<Response> {"),
             "got: {got}"
         );
+    }
+
+    #[test]
+    fn injects_on_arrow_server_handler() {
+        // `export const GET = (event) => …` is a handler too; the return
+        // annotation lands on the `=>` token.
+        let source = "export const GET = (event) /* a => b */ => new Response('x');";
+        let got = inject(&server_path(), source).unwrap();
+        assert!(
+            got.contains(
+                "(event: import('./$types.js').RequestEvent) /* a => b */ : Response | Promise<Response> => new Response('x')"
+            ),
+            "got: {got}"
+        );
+        let source = "export const POST = async (event) => new Response('x');";
+        let got = inject(&server_path(), source).unwrap();
+        assert!(got.contains(": Promise<Response> =>"), "got: {got}");
     }
 
     #[test]

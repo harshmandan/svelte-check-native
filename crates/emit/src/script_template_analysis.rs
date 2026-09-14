@@ -144,25 +144,30 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
                     }
                 }
             };
-        if let Some(module_script) = &doc.module_script {
+        if let (Some(module_script), Some(p)) = (&doc.module_script, parsed_mod.as_ref()) {
             // Rune-position skips are per-script — the offsets index
-            // into the script content being scanned.
-            let runes = parsed_mod
-                .as_ref()
-                .map(|p| collect_rune_scan_context(&p.program, module_script.content))
-                .unwrap_or_default();
+            // into the script content being walked.
+            let runes = collect_rune_scan_context(&p.program, module_script.content);
             push_unique(
-                find_store_refs_with_bindings(module_script.content, &script_bindings, &runes),
+                find_store_refs_with_bindings(
+                    &p.program,
+                    module_script.content,
+                    &script_bindings,
+                    &runes,
+                ),
                 &mut seen,
                 &mut accumulated,
             );
         }
-        if let Some(instance) = &doc.instance_script {
-            let runes = parsed_instance
-                .map(|p| collect_rune_scan_context(&p.program, instance.content))
-                .unwrap_or_default();
+        if let (Some(instance), Some(p)) = (&doc.instance_script, parsed_instance) {
+            let runes = collect_rune_scan_context(&p.program, instance.content);
             push_unique(
-                find_store_refs_with_bindings(instance.content, &script_bindings, &runes),
+                find_store_refs_with_bindings(
+                    &p.program,
+                    instance.content,
+                    &script_bindings,
+                    &runes,
+                ),
                 &mut seen,
                 &mut accumulated,
             );

@@ -8,7 +8,7 @@ async function $$render_e40e2c10() {
         }
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: /** @type {(__SvnEachItem<typeof items>)} */ (/** @type {any} */ (null)) } }, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: ((__svn_unwrap_arr(items))) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

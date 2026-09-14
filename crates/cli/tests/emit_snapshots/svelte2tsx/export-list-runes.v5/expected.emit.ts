@@ -34,7 +34,7 @@ async function $$render_e40e2c10() {
     void RenameFoo;
     void renamebar;
     void renamebaz;
-    return { props: /** @type {{ name1?: typeof name1; name2: any; renamed1?: typeof rename1; renamed2: any; Foo: any; bar: any; baz?: typeof baz; RenamedFoo: any; renamedbar: any; renamedbaz?: typeof renamebaz; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

@@ -64,8 +64,6 @@ async function $$render_e40e2c10() {
             new __svn_C_1e3({ target: __svn_any(), props: {"config": (cfg)} });
         }
     });
-    void Panel;
-    void cfg;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

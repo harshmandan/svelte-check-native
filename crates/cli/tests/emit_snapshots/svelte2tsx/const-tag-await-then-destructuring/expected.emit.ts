@@ -32,6 +32,9 @@ async function $$render_e40e2c10() {
             void width;
             void height;
         }
+        { const $$_promise = (promise2);
+            const $$_await = await $$_promise; void $$_await;
+        }
         {
             const { width, height } = __svn_any();
             const {area, volume} = calculate(width, height, constant);
@@ -55,9 +58,8 @@ async function $$render_e40e2c10() {
         }
     });
     void promise1;
-    void calculate;
-    void constant;
     void promise2;
+    void constant;
     return { props: /** @type {{ promise1?: typeof promise1; promise2?: typeof promise2; constant?: typeof constant; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ promise1: typeof promise1; promise2: typeof promise2; constant: typeof constant; }} */ ({}) };
 }
 $$render_e40e2c10;

@@ -1,4 +1,11 @@
 {
-    "errors": [],
-    "_note": "Reviewer item #1a: `<svelte:self bind:this={me}>` (and `<svelte:component>`, `<svelte:boundary>`) must NOT go through the DOM-element bind:this check (`__svn_bind_this_check<HTMLElement>(…)`) — the bound expr is a component-instance ref, not an HTMLElement. Pre-fix this fired a spurious TS2322. The full component-instantiation port (#1b) is deferred; for now `bind:this` on these kinds is silently passed through, which matches upstream's no-error behavior on the same shape."
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 12,
+            "column": 8,
+            "code": 6133
+        }
+    ],
+    "_note": "Reviewer item #1a: `<svelte:self bind:this={me}>` (and `<svelte:component>`, `<svelte:boundary>`) must NOT go through the DOM-element bind:this check (`__svn_bind_this_check<HTMLElement>(\u2026)`) \u2014 the bound expr is a component-instance ref, not an HTMLElement. Pre-fix this fired a spurious TS2322. The full component-instantiation port (#1b) is deferred; for now `bind:this` on these kinds is silently passed through, which matches upstream's no-error behavior on the same shape. Unused-variable reports on write-only bind targets are upstream's: every template read is copied into the render function, and no `void` list masks a binding the template only assigns."
 }

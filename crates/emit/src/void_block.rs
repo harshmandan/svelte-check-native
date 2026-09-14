@@ -83,7 +83,6 @@ pub(crate) fn emit_void_block<'a>(
     summary: &'a TemplateSummary,
     store_refs: &'a [SmolStr],
     bindable_prop_names: &'a [SmolStr],
-    template_refs: &'a [SmolStr],
     exported_locals: &'a [SmolStr],
 ) {
     let mut emitted: HashSet<&'a str> = HashSet::new();
@@ -110,9 +109,6 @@ pub(crate) fn emit_void_block<'a>(
         }
     }
     for name in bindable_prop_names {
-        emit(out, name);
-    }
-    for name in template_refs {
         emit(out, name);
     }
     // Names declared `export const|let|var|function|class` (or

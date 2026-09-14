@@ -9,9 +9,6 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});         }
     });
-    void b;
-    void d;
-    void e;
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: (b) }, 'test': { c: (d), e: (e) }, 'abc-cde.113': {  } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;

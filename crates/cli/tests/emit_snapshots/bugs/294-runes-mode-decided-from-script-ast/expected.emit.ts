@@ -9,7 +9,6 @@ async function $$render_744f9a92() {
         { svelteHTML.createElement("p", {});             (v);
         }
     });
-    void v;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_744f9a92;
@@ -58,7 +57,6 @@ async function $$render_b0b891b6() {
         { svelteHTML.createElement("p", {});             (v);
         }
     });
-    void v;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_b0b891b6;
@@ -82,7 +80,6 @@ async function $$render_b9b99725() {
         { svelteHTML.createElement("p", {});             (v);
         }
     });
-    void v;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_b9b99725;
@@ -120,9 +117,6 @@ async function $$render_e40e2c10() {
             (c);
         }
     });
-    void a;
-    void b;
-    void c;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

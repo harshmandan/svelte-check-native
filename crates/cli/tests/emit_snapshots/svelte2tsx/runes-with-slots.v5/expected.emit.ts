@@ -10,8 +10,6 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    void x;
-    void y;
     return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { x: (x), y: (y) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;

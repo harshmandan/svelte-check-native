@@ -19,10 +19,6 @@ async function $$render_e40e2c10() {
     });
     void $count;
     void count;
-    void quote;
-    void tick;
-    void v;
-    void w;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

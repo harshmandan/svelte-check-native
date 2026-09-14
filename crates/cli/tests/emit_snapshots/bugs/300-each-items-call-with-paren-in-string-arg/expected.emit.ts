@@ -13,8 +13,7 @@ async function $$render_e40e2c10() {
             void row;
         }
     });
-    void f;
-    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'x': { r: undefined as any as ((__SvnEachItem<any>)) } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'x': { r: ((__svn_unwrap_arr(f("(")(")")))) } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 interface $$IsomorphicComponent {

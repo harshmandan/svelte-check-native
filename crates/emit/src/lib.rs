@@ -389,6 +389,12 @@ fn emit_document_with_render_name(
         parsed_instance.as_ref(),
         parsed_module.as_ref(),
     );
+    let ambients = svn_analyze::find_ambient_refs(
+        fragment,
+        doc.source,
+        parsed_instance.as_ref().map(|p| &p.program),
+        parsed_module.as_ref().map(|p| &p.program),
+    );
 
     // Single analyze-time resolution of every Props decision emit
     // makes downstream — type text, type root name, destructure
@@ -405,7 +411,7 @@ fn emit_document_with_render_name(
     // than the lossy declare-const stub.
     let raw_props_info: PropsInfo =
         if let (Some(s), Some(parsed)) = (doc.instance_script.as_ref(), parsed_instance.as_ref()) {
-            PropsInfo::build(&parsed.program, s.content)
+            PropsInfo::build(&parsed.program, s.content, runes_mode)
         } else {
             PropsInfo::default()
         };
@@ -1268,8 +1274,6 @@ fn emit_document_with_render_name(
         bindable_prop_names,
         prop_type_source,
         store_refs,
-        template_void_refs,
-        template_type_refs,
     } = analyze_script_and_template_refs(
         doc,
         source_path,
@@ -1324,7 +1328,7 @@ fn emit_document_with_render_name(
     // (script + template). Ambiguity risk: a literal `$$slots` inside
     // a string or comment would trigger the declaration, but that's
     // harmless — the `let` just goes unused in the overlay.
-    emit_svelte4_ambients(buf.raw_string_mut(), doc, is_ts);
+    emit_svelte4_ambients(buf.raw_string_mut(), ambients, is_ts);
 
     // Forward-declare top-level `{#snippet NAME(params)}` names at the
     // `$$render_<hash>` function-body scope so the script body can
@@ -1445,7 +1449,6 @@ fn emit_document_with_render_name(
         summary,
         &store_refs,
         &bindable_prop_names,
-        &template_void_refs,
         &exported_locals,
     );
 
@@ -1551,19 +1554,17 @@ fn emit_document_with_render_name(
             has_inline_typed_members || synthesized_untyped_events.is_some();
         emit_default_export_declarations_ts(
             &mut buf,
-            doc,
             fragment,
-            split.as_ref(),
             &render_name,
             generics.as_deref(),
             prop_type_effective.as_deref(),
-            &template_type_refs,
             has_dispatcher_call,
             has_concrete_dispatcher_events,
             events_alias_body.is_some(),
             has_strict_events_decl,
             has_bubbled_events,
             runes_mode,
+            ambients,
         );
     } else {
         emit_default_export_declarations_js(&mut buf, &render_name);

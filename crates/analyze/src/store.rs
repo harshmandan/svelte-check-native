@@ -250,6 +250,65 @@ pub fn find_store_refs_with_bindings(
     probe.out
 }
 
+/// Store subscriptions written in the template: every `$<ident>`
+/// identifier reference in a template expression whose `<ident>` is a
+/// script binding. Each expression range is parsed with oxc (a
+/// declaration tag's payload as a declarator list), so object keys,
+/// member names, regex bodies and string contents never count.
+/// Mirrors upstream `svelte2tsx/nodes/Stores.ts`, which walks the
+/// template AST for the same identifiers.
+pub fn find_template_store_refs(
+    fragment: &svn_parser::Fragment,
+    source: &str,
+    bound: &HashSet<String>,
+) -> Vec<SmolStr> {
+    if bound.is_empty() {
+        return Vec::new();
+    }
+    let alloc = oxc_allocator::Allocator::default();
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    // `use:$action`, `transition:$fly`: the directive name itself is
+    // the store reference (upstream `Stores.handleDirective`).
+    for name in crate::template_directive_names(fragment) {
+        if let Some(base) = name.strip_prefix('$')
+            && bound.contains(base)
+            && seen.insert(name.clone())
+        {
+            out.push(name);
+        }
+    }
+    for expr in crate::template_expression_ranges(fragment) {
+        let Some(text) = source.get(expr.range.start as usize..expr.range.end as usize) else {
+            continue;
+        };
+        if !text.contains('$') {
+            continue;
+        }
+        let wrapped = if expr.is_declaration {
+            format!("let {text}\n;")
+        } else {
+            format!("({text}\n);")
+        };
+        let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+        let runes = collect_rune_scan_context(&parsed.program, &wrapped);
+        let mut probe = StoreRefProbe {
+            source: &wrapped,
+            bound,
+            runes: &runes,
+            seen: HashSet::new(),
+            out: Vec::new(),
+        };
+        probe.visit_program(&parsed.program);
+        for name in probe.out {
+            if seen.insert(name.clone()) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
 /// AST walk behind [`find_store_refs_with_bindings`]: every
 /// `$<ident>` identifier reference outside type positions.
 struct StoreRefProbe<'b> {
@@ -337,45 +396,6 @@ fn followed_by_id_call(bytes: &[u8], pos: usize) -> bool {
 pub fn collect_top_level_bindings(program: &oxc_ast::ast::Program<'_>, out: &mut HashSet<String>) {
     for stmt in &program.body {
         collect_from_statement(stmt, out);
-    }
-}
-
-/// Collect the set of type-only import specifier names. Parallel to
-/// [`collect_top_level_bindings`] but only returns names that were
-/// imported strictly as types (`import type { X }` / `import { type X }`).
-/// These have no runtime value — downstream emit must reference them in
-/// TYPE position (`type _ = [X, Y]`) to keep TS from firing TS6133 when
-/// they're only consumed inside template expressions (e.g. as cast
-/// targets: `{foo(item as AppVideo)}`).
-pub fn collect_type_only_import_bindings(
-    program: &oxc_ast::ast::Program<'_>,
-    out: &mut HashSet<String>,
-) {
-    for stmt in &program.body {
-        let Statement::ImportDeclaration(decl) = stmt else {
-            continue;
-        };
-        // `import type { X, Y } from '...'` — every specifier is type-only.
-        if matches!(decl.import_kind, ImportOrExportKind::Type) {
-            if let Some(specifiers) = &decl.specifiers {
-                for spec in specifiers {
-                    if let ImportDeclarationSpecifier::ImportSpecifier(s) = spec {
-                        out.insert(s.local.name.to_string());
-                    }
-                }
-            }
-            continue;
-        }
-        // Mixed import with per-specifier `type` prefix.
-        if let Some(specifiers) = &decl.specifiers {
-            for spec in specifiers {
-                if let ImportDeclarationSpecifier::ImportSpecifier(s) = spec {
-                    if matches!(s.import_kind, ImportOrExportKind::Type) {
-                        out.insert(s.local.name.to_string());
-                    }
-                }
-            }
-        }
     }
 }
 

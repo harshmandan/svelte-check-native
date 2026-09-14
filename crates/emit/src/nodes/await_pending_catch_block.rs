@@ -177,18 +177,23 @@ pub(crate) fn emit_await_block(
     if let Some(p) = &b.pending {
         emit_template_body(buf, source, p, depth, insts, action_counter);
     }
-    if let Some(t) = &b.then_branch {
-        emit_await_then_branch(
-            buf,
-            source,
-            b.expression_range,
-            t.context_range.as_ref(),
-            &t.body,
-            depth,
-            insts,
-            action_counter,
-        );
-    }
+    // Upstream always emits `await (EXPR);` — with no `{:then}` the
+    // promise expression is still a read of whatever it names.
+    let empty = Fragment::default();
+    let (context_range, then_body) = match &b.then_branch {
+        Some(t) => (t.context_range.as_ref(), &t.body),
+        None => (None, &empty),
+    };
+    emit_await_then_branch(
+        buf,
+        source,
+        b.expression_range,
+        context_range,
+        then_body,
+        depth,
+        insts,
+        action_counter,
+    );
     if let Some(c) = &b.catch_branch {
         emit_branch_with_binding(
             buf,

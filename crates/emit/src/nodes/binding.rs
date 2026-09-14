@@ -261,6 +261,20 @@ pub(crate) fn emit_element_bind_checks_inline(
             buf.push_str(" = __svn_any(null); });/*svn:ignore_end*/\n");
             continue;
         }
+        // Upstream passes a two-way binding's expression as an attribute
+        // value (`"bind:value": v`), which reads it; the one-way families
+        // (`bind:this`, element-native `clientWidth`, …) are pure writes.
+        // Keep the same read so a variable only bound this way is not
+        // reported as never read.
+        if name == "value" {
+            buf.push_str(&indent);
+            buf.push_str("(");
+            match expr_source_range {
+                Some(range) => buf.append_with_source(&expr_text, range),
+                None => buf.push_str(&expr_text),
+            }
+            buf.push_str(");\n");
+        }
         buf.push_str(&indent);
         match expr_source_range {
             Some(range) => buf.append_with_source(&expr_text, range),

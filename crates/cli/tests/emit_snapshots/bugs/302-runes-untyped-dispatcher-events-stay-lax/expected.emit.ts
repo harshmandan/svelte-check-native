@@ -13,7 +13,6 @@ async function $$render_d01ef561() {
         { svelteHTML.createElement("p", {});             (w);
         }
     });
-    void w;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_d01ef561;

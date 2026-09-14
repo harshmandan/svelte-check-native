@@ -6,21 +6,22 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         for (const { a, ...rést } of __svn_each_items(xs)) {
-            { svelteHTML.createElement("input", {});                 rést.b = null as any as string;
+            { svelteHTML.createElement("input", {});                 (rést.b);
+                rést.b = null as any as string;
             }
             (a);
             void a;
             void rést;
         }
         for (const { a, ...rest } of __svn_each_items(xs)) {
-            { svelteHTML.createElement("input", {});                 /* c */ rest.b = null as any as string;
+            { svelteHTML.createElement("input", {});                 (/* c */ rest.b);
+                /* c */ rest.b = null as any as string;
             }
             (a);
             void a;
             void rest;
         }
     });
-    void xs;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

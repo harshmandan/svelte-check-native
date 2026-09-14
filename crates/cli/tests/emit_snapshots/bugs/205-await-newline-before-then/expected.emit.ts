@@ -18,6 +18,9 @@ async function $$render_e40e2c10() {
             }
             void v;
         }
+        { const $$_promise = (q);
+            const $$_await = await $$_promise; void $$_await;
+        }
         {
             const e = __svn_any();
             { svelteHTML.createElement("span", {});                 (String(e));
@@ -34,9 +37,6 @@ async function $$render_e40e2c10() {
             void ok;
         }
     });
-    void p;
-    void q;
-    void fetchData;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

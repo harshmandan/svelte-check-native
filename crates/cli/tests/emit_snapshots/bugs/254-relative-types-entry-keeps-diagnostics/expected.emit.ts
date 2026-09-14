@@ -19,7 +19,6 @@ async function $$render_e40e2c10() {
         { svelteHTML.createElement("p", {});             (out.length);
         }
     });
-    void out;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

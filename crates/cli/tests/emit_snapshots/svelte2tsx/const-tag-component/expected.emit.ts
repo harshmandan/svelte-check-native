@@ -171,9 +171,7 @@ async function $$render_e40e2c10() {
             }
         }
     });
-    void Component;
     void box;
-    void calculate;
     void constant;
     return { props: /** @type {{ box?: typeof box; constant?: typeof constant; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ box: typeof box; constant: typeof constant; }} */ ({}) };
 }

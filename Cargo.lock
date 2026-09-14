@@ -1176,6 +1176,7 @@ dependencies = [
  "oxc_ast",
  "oxc_ast_visit",
  "oxc_span",
+ "oxc_syntax",
  "smallvec 2.0.0-alpha.13",
  "smol_str",
  "svn-core",

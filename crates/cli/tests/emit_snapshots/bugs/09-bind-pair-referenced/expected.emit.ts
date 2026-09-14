@@ -16,8 +16,6 @@ async function $$render_e40e2c10() {
         { svelteHTML.createElement("input", {});             void (__svn_get_set_binding(() => getValue(),  (v: string) => setValue(v)) satisfies string);
         }
     });
-    void getValue;
-    void setValue;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

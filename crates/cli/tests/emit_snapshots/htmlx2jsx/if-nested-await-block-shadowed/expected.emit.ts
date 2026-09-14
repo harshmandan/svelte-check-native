@@ -35,7 +35,13 @@ async function $$render_e40e2c10() {
                 if ((hello)) {
                     void [hello];
                     (hello);
+                    { const $$_promise = (aPromise);
+                        const $$_await = await $$_promise; void $$_await;
+                    }
                     (hello);
+                    { const $$_promise = (aPromise);
+                        const $$_await = await $$_promise; void $$_await;
+                    }
                     {
                         const hello = __svn_any();
                         (hello);

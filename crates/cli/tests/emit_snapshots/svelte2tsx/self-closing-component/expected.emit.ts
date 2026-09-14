@@ -12,7 +12,6 @@ let a = 'b';
             new __svn_C_0({ target: __svn_any(), props: {"b": "6"} });
         }
     });
-    void Test;
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;

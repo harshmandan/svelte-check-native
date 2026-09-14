@@ -21,8 +21,8 @@ async function $$render_6a78bc66() {
 }
 $$render_6a78bc66;
 interface $$IsomorphicComponent {
-    new (options: import('svelte').ComponentConstructorOptions<__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_6a78bc66>>['props'], Awaited<ReturnType<typeof $$render_6a78bc66>>['props'] & __SvnSvelte4PropsWiden<{ xyz: string; }>>>): import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_6a78bc66>>['props'] & __SvnSvelte4PropsWiden<{ xyz: string; }>>, Awaited<ReturnType<typeof $$render_6a78bc66>>['events'], Awaited<ReturnType<typeof $$render_6a78bc66>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_6a78bc66>>['bindings'] } & Awaited<ReturnType<typeof $$render_6a78bc66>>['exports'];
-    (internal: unknown, props: __SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_6a78bc66>>['props'], Awaited<ReturnType<typeof $$render_6a78bc66>>['props'] & __SvnSvelte4PropsWiden<{ xyz: string; }>>): Awaited<ReturnType<typeof $$render_6a78bc66>>['exports'] & { $set?: any; $on?: any };
+    new (options: import('svelte').ComponentConstructorOptions<__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_6a78bc66>>['props'], Awaited<ReturnType<typeof $$render_6a78bc66>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_6a78bc66>>['props']>>>): import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_6a78bc66>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_6a78bc66>>['props']>>, Awaited<ReturnType<typeof $$render_6a78bc66>>['events'], Awaited<ReturnType<typeof $$render_6a78bc66>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_6a78bc66>>['bindings'] } & Awaited<ReturnType<typeof $$render_6a78bc66>>['exports'];
+    (internal: unknown, props: __SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_6a78bc66>>['props'], Awaited<ReturnType<typeof $$render_6a78bc66>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_6a78bc66>>['props']>>): Awaited<ReturnType<typeof $$render_6a78bc66>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_6a78bc66>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;
@@ -42,7 +42,6 @@ async function $$render_e40e2c10() {
             new __svn_C_46({ target: __svn_any(), props: {"xyz": "my-css-class"} });
         }
     });
-    void Badge;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

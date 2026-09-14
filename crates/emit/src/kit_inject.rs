@@ -150,17 +150,28 @@ fn kit_file_kind(path: &Path, settings: &KitFilesSettings) -> Option<(KitFileKin
 /// a JSDoc block carrying `@type` / `@param` / `@satisfies` counts as
 /// user-typed, and the injector must leave it alone (upstream checks
 /// `ts.getJSDocType` / `getJSDocParameterTags` / a `satisfies` tag).
-/// Comments aren't AST, so this is a bounded textual check on the
-/// bytes immediately before the statement.
-fn has_preceding_jsdoc_typing(source: &str, stmt_start: usize) -> bool {
-    let before = source[..stmt_start.min(source.len())].trim_end();
-    if !before.ends_with("*/") {
-        return false;
-    }
-    let Some(open) = before.rfind("/**") else {
+///
+/// "Directly preceded" means the last comment before the statement,
+/// with only whitespace between them, is that JSDoc block. A JSDoc
+/// block further up belongs to whatever it precedes, not to this
+/// export.
+fn has_preceding_jsdoc_typing(
+    comments: &[oxc_ast::Comment],
+    source: &str,
+    stmt_start: usize,
+) -> bool {
+    let Some(last) = comments
+        .iter()
+        .filter(|c| (c.span.end as usize) <= stmt_start)
+        .max_by_key(|c| c.span.end)
+    else {
         return false;
     };
-    let block = &before[open..];
+    let gap = &source[last.span.end as usize..stmt_start];
+    if !gap.trim().is_empty() || !last.is_jsdoc() {
+        return false;
+    }
+    let block = &source[last.span.start as usize..last.span.end as usize];
     block.contains("@type") || block.contains("@param") || block.contains("@satisfies")
 }
 
@@ -217,8 +228,12 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
         };
         // JS sources: an export the user already JSDoc-typed is
         // upstream's `hasTypeDefinition` — leave it untouched.
-        let js_user_typed =
-            !is_ts && has_preceding_jsdoc_typing(source, export.span.start as usize);
+        let js_user_typed = !is_ts
+            && has_preceding_jsdoc_typing(
+                &parsed.program.comments,
+                source,
+                export.span.start as usize,
+            );
 
         match &export.declaration {
             Declaration::FunctionDeclaration(func) => {

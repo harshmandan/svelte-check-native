@@ -11,6 +11,10 @@ workspace = true
 [dependencies]
 svn-core = { path = "../core" }
 svn-emit = { path = "../emit" }
+svn-parser = { path = "../parser" }
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_ast_visit.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 blake3.workspace = true

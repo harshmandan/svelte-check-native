@@ -54,9 +54,12 @@
 use std::collections::HashSet;
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{BindingPattern, Expression, LabeledStatement, Statement, VariableDeclarator};
+use oxc_ast::ast::{
+    BindingPattern, Expression, LabeledStatement, Statement, UnaryOperator, VariableDeclarator,
+};
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
+use svn_analyze::{WalkNode, walk_statement_descend};
 use svn_parser::{ScriptLang, parse_script_body};
 
 /// Rewrite the Svelte-4 `$: ...` forms in `content` and return the
@@ -453,12 +456,55 @@ fn classify_and_rewrite(
     //   splice with the arrow into a call chain
     //   `…then(…)(() => {…})`. The semicolon forces the prior
     //   statement to terminate.
-    let original = &content[full_start..full_end];
+    let original = with_sequence_parens_swapped(labeled, content);
     Edit {
         start: full_start,
         end: full_end,
         replacement: format!(";() => {{ {original} }};"),
     }
+}
+
+/// The labeled statement's source text with every parenthesised
+/// sequence that stands as its own statement — `void (a, b)` or a
+/// bare `(a, b)` — turned into an array literal: `void [a, b]`, `[a, b]`.
+///
+/// Both are the Svelte-4 way to list reactive dependencies. The comma
+/// operator fires TS2695 ("left side is unused") on each, which the
+/// default svelte-check filters inside `$:` statements
+/// (`DiagnosticsProvider.resolveNoopsInReactiveStatements`); in array
+/// position each reference counts as used, so the diagnostic never
+/// arises. Swapping `(` for `[` and `)` for `]` keeps every byte
+/// position in place. Statements outside `$:` are not touched — there
+/// upstream reports the comma, and so must we.
+fn with_sequence_parens_swapped(labeled: &LabeledStatement<'_>, content: &str) -> String {
+    let start = labeled.span.start as usize;
+    let mut text = content[start..labeled.span.end as usize].to_string();
+    let mut swap = |paren: &oxc_ast::ast::ParenthesizedExpression<'_>| {
+        if !matches!(paren.expression, Expression::SequenceExpression(_)) {
+            return;
+        }
+        let open = paren.span.start as usize - start;
+        let close = paren.span.end as usize - 1 - start;
+        if text.as_bytes().get(open) == Some(&b'(') && text.as_bytes().get(close) == Some(&b')') {
+            text.replace_range(open..open + 1, "[");
+            text.replace_range(close..close + 1, "]");
+        }
+    };
+    walk_statement_descend(&labeled.body, &mut |node| {
+        let WalkNode::Statement(Statement::ExpressionStatement(stmt)) = node else {
+            return;
+        };
+        match &stmt.expression {
+            Expression::ParenthesizedExpression(paren) => swap(paren),
+            Expression::UnaryExpression(unary) if unary.operator == UnaryOperator::Void => {
+                if let Expression::ParenthesizedExpression(paren) = &unary.argument {
+                    swap(paren);
+                }
+            }
+            _ => {}
+        }
+    });
+    text
 }
 
 /// Collect every identifier name introduced by a destructuring
@@ -543,6 +589,23 @@ mod tests {
         assert_eq!(
             ts("$: button, prop, count, console.log(button);"),
             ";() => { $: button; prop; count; console.log(button); };"
+        );
+    }
+
+    #[test]
+    fn parenthesised_sequences_become_array_literals() {
+        assert_eq!(ts("$: void (a, b);"), ";() => { $: void [a, b]; };");
+        assert_eq!(ts("$: (a, b);"), ";() => { $: [a, b]; };");
+        assert_eq!(
+            ts("$: { void (a, b); f(); }"),
+            ";() => { $: { void [a, b]; f(); } };"
+        );
+        // A single parenthesised expression has no comma to hide.
+        assert_eq!(ts("$: void (a);"), ";() => { $: void (a); };");
+        // Outside `$:` the comma stays: upstream reports it there.
+        assert_eq!(
+            ts("function f() { void (a, b); }\n$: g();"),
+            "function f() { void (a, b); }\n;() => { $: g(); };"
         );
     }
 

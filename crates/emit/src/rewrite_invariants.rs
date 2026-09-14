@@ -36,8 +36,7 @@ use crate::props_emit::inject_component_props_annotation;
 use crate::svelte2tsx_nodes::component_events::rewrite_dispatcher_typing;
 use crate::svelte4::compat::{
     denarrow_typed_exported_props_in_place, rewrite_definite_assignment_in_place,
-    rewrite_void_sequence_to_array, widen_untyped_exported_props_in_place,
-    widen_untyped_exports_jsdoc_in_place,
+    widen_untyped_exported_props_in_place, widen_untyped_exports_jsdoc_in_place,
 };
 use crate::svelte4::reactive::rewrite_with_touched_names;
 use crate::util::blank_dollar_generic_decls;
@@ -205,28 +204,6 @@ fn denarrow_typed_exports_edits_reconstruct() {
         &[SmolStr::from("size")],
     );
     assert_edits_reconstruct(input, &out, &edits);
-}
-
-#[test]
-fn void_sequence_rewrite_accounts_for_length_and_lines() {
-    // This rewrite mixes length-preserving replacements (`(` → `[`,
-    // `)` → `]`), which need no re-anchoring, with real insertions
-    // (the `void ` prefix on `$:` labels). The reconstruct helper
-    // can't verify byte-identity across the replacements, so assert
-    // the weaker contract the token-map adjustment depends on: the
-    // reported edits account for the FULL length delta, and no
-    // newline was introduced.
-    let input = "void (a, b, c);\n$: (d, e);\n";
-    let mut out = input.to_string();
-    let edits = rewrite_void_sequence_to_array(&mut out);
-    assert_ne!(input, out, "sample did not trigger the rewrite");
-    let reported: usize = edits.iter().map(|&(_, len)| len as usize).sum();
-    assert_eq!(
-        out.len() - input.len(),
-        reported,
-        "unreported length change corrupts the token map"
-    );
-    assert_eq!(line_count(input), line_count(&out));
 }
 
 // ---- the splice site's column-recovery helper itself ----

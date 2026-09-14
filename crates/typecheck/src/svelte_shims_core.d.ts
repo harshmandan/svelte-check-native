@@ -17,7 +17,7 @@
 //
 // Holds the Svelte 5 rune ambients ($state, $derived, $effect, $props,
 // $bindable, $inspect, $host) plus the helper types emit references
-// (__SvnStoreValue, __svn_type_ref). These have no equivalent in the
+// (__svn_store_get, __svn_type_ref). These have no equivalent in the
 // real `svelte` npm package — runes are compiler macros, and the
 // helpers are our private contract with the emit crate — so this file
 // is written to the cache on every check, regardless of whether the
@@ -43,23 +43,23 @@
 type __SvnStore<T> = { subscribe: (run: (value: T) => any, invalidate?: any) => any };
 
 /**
- * Type-level store unwrap. Used in emit as
- *   `let $foo!: __SvnStoreValue<typeof foo>;`
+ * Value of a store, for the `$store` auto-subscription declaration
+ * emit appends after the store's own declaration:
+ *   `;let $foo = __svn_store_get(foo);`
  *
- * Forward references the store's *type* without depending on
- * declaration order — the `let` declaration goes ABOVE the body so the
- * body can reference `$foo`, but `foo` itself is declared further down.
- * TS resolves types lazily, so `typeof foo` works even when `foo`
- * appears later in the source.
- *
- * The conditional handles non-store inputs by falling through to the
- * input type itself (matches what Svelte's auto-subscribe would do).
- * `undefined | null` collapse to themselves, which is the closest we can
- * get to the runtime "subscribe-first" semantic without actually
- * calling subscribe.
+ * Same overloads as upstream's `__sveltets_2_store_get`: a store yields
+ * its value type; `undefined` / `null` pass through; anything else
+ * fails the call — inside the ignore region emit wraps it in, which
+ * leaves `$foo` as `any`.
  */
-type __SvnStoreValue<S> =
-    S extends __SvnStore<infer T> ? T : S;
+declare function __svn_store_get<T = any>(store: __SvnStore<T>): T;
+declare function __svn_store_get<Store extends __SvnStore<any> | undefined | null>(
+    store: Store
+): Store extends __SvnStore<infer T> ? T : Store;
+declare function __sveltets_2_store_get<T = any>(store: __SvnStore<T>): T;
+declare function __sveltets_2_store_get<Store extends __SvnStore<any> | undefined | null>(
+    store: Store
+): Store extends __SvnStore<infer T> ? T : Store;
 
 /**
  * Surface a type-only template reference inside the type-check function

@@ -132,7 +132,10 @@ fn is_target(target_names: &[SmolStr], name: &str) -> bool {
 /// Positions must be ascending. Returns the edits as `(position,
 /// length)` pairs in pre-rewrite coordinates, the shape
 /// `EmitBuffer::adjust_token_map_for_insertions` re-anchors with.
-fn splice_insertions(out: &mut String, insertions: &[(usize, String)]) -> Vec<(u32, u32)> {
+pub(crate) fn splice_insertions(
+    out: &mut String,
+    insertions: &[(usize, String)],
+) -> Vec<(u32, u32)> {
     if insertions.is_empty() {
         return Vec::new();
     }

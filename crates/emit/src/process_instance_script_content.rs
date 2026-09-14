@@ -871,7 +871,7 @@ fn collect_declaration_names(decl: &Declaration<'_>, out: &mut Vec<SmolStr>) {
     }
 }
 
-fn collect_binding_pattern_names(pat: &BindingPattern<'_>, out: &mut Vec<SmolStr>) {
+pub(crate) fn collect_binding_pattern_names(pat: &BindingPattern<'_>, out: &mut Vec<SmolStr>) {
     match pat {
         BindingPattern::BindingIdentifier(id) => {
             out.push(SmolStr::from(id.name.as_str()));

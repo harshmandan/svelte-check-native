@@ -37,6 +37,7 @@ use smol_str::SmolStr;
 use crate::emit_buffer::EmitBuffer;
 use crate::emit_is_ts;
 use crate::process_instance_script_content;
+use crate::store_subscriptions;
 use crate::svelte4::compat::{
     denarrow_typed_exported_props_in_place, rewrite_definite_assignment_in_place,
     widen_untyped_exported_props_in_place, widen_untyped_exports_jsdoc_in_place,
@@ -55,7 +56,8 @@ use svn_analyze::collect_typed_top_level_lets;
 pub(crate) fn apply_script_body_rewrites<'alloc>(
     buf: &mut EmitBuffer,
     split: Option<(&process_instance_script_content::SplitScript, Range<usize>)>,
-    store_refs: &[SmolStr],
+    module_body: Option<Range<usize>>,
+    mut store_bases: Vec<SmolStr>,
     reactive_touched_names: &[SmolStr],
     parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
     source_path: &Path,
@@ -66,16 +68,6 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
             if !def_assign_names.iter().any(|n| n == name) {
                 def_assign_names.push(name.clone());
             }
-        }
-    }
-    // `$store` auto-subscribe aliases: definite-assign the underlying
-    // `store` local. Body-declared `let store: Writable<T>` without
-    // initializer fires TS2454 at every `typeof store` read; the
-    // rewrite is a no-op for imports / `const` / initialized `let`.
-    for name in store_refs {
-        let base = SmolStr::from(name.strip_prefix('$').unwrap_or(name));
-        if !def_assign_names.iter().any(|n| n == &base) {
-            def_assign_names.push(base);
         }
     }
     // SVELTE-4-COMPAT: names touched by reactive destructure /
@@ -103,13 +95,32 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
     // The declaration rewrites only touch the spliced instance script.
     // Each pass grows the body by what it inserted, so the range is
     // re-extended before the next pass reads it.
-    let Some((s, mut body)) = split else {
-        return;
-    };
     let apply = |buf: &mut EmitBuffer, body: &mut Range<usize>, edits: Vec<(u32, u32)>| {
         body.end += edits.iter().map(|&(_, len)| len as usize).sum::<usize>();
         buf.adjust_token_map_for_insertions(&edits);
     };
+    // A store declared in the module script gets its `$store`
+    // declaration there, at module scope, as upstream does. This runs
+    // before the instance passes because the module text sits earlier
+    // in the buffer, and those passes take the instance range as it is
+    // after this insertion.
+    let module_inserted: usize = if let Some(mut module) = module_body {
+        let edits = store_subscriptions::attach_to_declarations(
+            buf.raw_string_mut(),
+            &module,
+            &mut store_bases,
+        );
+        let inserted = edits.iter().map(|&(_, len)| len as usize).sum();
+        apply(buf, &mut module, edits);
+        inserted
+    } else {
+        0
+    };
+    let Some((s, mut body)) = split else {
+        return;
+    };
+    body.start += module_inserted;
+    body.end += module_inserted;
     if emit_is_ts() {
         {
             let edits = widen_untyped_exported_props_in_place(
@@ -164,4 +175,9 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
             denarrow_typed_exported_props_in_place(buf.raw_string_mut(), &body, &denarrow_targets);
         apply(buf, &mut body, edits);
     }
+    // Last, so the declarations land after every rewrite of the
+    // statements they attach to.
+    let edits =
+        store_subscriptions::attach_to_declarations(buf.raw_string_mut(), &body, &mut store_bases);
+    apply(buf, &mut body, edits);
 }

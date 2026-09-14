@@ -3,16 +3,13 @@
 	import {writable} from "svelte/store";
 	type Foo = typeof $foo;
 async function $$render_e40e2c10() {
-    let $foo!: __SvnStoreValue<typeof foo>;
 
 	                                      
-	const foo = writable(1);
+	const foo = writable(1)/*svn:ignore_start*/;let $foo = __svn_store_get(foo);/*svn:ignore_end*/;
 	                       
     ;(async () => {
         // template type-check body (incremental)
     });
-    void $foo;
-    void foo;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

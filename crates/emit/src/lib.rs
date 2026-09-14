@@ -73,6 +73,7 @@ mod render_function;
 mod rewrite_invariants;
 mod script_body_rewrites;
 mod script_template_analysis;
+mod store_subscriptions;
 mod void_block;
 // SVELTE-4-COMPAT: droppable submodule for Svelte-4 emit rewrites.
 // See design/phase_g/DESIGN.md.
@@ -295,6 +296,7 @@ fn emit_document_with_render_name(
     }
 
     // Module script content (already at module level — no special handling).
+    let mut module_body: Option<std::ops::Range<usize>> = None;
     if let Some(module_script) = &doc.module_script {
         // Pad to a trailing `\n` before calling `append_verbatim` so a
         // single-line script (no terminating newline) still produces a
@@ -323,6 +325,7 @@ fn emit_document_with_render_name(
             source_byte_end: module_script.content_range.start + body_no_pad.len() as u32,
         });
         buf.append_verbatim(text, doc.source, module_script.content_range);
+        module_body = Some(overlay_start as usize..overlay_start as usize + body_no_pad.len());
     }
 
     // `<script generics="T extends ...">` — pulled from the parser's
@@ -1285,38 +1288,35 @@ fn emit_document_with_render_name(
         effective_props_type_text.as_deref(),
     );
 
-    // Store auto-subscribe aliases: declare a typed `let $store!:
-    // __SvnStoreValue<typeof store>;` for every detected `$ident`.
-    //
-    // Why `let !` and not `const = expr`:
-    //   - `$store` references in the body need the alias to be visible
-    //     at the top of the function, but the underlying `store` may be
-    //     declared FURTHER DOWN in the body (or hoisted above as an
-    //     import). A value-position reference like `__svn_store_get(store)`
-    //     fires TS2448 ("used before declaration") for body-declared
-    //     stores. A type-position reference (`typeof store`) is resolved
-    //     lazily by TS and works regardless of declaration order.
-    //   - `__SvnStoreValue<typeof store>` extracts the value type out of
-    //     the store wrapper using a conditional infer. Without this,
-    //     downstream code (`$store.bar`, `$store.map(...)`) would see
-    //     `any` and cascade into TS7006/TS18046/TS2339/TS2698 hits.
-    //   - The `!` definite-assignment assertion suppresses TS2454; we
-    //     never actually assign to `$store` ourselves, but Svelte's
-    //     compiler treats the identifier as initialized at runtime.
-    for name in &store_refs {
-        let base = name.strip_prefix('$').unwrap_or(name);
-        if is_ts {
-            let _ = writeln!(buf, "    let {name}!: __SvnStoreValue<typeof {base}>;");
-        } else {
-            // JS-overlay form — `!:` definite-assign is TS-only
-            // syntax, so initialise via a JSDoc-typed double-cast
-            // through `any` (matches the design fixture pattern in
-            // `design/js_overlay/fixture/src/04_store_unwrap.svelte.svn.js`).
-            let _ = writeln!(buf, "    /** @type {{__SvnStoreValue<typeof {base}>}} */");
+    // Stores that come from imports are declared at the start of the
+    // render function (upstream `ImplicitStoreValues
+    // .attachStoreValueDeclarationOfImportsToRenderFn`); the rest are
+    // attached to their own declarations once the script body is in
+    // the buffer.
+    let mut store_bases: Vec<SmolStr> = store_refs
+        .iter()
+        .map(|name| SmolStr::from(name.strip_prefix('$').unwrap_or(name)))
+        .collect();
+    {
+        let mut import_names: std::collections::HashSet<SmolStr> = std::collections::HashSet::new();
+        if let Some(p) = parsed_instance.as_ref() {
+            store_subscriptions::import_local_names(&p.program, &mut import_names);
+        }
+        if let Some(p) = parsed_module.as_ref() {
+            store_subscriptions::import_local_names(&p.program, &mut import_names);
+        }
+        let imported: Vec<&str> = store_bases
+            .iter()
+            .filter(|b| import_names.contains(*b))
+            .map(SmolStr::as_str)
+            .collect();
+        if !imported.is_empty() {
             let _ = writeln!(
                 buf,
-                "    let {name} = /** @type {{any}} */ (/** @type {{any}} */ (null));"
+                "    {}",
+                store_subscriptions::store_declarations(imported.iter().copied())
             );
+            store_bases.retain(|b| !import_names.contains(b));
         }
     }
 
@@ -1419,7 +1419,8 @@ fn emit_document_with_render_name(
     script_body_rewrites::apply_script_body_rewrites(
         &mut buf,
         split.as_ref().zip(instance_body),
-        &store_refs,
+        module_body,
+        store_bases,
         &reactive_touched_names,
         parsed_instance.as_ref(),
         source_path,
@@ -1447,7 +1448,6 @@ fn emit_document_with_render_name(
     emit_void_block(
         buf.raw_string_mut(),
         summary,
-        &store_refs,
         &bindable_prop_names,
         &exported_locals,
     );

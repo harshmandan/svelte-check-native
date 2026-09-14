@@ -1,7 +1,23 @@
 {
     "errors": [
-        { "file": "Bad.svelte", "line": 6, "column": 26, "code": 2339 },
-        { "file": "DerivedBy.svelte", "line": 8, "column": 10, "code": 7022 }
+        {
+            "file": "Bad.svelte",
+            "line": 6,
+            "column": 26,
+            "code": 2339
+        },
+        {
+            "file": "DerivedBy.svelte",
+            "line": 8,
+            "column": 10,
+            "code": 7022
+        },
+        {
+            "file": "DerivedBy.svelte",
+            "line": 8,
+            "column": 20,
+            "code": 2448
+        }
     ],
-    "_note": "Stores literally named `state`/`derived`/`props` still auto-subscribe: upstream only treats $state/$derived/$props as runes when the identifier is a direct child of a call initialising a declarator whose name contains the rune base (processInstanceScriptContent.ts is_rune gate). input.svelte: `$state.count` resolves through the subscription alias — 0 errors. Bad.svelte: `$state.missing` fires TS2339 against the store's value type, proving the alias carries the real Writable value type instead of falling through to the ambient rune declaration. DerivedBy.svelte: `const derived = $derived.by(...)` self-referentially types the alias, firing TS7022 at the user declaration — verified against upstream svelte2tsx 0.7.45 output plus tsgo on the emitted shape."
+    "_note": "Stores literally named `state`/`derived`/`props` still auto-subscribe: upstream only treats $state/$derived/$props as runes when the identifier is a direct child of a call initialising a declarator whose name contains the rune base (processInstanceScriptContent.ts is_rune gate). input.svelte: `$state.count` resolves through the subscription declaration \u2014 0 errors. Bad.svelte: `$state.missing` fires TS2339 against the store's value type, proving the declaration carries the real Writable value type instead of falling through to the ambient rune declaration. DerivedBy.svelte: `const derived = $derived.by(...)` \u2014 the `$derived` subscription is declared right after `derived` itself (upstream's `;let $derived = __sveltets_2_store_get(derived);`), so the initializer reads `$derived` before that declaration (TS2448) and the declaration is self-referential (TS7022); both at the same user positions as upstream."
 }

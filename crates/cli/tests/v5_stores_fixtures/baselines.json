@@ -54,7 +54,7 @@
             ]
         },
         "$store-inside-block-without-braces": {
-            "reason": "Multiple `$store` references where only some `store` names are declared in the fixture; verbatim emit preserves the unresolved ones. An unresolved `$name` is also the compiler's `global_reference_invalid` error, reported once at the first such reference (svelte-check stops at the first compiler error), alongside the TypeScript errors. Upstream reports only the `$store` and `b` errors: it declares `$store1` as `let $store1 = __sveltets_2_store_get(store1)` inside ignore comments, and since `store1` is a string rather than a store that call fails (hidden by the ignore) and leaves `$store1` as `any`. Our hoisted `__SvnStoreValue<typeof store1>` declaration resolves to the string type instead, so `$store1 = 1` and `$store1.x` additionally fire TS2322 / TS2339 — a known store-declaration shape difference, not covered by this baseline's parity.",
+            "reason": "Multiple `$store` references where only some `store` names are declared in the fixture; verbatim emit preserves the unresolved ones. An unresolved `$name` is also the compiler's `global_reference_invalid` error, reported once at the first such reference (svelte-check stops at the first compiler error), alongside the TypeScript errors. Locked to upstream's exact list: `$store1` is declared as `let $store1 = __svn_store_get(store1)` inside ignore comments, and since `store1` is a string rather than a store that call fails (hidden by the ignore) and leaves `$store1` as `any`, so `$store1 = 1` and `$store1.x` report nothing.",
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
@@ -67,18 +67,6 @@
                     "line": 8,
                     "column": 8,
                     "code": "global_reference_invalid"
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 10,
-                    "column": 8,
-                    "code": 2322
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 12,
-                    "column": 16,
-                    "code": 2339
                 },
                 {
                     "file": "src/input.svelte",

@@ -8,11 +8,10 @@ declare const foo: { [key: string]: any } & ((...args: any[]) => any);
         foo?: string;
     }
 async function $$render_e40e2c10() {
-    let $store!: __SvnStoreValue<typeof store>;
 
                                             
     
-    const store = readable(1)
+    const store = readable(1)/*svn:ignore_start*/;let $store = __svn_store_get(store);/*svn:ignore_end*/
  
     /** I should not be sandwitched between the imports */
                      
@@ -23,8 +22,6 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         ($store);
     });
-    void $store;
-    void store;
     return { props: undefined as any as (Props), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

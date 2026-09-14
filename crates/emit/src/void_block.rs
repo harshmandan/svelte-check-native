@@ -81,7 +81,6 @@ pub(crate) fn emit_bind_pair_declarations(
 pub(crate) fn emit_void_block<'a>(
     out: &mut String,
     summary: &'a TemplateSummary,
-    store_refs: &'a [SmolStr],
     bindable_prop_names: &'a [SmolStr],
     exported_locals: &'a [SmolStr],
 ) {
@@ -96,17 +95,6 @@ pub(crate) fn emit_void_block<'a>(
             continue;
         }
         emit(out, name);
-    }
-    for name in store_refs {
-        emit(out, name);
-        // The auto-subscribe alias `$store` references the store, but
-        // the underlying `store` const is itself only used in template
-        // expressions like `$store` (which the alias receives). Void
-        // the base name so TS6133 doesn't fire on the original
-        // declaration.
-        if let Some(base) = name.strip_prefix('$') {
-            emit(out, base);
-        }
     }
     for name in bindable_prop_names {
         emit(out, name);

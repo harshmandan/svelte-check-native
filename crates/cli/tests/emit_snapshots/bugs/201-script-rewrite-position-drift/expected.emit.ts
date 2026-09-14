@@ -3,7 +3,7 @@
 async function $$render_e40e2c10() {
 
     let a: string | null = null; a = undefined as any;
-    let el!: HTMLDivElement;
+    let el: HTMLDivElement;
     const b: string = 1;
     void a;
     void b;

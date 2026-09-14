@@ -7,7 +7,7 @@ async function $$render_e40e2c10<T>() {
 
   /** @type {{ b: T }}*/
   let { b } = $props();
-  let rect = /** @type {any} */ (null);
+  let rect;
     ;(async () => {
         // template type-check body (incremental)
         {

@@ -8,7 +8,6 @@ interface A extends B<A> {
 }
 interface B<T> {}
 async function $$render_e40e2c10() {
-    type $$Events = {};
 
                           
           
@@ -21,7 +20,7 @@ let {Abc}: A = $props()
     ;(async () => {
         // template type-check body (incremental)
     });
-    return { props: undefined as any as (A), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as (A), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 const __svn_component_default: import('svelte').Component<

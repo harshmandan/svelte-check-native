@@ -485,19 +485,22 @@ fn emit_document_with_render_name(
         None => raw_props_info,
     };
 
-    // Three-trigger gate for event-type narrowing, matching upstream
-    // svelte2tsx (`ComponentEvents.ts:84-86` + `ExportedNames.isRunesMode`).
+    // Gate for event-type narrowing, matching upstream svelte2tsx
+    // (`ComponentEvents.hasStrictEvents` and `addComponentExport.ts`).
     // Narrow ONLY when the user opted in via ONE of:
     //   1. `interface $$Events` / `type $$Events` declared.
     //   2. `<script strictEvents>` attribute.
-    //   3. Runes mode.
+    //   3. Runes mode — but only on the generics export path, whose
+    //      class wrapper is the one place upstream OR-s `isRunesMode()`
+    //      into the strictness; the plain path stays lax.
     // Otherwise stay lax (child events flow through the default
     // `(e: any) => any` overload). This matches upstream's behavior
     // for Svelte-4 components that happen to use
     // `createEventDispatcher<T>()` without opting into strict events —
     // narrowing those without opt-in produced 18 legitimate-but-new
     // errors on a Svelte-4 bench in the reverted commit 3c24f18.
-    let narrow_events = has_strict_events_decl || has_strict_events_attr(doc) || runes_mode;
+    let narrow_events =
+        has_strict_events_decl || has_strict_events_attr(doc) || (runes_mode && generics.is_some());
     // If the component doesn't already declare `$$Events` but opted in
     // via one of the other two triggers, pull the dispatcher's type
     // argument as the source for a synthesised `type $$Events = T;`.
@@ -1411,7 +1414,6 @@ fn emit_document_with_render_name(
 
     script_body_rewrites::apply_script_body_rewrites(
         &mut buf,
-        summary,
         split.as_ref().zip(instance_body),
         &store_refs,
         &reactive_touched_names,
@@ -2324,18 +2326,14 @@ mod tests {
     }
 
     #[test]
-    fn bind_this_target_gets_definite_assignment() {
+    fn bind_this_target_declaration_is_left_as_written() {
+        // Upstream keeps the declaration and assigns the element inside
+        // the template arrow, so a direct read still reports TS2454.
         let src = "<script lang=\"ts\">let inputEl: HTMLDivElement;</script>\
                    <div bind:this={inputEl}></div>";
         let out = emit_str(src);
-        assert!(
-            out.contains("let inputEl!:"),
-            "missing definite-assignment rewrite:\n{out}"
-        );
-        assert!(
-            !out.contains("let inputEl: "),
-            "still has un-rewritten declaration:\n{out}"
-        );
+        assert!(out.contains("let inputEl: HTMLDivElement;"), "{out}");
+        assert!(out.contains("inputEl = null as any as"), "{out}");
     }
 
     #[test]

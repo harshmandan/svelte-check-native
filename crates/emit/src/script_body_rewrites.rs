@@ -8,9 +8,11 @@
 //!    TS7034/7005.
 //! 2. **Definite-assign** — `let X: T;` becomes `let X!: T;` for
 //!    every name we know is assigned at runtime but TS flow
-//!    analysis can't prove (bind:this targets, store
-//!    auto-subscribe bases, reactive-rewrite-touched names, typed
-//!    uninitialised top-level lets).
+//!    analysis can't prove (exported props, store auto-subscribe
+//!    bases, reactive-rewrite-touched names). A `bind:this` target
+//!    is not one of them: upstream leaves its declaration as
+//!    written, so a direct read before the element mounts still
+//!    reports TS2454 while reads inside closures pass.
 //! 3. **De-narrow typed literal inits** — `export let size: Size =
 //!    'medium'` gets a `size = undefined as any;` trailer so later
 //!    comparisons don't fire TS2367 ("no overlap"). TS-only.
@@ -45,26 +47,20 @@ use svn_analyze::collect_typed_top_level_lets;
 /// Apply the three post-body in-place rewrites: widen-untyped-exports →
 /// definite-assign → de-narrow-typed-literal-inits.
 ///
-/// Builds the `def_assign_names` set from five sources (bind:this
-/// targets, export-stripped locals, store-auto-subscribe bases,
-/// reactive-rewrite-touched names, typed uninitialized top-level
-/// `let`s) — all of which produce declarations that Svelte treats
-/// as definitely-assigned at runtime but TS flow analysis can't
-/// prove.
+/// Builds the `def_assign_names` set from three sources
+/// (export-stripped locals, store-auto-subscribe bases,
+/// reactive-rewrite-touched names) — all of which produce
+/// declarations that Svelte treats as definitely-assigned at runtime
+/// but TS flow analysis can't prove.
 pub(crate) fn apply_script_body_rewrites<'alloc>(
     buf: &mut EmitBuffer,
-    summary: &svn_analyze::TemplateSummary,
     split: Option<(&process_instance_script_content::SplitScript, Range<usize>)>,
     store_refs: &[SmolStr],
     reactive_touched_names: &[SmolStr],
     parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
     source_path: &Path,
 ) {
-    let mut def_assign_names: Vec<SmolStr> = summary
-        .bind_this_targets
-        .iter()
-        .map(|t| t.name.clone())
-        .collect();
+    let mut def_assign_names: Vec<SmolStr> = Vec::new();
     if let Some((s, _)) = &split {
         for name in &s.exported_locals {
             if !def_assign_names.iter().any(|n| n == name) {
@@ -90,14 +86,11 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
             def_assign_names.push(name.clone());
         }
     }
-    // R-Conv #20 (B2 #5): the blanket `collect_typed_uninit_lets`
-    // source was removed. It used to inject `!` on every `let NAME:
-    // Type;` (typed, no init) in the instance script — masking real
-    // TS2454 ("used before being assigned") diagnostics that
-    // upstream LS surfaces unmodified. The four explicit sources
-    // above (bind:this, exported lets, store-auto-subscribe,
-    // reactive-touched) cover every legitimate "Svelte assigns
-    // this at runtime" case; everything else is genuinely a
+    // No blanket source: injecting `!` on every typed uninitialised
+    // `let` masked real TS2454 ("used before being assigned")
+    // diagnostics that upstream surfaces unmodified. The three
+    // explicit sources above cover every "Svelte assigns this at
+    // runtime" case upstream also covers; everything else is a
     // user-source order bug that should fire TS2454.
     // Every pass below splices bytes into the buffer AFTER the script
     // body's byte-precise TokenMapEntry was pushed (and after the

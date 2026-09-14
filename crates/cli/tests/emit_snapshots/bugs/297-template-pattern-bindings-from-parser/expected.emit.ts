@@ -3,7 +3,6 @@
     import type { Snippet } from 'svelte';
 async function $$render_d01ef561() {
     type $$ComponentProps = { row?: Snippet<[Map<() => void, string>]> };
-    type $$Events = {};
 
                                           
     let { row }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
@@ -11,7 +10,7 @@ async function $$render_d01ef561() {
         // template type-check body (incremental)
         (row?.(new Map()));
     });
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_d01ef561;
 const __svn_component_default: import('svelte').Component<

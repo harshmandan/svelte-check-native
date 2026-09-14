@@ -3,7 +3,6 @@
   import { getDuration, type AppVideo } from './helpers'
 async function $$render_e40e2c10() {
     type $$ComponentProps = { item: unknown };
-    type $$Events = {};
 
                                                         
   let { item }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props()
@@ -13,7 +12,7 @@ async function $$render_e40e2c10() {
         }
     });
     void getDuration;
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 type __svn_tpl_type_refs = [AppVideo];

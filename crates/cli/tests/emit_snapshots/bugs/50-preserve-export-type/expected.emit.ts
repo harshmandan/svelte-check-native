@@ -9,7 +9,6 @@ async function $$render_c3e5a17f() {
     type $$ComponentProps = {
         config: PanelConfig;
     };
-    type $$Events = {};
 
     // `export type` at the instance-script level is pure type surface. It
     // must survive to the module top level of the generated overlay so
@@ -32,7 +31,7 @@ async function $$render_c3e5a17f() {
             (config.count);
         }
     });
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_c3e5a17f;
 const __svn_component_default: import('svelte').Component<

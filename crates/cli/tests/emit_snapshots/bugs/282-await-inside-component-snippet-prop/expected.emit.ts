@@ -3,7 +3,6 @@
     import type { Snippet } from 'svelte';
 async function $$render_d33db870() {
     type $$ComponentProps = { row: Snippet<[label: string]> };
-    type $$Events = {};
 
                                           
     let { row }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
@@ -11,7 +10,7 @@ async function $$render_d33db870() {
         // template type-check body (incremental)
         (row('a'));
     });
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_d33db870;
 const __svn_component_default: import('svelte').Component<
@@ -27,7 +26,6 @@ export default __svn_component_default;
     import type { Snippet } from 'svelte';
 async function $$render_74f92bad() {
     type $$ComponentProps = { children: Snippet };
-    type $$Events = {};
 
                                           
     let { children }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
@@ -35,7 +33,7 @@ async function $$render_74f92bad() {
         // template type-check body (incremental)
         (children());
     });
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_74f92bad;
 const __svn_component_default: import('svelte').Component<

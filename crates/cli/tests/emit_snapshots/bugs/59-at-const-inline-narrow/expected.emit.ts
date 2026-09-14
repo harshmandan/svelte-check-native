@@ -5,7 +5,6 @@
     | { kind: 'square'; side: number }
 async function $$render_e40e2c10() {
     type $$ComponentProps = { shape: Shape };
-    type $$Events = {};
 
               
                                         
@@ -36,7 +35,7 @@ async function $$render_e40e2c10() {
             (rest.length);
         }
     });
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 const __svn_component_default: import('svelte').Component<

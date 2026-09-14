@@ -320,18 +320,18 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
             // resolution upstream, so they don't fire.
             if d.kind == DirectiveKind::Bind {
                 use svn_parser::ast::DirectiveValue;
-                let base: Option<&str> = match &d.value {
+                let base: Option<String> = match &d.value {
                     Some(DirectiveValue::Expression {
                         expression_range, ..
                     }) => ctx
                         .source
                         .get(expression_range.start as usize..expression_range.end as usize)
-                        .and_then(crate::scope_util::extract_base_ident),
+                        .and_then(crate::scope_util::base_identifier_of_text),
                     // `bind:foo` shorthand — the implied identifier.
-                    None => Some(d.name.as_str()),
+                    None => Some(d.name.to_string()),
                     _ => None,
                 };
-                if let Some(base) = base
+                if let Some(base) = base.as_deref()
                     && let Some(tree) = &ctx.scope_tree
                     && let Some(bid) =
                         tree.resolve(tree.innermost_template_scope_at(d.range.start), base)

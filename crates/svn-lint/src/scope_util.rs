@@ -38,21 +38,24 @@ pub(crate) fn idents_in_pattern<'a>(pat: &'a BindingPattern<'_>) -> Vec<&'a str>
     out
 }
 
-/// Strip the leading identifier off an arbitrary string. `None`
-/// when the first character isn't a valid identifier-start.
-pub(crate) fn extract_base_ident(s: &str) -> Option<&str> {
-    let mut end = 0;
-    for (i, c) in s.char_indices() {
-        if i == 0 && !(c.is_ascii_alphabetic() || c == '_' || c == '$') {
-            return None;
-        }
-        if c.is_ascii_alphanumeric() || c == '_' || c == '$' {
-            end = i + c.len_utf8();
-        } else {
-            break;
-        }
+/// The leftmost identifier of an expression given as source text
+/// (`rest[0]` → `rest`, `/* c */ rést.b` → `rést`), or `None` when the
+/// text isn't an identifier / member chain. Parses the slice, so
+/// comments and non-ASCII names are handled like everything else.
+pub(crate) fn base_identifier_of_text(slice: &str) -> Option<String> {
+    use oxc_ast::ast::Statement;
+
+    let wrapped = format!("({slice});");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
+        return None;
+    };
+    let mut expr = &stmt.expression;
+    while let Expression::ParenthesizedExpression(p) = expr {
+        expr = &p.expression;
     }
-    if end == 0 { None } else { Some(&s[..end]) }
+    base_identifier(expr).map(|(name, _, _)| name.to_string())
 }
 
 /// Walk to the leftmost identifier of a member-chain expression.

@@ -45,7 +45,7 @@ use crate::scope_rune_detection::{
 };
 use crate::scope_util::{
     base_identifier, expression_from_default, expression_from_for_init,
-    expression_from_property_key, extract_base_ident, idents_in_pattern, unwrap_ts_wrappers,
+    expression_from_property_key, idents_in_pattern, unwrap_ts_wrappers,
 };
 
 // Public data types live in `scope_types.rs`. Re-export them so
@@ -903,26 +903,34 @@ impl TreeBuilder {
         let Some(raw) = ctx.source.get(range.start as usize..range.end as usize) else {
             return;
         };
-        let slice = raw.trim();
-        if slice.is_empty() {
+        if raw.trim().is_empty() {
             return;
+        }
+        // Parse the expression so a leading comment or a non-ASCII
+        // name doesn't hide the identifier the bind roots on.
+        let wrapped = format!("({raw});");
+        let alloc = oxc_allocator::Allocator::default();
+        let parsed = parse_script_body(&alloc, &wrapped, ctx.lang);
+        let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
+            return;
+        };
+        let mut expr = &stmt.expression;
+        while let Expression::ParenthesizedExpression(p) = expr {
+            expr = &p.expression;
         }
         // Bare identifier → also push a reassignment for
         // `non_reactive_update`.
-        if slice
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
-        {
+        if let Expression::Identifier(id) = expr {
             self.pending_updates.push(PendingUpdate {
                 scope: ctx.scope,
-                name: SmolStr::from(slice),
+                name: SmolStr::from(id.name.as_str()),
                 range,
                 is_reassign: true,
             });
         }
-        // Extract the base identifier for member / call chains too —
+        // The base identifier of member chains counts too —
         // `rest[0]` and `rest.foo` both root on `rest`.
-        if let Some(base) = extract_base_ident(slice)
+        if let Some((base, _, _)) = base_identifier(expr)
             && let Some(bid) = resolve_by_name(&self.scopes, ctx.scope, base)
         {
             self.bindings[bid.0 as usize].bind_reference_count += 1;

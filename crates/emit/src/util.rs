@@ -119,109 +119,32 @@ pub(crate) fn render_class_name(render_fn_name: &str) -> SmolStr {
 /// constraints and `= default` defaults).
 ///
 /// At instantiation sites we need just the names: `typeof foo<T, U>`
-/// not `typeof foo<T extends X, U = Y>`. This helper strips
-/// constraints and defaults, preserving comma-separated order.
+/// not `typeof foo<T extends X, U = Y>`. The list is read back from a
+/// parse of `function f<…>() {}`, the way upstream reads
+/// `param.name.getText()`, so a `>` inside `=>` or a comma inside a
+/// string constraint never splits a parameter. Declaration-only
+/// modifiers (`const T`, `in T`, `out U`) are dropped with the rest.
 ///
-/// Handles:
-/// - `T` → `T`
-/// - `T extends Item` → `T`
-/// - `T extends Item, U` → `T, U`
-/// - `T extends Array<U>, U` → `T, U` (bracket depth tracked so the
-///   inner `U` doesn't get counted as a separator)
-/// - `T = string` → `T`
-/// - `const T extends X` / `in T` / `out U` → `T` / `T` / `U`
-///   (declaration-only modifiers stripped — see [`strip_tp_modifiers`])
+/// A list oxc can't read at all comes back unchanged: the declaration
+/// site reports the real problem in the user's own text.
 pub(crate) fn generic_arg_names(generics: &str) -> String {
-    // Output is a strict subset of `generics` (drops constraints /
-    // defaults, keeps names + commas). Pre-size to input length so
-    // single-shot push_strs don't trigger any growth realloc.
-    let mut out = String::with_capacity(generics.len());
-    let mut depth_angle: i32 = 0;
-    let mut depth_paren: i32 = 0;
-    let mut depth_bracket: i32 = 0;
-    let mut current_name: Vec<u8> = Vec::new();
-    let mut in_name = true;
-    let bytes = generics.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        match b {
-            b'<' => depth_angle += 1,
-            b'>' => depth_angle -= 1,
-            b'(' => depth_paren += 1,
-            b')' => depth_paren -= 1,
-            b'[' => depth_bracket += 1,
-            b']' => depth_bracket -= 1,
-            _ => {}
-        }
-        let at_depth_zero = depth_angle == 0 && depth_paren == 0 && depth_bracket == 0;
-        if at_depth_zero && b == b',' {
-            let s = std::str::from_utf8(&current_name).unwrap_or("");
-            let trimmed = strip_tp_modifiers(s);
-            if !trimmed.is_empty() {
-                if !out.is_empty() {
-                    out.push_str(", ");
-                }
-                out.push_str(trimmed);
-            }
-            current_name.clear();
-            in_name = true;
-            i += 1;
-            continue;
-        }
-        if in_name && at_depth_zero {
-            if b.is_ascii_whitespace() {
-                if !current_name.is_empty() {
-                    let mut j = i;
-                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                        j += 1;
-                    }
-                    if generics[j..].starts_with("extends") {
-                        in_name = false;
-                    }
-                }
-                current_name.push(b);
-                i += 1;
-                continue;
-            }
-            if b == b'=' {
-                in_name = false;
-                i += 1;
-                continue;
-            }
-            current_name.push(b);
-        }
-        i += 1;
+    let wrapped = format!("function __svn_generics<{generics}>() {{}}");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    let names: Vec<&str> = parsed
+        .program
+        .body
+        .first()
+        .and_then(|stmt| match stmt {
+            oxc_ast::ast::Statement::FunctionDeclaration(f) => f.type_parameters.as_deref(),
+            _ => None,
+        })
+        .map(|tps| tps.params.iter().map(|p| p.name.name.as_str()).collect())
+        .unwrap_or_default();
+    if names.is_empty() {
+        return generics.to_string();
     }
-    let s = std::str::from_utf8(&current_name).unwrap_or("");
-    let trimmed = strip_tp_modifiers(s);
-    if !trimmed.is_empty() {
-        if !out.is_empty() {
-            out.push_str(", ");
-        }
-        out.push_str(trimmed);
-    }
-    out
-}
-
-/// Strip a leading type-parameter DECLARATION modifier (`const`, `in`,
-/// `out`) from a parameter name segment. These are legal only in the
-/// declaration list (`<const T>`, `<in T>`, `<out U>`); at an
-/// instantiation site (`typeof foo<T, U>`) only the bare name is valid.
-/// Upstream uses `param.name.getText()`, which never includes them.
-fn strip_tp_modifiers(name: &str) -> &str {
-    let mut s = name.trim();
-    // At most one of these realistically applies, but loop harmlessly.
-    loop {
-        let rest = s
-            .strip_prefix("const ")
-            .or_else(|| s.strip_prefix("in "))
-            .or_else(|| s.strip_prefix("out "));
-        match rest {
-            Some(r) => s = r.trim_start(),
-            None => return s,
-        }
-    }
+    names.join(", ")
 }
 
 /// Extract the `generics=` attribute value from the instance `<script>`
@@ -236,8 +159,77 @@ fn strip_tp_modifiers(name: &str) -> &str {
 /// The value is spliced verbatim into our wrapping function as
 /// `function $$render<T extends Item, K extends keyof T>() { ... }` so
 /// any references to `T` / `K` inside the script body resolve correctly.
+/// A top-level `type NAME = $$Generic[<constraint>];` declaration.
+struct DollarGenericDecl {
+    name: SmolStr,
+    /// Source text of the single type argument, if any.
+    constraint: Option<String>,
+    /// Byte span of the whole declaration in the script.
+    span: std::ops::Range<usize>,
+}
+
+/// Parse the script and list its `type NAME = $$Generic[<…>];`
+/// declarations in source order.
+///
+/// Only a parsed type alias counts, so the same text inside a comment
+/// or string is not a declaration. A `$$Generic<X, Y>` with two type
+/// arguments has no single-constraint meaning (upstream rejects it
+/// with a transform error); the whole list is dropped so no malformed
+/// generic parameter is produced.
+fn dollar_generic_decls(script: &str) -> Option<Vec<DollarGenericDecl>> {
+    use oxc_ast::ast::{Declaration, Statement, TSType, TSTypeName};
+
+    // Cheap pre-filter: the parse is only worth it when the marker
+    // appears somewhere in the text.
+    if !script.contains("$$Generic") {
+        return Some(Vec::new());
+    }
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, script, svn_parser::ScriptLang::Ts);
+    if parsed.panicked {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    for stmt in &parsed.program.body {
+        let (alias, span) = match stmt {
+            Statement::TSTypeAliasDeclaration(a) => (a, a.span),
+            Statement::ExportDeclaration(e) => match &e.declaration {
+                Declaration::TSTypeAliasDeclaration(a) => (a, e.span),
+                _ => continue,
+            },
+            _ => continue,
+        };
+        let TSType::TSTypeReference(reference) = &alias.type_annotation else {
+            continue;
+        };
+        let TSTypeName::IdentifierReference(id) = &reference.type_name else {
+            continue;
+        };
+        if id.name != "$$Generic" {
+            continue;
+        }
+        let constraint = match reference.type_arguments.as_deref() {
+            None => None,
+            Some(args) if args.params.len() == 1 => {
+                let arg = oxc_span::GetSpan::span(&args.params[0]);
+                script
+                    .get(arg.start as usize..arg.end as usize)
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+            }
+            Some(_) => return None,
+        };
+        out.push(DollarGenericDecl {
+            name: SmolStr::from(alias.id.name.as_str()),
+            constraint,
+            span: span.start as usize..span.end as usize,
+        });
+    }
+    Some(out)
+}
+
 /// Blank out `type NAME = $$Generic[<args>];` declarations from a
-/// script body, replacing each matched span with whitespace of equal
+/// script body, replacing each declaration with whitespace of equal
 /// length so subsequent line/column source maps stay aligned.
 ///
 /// Used in the rewrite chain when `synthesise_generics_from_dollar_generic`
@@ -246,86 +238,13 @@ fn strip_tp_modifiers(name: &str) -> &str {
 /// identifier in the function scope, on top of the local declaration
 /// shadowing the generic parameter and degrading binding precision).
 pub(crate) fn blank_dollar_generic_decls(script: &str) -> String {
-    let bytes = script.as_bytes();
     let mut out = script.to_string();
-    let mut cursor = 0;
-    while cursor < bytes.len() {
-        let Some(rel) = bytes[cursor..].windows(4).position(|w| w == b"type") else {
-            break;
-        };
-        let kw_start = cursor + rel;
-        cursor = kw_start + 4;
-        // Reject identifier prefix/suffix continuation.
-        let before_ok = kw_start == 0 || !is_ident_byte(bytes[kw_start - 1]);
-        let after_ok = cursor < bytes.len() && is_ascii_ws(bytes[cursor]);
-        if !before_ok || !after_ok {
-            continue;
-        }
-        // Skip whitespace, read NAME.
-        while cursor < bytes.len() && is_ascii_ws(bytes[cursor]) {
-            cursor += 1;
-        }
-        let name_start = cursor;
-        while cursor < bytes.len() && is_ident_byte(bytes[cursor]) {
-            cursor += 1;
-        }
-        if name_start == cursor {
-            continue;
-        }
-        while cursor < bytes.len() && is_ascii_ws(bytes[cursor]) {
-            cursor += 1;
-        }
-        if bytes.get(cursor) != Some(&b'=') {
-            continue;
-        }
-        cursor += 1;
-        while cursor < bytes.len() && is_ascii_ws(bytes[cursor]) {
-            cursor += 1;
-        }
-        if !script[cursor..].starts_with("$$Generic") {
-            continue;
-        }
-        cursor += "$$Generic".len();
-        // Optional `<args>`.
-        if bytes.get(cursor) == Some(&b'<') {
-            cursor += 1;
-            let mut depth = 1usize;
-            while cursor < bytes.len() && depth > 0 {
-                match bytes[cursor] {
-                    b'<' => depth += 1,
-                    b'>' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-                cursor += 1;
-            }
-            if depth != 0 {
-                return out;
-            }
-            cursor += 1; // past `>`
-        }
-        // Skip whitespace, expect `;` (or end of line / file).
-        while cursor < bytes.len() && matches!(bytes[cursor], b' ' | b'\t') {
-            cursor += 1;
-        }
-        let semi_end = if bytes.get(cursor) == Some(&b';') {
-            cursor + 1
-        } else {
-            cursor
-        };
-        // Replace the span [kw_start..semi_end) with spaces, preserving
-        // newlines so line numbers stay aligned.
-        let span = &script[kw_start..semi_end];
-        let replacement: String = span
+    for decl in dollar_generic_decls(script).unwrap_or_default() {
+        let replacement: String = script[decl.span.clone()]
             .chars()
             .map(|c| if c == '\n' || c == '\r' { c } else { ' ' })
             .collect();
-        out.replace_range(kw_start..semi_end, &replacement);
-        cursor = semi_end;
+        out.replace_range(decl.span, &replacement);
     }
     out
 }
@@ -363,9 +282,8 @@ pub(crate) fn extract_generics_attr(doc: &Document<'_>) -> Option<(SmolStr, Gene
         .map(|g| (g, GenericsOrigin::DollarGeneric))
 }
 
-/// Scan an instance-script body for `type NAME = $$Generic[<args>];`
-/// declarations and return them as a generic-parameter list. Each
-/// declaration becomes one parameter:
+/// Turn the script's `type NAME = $$Generic[<args>];` declarations into
+/// a generic-parameter list. Each declaration becomes one parameter:
 ///   `type A = $$Generic;`            → `A`
 ///   `type B = $$Generic<keyof A>;`   → `B extends keyof A`
 ///   `type C = $$Generic<boolean>;`   → `C extends boolean`
@@ -375,127 +293,18 @@ pub(crate) fn extract_generics_attr(doc: &Document<'_>) -> Option<(SmolStr, Gene
 /// Returns `None` when no `$$Generic` declarations exist (caller's
 /// non-`<script generics>` path keeps its existing behaviour).
 fn synthesise_generics_from_dollar_generic(script: &str) -> Option<SmolStr> {
-    let bytes = script.as_bytes();
-    let mut params: Vec<String> = Vec::new();
-    let mut cursor = 0;
-    while cursor < bytes.len() {
-        // Find next `type` keyword.
-        let Some(rel) = bytes[cursor..].windows(4).position(|w| w == b"type") else {
-            break;
-        };
-        let kw_start = cursor + rel;
-        cursor = kw_start + 4;
-        // Reject identifier prefix/suffix continuation
-        // (`Type` / `prototype`).
-        let before_ok = kw_start == 0 || !is_ident_byte(bytes[kw_start - 1]);
-        let after_ok = cursor < bytes.len() && is_ascii_ws(bytes[cursor]);
-        if !before_ok || !after_ok {
-            continue;
-        }
-        // Skip whitespace, read NAME.
-        while cursor < bytes.len() && is_ascii_ws(bytes[cursor]) {
-            cursor += 1;
-        }
-        let name_start = cursor;
-        while cursor < bytes.len() && is_ident_byte(bytes[cursor]) {
-            cursor += 1;
-        }
-        if name_start == cursor {
-            continue;
-        }
-        let name = &script[name_start..cursor];
-        // Skip whitespace, expect `=`.
-        while cursor < bytes.len() && is_ascii_ws(bytes[cursor]) {
-            cursor += 1;
-        }
-        if bytes.get(cursor) != Some(&b'=') {
-            continue;
-        }
-        cursor += 1;
-        while cursor < bytes.len() && is_ascii_ws(bytes[cursor]) {
-            cursor += 1;
-        }
-        // Expect literal `$$Generic` (followed by optional `<args>`).
-        if !script[cursor..].starts_with("$$Generic") {
-            continue;
-        }
-        cursor += "$$Generic".len();
-        // Optional `<args>` — track angle-bracket nesting.
-        let constraint = if bytes.get(cursor) == Some(&b'<') {
-            cursor += 1;
-            let arg_start = cursor;
-            let mut depth = 1usize;
-            while cursor < bytes.len() && depth > 0 {
-                match bytes[cursor] {
-                    b'<' => depth += 1,
-                    b'>' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-                cursor += 1;
-            }
-            if depth != 0 {
-                return None;
-            }
-            let constraint = script[arg_start..cursor].trim().to_string();
-            cursor += 1; // past `>`
-            // A top-level comma means the user wrote `$$Generic<X, Y>`,
-            // which has no single-constraint meaning. Splicing it would
-            // emit malformed `A extends X, Y`. Upstream rejects this with
-            // a transform error; lacking that error path here, abort the
-            // whole synthesis so no malformed generic list is produced.
-            if has_top_level_comma(&constraint) {
-                return None;
-            }
-            if constraint.is_empty() {
-                None
-            } else {
-                Some(constraint)
-            }
-        } else {
-            None
-        };
-        match constraint {
-            Some(c) => params.push(format!("{name} extends {c}")),
-            None => params.push(name.to_string()),
-        }
-    }
+    let params: Vec<String> = dollar_generic_decls(script)?
+        .into_iter()
+        .map(|d| match d.constraint {
+            Some(c) => format!("{} extends {c}", d.name),
+            None => d.name.to_string(),
+        })
+        .collect();
     if params.is_empty() {
         None
     } else {
         Some(SmolStr::from(params.join(", ")))
     }
-}
-
-/// True if `s` contains a comma outside any `<...>` nesting. Used to
-/// detect a multi-argument `$$Generic<X, Y>` whose span can't be spliced
-/// as a single constraint. Tracks angle-bracket depth so a nested
-/// `Map<X, Y>` does not false-positive.
-fn has_top_level_comma(s: &str) -> bool {
-    let mut depth: i32 = 0;
-    for b in s.bytes() {
-        match b {
-            b'<' => depth += 1,
-            b'>' => depth -= 1,
-            b',' if depth == 0 => return true,
-            _ => {}
-        }
-    }
-    false
-}
-
-#[inline]
-pub(crate) fn is_ascii_ws(b: u8) -> bool {
-    matches!(b, b' ' | b'\t' | b'\n' | b'\r')
-}
-
-#[inline]
-pub(crate) fn is_ident_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
 
 /// True for CSS-custom-property attribute names (`--foo`, `--some-var`).

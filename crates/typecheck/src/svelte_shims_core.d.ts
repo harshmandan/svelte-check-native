@@ -386,6 +386,23 @@ type __SvnEachItem<T> = 0 extends 1 & T
             : never;
 
 /**
+ * Value-level item of an `{#each}` source, used to resolve a binding
+ * exposed through a `<slot>`. Mirrors upstream's
+ * `__sveltets_2_unwrapArr<T>(arr: ArrayLike<T>): T`, widened to the
+ * iterables Svelte 5 accepts; both names are declared so overlay-diff
+ * tooling resolves either side.
+ */
+declare function __svn_unwrap_arr<T extends ArrayLike<unknown> | Iterable<unknown>>(
+    value: T | undefined | null,
+): __SvnEachItem<T>;
+declare function __sveltets_2_unwrapArr<T extends ArrayLike<unknown> | Iterable<unknown>>(
+    value: T | undefined | null,
+): __SvnEachItem<T>;
+/** Value-level result of an `{#await}` source (`__sveltets_2_unwrapPromiseLike`). */
+declare function __svn_unwrap_promise_like<T>(promise: PromiseLike<T> | T): T;
+declare function __sveltets_2_unwrapPromiseLike<T>(promise: PromiseLike<T> | T): T;
+
+/**
  * Reviewer follow-up #2: extract a child component's events surface
  * for the parent's bubbled-event projection. When the wrapper has
  * `<Child on:NAME />` (no value, event-bubble shorthand), the

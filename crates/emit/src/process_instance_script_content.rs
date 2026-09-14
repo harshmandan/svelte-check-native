@@ -68,13 +68,6 @@ pub struct SplitScript {
     /// we couldn't extract a safe-to-hoist annotation); the caller
     /// falls back to `any` for those slots.
     pub export_type_infos: Vec<ExportedLocalInfo>,
-    /// Names of `type`/`interface` declarations that were hoisted to
-    /// module scope. Emit consults this set before referencing a
-    /// user-declared type in the default-export declaration — if the
-    /// user's Props type wasn't hoistable (it references a body-local
-    /// via `typeof`), emit must fall back to `any` instead of firing
-    /// "Cannot find name 'Props'" at module scope.
-    pub hoisted_type_names: std::collections::HashSet<SmolStr>,
 }
 
 /// Surface-facing type info for one `export function/let/const` — what
@@ -228,7 +221,6 @@ pub fn split_imports(
             hoisted_stmt_spans: Vec::new(),
             stub_prefix_len: 0,
             export_type_infos: Vec::new(),
-            hoisted_type_names: HashSet::new(),
         };
     }
 
@@ -275,10 +267,6 @@ pub fn split_imports(
     // carries its AST-walked dependency sets so the decision logic reads
     // precomputed deps instead of re-scanning the byte slice.
     let mut pending_type_spans: Vec<PendingType> = Vec::new();
-    // Names of `export type` / `export interface` declarations hoisted
-    // verbatim (with their `export` keyword) — these bypass
-    // `pending_type_spans` and are merged into `hoisted_type_names` below.
-    let mut exported_hoisted_type_names: Vec<SmolStr> = Vec::new();
     // Broad identifier set referenced by every type-bearing declaration
     // that gets hoisted to module scope (hoisted pending types + `export
     // type`/`export interface` + namespace top-level type decls). Feeds
@@ -350,9 +338,8 @@ pub fn split_imports(
                         }
                         _ => None,
                     };
-                    if let Some((name, deps)) = exported_type {
+                    if let Some((_, deps)) = exported_type {
                         hoist_spans.push(span);
-                        exported_hoisted_type_names.push(SmolStr::from(name));
                         // `export type`/`export interface` always hoist, so
                         // their deps always feed the declare-const stub pass.
                         hoisted_type_idents.extend(deps.idents);
@@ -676,23 +663,15 @@ pub fn split_imports(
             break;
         }
     }
-    let mut hoisted_type_names: HashSet<SmolStr> = HashSet::new();
     for pending in pending_type_spans {
         if !must_stay_body.contains(&pending.name) {
             hoist_spans.push((pending.start, pending.end));
-            hoisted_type_names.insert(pending.name);
             // This hoisted type's references feed the declare-const
             // stub pass (replaces the old collect_ident_refs over the
             // concatenated hoist spans).
             hoisted_type_idents.extend(pending.deps.idents);
         }
     }
-
-    // `export type` / `export interface` declarations were hoisted
-    // verbatim above (with their `export` keyword), bypassing
-    // `pending_type_spans`. Their names were captured from the AST at the
-    // export arm; merge them so consumers' `import type` references resolve.
-    hoisted_type_names.extend(exported_hoisted_type_names);
 
     if hoist_spans.is_empty() && strip_keyword_spans.is_empty() && drop_spans.is_empty() {
         return SplitScript {
@@ -703,7 +682,6 @@ pub fn split_imports(
             hoisted_stmt_spans: Vec::new(),
             stub_prefix_len: 0,
             export_type_infos,
-            hoisted_type_names: HashSet::new(),
         };
     }
 
@@ -857,7 +835,6 @@ pub fn split_imports(
         hoisted_stmt_spans,
         stub_prefix_len,
         export_type_infos,
-        hoisted_type_names,
     }
 }
 

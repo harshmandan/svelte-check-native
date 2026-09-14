@@ -11,19 +11,16 @@
 //!   `interface $$IsomorphicComponent`, optional class wrapper for the
 //!   generic + Props case, and the Svelte-4 widening intersections.
 //!
-//! Plus two byte-scan helpers used to decide whether a Props type
-//! reference is module-scope-visible (`module_script_declares_type`,
-//! `imports_name`).
 
 use std::fmt::Write;
 
 use smol_str::SmolStr;
-use svn_parser::{Document, Fragment};
+use svn_parser::Fragment;
 
 use crate::emit_buffer::EmitBuffer;
-use crate::process_instance_script_content;
-use crate::svelte4::compat::{contains_export_let, fragment_contains_slot, is_svelte4_component};
+use crate::svelte4::compat::fragment_contains_slot;
 use crate::util::{generic_arg_names, render_class_name};
+use svn_analyze::AmbientRefs;
 
 /// JS-overlay default-export shape. Captures Props via
 /// `Awaited<ReturnType<typeof $$render>>['props']` so consumer
@@ -112,19 +109,17 @@ pub(crate) fn emit_default_export_declarations_js(buf: &mut EmitBuffer, render_n
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_default_export_declarations_ts(
     buf: &mut EmitBuffer,
-    doc: &Document<'_>,
     fragment: &Fragment,
-    split: Option<&process_instance_script_content::SplitScript>,
     render_name: &SmolStr,
     generics: Option<&str>,
     prop_type_source: Option<&str>,
-    template_type_refs: &[SmolStr],
     has_dispatcher_call: bool,
     has_concrete_dispatcher_events: bool,
     has_synth_events_alias: bool,
     has_strict_events_decl: bool,
     has_bubbled_events: bool,
     runes_mode: bool,
+    ambients: AmbientRefs,
 ) {
     // Upstream's `addComponentExport.ts:343` selects between three
     // default-export shapes. For the **non-generic, runes, no-slots,
@@ -138,24 +133,6 @@ pub(crate) fn emit_default_export_declarations_ts(
     // Threlte's instancing pattern (gap-A discovery, 2026-04-27) is
     // the canonical example. See `design/gap_a_iso_extraction/` for
     // tsgo-validated repro.
-    // Type-position reference for every type-only import that was
-    // consumed only inside a template expression (`{foo(item as
-    // AppVideo)}`). Emitted BEFORE the default-export selection so
-    // both the `__sveltets_2_fn_component` path and the
-    // `$$IsomorphicComponent` path keep these imports visibly used —
-    // without it, the fn_component path early-returns and the import
-    // fires TS6133.
-    if !template_type_refs.is_empty() {
-        buf.push_str("type __svn_tpl_type_refs = [");
-        for (i, name) in template_type_refs.iter().enumerate() {
-            if i > 0 {
-                buf.push_str(", ");
-            }
-            buf.push_str(name.as_str());
-        }
-        buf.push_str("];\n");
-        buf.push_str("void (0 as any as __svn_tpl_type_refs);\n");
-    }
     if should_emit_fn_component_shape(
         fragment,
         generics,
@@ -193,35 +170,8 @@ pub(crate) fn emit_default_export_declarations_ts(
         let _ = writeln!(buf, "}}");
     }
 
-    // The Props source has to be "safe" to reference at module scope:
-    // either a literal shape (`{ item: T }`) or a named type whose
-    // declaration was hoisted by process_instance_script_content. Bare named types that
-    // stay body-scoped (either because they reference the script's
-    // generic without re-binding it, or because they reference a
-    // body-level const via `typeof`) can't be named from the
-    // default-export declaration — emit falls back to `any` for those.
-    let prop_ty_is_literal = prop_type_source
-        .is_some_and(|t| t.trim().starts_with('{') && !svn_analyze::contains_typeof_ref(t));
     let prop_ty_root_name = prop_type_source.and_then(svn_analyze::root_type_name_of);
-    // Consider a named Props type module-scope-visible if either (a)
-    // process_instance_script_content hoisted it out of the instance script, (b) it's
-    // declared in the `<script module>` section, or (c) it's imported
-    // as a type at the module top level.
-    let module_script_text = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
-    let prop_ty_module_visible = prop_ty_root_name.as_deref().is_some_and(|n| {
-        // `$$ComponentProps` is the reserved name for our TS-source
-        // hard-mode synthesis. When the name appears as the Props
-        // root, the corresponding `type $$ComponentProps = …;` alias
-        // was already emitted at module scope by the same pass — so
-        // treat it as module-visible without a hoisted-types lookup.
-        n == "$$ComponentProps"
-            || split.is_some_and(|s| s.hoisted_type_names.contains(n))
-            || module_script_declares_type(module_script_text, n)
-            || split.is_some_and(|s| imports_name(&s.hoisted, n))
-    });
-    let ty_safe_in_generic_scope = prop_ty_is_literal || prop_ty_module_visible;
-
-    // SVELTE-4-COMPAT detection. Consumers of Svelte-4 components pass
+    // SVELTE-4-COMPAT widening. Consumers of Svelte-4 components pass
     // `on:event` directives (rewritten to `on<event>` prop keys by us)
     // and `<Foo slot="x">` slot-name attrs, neither of which are
     // declared in the actual Props type. Widening with an
@@ -229,15 +179,6 @@ pub(crate) fn emit_default_export_declarations_ts(
     // consumer writes valid without opening the door on Svelte-5
     // codebases where widening would mask real typos.
     let has_slot = fragment_contains_slot(fragment);
-    let svelte4_style = is_svelte4_component(doc, split, has_slot);
-    let _has_export_let = doc
-        .instance_script
-        .as_ref()
-        .is_some_and(|s| contains_export_let(s.content))
-        || doc
-            .module_script
-            .as_ref()
-            .is_some_and(|s| contains_export_let(s.content));
     // v0.3 Item 3: carry the typed event surface as `& { readonly
     // __svn_events: <Events> }` on the default export so
     // `__svn_ensure_component`'s marker branch resolves and
@@ -270,20 +211,18 @@ pub(crate) fn emit_default_export_declarations_ts(
     };
     // Conditional index-signature widen mirrors upstream's
     // `__sveltets_2_with_any(…)` factory: adds `SvelteAllProps =
-    // {[index: string]: any}` ONLY when the child component uses
-    // `$$props` / `$$restProps`. Scan the WHOLE document source — a
-    // Svelte 4 component can spread `{...$$props}` in the TEMPLATE.
-    // Upstream gates this on `!uses$$Props && (uses$$props || uses$$restProps)`
-    // (index.ts:253): a declared `interface/type $$Props` is authoritative,
-    // so the AllProps index-signature widen is suppressed. Dropping the
+    // {[index: string]: any}` ONLY when the child component refers to
+    // `$$props` / `$$restProps` — an identifier reference in a script
+    // or a template expression, as upstream's `uses$$props` /
+    // `uses$$restProps`. Upstream gates this on
+    // `!uses$$Props && (uses$$props || uses$$restProps)` (index.ts:253):
+    // a declared `interface/type $$Props` is authoritative, so the
+    // AllProps index-signature widen is suppressed. Dropping the
     // `!uses$$Props` term made us accept excess props upstream rejects.
-    let uses_any_props = (doc.source.contains("$$props") || doc.source.contains("$$restProps"))
-        && prop_ty_root_name.as_deref() != Some("$$Props");
-    let has_slots = svelte4_style && has_slot;
+    let uses_any_props =
+        (ambients.props || ambients.rest_props) && prop_ty_root_name.as_deref() != Some("$$Props");
+    let has_slots = has_slot;
     let widen_for = |base: &str| -> String {
-        if !svelte4_style {
-            return String::new();
-        }
         match (has_slots, uses_any_props) {
             (false, false) => String::new(),
             (true, false) => format!(" & __SvnSvelte4PropsWiden<{base}>"),
@@ -291,7 +230,7 @@ pub(crate) fn emit_default_export_declarations_ts(
             (true, true) => format!(" & __SvnSvelte4PropsWiden<{base}> & __SvnAllProps"),
         }
     };
-    let svelte4_with_slot = svelte4_style && has_slot;
+    let svelte4_with_slot = has_slot;
     let wrap_props = |inner: String| -> String {
         if svelte4_with_slot {
             format!("Partial<{inner}>")
@@ -331,13 +270,9 @@ pub(crate) fn emit_default_export_declarations_ts(
             )
         };
 
-    // Widen base: if the user named a Props type and it's safe at
-    // module scope, use the named type for widening (better error
-    // messages at consumer sites — `ChartProps` vs `ReturnType<…>`).
-    let widen_base: &str = prop_type_source
-        .filter(|_| ty_safe_in_generic_scope)
-        .unwrap_or(&props_src);
-    let widen = widen_for(widen_base);
+    // Upstream widens the render projection itself
+    // (`addComponentExport.ts`), never a user-named Props type.
+    let widen = widen_for(&props_src);
     let props_typed = format!("{props_src}{widen}");
 
     // `z_$$bindings` can't reference the interface's own free `<G>`
@@ -435,8 +370,6 @@ pub(crate) fn emit_default_export_declarations_ts(
         );
     }
 
-    // (template_type_refs emitted above, before the default-export
-    // selection — see the top of this function.)
     buf.push_str("export default __svn_component_default;\n");
 }
 
@@ -568,71 +501,4 @@ fn emit_fn_component_default_export(buf: &mut EmitBuffer, render_name: &SmolStr)
         "type __svn_component_default = ReturnType<typeof __svn_component_default>;"
     );
     buf.push_str("export default __svn_component_default;\n");
-}
-
-/// Byte-scan a script section for `type NAME`, `interface NAME`,
-/// `export type NAME`, or `export interface NAME` declarations.
-/// Returns true if `name` appears as a declared type.
-///
-/// Not a full parser — matches the common case of a top-of-line type
-/// keyword followed by whitespace and the identifier. String-literal
-/// and comment false-positives resolve toward "visible"; emit then
-/// declares `Component<Foo>` which fires TS2304 only if the user
-/// genuinely forgot to declare Foo, a clear error they can fix.
-fn module_script_declares_type(text: &str, name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-    for prefix in ["type ", "interface "] {
-        let needle = format!("{prefix}{name}");
-        for (idx, _) in text.match_indices(&needle) {
-            let before_ok = idx == 0 || {
-                let b = text.as_bytes()[idx - 1];
-                !b.is_ascii_alphanumeric() && b != b'_' && b != b'$'
-            };
-            let after_idx = idx + needle.len();
-            let after_ok = after_idx == text.len() || {
-                let b = text.as_bytes()[after_idx];
-                !b.is_ascii_alphanumeric() && b != b'_' && b != b'$'
-            };
-            if before_ok && after_ok {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Byte-scan hoisted import declarations for `name` appearing in an
-/// `import type { ... }` or `import { ... }` clause. Used to check
-/// whether a Props type referenced by the consumer emit comes from a
-/// type-only module import.
-fn imports_name(hoisted: &str, name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-    // Fast path: check any `import` statement that mentions the name
-    // as a braced specifier. Matches `{ name }`, `{ name, ... }`,
-    // `{ ..., name }`, `{ name as Alias }`, `{ type name }`, etc.
-    for (idx, _) in hoisted.match_indices(name) {
-        let before = idx.checked_sub(1).map(|i| hoisted.as_bytes()[i]);
-        let after = hoisted.as_bytes().get(idx + name.len()).copied();
-        let bounded = before.is_none_or(|b| !b.is_ascii_alphanumeric() && b != b'_' && b != b'$')
-            && after.is_none_or(|b| !b.is_ascii_alphanumeric() && b != b'_' && b != b'$');
-        if !bounded {
-            continue;
-        }
-        // Scan backward to the nearest `import`, stopping at a prior
-        // `;` or `\n\n` (statement boundary). If we hit `import` with
-        // an open `{` between it and the name, it's an import
-        // specifier.
-        let before_text = &hoisted[..idx];
-        if let Some(import_pos) = before_text.rfind("import") {
-            let between = &before_text[import_pos + "import".len()..];
-            if between.contains('{') && !between.contains('}') {
-                return true;
-            }
-        }
-    }
-    false
 }

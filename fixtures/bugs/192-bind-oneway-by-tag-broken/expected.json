@@ -21,6 +21,12 @@
         {
             "file": "input.svelte",
             "line": 5,
+            "column": 5,
+            "code": "bind_invalid_target"
+        },
+        {
+            "file": "input.svelte",
+            "line": 5,
             "column": 10,
             "code": 2339
         }

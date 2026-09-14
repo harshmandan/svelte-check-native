@@ -14,6 +14,18 @@ use crate::emit_buffer::EmitBuffer;
 use crate::emit_is_ts;
 use crate::nodes::element::element_type_annotation;
 
+/// A `bind:` name none of the typed passes in this module handle:
+/// not `this` / `value` / `group`, not element-native one-way, not a
+/// two-way slot type, not in the not-on-element table. Upstream still
+/// emits these as `"bind:NAME": EXPR` attributes; the element emit
+/// does the same so the attribute type reports them.
+pub(crate) fn is_untyped_binding(name: &str) -> bool {
+    !matches!(name, "this" | "value" | "group")
+        && !svn_analyze::dom_binding::is_element_native_oneway(name)
+        && svn_analyze::dom_binding::two_way_slot_type(name).is_none()
+        && svn_analyze::dom_binding::type_for(name).is_none()
+}
+
 /// Emit a type-check line per `bind:NAME` directive on a DOM element.
 ///
 /// Shape: `{indent}EXPR = null as any as TYPE;` — direct assignment

@@ -38,6 +38,7 @@ mod aria_data;
 mod codes;
 mod compat;
 mod context;
+mod fuzzymatch;
 // The vendored HTML5 tree-validation tables live in `svn-parser` (the
 // parser needs `closing_tag_omitted` for implicit-close handling); this
 // alias keeps the `crate::html5::*` paths working here unchanged.

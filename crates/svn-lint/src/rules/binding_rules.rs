@@ -38,8 +38,46 @@ pub fn visit_pre_options(ctx: &mut LintContext<'_>) {
         Some(t) => t,
         None => return,
     };
+    global_reference_invalid(&tree, ctx);
     store_rune_conflict(&tree, ctx);
     ctx.scope_tree = Some(tree);
+}
+
+/// Compiler error `global_reference_invalid` — upstream
+/// `2-analyze/index.js`, the store-subscription synthesis loop. For
+/// each `$`-prefixed name referenced anywhere in the component and
+/// not resolved to a binding: `$` alone or a `$$name` that is not one
+/// of the reserved ambients is illegal outright; a non-rune `$name`
+/// whose store name has no declaration and starts with a lowercase
+/// letter is illegal unless runes were switched off by option. Fires
+/// once per name, at its first reference.
+fn global_reference_invalid(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
+    const RESERVED: [&str; 3] = ["$$props", "$$restProps", "$$slots"];
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut refs: Vec<&crate::scope_types::UnresolvedRef> = tree.unresolved_refs.iter().collect();
+    refs.sort_by_key(|r| r.range.start);
+    for r in refs {
+        let name = r.name.as_str();
+        if !name.starts_with('$') || RESERVED.contains(&name) || !seen.insert(name) {
+            continue;
+        }
+        let illegal = if name.len() == 1 || name.as_bytes()[1] == b'$' {
+            true
+        } else {
+            let store_name = &name[1..];
+            ctx.runes_option != Some(false)
+                && !is_rune_name(name)
+                && tree.resolve(tree.instance_root, store_name).is_none()
+                && store_name.starts_with(|c: char| c.is_ascii_lowercase())
+        };
+        if illegal {
+            ctx.emit_error(
+                Code::global_reference_invalid,
+                messages::global_reference_invalid(name),
+                r.range,
+            );
+        }
+    }
 }
 
 /// Walk-time pass: rules whose upstream counterparts fire DURING the

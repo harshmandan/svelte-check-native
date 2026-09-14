@@ -602,6 +602,21 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                     }
                     emit_dom_event_handler(buf, source, d, depth + 1);
                 }
+                // A `bind:` the typed binding passes don't model is
+                // still an attribute upstream (`"bind:NAME": EXPR` in the
+                // createElement literal, Binding.ts `preserveBind`): a name
+                // the element's attribute type doesn't declare fires
+                // TS2353 there, and the expression is read.
+                if d.kind == svn_parser::DirectiveKind::Bind
+                    && crate::nodes::binding::is_untyped_binding(d.name.as_str())
+                    && let Some(parts) = dom_bind_attribute_parts(source, d)
+                {
+                    if !any {
+                        buf.push_str("\n");
+                        any = true;
+                    }
+                    emit_dom_bind_attribute(buf, parts, depth + 1);
+                }
             }
         }
     }
@@ -632,6 +647,88 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
     } else {
         buf.push_str("}); ");
     }
+}
+
+/// The pieces of a `"bind:NAME": (EXPR),` attribute entry: the key
+/// text and the source byte it anchors to, plus the expression text
+/// and its source range.
+struct DomBindAttribute<'a> {
+    key_text: &'a str,
+    key_anchor: u32,
+    expr_text: &'a str,
+    expr_range: svn_core::Range,
+}
+
+/// Resolve a DOM `bind:` directive into its attribute-entry pieces
+/// (upstream `Binding.ts`, the `preserveBind` name). `None` when there
+/// is nothing to emit: an empty expression, or a quoted value that is
+/// not a single `{expr}`.
+///
+/// The key is the source text from the directive start up to its `=`
+/// (so whitespace before the `=` stays part of the key, as upstream's
+/// diagnostic message shows it), and the excess-property diagnostic
+/// anchors where upstream's does: at the `=`, or at the directive
+/// start for the shorthand form.
+fn dom_bind_attribute_parts<'a>(
+    source: &'a str,
+    d: &svn_parser::Directive,
+) -> Option<DomBindAttribute<'a>> {
+    let name = d.name.as_str();
+    let expression_range = match &d.value {
+        Some(svn_parser::DirectiveValue::Expression {
+            expression_range, ..
+        }) => *expression_range,
+        // `bind:NAME="{expr}"` — the quoted form of the same binding.
+        Some(svn_parser::DirectiveValue::Quoted(v)) => match v.parts.as_slice() {
+            [
+                svn_parser::AttrValuePart::Expression {
+                    expression_range, ..
+                },
+            ] => *expression_range,
+            _ => return None,
+        },
+        // Shorthand `bind:NAME` reads the same-named local.
+        None => {
+            let start = d.range.start + 5;
+            let end = start + name.len() as u32;
+            let key_text = source.get(d.range.start as usize..end as usize)?;
+            return Some(DomBindAttribute {
+                key_text,
+                key_anchor: d.range.start,
+                expr_text: &key_text[5..],
+                expr_range: svn_core::Range::new(start, end),
+            });
+        }
+        Some(svn_parser::DirectiveValue::BindPair { .. }) => return None,
+    };
+    let expr = source.get(expression_range.start as usize..expression_range.end as usize)?;
+    let expr_text = expr.trim();
+    if expr_text.is_empty() {
+        return None;
+    }
+    let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
+    let start = expression_range.start + leading_ws;
+    let head = source.get(d.range.start as usize..expression_range.start as usize)?;
+    let eq = head.rfind('=')?;
+    Some(DomBindAttribute {
+        key_text: &head[..eq],
+        key_anchor: d.range.start + eq as u32,
+        expr_text,
+        expr_range: svn_core::Range::new(start, start + expr_text.len() as u32),
+    })
+}
+
+/// Emit a `"bind:NAME": (EXPR),` entry into the open `createElement`
+/// attribute literal.
+fn emit_dom_bind_attribute(buf: &mut EmitBuffer, parts: DomBindAttribute<'_>, depth: usize) {
+    buf.push_str(&"    ".repeat(depth));
+    buf.append_with_source(
+        &format!("\"{}\"", parts.key_text),
+        svn_core::Range::new(parts.key_anchor, parts.key_anchor + 1),
+    );
+    buf.push_str(": (");
+    buf.append_with_source(parts.expr_text, parts.expr_range);
+    buf.push_str("),\n");
 }
 
 /// Emit a `"on:NAME": handler` entry into the open `createElement`

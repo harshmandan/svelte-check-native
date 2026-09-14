@@ -29,6 +29,9 @@ pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::
             AttrParent::SvelteComponentLike
         }
         SvelteElementKind::Element => AttrParent::SvelteElement,
+        SvelteElementKind::Window => AttrParent::SvelteSpecial("svelte:window"),
+        SvelteElementKind::Document => AttrParent::SvelteSpecial("svelte:document"),
+        SvelteElementKind::Body => AttrParent::SvelteSpecial("svelte:body"),
         _ => AttrParent::OtherSvelte,
     };
     for attr in &se.attributes {

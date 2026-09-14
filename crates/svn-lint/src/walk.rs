@@ -102,6 +102,7 @@ pub fn walk_parsed(
     // ignore-comment strictness and the compat-gated binding fields
     // depend on the mode); when the authoritative scope-derived answer
     // disagrees, the tree is rebuilt once under the correct mode.
+    ctx.runes_option = runes;
     let forced: Option<bool> = svn_parser::runes_option(fragment, source)
         .or(runes)
         .or_else(|| runes_from_filename(path).then_some(true));

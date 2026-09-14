@@ -11,9 +11,15 @@ async function $$render_e40e2c10() {
         }
         { svelteHTML.createElement("div", {});             $compile_options.foo = /** @type {HTMLElementTagNameMap['div']} */ (null);
         }
-        { svelteHTML.createElement("div", {});             /*svn:ignore_start*/void (() => { $compile_options = __svn_any(null); });/*svn:ignore_end*/
+        { svelteHTML.createElement("div", {
+            "bind:noAssignment": ($compile_options),
+        });
+            /*svn:ignore_start*/void (() => { $compile_options = __svn_any(null); });/*svn:ignore_end*/
         }
-        { svelteHTML.createElement("div", {});             /*svn:ignore_start*/void (() => { $compile_options.foo = __svn_any(null); });/*svn:ignore_end*/
+        { svelteHTML.createElement("div", {
+            "bind:noAssignment": ($compile_options.foo),
+        });
+            /*svn:ignore_start*/void (() => { $compile_options.foo = __svn_any(null); });/*svn:ignore_end*/
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

@@ -1037,11 +1037,12 @@ fn merge_native_diagnostics(
             let code = w.code.as_str().to_string();
             // Apply user `--compiler-warnings` reclassification. Default
             // severity from our lint pass is Warning.
-            let severity = apply_compiler_override(
-                &code,
-                svn_svelte_compiler::Severity::Warning,
-                compiler_overrides,
-            );
+            let base = if w.is_error {
+                svn_svelte_compiler::Severity::Error
+            } else {
+                svn_svelte_compiler::Severity::Warning
+            };
+            let severity = apply_compiler_override(&code, base, compiler_overrides);
             let Some(severity) = severity else { continue };
             let key = (code.clone(), path.clone(), w.start_line, w.start_column);
             if !seen.insert(key) {

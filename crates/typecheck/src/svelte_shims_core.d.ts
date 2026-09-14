@@ -1724,7 +1724,7 @@ declare module 'svelte/legacy' {
 declare module 'svelte/elements' {
     // Closed `HTMLAttributes` shape: standard HTML attrs plus index
     // signatures for `data-*` / `aria-*` and Svelte directive prefixes
-    // (`on:*` / `bind:*` / `class:*` / `style:*` / `transition:*` /
+    // (`class:*` / `style:*` / `transition:*` /
     // `in:*` / `out:*` / `animate:*` / `use:*`). Our overlay emits
     // directives as object-literal keys (e.g. `{ "on:click": fn }`),
     // so the directive prefixes need explicit allowance to avoid 2353
@@ -1883,11 +1883,11 @@ declare module 'svelte/elements' {
         // on unknown event names and 2339 on bad event-shape uses
         // (e.g. `on:click={e => e.asd}` — `e` narrows to MouseEvent).
         // Without this, both diagnostics fall through to the
-        // permissive wildcard. The other directive prefixes
-        // (`bind:`, `class:`, `style:`, `transition:`, `in:`, `out:`,
-        // `animate:`, `use:`) remain wildcard since the overlay
-        // generates one key per directive site and we don't pretend
-        // to validate action signatures here.
+        // permissive wildcard. `bind:` keys are likewise enumerated
+        // (below). The other directive prefixes (`class:`, `style:`,
+        // `transition:`, `in:`, `out:`, `animate:`, `use:`) remain
+        // wildcard since the overlay generates one key per directive
+        // site and we don't pretend to validate action signatures here.
         // Clipboard Events
         'on:copy'?: ClipboardEventHandler<T> | undefined | null;
         oncopy?: ClipboardEventHandler<T> | undefined | null;
@@ -2233,7 +2233,56 @@ declare module 'svelte/elements' {
         'on:fullscreenerror'?: EventHandler<Event, T> | undefined | null;
         onfullscreenerror?: EventHandler<Event, T> | undefined | null;
         onfullscreenerrorcapture?: EventHandler<Event, T> | undefined | null;
-        [name: `bind:${string}`]: any;
+        // Every `bind:` key real svelte declares (across all of its
+        // per-element interfaces), collapsed onto this one interface.
+        // A name outside this list fires 2353 exactly as it does
+        // against the real types; a wildcard here hid that.
+        'bind:contentRect'?: any;
+        'bind:contentBoxSize'?: any;
+        'bind:borderBoxSize'?: any;
+        'bind:devicePixelContentBoxSize'?: any;
+        'bind:clientWidth'?: any;
+        'bind:clientHeight'?: any;
+        'bind:innerHTML'?: any;
+        'bind:textContent'?: any;
+        'bind:innerText'?: any;
+        'bind:focused'?: any;
+        'bind:offsetWidth'?: any;
+        'bind:offsetHeight'?: any;
+        'bind:open'?: any;
+        'bind:naturalWidth'?: any;
+        'bind:naturalHeight'?: any;
+        'bind:checked'?: any;
+        'bind:value'?: any;
+        'bind:group'?: any;
+        'bind:files'?: any;
+        'bind:indeterminate'?: any;
+        'bind:readyState'?: any;
+        'bind:duration'?: any;
+        'bind:buffered'?: any;
+        'bind:played'?: any;
+        'bind:seekable'?: any;
+        'bind:seeking'?: any;
+        'bind:ended'?: any;
+        'bind:muted'?: any;
+        'bind:volume'?: any;
+        'bind:currentTime'?: any;
+        'bind:playbackRate'?: any;
+        'bind:paused'?: any;
+        'bind:videoWidth'?: any;
+        'bind:videoHeight'?: any;
+        'bind:activeElement'?: any;
+        'bind:fullscreenElement'?: any;
+        'bind:pointerLockElement'?: any;
+        'bind:visibilityState'?: any;
+        'bind:innerWidth'?: any;
+        'bind:innerHeight'?: any;
+        'bind:outerWidth'?: any;
+        'bind:outerHeight'?: any;
+        'bind:devicePixelRatio'?: any;
+        'bind:scrollX'?: any;
+        'bind:scrollY'?: any;
+        'bind:online'?: any;
         [name: `class:${string}`]: any;
         [name: `style:${string}`]: any;
         [name: `transition:${string}`]: any;

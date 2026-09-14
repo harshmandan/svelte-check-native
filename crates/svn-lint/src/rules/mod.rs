@@ -13,6 +13,7 @@
 //! `walk::walk`.
 
 pub mod a11y_rules;
+pub mod bind_properties;
 pub mod binding_rules;
 pub mod block_rules;
 pub mod component_rules;

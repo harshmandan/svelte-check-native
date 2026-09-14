@@ -5,7 +5,6 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         for (const str of __svn_each_items([''])) {
             const lower = str.;
-            void lower;
             void str;
         }
     });

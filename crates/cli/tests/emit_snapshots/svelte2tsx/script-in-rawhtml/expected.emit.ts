@@ -9,7 +9,6 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         (`<script type="application/ld+json">${JSON.stringify(schema)}</script>`);
     });
-    void schema;
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;

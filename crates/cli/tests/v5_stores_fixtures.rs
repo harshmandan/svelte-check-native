@@ -68,17 +68,15 @@ fn v5_stores_fixtures_suite() {
     eprintln!("\n{summary_line}");
 
     let (passed, failed, skipped) = parse_summary(summary_line);
-    const MIN_PASSED: usize = 20;
-    const MAX_FAILED: usize = 6;
+    const MIN_PASSED: usize = 24;
     assert!(
         passed >= MIN_PASSED,
         "v5-stores pass count regressed: got {passed}, baseline is {MIN_PASSED}.\n\
          summary: {summary_line}"
     );
-    assert!(
-        failed <= MAX_FAILED,
-        "v5-stores failure count regressed: got {failed}, baseline ceiling is \
-         {MAX_FAILED}.\n\
+    assert_eq!(
+        failed, 0,
+        "v5-stores: {failed} fixture(s) diverged from their locked baseline.\n\
          summary: {summary_line}"
     );
     assert_eq!(

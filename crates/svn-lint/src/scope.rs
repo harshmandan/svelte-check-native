@@ -45,7 +45,7 @@ use crate::scope_rune_detection::{
 };
 use crate::scope_util::{
     base_identifier, expression_from_default, expression_from_for_init,
-    expression_from_property_key, extract_base_ident, idents_in_pattern, unwrap_ts_wrappers,
+    expression_from_property_key, idents_in_pattern, unwrap_ts_wrappers,
 };
 
 // Public data types live in `scope_types.rs`. Re-export them so
@@ -391,6 +391,11 @@ struct TreeBuilder {
     /// parent_kind, function_depth_at_use, nested_in_state, in_fn_closure).
     pending_refs: Vec<PendingRef>,
     pending_updates: Vec<PendingUpdate>,
+    /// Identifiers assigned by a top-level `$: x = …` in the instance
+    /// script. Upstream collects them as `possible_implicit_declarations`
+    /// and, once the script walk is done, declares each one without an
+    /// outer binding as `legacy_reactive`.
+    implicit_reactive_decls: Vec<(SmolStr, Range)>,
     /// Accumulated `$props()` identifier / rest-element ranges that
     /// would fire `custom_element_props_identifier` when the file
     /// compiles as a custom element. Paired with an ignore-stack
@@ -473,6 +478,7 @@ impl TreeBuilder {
             bindings: Vec::new(),
             pending_refs: Vec::new(),
             pending_updates: Vec::new(),
+            implicit_reactive_decls: Vec::new(),
             custom_element_props_candidates: Vec::new(),
             custom_element_props_ignored: Vec::new(),
             nonrunes_export_idents: Vec::new(),
@@ -903,26 +909,34 @@ impl TreeBuilder {
         let Some(raw) = ctx.source.get(range.start as usize..range.end as usize) else {
             return;
         };
-        let slice = raw.trim();
-        if slice.is_empty() {
+        if raw.trim().is_empty() {
             return;
+        }
+        // Parse the expression so a leading comment or a non-ASCII
+        // name doesn't hide the identifier the bind roots on.
+        let wrapped = format!("({raw});");
+        let alloc = oxc_allocator::Allocator::default();
+        let parsed = parse_script_body(&alloc, &wrapped, ctx.lang);
+        let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
+            return;
+        };
+        let mut expr = &stmt.expression;
+        while let Expression::ParenthesizedExpression(p) = expr {
+            expr = &p.expression;
         }
         // Bare identifier → also push a reassignment for
         // `non_reactive_update`.
-        if slice
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
-        {
+        if let Expression::Identifier(id) = expr {
             self.pending_updates.push(PendingUpdate {
                 scope: ctx.scope,
-                name: SmolStr::from(slice),
+                name: SmolStr::from(id.name.as_str()),
                 range,
                 is_reassign: true,
             });
         }
-        // Extract the base identifier for member / call chains too —
+        // The base identifier of member chains counts too —
         // `rest[0]` and `rest.foo` both root on `rest`.
-        if let Some(base) = extract_base_ident(slice)
+        if let Some((base, _, _)) = base_identifier(expr)
             && let Some(bid) = resolve_by_name(&self.scopes, ctx.scope, base)
         {
             self.bindings[bid.0 as usize].bind_reference_count += 1;
@@ -1234,6 +1248,23 @@ impl TreeBuilder {
         }
         if !leading_ignores.is_empty() {
             walker.ignore_frames.pop();
+        }
+        // `$: x = …` declares `x` at the instance root unless something
+        // already declares it. Done after the walk, so a reference
+        // recorded before the reactive statement still resolves to it
+        // (references are resolved in `finish`).
+        for (name, range) in std::mem::take(&mut self.implicit_reactive_decls) {
+            if resolve_by_name(&self.scopes, root_scope, &name).is_some() {
+                continue;
+            }
+            self.declare(
+                root_scope,
+                name,
+                range,
+                BindingKind::LegacyReactive,
+                DeclarationKind::Let,
+                InitialKind::None,
+            );
         }
         // Harvest non-runes `export` facts from the instance script's
         // top level — so the later `promote_non_runes_exports` pass
@@ -1991,11 +2022,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     }
 
     fn visit_labeled(&mut self, lbl: &LabeledStatement<'_>, at_program_top: bool) {
-        // `$: …` — upstream puts the LHS name into
-        // `possible_implicit_declarations` and promotes it to
-        // `legacy_reactive` post-walk if no outer binding exists.
-        // Not ported yet. For
-        // `reactive_declaration_module_script_dependency` we need to
+        // For `reactive_declaration_module_script_dependency` we need to
         // know the reference sits inside a `$:` block at the top
         // level of the instance script.
         if let Some(h) = self.hooks {
@@ -2010,6 +2037,29 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         }
         let is_top_level_reactive = lbl.label.name == "$" && self.is_instance && at_program_top;
         if is_top_level_reactive {
+            // `$: x = …` / `$: ({ a, b } = obj)` — every identifier the
+            // assignment writes (member targets excluded) may be an
+            // implicit declaration; `$`-prefixed names never are.
+            let mut body_expr = match &lbl.body {
+                Statement::ExpressionStatement(es) => Some(&es.expression),
+                _ => None,
+            };
+            // acorn drops the parens of `$: ({ a } = obj)`; oxc keeps them.
+            while let Some(Expression::ParenthesizedExpression(p)) = body_expr {
+                body_expr = Some(&p.expression);
+            }
+            if let Some(Expression::AssignmentExpression(a)) = body_expr {
+                let mut idents = Vec::new();
+                assignment_target_identifiers(&a.left, &mut idents);
+                for (name, start, end) in idents {
+                    if !name.starts_with('$') {
+                        let range = self.abs(start, end);
+                        self.tree
+                            .implicit_reactive_decls
+                            .push((SmolStr::from(name), range));
+                    }
+                }
+            }
             let prev = std::mem::replace(&mut self.in_reactive_statement, true);
             self.visit_stmt(&lbl.body);
             self.in_reactive_statement = prev;
@@ -3159,6 +3209,62 @@ fn apply_template_flags_since(
             r.in_template = in_template;
             r.in_control_flow = in_control_flow;
             r.is_bind_this = flags.is_bind_this;
+        }
+    }
+}
+
+/// The identifiers an assignment target writes, in pattern order —
+/// upstream `extract_identifiers` over the assignment's left side.
+/// Member targets (`a.b = …`) contribute nothing.
+fn assignment_target_identifiers<'a>(
+    t: &'a AssignmentTarget<'a>,
+    out: &mut Vec<(&'a str, u32, u32)>,
+) {
+    use oxc_ast::ast::{AssignmentTargetMaybeDefault as ATMD, AssignmentTargetProperty as ATP};
+    match t {
+        AssignmentTarget::AssignmentTargetIdentifier(id) => {
+            out.push((id.name.as_str(), id.span.start, id.span.end));
+        }
+        AssignmentTarget::ArrayAssignmentTarget(arr) => {
+            for el in arr.elements.iter().flatten() {
+                assignment_target_maybe_default_identifiers(el, out);
+            }
+            if let Some(rest) = &arr.rest {
+                assignment_target_identifiers(&rest.target, out);
+            }
+        }
+        AssignmentTarget::ObjectAssignmentTarget(obj) => {
+            for p in &obj.properties {
+                match p {
+                    ATP::AssignmentTargetPropertyIdentifier(pi) => {
+                        out.push((
+                            pi.binding.name.as_str(),
+                            pi.binding.span.start,
+                            pi.binding.span.end,
+                        ));
+                    }
+                    ATP::AssignmentTargetPropertyProperty(pp) => {
+                        assignment_target_maybe_default_identifiers(&pp.binding, out);
+                    }
+                }
+            }
+            if let Some(rest) = &obj.rest {
+                assignment_target_identifiers(&rest.target, out);
+            }
+        }
+        _ => {}
+    }
+    fn assignment_target_maybe_default_identifiers<'a>(
+        t: &'a ATMD<'a>,
+        out: &mut Vec<(&'a str, u32, u32)>,
+    ) {
+        match t {
+            ATMD::AssignmentTargetWithDefault(d) => assignment_target_identifiers(&d.binding, out),
+            other => {
+                if let Some(target) = other.as_assignment_target() {
+                    assignment_target_identifiers(target, out);
+                }
+            }
         }
     }
 }

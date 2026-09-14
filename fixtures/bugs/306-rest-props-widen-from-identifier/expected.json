@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 3, "column": 9, "code": 2353 }
+    ],
+    "_note": "Whether a component accepts arbitrary props (`$$props` / `$$restProps`) is an identifier-reference question, as in upstream's `uses$$props` / `uses$$restProps`. A substring match over the whole document counted a comment that merely mentioned `$$restProps`, so the child was widened to accept any prop and the parent's excess property went unreported."
+}

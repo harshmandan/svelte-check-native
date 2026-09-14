@@ -10,7 +10,6 @@ async function $$render_e40e2c10() {
             new __svn_C_2b({ target: __svn_any(), props: {} });
         }
     });
-    void Script;
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;

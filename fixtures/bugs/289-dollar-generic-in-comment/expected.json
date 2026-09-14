@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 2, "column": 18, "code": 2304 }
+    ],
+    "_note": "A `type A = $$Generic;` inside a comment is not a declaration. It used to synthesise a generic parameter `A` anyway, so the real `x: A` resolved and upstream's TS2304 went missing."
+}

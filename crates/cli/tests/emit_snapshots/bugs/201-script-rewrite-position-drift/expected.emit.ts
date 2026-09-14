@@ -3,7 +3,7 @@
 async function $$render_e40e2c10() {
 
     let a: string | null = null; a = undefined as any;
-    let el!: HTMLDivElement;
+    let el: HTMLDivElement;
     const b: string = 1;
     void a;
     void b;
@@ -12,7 +12,6 @@ async function $$render_e40e2c10() {
         { svelteHTML.createElement("div", {});             el = null as any as HTMLElementTagNameMap['div'];
         }
     });
-    void el;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

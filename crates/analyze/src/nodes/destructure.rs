@@ -34,52 +34,6 @@ pub(crate) fn leading_identifier(s: &str) -> Option<&str> {
     Some(&s[..end])
 }
 
-/// Round-12 follow-up #1: produce a typeof-safe TS type expression
-/// for an items / promise expression that may not be directly
-/// typeof-able. Recognised shapes:
-///
-/// - bare identifier `items`                   → `typeof items`
-/// - dotted member chain `obj.list.items`      → `typeof obj.list.items`
-/// - zero/single-arg call on typeof-safe callee `getRows()` /
-///   `obj.method(arg)`                         → `ReturnType<typeof <callee>>`
-/// - anything else (chained calls, indexing,
-///   ternary, optional chains, etc.)           → `any`
-///
-/// Round-13 follow-up #3 (acknowledged divergence): the
-/// `ReturnType<typeof callee>` form for calls loses argument-based
-/// generic inference and overload selection. Upstream's
-/// `__sveltets_2_unwrapArr(expr)` keeps the actual call expression
-/// at value level so TS resolves the callsite-specific instantiation;
-/// native's type-level emit can't replicate that without hoisting a
-/// `const __svn_iter_<id> = (<items_expr>);` at render-fn body scope
-/// (a larger emit-side refactor). Common cases — non-generic calls
-/// or generics whose T flows through the items-list type — work
-/// today; generic functions whose T is inferred PURELY from the
-/// arguments lose precision and fall to the unbound default.
-///
-/// The fallback to `any` is conservative — element type via
-/// `__SvnEachItem<any>` resolves to `any` (the shim's
-/// `0 extends 1 & T` guard short-circuits), accepting any
-/// consumer use without firing TS errors. Pre-fix native emitted
-/// raw `typeof <expr>` which fails to parse for non-typeof-able
-/// shapes (e.g. `typeof getRows()`).
-pub(crate) fn items_typeof_expr(expr: &str) -> String {
-    let trimmed = expr.trim();
-    if is_typeof_safe_chain(trimmed) {
-        return format!("typeof {trimmed}");
-    }
-    // Detect `<callee>(<args>)` where callee is typeof-safe.
-    if trimmed.ends_with(')')
-        && let Some(open) = find_balanced_call_open(trimmed)
-    {
-        let callee = trimmed[..open].trim();
-        if is_typeof_safe_chain(callee) {
-            return format!("ReturnType<typeof {callee}>");
-        }
-    }
-    "any".to_string()
-}
-
 /// Returns true iff `s` is a bare identifier or a dotted chain of
 /// identifiers (`a`, `a.b`, `a.b.c`, …). Whitespace and other
 /// tokens are not allowed inside the chain.
@@ -101,32 +55,6 @@ pub(crate) fn is_typeof_safe_chain(s: &str) -> bool {
         }
     }
     !at_segment_start
-}
-
-/// Find the byte offset of the OUTER opening `(` whose matching `)`
-/// is the LAST byte of `s`. Returns None if no balanced match.
-/// Used to extract `<callee>` from `<callee>(<args>)` expressions.
-fn find_balanced_call_open(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    if bytes.is_empty() || *bytes.last()? != b')' {
-        return None;
-    }
-    let mut depth: i32 = 0;
-    // Walk backwards; first '(' that brings depth to 0 (excluding
-    // the trailing ')') is the outer one.
-    for i in (0..bytes.len()).rev() {
-        match bytes[i] {
-            b')' => depth += 1,
-            b'(' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Round-12 follow-up #2: when a destructure leaf carries a default
@@ -154,15 +82,13 @@ pub(crate) fn apply_default_narrow(
     }
 }
 
-/// Round-13 #4: derive a TS type expression from a default-value
-/// source slice. Recognised shapes (extends round-12 #1's
-/// `items_typeof_expr` with literal handling):
+/// Derive a TS type expression from a default-value source slice.
+/// Recognised shapes:
 ///
 /// - string literal (`'fallback'` / `"x"` / `` `tpl` ``) → the
 ///   literal type itself.
 /// - boolean / null / undefined / numeric literal → the literal type.
 /// - bare identifier / dotted chain                → `typeof X`.
-/// - typeof-safe call                              → `ReturnType<typeof <callee>>`.
 /// - anything else                                 → `None` (caller
 ///   falls back to `Exclude<…, undefined>` only).
 pub(crate) fn default_typeof_expr(text: &str) -> Option<String> {
@@ -191,14 +117,51 @@ pub(crate) fn default_typeof_expr(text: &str) -> Option<String> {
     if trimmed.parse::<f64>().is_ok() {
         return Some(trimmed.to_string());
     }
-    // Identifier/call shapes — reuse the items_typeof helper.
-    let candidate = items_typeof_expr(trimmed);
-    if candidate == "any" {
-        // Helper's fallback. We'd rather skip the union than widen
-        // the projected leaf to `any` via the default's contribution.
-        return None;
+    // A bare identifier or dotted chain: `typeof X`. Anything else
+    // would widen the projected leaf to `any`; skip the union instead.
+    is_typeof_safe_chain(trimmed).then(|| format!("typeof {trimmed}"))
+}
+
+/// A template expression with every identifier that names an enclosing
+/// template binding replaced by that binding's own resolution — upstream
+/// `SlotHandler.resolveExpression`. `None` when a shadowed name has no
+/// resolution (the caller then drops the binding rather than resolving
+/// it to the wrong declaration).
+pub(crate) fn resolve_template_expression(
+    text: &str,
+    shadow: &crate::walker::ResolverStack,
+) -> Option<String> {
+    use crate::slot_attr_rewrite::{ValueRewrite, rewrite_slot_attr_expr_value};
+    match rewrite_slot_attr_expr_value(text, &|name| shadow.lookup_resolved(name)) {
+        ValueRewrite::Rewritten(s) => Some(s),
+        ValueRewrite::NoEdits => Some(text.trim().to_string()),
+        ValueRewrite::Bailed => None,
     }
-    Some(candidate)
+}
+
+/// The value expression for one binding declared by a pattern over
+/// `value`: the value itself for a plain identifier, upstream's
+/// `((PATTERN) => leaf)(value)` for a destructured leaf (slot.ts
+/// `resolveDestructuringAssignment`), so TS evaluates the destructure
+/// — defaults included — exactly as written.
+pub(crate) fn destructured_value(
+    source: &str,
+    b: &crate::template_scope::BoundIdent,
+    value: &str,
+) -> crate::walker::ResolvedSlotExpr {
+    use crate::walker::ResolvedSlotExpr;
+    let is_leaf = b.destructure_path.is_some() || b.has_default;
+    if is_leaf
+        && let Some(range) = b.pattern_source_range
+        && let Some(pattern) = source.get(range.start as usize..range.end as usize)
+    {
+        return ResolvedSlotExpr::Value(format!(
+            "(({pattern}) => {leaf})({value})",
+            pattern = pattern.trim(),
+            leaf = b.name.as_str(),
+        ));
+    }
+    ResolvedSlotExpr::Value(value.to_string())
 }
 
 /// Round-7 follow-up #3 / Round-9 #4: project a `root` expression

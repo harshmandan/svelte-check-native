@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "`type T = $$Generic<Record<string, () => void>>` lifts `T extends Record<string, () => void>` into the render function generics. The constraint span used to be cut at the `>` of `=>`, leaving `> void>>;` behind in the body: a syntax error that hides every type error in the workspace."
+}

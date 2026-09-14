@@ -7,7 +7,7 @@ async function $$render_e40e2c10<T>() {
 
   /** @type {{ b: T }}*/
   let { b } = $props();
-  let rect = /** @type {any} */ (null);
+  let rect;
     ;(async () => {
         // template type-check body (incremental)
         {
@@ -22,7 +22,6 @@ async function $$render_e40e2c10<T>() {
             }
         }
     });
-    void rect;
     return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': {  } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;

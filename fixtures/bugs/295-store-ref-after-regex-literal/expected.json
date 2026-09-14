@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A quote inside a regex literal used to throw the `$store` scan out of sync, so a real `$count` later in the script was never declared and fired TS2304."
+}

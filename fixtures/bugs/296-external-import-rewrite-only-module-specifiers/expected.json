@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Overlays live in the cache directory, so `../` module specifiers that leave the workspace are re-based when the overlay is written. Only import and export specifiers, `import()` / `require()` arguments and `import()` types qualify. A plain string that merely contains `from \"../…\"` used to be rewritten too, changing its literal type."
+}

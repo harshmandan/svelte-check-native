@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A `$$Generic<…>` constraint containing a top-level comma inside braces (`{ a: string, b: number }`) is one type argument. It used to be read as two, which aborted generic synthesis: the component stopped being generic and the parent's extra object property fired a false excess-property error."
+}

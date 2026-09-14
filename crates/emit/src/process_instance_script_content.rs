@@ -68,13 +68,6 @@ pub struct SplitScript {
     /// we couldn't extract a safe-to-hoist annotation); the caller
     /// falls back to `any` for those slots.
     pub export_type_infos: Vec<ExportedLocalInfo>,
-    /// Names of `type`/`interface` declarations that were hoisted to
-    /// module scope. Emit consults this set before referencing a
-    /// user-declared type in the default-export declaration — if the
-    /// user's Props type wasn't hoistable (it references a body-local
-    /// via `typeof`), emit must fall back to `any` instead of firing
-    /// "Cannot find name 'Props'" at module scope.
-    pub hoisted_type_names: std::collections::HashSet<SmolStr>,
 }
 
 /// Surface-facing type info for one `export function/let/const` — what
@@ -139,66 +132,55 @@ struct PendingType {
 /// and those types are user-facing surface so they're unlikely to
 /// reference private render-scope generics.
 /// Walk backwards from `span_start` through contiguous
-/// `// @ts-ignore` / `// @ts-expect-error` / `// @ts-nocheck` line
-/// comments and return the position that includes them. Returns
-/// `span_start` unchanged when the preceding line isn't such a
-/// directive.
+/// `@ts-ignore` / `@ts-expect-error` / `@ts-nocheck` comments (line or
+/// block form) that sit on their own lines directly above it, and
+/// return the position that includes them. Returns `span_start`
+/// unchanged when the preceding line isn't such a directive.
 ///
 /// Used when hoisting imports so the directive travels with the
 /// import it annotates. Without this, hoisting strands the directive
 /// in the body (where it suppresses nothing) and the import fires
 /// unsuppressed errors at module scope.
-fn extend_span_for_ts_directives(content: &str, span_start: usize) -> usize {
-    let bytes = content.as_bytes();
-    // Scan-only backtrack through same-line leading whitespace —
-    // indented imports have `\t`/` ` between the newline and
-    // span_start. We DO NOT commit this to the returned value
-    // unless we actually find a directive: otherwise we'd over-eat
-    // the line's indent into the hoist span, which changes the
-    // body's leading whitespace after blanking and breaks unrelated
-    // snapshots.
-    let mut scan = span_start;
-    while scan > 0 {
-        let b = bytes[scan - 1];
-        if b == b' ' || b == b'\t' {
-            scan -= 1;
-        } else {
-            break;
-        }
-    }
+fn extend_span_for_ts_directives(
+    content: &str,
+    comments: &[oxc_ast::Comment],
+    span_start: usize,
+) -> usize {
+    let is_directive = |c: &oxc_ast::Comment| {
+        let text = content[c.content_span().start as usize..c.content_span().end as usize]
+            .trim_start_matches('*')
+            .trim();
+        text.starts_with("@ts-ignore")
+            || text.starts_with("@ts-expect-error")
+            || text.starts_with("@ts-nocheck")
+    };
     let mut new_start = span_start;
-    let mut cur = scan;
     loop {
-        if cur == 0 {
+        // The comment must end on the line above `new_start` with only
+        // whitespace between, and nothing but indentation before it on
+        // its own line.
+        let Some(prev) = comments
+            .iter()
+            .filter(|c| (c.span.end as usize) <= new_start)
+            .max_by_key(|c| c.span.end)
+        else {
+            return new_start;
+        };
+        let gap = &content[prev.span.end as usize..new_start];
+        if !gap.contains('\n') || !gap.trim().is_empty() || !is_directive(prev) {
             return new_start;
         }
-        if bytes[cur - 1] != b'\n' {
+        let line_start = content[..prev.span.start as usize]
+            .rfind('\n')
+            .map(|p| p + 1)
+            .unwrap_or(0);
+        if !content[line_start..prev.span.start as usize]
+            .trim()
+            .is_empty()
+        {
             return new_start;
         }
-        let mut line_end = cur - 1;
-        if line_end > 0 && bytes[line_end - 1] == b'\r' {
-            line_end -= 1;
-        }
-        let mut line_start = line_end;
-        while line_start > 0 && bytes[line_start - 1] != b'\n' {
-            line_start -= 1;
-        }
-        let trimmed = content[line_start..line_end].trim();
-        let is_directive = trimmed
-            .strip_prefix("//")
-            .map(|rest| {
-                let r = rest.trim_start();
-                r.starts_with("@ts-ignore")
-                    || r.starts_with("@ts-expect-error")
-                    || r.starts_with("@ts-nocheck")
-            })
-            .unwrap_or(false);
-        if is_directive {
-            new_start = line_start;
-            cur = line_start;
-            continue;
-        }
-        return new_start;
+        new_start = line_start;
     }
 }
 
@@ -239,7 +221,6 @@ pub fn split_imports(
             hoisted_stmt_spans: Vec::new(),
             stub_prefix_len: 0,
             export_type_infos: Vec::new(),
-            hoisted_type_names: HashSet::new(),
         };
     }
 
@@ -286,10 +267,6 @@ pub fn split_imports(
     // carries its AST-walked dependency sets so the decision logic reads
     // precomputed deps instead of re-scanning the byte slice.
     let mut pending_type_spans: Vec<PendingType> = Vec::new();
-    // Names of `export type` / `export interface` declarations hoisted
-    // verbatim (with their `export` keyword) — these bypass
-    // `pending_type_spans` and are merged into `hoisted_type_names` below.
-    let mut exported_hoisted_type_names: Vec<SmolStr> = Vec::new();
     // Broad identifier set referenced by every type-bearing declaration
     // that gets hoisted to module scope (hoisted pending types + `export
     // type`/`export interface` + namespace top-level type decls). Feeds
@@ -306,13 +283,17 @@ pub fn split_imports(
         match stmt {
             Statement::ImportDeclaration(decl) => {
                 // Extend the span backwards to eat any immediately-
-                // preceding `// @ts-ignore` / `// @ts-expect-error` /
-                // `// @ts-nocheck` directive line(s). The comment has
+                // preceding `@ts-ignore` / `@ts-expect-error` /
+                // `@ts-nocheck` directive comment(s). The comment has
                 // to travel WITH the import it annotates — otherwise
                 // hoisting strands it in the body where it suppresses
                 // nothing and the import fires unsuppressed errors at
                 // module scope.
-                let start = extend_span_for_ts_directives(content, decl.span.start as usize);
+                let start = extend_span_for_ts_directives(
+                    content,
+                    &parsed.program.comments,
+                    decl.span.start as usize,
+                );
                 hoist_spans.push((start, decl.span.end as usize));
             }
             Statement::VariableDeclaration(decl) => {
@@ -357,9 +338,8 @@ pub fn split_imports(
                         }
                         _ => None,
                     };
-                    if let Some((name, deps)) = exported_type {
+                    if let Some((_, deps)) = exported_type {
                         hoist_spans.push(span);
-                        exported_hoisted_type_names.push(SmolStr::from(name));
                         // `export type`/`export interface` always hoist, so
                         // their deps always feed the declare-const stub pass.
                         hoisted_type_idents.extend(deps.idents);
@@ -640,6 +620,15 @@ pub fn split_imports(
         if body_names_set.is_empty() {
             continue;
         }
+        // A type alias that shares its name with a body value (`const
+        // Other = 1; type Other = string;`) is one merged symbol in
+        // upstream's render function: a type-position use of `Other`
+        // counts as a read of the const. Hoisting only the alias would
+        // split the symbol and report the const as never read.
+        if body_names_set.contains(&pending.name) {
+            must_stay_body.insert(pending.name.clone());
+            continue;
+        }
         // Always stay-body: `keyof typeof <body-local>` (stubbed
         // `any` widens `keyof` to `string | number | symbol`).
         let has_keyof_typeof = pending
@@ -683,23 +672,15 @@ pub fn split_imports(
             break;
         }
     }
-    let mut hoisted_type_names: HashSet<SmolStr> = HashSet::new();
     for pending in pending_type_spans {
         if !must_stay_body.contains(&pending.name) {
             hoist_spans.push((pending.start, pending.end));
-            hoisted_type_names.insert(pending.name);
             // This hoisted type's references feed the declare-const
             // stub pass (replaces the old collect_ident_refs over the
             // concatenated hoist spans).
             hoisted_type_idents.extend(pending.deps.idents);
         }
     }
-
-    // `export type` / `export interface` declarations were hoisted
-    // verbatim above (with their `export` keyword), bypassing
-    // `pending_type_spans`. Their names were captured from the AST at the
-    // export arm; merge them so consumers' `import type` references resolve.
-    hoisted_type_names.extend(exported_hoisted_type_names);
 
     if hoist_spans.is_empty() && strip_keyword_spans.is_empty() && drop_spans.is_empty() {
         return SplitScript {
@@ -710,7 +691,6 @@ pub fn split_imports(
             hoisted_stmt_spans: Vec::new(),
             stub_prefix_len: 0,
             export_type_infos,
-            hoisted_type_names: HashSet::new(),
         };
     }
 
@@ -864,7 +844,6 @@ pub fn split_imports(
         hoisted_stmt_spans,
         stub_prefix_len,
         export_type_infos,
-        hoisted_type_names,
     }
 }
 
@@ -892,7 +871,7 @@ fn collect_declaration_names(decl: &Declaration<'_>, out: &mut Vec<SmolStr>) {
     }
 }
 
-fn collect_binding_pattern_names(pat: &BindingPattern<'_>, out: &mut Vec<SmolStr>) {
+pub(crate) fn collect_binding_pattern_names(pat: &BindingPattern<'_>, out: &mut Vec<SmolStr>) {
     match pat {
         BindingPattern::BindingIdentifier(id) => {
             out.push(SmolStr::from(id.name.as_str()));

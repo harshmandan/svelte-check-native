@@ -1,4 +1,11 @@
 {
-    "clean": true,
-    "_note": "A Svelte 4-style Legacy.svelte uses `export let onChange: (value: string) => void`. Without Task C, our overlay typed the default export as `any`, so Consumer's inline `onChange={(value) => ...}` arrow saw `value` as implicit-any under strict. With Task C, analyze synthesizes a Props type `{ onChange: ...; initial?: string; count?: any }` from the `export let`s and the overlay default becomes `Component<Props>`, restoring contextual typing."
+    "errors": [
+        {
+            "file": "Consumer.svelte",
+            "line": 3,
+            "column": 8,
+            "code": 6133
+        }
+    ],
+    "_note": "A Svelte 4-style Legacy.svelte uses `export let onChange: (value: string) => void`. Without Task C, our overlay typed the default export as `any`, so Consumer's inline `onChange={(value) => ...}` arrow saw `value` as implicit-any under strict. With Task C, analyze synthesizes a Props type `{ onChange: ...; initial?: string; count?: any }` from the `export let`s and the overlay default becomes `Component<Props>`, restoring contextual typing. Unused-variable reports on write-only bind targets are upstream's: every template read is copied into the render function, and no `void` list masks a binding the template only assigns."
 }

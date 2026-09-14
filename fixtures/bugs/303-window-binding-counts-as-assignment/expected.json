@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A binding with no element-side type to check (`bind:innerWidth` on `<svelte:window>`) still gets upstream's never-called widening reassignment. Without any assignment in the file, TypeScript reports TS2454 even for reads inside closures, so the template read of `screenWidth` fired once bind targets stopped receiving a `!`."
+}

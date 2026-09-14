@@ -658,3 +658,29 @@ pub fn unknown_code(code: &str, suggestion: Option<&str>) -> String {
         )
     }
 }
+
+/// `%name%` is an illegal variable name. To reference a global variable called `%name%`, use `globalThis.%name%`
+pub fn global_reference_invalid(name: &str) -> String {
+    format!(
+        "`{name}` is an illegal variable name. To reference a global variable called `{name}`, use `globalThis.{name}`\nhttps://svelte.dev/e/global_reference_invalid"
+    )
+}
+
+/// `bind:%name%` is not a valid binding. %explanation%
+pub fn bind_invalid_name(name: &str, explanation: Option<&str>) -> String {
+    match explanation {
+        Some(explanation) => format!(
+            "`bind:{name}` is not a valid binding. {explanation}\nhttps://svelte.dev/e/bind_invalid_name"
+        ),
+        None => {
+            format!("`bind:{name}` is not a valid binding\nhttps://svelte.dev/e/bind_invalid_name")
+        }
+    }
+}
+
+/// `bind:%name%` can only be used with %elements%
+pub fn bind_invalid_target(name: &str, elements: &str) -> String {
+    format!(
+        "`bind:{name}` can only be used with {elements}\nhttps://svelte.dev/e/bind_invalid_target"
+    )
+}

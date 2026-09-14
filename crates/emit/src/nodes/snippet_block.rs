@@ -10,7 +10,7 @@ use svn_parser::SnippetBlock;
 
 use crate::emit_buffer::EmitBuffer;
 use crate::is_ts::emit_is_ts;
-use crate::{all_identifiers, emit_template_body};
+use crate::{emit_template_body, param_binding_names};
 
 /// Emit a lexical-scope block wrapping a `{#snippet name(params)}` body
 /// so the snippet's parameter identifiers are in scope for references
@@ -25,7 +25,7 @@ use crate::{all_identifiers, emit_template_body};
 /// dropped.
 ///
 /// Handles both identifier params (`foo, bar`) and destructure params
-/// (`{months, weekdays}`, `[a, b]`) via `all_identifiers`. Default
+/// (`{months, weekdays}`, `[a, b]`) via `param_binding_names`. Default
 /// values (`foo = 1`) have the default expression stripped before
 /// identifier extraction.
 pub(crate) fn emit_snippet_block(
@@ -120,7 +120,7 @@ pub(crate) fn emit_snippet_const(
     // unannotated param fires TS7006 under `noImplicitAny` exactly like
     // upstream, and diagnostics landing in the param list map back to
     // the user's source instead of being dropped.
-    let idents = all_identifiers(params);
+    let idents = param_binding_names(params);
     let raw = source
         .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
         .unwrap_or("");

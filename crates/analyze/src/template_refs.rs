@@ -1,164 +1,151 @@
-//! Template identifier-reference collection.
+//! Template expression sites.
 //!
 //! Walks every expression-bearing position in the template fragment —
 //! interpolations, expression attributes, attribute-value parts, spreads,
 //! directive values, control-flow conditions, each-iterables, key-block
-//! expressions, await promises — and extracts the *root* identifiers
-//! referenced.
+//! expressions, await promises — and hands each one to a sink as a byte
+//! range (or as a bare name for component tags, directive names and
+//! shorthand attributes).
 //!
-//! The component-tag name of every `<Component />` is also collected
-//! (root identifier before any `.`), since a component invocation in the
-//! template is a value reference to the imported component binding.
-//!
-//! ### Why this exists
-//!
-//! Without this pass, a script-level import or local that's only used in
-//! the template (e.g. `<MyButton />` or `{count}`) is flagged as
-//! TS6133 ("declared but never read"): our wrapper compiles the script
-//! body inside `function $$render() { ... }` but doesn't spell out a
-//! single use of those names. Voiding template references inside the
-//! same function brings them back into the "used" set.
-//!
-//! ### Why the byte-scanner over a per-expression oxc parse
-//!
-//! Most templates have dozens to hundreds of expression sites. Spinning
-//! up an oxc parse per site is the obvious approach but it's measurably
-//! slow on large component sets (1k+ components, many
-//! hundreds of expressions each).
-//!
-//! Here we use a simple JS tokenizer: skip strings, template literals,
-//! and comments; collect every identifier not preceded by `.` or `?.`
-//! (so `obj.prop` only yields `obj`, not `prop`). The scanner is
-//! intentionally lenient — it may collect a few false positives (e.g. a
-//! property key in `{ key: value }`), but consumers always intersect
-//! with the script's declared bindings, so a name not actually in scope
-//! just gets dropped.
-//!
-//! Known lenient edge: regex literals are NOT specially recognised (the
-//! division-vs-regex ambiguity isn't worth a byte-level heuristic here).
-//! A regex whose body contains a quote can desync the string scanner and
-//! cause a few later identifiers to be skipped — i.e. it can MISS a ref,
-//! which only risks the safe direction (a redundant TS6133 the binding
-//! intersection usually still covers because the name appears elsewhere
-//! in the template too). Identifiers inside the regex body itself are
-//! never collected, so no over-suppression results. The depth counter
-//! that locates the end of a `${...}` substitution inside a template
-//! literal skips string runs for the same reason — a brace living inside
-//! a string (e.g. `${ x === "}" ? a : b }`) would otherwise close the
-//! substitution early and miss the identifiers after it.
-//!
-//! Reserved words and the auto-subscribe `$store` syntax are filtered
-//! out at the byte-scanner level (we only collect names that look like
-//! identifiers; the `$store` form goes through [`crate::store`]).
-//!
-//! ### Why we don't try to track scope in the template
-//!
-//! `{#each items as item}{item}{/each}` introduces `item` as a local in
-//! the body. A pedantic implementation would skip `item` when collecting
-//! refs from the body. We don't — `item` is unlikely to also be a
-//! script-level binding name, so the intersection step in emit drops it
-//! naturally. If a user happens to name a local the same as an each-bind,
-//! we may emit a redundant `void item;`, which is harmless.
+//! Consumers parse the ranges with oxc. Nothing here reads the
+//! expression text itself: identifiers, store subscriptions and rune
+//! calls all come from the parsed expression, the way upstream
+//! svelte2tsx walks the template AST.
 
-use std::collections::HashSet;
-
-use smol_str::SmolStr;
 use svn_core::Range;
-use svn_parser::{
-    AttrValuePart, Attribute, Directive, DirectiveKind, DirectiveValue, Fragment, Node,
-};
+use svn_parser::{AttrValuePart, Attribute, Directive, DirectiveValue, Fragment, Node};
 
-/// Find every root identifier referenced in the template fragment.
-///
-/// Returns names in source order of first occurrence, deduplicated.
-/// Filtering by which of these are actually script-declared is the
-/// caller's responsibility.
-pub fn find_template_refs(fragment: &Fragment, source: &str) -> Vec<SmolStr> {
-    let mut seen = HashSet::new();
+/// Every expression-bearing byte range in the template fragment —
+/// the positions `find_template_refs` reads identifiers from — in
+/// source order. A declaration payload (`{@const a = b}`, `{let a =
+/// b}`) is flagged: its text is a declarator list, not an expression.
+pub fn template_expression_ranges(fragment: &Fragment) -> Vec<TemplateExpression> {
     let mut out = Vec::new();
-    walk_fragment(fragment, source, &mut seen, &mut out);
+    walk_fragment(fragment, &mut |site| match site {
+        TemplateSite::Expression(range) => out.push(TemplateExpression {
+            range,
+            is_declaration: false,
+        }),
+        TemplateSite::Declaration(range) => out.push(TemplateExpression {
+            range,
+            is_declaration: true,
+        }),
+        TemplateSite::DirectiveName(_) => {}
+    });
     out
 }
 
-fn walk_fragment(
-    fragment: &Fragment,
-    source: &str,
-    seen: &mut HashSet<SmolStr>,
-    out: &mut Vec<SmolStr>,
-) {
+/// Every directive name in the template fragment, in source order.
+/// Upstream's `Stores.handleDirective` treats a directive whose name
+/// is a store (`use:$action`, `transition:$fly`) as a store reference.
+pub fn template_directive_names(fragment: &Fragment) -> Vec<smol_str::SmolStr> {
+    let mut out = Vec::new();
+    walk_fragment(fragment, &mut |site| {
+        if let TemplateSite::DirectiveName(name) = site {
+            out.push(smol_str::SmolStr::from(name));
+        }
+    });
+    out
+}
+
+/// One expression-bearing template range — see
+/// [`template_expression_ranges`].
+#[derive(Debug, Clone, Copy)]
+pub struct TemplateExpression {
+    pub range: Range,
+    /// The payload after `@const` / `const` / `let`: `NAME = EXPR`,
+    /// to be read as a declarator list.
+    pub is_declaration: bool,
+}
+
+/// One template position of interest: an expression slice, a
+/// declaration-tag payload, or a directive's name.
+enum TemplateSite<'a> {
+    Expression(Range),
+    Declaration(Range),
+    DirectiveName(&'a str),
+}
+
+fn walk_fragment(fragment: &Fragment, sink: &mut dyn FnMut(TemplateSite<'_>)) {
     for node in &fragment.nodes {
-        walk_node(node, source, seen, out);
+        walk_node(node, sink);
     }
 }
 
-fn walk_node(node: &Node, source: &str, seen: &mut HashSet<SmolStr>, out: &mut Vec<SmolStr>) {
+fn walk_node(node: &Node, sink: &mut dyn FnMut(TemplateSite<'_>)) {
     match node {
         Node::Element(e) => {
-            walk_attributes(&e.attributes, source, seen, out);
-            walk_fragment(&e.children, source, seen, out);
+            walk_attributes(&e.attributes, sink);
+            walk_fragment(&e.children, sink);
         }
         Node::Component(c) => {
             // `<MyButton />` and `<ui.MyButton />` — the root identifier is
-            // a value reference to the imported binding.
-            push_ident(component_root(&c.name), seen, out);
-            walk_attributes(&c.attributes, source, seen, out);
-            walk_fragment(&c.children, source, seen, out);
+            // a value reference to the imported binding.);
+            walk_attributes(&c.attributes, sink);
+            walk_fragment(&c.children, sink);
         }
         Node::SvelteElement(s) => {
-            walk_attributes(&s.attributes, source, seen, out);
-            walk_fragment(&s.children, source, seen, out);
+            walk_attributes(&s.attributes, sink);
+            walk_fragment(&s.children, sink);
         }
-        Node::Interpolation(i) => extract_idents(source, i.expression_range, seen, out),
+        Node::Interpolation(i) => {
+            use svn_parser::InterpolationKind;
+            if matches!(
+                i.kind,
+                InterpolationKind::AtConst
+                    | InterpolationKind::DeclConst
+                    | InterpolationKind::DeclLet
+            ) {
+                sink(TemplateSite::Declaration(i.expression_range))
+            } else {
+                sink(TemplateSite::Expression(i.expression_range))
+            }
+        }
         Node::IfBlock(b) => {
-            extract_idents(source, b.condition_range, seen, out);
-            walk_fragment(&b.consequent, source, seen, out);
+            sink(TemplateSite::Expression(b.condition_range));
+            walk_fragment(&b.consequent, sink);
             for arm in &b.elseif_arms {
-                extract_idents(source, arm.condition_range, seen, out);
-                walk_fragment(&arm.body, source, seen, out);
+                sink(TemplateSite::Expression(arm.condition_range));
+                walk_fragment(&arm.body, sink);
             }
             if let Some(alt) = &b.alternate {
-                walk_fragment(alt, source, seen, out);
+                walk_fragment(alt, sink);
             }
         }
         Node::EachBlock(b) => {
-            extract_idents(source, b.expression_range, seen, out);
+            sink(TemplateSite::Expression(b.expression_range));
             if let Some(c) = &b.as_clause {
                 if let Some(k) = c.key_range {
-                    extract_idents(source, k, seen, out);
+                    sink(TemplateSite::Expression(k));
                 }
             }
-            walk_fragment(&b.body, source, seen, out);
+            walk_fragment(&b.body, sink);
             if let Some(alt) = &b.alternate {
-                walk_fragment(alt, source, seen, out);
+                walk_fragment(alt, sink);
             }
         }
         Node::AwaitBlock(b) => {
-            extract_idents(source, b.expression_range, seen, out);
+            sink(TemplateSite::Expression(b.expression_range));
             if let Some(p) = &b.pending {
-                walk_fragment(p, source, seen, out);
+                walk_fragment(p, sink);
             }
             if let Some(t) = &b.then_branch {
-                walk_fragment(&t.body, source, seen, out);
+                walk_fragment(&t.body, sink);
             }
             if let Some(c) = &b.catch_branch {
-                walk_fragment(&c.body, source, seen, out);
+                walk_fragment(&c.body, sink);
             }
         }
         Node::KeyBlock(b) => {
-            extract_idents(source, b.expression_range, seen, out);
-            walk_fragment(&b.body, source, seen, out);
+            sink(TemplateSite::Expression(b.expression_range));
+            walk_fragment(&b.body, sink);
         }
-        Node::SnippetBlock(b) => walk_fragment(&b.body, source, seen, out),
+        Node::SnippetBlock(b) => walk_fragment(&b.body, sink),
         Node::Text(_) | Node::Comment(_) => {}
     }
 }
 
-fn walk_attributes(
-    attrs: &[Attribute],
-    source: &str,
-    seen: &mut HashSet<SmolStr>,
-    out: &mut Vec<SmolStr>,
-) {
+fn walk_attributes(attrs: &[Attribute], sink: &mut dyn FnMut(TemplateSite<'_>)) {
     for attr in attrs {
         match attr {
             Attribute::Plain(p) => {
@@ -168,55 +155,35 @@ fn walk_attributes(
                             expression_range, ..
                         } = part
                         {
-                            extract_idents(source, *expression_range, seen, out);
+                            sink(TemplateSite::Expression(*expression_range));
                         }
                     }
                 }
             }
-            Attribute::Expression(e) => extract_idents(source, e.expression_range, seen, out),
-            Attribute::Shorthand(s) => push_ident(&s.name, seen, out),
-            Attribute::Spread(s) => extract_idents(source, s.expression_range, seen, out),
-            Attribute::Directive(d) => walk_directive(d, source, seen, out),
+            Attribute::Expression(e) => sink(TemplateSite::Expression(e.expression_range)),
+            Attribute::Shorthand(_) => {}
+            Attribute::Spread(s) => sink(TemplateSite::Expression(s.expression_range)),
+            Attribute::Directive(d) => walk_directive(d, sink),
             Attribute::Comment(_) => {}
         }
     }
 }
 
-fn walk_directive(
-    d: &Directive,
-    source: &str,
-    seen: &mut HashSet<SmolStr>,
-    out: &mut Vec<SmolStr>,
-) {
-    // For directives where the name itself is a value reference (action,
-    // transition, animation), record it. For the others (`on:click`,
-    // `class:active`, `style:left`) the name is an event/CSS-name and
-    // never refers to a script binding.
-    let name_is_ref = matches!(
-        d.kind,
-        DirectiveKind::Use
-            | DirectiveKind::Transition
-            | DirectiveKind::In
-            | DirectiveKind::Out
-            | DirectiveKind::Animate
-    );
-    if name_is_ref {
-        push_ident(&d.name, seen, out);
-    }
-
+fn walk_directive(d: &Directive, sink: &mut dyn FnMut(TemplateSite<'_>)) {
+    sink(TemplateSite::DirectiveName(&d.name));
     match &d.value {
         Some(DirectiveValue::Expression {
             expression_range, ..
         }) => {
-            extract_idents(source, *expression_range, seen, out);
+            sink(TemplateSite::Expression(*expression_range));
         }
         Some(DirectiveValue::BindPair {
             getter_range,
             setter_range,
             ..
         }) => {
-            extract_idents(source, *getter_range, seen, out);
-            extract_idents(source, *setter_range, seen, out);
+            sink(TemplateSite::Expression(*getter_range));
+            sink(TemplateSite::Expression(*setter_range));
         }
         Some(DirectiveValue::Quoted(v)) => {
             for part in &v.parts {
@@ -224,519 +191,12 @@ fn walk_directive(
                     expression_range, ..
                 } = part
                 {
-                    extract_idents(source, *expression_range, seen, out);
+                    sink(TemplateSite::Expression(*expression_range));
                 }
             }
         }
-        None => {
-            // Shorthand expansions:
-            //   - `bind:value`     → `bind:value={value}`     — value is local
-            //   - `class:active`   → `class:active={active}`  — active is local
-            //   - `style:height`   → `style:height={height}`  — height is local
-            //
-            // For `on:click`, `let:foo` the name is an event/new-binding,
-            // NOT a script-level reference. Svelte 5 permits a bare
-            // `style:<prop>` that pulls the value from a same-named
-            // script binding, so we treat it the same as `bind`/`class`.
-            let bare_is_shorthand = matches!(
-                d.kind,
-                DirectiveKind::Bind | DirectiveKind::Class | DirectiveKind::Style
-            );
-            if bare_is_shorthand {
-                push_ident(&d.name, seen, out);
-            }
-        }
-    }
-}
-
-fn component_root(name: &str) -> &str {
-    name.split('.').next().unwrap_or(name)
-}
-
-fn push_ident(name: &str, seen: &mut HashSet<SmolStr>, out: &mut Vec<SmolStr>) {
-    if !is_valid_ident(name) || is_keyword(name) {
-        return;
-    }
-    let s = SmolStr::from(name);
-    if seen.insert(s.clone()) {
-        out.push(s);
-    }
-}
-
-fn is_valid_ident(s: &str) -> bool {
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !is_ident_start(first) {
-        return false;
-    }
-    chars.all(is_ident_continue)
-}
-
-#[inline]
-fn is_ident_start(c: char) -> bool {
-    // Unicode-aware: JS identifiers admit non-ASCII letters (`let café`),
-    // so a Unicode-named binding used only in the template must still be
-    // collected — otherwise it fires a false TS6133. `is_alphabetic` is a
-    // lenient approximation of `ID_Start`; the downstream binding
-    // intersection discards anything not actually in scope.
-    c.is_alphabetic() || c == '_' || c == '$'
-}
-
-#[inline]
-fn is_ident_continue(c: char) -> bool {
-    c.is_alphanumeric() || c == '_' || c == '$'
-}
-
-/// JS RESERVED words that can never be a user identifier, so a token
-/// matching one is never a real value reference.
-///
-/// CONTEXTUAL keywords (`as`, `async`, `from`, `of`, `satisfies`, `get`,
-/// `set`, …) are deliberately NOT filtered: they are legal identifiers
-/// (`let from = url; {from}` is valid Svelte), so filtering them dropped
-/// a real template ref and produced a false TS6133 ("declared but never
-/// read") — stricter than upstream. The downstream intersection with the
-/// script's declared bindings already discards any collected token that
-/// isn't actually in scope, so collecting a contextual keyword that
-/// happens NOT to be a binding is harmless; filtering one that IS a
-/// binding is not.
-fn is_keyword(s: &str) -> bool {
-    matches!(
-        s,
-        "true"
-            | "false"
-            | "null"
-            | "undefined"
-            | "this"
-            | "void"
-            | "typeof"
-            | "new"
-            | "instanceof"
-            | "in"
-            | "let"
-            | "const"
-            | "var"
-            | "function"
-            | "if"
-            | "else"
-            | "for"
-            | "while"
-            | "do"
-            | "return"
-            | "yield"
-            | "await"
-            | "delete"
-            | "throw"
-            | "try"
-            | "catch"
-            | "finally"
-            | "switch"
-            | "case"
-            | "default"
-            | "break"
-            | "continue"
-            | "class"
-            | "extends"
-            | "super"
-            | "import"
-            | "export"
-    )
-}
-
-/// Byte-scan an expression range, collecting root identifiers.
-///
-/// Skips string literals, template literals (recursing into `${...}`),
-/// and comments. Suppresses identifiers preceded by `.` or `?.` so
-/// `obj.prop` only yields `obj`. Regex literals are not specially
-/// handled — see the module-level "Known lenient edge" note.
-fn extract_idents(source: &str, range: Range, seen: &mut HashSet<SmolStr>, out: &mut Vec<SmolStr>) {
-    let Some(slice) = source.get(range.start as usize..range.end as usize) else {
-        return;
-    };
-    let bytes = slice.as_bytes();
-    let mut i = 0;
-    let mut after_dot = false;
-
-    while i < bytes.len() {
-        let b = bytes[i];
-
-        // Line comment.
-        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-            i += 2;
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
-            continue;
-        }
-        // Block comment.
-        if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-            i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                i += 1;
-            }
-            if i + 1 < bytes.len() {
-                i += 2;
-            }
-            continue;
-        }
-        // String literal.
-        if b == b'"' || b == b'\'' {
-            let q = b;
-            i += 1;
-            while i < bytes.len() && bytes[i] != q {
-                if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            }
-            if i < bytes.len() {
-                i += 1;
-            }
-            after_dot = false;
-            continue;
-        }
-        // Template literal.
-        if b == b'`' {
-            i += 1;
-            while i < bytes.len() && bytes[i] != b'`' {
-                if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-                    i += 2;
-                    let inner_start = i;
-                    let mut depth = 1usize;
-                    while i < bytes.len() {
-                        match bytes[i] {
-                            // Skip string runs so a brace inside a string
-                            // (e.g. `${ x === "}" ? a : b }`) doesn't desync
-                            // the depth counter and end the substitution early.
-                            q @ (b'"' | b'\'') => {
-                                i += 1;
-                                while i < bytes.len() && bytes[i] != q {
-                                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                                        i += 2;
-                                    } else {
-                                        i += 1;
-                                    }
-                                }
-                            }
-                            b'{' => depth += 1,
-                            b'}' => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                        i += 1;
-                    }
-                    let inner_range =
-                        Range::new(range.start + inner_start as u32, range.start + i as u32);
-                    extract_idents(source, inner_range, seen, out);
-                    if i < bytes.len() {
-                        i += 1; // past `}`
-                    }
-                } else if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            }
-            if i < bytes.len() {
-                i += 1;
-            }
-            after_dot = false;
-            continue;
-        }
-        // Identifier-like start. Bytes >= 0x80 are UTF-8 lead/continuation
-        // bytes of a non-ASCII identifier char (e.g. `café`); consume the
-        // whole run so the resulting `&slice[start..i]` stays char-aligned
-        // and valid UTF-8.
-        if b.is_ascii_alphabetic() || b == b'_' || b == b'$' || b >= 0x80 {
-            let start = i;
-            while i < bytes.len() {
-                let c = bytes[i];
-                if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80 {
-                    i += 1;
-                } else {
-                    break;
-                }
-            }
-            let name = &slice[start..i];
-            if !after_dot {
-                push_ident(name, seen, out);
-            }
-            after_dot = false;
-            continue;
-        }
-        // Member access — suppress the next ident. But NOT when `.` is
-        // part of a `...` spread/rest operator — the identifier after
-        // `...` is a real reference (e.g. `{[...selection].toString()}`
-        // spreads `selection`, so `selection` must flow into the
-        // template-ref set).
-        if b == b'.' {
-            let is_spread = i + 2 < bytes.len() && bytes[i + 1] == b'.' && bytes[i + 2] == b'.';
-            if is_spread {
-                i += 3;
-                after_dot = false;
-                continue;
-            }
-            after_dot = true;
-            i += 1;
-            continue;
-        }
-        // Anything else clears member-access context (except whitespace).
-        if !b.is_ascii_whitespace() {
-            after_dot = false;
-        }
-        i += 1;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use svn_parser::{parse_all_template_runs, parse_sections};
-
-    fn refs_in(src: &str) -> Vec<String> {
-        let (doc, errors) = parse_sections(src);
-        assert!(errors.is_empty(), "section errors: {errors:?}");
-        let (frag, errors) = parse_all_template_runs(src, &doc.template.text_runs);
-        assert!(errors.is_empty(), "template errors: {errors:?}");
-        find_template_refs(&frag, src)
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect()
-    }
-
-    #[test]
-    fn empty_template() {
-        assert!(refs_in("").is_empty());
-    }
-
-    #[test]
-    fn interpolation_collects_root_identifier() {
-        assert_eq!(refs_in("<p>{count}</p>"), vec!["count"]);
-    }
-
-    #[test]
-    fn member_access_only_collects_root() {
-        assert_eq!(refs_in("<p>{user.name}</p>"), vec!["user"]);
-    }
-
-    #[test]
-    fn contextual_keywords_are_collected_as_identifiers() {
-        // `from`, `of`, `as`, `async`, `satisfies` are contextual
-        // keywords — legal identifiers. They must be collected so a
-        // script binding used only in the template isn't falsely TS6133.
-        assert_eq!(refs_in("<p>{from}</p>"), vec!["from"]);
-        assert_eq!(refs_in("<p>{of}</p>"), vec!["of"]);
-        assert_eq!(refs_in("<p>{as}</p>"), vec!["as"]);
-        assert_eq!(refs_in("<p>{async}</p>"), vec!["async"]);
-        assert_eq!(refs_in("<p>{satisfies}</p>"), vec!["satisfies"]);
-    }
-
-    #[test]
-    fn true_reserved_words_still_filtered() {
-        // Genuine reserved words can't be identifiers, so they're never refs.
-        assert!(refs_in("<p>{typeof x}</p>").iter().all(|r| r != "typeof"));
-        assert!(refs_in("<p>{null}</p>").is_empty());
-    }
-
-    #[test]
-    fn unicode_identifiers_are_collected() {
-        // Non-ASCII identifiers (`café`, `日本語`) are valid JS names; a
-        // Unicode-named binding used only in the template must be voided.
-        assert_eq!(refs_in("<p>{café}</p>"), vec!["café"]);
-        assert_eq!(refs_in("<p>{日本語}</p>"), vec!["日本語"]);
-        // member access still only collects the (Unicode) root.
-        assert_eq!(refs_in("<p>{café.name}</p>"), vec!["café"]);
-    }
-
-    #[test]
-    fn optional_chaining_only_collects_root() {
-        assert_eq!(refs_in("<p>{user?.name}</p>"), vec!["user"]);
-    }
-
-    #[test]
-    fn component_tag_collected() {
-        let r = refs_in("<MyButton />");
-        assert!(r.contains(&"MyButton".to_string()));
-    }
-
-    #[test]
-    fn dotted_component_collects_root() {
-        let r = refs_in("<ui.Button />");
-        assert!(r.contains(&"ui".to_string()));
-        assert!(!r.contains(&"Button".to_string()));
-    }
-
-    #[test]
-    fn shorthand_attribute_collected() {
-        // `<div {foo} />` is shorthand for `foo={foo}`.
-        let r = refs_in("<div {foo} />");
-        assert!(r.contains(&"foo".to_string()));
-    }
-
-    #[test]
-    fn expression_attribute_collected() {
-        let r = refs_in("<div title={greeting} />");
-        assert!(r.contains(&"greeting".to_string()));
-    }
-
-    #[test]
-    fn spread_attribute_collected() {
-        let r = refs_in("<div {...rest} />");
-        assert!(r.contains(&"rest".to_string()));
-    }
-
-    #[test]
-    fn quoted_attr_with_interpolation() {
-        // `class="foo {bar} baz"` — the parser splits the quoted value
-        // into Text/Expression parts and the template-ref pass walks the
-        // expression part for identifiers.
-        let r = refs_in(r#"<div class="foo {bar} baz" />"#);
-        assert!(r.contains(&"bar".to_string()));
-    }
-
-    #[test]
-    fn directive_expression_collected() {
-        let r = refs_in("<input bind:value={inputValue} />");
-        assert!(r.contains(&"inputValue".to_string()));
-    }
-
-    #[test]
-    fn bind_pair_collects_both_sides() {
-        let r = refs_in("<input bind:value={() => g(), (v) => s(v)} />");
-        assert!(r.contains(&"g".to_string()));
-        assert!(r.contains(&"s".to_string()));
-        assert!(r.contains(&"v".to_string()));
-    }
-
-    #[test]
-    fn bare_directive_collects_name() {
-        // `bind:value` (no `={...}`) is shorthand for `bind:value={value}`.
-        let r = refs_in("<input bind:value />");
-        assert!(r.contains(&"value".to_string()));
-    }
-
-    #[test]
-    fn use_directive_with_arg() {
-        let r = refs_in("<div use:tooltip={text} />");
-        assert!(r.contains(&"tooltip".to_string()));
-        assert!(r.contains(&"text".to_string()));
-    }
-
-    #[test]
-    fn if_condition_collected() {
-        let r = refs_in("{#if showThing}<p>x</p>{/if}");
-        assert!(r.contains(&"showThing".to_string()));
-    }
-
-    #[test]
-    fn elseif_condition_collected() {
-        let r = refs_in("{#if a}<p/>{:else if b}<p/>{/if}");
-        assert!(r.contains(&"a".to_string()));
-        assert!(r.contains(&"b".to_string()));
-    }
-
-    #[test]
-    fn each_iterable_collected() {
-        let r = refs_in("{#each items as item}<p>{item}</p>{/each}");
-        assert!(r.contains(&"items".to_string()));
-    }
-
-    #[test]
-    fn await_promise_collected() {
-        let r = refs_in("{#await fetchUser()}<p>...</p>{/await}");
-        assert!(r.contains(&"fetchUser".to_string()));
-    }
-
-    #[test]
-    fn key_block_expression_collected() {
-        let r = refs_in("{#key trigger}<p />{/key}");
-        assert!(r.contains(&"trigger".to_string()));
-    }
-
-    #[test]
-    fn dedupe_preserves_first_occurrence_order() {
-        let r = refs_in("<p>{a} {b} {a}</p>");
-        assert_eq!(r, vec!["a".to_string(), "b".to_string()]);
-    }
-
-    #[test]
-    fn string_literal_contents_skipped() {
-        let r = refs_in(r#"<p>{"foo bar baz"}</p>"#);
-        assert!(r.is_empty());
-    }
-
-    #[test]
-    fn template_literal_contents_skipped_but_substitutions_walked() {
-        let r = refs_in("<p>{`hello ${name} world`}</p>");
-        assert!(r.contains(&"name".to_string()));
-        assert!(!r.contains(&"hello".to_string()));
-    }
-
-    #[test]
-    fn template_literal_substitution_with_brace_in_string_walked() {
-        // A `}` inside a string within a `${...}` substitution must not
-        // close the substitution early; the identifiers after it are
-        // still collected.
-        let r = refs_in(r#"<p>{`${ x === "}" ? a : b }`}</p>"#);
-        assert!(r.contains(&"a".to_string()));
-        assert!(r.contains(&"b".to_string()));
-    }
-
-    #[test]
-    fn comment_in_expression_skipped() {
-        // The structural mustache scanner sees `{/` and treats it as a
-        // closing block tag start, so we test the byte scanner directly
-        // on a constructed range instead.
-        let src = "/* commentedOut */ realRef";
-        let mut seen = HashSet::new();
-        let mut out = Vec::new();
-        extract_idents(src, Range::new(0, src.len() as u32), &mut seen, &mut out);
-        let r: Vec<String> = out.into_iter().map(|s| s.to_string()).collect();
-        assert!(r.contains(&"realRef".to_string()));
-        assert!(!r.contains(&"commentedOut".to_string()));
-    }
-
-    #[test]
-    fn keyword_not_collected() {
-        let r = refs_in("<p>{typeof x}</p>");
-        assert!(!r.contains(&"typeof".to_string()));
-        assert!(r.contains(&"x".to_string()));
-    }
-
-    #[test]
-    fn dollar_store_ref_collected() {
-        // `$count` looks like an identifier-with-leading-dollar; we DO
-        // collect it, the caller's intersect step decides whether the
-        // store-alias declaration covers it.
-        let r = refs_in("<p>{$count}</p>");
-        assert!(r.contains(&"$count".to_string()));
-    }
-
-    #[test]
-    fn object_literal_property_value_collected() {
-        let r = refs_in("<p>{getThing({ key: someValue })}</p>");
-        assert!(r.contains(&"getThing".to_string()));
-        assert!(r.contains(&"someValue".to_string()));
-    }
-
-    #[test]
-    fn nested_in_block_walked() {
-        let r = refs_in("{#if cond}<MyButton onclick={handler} />{/if}");
-        assert!(r.contains(&"cond".to_string()));
-        assert!(r.contains(&"MyButton".to_string()));
-        assert!(r.contains(&"handler".to_string()));
-    }
-
-    #[test]
-    fn each_body_idents_collected() {
-        let r = refs_in("{#each items as item}<p>{item.label}</p>{/each}");
-        assert!(r.contains(&"items".to_string()));
-        assert!(r.contains(&"item".to_string()));
+        // A bare directive (`bind:value`, `class:active`) carries no
+        // expression of its own.
+        None => {}
     }
 }

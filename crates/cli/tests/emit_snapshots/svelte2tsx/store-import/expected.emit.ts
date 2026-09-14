@@ -4,12 +4,7 @@
     import { storeB } from './store';
     import { storeB as storeC } from './store';
 async function $$render_e40e2c10() {
-    /** @type {__SvnStoreValue<typeof storeA>} */
-    let $storeA = /** @type {any} */ (/** @type {any} */ (null));
-    /** @type {__SvnStoreValue<typeof storeB>} */
-    let $storeB = /** @type {any} */ (/** @type {any} */ (null));
-    /** @type {__SvnStoreValue<typeof storeC>} */
-    let $storeC = /** @type {any} */ (/** @type {any} */ (null));
+    /*svn:ignore_start*/;let $storeA = __svn_store_get(storeA);;let $storeB = __svn_store_get(storeB);;let $storeC = __svn_store_get(storeC);/*svn:ignore_end*/
 
                                  
                                      
@@ -23,12 +18,6 @@ async function $$render_e40e2c10() {
         { svelteHTML.createElement("p", {});             ($storeC);
         }
     });
-    void $storeA;
-    void storeA;
-    void $storeB;
-    void storeB;
-    void $storeC;
-    void storeC;
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;

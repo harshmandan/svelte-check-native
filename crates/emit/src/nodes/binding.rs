@@ -14,6 +14,18 @@ use crate::emit_buffer::EmitBuffer;
 use crate::emit_is_ts;
 use crate::nodes::element::element_type_annotation;
 
+/// A `bind:` name none of the typed passes in this module handle:
+/// not `this` / `value` / `group`, not element-native one-way, not a
+/// two-way slot type, not in the not-on-element table. Upstream still
+/// emits these as `"bind:NAME": EXPR` attributes; the element emit
+/// does the same so the attribute type reports them.
+pub(crate) fn is_untyped_binding(name: &str) -> bool {
+    !matches!(name, "this" | "value" | "group")
+        && !svn_analyze::dom_binding::is_element_native_oneway(name)
+        && svn_analyze::dom_binding::two_way_slot_type(name).is_none()
+        && svn_analyze::dom_binding::type_for(name).is_none()
+}
+
 /// Emit a type-check line per `bind:NAME` directive on a DOM element.
 ///
 /// Shape: `{indent}EXPR = null as any as TYPE;` — direct assignment
@@ -128,18 +140,15 @@ pub(crate) fn emit_element_bind_checks_inline(
             buf.push_str(" = __svn_any(null);\n");
             continue;
         }
-        let ty: String = if name == "this" {
-            element_type_annotation(tag_name)
+        // `None` for a binding with no known target type (`bind:innerWidth`
+        // on `<svelte:window>`, `bind:value` on an element that has none):
+        // upstream still emits its widening reassignment for those.
+        let ty: Option<String> = if name == "this" {
+            Some(element_type_annotation(tag_name))
         } else if name == "value" {
-            match bind_value_type {
-                Some(t) => t.to_string(),
-                None => continue,
-            }
+            bind_value_type.map(str::to_string)
         } else {
-            match svn_analyze::dom_binding::type_for(name) {
-                Some(t) => t.to_string(),
-                None => continue,
-            }
+            svn_analyze::dom_binding::type_for(name).map(str::to_string)
         };
         let (expr_text, expr_source_range): (std::borrow::Cow<'_, str>, Option<svn_core::Range>) =
             match &directive.value {
@@ -190,6 +199,9 @@ pub(crate) fn emit_element_bind_checks_inline(
                     setter_range,
                     ..
                 }) => {
+                    let Some(ty) = &ty else {
+                        continue;
+                    };
                     let getter = &source[getter_range.start as usize..getter_range.end as usize];
                     let setter = &source[setter_range.start as usize..setter_range.end as usize];
                     buf.push_str(&indent);
@@ -211,6 +223,21 @@ pub(crate) fn emit_element_bind_checks_inline(
         if expr_text.is_empty() {
             continue;
         }
+        // No target type to check against: emit only upstream's
+        // never-called widening reassignment (Binding.ts:139-145). It
+        // references the bound variable, so a typo fires TS2304, and it
+        // counts as an assignment, so an uninitialised `let` read
+        // elsewhere in a closure doesn't fire TS2454.
+        let Some(ty) = ty else {
+            buf.push_str(&indent);
+            buf.push_str("/*svn:ignore_start*/void (() => { ");
+            match expr_source_range {
+                Some(range) => buf.append_with_source(&expr_text, range),
+                None => buf.push_str(&expr_text),
+            }
+            buf.push_str(" = __svn_any(null); });/*svn:ignore_end*/\n");
+            continue;
+        };
         // Two-way bindings (`bind:checked` / `bind:files`): upstream
         // (Binding.ts:139-201) checks the bound value AGAINST the slot
         // type (value→slot) and emits a widening `() => EXPR = any` lambda.
@@ -245,6 +272,20 @@ pub(crate) fn emit_element_bind_checks_inline(
             buf.push_str(&expr_text);
             buf.push_str(" = __svn_any(null); });/*svn:ignore_end*/\n");
             continue;
+        }
+        // Upstream passes a two-way binding's expression as an attribute
+        // value (`"bind:value": v`), which reads it; the one-way families
+        // (`bind:this`, element-native `clientWidth`, …) are pure writes.
+        // Keep the same read so a variable only bound this way is not
+        // reported as never read.
+        if name == "value" {
+            buf.push_str(&indent);
+            buf.push_str("(");
+            match expr_source_range {
+                Some(range) => buf.append_with_source(&expr_text, range),
+                None => buf.push_str(&expr_text),
+            }
+            buf.push_str(");\n");
         }
         buf.push_str(&indent);
         match expr_source_range {

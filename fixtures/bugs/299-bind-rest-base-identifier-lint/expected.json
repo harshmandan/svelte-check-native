@@ -1,0 +1,8 @@
+{
+    "clean": true,
+    "warnings": [
+        { "file": "input.svelte", "line": 4, "column": 21, "code": "bind_invalid_each_rest" },
+        { "file": "input.svelte", "line": 5, "column": 21, "code": "bind_invalid_each_rest" }
+    ],
+    "_note": "The base identifier of a `bind:` expression comes from parsing it. The text read used to stop at a non-ASCII character (`rést` became `r`) and gave up on a leading comment, so the rest-binding warning was missed."
+}

@@ -4,7 +4,13 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});         }
+        { const $$_promise = (aPromise);
+            const $$_await = await $$_promise; void $$_await;
+        }
         { svelteHTML.createElement("div", {});         }
+        { const $$_promise = (aPromise);
+            const $$_await = await $$_promise; void $$_await;
+        }
         {
             const error = __svn_any();
             { svelteHTML.createElement("div", {});                 (error);

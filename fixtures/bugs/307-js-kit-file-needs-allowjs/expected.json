@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "src/sanity.ts", "line": 0, "column": 6, "code": 2322 }
+    ],
+    "_note": "TypeScript only admits `.js` sources under `allowJs` (or `checkJs`). Listing a `+page.js` in the overlay's `files` without it made the compiler abandon the whole program with TS6504, and the run reported 0 errors for a workspace with a real type error. The JS route file is now left out of the program, as it is upstream, and the other files are checked."
+}

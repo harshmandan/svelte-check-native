@@ -17,9 +17,7 @@ use std::ops::Range;
 use smol_str::SmolStr;
 use svn_parser::ScriptLang;
 
-use crate::process_instance_script_content;
 use crate::sveltekit;
-use crate::util::{is_ascii_ws, is_ident_byte};
 
 /// A top-level `let` declarator in the instance script body. Byte
 /// positions are absolute offsets into the emit buffer.
@@ -134,7 +132,10 @@ fn is_target(target_names: &[SmolStr], name: &str) -> bool {
 /// Positions must be ascending. Returns the edits as `(position,
 /// length)` pairs in pre-rewrite coordinates, the shape
 /// `EmitBuffer::adjust_token_map_for_insertions` re-anchors with.
-fn splice_insertions(out: &mut String, insertions: &[(usize, String)]) -> Vec<(u32, u32)> {
+pub(crate) fn splice_insertions(
+    out: &mut String,
+    insertions: &[(usize, String)],
+) -> Vec<(u32, u32)> {
     if insertions.is_empty() {
         return Vec::new();
     }
@@ -185,91 +186,6 @@ pub(crate) fn rewrite_definite_assignment_in_place(
         .map(|d| (d.name_end, String::from("!")))
         .collect();
     splice_insertions(out, &insertions)
-}
-
-/// SVELTE-4-COMPAT: heuristic detector for components that use Svelte-4
-/// conventions, i.e. ones whose consumers are likely to pass `on:event`
-/// directives (rewritten to `on<event>` prop keys), `slot="x"` named-slot
-/// attrs, and similar Svelte-4-specific surface our Svelte-5 emit doesn't
-/// model as declared props. Signals, any of which trips detection:
-///
-/// 1. Any `export let` declaration — strongest signal; Svelte 5 uses
-///    `$props()` and `export { … }` instead.
-/// 2. Any `<slot>` element in the template — Svelte 5 uses snippets.
-/// 3. `createEventDispatcher` imported or called — Svelte 5 uses prop
-///    callbacks instead of the dispatcher.
-/// 4. `$$Props` / `$$Events` / `$$Slots` interface declared — explicit
-///    Svelte-4 typing convention.
-/// 5. `$$slots` / `$$props` / `$$restProps` ambients referenced.
-///
-/// False positives (a genuinely Svelte-5 file containing one of those
-/// substrings in a comment) just add a widen clause that's structurally
-/// a no-op against well-formed Svelte-5 consumer code. The reverse is
-/// costlier — a missed Svelte-4 file surfaces hundreds of TS2353
-/// "property does not exist" errors on every consumer.
-pub(crate) fn is_svelte4_component(
-    doc: &svn_parser::Document<'_>,
-    split: Option<&process_instance_script_content::SplitScript>,
-    has_slot: bool,
-) -> bool {
-    let instance_src = doc
-        .instance_script
-        .as_ref()
-        .map(|s| s.content)
-        .unwrap_or("");
-    let module_src = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
-    if contains_export_let(instance_src) || contains_export_let(module_src) {
-        return true;
-    }
-    if has_slot {
-        return true;
-    }
-    if instance_src.contains("createEventDispatcher")
-        || module_src.contains("createEventDispatcher")
-    {
-        return true;
-    }
-    if has_double_dollar_interface(instance_src) || has_double_dollar_interface(module_src) {
-        return true;
-    }
-    if doc.source.contains("$$slots")
-        || doc.source.contains("$$restProps")
-        || doc.source.contains("$$props")
-    {
-        return true;
-    }
-    if let Some(s) = split {
-        if !s.exported_locals.is_empty() {
-            return true;
-        }
-    }
-    false
-}
-
-pub(crate) fn contains_export_let(src: &str) -> bool {
-    // Loose: we want `export let` at word boundaries. Using substring is
-    // too permissive (e.g. `/* export let X */` in a comment), but
-    // comments would only false-positive, not false-negative — safe.
-    let mut rest = src;
-    while let Some(idx) = rest.find("export") {
-        let after = &rest[idx + 6..];
-        if let Some(non_ws) = after.find(|c: char| !c.is_whitespace()) {
-            if after[non_ws..].starts_with("let") {
-                let next = after[non_ws + 3..].chars().next();
-                if matches!(next, Some(c) if c.is_whitespace() || c == '/') {
-                    return true;
-                }
-            }
-        }
-        rest = &rest[idx + 6..];
-    }
-    false
-}
-
-fn has_double_dollar_interface(src: &str) -> bool {
-    src.contains("interface $$Props")
-        || src.contains("interface $$Events")
-        || src.contains("interface $$Slots")
 }
 
 /// Does the parsed template fragment contain a `<slot>` element?
@@ -476,292 +392,72 @@ pub(crate) fn has_strict_events_attr(doc: &svn_parser::Document<'_>) -> bool {
     })
 }
 
-/// Infer Svelte 5 runes mode from the document source.
+/// Infer Svelte 5 runes mode the way upstream svelte2tsx does
+/// (`ExportedNames.isRunesMode`): the script or a template expression
+/// references one of the `$state` / `$derived` / `$effect` globals,
+/// something is declared from `$props()`, an `await` sits outside any
+/// function, or the document sets `<svelte:options runes>`. Nothing
+/// else counts — a rune name in markup text or a comment is not a
+/// reference, and `$inspect` alone does not switch modes.
 ///
-/// Deliberately NOT comment/string-aware, unlike svn_core's
-/// [`svn_core::rune_scan::script_calls_rune`] (svn-lint's scan): a
-/// `$state(0)` inside a comment or string literal DOES flip emit's
-/// runes mode. The two scans share the marker-anchoring primitive
-/// (`find_marker_from`) but keep their distinct match semantics.
-///
-/// Emit only ever sees `.svelte` documents, so runes mode is inferred
-/// purely from rune-call markers in the source — there is no filename
-/// signal to consult here. The `.svelte.js` / `.svelte.ts` filename
-/// case is svn-lint's concern for the module files emit never
-/// transforms.
-///
-/// Looks for any rune call (`$state(…)`, `$props(…)`, `$derived(…)`,
-/// `$effect(…)`, `$bindable(…)`, `$inspect(…)`, `$host(…)`). Runes are
-/// always called, so requiring `(` after the name excludes the ambient
-/// `$$props` store pattern cheaply. Dotted variants (`$state.raw`,
-/// `$derived.by`) are matched by walking past the `.word` chain before
-/// the `(`.
+/// A `$state` that resolves to a store subscription (`const state =
+/// writable(…)` in a Svelte-4 component) is not a global either, so
+/// the top-level bindings of both scripts are excluded first.
 pub(crate) fn is_runes_mode(
     doc: &svn_parser::Document<'_>,
     fragment: &svn_parser::Fragment,
+    parsed_instance: Option<&svn_parser::ParsedScript<'_>>,
+    parsed_module: Option<&svn_parser::ParsedScript<'_>>,
 ) -> bool {
+    let source = doc.source;
     // An explicit `<svelte:options runes>` / `runes={true}` forces runes
-    // ON — mirroring upstream svelte2tsx `ExportedNames.isRunesMode`,
-    // which OR-s the option in. `runes={false}` cannot force runes OFF
-    // here (the OR still yields runes when a `$props()`/`$state()` call
-    // is present), so only `Some(true)` participates.
-    if svn_parser::runes_option(fragment, doc.source) == Some(true) {
+    // ON. `runes={false}` cannot force runes OFF here (upstream OR-s the
+    // option with the script signals), so only `Some(true)` participates.
+    if svn_parser::runes_option(fragment, source) == Some(true) {
         return true;
     }
-    let bytes = doc.source.as_bytes();
-    let mut i = 0;
-    while let Some((pos, marker_len)) = svn_core::rune_scan::find_marker_from(bytes, i) {
-        i = pos + 1;
-        // Identifier tails (`$$props`, `my$state`) and member-access
-        // property names (`api.$state(0)`, `this?.$props()`) are not
-        // rune usages — shared guard with svn_core's rune scan.
-        if svn_core::rune_scan::rune_marker_is_shadowed_at(bytes, pos) {
+    let mut bound: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for parsed in [parsed_instance, parsed_module].into_iter().flatten() {
+        svn_analyze::collect_top_level_bindings(&parsed.program, &mut bound);
+    }
+    let mut probe = svn_analyze::RunesProbe::new(svn_analyze::RunesRule::Svelte2tsx, &bound);
+    for parsed in [parsed_instance, parsed_module].into_iter().flatten() {
+        probe.scan_program(&parsed.program);
+        if probe.found {
+            return true;
+        }
+    }
+    // Template expressions: `{let x = $state(0)}`, `{await p}`. Only
+    // worth parsing when the text carries a marker at all.
+    let has_marker = doc.template.text_runs.iter().any(|run| {
+        source
+            .get(run.start as usize..run.end as usize)
+            .is_some_and(|t| {
+                ["$state", "$derived", "$effect", "await"]
+                    .iter()
+                    .any(|m| t.contains(m))
+            })
+    });
+    if !has_marker {
+        return false;
+    }
+    let alloc = oxc_allocator::Allocator::default();
+    for expr in svn_analyze::template_expression_ranges(fragment) {
+        let Some(text) = source.get(expr.range.start as usize..expr.range.end as usize) else {
             continue;
-        }
-        let mut after = pos + marker_len;
-        while bytes.get(after) == Some(&b'.') {
-            after += 1;
-            while after < bytes.len()
-                && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_')
-            {
-                after += 1;
-            }
-        }
-        while after < bytes.len() && matches!(bytes[after], b' ' | b'\t') {
-            after += 1;
-        }
-        if bytes.get(after) == Some(&b'(') {
+        };
+        let wrapped = if expr.is_declaration {
+            format!("let {text}\n;")
+        } else {
+            format!("({text}\n);")
+        };
+        let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+        probe.scan_program(&parsed.program);
+        if probe.found {
             return true;
         }
     }
     false
-}
-
-/// SVELTE-4-COMPAT: de-narrow a typed-with-initializer exported
-/// declaration. Scans `out` for `let NAME: T = EXPR;` where NAME is
-/// in `target_names`, then inserts `NAME = undefined as any;`
-/// immediately after the terminating `;`. The cast widens TS's
-/// flow-narrowed type back to the declared annotation, so later
-/// comparisons like `NAME === 'other-literal'` don't fire TS2367.
-///
-/// Declarations without a type annotation or without an initializer
-/// are skipped — those are already handled by the widen / definite-
-/// assign passes.
-/// SVELTE-4-COMPAT: rewrite every parenthesized sequence expression
-/// emitted in two specific Svelte-4 idiomatic positions to an array
-/// literal:
-///
-///   1. `void (a, b, c)`     → `void [a, b, c]`
-///   2. `$: (a, b, c)`       → `$: void [a, b, c]`
-///
-/// Both shapes are how Svelte-4 components declare reactive
-/// dependencies: `$:` re-runs whenever any referenced identifier
-/// changes, and `void (deps…)` is the canonical "list deps without
-/// using them" pattern when the actual side effect is in a separate
-/// statement. tsgo's strict checking fires TS2871 ("Left side of
-/// comma operator is unused and has no side effects") on every comma
-/// in the list because each LHS of a comma is just an identifier
-/// read with no side effect. The array-literal form puts each
-/// reference in array-element position where TS treats it as "used"
-/// and the warning doesn't fire. Runtime semantics are equivalent
-/// (both forms evaluate every expression and discard the result),
-/// and the rewrite lives entirely in our type-check overlay so user
-/// runtime behaviour is untouched.
-///
-/// Detection: `void` or `$:` keyword followed (after ws/newlines) by
-/// `(`, scan paren-balanced content; rewrite ONLY if a top-level `,`
-/// was seen (i.e. a sequence expression, not just `void (x)` with a
-/// single expression in parens). String / template / comment content
-/// inside the parens is skipped so a `,` inside a string doesn't
-/// trigger a false rewrite.
-///
-/// Returns the insertions performed (the `void ` prefix on `$:` labels
-/// — the paren→bracket swaps are length-preserving and need no
-/// re-anchoring) as ascending `(position, length)` pairs in PRE-rewrite
-/// buffer coordinates, same contract as
-/// [`rewrite_definite_assignment_in_place`].
-pub(crate) fn rewrite_void_sequence_to_array(out: &mut String) -> Vec<(u32, u32)> {
-    // Phase 1: scan for sequence sites without touching the buffer —
-    // most files have none and return with zero allocation.
-    let bytes = out.as_bytes();
-    let mut sites: Vec<(SeqKind, usize, usize)> = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        // Skip string / template literals and comments so a
-        // `void (a, b)` appearing inside `"…"` or `// …` isn't rewritten.
-        if matches!(c, b'"' | b'\'' | b'`') {
-            i = skip_string_literal(bytes, i, c);
-            continue;
-        }
-        if c == b'/' && bytes.get(i + 1).copied() == Some(b'/') {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
-            continue;
-        }
-        if c == b'/' && bytes.get(i + 1).copied() == Some(b'*') {
-            let mut k = i + 2;
-            while k + 1 < bytes.len() && !(bytes[k] == b'*' && bytes[k + 1] == b'/') {
-                k += 1;
-            }
-            i = k.saturating_add(2).min(bytes.len());
-            continue;
-        }
-        if let Some(site) = find_paren_sequence(bytes, i) {
-            i = site.2 + 1;
-            sites.push(site);
-        } else {
-            i += 1;
-        }
-    }
-    let mut edits: Vec<(u32, u32)> = Vec::new();
-    if sites.is_empty() {
-        return edits;
-    }
-    // Phase 2: rebuild once with bulk segment copies. The paren →
-    // bracket swaps are length-preserving; only the `void ` prefix on
-    // `$:` labels grows the buffer.
-    let original = std::mem::take(out);
-    let mut rebuilt = String::with_capacity(original.len() + sites.len() * 5);
-    let mut cursor = 0;
-    for (kind, paren_open, paren_close) in sites {
-        rebuilt.push_str(&original[cursor..paren_open]);
-        if matches!(kind, SeqKind::ReactiveLabel) {
-            rebuilt.push_str("void ");
-            edits.push((paren_open as u32, 5));
-        }
-        rebuilt.push('[');
-        rebuilt.push_str(&original[paren_open + 1..paren_close]);
-        rebuilt.push(']');
-        cursor = paren_close + 1;
-    }
-    rebuilt.push_str(&original[cursor..]);
-    *out = rebuilt;
-    edits
-}
-
-#[derive(Copy, Clone)]
-enum SeqKind {
-    /// `void (a, b)` — already has `void`, just swap parens for brackets.
-    Void,
-    /// `$: (a, b)` — emit `void` prefix in addition to swapping parens.
-    ReactiveLabel,
-}
-
-/// At byte `i`, look for `void` or `$:` followed by a parenthesized
-/// sequence expression. Returns `(kind, paren_open, paren_close)` iff
-/// matched. Match conditions:
-///   - `void` keyword: byte[i..i+4] == `void` AND surrounding
-///     boundaries are not identifier chars (otherwise `avoid` /
-///     `void_x` would match), then ws, then `(`
-///   - `$:` label: byte[i..i+2] == `$:` AND not preceded by an
-///     identifier char (avoids `foo$:bar` though that's not valid
-///     JS anyway), then ws, then `(`
-///   - inside the parens, at least one TOP-LEVEL `,` (paren_depth=1)
-fn find_paren_sequence(bytes: &[u8], i: usize) -> Option<(SeqKind, usize, usize)> {
-    let (kind, after_keyword) = if i + 4 <= bytes.len()
-        && &bytes[i..i + 4] == b"void"
-        && (i == 0 || !is_ident_byte(bytes[i - 1]))
-        && bytes.get(i + 4).copied().is_some_and(|b| !is_ident_byte(b))
-    {
-        (SeqKind::Void, i + 4)
-    } else if i + 2 <= bytes.len()
-        && &bytes[i..i + 2] == b"$:"
-        && (i == 0 || !is_ident_byte(bytes[i - 1]))
-    {
-        (SeqKind::ReactiveLabel, i + 2)
-    } else {
-        return None;
-    };
-    let mut p = after_keyword;
-    while p < bytes.len() && is_ascii_ws(bytes[p]) {
-        p += 1;
-    }
-    if p >= bytes.len() || bytes[p] != b'(' {
-        return None;
-    }
-    let paren_open = p;
-    let mut depth: i32 = 1;
-    let mut top_level_comma = false;
-    let mut s = paren_open + 1;
-    while s < bytes.len() && depth > 0 {
-        let c = bytes[s];
-        match c {
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    if !top_level_comma {
-                        return None;
-                    }
-                    return Some((kind, paren_open, s));
-                }
-            }
-            b',' if depth == 1 => {
-                top_level_comma = true;
-            }
-            b'"' | b'\'' | b'`' => {
-                s = skip_string_literal(bytes, s, c);
-                continue;
-            }
-            b'/' if bytes.get(s + 1).copied() == Some(b'/') => {
-                while s < bytes.len() && bytes[s] != b'\n' {
-                    s += 1;
-                }
-                continue;
-            }
-            b'/' if bytes.get(s + 1).copied() == Some(b'*') => {
-                let mut k = s + 2;
-                while k + 1 < bytes.len() && !(bytes[k] == b'*' && bytes[k + 1] == b'/') {
-                    k += 1;
-                }
-                s = k.saturating_add(2).min(bytes.len());
-                continue;
-            }
-            _ => {}
-        }
-        s += 1;
-    }
-    None
-}
-
-/// Skip past a JS string / template literal starting at `start`
-/// (which is the opening quote). Returns the byte position AFTER
-/// the closing quote. Handles `\\` escapes and template
-/// `${ … }` interpolations recursively (depth tracked so a `}`
-/// inside an interpolation expression doesn't close the template).
-fn skip_string_literal(bytes: &[u8], start: usize, quote: u8) -> usize {
-    let mut s = start + 1;
-    while s < bytes.len() {
-        let c = bytes[s];
-        if c == b'\\' {
-            s += 2;
-            continue;
-        }
-        if c == quote {
-            return s + 1;
-        }
-        if quote == b'`' && c == b'$' && bytes.get(s + 1).copied() == Some(b'{') {
-            let mut depth = 1;
-            s += 2;
-            while s < bytes.len() && depth > 0 {
-                match bytes[s] {
-                    b'{' => depth += 1,
-                    b'}' => depth -= 1,
-                    b'"' | b'\'' | b'`' => {
-                        s = skip_string_literal(bytes, s, bytes[s]);
-                        continue;
-                    }
-                    _ => {}
-                }
-                s += 1;
-            }
-            continue;
-        }
-        s += 1;
-    }
-    s
 }
 
 /// Append ` NAME = undefined as any;` after each top-level `let`
@@ -802,27 +498,20 @@ pub(crate) fn denarrow_typed_exported_props_in_place(
 }
 
 /// SVELTE-4-COMPAT: emit `let $$slots = …; let $$props = …; let
-/// $$restProps = …;` at the top of the render function when the source
-/// references them.
-///
-/// Substring detection is deliberately loose — we don't parse to see
-/// whether the occurrence is a real identifier vs. string content. A
-/// spurious injection is harmless (the declared local just goes
-/// unused), whereas a missed one fires TS2304 across every reference
-/// and cascades through the surrounding expression's typing.
+/// $$restProps = …;` at the top of the render function for each
+/// ambient the component refers to (an identifier reference in a
+/// script or template expression — see `svn_analyze::find_ambient_refs`).
 ///
 /// Types: `Record<string, any>` for all three. Upstream's
 /// `__sveltets_2_slotsType({…slot names…})` is more precise (each
 /// slot is typed as `boolean | ''`), but that requires walking the
-/// template to collect slot names and emit a shape literal. We'll do
-/// that in Phase 2 if the loose ambient isn't sufficient.
-pub(crate) fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document<'_>, is_ts: bool) {
-    let src = doc.source;
+/// template to collect slot names and emit a shape literal.
+pub(crate) fn emit_svelte4_ambients(out: &mut String, refs: svn_analyze::AmbientRefs, is_ts: bool) {
     // In TS overlays we emit inline `: T` annotations. In JS overlays
     // we must not — tsgo fires TS8010 and aborts project-wide once
     // hit, silently suppressing every legitimate diagnostic
     // elsewhere. Emit JSDoc casts on the RHS for JS overlays.
-    if src.contains("$$slots") {
+    if refs.slots {
         if is_ts {
             out.push_str("    let $$slots: Record<string, boolean | undefined> = {};\n");
         } else {
@@ -832,7 +521,7 @@ pub(crate) fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document
         }
         out.push_str("    void $$slots;\n");
     }
-    if src.contains("$$restProps") {
+    if refs.rest_props {
         if is_ts {
             out.push_str("    let $$restProps: Record<string, any> = {};\n");
         } else {
@@ -840,11 +529,7 @@ pub(crate) fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document
         }
         out.push_str("    void $$restProps;\n");
     }
-    // `$$props` detection is intentionally loose substring matching,
-    // consistent with the `$$slots` / `$$restProps` branches above. A
-    // spurious match just declares an unused local, which is harmless;
-    // a missed one would fire TS2304 across every reference.
-    if src.contains("$$props") {
+    if refs.props {
         if is_ts {
             out.push_str("    let $$props: Record<string, any> = {};\n");
         } else {
@@ -853,7 +538,6 @@ pub(crate) fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document
         out.push_str("    void $$props;\n");
     }
 }
-
 /// JS-overlay equivalent of `rewrite_definite_assignment_in_place` +
 /// `widen_untyped_exported_props_in_place` rolled into one. For each
 /// `let NAME[, NAME…];` declaration where NAME is a target AND that
@@ -947,7 +631,16 @@ mod tests {
     fn runes(source: &str) -> bool {
         let (doc, _) = svn_parser::parse_sections(source);
         let (fragment, _) = svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
-        is_runes_mode(&doc, &fragment)
+        let alloc = oxc_allocator::Allocator::default();
+        let instance = doc
+            .instance_script
+            .as_ref()
+            .map(|s| svn_parser::parse_script_body(&alloc, s.content, s.lang));
+        let module = doc
+            .module_script
+            .as_ref()
+            .map(|s| svn_parser::parse_script_body(&alloc, s.content, s.lang));
+        is_runes_mode(&doc, &fragment, instance.as_ref(), module.as_ref())
     }
 
     #[test]
@@ -975,15 +668,50 @@ mod tests {
     }
 
     #[test]
-    fn rune_in_comment_or_string_still_flips_runes_mode() {
-        // Emit's runes detection is deliberately comment/string-BLIND —
-        // a rune call mentioned in a comment or string literal counts.
-        // svn_core::rune_scan::script_calls_rune (svn-lint's scan) is
-        // the comment-aware variant; the two must not be unified.
-        assert!(runes(
+    fn rune_in_comment_string_or_markup_is_not_a_reference() {
+        // Upstream reads runes mode from the script's unresolved
+        // globals, so text that only looks like a rune call is ignored.
+        assert!(!runes(
             "<script>// migrate to $state(0) later\nlet x = 1;</script>"
         ));
-        assert!(runes("<script>const s = \"$state(0)\";</script>"));
+        assert!(!runes("<script>const s = \"$state(0)\";</script>"));
+        assert!(!runes(
+            "<script>let v = 1;</script><p>Call $state(0) to start</p>"
+        ));
+    }
+
+    #[test]
+    fn inspect_alone_does_not_flip_runes_mode() {
+        assert!(!runes("<script>let v = 1; $inspect(v);</script>"));
+    }
+
+    #[test]
+    fn props_rune_and_top_level_await_flip_runes_mode() {
+        assert!(runes("<script>let { a } = $props();</script>"));
+        assert!(runes("<script>const x = await fetch('/');</script>"));
+        assert!(!runes(
+            "<script>async function f() { await fetch('/'); }</script>"
+        ));
+    }
+
+    #[test]
+    fn template_expressions_count() {
+        assert!(runes(
+            "<script>let n = 1;</script>{#each [n] as x}{let y = $state(x)}{y}{/each}"
+        ));
+        assert!(runes(
+            "<script>const p = Promise.resolve(1);</script><p>{await p}</p>"
+        ));
+        assert!(!runes(
+            "<script>const f = async () => 1;</script><button onclick={async () => { await f(); }}>x</button>"
+        ));
+    }
+
+    #[test]
+    fn store_named_state_is_not_a_rune() {
+        assert!(!runes(
+            "<script>import { writable } from 'svelte/store'; const state = writable(0); $state.set(1);</script>"
+        ));
     }
 
     #[test]

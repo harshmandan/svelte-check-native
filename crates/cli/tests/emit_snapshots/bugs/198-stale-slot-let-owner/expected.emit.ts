@@ -91,9 +91,6 @@ async function $$render_e40e2c10() {
             }
         }
     });
-    void Wrapper;
-    void Foo;
-    void Bar;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': {  } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

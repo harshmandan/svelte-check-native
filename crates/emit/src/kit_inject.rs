@@ -150,17 +150,28 @@ fn kit_file_kind(path: &Path, settings: &KitFilesSettings) -> Option<(KitFileKin
 /// a JSDoc block carrying `@type` / `@param` / `@satisfies` counts as
 /// user-typed, and the injector must leave it alone (upstream checks
 /// `ts.getJSDocType` / `getJSDocParameterTags` / a `satisfies` tag).
-/// Comments aren't AST, so this is a bounded textual check on the
-/// bytes immediately before the statement.
-fn has_preceding_jsdoc_typing(source: &str, stmt_start: usize) -> bool {
-    let before = source[..stmt_start.min(source.len())].trim_end();
-    if !before.ends_with("*/") {
-        return false;
-    }
-    let Some(open) = before.rfind("/**") else {
+///
+/// "Directly preceded" means the last comment before the statement,
+/// with only whitespace between them, is that JSDoc block. A JSDoc
+/// block further up belongs to whatever it precedes, not to this
+/// export.
+fn has_preceding_jsdoc_typing(
+    comments: &[oxc_ast::Comment],
+    source: &str,
+    stmt_start: usize,
+) -> bool {
+    let Some(last) = comments
+        .iter()
+        .filter(|c| (c.span.end as usize) <= stmt_start)
+        .max_by_key(|c| c.span.end)
+    else {
         return false;
     };
-    let block = &before[open..];
+    let gap = &source[last.span.end as usize..stmt_start];
+    if !gap.trim().is_empty() || !last.is_jsdoc() {
+        return false;
+    }
+    let block = &source[last.span.start as usize..last.span.end as usize];
     block.contains("@type") || block.contains("@param") || block.contains("@satisfies")
 }
 
@@ -217,8 +228,12 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
         };
         // JS sources: an export the user already JSDoc-typed is
         // upstream's `hasTypeDefinition` — leave it untouched.
-        let js_user_typed =
-            !is_ts && has_preceding_jsdoc_typing(source, export.span.start as usize);
+        let js_user_typed = !is_ts
+            && has_preceding_jsdoc_typing(
+                &parsed.program.comments,
+                source,
+                export.span.start as usize,
+            );
 
         match &export.declaration {
             Declaration::FunctionDeclaration(func) => {
@@ -338,6 +353,38 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                         if let Some(init) = declarator.init.as_ref() {
                             collect_fn_value_insert(init, source, is_ts, &types, &mut insertions);
                         }
+                        continue;
+                    }
+
+                    // `export const GET = (event) => …` on `+server`:
+                    // upstream's `findExports` registers the arrow /
+                    // function-expression value as a function and
+                    // `insertApiMethod` types it like the declaration
+                    // form.
+                    if matches!(kind, KitFileKind::ServerEndpoint) {
+                        use oxc_ast::ast::Expression;
+                        if !SERVER_HANDLER_NAMES.contains(&id.name.as_str())
+                            || declarator.type_annotation.is_some()
+                        {
+                            continue;
+                        }
+                        let Some(init) = declarator.init.as_ref() else {
+                            continue;
+                        };
+                        let is_async = match init {
+                            Expression::ArrowFunctionExpression(a) => a.r#async,
+                            Expression::FunctionExpression(f) => f.r#async,
+                            _ => false,
+                        };
+                        let types = HandlerTypes::Concrete {
+                            param: "import('./$types.js').RequestEvent",
+                            ret: if is_async {
+                                "Promise<Response>"
+                            } else {
+                                "Response | Promise<Response>"
+                            },
+                        };
+                        collect_fn_value_insert(init, source, is_ts, &types, &mut insertions);
                         continue;
                     }
 
@@ -906,6 +953,23 @@ mod tests {
     }
 
     #[test]
+    fn injects_on_arrow_server_handler() {
+        // `export const GET = (event) => …` is a handler too; the return
+        // annotation lands on the `=>` token.
+        let source = "export const GET = (event) /* a => b */ => new Response('x');";
+        let got = inject(&server_path(), source).unwrap();
+        assert!(
+            got.contains(
+                "(event: import('./$types.js').RequestEvent) /* a => b */ : Response | Promise<Response> => new Response('x')"
+            ),
+            "got: {got}"
+        );
+        let source = "export const POST = async (event) => new Response('x');";
+        let got = inject(&server_path(), source).unwrap();
+        assert!(got.contains(": Promise<Response> =>"), "got: {got}");
+    }
+
+    #[test]
     fn injects_sync_return_type_on_server_handler() {
         // Sync handler → `Response | Promise<Response>`.
         let source = "export function POST(event) { return new Response(''); }";
@@ -1178,6 +1242,15 @@ export async function POST({ request }) { return new Response(''); }
                 "should not double-type: {source}"
             );
         }
+    }
+
+    #[test]
+    fn js_jsdoc_typing_must_sit_directly_on_the_export() {
+        // An earlier `@type` block belongs to `a`, not to `load`; the
+        // plain comment in between is not JSDoc. `load` is untyped.
+        let source = "/** @type {string} */\nconst a = 'x';\n/* plain note */\nexport function load(event) { return { u: event.url.pathname, a }; }";
+        let got = inject(&page_js_path(), source).expect("untyped load must inject");
+        assert!(got.contains("PageLoadEvent"), "{got}");
     }
 
     // ===== Hooks and param matchers =====================================

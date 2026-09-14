@@ -20,10 +20,10 @@
 //!
 //! In addition to the bundled outputs, the crate exports several
 //! stateful accumulator helpers from `store`
-//! (`collect_top_level_bindings`, `collect_type_only_import_bindings`,
-//! `find_store_refs`, `find_store_refs_with_bindings`,
+//! (`collect_top_level_bindings`, `find_store_refs`,
+//! `find_store_refs_with_bindings`, `find_template_store_refs`,
 //! `collect_typed_uninit_lets`, `collect_typed_top_level_lets`) plus
-//! `find_template_refs`.
+//! `template_expression_ranges`.
 //! These are driven by emit at specific points in its flow (e.g.
 //! `collect_top_level_bindings` is called three times to union
 //! identifiers from module + instance + rewritten-instance
@@ -39,12 +39,14 @@
 // Tests are allowed to panic loudly on setup failures.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
+pub mod ambients;
 pub mod ast_walk;
 pub mod dom_binding;
 pub mod events;
 pub mod jsdoc;
 pub mod nodes;
 pub mod props;
+pub mod runes;
 pub mod slot_attr_rewrite;
 pub mod store;
 pub mod template_refs;
@@ -52,6 +54,7 @@ pub mod template_scope;
 pub mod void_refs;
 pub mod walker;
 
+pub use ambients::{AmbientRefs, find_ambient_refs};
 pub use ast_walk::{WalkNode, collect_function_body_stmts, walk_statement_descend};
 pub use events::{
     collect_ctor_locals, collect_inline_typed_dispatcher_member_names, find_dispatched_event_names,
@@ -68,12 +71,13 @@ pub use nodes::const_tag::{
     CONST_TAG_INVALID_PLACEMENT_MSG, ConstPlacementError, check_const_placement,
 };
 pub use props::{PropInfo, PropsInfo, PropsSource, contains_typeof_ref, root_type_name_of};
+pub use runes::{RunesProbe, RunesRule};
 pub use store::{
     RuneScanContext, collect_rune_scan_context, collect_top_level_bindings,
-    collect_type_only_import_bindings, collect_typed_top_level_lets, collect_typed_uninit_lets,
-    find_store_refs, find_store_refs_with_bindings, has_svelte_store_derived_import,
+    collect_typed_top_level_lets, collect_typed_uninit_lets, find_store_refs,
+    find_store_refs_with_bindings, find_template_store_refs, has_svelte_store_derived_import,
 };
-pub use template_refs::find_template_refs;
+pub use template_refs::{TemplateExpression, template_directive_names, template_expression_ranges};
 pub use template_scope::extract_at_const_bindings;
 pub use void_refs::VoidRefRegistry;
 pub use walker::{

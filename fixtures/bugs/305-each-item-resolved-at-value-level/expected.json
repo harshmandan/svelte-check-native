@@ -1,0 +1,7 @@
+{
+    "errors": [
+        { "file": "Alias.svelte", "line": 3, "column": 46, "code": 2339 },
+        { "file": "Use2.svelte", "line": 3, "column": 18, "code": 2339 }
+    ],
+    "_note": "An each-block binding exposed through a slot resolves at value level, as upstream's `__sveltets_2_unwrapArr(items)` does. Deriving a type from the items text instead (`ReturnType<typeof list.filter>`, or `any` for `list ?? []`) picked the wrong overload of `filter` — so a type-predicate callback still produced `Item | null` and every consumer read fired a false 'possibly null' — and collapsed `list ?? []` to `any`, hiding the real missing-property error."
+}

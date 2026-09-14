@@ -14,7 +14,7 @@ async function $$render_e40e2c10() {
     });
     void name;
     void name2;
-    return { props: /** @type {{ name3?: typeof name; name4?: typeof name2; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

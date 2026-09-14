@@ -1,5 +1,4 @@
 {
-    "emit_contains": ["let inputEl!:"],
-    "emit_not_contains": ["let inputEl:"],
-    "_note": "bug #30: `let x: T` + `bind:this={x}` caused TS2454 (used-before-assigned) because Svelte assigns x asynchronously. Fix: rewrite bind-target declarations with the definite-assignment assertion `let x!: T`. Emit must detect bind-this targets and rewrite their declaration."
+    "clean": true,
+    "_note": "`let x: T` + `bind:this={x}` with reads only inside closures must not fire TS2454: Svelte assigns `x` when the element mounts, and TypeScript does not flow-check reads inside closures. Upstream leaves the declaration as written and assigns the element inside the template arrow; the same shape here keeps a direct top-level read reporting TS2454 (fixture 301) while closure reads stay clean."
 }

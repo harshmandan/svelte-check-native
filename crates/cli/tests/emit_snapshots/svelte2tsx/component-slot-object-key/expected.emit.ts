@@ -7,7 +7,7 @@ async function $$render_e40e2c10() {
             void item;
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: /** @type {(__SvnEachItem<typeof items>)} */ (/** @type {any} */ (null)), b: ({ item: (undefined as any as (__SvnEachItem<typeof items>)) }), c: ({ item: 'abc' }.item), d: ({ item: (undefined as any as (__SvnEachItem<typeof items>)) }), e: ($item), f: ($item), ...(g), ...(/** @type {(__SvnEachItem<typeof items>)} */ (/** @type {any} */ (null))) } }, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: ((__svn_unwrap_arr(items))), b: ({ item: (__svn_unwrap_arr(items)) }), c: ({ item: 'abc' }.item), d: ({ item: (__svn_unwrap_arr(items)) }), e: ($item), f: ($item), ...(g), ...((__svn_unwrap_arr(items))) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

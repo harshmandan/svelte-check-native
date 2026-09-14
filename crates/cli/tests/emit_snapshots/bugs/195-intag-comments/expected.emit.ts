@@ -19,8 +19,6 @@ async function $$render_e40e2c10() {
             __svn_ensure_transition(fade(__svn_map_element_tag('div')));
         }
     });
-    void x;
-    void fade;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

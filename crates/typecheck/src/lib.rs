@@ -52,7 +52,7 @@ pub use types::{
 /// into the cache. Structure:
 ///
 /// - Always-shipped core: rune ambients (`$state`, `$derived`, …),
-///   emit helper types (`__SvnStoreValue`, `__svn_type_ref`), the
+///   emit helpers (`__svn_store_get`, `__svn_type_ref`), the
 ///   `svelteHTML` / `svelte-jsx` intersection shapes, asset-module
 ///   ambients (`*.svg` / `*.css` / …).
 /// - `@@FALLBACK_BEGIN@@` … `@@FALLBACK_END@@` block: stand-in

@@ -1,8 +1,8 @@
 {
-    "_doc": "Same baseline format as v5_fixtures/baselines.json \u2014 exact-shape `expected_errors` list per entry. These are hand-converted Svelte-5 ports of upstream svelte2tsx store fixtures that test verbatim-emit behavior: preserving user code character-for-character even when the user's code references undefined names, unresolved modules, or other things TS would flag. Regenerate with `CAPTURE_BASELINES=1` on the runner when an emit change deliberately shifts the error shape; always `git diff` before committing.",
+    "_doc": "Same baseline format as v5_fixtures/baselines.json — exact-shape `expected_errors` list per entry. These are hand-converted Svelte-5 ports of upstream svelte2tsx store fixtures that test verbatim-emit behavior: preserving user code character-for-character even when the user's code references undefined names, unresolved modules, or other things TS would flag. Regenerate with `CAPTURE_BASELINES=1` on the runner when an emit change deliberately shifts the error shape; always `git diff` before committing.",
     "verbatim_emit_fixtures": {
         "$store-as-directive": {
-            "reason": "Tests store-name-as-directive emit shape; user code has TS oddities (unused comma operator side) that svelte2tsx preserves verbatim. Round 2 #4 + #5 (2026-04-26) added type-checking for use: / animate: / transition: / in: / out: directive calls \u2014 the user's stores in this fixture are declared `null`, so each directive call now correctly fires TS2721 'Cannot invoke an object which is possibly null'. These are real type errors tsgo identifies; we accept them as the new baseline.",
+            "reason": "Tests store-name-as-directive emit shape; user code has TS oddities (unused comma operator side) that svelte2tsx preserves verbatim. Round 2 #4 + #5 (2026-04-26) added type-checking for use: / animate: / transition: / in: / out: directive calls — the user's stores in this fixture are declared `null`, so each directive call now correctly fires TS2721 'Cannot invoke an object which is possibly null'. These are real type errors tsgo identifies; we accept them as the new baseline.",
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
@@ -54,7 +54,7 @@
             ]
         },
         "$store-inside-block-without-braces": {
-            "reason": "Multiple `$store` references where only some `store` names are declared in the fixture; verbatim emit preserves the unresolved ones. Raised from 3 to 5 after our store-auto-subscribe pass caught two additional `$store` references upstream misses.",
+            "reason": "Multiple `$store` references where only some `store` names are declared in the fixture; verbatim emit preserves the unresolved ones. An unresolved `$name` is also the compiler's `global_reference_invalid` error, reported once at the first such reference (svelte-check stops at the first compiler error), alongside the TypeScript errors. Locked to upstream's exact list: `$store1` is declared as `let $store1 = __svn_store_get(store1)` inside ignore comments, and since `store1` is a string rather than a store that call fails (hidden by the ignore) and leaves `$store1` as `any`, so `$store1 = 1` and `$store1.x` report nothing.",
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
@@ -64,15 +64,9 @@
                 },
                 {
                     "file": "src/input.svelte",
-                    "line": 10,
+                    "line": 8,
                     "column": 8,
-                    "code": 2322
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 12,
-                    "column": 16,
-                    "code": 2339
+                    "code": "global_reference_invalid"
                 },
                 {
                     "file": "src/input.svelte",
@@ -89,7 +83,7 @@
             ]
         },
         "$store-nested-declaration": {
-            "reason": "Implicit-any in JSDoc-typed JS under strict mode. Verbatim emit doesn't add type annotations.",
+            "reason": "Implicit-any in JSDoc-typed JS under strict mode. Verbatim emit doesn't add type annotations. An unresolved `$name` is also the compiler's `global_reference_invalid` error, reported once at the first such reference (svelte-check stops at the first compiler error), alongside the TypeScript errors.",
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
@@ -102,6 +96,12 @@
                     "line": 5,
                     "column": 4,
                     "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 5,
+                    "column": 4,
+                    "code": "global_reference_invalid"
                 }
             ]
         },
@@ -117,13 +117,19 @@
             ]
         },
         "binding-group-store": {
-            "reason": "No <script>, so `compile_options` is undeclared. l136 added the bind:group widening `$compile_options.generate = __svn_any(null)` (upstream Binding.ts:99-109); the reference to the undeclared store correctly fires TS2304 \u2014 same as upstream's transform under tsgo. Verbatim-emit fixture preserves the undeclared name.",
+            "reason": "No <script>, so `compile_options` is undeclared. The bind:group widening `$compile_options.generate = __svn_any(null)` (upstream Binding.ts) references the undeclared store, which fires TS2304 — same as upstream's transform under tsgo. An unresolved `$name` is also the compiler's `global_reference_invalid` error, reported once at the first such reference (svelte-check stops at the first compiler error), alongside the TypeScript errors.",
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
                     "line": 0,
                     "column": 47,
                     "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 47,
+                    "code": "global_reference_invalid"
                 }
             ]
         },
@@ -220,13 +226,19 @@
             ]
         },
         "uses-$store": {
-            "reason": "User code references `$b` where `b` is never declared (external store assumed). Verbatim emit preserves.",
+            "reason": "User code references `$b` where `b` is never declared (external store assumed). Verbatim emit preserves. An unresolved `$name` is also the compiler's `global_reference_invalid` error, reported once at the first such reference (svelte-check stops at the first compiler error), alongside the TypeScript errors.",
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
                     "line": 0,
                     "column": 8,
                     "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 8,
+                    "code": "global_reference_invalid"
                 },
                 {
                     "file": "src/input.svelte",
@@ -255,7 +267,7 @@
             ]
         },
         "typeof-$store": {
-            "reason": "`typeof $foo` with no `foo` store declared in the fixture \u2014 verbatim preservation of the undeclared reference.",
+            "reason": "`typeof $foo` with no `foo` store declared in the fixture — verbatim preservation of the undeclared reference.",
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
@@ -266,7 +278,7 @@
             ]
         },
         "uses-$store-in-event-binding": {
-            "reason": "`<svelte:options runes />` + `on:event` directives referencing Component-typed expressions with no Svelte type imports. Mix of user-code-without-imports and Svelte-4 on-directive handling our emit doesn't yet cover (see phase G design doc for the full plan). The undeclared `Component` tag itself also fires TS2304 at 0:1 now that hoist-region positions map truthfully.",
+            "reason": "`<svelte:options runes />` + `on:event` directives referencing Component-typed expressions with no Svelte type imports. The undeclared `Component` tag itself also fires TS2304 at 0:1. An unresolved `$name` is also the compiler's `global_reference_invalid` error, reported once at the first such reference (svelte-check stops at the first compiler error), alongside the TypeScript errors.",
             "expected_errors": [
                 {
                     "file": "src/input.svelte",
@@ -279,6 +291,12 @@
                     "line": 0,
                     "column": 20,
                     "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 20,
+                    "code": "global_reference_invalid"
                 },
                 {
                     "file": "src/input.svelte",
@@ -308,6 +326,164 @@
                     "file": "src/input.svelte",
                     "line": 1,
                     "column": 36,
+                    "code": 2304
+                }
+            ]
+        },
+        "stores-mustache": {
+            "reason": "Script-less upstream sample: every name it references is undeclared, so the file is an error set by construction. Locked to upstream's exact list (TypeScript errors plus the single compiler error svelte-check reports before it stops).",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 1,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 8,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 8,
+                    "code": "global_reference_invalid"
+                }
+            ]
+        },
+        "$store-index": {
+            "reason": "Script-less upstream sample: every name it references is undeclared, so the file is an error set by construction. Locked to upstream's exact list (TypeScript errors plus the single compiler error svelte-check reports before it stops).",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 1,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 17,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 17,
+                    "code": "global_reference_invalid"
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 1,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 2,
+                    "column": 1,
+                    "code": 2304
+                }
+            ]
+        },
+        "binding-assignment-$store": {
+            "reason": "Script-less upstream sample: every name it references is undeclared, so the file is an error set by construction. Locked to upstream's exact list (TypeScript errors plus the single compiler error svelte-check reports before it stops).",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 24,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 24,
+                    "code": "global_reference_invalid"
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 24,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 2,
+                    "column": 16,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 3,
+                    "column": 16,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 4,
+                    "column": 22,
+                    "code": 2353
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 4,
+                    "column": 24,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 5,
+                    "column": 22,
+                    "code": 2353
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 5,
+                    "column": 24,
+                    "code": 2304
+                }
+            ]
+        },
+        "custom-css-properties-with-$store": {
+            "reason": "Script-less upstream sample: every name it references is undeclared, so the file is an error set by construction. Locked to upstream's exact list (TypeScript errors plus the single compiler error svelte-check reports before it stops).",
+            "expected_errors": [
+                {
+                    "file": "src/input.svelte",
+                    "line": 0,
+                    "column": 1,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 26,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 1,
+                    "column": 26,
+                    "code": "global_reference_invalid"
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 2,
+                    "column": 29,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 3,
+                    "column": 29,
+                    "code": 2304
+                },
+                {
+                    "file": "src/input.svelte",
+                    "line": 4,
+                    "column": 28,
                     "code": 2304
                 }
             ]

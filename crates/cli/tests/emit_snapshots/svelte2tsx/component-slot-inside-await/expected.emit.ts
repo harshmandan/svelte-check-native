@@ -16,7 +16,7 @@ async function $$render_e40e2c10() {
             void b;
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: /** @type {((Awaited<typeof promise>))} */ (/** @type {any} */ (null)) }, 'err': { err: /** @type {(any)} */ (/** @type {any} */ (null)) }, 'second': { a: /** @type {((Awaited<typeof promise2>)["b"])} */ (/** @type {any} */ (null)) } }, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: ((__svn_unwrap_promise_like(promise))) }, 'err': { err: /** @type {(any)} */ (/** @type {any} */ (null)) }, 'second': { a: (((({ b }) => b)(__svn_unwrap_promise_like(promise2)))) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

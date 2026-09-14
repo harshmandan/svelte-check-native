@@ -1,0 +1,4 @@
+{
+    "emit_not_contains": ["ReturnType<typeof f>"],
+    "_note": "The callee of an each-block items call is taken from the parsed expression. Counting parentheses backwards through the text used to be fooled by `(` and `)` inside string arguments, turning `f(\"(\")(\")\")` into `ReturnType<typeof f>` and typing the slot item as `never`."
+}

@@ -18,7 +18,6 @@
 //! - [`diagnostic`] — `Diagnostic`, `Severity`, `DiagnosticSource`.
 //! - [`sveltekit`] — single source of truth for SvelteKit path
 //!   classification (route components, route scripts, hooks, params).
-//! - [`rune_scan`] — rune-scanning helper.
 //! - [`synth_names`] — the `__svn_*` synthesized-name helpers (architecture rule #6).
 //! - [`tsconfig`] — canonical `TsConfig`/`CompilerOptions` struct + loader
 //!   (architecture rule #4; re-exported below).
@@ -36,7 +35,6 @@
 pub mod diagnostic;
 pub mod position;
 pub mod range;
-pub mod rune_scan;
 pub mod sveltekit;
 pub mod symbol;
 pub mod synth_names;

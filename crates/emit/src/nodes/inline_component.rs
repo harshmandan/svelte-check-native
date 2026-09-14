@@ -18,7 +18,7 @@ use crate::nodes::let_directive::{
     walk_child_with_slot_let,
 };
 use crate::util::{is_css_custom_prop_name, is_simple_js_identifier};
-use crate::{all_identifiers, emit_template_body};
+use crate::{emit_template_body, param_binding_names};
 
 /// Emit a `<Component ...>` node as a call to the component's typed
 /// default export:
@@ -838,7 +838,7 @@ pub(crate) fn write_snippet_arrow_prop(
     let _ = writeln!(buf, ": ({params_text}) => {{ async () => {{");
     emit_template_body(buf, source, &s.body, depth + 1, insts, action_counter);
     let _ = writeln!(buf, "{body_indent}}};");
-    for ident in all_identifiers(params_text) {
+    for ident in param_binding_names(params_text) {
         let _ = writeln!(buf, "{body_indent}void {ident};");
     }
     let _ = writeln!(buf, "{body_indent}return __svn_snippet_return();");

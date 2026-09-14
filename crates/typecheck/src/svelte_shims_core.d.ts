@@ -17,7 +17,7 @@
 //
 // Holds the Svelte 5 rune ambients ($state, $derived, $effect, $props,
 // $bindable, $inspect, $host) plus the helper types emit references
-// (__SvnStoreValue, __svn_type_ref). These have no equivalent in the
+// (__svn_store_get, __svn_type_ref). These have no equivalent in the
 // real `svelte` npm package — runes are compiler macros, and the
 // helpers are our private contract with the emit crate — so this file
 // is written to the cache on every check, regardless of whether the
@@ -43,23 +43,23 @@
 type __SvnStore<T> = { subscribe: (run: (value: T) => any, invalidate?: any) => any };
 
 /**
- * Type-level store unwrap. Used in emit as
- *   `let $foo!: __SvnStoreValue<typeof foo>;`
+ * Value of a store, for the `$store` auto-subscription declaration
+ * emit appends after the store's own declaration:
+ *   `;let $foo = __svn_store_get(foo);`
  *
- * Forward references the store's *type* without depending on
- * declaration order — the `let` declaration goes ABOVE the body so the
- * body can reference `$foo`, but `foo` itself is declared further down.
- * TS resolves types lazily, so `typeof foo` works even when `foo`
- * appears later in the source.
- *
- * The conditional handles non-store inputs by falling through to the
- * input type itself (matches what Svelte's auto-subscribe would do).
- * `undefined | null` collapse to themselves, which is the closest we can
- * get to the runtime "subscribe-first" semantic without actually
- * calling subscribe.
+ * Same overloads as upstream's `__sveltets_2_store_get`: a store yields
+ * its value type; `undefined` / `null` pass through; anything else
+ * fails the call — inside the ignore region emit wraps it in, which
+ * leaves `$foo` as `any`.
  */
-type __SvnStoreValue<S> =
-    S extends __SvnStore<infer T> ? T : S;
+declare function __svn_store_get<T = any>(store: __SvnStore<T>): T;
+declare function __svn_store_get<Store extends __SvnStore<any> | undefined | null>(
+    store: Store
+): Store extends __SvnStore<infer T> ? T : Store;
+declare function __sveltets_2_store_get<T = any>(store: __SvnStore<T>): T;
+declare function __sveltets_2_store_get<Store extends __SvnStore<any> | undefined | null>(
+    store: Store
+): Store extends __SvnStore<infer T> ? T : Store;
 
 /**
  * Surface a type-only template reference inside the type-check function
@@ -384,6 +384,23 @@ type __SvnEachItem<T> = 0 extends 1 & T
         : T extends Iterable<infer U>
             ? U
             : never;
+
+/**
+ * Value-level item of an `{#each}` source, used to resolve a binding
+ * exposed through a `<slot>`. Mirrors upstream's
+ * `__sveltets_2_unwrapArr<T>(arr: ArrayLike<T>): T`, widened to the
+ * iterables Svelte 5 accepts; both names are declared so overlay-diff
+ * tooling resolves either side.
+ */
+declare function __svn_unwrap_arr<T extends ArrayLike<unknown> | Iterable<unknown>>(
+    value: T | undefined | null,
+): __SvnEachItem<T>;
+declare function __sveltets_2_unwrapArr<T extends ArrayLike<unknown> | Iterable<unknown>>(
+    value: T | undefined | null,
+): __SvnEachItem<T>;
+/** Value-level result of an `{#await}` source (`__sveltets_2_unwrapPromiseLike`). */
+declare function __svn_unwrap_promise_like<T>(promise: PromiseLike<T> | T): T;
+declare function __sveltets_2_unwrapPromiseLike<T>(promise: PromiseLike<T> | T): T;
 
 /**
  * Reviewer follow-up #2: extract a child component's events surface
@@ -1707,7 +1724,7 @@ declare module 'svelte/legacy' {
 declare module 'svelte/elements' {
     // Closed `HTMLAttributes` shape: standard HTML attrs plus index
     // signatures for `data-*` / `aria-*` and Svelte directive prefixes
-    // (`on:*` / `bind:*` / `class:*` / `style:*` / `transition:*` /
+    // (`class:*` / `style:*` / `transition:*` /
     // `in:*` / `out:*` / `animate:*` / `use:*`). Our overlay emits
     // directives as object-literal keys (e.g. `{ "on:click": fn }`),
     // so the directive prefixes need explicit allowance to avoid 2353
@@ -1866,11 +1883,11 @@ declare module 'svelte/elements' {
         // on unknown event names and 2339 on bad event-shape uses
         // (e.g. `on:click={e => e.asd}` — `e` narrows to MouseEvent).
         // Without this, both diagnostics fall through to the
-        // permissive wildcard. The other directive prefixes
-        // (`bind:`, `class:`, `style:`, `transition:`, `in:`, `out:`,
-        // `animate:`, `use:`) remain wildcard since the overlay
-        // generates one key per directive site and we don't pretend
-        // to validate action signatures here.
+        // permissive wildcard. `bind:` keys are likewise enumerated
+        // (below). The other directive prefixes (`class:`, `style:`,
+        // `transition:`, `in:`, `out:`, `animate:`, `use:`) remain
+        // wildcard since the overlay generates one key per directive
+        // site and we don't pretend to validate action signatures here.
         // Clipboard Events
         'on:copy'?: ClipboardEventHandler<T> | undefined | null;
         oncopy?: ClipboardEventHandler<T> | undefined | null;
@@ -2216,7 +2233,56 @@ declare module 'svelte/elements' {
         'on:fullscreenerror'?: EventHandler<Event, T> | undefined | null;
         onfullscreenerror?: EventHandler<Event, T> | undefined | null;
         onfullscreenerrorcapture?: EventHandler<Event, T> | undefined | null;
-        [name: `bind:${string}`]: any;
+        // Every `bind:` key real svelte declares (across all of its
+        // per-element interfaces), collapsed onto this one interface.
+        // A name outside this list fires 2353 exactly as it does
+        // against the real types; a wildcard here hid that.
+        'bind:contentRect'?: any;
+        'bind:contentBoxSize'?: any;
+        'bind:borderBoxSize'?: any;
+        'bind:devicePixelContentBoxSize'?: any;
+        'bind:clientWidth'?: any;
+        'bind:clientHeight'?: any;
+        'bind:innerHTML'?: any;
+        'bind:textContent'?: any;
+        'bind:innerText'?: any;
+        'bind:focused'?: any;
+        'bind:offsetWidth'?: any;
+        'bind:offsetHeight'?: any;
+        'bind:open'?: any;
+        'bind:naturalWidth'?: any;
+        'bind:naturalHeight'?: any;
+        'bind:checked'?: any;
+        'bind:value'?: any;
+        'bind:group'?: any;
+        'bind:files'?: any;
+        'bind:indeterminate'?: any;
+        'bind:readyState'?: any;
+        'bind:duration'?: any;
+        'bind:buffered'?: any;
+        'bind:played'?: any;
+        'bind:seekable'?: any;
+        'bind:seeking'?: any;
+        'bind:ended'?: any;
+        'bind:muted'?: any;
+        'bind:volume'?: any;
+        'bind:currentTime'?: any;
+        'bind:playbackRate'?: any;
+        'bind:paused'?: any;
+        'bind:videoWidth'?: any;
+        'bind:videoHeight'?: any;
+        'bind:activeElement'?: any;
+        'bind:fullscreenElement'?: any;
+        'bind:pointerLockElement'?: any;
+        'bind:visibilityState'?: any;
+        'bind:innerWidth'?: any;
+        'bind:innerHeight'?: any;
+        'bind:outerWidth'?: any;
+        'bind:outerHeight'?: any;
+        'bind:devicePixelRatio'?: any;
+        'bind:scrollX'?: any;
+        'bind:scrollY'?: any;
+        'bind:online'?: any;
         [name: `class:${string}`]: any;
         [name: `style:${string}`]: any;
         [name: `transition:${string}`]: any;

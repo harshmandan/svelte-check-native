@@ -774,32 +774,6 @@ struct LetDirectiveScope {
     defaults: Vec<Range>,
 }
 
-/// Round-7 follow-up #2: detect the alias form `let:foo={bar}` —
-/// the value expression is a single bare JS identifier with no
-/// surrounding parens, dot-access, or destructure brackets. Used to
-/// distinguish the alias case (slot key path = `[directive_name]`)
-/// from destructure patterns (left unsupported at the slot-key
-/// level for now).
-fn expression_is_bare_identifier(source: &str, range: Range) -> bool {
-    let start = range.start as usize;
-    let end = range.end as usize;
-    let Some(slice) = source.get(start..end) else {
-        return false;
-    };
-    let trimmed = slice.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let mut bytes = trimmed.bytes();
-    let Some(first) = bytes.next() else {
-        return false;
-    };
-    if !(first.is_ascii_alphabetic() || first == b'_' || first == b'$') {
-        return false;
-    }
-    bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$')
-}
-
 /// Parse a binding-pattern source slice (the `as` clause of
 /// `{#each}`, an await branch's `{value}`, or a snippet's
 /// `(p1, p2)` list) and return the bindings it declares plus any
@@ -918,9 +892,11 @@ fn collect_let_directive_bindings(
                 expression_range, ..
             }) => {
                 let pb = collect_pattern_bindings_from_slice(source, *expression_range);
+                // Alias form `let:foo={bar}`: one plain identifier, no
+                // destructure path, no default.
                 let is_alias = pb.bindings.len() == 1
                     && pb.default_value_ranges.is_empty()
-                    && expression_is_bare_identifier(source, *expression_range);
+                    && pb.bindings[0].destructure_path.is_none();
                 if pb.bindings.is_empty() {
                     // Empty expression — fall back to the directive name itself.
                     push(
@@ -1005,42 +981,19 @@ fn collect_let_directive_bindings(
 /// `{@const { a, b } = EXPR}` / `{@const [x, ...rest] = EXPR}`)
 /// interpolation body. Returns the names in walk order.
 ///
-/// Fast path: bare-identifier form (`NAME = EXPR`) skips the oxc
-/// parser. Destructure forms re-parse the body as
-/// `let <body>;` and run the unified pattern walker so analyze's
-/// shadow tracking picks them up — without this, a slot-attr after
-/// `{@const { a } = X}` would resolve `a` against the wrong outer
-/// binding.
+/// The body is re-parsed as `let <body>;` and run through the unified
+/// pattern walker so analyze's shadow tracking picks the names up —
+/// without this, a slot-attr after `{@const { a } = X}` would resolve
+/// `a` against the wrong outer binding. Reading a bare name off the
+/// text instead misread escaped (`a\u0062c`) and non-ASCII names.
 pub fn extract_at_const_bindings(interp: &svn_parser::Interpolation, source: &str) -> Vec<SmolStr> {
     let start = interp.expression_range.start as usize;
     let end = interp.expression_range.end as usize;
     let Some(body) = source.get(start..end) else {
         return Vec::new();
     };
-    // Bare identifier fast path: leading run of identifier chars. Bytes
-    // >= 0x80 are UTF-8 bytes of a non-ASCII identifier char (`café`);
-    // consume them so a Unicode `{@const}` name isn't truncated (e.g.
-    // `caf` for `café`) — a truncated shadow name would mis-resolve a
-    // later slot-attr reference. The run stays char-aligned (a char's
-    // bytes are all >= 0x80 and consumed together), so `&body[..p]` is
-    // valid UTF-8.
-    let bytes = body.as_bytes();
-    let mut p = 0usize;
-    while p < bytes.len()
-        && (bytes[p].is_ascii_alphanumeric()
-            || bytes[p] == b'_'
-            || bytes[p] == b'$'
-            || bytes[p] >= 0x80)
-    {
-        p += 1;
-    }
-    if p > 0 {
-        return vec![SmolStr::from(&body[..p])];
-    }
-    // Destructure form: re-parse as `let <body>;` and walk the
-    // declarator's pattern. Wrapper prefix `let ` is 4 bytes; offset
-    // is irrelevant here (analyze's consumer only reads names, not
-    // ranges).
+    // Wrapper prefix `let ` is 4 bytes; offset is irrelevant here
+    // (analyze's consumer only reads names, not ranges).
     let wrapped = format!("let {body};");
     let alloc = oxc_allocator::Allocator::default();
     let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);

@@ -1037,11 +1037,12 @@ fn merge_native_diagnostics(
             let code = w.code.as_str().to_string();
             // Apply user `--compiler-warnings` reclassification. Default
             // severity from our lint pass is Warning.
-            let severity = apply_compiler_override(
-                &code,
-                svn_svelte_compiler::Severity::Warning,
-                compiler_overrides,
-            );
+            let base = if w.is_error {
+                svn_svelte_compiler::Severity::Error
+            } else {
+                svn_svelte_compiler::Severity::Warning
+            };
+            let severity = apply_compiler_override(&code, base, compiler_overrides);
             let Some(severity) = severity else { continue };
             let key = (code.clone(), path.clone(), w.start_line, w.start_column);
             if !seen.insert(key) {
@@ -1628,6 +1629,22 @@ fn check_project(
                 .collect();
         (include, exclude, explicit_files)
     });
+    // TypeScript only admits `.js` sources under `allowJs` (or `checkJs`,
+    // which implies it — the language server reads it the same way in
+    // `service.ts`). A `+page.js` listed in the overlay's `files` without
+    // it makes the compiler abandon the whole program with TS6504, so
+    // such files are left out exactly as upstream's program leaves
+    // them out.
+    let allow_js = svn_core::tsconfig::load_chain(tsconfig)
+        .ok()
+        .and_then(|chain| {
+            svn_core::tsconfig::winning_field(&chain, |f| f.compiler_options.allow_js)
+                .or_else(|| {
+                    svn_core::tsconfig::winning_field(&chain, |f| f.compiler_options.check_js)
+                })
+                .map(|(_, v)| v)
+        })
+        .unwrap_or(false);
     let in_project_scope = |path: &Path| -> bool {
         let Some((include, exclude, files)) = &project_scope else {
             return true;
@@ -1691,6 +1708,7 @@ fn check_project(
     let kit_files: Vec<PathBuf> = kit_files_raw
         .iter()
         .filter(|p| in_project_scope(p))
+        .filter(|p| allow_js || p.extension().is_none_or(|e| e != "js"))
         .cloned()
         .collect();
     // `.svelte.ts` runes-module set. Walker paths are canonical

@@ -4,10 +4,7 @@
     import { store2 } from './foo';
     import { store } from './foo';
 async function $$render_e40e2c10() {
-    /** @type {__SvnStoreValue<typeof store>} */
-    let $store = /** @type {any} */ (/** @type {any} */ (null));
-    /** @type {__SvnStoreValue<typeof store2>} */
-    let $store2 = /** @type {any} */ (/** @type {any} */ (null));
+    /*svn:ignore_start*/;let $store = __svn_store_get(store);;let $store2 = __svn_store_get(store2);/*svn:ignore_end*/
     /** @type {any} */ const _foo = /** @type {any} */ (undefined);
     void _foo;
     /** @type {any} */ const _foo2 = /** @type {any} */ (undefined);
@@ -31,10 +28,6 @@ async function $$render_e40e2c10() {
             void _foo2;
         }
     });
-    void $store;
-    void store;
-    void $store2;
-    void store2;
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;

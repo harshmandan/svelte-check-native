@@ -1,6 +1,54 @@
 {
     "errors": [
         {
+            "file": "Clean.svelte",
+            "line": 3,
+            "column": 8,
+            "code": 6133
+        },
+        {
+            "file": "Clean.svelte",
+            "line": 4,
+            "column": 8,
+            "code": 6133
+        },
+        {
+            "file": "Clean.svelte",
+            "line": 5,
+            "column": 8,
+            "code": 6133
+        },
+        {
+            "file": "Clean.svelte",
+            "line": 6,
+            "column": 8,
+            "code": 6133
+        },
+        {
+            "file": "Clean.svelte",
+            "line": 7,
+            "column": 8,
+            "code": 6133
+        },
+        {
+            "file": "Clean.svelte",
+            "line": 8,
+            "column": 8,
+            "code": 6133
+        },
+        {
+            "file": "Mismatch.svelte",
+            "line": 3,
+            "column": 8,
+            "code": 6133
+        },
+        {
+            "file": "Mismatch.svelte",
+            "line": 4,
+            "column": 8,
+            "code": 6133
+        },
+        {
             "file": "Mismatch.svelte",
             "line": 7,
             "column": 39,
@@ -13,5 +61,5 @@
             "code": 2322
         }
     ],
-    "_note": "v0.3 Item 4 + Item 6: dom_binding::type_for covers HTMLImageElement (`naturalWidth`, `naturalHeight`), HTMLMediaElement (`duration`, `seeking`, `ended`, `readyState`), and HTMLElement layout (`clientWidth/Height`, `offsetWidth/Height`). Each emits `void ((): void => { EXPR = null as any as TYPE; });` at the bind-site inside the walker's scope — never-called lambda form matches upstream's assignment-direction check (LHS accepts RHS) so `bind:clientWidth={arr[i].optionalWidth}` doesn't fire a spurious `undefined not assignable` FP. Wrong-typed bindings fire TS2322 at the EXPR position via the collect_dom_binding_token_map source-map. Row/column are 0-based."
+    "_note": "v0.3 Item 4 + Item 6: dom_binding::type_for covers HTMLImageElement (`naturalWidth`, `naturalHeight`), HTMLMediaElement (`duration`, `seeking`, `ended`, `readyState`), and HTMLElement layout (`clientWidth/Height`, `offsetWidth/Height`). Each emits `void ((): void => { EXPR = null as any as TYPE; });` at the bind-site inside the walker's scope \u2014 never-called lambda form matches upstream's assignment-direction check (LHS accepts RHS) so `bind:clientWidth={arr[i].optionalWidth}` doesn't fire a spurious `undefined not assignable` FP. Wrong-typed bindings fire TS2322 at the EXPR position via the collect_dom_binding_token_map source-map. Row/column are 0-based. Unused-variable reports on write-only bind targets are upstream's: every template read is copied into the render function, and no `void` list masks a binding the template only assigns."
 }

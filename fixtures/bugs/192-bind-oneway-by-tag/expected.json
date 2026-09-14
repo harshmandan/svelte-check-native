@@ -1,4 +1,23 @@
 {
-    "errors": [],
-    "_note": "l004: element-native one-way bind:NAME (clientWidth, naturalWidth) resolves through the tag-specific createElement return, matching upstream EXPR = element.NAME. Correct-typed targets on the right element type-check clean; custom/unknown tags fall back to any."
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 1,
+            "column": 6,
+            "code": 6133
+        },
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 6,
+            "code": 6133
+        },
+        {
+            "file": "input.svelte",
+            "line": 3,
+            "column": 6,
+            "code": 6133
+        }
+    ],
+    "_note": "l004: element-native one-way bind:NAME (clientWidth, naturalWidth) resolves through the tag-specific createElement return, matching upstream EXPR = element.NAME. Correct-typed targets on the right element type-check clean; custom/unknown tags fall back to any. Unused-variable reports on write-only bind targets are upstream's: every template read is copied into the render function, and no `void` list masks a binding the template only assigns."
 }

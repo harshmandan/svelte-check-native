@@ -211,6 +211,14 @@ pub(crate) fn collect_slot_def(
                         entries.push(SlotAttr::Spread {
                             expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Type(rewritten)),
                         });
+                    } else if let crate::slot_attr_rewrite::ValueRewrite::Rewritten(rewritten) =
+                        crate::slot_attr_rewrite::rewrite_slot_attr_expr_value(trimmed, &lookup)
+                    {
+                        // A value-resolved root (an each / await binding):
+                        // spread the value, as upstream does.
+                        entries.push(SlotAttr::Spread {
+                            expr: SlotAttrExpr::Resolved(ResolvedSlotExpr::Value(rewritten)),
+                        });
                     }
                     continue;
                 }

@@ -26,9 +26,9 @@ async function $$render_e40e2c10/*svn:ignore_start*/<A, B extends keyof A, C ext
             __svn_create_slot("default", { c: c });
         }
     });
-    void c;
     void a;
     void b;
+    void c;
     void getA;
     return { props: undefined as any as ({ a: A; b: B; c: C; getA?: typeof getA; }), events: undefined as any as $$Events, slots: { 'default': { c: (c) } }, bindings: undefined as any as string, exports: undefined as any as ({ a: A; b: B; c: C; getA: typeof getA; }) };
 }

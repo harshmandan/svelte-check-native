@@ -9,7 +9,7 @@ use std::fmt::Write;
 use svn_parser::Fragment;
 
 use crate::emit_buffer::EmitBuffer;
-use crate::{all_identifiers, emit_template_body};
+use crate::{emit_template_body, pattern_binding_names};
 
 /// Walk `{:then v}` / `{:catch e}` body in a fresh lexical scope that
 /// declares the branch's context binding as `any`. Without the
@@ -18,7 +18,7 @@ use crate::{all_identifiers, emit_template_body};
 /// `{#each v as item}`) fire TS2304.
 ///
 /// Supports destructure patterns (`{:then { a, b }}`, `{:then [x]}`)
-/// via `all_identifiers`. An absent context range (`{:then}` with no
+/// via `pattern_binding_names`. An absent context range (`{:then}` with no
 /// binding) skips the scope and just walks the body inline.
 pub(crate) fn emit_branch_with_binding(
     buf: &mut EmitBuffer,
@@ -41,16 +41,16 @@ pub(crate) fn emit_branch_with_binding(
         emit_template_body(buf, source, body, depth, insts, action_counter);
         return;
     }
-    let idents = all_identifiers(binding_text);
+    let idents = pattern_binding_names(binding_text);
     let indent = "    ".repeat(depth);
     let _ = writeln!(buf, "{indent}{{");
     // Upstream binds the catch error as `const <err> = __sveltets_2_any();`
     // (AwaitPendingCatchBlock.ts:64) — no annotation, identical in JS/TS. The
     // old JS path `= undefined` inferred type `undefined`, so any property
     // access on the binding fired a spurious diagnostic in `.svelte.js` files.
-    for ident in &idents {
-        let _ = writeln!(buf, "{indent}    const {ident} = __svn_any();");
-    }
+    // The pattern is spliced as written, so a computed key (`{ [k]: v }`)
+    // keeps its reference to `k`.
+    let _ = writeln!(buf, "{indent}    const {binding_text} = __svn_any();");
     emit_template_body(buf, source, body, depth + 1, insts, action_counter);
     for ident in &idents {
         let _ = writeln!(buf, "{indent}    void {ident};");
@@ -137,7 +137,7 @@ pub(crate) fn emit_await_then_branch(
     buf.push_str(");\n");
     match binding_text {
         Some(bind) => {
-            let idents = all_identifiers(bind);
+            let idents = pattern_binding_names(bind);
             let _ = writeln!(
                 buf,
                 "{inner}const $$_await = await $$_promise; const {bind} = $$_await;"
@@ -177,18 +177,23 @@ pub(crate) fn emit_await_block(
     if let Some(p) = &b.pending {
         emit_template_body(buf, source, p, depth, insts, action_counter);
     }
-    if let Some(t) = &b.then_branch {
-        emit_await_then_branch(
-            buf,
-            source,
-            b.expression_range,
-            t.context_range.as_ref(),
-            &t.body,
-            depth,
-            insts,
-            action_counter,
-        );
-    }
+    // Upstream always emits `await (EXPR);` — with no `{:then}` the
+    // promise expression is still a read of whatever it names.
+    let empty = Fragment::default();
+    let (context_range, then_body) = match &b.then_branch {
+        Some(t) => (t.context_range.as_ref(), &t.body),
+        None => (None, &empty),
+    };
+    emit_await_then_branch(
+        buf,
+        source,
+        b.expression_range,
+        context_range,
+        then_body,
+        depth,
+        insts,
+        action_counter,
+    );
     if let Some(c) = &b.catch_branch {
         emit_branch_with_binding(
             buf,

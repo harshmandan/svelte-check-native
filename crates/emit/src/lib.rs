@@ -73,6 +73,7 @@ mod render_function;
 mod rewrite_invariants;
 mod script_body_rewrites;
 mod script_template_analysis;
+mod store_subscriptions;
 mod void_block;
 // SVELTE-4-COMPAT: droppable submodule for Svelte-4 emit rewrites.
 // See design/phase_g/DESIGN.md.
@@ -295,6 +296,7 @@ fn emit_document_with_render_name(
     }
 
     // Module script content (already at module level — no special handling).
+    let mut module_body: Option<std::ops::Range<usize>> = None;
     if let Some(module_script) = &doc.module_script {
         // Pad to a trailing `\n` before calling `append_verbatim` so a
         // single-line script (no terminating newline) still produces a
@@ -323,6 +325,7 @@ fn emit_document_with_render_name(
             source_byte_end: module_script.content_range.start + body_no_pad.len() as u32,
         });
         buf.append_verbatim(text, doc.source, module_script.content_range);
+        module_body = Some(overlay_start as usize..overlay_start as usize + body_no_pad.len());
     }
 
     // `<script generics="T extends ...">` — pulled from the parser's
@@ -383,6 +386,18 @@ fn emit_document_with_render_name(
     // `type $$Slots`, the render-fn return uses that as the slots
     // surface; the synthesised slot-defs are ignored.
     let has_strict_slots_decl = svelte4::compat::has_strict_slots_ast(parsed_instance.as_ref());
+    let runes_mode = is_runes_mode(
+        doc,
+        fragment,
+        parsed_instance.as_ref(),
+        parsed_module.as_ref(),
+    );
+    let ambients = svn_analyze::find_ambient_refs(
+        fragment,
+        doc.source,
+        parsed_instance.as_ref().map(|p| &p.program),
+        parsed_module.as_ref().map(|p| &p.program),
+    );
 
     // Single analyze-time resolution of every Props decision emit
     // makes downstream — type text, type root name, destructure
@@ -399,7 +414,7 @@ fn emit_document_with_render_name(
     // than the lossy declare-const stub.
     let raw_props_info: PropsInfo =
         if let (Some(s), Some(parsed)) = (doc.instance_script.as_ref(), parsed_instance.as_ref()) {
-            PropsInfo::build(&parsed.program, s.content)
+            PropsInfo::build(&parsed.program, s.content, runes_mode)
         } else {
             PropsInfo::default()
         };
@@ -479,12 +494,14 @@ fn emit_document_with_render_name(
         None => raw_props_info,
     };
 
-    // Three-trigger gate for event-type narrowing, matching upstream
-    // svelte2tsx (`ComponentEvents.ts:84-86` + `ExportedNames.isRunesMode`).
+    // Gate for event-type narrowing, matching upstream svelte2tsx
+    // (`ComponentEvents.hasStrictEvents` and `addComponentExport.ts`).
     // Narrow ONLY when the user opted in via ONE of:
     //   1. `interface $$Events` / `type $$Events` declared.
     //   2. `<script strictEvents>` attribute.
-    //   3. Runes mode.
+    //   3. Runes mode — but only on the generics export path, whose
+    //      class wrapper is the one place upstream OR-s `isRunesMode()`
+    //      into the strictness; the plain path stays lax.
     // Otherwise stay lax (child events flow through the default
     // `(e: any) => any` overload). This matches upstream's behavior
     // for Svelte-4 components that happen to use
@@ -492,7 +509,7 @@ fn emit_document_with_render_name(
     // narrowing those without opt-in produced 18 legitimate-but-new
     // errors on a Svelte-4 bench in the reverted commit 3c24f18.
     let narrow_events =
-        has_strict_events_decl || has_strict_events_attr(doc) || is_runes_mode(doc, fragment);
+        has_strict_events_decl || has_strict_events_attr(doc) || (runes_mode && generics.is_some());
     // If the component doesn't already declare `$$Events` but opted in
     // via one of the other two triggers, pull the dispatcher's type
     // argument as the source for a synthesised `type $$Events = T;`.
@@ -1260,8 +1277,6 @@ fn emit_document_with_render_name(
         bindable_prop_names,
         prop_type_source,
         store_refs,
-        template_void_refs,
-        template_type_refs,
     } = analyze_script_and_template_refs(
         doc,
         source_path,
@@ -1273,38 +1288,35 @@ fn emit_document_with_render_name(
         effective_props_type_text.as_deref(),
     );
 
-    // Store auto-subscribe aliases: declare a typed `let $store!:
-    // __SvnStoreValue<typeof store>;` for every detected `$ident`.
-    //
-    // Why `let !` and not `const = expr`:
-    //   - `$store` references in the body need the alias to be visible
-    //     at the top of the function, but the underlying `store` may be
-    //     declared FURTHER DOWN in the body (or hoisted above as an
-    //     import). A value-position reference like `__svn_store_get(store)`
-    //     fires TS2448 ("used before declaration") for body-declared
-    //     stores. A type-position reference (`typeof store`) is resolved
-    //     lazily by TS and works regardless of declaration order.
-    //   - `__SvnStoreValue<typeof store>` extracts the value type out of
-    //     the store wrapper using a conditional infer. Without this,
-    //     downstream code (`$store.bar`, `$store.map(...)`) would see
-    //     `any` and cascade into TS7006/TS18046/TS2339/TS2698 hits.
-    //   - The `!` definite-assignment assertion suppresses TS2454; we
-    //     never actually assign to `$store` ourselves, but Svelte's
-    //     compiler treats the identifier as initialized at runtime.
-    for name in &store_refs {
-        let base = name.strip_prefix('$').unwrap_or(name);
-        if is_ts {
-            let _ = writeln!(buf, "    let {name}!: __SvnStoreValue<typeof {base}>;");
-        } else {
-            // JS-overlay form — `!:` definite-assign is TS-only
-            // syntax, so initialise via a JSDoc-typed double-cast
-            // through `any` (matches the design fixture pattern in
-            // `design/js_overlay/fixture/src/04_store_unwrap.svelte.svn.js`).
-            let _ = writeln!(buf, "    /** @type {{__SvnStoreValue<typeof {base}>}} */");
+    // Stores that come from imports are declared at the start of the
+    // render function (upstream `ImplicitStoreValues
+    // .attachStoreValueDeclarationOfImportsToRenderFn`); the rest are
+    // attached to their own declarations once the script body is in
+    // the buffer.
+    let mut store_bases: Vec<SmolStr> = store_refs
+        .iter()
+        .map(|name| SmolStr::from(name.strip_prefix('$').unwrap_or(name)))
+        .collect();
+    {
+        let mut import_names: std::collections::HashSet<SmolStr> = std::collections::HashSet::new();
+        if let Some(p) = parsed_instance.as_ref() {
+            store_subscriptions::import_local_names(&p.program, &mut import_names);
+        }
+        if let Some(p) = parsed_module.as_ref() {
+            store_subscriptions::import_local_names(&p.program, &mut import_names);
+        }
+        let imported: Vec<&str> = store_bases
+            .iter()
+            .filter(|b| import_names.contains(*b))
+            .map(SmolStr::as_str)
+            .collect();
+        if !imported.is_empty() {
             let _ = writeln!(
                 buf,
-                "    let {name} = /** @type {{any}} */ (/** @type {{any}} */ (null));"
+                "    {}",
+                store_subscriptions::store_declarations(imported.iter().copied())
             );
+            store_bases.retain(|b| !import_names.contains(b));
         }
     }
 
@@ -1316,7 +1328,7 @@ fn emit_document_with_render_name(
     // (script + template). Ambiguity risk: a literal `$$slots` inside
     // a string or comment would trigger the declaration, but that's
     // harmless — the `let` just goes unused in the overlay.
-    emit_svelte4_ambients(buf.raw_string_mut(), doc, is_ts);
+    emit_svelte4_ambients(buf.raw_string_mut(), ambients, is_ts);
 
     // Forward-declare top-level `{#snippet NAME(params)}` names at the
     // `$$render_<hash>` function-body scope so the script body can
@@ -1406,9 +1418,9 @@ fn emit_document_with_render_name(
 
     script_body_rewrites::apply_script_body_rewrites(
         &mut buf,
-        summary,
         split.as_ref().zip(instance_body),
-        &store_refs,
+        module_body,
+        store_bases,
         &reactive_touched_names,
         parsed_instance.as_ref(),
         source_path,
@@ -1436,9 +1448,7 @@ fn emit_document_with_render_name(
     emit_void_block(
         buf.raw_string_mut(),
         summary,
-        &store_refs,
         &bindable_prop_names,
-        &template_void_refs,
         &exported_locals,
     );
 
@@ -1544,18 +1554,17 @@ fn emit_document_with_render_name(
             has_inline_typed_members || synthesized_untyped_events.is_some();
         emit_default_export_declarations_ts(
             &mut buf,
-            doc,
             fragment,
-            split.as_ref(),
             &render_name,
             generics.as_deref(),
             prop_type_effective.as_deref(),
-            &template_type_refs,
             has_dispatcher_call,
             has_concrete_dispatcher_events,
             events_alias_body.is_some(),
             has_strict_events_decl,
             has_bubbled_events,
+            runes_mode,
+            ambients,
         );
     } else {
         emit_default_export_declarations_js(&mut buf, &render_name);
@@ -1806,7 +1815,7 @@ pub use is_ts::set_preserve_attribute_case;
 pub(crate) use is_ts::{IsTsGuard, emit_is_ts, preserve_attribute_case};
 pub(crate) use void_block::{emit_bind_pair_declarations, emit_void_block};
 
-pub(crate) use destructure_idents::all_identifiers;
+pub(crate) use destructure_idents::{param_binding_names, pattern_binding_names};
 
 #[cfg(test)]
 mod tests {
@@ -2318,18 +2327,14 @@ mod tests {
     }
 
     #[test]
-    fn bind_this_target_gets_definite_assignment() {
+    fn bind_this_target_declaration_is_left_as_written() {
+        // Upstream keeps the declaration and assigns the element inside
+        // the template arrow, so a direct read still reports TS2454.
         let src = "<script lang=\"ts\">let inputEl: HTMLDivElement;</script>\
                    <div bind:this={inputEl}></div>";
         let out = emit_str(src);
-        assert!(
-            out.contains("let inputEl!:"),
-            "missing definite-assignment rewrite:\n{out}"
-        );
-        assert!(
-            !out.contains("let inputEl: "),
-            "still has un-rewritten declaration:\n{out}"
-        );
+        assert!(out.contains("let inputEl: HTMLDivElement;"), "{out}");
+        assert!(out.contains("inputEl = null as any as"), "{out}");
     }
 
     #[test]

@@ -14,7 +14,6 @@ second line`, count: (1 + 1), good: `prefix ${known} suffix` });
             __svn_create_slot("labeled", { label: `prefix ${missingName} suffix` });
         }
     });
-    void known;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'header': { tooltip: ("first line\nsecond line"), count: (1 + 1), good: undefined as any as (string) }, 'labeled': { label: undefined as any as (string) } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

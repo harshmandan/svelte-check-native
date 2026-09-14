@@ -6,6 +6,7 @@ async function $$render_e40e2c10() {
         { svelteHTML.createElement("input", {
             "type": `text`,
         });
+            (test);
             test = /** @type {string} */ (null);
         }
         { svelteHTML.createElement("input", {

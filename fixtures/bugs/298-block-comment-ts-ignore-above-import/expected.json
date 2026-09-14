@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A `@ts-ignore` directive must travel with the import it annotates when the import is hoisted to module scope. Only `//` directives used to be carried; a `/* @ts-ignore */` block stayed behind in the body and the import fired TS2307 unsuppressed."
+}

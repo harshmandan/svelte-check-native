@@ -6,7 +6,6 @@ async function $$render_74f92bad() {
         row: Snippet<[{ id: number; label: string }]>;
         header: Snippet<[columns: readonly string[]]>;
     };
-    type $$Events = {};
 
                                           
     let { row, header }: /*Ωignore_startΩ*/$$ComponentProps
@@ -18,7 +17,7 @@ async function $$render_74f92bad() {
         (header(['id', 'label']));
         (row({ id: 1, label: 'a' }));
     });
-    return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
+    return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_74f92bad;
 const __svn_component_default: import('svelte').Component<
@@ -72,9 +71,6 @@ async function $$render_e40e2c10() {
             /*svn:ignore_start*/void header;/*svn:ignore_end*/
         }
     });
-    void Wrapper;
-    void formatId;
-    void joinLabels;
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

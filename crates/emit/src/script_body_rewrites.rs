@@ -8,9 +8,11 @@
 //!    TS7034/7005.
 //! 2. **Definite-assign** — `let X: T;` becomes `let X!: T;` for
 //!    every name we know is assigned at runtime but TS flow
-//!    analysis can't prove (bind:this targets, store
-//!    auto-subscribe bases, reactive-rewrite-touched names, typed
-//!    uninitialised top-level lets).
+//!    analysis can't prove (exported props, store auto-subscribe
+//!    bases, reactive-rewrite-touched names). A `bind:this` target
+//!    is not one of them: upstream leaves its declaration as
+//!    written, so a direct read before the element mounts still
+//!    reports TS2454 while reads inside closures pass.
 //! 3. **De-narrow typed literal inits** — `export let size: Size =
 //!    'medium'` gets a `size = undefined as any;` trailer so later
 //!    comparisons don't fire TS2367 ("no overlap"). TS-only.
@@ -35,10 +37,10 @@ use smol_str::SmolStr;
 use crate::emit_buffer::EmitBuffer;
 use crate::emit_is_ts;
 use crate::process_instance_script_content;
+use crate::store_subscriptions;
 use crate::svelte4::compat::{
     denarrow_typed_exported_props_in_place, rewrite_definite_assignment_in_place,
-    rewrite_void_sequence_to_array, widen_untyped_exported_props_in_place,
-    widen_untyped_exports_jsdoc_in_place,
+    widen_untyped_exported_props_in_place, widen_untyped_exports_jsdoc_in_place,
 };
 use crate::sveltekit;
 use svn_analyze::collect_typed_top_level_lets;
@@ -46,41 +48,26 @@ use svn_analyze::collect_typed_top_level_lets;
 /// Apply the three post-body in-place rewrites: widen-untyped-exports →
 /// definite-assign → de-narrow-typed-literal-inits.
 ///
-/// Builds the `def_assign_names` set from five sources (bind:this
-/// targets, export-stripped locals, store-auto-subscribe bases,
-/// reactive-rewrite-touched names, typed uninitialized top-level
-/// `let`s) — all of which produce declarations that Svelte treats
-/// as definitely-assigned at runtime but TS flow analysis can't
-/// prove.
+/// Builds the `def_assign_names` set from three sources
+/// (export-stripped locals, store-auto-subscribe bases,
+/// reactive-rewrite-touched names) — all of which produce
+/// declarations that Svelte treats as definitely-assigned at runtime
+/// but TS flow analysis can't prove.
 pub(crate) fn apply_script_body_rewrites<'alloc>(
     buf: &mut EmitBuffer,
-    summary: &svn_analyze::TemplateSummary,
     split: Option<(&process_instance_script_content::SplitScript, Range<usize>)>,
-    store_refs: &[SmolStr],
+    module_body: Option<Range<usize>>,
+    mut store_bases: Vec<SmolStr>,
     reactive_touched_names: &[SmolStr],
     parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
     source_path: &Path,
 ) {
-    let mut def_assign_names: Vec<SmolStr> = summary
-        .bind_this_targets
-        .iter()
-        .map(|t| t.name.clone())
-        .collect();
+    let mut def_assign_names: Vec<SmolStr> = Vec::new();
     if let Some((s, _)) = &split {
         for name in &s.exported_locals {
             if !def_assign_names.iter().any(|n| n == name) {
                 def_assign_names.push(name.clone());
             }
-        }
-    }
-    // `$store` auto-subscribe aliases: definite-assign the underlying
-    // `store` local. Body-declared `let store: Writable<T>` without
-    // initializer fires TS2454 at every `typeof store` read; the
-    // rewrite is a no-op for imports / `const` / initialized `let`.
-    for name in store_refs {
-        let base = SmolStr::from(name.strip_prefix('$').unwrap_or(name));
-        if !def_assign_names.iter().any(|n| n == &base) {
-            def_assign_names.push(base);
         }
     }
     // SVELTE-4-COMPAT: names touched by reactive destructure /
@@ -91,14 +78,11 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
             def_assign_names.push(name.clone());
         }
     }
-    // R-Conv #20 (B2 #5): the blanket `collect_typed_uninit_lets`
-    // source was removed. It used to inject `!` on every `let NAME:
-    // Type;` (typed, no init) in the instance script — masking real
-    // TS2454 ("used before being assigned") diagnostics that
-    // upstream LS surfaces unmodified. The four explicit sources
-    // above (bind:this, exported lets, store-auto-subscribe,
-    // reactive-touched) cover every legitimate "Svelte assigns
-    // this at runtime" case; everything else is genuinely a
+    // No blanket source: injecting `!` on every typed uninitialised
+    // `let` masked real TS2454 ("used before being assigned")
+    // diagnostics that upstream surfaces unmodified. The three
+    // explicit sources above cover every "Svelte assigns this at
+    // runtime" case upstream also covers; everything else is a
     // user-source order bug that should fire TS2454.
     // Every pass below splices bytes into the buffer AFTER the script
     // body's byte-precise TokenMapEntry was pushed (and after the
@@ -111,15 +95,32 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
     // The declaration rewrites only touch the spliced instance script.
     // Each pass grows the body by what it inserted, so the range is
     // re-extended before the next pass reads it.
-    let Some((s, mut body)) = split else {
-        let edits = rewrite_void_sequence_to_array(buf.raw_string_mut());
-        buf.adjust_token_map_for_insertions(&edits);
-        return;
-    };
     let apply = |buf: &mut EmitBuffer, body: &mut Range<usize>, edits: Vec<(u32, u32)>| {
         body.end += edits.iter().map(|&(_, len)| len as usize).sum::<usize>();
         buf.adjust_token_map_for_insertions(&edits);
     };
+    // A store declared in the module script gets its `$store`
+    // declaration there, at module scope, as upstream does. This runs
+    // before the instance passes because the module text sits earlier
+    // in the buffer, and those passes take the instance range as it is
+    // after this insertion.
+    let module_inserted: usize = if let Some(mut module) = module_body {
+        let edits = store_subscriptions::attach_to_declarations(
+            buf.raw_string_mut(),
+            &module,
+            &mut store_bases,
+        );
+        let inserted = edits.iter().map(|&(_, len)| len as usize).sum();
+        apply(buf, &mut module, edits);
+        inserted
+    } else {
+        0
+    };
+    let Some((s, mut body)) = split else {
+        return;
+    };
+    body.start += module_inserted;
+    body.end += module_inserted;
     if emit_is_ts() {
         {
             let edits = widen_untyped_exported_props_in_place(
@@ -174,16 +175,9 @@ pub(crate) fn apply_script_body_rewrites<'alloc>(
             denarrow_typed_exported_props_in_place(buf.raw_string_mut(), &body, &denarrow_targets);
         apply(buf, &mut body, edits);
     }
-    // SVELTE-4-COMPAT: rewrite `void (a, b, c)` (the dependency-list
-    // idiom for `$:` reactive blocks) to `void [a, b, c]`. The
-    // sequence-expression form fires TS2871 ("Left side of comma
-    // operator is unused and has no side effects") on every comma-
-    // separated reference under tsgo's strict checking; the array
-    // literal form puts each ref in array-element position where TS
-    // doesn't fire the warning. Runtime semantics are equivalent (both
-    // evaluate every expression and discard the result via `void`),
-    // and the rewrite lives entirely in our type-check overlay so
-    // user runtime is untouched.
-    let edits = rewrite_void_sequence_to_array(buf.raw_string_mut());
-    buf.adjust_token_map_for_insertions(&edits);
+    // Last, so the declarations land after every rewrite of the
+    // statements they attach to.
+    let edits =
+        store_subscriptions::attach_to_declarations(buf.raw_string_mut(), &body, &mut store_bases);
+    apply(buf, &mut body, edits);
 }

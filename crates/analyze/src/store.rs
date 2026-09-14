@@ -11,20 +11,18 @@
 //!
 //! 1. Walking the script's oxc AST to collect every top-level binding
 //!    (let/const/var/function/class/import-specifier name).
-//! 2. Walking the script source again for `$<ident>` references where
-//!    `<ident>` is in the binding set and isn't a rune name.
+//! 2. Walking the same AST for `$<ident>` identifier references where
+//!    `<ident>` is in the binding set and the occurrence isn't a rune.
 //!
 //! Returns the set of store names that need to be declared as aliases.
 //! The emit crate generates `let $<name>: any;` declarations from the
 //! returned list.
 //!
-//! The scanner skips `// line` and `/* block */` comments, single-
-//! and double-quoted strings, and the static segments of template
-//! literals. Interpolations (`${…}`) are re-scanned as normal code,
-//! so a `$store` inside a `${…}` IS picked up. Regex literals are
-//! not specially handled — in practice a regex containing a pattern
-//! that happens to match a bound script name is rare, and the
-//! intersection-with-bindings filter keeps the scanner conservative.
+//! Only identifier references count, mirroring upstream
+//! `processInstanceScriptContent`: a member name (`api.$count`), an
+//! object key (`{ $count: 1 }`), a type reference or anything inside a
+//! type alias / interface is not a subscription. Comments, strings and
+//! regex literals never reach the walk.
 //!
 //! Limitations:
 //! - Doesn't yet scan template interpolations (template-only store
@@ -36,9 +34,10 @@
 use std::collections::HashSet;
 
 use oxc_ast::ast::{
-    BindingPattern, Declaration, Expression, ImportDeclarationSpecifier, ImportOrExportKind,
-    Statement, VariableDeclaration,
+    BindingPattern, Declaration, Expression, IdentifierReference, ImportDeclarationSpecifier,
+    ImportOrExportKind, Program, Statement, VariableDeclaration,
 };
+use oxc_ast_visit::Visit;
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
 
@@ -53,7 +52,7 @@ pub fn find_store_refs(program: &oxc_ast::ast::Program<'_>, source: &str) -> Vec
     let mut bound = HashSet::new();
     collect_top_level_bindings(program, &mut bound);
     let runes = collect_rune_scan_context(program, source);
-    let mut refs = find_store_refs_with_bindings(source, &bound, &runes);
+    let mut refs = find_store_refs_with_bindings(program, source, &bound, &runes);
     // Mirrors upstream ImplicitStoreValues.isSvelteStoreDerivedImport:
     // a named import of `derived` from 'svelte/store' never gets a
     // store subscription in Svelte 5+ — `$derived(...)` in such a file
@@ -225,17 +224,6 @@ pub fn has_svelte_store_derived_import(program: &oxc_ast::ast::Program<'_>) -> b
 /// (a `$store` reference in instance can resolve to a binding declared
 /// in `<script module>`).
 ///
-/// Like [`crate::template_refs`], this is a deliberate lightweight JS
-/// tokenizer rather than a full oxc walk: it runs over the whole script
-/// for every component and only needs to find `$<ident>` tokens, so it
-/// skips strings / comments / template-literal statics and collects the
-/// rest, intersecting with `bound` so a false positive that isn't an
-/// actual binding is dropped. Known lenient edge: regex literals are not
-/// recognised (the division-vs-regex ambiguity isn't worth a byte-level
-/// heuristic), so a `$<boundname>` inside a regex body could be
-/// mis-collected — rare, and only when the regex contains the literal
-/// name of a real top-level binding.
-///
 /// `runes` carries the byte offsets (of the `$`) of `$state` /
 /// `$derived` / `$props` occurrences that are genuine rune usage per
 /// upstream's contextual gate — see [`collect_rune_scan_context`].
@@ -243,6 +231,7 @@ pub fn has_svelte_store_derived_import(program: &oxc_ast::ast::Program<'_>) -> b
 /// component with `const state = writable(…)` gets its `$state`
 /// subscription like any other store.
 pub fn find_store_refs_with_bindings(
+    program: &Program<'_>,
     source: &str,
     bound: &HashSet<String>,
     runes: &RuneScanContext,
@@ -250,192 +239,119 @@ pub fn find_store_refs_with_bindings(
     if bound.is_empty() {
         return Vec::new();
     }
+    let mut probe = StoreRefProbe {
+        source,
+        bound,
+        runes,
+        seen: HashSet::new(),
+        out: Vec::new(),
+    };
+    probe.visit_program(program);
+    probe.out
+}
 
+/// Store subscriptions written in the template: every `$<ident>`
+/// identifier reference in a template expression whose `<ident>` is a
+/// script binding. Each expression range is parsed with oxc (a
+/// declaration tag's payload as a declarator list), so object keys,
+/// member names, regex bodies and string contents never count.
+/// Mirrors upstream `svelte2tsx/nodes/Stores.ts`, which walks the
+/// template AST for the same identifiers.
+pub fn find_template_store_refs(
+    fragment: &svn_parser::Fragment,
+    source: &str,
+    bound: &HashSet<String>,
+) -> Vec<SmolStr> {
+    if bound.is_empty() {
+        return Vec::new();
+    }
+    let alloc = oxc_allocator::Allocator::default();
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    let bytes = source.as_bytes();
-    // Template-literal depth stack: each entry is the brace-nesting
-    // count at which we re-enter template-quoted mode when the brace
-    // count drops back to 0. Non-empty when inside `${…}` of a
-    // template literal. Lets nested templates work correctly.
-    let mut template_stack: Vec<u32> = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
+    // `use:$action`, `transition:$fly`: the directive name itself is
+    // the store reference (upstream `Stores.handleDirective`).
+    for name in crate::template_directive_names(fragment) {
+        if let Some(base) = name.strip_prefix('$')
+            && bound.contains(base)
+            && seen.insert(name.clone())
+        {
+            out.push(name);
+        }
+    }
+    for expr in crate::template_expression_ranges(fragment) {
+        let Some(text) = source.get(expr.range.start as usize..expr.range.end as usize) else {
+            continue;
+        };
+        if !text.contains('$') {
+            continue;
+        }
+        let wrapped = if expr.is_declaration {
+            format!("let {text}\n;")
+        } else {
+            format!("({text}\n);")
+        };
+        let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+        let runes = collect_rune_scan_context(&parsed.program, &wrapped);
+        let mut probe = StoreRefProbe {
+            source: &wrapped,
+            bound,
+            runes: &runes,
+            seen: HashSet::new(),
+            out: Vec::new(),
+        };
+        probe.visit_program(&parsed.program);
+        for name in probe.out {
+            if seen.insert(name.clone()) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
 
-        // Line comment.
-        if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
-            i += 2;
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
-            continue;
-        }
-        // Block comment.
-        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
-            i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                i += 1;
-            }
-            i = (i + 2).min(bytes.len());
-            continue;
-        }
-        // Single- or double-quoted string. `$ident` inside is a
-        // literal substring, not a store reference — skip the whole
-        // thing.
-        if b == b'"' || b == b'\'' {
-            let quote = b;
-            i += 1;
-            while i < bytes.len() && bytes[i] != quote {
-                if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                    i += 2;
-                } else if bytes[i] == b'\n' {
-                    // Unterminated; bail conservatively to avoid a
-                    // runaway skip if the user's code is mid-edit.
-                    break;
-                } else {
-                    i += 1;
-                }
-            }
-            if i < bytes.len() {
-                i += 1; // closing quote
-            }
-            continue;
-        }
-        // Template literal open. Skip the static prefix; `${…}`
-        // interpolations push a stack entry so the inner expression
-        // goes through normal scanning (a `$store` inside `${…}`
-        // IS a real store ref) and we return to template-quoted
-        // mode when the matching `}` is seen.
-        if b == b'`' {
-            i += 1;
-            while i < bytes.len() {
-                if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'`' {
-                    i += 1;
-                    break;
-                }
-                if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'{') {
-                    template_stack.push(0);
-                    i += 2;
-                    break;
-                }
-                i += 1;
-            }
-            continue;
-        }
-        // Brace accounting while we're in the expression part of a
-        // template literal.
-        if !template_stack.is_empty() {
-            if b == b'{' {
-                if let Some(depth) = template_stack.last_mut() {
-                    *depth += 1;
-                }
-                i += 1;
-                continue;
-            }
-            if b == b'}' {
-                if let Some(depth) = template_stack.last_mut() {
-                    if *depth == 0 {
-                        // End of `${…}` — resume template-quoted mode
-                        // for the current level.
-                        template_stack.pop();
-                        i += 1;
-                        // Re-use the template-literal skip above by
-                        // pretending we just hit a backtick boundary:
-                        // fall through so the next iteration sees
-                        // whatever character follows. But the rest of
-                        // the template string still needs skipping,
-                        // so walk until ` or another ${.
-                        while i < bytes.len() {
-                            if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                                i += 2;
-                                continue;
-                            }
-                            if bytes[i] == b'`' {
-                                i += 1;
-                                break;
-                            }
-                            if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'{') {
-                                template_stack.push(0);
-                                i += 2;
-                                break;
-                            }
-                            i += 1;
-                        }
-                        continue;
-                    }
-                    *depth -= 1;
-                }
-                i += 1;
-                continue;
-            }
-        }
+/// AST walk behind [`find_store_refs_with_bindings`]: every
+/// `$<ident>` identifier reference outside type positions.
+struct StoreRefProbe<'b> {
+    source: &'b str,
+    bound: &'b HashSet<String>,
+    runes: &'b RuneScanContext,
+    seen: HashSet<SmolStr>,
+    out: Vec<SmolStr>,
+}
 
-        if b != b'$' {
-            i += 1;
-            continue;
+impl<'a> Visit<'a> for StoreRefProbe<'_> {
+    fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
+        let full = it.name.as_str();
+        let Some(ident) = full.strip_prefix('$') else {
+            return;
+        };
+        if ident.is_empty() || self.runes.decl_offsets.contains(&it.span.start) {
+            return;
         }
-        // Anchor: previous char must NOT be an ident continuation, so
-        // we don't match the `$` in the middle of `foo$bar`.
-        if i > 0 {
-            let prev = bytes[i - 1];
-            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' || prev >= 0x80 {
-                i += 1;
-                continue;
-            }
-        }
-        // Read $<ident>.
-        let name_start = i;
-        let mut j = i + 1;
-        if j >= bytes.len() {
-            break;
-        }
-        // First char of identifier (after `$`) must be alpha, `_`, or a
-        // non-ASCII (UTF-8) letter byte — JS identifiers admit Unicode, so
-        // a `$café` store reference must be read in full (else it truncates
-        // to `$caf`, which never matches the real `café` binding).
-        let first = bytes[j];
-        if !(first.is_ascii_alphabetic() || first == b'_' || first >= 0x80) {
-            i += 1;
-            continue;
-        }
-        j += 1;
-        while j < bytes.len() {
-            let b = bytes[j];
-            // JS identifier-continuation chars: alphanumeric, `_`, `$`, or
-            // UTF-8 continuation/lead bytes (>= 0x80). The run stays
-            // char-aligned, so `&source[name_start..j]` is valid UTF-8.
-            if b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80 {
-                j += 1;
-            } else {
-                break;
-            }
-        }
-        let full = &source[name_start..j];
-        let ident = &full[1..];
-
         // Upstream's `isPropsId` filter: with a `props = $props()`
         // declaration in the file, `$props.id()` is the rune's id
         // getter, never a store subscription. Upstream matches the
         // exact member text `$props.id` (getText() comparison — no
         // trivia between the tokens) on a zero-argument call.
-        let is_props_id_rune =
-            full == "$props" && runes.props_id_is_rune && followed_by_id_call(bytes, j);
-
-        if !runes.decl_offsets.contains(&(name_start as u32))
-            && !is_props_id_rune
-            && bound.contains(ident)
-            && seen.insert(full.to_string())
+        if full == "$props"
+            && self.runes.props_id_is_rune
+            && followed_by_id_call(self.source.as_bytes(), it.span.end as usize)
         {
-            out.push(SmolStr::from(full));
+            return;
         }
-        i = j;
+        if self.bound.contains(ident) && self.seen.insert(SmolStr::from(full)) {
+            self.out.push(SmolStr::from(full));
+        }
     }
-    out
+
+    // A type reference's name is a type, never a store (upstream skips
+    // `TypeReferenceNode`); its type arguments and a `typeof $x` type
+    // query still count.
+    fn visit_ts_type_reference(&mut self, it: &oxc_ast::ast::TSTypeReference<'a>) {
+        if let Some(args) = &it.type_arguments {
+            self.visit_ts_type_parameter_instantiation(args);
+        }
+    }
 }
 
 /// True when the bytes at `pos` spell `.id()` (member name exactly
@@ -480,45 +396,6 @@ fn followed_by_id_call(bytes: &[u8], pos: usize) -> bool {
 pub fn collect_top_level_bindings(program: &oxc_ast::ast::Program<'_>, out: &mut HashSet<String>) {
     for stmt in &program.body {
         collect_from_statement(stmt, out);
-    }
-}
-
-/// Collect the set of type-only import specifier names. Parallel to
-/// [`collect_top_level_bindings`] but only returns names that were
-/// imported strictly as types (`import type { X }` / `import { type X }`).
-/// These have no runtime value — downstream emit must reference them in
-/// TYPE position (`type _ = [X, Y]`) to keep TS from firing TS6133 when
-/// they're only consumed inside template expressions (e.g. as cast
-/// targets: `{foo(item as AppVideo)}`).
-pub fn collect_type_only_import_bindings(
-    program: &oxc_ast::ast::Program<'_>,
-    out: &mut HashSet<String>,
-) {
-    for stmt in &program.body {
-        let Statement::ImportDeclaration(decl) = stmt else {
-            continue;
-        };
-        // `import type { X, Y } from '...'` — every specifier is type-only.
-        if matches!(decl.import_kind, ImportOrExportKind::Type) {
-            if let Some(specifiers) = &decl.specifiers {
-                for spec in specifiers {
-                    if let ImportDeclarationSpecifier::ImportSpecifier(s) = spec {
-                        out.insert(s.local.name.to_string());
-                    }
-                }
-            }
-            continue;
-        }
-        // Mixed import with per-specifier `type` prefix.
-        if let Some(specifiers) = &decl.specifiers {
-            for spec in specifiers {
-                if let ImportDeclarationSpecifier::ImportSpecifier(s) = spec {
-                    if matches!(s.import_kind, ImportOrExportKind::Type) {
-                        out.insert(s.local.name.to_string());
-                    }
-                }
-            }
-        }
     }
 }
 

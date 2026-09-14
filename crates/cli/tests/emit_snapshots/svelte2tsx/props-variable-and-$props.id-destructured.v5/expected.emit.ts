@@ -10,7 +10,6 @@ async function $$render_e40e2c10() {
         (id);
         (props);
     });
-    void id;
     return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;

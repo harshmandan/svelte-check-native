@@ -121,7 +121,10 @@ pub fn visit(
     }
 
     let is_custom = is_custom_element_name(&el.name);
-    let parent = AttrParent::RegularElement { is_custom };
+    let parent = AttrParent::RegularElement {
+        is_custom,
+        name: el.name.as_str(),
+    };
 
     // Per-attribute rules.
     for attr in &el.attributes {
@@ -145,24 +148,42 @@ fn is_custom_element_name(name: &str) -> bool {
 /// SvelteComponent/SvelteSelf/custom-element;
 /// `event_directive_deprecated` only on RegularElement/SvelteElement).
 #[derive(Clone, Copy)]
-pub(crate) enum AttrParent {
+pub(crate) enum AttrParent<'a> {
     /// A regular HTML element.
-    RegularElement { is_custom: bool },
+    RegularElement { is_custom: bool, name: &'a str },
     /// A `<Component>` invocation.
     Component,
     /// `<svelte:component>` or `<svelte:self>`.
     SvelteComponentLike,
     /// `<svelte:element>` — dynamic element.
     SvelteElement,
-    /// Any other `<svelte:*>` (options/window/head/body/document/fragment/boundary).
+    /// `<svelte:window>` / `<svelte:document>` / `<svelte:body>` — the
+    /// special elements the compiler validates bindings on, by name.
+    SvelteSpecial(&'static str),
+    /// Any other `<svelte:*>` (options/head/fragment/boundary).
     OtherSvelte,
 }
 
-impl AttrParent {
+impl<'a> AttrParent<'a> {
+    /// The name the compiler's binding table is checked against.
+    fn binding_target_name(self) -> Option<&'a str> {
+        match self {
+            Self::RegularElement { name, .. } => Some(name),
+            Self::SvelteElement => Some("svelte:element"),
+            Self::SvelteSpecial(name) => Some(name),
+            _ => None,
+        }
+    }
+
     fn is_quotable(self) -> bool {
         matches!(
             self,
-            Self::Component | Self::SvelteComponentLike | Self::RegularElement { is_custom: true }
+            Self::Component
+                | Self::SvelteComponentLike
+                | Self::RegularElement {
+                    is_custom: true,
+                    ..
+                }
         )
     }
     fn fires_event_directive_deprecated(self) -> bool {
@@ -174,7 +195,7 @@ impl AttrParent {
     }
 }
 
-pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, parent: AttrParent) {
+pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, parent: AttrParent<'_>) {
     let parent_is_quotable = parent.is_quotable();
     let fires_event_directive = parent.fires_event_directive_deprecated();
     let parent_is_regular_or_svelte = matches!(
@@ -318,20 +339,25 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
             // suppresses (verified against the compiler). Getter/
             // setter pairs (SequenceExpression) skip the binding
             // resolution upstream, so they don't fire.
+            if d.kind == DirectiveKind::Bind
+                && let Some(target) = parent.binding_target_name()
+            {
+                bind_name_checks(d, target, ctx);
+            }
             if d.kind == DirectiveKind::Bind {
                 use svn_parser::ast::DirectiveValue;
-                let base: Option<&str> = match &d.value {
+                let base: Option<String> = match &d.value {
                     Some(DirectiveValue::Expression {
                         expression_range, ..
                     }) => ctx
                         .source
                         .get(expression_range.start as usize..expression_range.end as usize)
-                        .and_then(crate::scope_util::extract_base_ident),
+                        .and_then(crate::scope_util::base_identifier_of_text),
                     // `bind:foo` shorthand — the implied identifier.
-                    None => Some(d.name.as_str()),
+                    None => Some(d.name.to_string()),
                     _ => None,
                 };
-                if let Some(base) = base
+                if let Some(base) = base.as_deref()
                     && let Some(tree) = &ctx.scope_tree
                     && let Some(bid) =
                         tree.resolve(tree.innermost_template_scope_at(d.range.start), base)
@@ -356,5 +382,68 @@ fn strip_tag_namespace(name: &str) -> &str {
     match name.rfind(':') {
         Some(i) => &name[i + 1..],
         None => name,
+    }
+}
+
+/// Compiler errors `bind_invalid_target` / `bind_invalid_name` —
+/// upstream `BindDirective.js`: a known binding used on an element
+/// outside its `valid_elements` (or inside its `invalid_elements`), or
+/// a name the table does not know, with a fuzzy "Did you mean" when a
+/// close name exists that is allowed on this element.
+fn bind_name_checks(d: &svn_parser::ast::Directive, target: &str, ctx: &mut LintContext<'_>) {
+    use crate::rules::bind_properties::{BINDING_PROPERTIES, allowed_on, lookup};
+    let name = d.name.as_str();
+    match lookup(name) {
+        Some(property) => {
+            if !property.valid_elements.is_empty() && !property.valid_elements.contains(&target) {
+                let elements: Vec<String> = property
+                    .valid_elements
+                    .iter()
+                    .map(|e| format!("`<{e}>`"))
+                    .collect();
+                ctx.emit_error(
+                    Code::bind_invalid_target,
+                    messages::bind_invalid_target(name, &elements.join(", ")),
+                    d.range,
+                );
+            }
+            if property.invalid_elements.contains(&target) {
+                let mut valid: Vec<&str> = BINDING_PROPERTIES
+                    .iter()
+                    .filter(|p| allowed_on(p, target))
+                    .map(|p| p.name)
+                    .collect();
+                valid.sort_unstable();
+                ctx.emit_error(
+                    Code::bind_invalid_name,
+                    messages::bind_invalid_name(
+                        name,
+                        Some(&format!(
+                            "Possible bindings for <{target}> are {}",
+                            valid.join(", ")
+                        )),
+                    ),
+                    d.range,
+                );
+            }
+        }
+        None => {
+            let names: Vec<&str> = BINDING_PROPERTIES.iter().map(|p| p.name).collect();
+            if let Some(matched) = crate::fuzzymatch::fuzzymatch(name, &names)
+                && let Some(property) = lookup(matched)
+                && (property.valid_elements.is_empty() || property.valid_elements.contains(&target))
+            {
+                ctx.emit_error(
+                    Code::bind_invalid_name,
+                    messages::bind_invalid_name(name, Some(&format!("Did you mean '{matched}'?"))),
+                    d.range,
+                );
+            }
+            ctx.emit_error(
+                Code::bind_invalid_name,
+                messages::bind_invalid_name(name, None),
+                d.range,
+            );
+        }
     }
 }

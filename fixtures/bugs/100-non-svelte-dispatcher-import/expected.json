@@ -1,11 +1,10 @@
 {
     "emit_contains": [
-        "const __svn_component_default: import('svelte').Component<",
-        "type $$Events = {};"
+        "const __svn_component_default: import('svelte').Component<"
     ],
     "emit_not_contains": [
         "type $$Events = { [__svn_K in keyof ({ id: number })",
         "$$IsomorphicComponent & { readonly __svn_events:"
     ],
-    "_note": "Reviewer follow-up #4: a local function named `createEventDispatcher` (NOT imported from 'svelte') was being treated as Svelte's dispatcher because `collect_ctor_locals` always inserted the bare name regardless of imports. Result: typed `createEventDispatcher<{ id: number }>()` returned a synthesized `type $$Events = { [K]: CustomEvent<{id:number}[K]> }`, the default-export switched to iso shape with the `__svn_events` marker, and downstream emit advertised a phantom event surface to consumers. Post-fix: only `import { createEventDispatcher } from 'svelte'` (and aliased forms from the same source) count. Local functions and non-Svelte imports are correctly ignored. The component falls through to fn-component shape with the empty `$$Events = {}` surface produced by runes mode's strict trigger (#2)."
+    "_note": "Reviewer follow-up #4: a local function named `createEventDispatcher` (NOT imported from 'svelte') was being treated as Svelte's dispatcher because `collect_ctor_locals` always inserted the bare name regardless of imports. Result: typed `createEventDispatcher<{ id: number }>()` returned a synthesized `type $$Events = { [K]: CustomEvent<{id:number}[K]> }`, the default-export switched to iso shape with the `__svn_events` marker, and downstream emit advertised a phantom event surface to consumers. Post-fix: only `import { createEventDispatcher } from 'svelte'` (and aliased forms from the same source) count. Local functions and non-Svelte imports are correctly ignored. The component falls through to the fn-component shape, which carries no events surface at all."
 }

@@ -1,14 +1,10 @@
 //! Cross-cutting analyze pass that runs after hoisted imports but
 //! before the template-check wrapper.
 //!
-//! Produces six named buckets in [`ScriptAndTemplateAnalysis`]:
+//! Produces three named buckets in [`ScriptAndTemplateAnalysis`]:
 //!
-//! - `prop_names` — destructured names from `let { … } = $props()`.
-//!   Used to keep `template_void_refs` from double-voiding what
-//!   void-emission already covers, and as the source set the
-//!   bindable subset is filtered from.
-//! - `bindable_prop_names` — the subset of `prop_names` whose
-//!   destructure entry is `= $bindable(...)`. Only these get the
+//! - `bindable_prop_names` — the destructured `let { … } = $props()`
+//!   names whose entry is `= $bindable(...)`. Only these get the
 //!   outer-scope `void <name>;` emission — non-bindable prop locals
 //!   are left exposed so TS6133 fires on the ones that are never
 //!   read (matching upstream svelte2tsx's
@@ -20,13 +16,10 @@
 //! - `store_refs` — `$store` auto-subscribe references from both
 //!   script sides AND the template, deduplicated, in encounter
 //!   order.
-//! - `template_void_refs` — script bindings used only in markup.
-//!   The emit's `void(...)` block keeps these alive so TS6133
-//!   doesn't fire on what's actually used.
-//! - `template_type_refs` — type-only imports referenced from
-//!   template type-cast expressions; emit registers them in a
-//!   module-scope `type __svn_tpl_type_refs = [A]` so the imports
-//!   stay visible to the type-checker.
+//!
+//! Template reads need no bookkeeping of their own: every template
+//! expression is copied into the render function, so TypeScript sees
+//! each read where it happens, exactly as upstream does.
 //!
 //! Pulled out of `lib.rs` so the dispatcher reads as orchestration
 //! and this 150-line analyze concern lives with its data.
@@ -38,7 +31,7 @@ use oxc_allocator::Allocator;
 use smol_str::SmolStr;
 use svn_analyze::{
     PropsInfo, collect_rune_scan_context, collect_top_level_bindings,
-    find_store_refs_with_bindings, find_template_refs, has_svelte_store_derived_import,
+    find_store_refs_with_bindings, find_template_store_refs, has_svelte_store_derived_import,
 };
 use svn_parser::parse_script_body;
 
@@ -51,8 +44,6 @@ pub(crate) struct ScriptAndTemplateAnalysis {
     pub bindable_prop_names: Vec<SmolStr>,
     pub prop_type_source: Option<String>,
     pub store_refs: Vec<SmolStr>,
-    pub template_void_refs: Vec<SmolStr>,
-    pub template_type_refs: Vec<SmolStr>,
 }
 
 /// Run the cross-cutting analyze pass — see module docs for the
@@ -144,25 +135,30 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
                     }
                 }
             };
-        if let Some(module_script) = &doc.module_script {
+        if let (Some(module_script), Some(p)) = (&doc.module_script, parsed_mod.as_ref()) {
             // Rune-position skips are per-script — the offsets index
-            // into the script content being scanned.
-            let runes = parsed_mod
-                .as_ref()
-                .map(|p| collect_rune_scan_context(&p.program, module_script.content))
-                .unwrap_or_default();
+            // into the script content being walked.
+            let runes = collect_rune_scan_context(&p.program, module_script.content);
             push_unique(
-                find_store_refs_with_bindings(module_script.content, &script_bindings, &runes),
+                find_store_refs_with_bindings(
+                    &p.program,
+                    module_script.content,
+                    &script_bindings,
+                    &runes,
+                ),
                 &mut seen,
                 &mut accumulated,
             );
         }
-        if let Some(instance) = &doc.instance_script {
-            let runes = parsed_instance
-                .map(|p| collect_rune_scan_context(&p.program, instance.content))
-                .unwrap_or_default();
+        if let (Some(instance), Some(p)) = (&doc.instance_script, parsed_instance) {
+            let runes = collect_rune_scan_context(&p.program, instance.content);
             push_unique(
-                find_store_refs_with_bindings(instance.content, &script_bindings, &runes),
+                find_store_refs_with_bindings(
+                    &p.program,
+                    instance.content,
+                    &script_bindings,
+                    &runes,
+                ),
                 &mut seen,
                 &mut accumulated,
             );
@@ -170,57 +166,13 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
         accumulated
     };
 
-    // Type-only imports can be "used" purely inside a template
-    // expression (type cast `{foo(item as AppVideo)}`); we intersect
-    // with template refs below and emit `type __svn_tpl_type_refs = [A]`
-    // so TS doesn't flag the import TS6133.
-    let mut type_only_imports: HashSet<String> = HashSet::new();
-    if let Some(parsed) = parsed_instance {
-        svn_analyze::collect_type_only_import_bindings(&parsed.program, &mut type_only_imports);
-    }
-    if let Some(parsed) = &parsed_mod {
-        svn_analyze::collect_type_only_import_bindings(&parsed.program, &mut type_only_imports);
-    }
-
-    // Single template walk produces: void-refs (script bindings used
-    // only in markup), template-side store-auto-subscribes, and type-
-    // only-import type refs.
-    let (template_void_refs, template_store_refs, template_type_refs) = if script_bindings
-        .is_empty()
-        && type_only_imports.is_empty()
-    {
-        (Vec::new(), Vec::new(), Vec::new())
-    } else {
-        let already: HashSet<&str> = store_refs
-            .iter()
-            .map(|s| s.as_str())
-            .chain(
-                props_info
-                    .destructures
-                    .iter()
-                    .map(|p| p.local_name.as_str()),
-            )
+    // Store subscriptions written in the template (`{$count}`): the
+    // alias must exist for them just like for script-side reads.
+    let template_store_refs: Vec<SmolStr> =
+        find_template_store_refs(fragment, doc.source, &script_bindings)
+            .into_iter()
+            .filter(|name| !store_refs.contains(name))
             .collect();
-        let mut tpl_voids = Vec::new();
-        let mut tpl_stores = Vec::new();
-        let mut tpl_types: Vec<SmolStr> = Vec::new();
-        let mut type_seen: HashSet<SmolStr> = HashSet::new();
-        let mut store_seen: HashSet<SmolStr> = store_refs.iter().cloned().collect();
-        for name in find_template_refs(fragment, doc.source) {
-            if let Some(base) = name.as_str().strip_prefix('$') {
-                if script_bindings.contains(base) && store_seen.insert(name.clone()) {
-                    tpl_stores.push(name.clone());
-                    continue;
-                }
-            }
-            if script_bindings.contains(name.as_str()) && !already.contains(name.as_str()) {
-                tpl_voids.push(name);
-            } else if type_only_imports.contains(name.as_str()) && type_seen.insert(name.clone()) {
-                tpl_types.push(name);
-            }
-        }
-        (tpl_voids, tpl_stores, tpl_types)
-    };
     store_refs.extend(template_store_refs);
 
     // Mirrors upstream ImplicitStoreValues.isSvelteStoreDerivedImport
@@ -242,7 +194,5 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
         bindable_prop_names,
         prop_type_source,
         store_refs,
-        template_void_refs,
-        template_type_refs,
     }
 }

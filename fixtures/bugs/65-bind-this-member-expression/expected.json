@@ -1,11 +1,23 @@
 {
     "errors": [
         {
+            "file": "Clean.svelte",
+            "line": 3,
+            "column": 8,
+            "code": 6133
+        },
+        {
+            "file": "Clean.svelte",
+            "line": 4,
+            "column": 8,
+            "code": 6133
+        },
+        {
             "file": "Mismatch.svelte",
             "line": 20,
             "column": 18,
             "code": 2322
         }
     ],
-    "_note": "v0.3 Item 7: bind:this on member expressions (`refs.count` / `arr[i]`) was previously dropped at analyze — now emits a never-called lambda assigning `HTMLElementTagNameMap['tag']` to the target. The TokenMapEntry pass maps the overlay EXPR span back to the user's bind:this={expr} source range, so TS2322 surfaces at the expression position. Cross-HTMLElement type distinctions don't fire (structural compatibility via the HTMLElement base); TRULY-wrong targets like `number` do."
+    "_note": "v0.3 Item 7: bind:this on member expressions (`refs.count` / `arr[i]`) was previously dropped at analyze \u2014 now emits a never-called lambda assigning `HTMLElementTagNameMap['tag']` to the target. The TokenMapEntry pass maps the overlay EXPR span back to the user's bind:this={expr} source range, so TS2322 surfaces at the expression position. Cross-HTMLElement type distinctions don't fire (structural compatibility via the HTMLElement base); TRULY-wrong targets like `number` do. Unused-variable reports on write-only bind targets are upstream's: every template read is copied into the render function, and no `void` list masks a binding the template only assigns."
 }

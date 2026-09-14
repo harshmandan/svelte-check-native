@@ -1,0 +1,47 @@
+{
+    "errors": [
+        {
+            "file": "ObjKey.svelte",
+            "line": 1,
+            "column": 6,
+            "code": 6133
+        },
+        {
+            "file": "ObjKey.svelte",
+            "line": 2,
+            "column": 6,
+            "code": 6133
+        },
+        {
+            "file": "Private.svelte",
+            "line": 1,
+            "column": 6,
+            "code": 6133
+        },
+        {
+            "file": "RegexBody.svelte",
+            "line": 1,
+            "column": 6,
+            "code": 6133
+        },
+        {
+            "file": "StoreKey.svelte",
+            "line": 1,
+            "column": 6,
+            "code": 6133
+        },
+        {
+            "file": "TypeKey.svelte",
+            "line": 1,
+            "column": 16,
+            "code": 6196
+        },
+        {
+            "file": "input.svelte",
+            "line": 1,
+            "column": 8,
+            "code": 6133
+        }
+    ],
+    "_note": "Every template expression is copied into the render function, so TypeScript already sees each read; upstream keeps no separate list of template identifiers. Ours emitted `void NAME;` for every script binding a text tokenizer found in the template \u2014 including object keys, regex bodies, private names and type-only imports used as keys \u2014 which hid these unused-variable reports, and a quote inside a regex threw the tokenizer off so a real `$count` store read fired TS2304 (RegexQuote.svelte, clean upstream). Store subscriptions in the template now come from a parse."
+}

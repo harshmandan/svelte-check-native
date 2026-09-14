@@ -19,6 +19,9 @@ use crate::codes::Code;
 #[derive(Debug, Clone)]
 pub struct Warning {
     pub code: Code,
+    /// Compiler errors (`e.*` upstream) ride the same channel as
+    /// warnings; the CLI reports them at error severity.
+    pub is_error: bool,
     /// Rendered message (including docs URL line).
     pub message: String,
     pub range: Range,
@@ -55,6 +58,11 @@ pub struct LintContext<'src> {
     /// Sink for accumulated warnings, in emit order.
     warnings: Vec<Warning>,
 
+    /// A compile error has been raised. The compiler throws on its
+    /// first error, so `svelte-check` reports that one diagnostic and
+    /// no warnings for the file; later emissions are dropped.
+    errored: bool,
+
     /// `<!-- svelte-ignore ... -->` frames. Pushed on entering a node
     /// with leading ignore comments, popped on exit.
     ignore_stack: Vec<HashSet<SmolStr>>,
@@ -62,6 +70,11 @@ pub struct LintContext<'src> {
     /// True when parsing/analyzing in runes mode. Controls which rules
     /// fire (e.g. `event_directive_deprecated` only in runes mode).
     pub runes: bool,
+
+    /// The explicit `compilerOptions.runes` value, when the caller
+    /// passed one. Some compiler rules only apply when runes mode was
+    /// not forced off.
+    pub runes_option: Option<bool>,
 
     /// Scope tree over the instance + module scripts. Built once at
     /// the start of [`crate::walk::walk`]; rules query it by name to
@@ -98,6 +111,8 @@ impl<'src> LintContext<'src> {
             warnings: Vec::new(),
             ignore_stack: Vec::new(),
             runes: false,
+            runes_option: None,
+            errored: false,
             scope_tree: None,
             custom_element_info: None,
             compat: crate::compat::CompatFeatures::MODERN,
@@ -127,7 +142,7 @@ impl<'src> LintContext<'src> {
     /// Emit a warning at a range. Short-circuits if the code is
     /// currently under an ignore frame.
     pub fn emit(&mut self, code: Code, message: String, range: Range) {
-        if self.is_ignored(code) {
+        if self.errored || self.is_ignored(code) {
             return;
         }
         let start = self.positions.position_of(range.start);
@@ -141,6 +156,30 @@ impl<'src> LintContext<'src> {
         // at the boundary.
         self.warnings.push(Warning {
             code,
+            is_error: false,
+            message,
+            range,
+            start_line: start.line + 1,
+            start_column: start.character,
+            end_line: end.line + 1,
+            end_column: end.character,
+        });
+    }
+
+    /// Emit a compiler error at a range. Upstream raises these from
+    /// the analysis phase; `svelte-ignore` comments never suppress
+    /// them, so the ignore stack is not consulted.
+    pub fn emit_error(&mut self, code: Code, message: String, range: Range) {
+        if self.errored {
+            return;
+        }
+        self.errored = true;
+        self.warnings.clear();
+        let start = self.positions.position_of(range.start);
+        let end = self.positions.position_of(range.end);
+        self.warnings.push(Warning {
+            code,
+            is_error: true,
             message,
             range,
             start_line: start.line + 1,

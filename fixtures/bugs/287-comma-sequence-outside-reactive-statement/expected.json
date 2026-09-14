@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 4, "column": 25, "code": 2695 }
+    ],
+    "_note": "The default svelte-check drops TS2695 (unused left side of a comma) only inside `$:` statements, where a comma list names reactive dependencies. The array-literal rewrite used to run over the whole file, so a `void (a, b)` inside an ordinary function lost the error upstream reports."
+}

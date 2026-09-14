@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Runes mode changes a component's export shape and turns on strict event typing. Upstream decides it from the script's unresolved `$state` / `$derived` / `$effect` globals, a `$props()` declaration, top-level await or `<svelte:options runes>`. Scanning the whole file used to flip it for a rune name in markup text or a comment, and for a bare `$inspect`, so parents got false errors on `InstanceType<typeof C>` and `$on(...)`."
+}

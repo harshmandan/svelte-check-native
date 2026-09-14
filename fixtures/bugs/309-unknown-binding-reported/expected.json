@@ -1,0 +1,23 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 10,
+            "code": 2322
+        },
+        {
+            "file": "input.svelte",
+            "line": 4,
+            "column": 5,
+            "code": "bind_invalid_name"
+        },
+        {
+            "file": "input.svelte",
+            "line": 4,
+            "column": 22,
+            "code": 2353
+        }
+    ],
+    "_note": "A `bind:` name the compiler's binding table does not know is a compile error (`bind_invalid_name`), and upstream also passes it as a `\"bind:NAME\"` attribute of the element, where the element's attribute type reports it as the literal's first excess property (TS2353 anchored at the `=`, so `foo` goes unreported). Before the fix neither was produced: no compile errors were emitted at all, and the unknown binding was dropped from the attribute literal. The shim's fallback `svelte/elements` used to accept any `bind:*` key, which hid the excess-property check here; it now enumerates the keys real svelte declares."
+}

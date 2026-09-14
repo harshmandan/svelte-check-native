@@ -20,9 +20,7 @@ async function $$render_e40e2c10() {
             void value;
         }
         {
-            const a = __svn_any();
-            const b = __svn_any();
-            const c = __svn_any();
+            const { a = 3, b = 4, c } = __svn_any();
             void a;
             void b;
             void c;
@@ -32,9 +30,7 @@ async function $$render_e40e2c10() {
             void value;
         }
         {
-            const a = __svn_any();
-            const b = __svn_any();
-            const c = __svn_any();
+            const [a, b, c = 3] = __svn_any();
             void a;
             void b;
             void c;

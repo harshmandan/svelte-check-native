@@ -1778,3 +1778,67 @@ fn await_in_template_handler_arrow_does_not_flip_runes() {
         codes(&warnings)
     );
 }
+
+// ----------------------------------------------------------------
+// Compile errors: `global_reference_invalid` / `bind_invalid_*`
+// ----------------------------------------------------------------
+
+/// `$: user = …` declares `user` (a `legacy_reactive` binding), so
+/// `$user` is a store subscription, not an illegal global. This
+/// shape fired `global_reference_invalid` on eleven Svelte-4 rig
+/// files before the implicit declaration was ported.
+#[test]
+fn reactive_declaration_declares_the_store_name() {
+    let src = "\
+<script>
+\timport { db } from './db';
+\t$: user = db.observe();
+\t$: ({ a, b } = db.pair());
+</script>
+{$user}{$a}{$b}
+";
+    let warnings = lint_auto(src);
+    assert!(
+        !codes(&warnings).contains(&"global_reference_invalid"),
+        "`$:`-declared store names are legal, got: {:?}",
+        codes(&warnings)
+    );
+}
+
+/// An undeclared `$name` is the compiler's `global_reference_invalid`
+/// error — reported once, at the first reference, and as an error
+/// that replaces every warning (the compiler stops there).
+#[test]
+fn undeclared_store_reference_is_a_compile_error() {
+    let src = "\
+<script>
+\tlet x = 1;
+</script>
+{$missing}{$missing}
+<button on:click={() => x++}>x</button>
+";
+    let warnings = lint_auto(src);
+    assert_eq!(codes(&warnings), vec!["global_reference_invalid"]);
+    assert!(warnings[0].is_error);
+}
+
+/// `bind:` names outside the compiler's binding table are
+/// `bind_invalid_name`; known names on the wrong element are
+/// `bind_invalid_target`.
+#[test]
+fn bind_names_are_checked_against_the_binding_table() {
+    let src = "\
+<script>
+\tlet x = 1;
+</script>
+<div bind:noAssignment={x}></div>
+";
+    assert_eq!(codes(&lint_auto(src)), vec!["bind_invalid_name"]);
+    let src = "\
+<script>
+\tlet x = 1;
+</script>
+<div bind:naturalWidth={x}></div>
+";
+    assert_eq!(codes(&lint_auto(src)), vec!["bind_invalid_target"]);
+}

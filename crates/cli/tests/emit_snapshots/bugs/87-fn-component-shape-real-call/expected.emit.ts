@@ -3,7 +3,7 @@
 import { createEventDispatcher } from 'svelte'
 async function $$render_e40e2c10() {
     type $$ComponentProps = { value: number };
-    type $$Events = ({ [__svn_K in keyof (({ click: { id: number } }))]: CustomEvent<(({ click: { id: number } }))[__svn_K]> });
+    type $$Events = ({ [__svn_K in keyof (({ click: { id: number } }))]: CustomEvent<(({ click: { id: number } }))[__svn_K]> }) & { [evt: string]: CustomEvent<any> };
 
 // Real `createEventDispatcher()` call — must disqualify the
 // `__sveltets_2_fn_component` default-export shape and route
@@ -26,7 +26,6 @@ function handle() {
             (value);
         }
     });
-    void handle;
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;

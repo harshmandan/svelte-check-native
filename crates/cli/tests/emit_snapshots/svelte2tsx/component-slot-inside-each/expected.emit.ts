@@ -10,7 +10,7 @@ async function $$render_e40e2c10() {
             void a;
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: /** @type {(__SvnEachItem<typeof items>)} */ (/** @type {any} */ (null)) }, 'second': { a: /** @type {__SvnEachItem<typeof items2>["a"]} */ (/** @type {any} */ (null)) } }, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: ((__svn_unwrap_arr(items))) }, 'second': { a: ((({ a }) => a)(__svn_unwrap_arr(items2))) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

@@ -1,4 +1,11 @@
 {
-    "clean": true,
-    "_note": "use:action={...} on an element inside {#each items as item, index} must emit the `__svn_action_<N>` call INSIDE the for-loop's scope so the params expression can reference `item`, `index`, or adjacent {@const} bindings. Pre-fix emit hoisted all action calls to the top of `__svn_tpl_check`, which made scope-bound names like `index` and `{@const} label` read as 'Cannot find name'. Found on a Svelte-4/5 control bench's hero component via upstream parity check."
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 6,
+            "column": 8,
+            "code": 6133
+        }
+    ],
+    "_note": "use:action={...} on an element inside {#each items as item, index} must emit the `__svn_action_<N>` call INSIDE the for-loop's scope so the params expression can reference `item`, `index`, or adjacent {@const} bindings. Pre-fix emit hoisted all action calls to the top of `__svn_tpl_check`, which made scope-bound names like `index` and `{@const} label` read as 'Cannot find name'. Found on a Svelte-4/5 control bench's hero component via upstream parity check. Unused-variable reports on write-only bind targets are upstream's: every template read is copied into the render function, and no `void` list masks a binding the template only assigns."
 }

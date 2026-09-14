@@ -16,6 +16,9 @@ async function $$render_e40e2c10() {
                 void y;
             }
             (hello);
+            { const $$_promise = (aPromise);
+                const $$_await = await $$_promise; void $$_await;
+            }
             if ((hi && bye)) {
                 void [hi, bye];
                 { const $$_promise = (x);

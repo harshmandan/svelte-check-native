@@ -6,13 +6,108 @@ versioning follows [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.6.0]
+
+A parity release built from an audit of every place the emit, analyze
+and lint crates still read JavaScript or TypeScript by scanning bytes
+instead of parsing it. Two user-reported regressions (#56, #57) came
+from that class of code; the audit found twenty-five more sites, each
+was compared with the upstream `svelte2tsx` source that makes the same
+decision, and every one now goes through the parser. Three compiler
+errors svelte-check reports were also never produced here; they are
+now. Both control workspaces report identical diagnostics before and
+after.
+
+### Fixed
+
+- **A `$:` statement no longer breaks the render function** (#56, #57).
+  `$: ({ a, b } = obj)` and `$: x = y, z` were rewritten by a byte
+  scanner that split on the wrong comma or parenthesis, producing a
+  file tsgo could not parse — and a parse failure hides every other
+  error in that file. The reactive rewrite now runs on the statement's
+  AST.
+- **Generated TypeScript that failed to parse** for `api.void(1, 2)`
+  (a method named `void`), `$$Generic<Record<string, () => void>>`,
+  `generics="T extends 'a,b', U"` and `{@debug a // note, y}`. Each
+  hid the whole file's diagnostics.
+- **Errors that diverged from upstream** for: `$count` after a regex
+  literal containing a quote; `type A = $$Generic;` inside a comment;
+  `generics="T extends () => void, U"` (the second parameter was
+  dropped); `$$Generic<{ a: string, b: number }>`; each / snippet /
+  then / catch patterns with quoted keys, string defaults, `=>` in a
+  type or a computed key; SvelteKit `load()` with an unrelated JSDoc
+  block earlier in the file; `/* @ts-ignore */` above an import;
+  `bind:value={/* c */ rest.b}`; `{#each f("(")(")") as row}`; string
+  literals containing `from "../…"` being rewritten on disk; `void (a,
+  b)` outside a `$:` statement.
+- **Runes mode is decided the way the compiler decides it**: a rune
+  name in markup or a comment, or `$inspect` alone, no longer switches
+  it on; `$state.raw<T>()`, template declaration tags and top-level
+  `await` do.
+- **`bind:this` targets keep their declaration as written.** A direct
+  read before the element mounts reports TS2454 as upstream does;
+  reads inside closures stay clean. Bindings with no element-side type
+  (`bind:innerWidth` on `<svelte:window>`) count as assigned.
+- **Runes mode is a strict-events trigger only on the generics export
+  path**, as in upstream: a runes child with an untyped dispatcher
+  accepts `$on` of any name.
+- **The compiler's `global_reference_invalid`, `bind_invalid_name` and
+  `bind_invalid_target` errors are reported**, with upstream's
+  semantics: the first compiler error in a file is the only error for
+  that file and replaces its warnings. `bind_invalid_name` carries the
+  compiler's "Did you mean" suggestion. A top-level `$: x = …`
+  declares `x`, so `$x` is a store subscription rather than an illegal
+  global.
+- **An unknown `bind:NAME` on a DOM element is passed as an attribute**
+  (`"bind:NAME": expr`), so the element's attribute type reports it
+  (TS2353) at the column upstream anchors to.
+- **`$store` subscriptions are declared where upstream declares them**:
+  `;let $store = __svn_store_get(store);` right after the store's own
+  declaration (module scope for module-script stores, the start of the
+  render function for imports), inside ignore comments. A `$name`
+  whose `name` is not a store is `any`, as upstream, instead of the
+  binding's own type; a self-referencing subscription (`const derived
+  = $derived.by(...)`) reports the same TS2448 upstream does.
+- **SvelteKit**: `export const GET = (event) => …` on a `+server` gets
+  its `RequestEvent` / `Response` annotations; a `+page.js` in a
+  project without `allowJs` no longer makes the compiler abandon the
+  program and report 0 errors.
+- **Unused-name reports match upstream.** The template no longer emits
+  a `void NAME;` per identifier a tokenizer found in markup, which hid
+  unused-variable reports on object keys, regex bodies, private names,
+  type-only imports and write-only bind targets; a type alias sharing
+  a body const's name stays in the render function so the merged
+  symbol counts as read.
+- **Each and await bindings resolve at value level**
+  (`__svn_unwrap_arr(items)` / `__svn_unwrap_promise_like(p)`) instead
+  of from a type derived from the items text, which picked the wrong
+  `filter` overload and collapsed `list ?? []` to `any`.
+- **A bind:value expression is read before it is assigned, and a
+  catch-only `{#await}` still awaits its promise** (both upstream
+  shapes).
+- **Files with a pug template no longer report unused-name
+  diagnostics.**
+
 ### Changed
 
 - **MSRV 1.95 → 1.96.** Required by oxc 0.148, which needs Rust 1.96.
   `rust-toolchain.toml` moves to 1.96 with it, and the whole lockfile
   is refreshed. oxc 0.144 → 0.148 brings only parser bug fixes for the
   crates we use (stricter rejection of malformed input, a panic fix on
-  escaped string export names); no emit change, all snapshots stable.
+  escaped string export names).
+- **The shim's fallback `svelte/elements` (used only when no `svelte`
+  is installed) lists the `bind:` keys real svelte declares** instead
+  of accepting any `bind:*` key.
+- **The diagnostic mapper is exposed** for callers that run tsgo
+  themselves.
+
+### Internal
+
+- One AST runes probe (`svn_analyze::RunesProbe`) is shared by emit,
+  the props synthesiser and lint; `oxc_ast_visit` visitors replace
+  every hand-written scanner, and the redundant text helpers were
+  deleted. The v5-stores suite now requires all 24 fixtures to match
+  their upstream-locked lists.
 
 ## [1.5.2]
 

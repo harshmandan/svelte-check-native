@@ -69,15 +69,39 @@ pub(crate) fn items_typeof_expr(expr: &str) -> String {
         return format!("typeof {trimmed}");
     }
     // Detect `<callee>(<args>)` where callee is typeof-safe.
-    if trimmed.ends_with(')')
-        && let Some(open) = find_balanced_call_open(trimmed)
+    if let Some(callee) = call_callee_text(trimmed)
+        && is_typeof_safe_chain(callee)
     {
-        let callee = trimmed[..open].trim();
-        if is_typeof_safe_chain(callee) {
-            return format!("ReturnType<typeof {callee}>");
-        }
+        return format!("ReturnType<typeof {callee}>");
     }
     "any".to_string()
+}
+
+/// The callee text when `s` parses as one call expression
+/// (`<callee>(<args>)`), else `None`. Parsing rather than matching
+/// parentheses backwards keeps a `(` or `)` inside a string argument
+/// from moving the split point.
+fn call_callee_text(s: &str) -> Option<&str> {
+    use oxc_ast::ast::{Expression, Statement};
+    use oxc_span::GetSpan;
+
+    let wrapped = format!("({s});");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
+        return None;
+    };
+    let mut expr = &stmt.expression;
+    while let Expression::ParenthesizedExpression(p) = expr {
+        expr = &p.expression;
+    }
+    let Expression::CallExpression(call) = expr else {
+        return None;
+    };
+    let span = call.callee.span();
+    // Subtract the one-byte `(` prefix to land in `s`.
+    s.get(span.start as usize - 1..span.end as usize - 1)
+        .map(str::trim)
 }
 
 /// Returns true iff `s` is a bare identifier or a dotted chain of
@@ -101,32 +125,6 @@ pub(crate) fn is_typeof_safe_chain(s: &str) -> bool {
         }
     }
     !at_segment_start
-}
-
-/// Find the byte offset of the OUTER opening `(` whose matching `)`
-/// is the LAST byte of `s`. Returns None if no balanced match.
-/// Used to extract `<callee>` from `<callee>(<args>)` expressions.
-fn find_balanced_call_open(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    if bytes.is_empty() || *bytes.last()? != b')' {
-        return None;
-    }
-    let mut depth: i32 = 0;
-    // Walk backwards; first '(' that brings depth to 0 (excluding
-    // the trailing ')') is the outer one.
-    for i in (0..bytes.len()).rev() {
-        match bytes[i] {
-            b')' => depth += 1,
-            b'(' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Round-12 follow-up #2: when a destructure leaf carries a default

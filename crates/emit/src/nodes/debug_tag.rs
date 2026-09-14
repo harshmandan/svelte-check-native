@@ -14,20 +14,23 @@
 
 use crate::emit_buffer::EmitBuffer;
 
-/// Emit `{@debug a, b, …}` as one bare `(IDENT);` per comma-separated
-/// part so tsgo fires TS2304 on typo'd names.
+/// Emit `{@debug a, b, …}` as one bare `(IDENT);` per listed
+/// expression so tsgo fires TS2304 on typo'd names.
 ///
-/// Top-level commas only — `{@debug a, b, c}` splits into three parts.
-/// Depth tracking matches `()`, `[]`, `{}`, `<>` so any commas nested in
-/// a (parse-error-only) non-identifier body wouldn't split. Svelte's
-/// parser restricts `{@debug}` to a comma-separated identifier list, so
-/// in practice every part is a bare name.
+/// The body is parsed as a parenthesised expression: a sequence yields
+/// one part per element, anything else is a single part. Parsing (not
+/// splitting on commas) is what keeps a comma inside a comment or a
+/// string from producing a fragment that fails to parse — and a
+/// parse failure in any file hides every type error in the workspace.
 pub(crate) fn emit_debug_tag(
     buf: &mut EmitBuffer,
     source: &str,
     interp: &svn_parser::Interpolation,
     depth: usize,
 ) {
+    use oxc_ast::ast::{Expression, Statement};
+    use oxc_span::GetSpan;
+
     let expr_start = interp.expression_range.start as usize;
     let expr_end = interp.expression_range.end as usize;
     let Some(body_raw) = source.get(expr_start..expr_end) else {
@@ -38,48 +41,36 @@ pub(crate) fn emit_debug_tag(
         // value" form. Nothing to type-check.
         return;
     }
+    // A leading `(` keeps a body that starts with `{` from parsing as a
+    // block; a trailing newline closes any line comment before the `)`.
+    let wrapped = format!("({body_raw}\n);");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    if parsed.panicked {
+        return;
+    }
+    let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
+        return;
+    };
+    let mut expr = &stmt.expression;
+    while let Expression::ParenthesizedExpression(p) = expr {
+        expr = &p.expression;
+    }
+    let spans: Vec<oxc_span::Span> = match expr {
+        Expression::SequenceExpression(seq) => seq.expressions.iter().map(|e| e.span()).collect(),
+        other => vec![other.span()],
+    };
     let indent = "    ".repeat(depth);
-    let body_start_offset = interp.expression_range.start;
-    for (rel_start, rel_end) in split_top_level_commas(body_raw) {
-        let part = &body_raw[rel_start..rel_end];
-        let trimmed = part.trim();
-        if trimmed.is_empty() {
+    for span in spans {
+        // Subtract the one-byte `(` prefix to land in the user's source.
+        let Some(part) = wrapped.get(span.start as usize..span.end as usize) else {
             continue;
-        }
-        let leading_ws = (part.len() - part.trim_start().len()) as u32;
-        let abs_start = body_start_offset + rel_start as u32 + leading_ws;
-        let abs_end = abs_start + trimmed.len() as u32;
+        };
+        let abs_start = interp.expression_range.start + span.start - 1;
+        let abs_end = abs_start + part.len() as u32;
         buf.append_synthetic(&indent);
         buf.append_synthetic("(");
-        buf.append_with_source(trimmed, svn_core::Range::new(abs_start, abs_end));
+        buf.append_with_source(part, svn_core::Range::new(abs_start, abs_end));
         buf.append_synthetic(");\n");
     }
-}
-
-/// Split `body` on top-level commas, returning `(start, end)` byte
-/// offsets for each part. Depth tracking over `() [] {}` keeps
-/// call/index/object-literal commas from splitting a body our lenient
-/// parser tolerates; Svelte's own `{@debug}` only permits bare
-/// identifiers, so this is defensive coverage. `<>` is included
-/// belt-and-braces and is not a correct bracket pair in general JS.
-fn split_top_level_commas(body: &str) -> Vec<(usize, usize)> {
-    let mut out: Vec<(usize, usize)> = Vec::new();
-    let bytes = body.as_bytes();
-    let mut depth: i32 = 0;
-    let mut start = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' | b'[' | b'{' | b'<' => depth += 1,
-            b')' | b']' | b'}' | b'>' if depth > 0 => depth -= 1,
-            b',' if depth == 0 => {
-                out.push((start, i));
-                start = i + 1;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    out.push((start, bytes.len()));
-    out
 }

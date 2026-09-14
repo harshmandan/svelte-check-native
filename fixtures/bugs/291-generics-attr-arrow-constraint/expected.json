@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 4, "column": 25, "code": 2322 }
+    ],
+    "_note": "`generics=\"T extends () => void, U\"` names two type parameters. The `>` of `=>` used to unbalance the name scan, dropping `U` at every instantiation site, so the props type collapsed and a wrong prop from the parent was accepted."
+}

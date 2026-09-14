@@ -259,3 +259,53 @@ pub(crate) fn lexical_normalise(p: &Path) -> PathBuf {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::rewrite_external_imports;
+    use std::path::Path;
+
+    fn rewrite(overlay: &str) -> String {
+        rewrite_external_imports(
+            overlay,
+            Path::new("/ws/src/nested/Foo.svelte"),
+            Path::new("/ws/node_modules/.cache/svelte-check-native/svelte/src/nested/Foo.svelte.svn.ts"),
+            Path::new("/ws"),
+        )
+    }
+
+    #[test]
+    fn module_specifiers_leaving_the_workspace_are_rebased() {
+        let out = rewrite(
+            "import a from '../../../ext/a';\nexport { b } from \"../../../ext/b\";\nconst c = import('../../../ext/c');\nconst d = require('../../../ext/d');\ntype E = import('../../../ext/e').E;\n",
+        );
+        assert!(!out.contains("'../../../ext/a'"), "{out}");
+        assert!(!out.contains("\"../../../ext/b\""), "{out}");
+        assert!(!out.contains("import('../../../ext/c')"), "{out}");
+        assert!(!out.contains("require('../../../ext/d')"), "{out}");
+        assert!(!out.contains("import('../../../ext/e')"), "{out}");
+        assert_eq!(out.lines().count(), 5);
+    }
+
+    #[test]
+    fn plain_strings_are_not_specifiers() {
+        // The text merely mentions `from "../"`; its literal type must
+        // survive untouched.
+        let src = "const s = 'from \"../../../ext/x\"' as const;\nconst u = `import \"../../../ext/x\"`;\n";
+        assert_eq!(rewrite(src), src);
+    }
+
+    #[test]
+    fn import_equals_require_is_left_alone() {
+        // Upstream rewrites `require()` calls but not `import x = require()`,
+        // which is a declaration rather than a call.
+        let src = "import x = require('../../../ext/x');\n";
+        assert_eq!(rewrite(src), src);
+    }
+
+    #[test]
+    fn in_workspace_specifiers_are_untouched() {
+        let src = "import a from '../lib/a';\n";
+        assert_eq!(rewrite(src), src);
+    }
+}

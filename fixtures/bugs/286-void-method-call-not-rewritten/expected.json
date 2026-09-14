@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "The Svelte-4 `void (a, b)` dependency idiom is rewritten to an array literal so the comma operator never fires TS2695. A method named `void` is not that idiom: `api.void(1, 2)` used to become `api.void[1, 2]`, a syntax error that hides every type error in the workspace."
+}

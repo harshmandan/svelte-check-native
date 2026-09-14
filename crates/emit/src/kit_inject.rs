@@ -1180,6 +1180,15 @@ export async function POST({ request }) { return new Response(''); }
         }
     }
 
+    #[test]
+    fn js_jsdoc_typing_must_sit_directly_on_the_export() {
+        // An earlier `@type` block belongs to `a`, not to `load`; the
+        // plain comment in between is not JSDoc. `load` is untyped.
+        let source = "/** @type {string} */\nconst a = 'x';\n/* plain note */\nexport function load(event) { return { u: event.url.pathname, a }; }";
+        let got = inject(&page_js_path(), source).expect("untyped load must inject");
+        assert!(got.contains("PageLoadEvent"), "{got}");
+    }
+
     // ===== Hooks and param matchers =====================================
     //
     // The expected strings below are not invented: they were taken from

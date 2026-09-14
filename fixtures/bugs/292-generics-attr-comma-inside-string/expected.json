@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "`generics=\"T extends 'a,b', U\"` has two type parameters; the comma inside the string literal is part of the constraint. It used to split the list there, producing a malformed instantiation and a syntax error that hides every type error in the workspace."
+}

@@ -8,14 +8,14 @@
 
 use std::path::{Path, PathBuf};
 
-/// Rewrite `../`-starting import specifiers in overlay text so they
+/// Rewrite `../`-starting module specifiers in overlay text so they
 /// resolve correctly from the overlay's location (under
 /// `<workspace>/node_modules/.cache/svelte-check-native/svelte/...`)
 /// instead of from the source's location.
 ///
 /// Mirrors upstream svelte2tsx's
 /// `helpers/rewriteExternalImports.ts::getExternalImportRewrite`:
-/// scan each import specifier; if it starts with `../` AND the resolved
+/// for each module specifier, if it starts with `../` AND the resolved
 /// target sits OUTSIDE `workspace`, rewrite the specifier to be relative
 /// to the overlay's directory.
 ///
@@ -23,10 +23,11 @@ use std::path::{Path, PathBuf};
 /// `rootDirs` virtual mapping (the overlay tsconfig lists both the
 /// source and cache directories as rootDirs).
 ///
-/// Implementation: pure regex-style scan for `from "..."` /
-/// `from '...'` / `import "..."` / `import('...')` patterns.
-/// Conservative — if we misclassify a non-import string we'd just
-/// change a string-literal value, which doesn't affect type-checking.
+/// The specifiers come from a parse of the overlay: `import` /
+/// `export … from` declarations, `import()` and `require()` calls,
+/// `import()` types, and `import()` inside comments (JSDoc types).
+/// Nothing else is touched, so a plain string that happens to contain
+/// `from "../…"` keeps its value and its literal type.
 pub(crate) fn rewrite_external_imports(
     overlay_text: &str,
     source_path: &Path,
@@ -39,118 +40,122 @@ pub(crate) fn rewrite_external_imports(
     let Some(overlay_dir) = overlay_path.parent() else {
         return overlay_text.to_string();
     };
-
-    let bytes = overlay_text.as_bytes();
-    let mut out = String::with_capacity(overlay_text.len());
-    let mut i = 0;
-    let mut copy_from = 0;
-    while i < bytes.len() {
-        // Only ASCII quote bytes (`'`, `"`, and backtick) are valid
-        // quote delimiters in JS/TS string/template literals —
-        // multi-byte UTF-8
-        // characters can't BE quote delimiters, so the byte-level
-        // search is sound. The ASCII assumption only governs
-        // quote-detection; the slice-copy below preserves all bytes
-        // verbatim, multi-byte chars included.
-        let quote = bytes[i];
-        if (quote == b'\'' || quote == b'"' || quote == b'`')
-            && bytes.get(i + 1) == Some(&b'.')
-            && bytes.get(i + 2) == Some(&b'.')
-            && bytes.get(i + 3) == Some(&b'/')
-            && is_in_import_context(bytes, i)
-        {
-            // Find the matching closing quote (no escapes inside import
-            // specifiers — JS/TS forbids them in module specifier strings).
-            let spec_start = i + 1;
-            let mut j = spec_start;
-            while j < bytes.len() && bytes[j] != quote {
-                j += 1;
-            }
-            if j >= bytes.len() {
-                i += 1;
-                continue;
-            }
-            let specifier = &overlay_text[spec_start..j];
-            // A template literal with a `${...}` substitution is not a
-            // static string literal — rewriting it would corrupt the
-            // expression. Only no-substitution backtick literals are
-            // safe to treat as module specifiers.
-            if quote == b'`' && specifier.contains("${") {
-                i += 1;
-                continue;
-            }
-            if let Some(rewritten) = compute_rewrite(specifier, source_dir, overlay_dir, workspace)
-            {
-                // Copy verbatim from `copy_from` up to (and including)
-                // the opening quote.
-                out.push_str(&overlay_text[copy_from..spec_start]);
-                out.push_str(&rewritten);
-                copy_from = j;
-                i = j;
-                continue;
-            }
-        }
-        i += 1;
+    // Cheap pre-filter: nothing to rewrite without a parent-dir
+    // specifier somewhere in the text.
+    if !overlay_text.contains("../") {
+        return overlay_text.to_string();
     }
-    // Final tail.
+
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, overlay_text, svn_parser::ScriptLang::Ts);
+    let mut probe = SpecifierSpans { spans: Vec::new() };
+    oxc_ast_visit::Visit::visit_program(&mut probe, &parsed.program);
+    for comment in &parsed.program.comments {
+        let span = comment.content_span();
+        probe.collect_from_comment(overlay_text, span.start as usize, span.end as usize);
+    }
+    probe.spans.sort_unstable();
+
+    let mut out = String::with_capacity(overlay_text.len());
+    let mut copy_from = 0;
+    for (start, end) in probe.spans {
+        // Spans cover the quoted literal; the quotes stay in place.
+        let Some(specifier) = overlay_text.get(start + 1..end - 1) else {
+            continue;
+        };
+        if let Some(rewritten) = compute_rewrite(specifier, source_dir, overlay_dir, workspace) {
+            out.push_str(&overlay_text[copy_from..start + 1]);
+            out.push_str(&rewritten);
+            copy_from = end - 1;
+        }
+    }
     out.push_str(&overlay_text[copy_from..]);
     out
 }
 
-/// Check whether the byte position `quote_pos` is inside an
-/// import-style context — preceded by `from `, `import(`, or
-/// `import ` (with optional whitespace). Avoids rewriting plain
-/// string literals like `const x = '../foo';` that aren't imports.
-fn is_in_import_context(bytes: &[u8], quote_pos: usize) -> bool {
-    // Walk backwards past whitespace.
-    let mut i = quote_pos;
-    while i > 0 && bytes[i - 1].is_ascii_whitespace() {
-        i -= 1;
+/// Byte spans (quotes included) of every module specifier literal in
+/// the overlay.
+struct SpecifierSpans {
+    spans: Vec<(usize, usize)>,
+}
+
+impl SpecifierSpans {
+    fn push_literal(&mut self, lit: &oxc_ast::ast::StringLiteral<'_>) {
+        self.spans
+            .push((lit.span.start as usize, lit.span.end as usize));
     }
-    // Match `from`, `import`, or `import(` (with the `(` already past).
-    let preceded_by = |needle: &[u8]| -> bool {
-        i >= needle.len()
-            && &bytes[i - needle.len()..i] == needle
-            && (i == needle.len()
-                || !bytes[i - needle.len() - 1].is_ascii_alphanumeric()
-                    && bytes[i - needle.len() - 1] != b'_'
-                    && bytes[i - needle.len() - 1] != b'$')
-    };
-    if preceded_by(b"from") {
-        return true;
-    }
-    if preceded_by(b"import") {
-        return true;
-    }
-    // `import("...")` — bytes immediately before quote position is `(`,
-    // possibly with whitespace; `import` precedes the `(`.
-    if i > 0 && bytes[i - 1] == b'(' {
-        let mut k = i - 1;
-        while k > 0 && bytes[k - 1].is_ascii_whitespace() {
-            k -= 1;
+
+    /// `import()` / `require()` take an expression; only a plain string
+    /// or a substitution-free template literal is a static specifier.
+    fn push_expression(&mut self, expr: &oxc_ast::ast::Expression<'_>) {
+        match expr {
+            oxc_ast::ast::Expression::StringLiteral(lit) => self.push_literal(lit),
+            oxc_ast::ast::Expression::TemplateLiteral(tpl) if tpl.expressions.is_empty() => {
+                self.spans
+                    .push((tpl.span.start as usize, tpl.span.end as usize));
+            }
+            _ => {}
         }
-        if k >= b"import".len()
-            && &bytes[k - b"import".len()..k] == b"import"
-            && (k == b"import".len()
-                || !bytes[k - b"import".len() - 1].is_ascii_alphanumeric()
-                    && bytes[k - b"import".len() - 1] != b'_'
-                    && bytes[k - b"import".len() - 1] != b'$')
+    }
+
+    /// `import('…')` inside a comment — JSDoc `@type {import('../x').T}`.
+    /// Comments have no AST, so the literal is located by text.
+    fn collect_from_comment(&mut self, text: &str, start: usize, end: usize) {
+        let body = &text[start..end];
+        let mut from = 0;
+        while let Some(rel) = body[from..].find("import(") {
+            let after = from + rel + "import(".len();
+            let rest = &body[after..];
+            let skip = rest.len() - rest.trim_start().len();
+            let quote_at = after + skip;
+            let Some(quote) = body.as_bytes().get(quote_at).copied() else {
+                break;
+            };
+            if matches!(quote, b'\'' | b'"' | b'`')
+                && let Some(len) = body[quote_at + 1..].find(quote as char)
+            {
+                let close = quote_at + 1 + len;
+                self.spans.push((start + quote_at, start + close + 1));
+                from = close + 1;
+            } else {
+                from = quote_at;
+            }
+        }
+    }
+}
+
+impl<'a> oxc_ast_visit::Visit<'a> for SpecifierSpans {
+    fn visit_import_declaration(&mut self, it: &oxc_ast::ast::ImportDeclaration<'a>) {
+        self.push_literal(&it.source);
+    }
+
+    fn visit_export_from_declaration(&mut self, it: &oxc_ast::ast::ExportFromDeclaration<'a>) {
+        self.push_literal(&it.source);
+    }
+
+    fn visit_export_all_declaration(&mut self, it: &oxc_ast::ast::ExportAllDeclaration<'a>) {
+        self.push_literal(&it.source);
+    }
+
+    fn visit_import_expression(&mut self, it: &oxc_ast::ast::ImportExpression<'a>) {
+        self.push_expression(&it.source);
+        oxc_ast_visit::walk::walk_import_expression(self, it);
+    }
+
+    fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
+        if let oxc_ast::ast::Expression::Identifier(id) = &it.callee
+            && id.name == "require"
+            && let Some(arg) = it.arguments.first().and_then(|a| a.as_expression())
         {
-            return true;
+            self.push_expression(arg);
         }
-        // `require("...")` — same shape as `import(`, matching `require`
-        // before the `(`.
-        if k >= b"require".len()
-            && &bytes[k - b"require".len()..k] == b"require"
-            && (k == b"require".len()
-                || !bytes[k - b"require".len() - 1].is_ascii_alphanumeric()
-                    && bytes[k - b"require".len() - 1] != b'_'
-                    && bytes[k - b"require".len() - 1] != b'$')
-        {
-            return true;
-        }
+        oxc_ast_visit::walk::walk_call_expression(self, it);
     }
-    false
+
+    fn visit_ts_import_type(&mut self, it: &oxc_ast::ast::TSImportType<'a>) {
+        self.push_literal(&it.source);
+        oxc_ast_visit::walk::walk_ts_import_type(self, it);
+    }
 }
 
 /// Compute the rewritten specifier, or `None` if no rewrite is
@@ -269,7 +274,9 @@ mod tests {
         rewrite_external_imports(
             overlay,
             Path::new("/ws/src/nested/Foo.svelte"),
-            Path::new("/ws/node_modules/.cache/svelte-check-native/svelte/src/nested/Foo.svelte.svn.ts"),
+            Path::new(
+                "/ws/node_modules/.cache/svelte-check-native/svelte/src/nested/Foo.svelte.svn.ts",
+            ),
             Path::new("/ws"),
         )
     }

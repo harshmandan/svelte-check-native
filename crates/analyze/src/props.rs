@@ -192,7 +192,10 @@ impl PropsInfo {
     ///
     /// `program` MUST be the instance-script program. Module-script
     /// `export let`s are module-scope exports, not component props.
-    pub fn build(program: &oxc_ast::ast::Program<'_>, source: &str) -> Self {
+    /// `runes_mode` is the component-level verdict (see
+    /// [`crate::RunesProbe`]); in runes mode props come only from
+    /// `$props()`, never from the export list.
+    pub fn build(program: &oxc_ast::ast::Program<'_>, source: &str, runes_mode: bool) -> Self {
         let mut destructures: Vec<PropInfo> = Vec::new();
         let mut type_text: Option<String> = None;
         let mut props_source = PropsSource::None;
@@ -252,6 +255,7 @@ impl PropsInfo {
         }
 
         if type_text.is_none()
+            && !runes_mode
             && let Some(synth) = synthesize_props_type_from_export_let(program, source)
         {
             // Shape 4: export-let fallback. Only synthesises when the
@@ -325,25 +329,11 @@ fn synthesize_props_type_from_export_let(
     program: &oxc_ast::ast::Program<'_>,
     source: &str,
 ) -> Option<String> {
-    // In runes mode, component props come SOLELY from the `$props()`
-    // binding pattern; every named / const / function / class export is
-    // exposed through the Exports type, NEVER Props. Mirror upstream
-    // svelte2tsx's `handle$propsRune` (ExportedNames.ts), which derives
-    // props only from `$props()` and routes exports via
-    // `createExportsStr`. Returning early keeps ALL export forms out of
-    // the synthesized Props shape.
-    //
-    // Previously only the `export function` / `export class` branches
-    // were gated on `!in_runes_mode`, so `export const reset = …` and
-    // `export { x as y }` leaked into Props as settable props in runes
-    // mode — and because Shape 4 fires whenever the `$props()`
-    // destructure is untyped, the synthesized export-shape could even
-    // shadow the real `$props()` props. (`runes-only-export.v5` pins the
-    // intended behaviour: `props: Record<string, never>`,
-    // `exports: { foo: typeof foo }`.)
-    if source_uses_runes(source) {
-        return None;
-    }
+    // In runes mode this never runs: component props come solely from
+    // the `$props()` binding pattern, and every named / const /
+    // function / class export is exposed through the Exports type,
+    // never Props (upstream `ExportedNames.createPropsStr`). The
+    // caller gates on the component's runes verdict.
     let mut parts: Vec<String> = Vec::new();
     for stmt in &program.body {
         // `export { name as alias, ... }` specifier form. Svelte 4
@@ -406,23 +396,6 @@ fn synthesize_props_type_from_export_let(
     }
     out.push_str(" }");
     Some(out)
-}
-
-/// Detect runes mode by scanning the script source for any rune
-/// marker followed by `(`. Mirrors `crates/emit/src/svelte4/compat.rs`'s
-/// `is_runes_mode` heuristic at the source-text level. A rune
-/// reference (`$state`, `$derived`, `$effect`, `$props`, `$bindable`,
-/// `$inspect`, `$host`) followed by an optional `.method` chain and
-/// `(` flips the file into runes mode. The `(` requirement excludes
-/// the ambient store-binding pattern `$$props` (always two `$`s) and
-/// the bare identifier `$state` from a non-rune `import { state as
-/// $state } from …` aliasing.
-fn source_uses_runes(source: &str) -> bool {
-    // Delegate to the shared comment/string/template-aware scanner. The
-    // previous inline scan matched markers in raw bytes, so a `$state(`
-    // inside a `// comment` or a `"string"` literal falsely flipped the
-    // file into runes mode (suppressing Svelte-4 export-let prop synthesis).
-    svn_core::rune_scan::script_calls_rune(source)
 }
 
 /// Extract a single property from `export { local as alias }`. Looks up
@@ -925,7 +898,7 @@ mod tests {
     fn props(src: &str) -> Vec<String> {
         let alloc = Allocator::default();
         let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
-        PropsInfo::build(&parsed.program, src)
+        build_with_probe(&parsed.program, src)
             .destructures
             .into_iter()
             .map(|p| p.local_name.to_string())
@@ -937,7 +910,7 @@ mod tests {
         let alloc = Allocator::default();
         let src = format!("let {{ x = {default_expr} }} = $props();");
         let parsed = parse_script_body(&alloc, &src, ScriptLang::Ts);
-        PropsInfo::build(&parsed.program, &src)
+        build_with_probe(&parsed.program, &src)
             .destructures
             .into_iter()
             .find(|p| p.local_name == "x")
@@ -1029,7 +1002,7 @@ mod tests {
         let src = "let { a, ...rest } = $props();";
         let alloc = Allocator::default();
         let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
-        let info = PropsInfo::build(&parsed.program, src).destructures;
+        let info = build_with_probe(&parsed.program, src).destructures;
         assert_eq!(info.len(), 2);
         assert!(!info[0].is_rest);
         assert!(info[1].is_rest);
@@ -1095,7 +1068,7 @@ mod tests {
         let alloc = Allocator::default();
         let src = "let { value = $bindable('') as string, other = $bindable(0) } = $props();";
         let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
-        let info = PropsInfo::build(&parsed.program, src);
+        let info = build_with_probe(&parsed.program, src);
         let bindable: Vec<&str> = info
             .destructures
             .iter()
@@ -1116,7 +1089,7 @@ mod tests {
     fn prop_surface(src: &str) -> (Vec<String>, bool) {
         let alloc = Allocator::default();
         let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
-        let info = PropsInfo::build(&parsed.program, src);
+        let info = build_with_probe(&parsed.program, src);
         let keys = info
             .destructures
             .iter()
@@ -1179,7 +1152,7 @@ mod tests {
         let src = "let { foo } = $props();";
         let alloc = Allocator::default();
         let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
-        let info = PropsInfo::build(&parsed.program, src).destructures;
+        let info = build_with_probe(&parsed.program, src).destructures;
         assert_eq!(info.len(), 1);
         assert_eq!(info[0].range.slice(src), "foo");
     }
@@ -1187,7 +1160,7 @@ mod tests {
     fn props_type(src: &str) -> Option<String> {
         let alloc = Allocator::default();
         let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
-        PropsInfo::build(&parsed.program, src).type_text
+        build_with_probe(&parsed.program, src).type_text
     }
 
     #[test]
@@ -1412,10 +1385,18 @@ mod tests {
 
     // ---------- PropsInfo::build tests ----------
 
+    fn build_with_probe(program: &oxc_ast::ast::Program<'_>, src: &str) -> PropsInfo {
+        let mut bound = std::collections::HashSet::new();
+        crate::collect_top_level_bindings(program, &mut bound);
+        let mut probe = crate::RunesProbe::new(crate::RunesRule::Svelte2tsx, &bound);
+        probe.scan_program(program);
+        PropsInfo::build(program, src, probe.found)
+    }
+
     fn build(src: &str) -> PropsInfo {
         let alloc = Allocator::default();
         let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
-        PropsInfo::build(&parsed.program, src)
+        build_with_probe(&parsed.program, src)
     }
 
     #[test]

@@ -17,7 +17,6 @@ use std::ops::Range;
 use smol_str::SmolStr;
 use svn_parser::ScriptLang;
 
-use crate::process_instance_script_content;
 use crate::sveltekit;
 
 /// A top-level `let` declarator in the instance script body. Byte
@@ -184,91 +183,6 @@ pub(crate) fn rewrite_definite_assignment_in_place(
         .map(|d| (d.name_end, String::from("!")))
         .collect();
     splice_insertions(out, &insertions)
-}
-
-/// SVELTE-4-COMPAT: heuristic detector for components that use Svelte-4
-/// conventions, i.e. ones whose consumers are likely to pass `on:event`
-/// directives (rewritten to `on<event>` prop keys), `slot="x"` named-slot
-/// attrs, and similar Svelte-4-specific surface our Svelte-5 emit doesn't
-/// model as declared props. Signals, any of which trips detection:
-///
-/// 1. Any `export let` declaration — strongest signal; Svelte 5 uses
-///    `$props()` and `export { … }` instead.
-/// 2. Any `<slot>` element in the template — Svelte 5 uses snippets.
-/// 3. `createEventDispatcher` imported or called — Svelte 5 uses prop
-///    callbacks instead of the dispatcher.
-/// 4. `$$Props` / `$$Events` / `$$Slots` interface declared — explicit
-///    Svelte-4 typing convention.
-/// 5. `$$slots` / `$$props` / `$$restProps` ambients referenced.
-///
-/// False positives (a genuinely Svelte-5 file containing one of those
-/// substrings in a comment) just add a widen clause that's structurally
-/// a no-op against well-formed Svelte-5 consumer code. The reverse is
-/// costlier — a missed Svelte-4 file surfaces hundreds of TS2353
-/// "property does not exist" errors on every consumer.
-pub(crate) fn is_svelte4_component(
-    doc: &svn_parser::Document<'_>,
-    split: Option<&process_instance_script_content::SplitScript>,
-    has_slot: bool,
-) -> bool {
-    let instance_src = doc
-        .instance_script
-        .as_ref()
-        .map(|s| s.content)
-        .unwrap_or("");
-    let module_src = doc.module_script.as_ref().map(|s| s.content).unwrap_or("");
-    if contains_export_let(instance_src) || contains_export_let(module_src) {
-        return true;
-    }
-    if has_slot {
-        return true;
-    }
-    if instance_src.contains("createEventDispatcher")
-        || module_src.contains("createEventDispatcher")
-    {
-        return true;
-    }
-    if has_double_dollar_interface(instance_src) || has_double_dollar_interface(module_src) {
-        return true;
-    }
-    if doc.source.contains("$$slots")
-        || doc.source.contains("$$restProps")
-        || doc.source.contains("$$props")
-    {
-        return true;
-    }
-    if let Some(s) = split {
-        if !s.exported_locals.is_empty() {
-            return true;
-        }
-    }
-    false
-}
-
-pub(crate) fn contains_export_let(src: &str) -> bool {
-    // Loose: we want `export let` at word boundaries. Using substring is
-    // too permissive (e.g. `/* export let X */` in a comment), but
-    // comments would only false-positive, not false-negative — safe.
-    let mut rest = src;
-    while let Some(idx) = rest.find("export") {
-        let after = &rest[idx + 6..];
-        if let Some(non_ws) = after.find(|c: char| !c.is_whitespace()) {
-            if after[non_ws..].starts_with("let") {
-                let next = after[non_ws + 3..].chars().next();
-                if matches!(next, Some(c) if c.is_whitespace() || c == '/') {
-                    return true;
-                }
-            }
-        }
-        rest = &rest[idx + 6..];
-    }
-    false
-}
-
-fn has_double_dollar_interface(src: &str) -> bool {
-    src.contains("interface $$Props")
-        || src.contains("interface $$Events")
-        || src.contains("interface $$Slots")
 }
 
 /// Does the parsed template fragment contain a `<slot>` element?
@@ -503,14 +417,10 @@ pub(crate) fn is_runes_mode(
     for parsed in [parsed_instance, parsed_module].into_iter().flatten() {
         svn_analyze::collect_top_level_bindings(&parsed.program, &mut bound);
     }
-    let mut probe = RunesProbe {
-        bound: &bound,
-        function_depth: 0,
-        runes: false,
-    };
+    let mut probe = svn_analyze::RunesProbe::new(svn_analyze::RunesRule::Svelte2tsx, &bound);
     for parsed in [parsed_instance, parsed_module].into_iter().flatten() {
-        oxc_ast_visit::Visit::visit_program(&mut probe, &parsed.program);
-        if probe.runes {
+        probe.scan_program(&parsed.program);
+        if probe.found {
             return true;
         }
     }
@@ -539,61 +449,12 @@ pub(crate) fn is_runes_mode(
             format!("({text}\n);")
         };
         let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
-        oxc_ast_visit::Visit::visit_program(&mut probe, &parsed.program);
-        if probe.runes {
+        probe.scan_program(&parsed.program);
+        if probe.found {
             return true;
         }
     }
     false
-}
-
-/// AST probe behind [`is_runes_mode`].
-struct RunesProbe<'b> {
-    bound: &'b std::collections::HashSet<String>,
-    /// Nesting depth of function bodies; `await` only counts at 0.
-    function_depth: u32,
-    runes: bool,
-}
-
-impl<'a> oxc_ast_visit::Visit<'a> for RunesProbe<'_> {
-    fn visit_identifier_reference(&mut self, it: &oxc_ast::ast::IdentifierReference<'a>) {
-        let name = it.name.as_str();
-        if matches!(name, "$state" | "$derived" | "$effect") && !self.bound.contains(&name[1..]) {
-            self.runes = true;
-        }
-    }
-
-    fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
-        if let oxc_ast::ast::Expression::Identifier(id) = &it.callee
-            && id.name == "$props"
-        {
-            self.runes = true;
-        }
-        oxc_ast_visit::walk::walk_call_expression(self, it);
-    }
-
-    fn visit_await_expression(&mut self, it: &oxc_ast::ast::AwaitExpression<'a>) {
-        if self.function_depth == 0 {
-            self.runes = true;
-        }
-        oxc_ast_visit::walk::walk_await_expression(self, it);
-    }
-
-    fn visit_function(
-        &mut self,
-        it: &oxc_ast::ast::Function<'a>,
-        flags: oxc_syntax::scope::ScopeFlags,
-    ) {
-        self.function_depth += 1;
-        oxc_ast_visit::walk::walk_function(self, it, flags);
-        self.function_depth -= 1;
-    }
-
-    fn visit_arrow_function_expression(&mut self, it: &oxc_ast::ast::ArrowFunctionExpression<'a>) {
-        self.function_depth += 1;
-        oxc_ast_visit::walk::walk_arrow_function_expression(self, it);
-        self.function_depth -= 1;
-    }
 }
 
 /// Append ` NAME = undefined as any;` after each top-level `let`
@@ -634,27 +495,20 @@ pub(crate) fn denarrow_typed_exported_props_in_place(
 }
 
 /// SVELTE-4-COMPAT: emit `let $$slots = …; let $$props = …; let
-/// $$restProps = …;` at the top of the render function when the source
-/// references them.
-///
-/// Substring detection is deliberately loose — we don't parse to see
-/// whether the occurrence is a real identifier vs. string content. A
-/// spurious injection is harmless (the declared local just goes
-/// unused), whereas a missed one fires TS2304 across every reference
-/// and cascades through the surrounding expression's typing.
+/// $$restProps = …;` at the top of the render function for each
+/// ambient the component refers to (an identifier reference in a
+/// script or template expression — see `svn_analyze::find_ambient_refs`).
 ///
 /// Types: `Record<string, any>` for all three. Upstream's
 /// `__sveltets_2_slotsType({…slot names…})` is more precise (each
 /// slot is typed as `boolean | ''`), but that requires walking the
-/// template to collect slot names and emit a shape literal. We'll do
-/// that in Phase 2 if the loose ambient isn't sufficient.
-pub(crate) fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document<'_>, is_ts: bool) {
-    let src = doc.source;
+/// template to collect slot names and emit a shape literal.
+pub(crate) fn emit_svelte4_ambients(out: &mut String, refs: svn_analyze::AmbientRefs, is_ts: bool) {
     // In TS overlays we emit inline `: T` annotations. In JS overlays
     // we must not — tsgo fires TS8010 and aborts project-wide once
     // hit, silently suppressing every legitimate diagnostic
     // elsewhere. Emit JSDoc casts on the RHS for JS overlays.
-    if src.contains("$$slots") {
+    if refs.slots {
         if is_ts {
             out.push_str("    let $$slots: Record<string, boolean | undefined> = {};\n");
         } else {
@@ -664,7 +518,7 @@ pub(crate) fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document
         }
         out.push_str("    void $$slots;\n");
     }
-    if src.contains("$$restProps") {
+    if refs.rest_props {
         if is_ts {
             out.push_str("    let $$restProps: Record<string, any> = {};\n");
         } else {
@@ -672,11 +526,7 @@ pub(crate) fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document
         }
         out.push_str("    void $$restProps;\n");
     }
-    // `$$props` detection is intentionally loose substring matching,
-    // consistent with the `$$slots` / `$$restProps` branches above. A
-    // spurious match just declares an unused local, which is harmless;
-    // a missed one would fire TS2304 across every reference.
-    if src.contains("$$props") {
+    if refs.props {
         if is_ts {
             out.push_str("    let $$props: Record<string, any> = {};\n");
         } else {
@@ -685,7 +535,6 @@ pub(crate) fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document
         out.push_str("    void $$props;\n");
     }
 }
-
 /// JS-overlay equivalent of `rewrite_definite_assignment_in_place` +
 /// `widen_untyped_exported_props_in_place` rolled into one. For each
 /// `let NAME[, NAME…];` declaration where NAME is a target AND that

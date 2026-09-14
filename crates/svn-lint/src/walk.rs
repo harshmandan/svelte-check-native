@@ -19,7 +19,7 @@ use crate::messages;
 /// - `<svelte:options runes={…}>` → explicit override (resolved later
 ///   in the template walk, in `walk`)
 /// - Any rune CALL (`$state(…)`, `$derived(…)`, …) in a script body
-///   → runes mode (`scan_doc_for_rune_call`)
+///   → runes mode (`scripts_signal_runes`)
 ///
 /// The call-shape check is critical: a bare substring match for
 /// `$props` (etc.) false-positives on Svelte-4 ambients like
@@ -39,319 +39,24 @@ fn runes_from_filename(path: &Path) -> bool {
     name.ends_with(".svelte.js") || name.ends_with(".svelte.ts")
 }
 
-/// Whether any rune is *called* in the module or instance script body
-/// of an already-parsed document.
-///
-/// A commented-out `// $state(0)` example in the SAME script body would
-/// false-positive a raw byte scan, so `scan_script_for_rune_call` runs
-/// a state machine that skips comments and string literals (line,
-/// block, single, double, template). HTML content in the template /
-/// comment block can also contain rune-shaped text but the chance of
-/// `$state(` literally appearing there is low; we scope the scan to
-/// script bodies (which `parse_sections` already isolated) to skip the
-/// template noise entirely.
-fn scan_doc_for_rune_call(doc: &svn_parser::Document<'_>) -> bool {
-    [doc.module_script.as_ref(), doc.instance_script.as_ref()]
-        .into_iter()
-        .flatten()
-        .any(|s| scan_script_for_rune_call(s.content))
-}
-
-/// Find the byte offset of the `}` that closes a `${…}` interpolation
-/// starting at `start` (the byte AFTER the opening `${`). Skips over
-/// string literals (single, double, template), line/block comments,
-/// and nested braces so the closing `}` is the structurally matching
-/// one — not an unbalanced `}` that happens to appear inside a
-/// string or comment.
-///
-/// Returns `None` when the interpolation is unterminated (truncated
-/// source / parse-error region). Caller treats that as "scan to EOF
-/// and stop." Regex literals are not currently distinguished — a
-/// `/}/` inside an interpolation would slip past the `/` byte
-/// without entering string mode, but the only fallout is a slightly
-/// over-broad scan; rune detection is monotonic-OR so it never
-/// produces a false negative.
-fn find_interpolation_end(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut depth = 1usize;
-    let mut j = start;
-    while j < bytes.len() {
-        let c = bytes[j];
-        // Line comment.
-        if c == b'/' && bytes.get(j + 1) == Some(&b'/') {
-            while j < bytes.len() && bytes[j] != b'\n' {
-                j += 1;
-            }
-            continue;
-        }
-        // Block comment.
-        if c == b'/' && bytes.get(j + 1) == Some(&b'*') {
-            j += 2;
-            while j + 1 < bytes.len() && !(bytes[j] == b'*' && bytes[j + 1] == b'/') {
-                j += 1;
-            }
-            j = (j + 2).min(bytes.len());
-            continue;
-        }
-        // Single/double-quoted string — escape-aware.
-        if c == b'\'' || c == b'"' {
-            j += 1;
-            while j < bytes.len() && bytes[j] != c {
-                if bytes[j] == b'\\' {
-                    j = (j + 2).min(bytes.len());
-                } else {
-                    j += 1;
-                }
-            }
-            j = (j + 1).min(bytes.len());
-            continue;
-        }
-        // Nested template literal — recurse into its own interpolations
-        // so a `}` inside a nested template's literal text can't
-        // terminate the outer interpolation prematurely.
-        if c == b'`' {
-            j += 1;
-            while j < bytes.len() && bytes[j] != b'`' {
-                if bytes[j] == b'\\' {
-                    j = (j + 2).min(bytes.len());
-                    continue;
-                }
-                if bytes[j] == b'$' && bytes.get(j + 1) == Some(&b'{') {
-                    let inner_start = j + 2;
-                    j = match find_interpolation_end(bytes, inner_start) {
-                        Some(pos) => (pos + 1).min(bytes.len()),
-                        None => bytes.len(),
-                    };
-                    continue;
-                }
-                j += 1;
-            }
-            j = (j + 1).min(bytes.len());
-            continue;
-        }
-        match c {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(j);
-                }
-            }
-            _ => {}
-        }
-        j += 1;
+/// Runes seed for the first scope-tree build: the compiler's rule
+/// (any rune name referenced, or an `await` outside a function) read
+/// from the parsed scripts. The scope tree recomputes the answer from
+/// its own reference set below and rebuilds once if this seed was
+/// wrong, so the seed only decides how much work the first build is.
+fn scripts_signal_runes(
+    module: Option<&oxc_ast::ast::Program<'_>>,
+    instance: Option<&oxc_ast::ast::Program<'_>>,
+) -> bool {
+    let mut bound = std::collections::HashSet::new();
+    for program in [module, instance].into_iter().flatten() {
+        svn_analyze::collect_top_level_bindings(program, &mut bound);
     }
-    None
-}
-
-/// Whether `prev` (the byte immediately before a candidate rune marker)
-/// is a valid left boundary for the marker — i.e. the marker is not the
-/// tail of a longer identifier or member-access chain. Rejects
-/// identifier-continuation chars, `_`, `$` (the `$$props` ambient), and
-/// `.` (member access like `obj.$state`). `None` means start-of-input,
-/// which is always a boundary. Rejecting `.` on the LEFT does not
-/// regress `$state.raw(` — there the `.raw` chain is consumed to the
-/// RIGHT, so the left boundary of `$state` is unaffected.
-fn is_left_boundary(prev: Option<u8>) -> bool {
-    match prev {
-        None => true,
-        Some(c) => !(c == b'$' || c == b'_' || c == b'.' || c.is_ascii_alphanumeric()),
+    let mut probe = svn_analyze::RunesProbe::new(svn_analyze::RunesRule::Compiler, &bound);
+    for program in [module, instance].into_iter().flatten() {
+        probe.scan_program(program);
     }
-}
-
-/// Whether a `/` encountered at code position can START a regex
-/// literal, judged by the previous significant (non-whitespace,
-/// non-comment) byte. After an identifier/number/`)`/`]`/quote the
-/// `/` is division; after an operator, opener, separator, or at the
-/// start of input it's a regex. Keyword-tail cases (`return /x/`)
-/// end in identifier bytes and classify as division — the only
-/// fallout is the pre-existing over-scan (monotonic-OR keeps rune
-/// detection safe from false negatives there).
-fn regex_can_start_after(prev: Option<u8>) -> bool {
-    match prev {
-        None => true,
-        Some(b) => matches!(
-            b,
-            b'(' | b','
-                | b'='
-                | b':'
-                | b'['
-                | b'!'
-                | b'&'
-                | b'|'
-                | b'?'
-                | b'{'
-                | b'}'
-                | b';'
-                | b'<'
-                | b'>'
-                | b'+'
-                | b'-'
-                | b'*'
-                | b'%'
-                | b'~'
-                | b'^'
-        ),
-    }
-}
-
-/// Scan a JS/TS script body for any call-form rune occurrence
-/// (`$state(`, `$derived(`, etc., or `$state.raw(` etc.). Skips line
-/// comments, block comments, single/double-quoted strings, regex
-/// literals, and template-literal contents (re-entering when a
-/// `${…}` interpolation opens). Returns true on the first match.
-fn scan_script_for_rune_call(source: &str) -> bool {
-    const MARKERS: &[&[u8]] = &[
-        b"$state",
-        b"$derived",
-        b"$effect",
-        b"$props",
-        b"$bindable",
-        b"$inspect",
-        b"$host",
-    ];
-    let bytes = source.as_bytes();
-    let mut i = 0;
-    // Last significant code byte — decides `/` regex-vs-division.
-    let mut last_sig: Option<u8> = None;
-    // Outer code state. Template-literal nesting depth tracked
-    // separately so a `${…}` interpolation re-enters code-scan with
-    // proper rune visibility.
-    while i < bytes.len() {
-        let b = bytes[i];
-        // Line comment.
-        if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
-            continue;
-        }
-        // Block comment.
-        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
-            i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                i += 1;
-            }
-            i = (i + 2).min(bytes.len());
-            continue;
-        }
-        // Regex literal — a `$state(` inside `/…/` is pattern text,
-        // not code (the real compiler stays non-runes). Skip to the
-        // closing unescaped `/`, honouring character classes; an
-        // unterminated candidate (newline/EOF first) was a division
-        // after all, so fall through to the normal byte path.
-        if b == b'/' && regex_can_start_after(last_sig) {
-            let mut j = i + 1;
-            let mut in_class = false;
-            let mut closed = false;
-            while j < bytes.len() {
-                match bytes[j] {
-                    b'\\' => j += 1,
-                    b'[' => in_class = true,
-                    b']' => in_class = false,
-                    b'/' if !in_class => {
-                        closed = true;
-                        break;
-                    }
-                    b'\n' => break,
-                    _ => {}
-                }
-                j += 1;
-            }
-            if closed {
-                // Skip the flags.
-                j += 1;
-                while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
-                    j += 1;
-                }
-                i = j;
-                last_sig = Some(b'/');
-                continue;
-            }
-        }
-        // String literals — walk past, honouring `\\` escapes.
-        if b == b'\'' || b == b'"' {
-            let quote = b;
-            i += 1;
-            while i < bytes.len() && bytes[i] != quote {
-                if bytes[i] == b'\\' {
-                    i = (i + 2).min(bytes.len());
-                } else {
-                    i += 1;
-                }
-            }
-            i = (i + 1).min(bytes.len());
-            last_sig = Some(quote);
-            continue;
-        }
-        // Template literal — skip the literal text but recurse on
-        // each `${…}` interpolation so a rune call inside one still
-        // triggers detection.
-        if b == b'`' {
-            i += 1;
-            while i < bytes.len() && bytes[i] != b'`' {
-                if bytes[i] == b'\\' {
-                    i = (i + 2).min(bytes.len());
-                    continue;
-                }
-                if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'{') {
-                    // Recursively scan the interpolation's contents.
-                    // Walk to the matching `}`, skipping strings,
-                    // comments, regex literals, and nested template
-                    // literals so an unbalanced `}` inside one of those
-                    // can't terminate the interpolation early.
-                    let interp_start = i + 2;
-                    let j = find_interpolation_end(bytes, interp_start);
-                    let end = j.unwrap_or(bytes.len());
-                    let interp_text = &source[interp_start..end];
-                    if scan_script_for_rune_call(interp_text) {
-                        return true;
-                    }
-                    i = match j {
-                        Some(pos) => (pos + 1).min(bytes.len()),
-                        None => bytes.len(),
-                    };
-                    continue;
-                }
-                i += 1;
-            }
-            i = (i + 1).min(bytes.len());
-            last_sig = Some(b'`');
-            continue;
-        }
-        // Try matching a rune marker at this code position.
-        for marker in MARKERS {
-            if bytes[i..].starts_with(marker) {
-                // Guard against the marker being the tail of a longer
-                // identifier or member chain (the `$$props` ambient,
-                // `obj.$state`, `foo$state`, …): require a clean left
-                // boundary before the marker.
-                let prev = i.checked_sub(1).and_then(|p| bytes.get(p)).copied();
-                if is_left_boundary(prev) {
-                    let mut after = i + marker.len();
-                    // Consume `.word` chains (`$state.raw`, etc.).
-                    while bytes.get(after) == Some(&b'.') {
-                        after += 1;
-                        while after < bytes.len()
-                            && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_')
-                        {
-                            after += 1;
-                        }
-                    }
-                    while after < bytes.len() && matches!(bytes[after], b' ' | b'\t') {
-                        after += 1;
-                    }
-                    if bytes.get(after) == Some(&b'(') {
-                        return true;
-                    }
-                }
-            }
-        }
-        if !b.is_ascii_whitespace() {
-            last_sig = Some(b);
-        }
-        i += 1;
-    }
-    false
+    probe.found
 }
 
 /// Walk a full `.svelte` source and run every phase-enabled rule.
@@ -393,15 +98,13 @@ pub fn walk_parsed(
     // though the text contains `$state(`). Both directions verified
     // against the compiler.
     //
-    // The textual rune-call scan only seeds the FIRST scope-tree
-    // build (the ignore-comment strictness and the compat-gated
-    // binding fields depend on the mode); when the authoritative
-    // scope-derived answer disagrees, the tree is rebuilt once under
-    // the correct mode.
+    // The AST rune probe only seeds the FIRST scope-tree build (the
+    // ignore-comment strictness and the compat-gated binding fields
+    // depend on the mode); when the authoritative scope-derived answer
+    // disagrees, the tree is rebuilt once under the correct mode.
     let forced: Option<bool> = svn_parser::runes_option(fragment, source)
         .or(runes)
         .or_else(|| runes_from_filename(path).then_some(true));
-    ctx.runes = forced.unwrap_or_else(|| scan_doc_for_rune_call(doc));
 
     // Emission order below mirrors the compiler's pipeline (verified
     // on a mixed fixture against svelte 5.56.5): parse-time warnings
@@ -425,6 +128,7 @@ pub fn walk_parsed(
         .map(|s| parse_script_body(&script_alloc, s.content, s.lang));
     let module_program = parsed_module.as_ref().map(|p| &p.program);
     let instance_program = parsed_instance.as_ref().map(|p| &p.program);
+    ctx.runes = forced.unwrap_or_else(|| scripts_signal_runes(module_program, instance_program));
 
     // Build the scope tree once; Phase-C rules query it by binding
     // name from both the script walker and the template walker. The
@@ -824,8 +528,23 @@ mod runes_inference_tests {
     /// shortcut, then a rune-call scan over the parsed document), so
     /// these tests cover the production runes-resolution path.
     fn infer_runes_mode(source: &str, path: &std::path::Path) -> bool {
-        super::runes_from_filename(path)
-            || super::scan_doc_for_rune_call(&svn_parser::parse_sections(source).0)
+        if super::runes_from_filename(path) {
+            return true;
+        }
+        let (doc, _) = svn_parser::parse_sections(source);
+        let alloc = oxc_allocator::Allocator::default();
+        let module = doc
+            .module_script
+            .as_ref()
+            .map(|s| svn_parser::parse_script_body(&alloc, s.content, s.lang));
+        let instance = doc
+            .instance_script
+            .as_ref()
+            .map(|s| svn_parser::parse_script_body(&alloc, s.content, s.lang));
+        super::scripts_signal_runes(
+            module.as_ref().map(|p| &p.program),
+            instance.as_ref().map(|p| &p.program),
+        )
     }
 
     #[test]

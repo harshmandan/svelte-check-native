@@ -620,6 +620,15 @@ pub fn split_imports(
         if body_names_set.is_empty() {
             continue;
         }
+        // A type alias that shares its name with a body value (`const
+        // Other = 1; type Other = string;`) is one merged symbol in
+        // upstream's render function: a type-position use of `Other`
+        // counts as a read of the const. Hoisting only the alias would
+        // split the symbol and report the const as never read.
+        if body_names_set.contains(&pending.name) {
+            must_stay_body.insert(pending.name.clone());
+            continue;
+        }
         // Always stay-body: `keyof typeof <body-local>` (stubbed
         // `any` widens `keyof` to `string | number | symbol`).
         let has_keyof_typeof = pending

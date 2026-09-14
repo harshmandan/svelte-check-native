@@ -93,13 +93,13 @@ impl<'b> RunesProbe<'b> {
         }
     }
 
-    /// A rune name is a global unless the component declares it — as
-    /// a store binding (`const state = …` makes `$state` a
-    /// subscription) or literally (`function $state() {}`).
+    /// A rune name is a global unless a binding of the base name makes
+    /// it a store subscription (`const state = …` turns `$state` into
+    /// one). Upstream removes globals by their store base name only, so
+    /// a literal `function $state() {}` does not stop `$state` from
+    /// counting.
     fn is_rune_global(&self, name: &str) -> bool {
-        self.names().contains(&name)
-            && !self.bound.contains(name)
-            && !self.bound.contains(&name[1..])
+        self.names().contains(&name) && !self.bound.contains(&name[1..])
     }
 
     fn check_key(&mut self, key: &PropertyKey<'_>) {
@@ -200,7 +200,7 @@ mod tests {
         assert!(!probe(r, "const s = \"$state(0)\";"));
         assert!(!probe(r, "async function f() { await g(); }"));
         assert!(!probe(r, "const state = writable(0); $state.set(1);"));
-        assert!(!probe(r, "function $state(n) {} $state(1);"));
+        assert!(probe(r, "function $state(n) {} $state(1);"));
         assert!(!probe(r, "const o = { $state: 1 };"));
     }
 

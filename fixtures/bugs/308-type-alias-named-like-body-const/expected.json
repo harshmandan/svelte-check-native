@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A const and a type alias with the same name are one merged symbol inside the render function, so a type-position use of the name counts as a read of the const — upstream keeps both in the render function and reports nothing. Hoisting only the alias to module scope split the symbol and reported the const as never read."
+}

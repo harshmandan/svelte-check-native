@@ -9,7 +9,7 @@ use std::fmt::Write;
 use svn_parser::EachBlock;
 
 use crate::emit_buffer::EmitBuffer;
-use crate::{all_identifiers, emit_is_ts, emit_template_body};
+use crate::{emit_is_ts, emit_template_body, pattern_binding_names};
 
 /// Emit a `for`-of loop for an `{#each}` block.
 ///
@@ -116,7 +116,7 @@ pub(crate) fn emit_each_block(
     // Void every identifier that the binding pattern destructures, not
     // just the first. `[id, label]` and `[id, { label }]` both bind two
     // names and TS6133 fires on each unused one.
-    for ident in all_identifiers(&binding_text) {
+    for ident in pattern_binding_names(&binding_text) {
         let _ = writeln!(buf, "{indent}    void {ident};");
     }
     if let Some(ix) = index_binding {

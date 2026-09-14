@@ -9,8 +9,7 @@ async function $$render_e40e2c10() {
             void error;
         }
         {
-            const message = __svn_any();
-            const code = __svn_any();
+            const { error: { message, code } } = __svn_any();
             void message;
             void code;
         }

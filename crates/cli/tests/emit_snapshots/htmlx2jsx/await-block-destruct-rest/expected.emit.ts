@@ -19,8 +19,7 @@ async function $$render_e40e2c10() {
             void value;
         }
         {
-            const a = __svn_any();
-            const rest = __svn_any();
+            const { a, ...rest } = __svn_any();
             void a;
             void rest;
         }
@@ -29,9 +28,7 @@ async function $$render_e40e2c10() {
             void value;
         }
         {
-            const a = __svn_any();
-            const b = __svn_any();
-            const rest = __svn_any();
+            const [a, b, ...rest] = __svn_any();
             void a;
             void b;
             void rest;

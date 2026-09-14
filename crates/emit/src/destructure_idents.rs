@@ -1,157 +1,122 @@
-//! Pull every binding-introducing identifier out of a destructure
-//! pattern's source text.
+//! The names a template binding site introduces.
 //!
 //! Used by emit when it needs the names a `{#each items as <pat>}`,
 //! `{#snippet name(<params>)}`, `{:then <pat>}`, or `{:catch <pat>}`
-//! introduces — emit declares each as `let <name>: any;` inside the
-//! enclosing scope so descendant template references resolve.
+//! introduces — emit declares or voids each one inside the enclosing
+//! scope so descendant template references resolve and unused-variable
+//! reports land on the right names.
 //!
-//! ## Why this is byte-scanning, not AST
-//!
-//! Architecture rule #1 (CLAUDE.md) says embedded JS/TS goes
-//! through `oxc_parser`. This helper is an exception flagged in
-//! its own doc comment: the patterns that show up at template-
-//! binding sites are a tiny grammar subset (identifiers, object/
-//! array destructure, optional defaults, optional TS type
-//! annotations on snippet params), and oxc invocation per each-
-//! block on a 1000+-component file is the kind of overhead the
-//! `walk_template` hot path is sensitive to. The byte scanner
-//! tracks just enough state — brace depth + a few special
-//! characters — to handle the shapes Svelte's parser will accept.
-//!
-//! If a future shape turns out to need AST fidelity (a hand-
-//! crafted bug repro that this scanner mishandles), the right
-//! response is moving the call to oxc here, not adding more
-//! special cases to the scanner.
+//! Both helpers parse the slice with oxc and walk the resulting
+//! binding pattern. Reading names out of the text used to invent
+//! bindings from a quoted key, a string default, a string type or the
+//! `>` of `=>`, and to declare a computed key as a binding.
 
-/// Pull every identifier-like token out of a destructuring pattern.
+use smol_str::SmolStr;
+use svn_analyze::template_scope::collect_pattern_bindings;
+
+/// Every identifier a destructuring pattern binds, in source order.
 ///
 /// For `id`              → `["id"]`
 /// For `[id, label]`     → `["id", "label"]`
 /// For `[id, { label }]` → `["id", "label"]`
 /// For `{ a: x, b }`     → `["x", "b"]` (only the local-name side of `key:value`)
 ///
-/// Falls back to a single `__svn_each_unused` token when nothing
-/// identifier-shaped is found, so the emitted `void` line stays
-/// valid.
-pub(crate) fn all_identifiers(binding: &str) -> Vec<&str> {
-    let bytes = binding.as_bytes();
-    let mut out: Vec<&str> = Vec::with_capacity(binding.len() / 4 + 1);
-    let mut i = 0;
-    let mut depth_brace = 0usize; // tracks `{ ... }` for object key:value
-    while i < bytes.len() {
-        let b = bytes[i];
-        // Skip block comments — JSDoc annotations (`/**@type {Foo}*/`)
-        // contain identifiers that aren't bindings. Without this skip
-        // a snippet param like `(/**@type {TypeA}*/a, b = 2)` produces
-        // bogus `void type; void TypeA;` lines (TS2304 / TS2693 noise).
-        if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
-            i += 2;
-            while i + 1 < bytes.len() {
-                if bytes[i] == b'*' && bytes[i + 1] == b'/' {
-                    i += 2;
-                    break;
-                }
-                i += 1;
-            }
-            continue;
-        }
-        // Skip line comments — `// foo` shouldn't contribute idents.
-        if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
-            continue;
-        }
-        match b {
-            b'{' => {
-                depth_brace += 1;
-                i += 1;
-            }
-            b'}' => {
-                depth_brace = depth_brace.saturating_sub(1);
-                i += 1;
-            }
-            b'?' if depth_brace == 0 => {
-                // Optional-parameter marker in TS snippet params: `name?:
-                // Type`. No-op; the following `:` handles the type skip.
-                // Each-block `as` clauses don't use `?`, so this branch
-                // is inert for that caller.
-                i += 1;
-            }
-            b':' if depth_brace == 0 => {
-                // Top-level `:` on a snippet parameter introduces a TS
-                // type annotation (`name: Foo<Bar>`). Skip until the
-                // next top-level `,` — tracking paren/bracket/brace/
-                // angle nesting so commas inside `Array<A, B>` or
-                // `(a: X) => Y` don't terminate the annotation early.
-                // Each-block `as` clauses never hit this (Svelte grammar
-                // forbids type annotations on destructure targets).
-                i += 1;
-                let mut depth = 0usize;
-                while i < bytes.len() {
-                    match bytes[i] {
-                        b'(' | b'[' | b'{' | b'<' => depth += 1,
-                        b')' | b']' | b'}' | b'>' if depth > 0 => depth -= 1,
-                        b',' if depth == 0 => break,
-                        _ => {}
-                    }
-                    i += 1;
-                }
-            }
-            b'=' => {
-                // Skip default value `name = expr` — advance past expr to
-                // the next comma/closer at the same depth. Conservative:
-                // just stop collecting until we see `,` `]` `}`.
-                i += 1;
-                let mut paren = 0usize;
-                while i < bytes.len() {
-                    match bytes[i] {
-                        b'(' | b'[' | b'{' => paren += 1,
-                        b')' | b']' | b'}' if paren > 0 => paren -= 1,
-                        b',' | b']' | b'}' if paren == 0 => break,
-                        _ => {}
-                    }
-                    i += 1;
-                }
-            }
-            _ if b.is_ascii_alphabetic() || b == b'_' || b == b'$' || b >= 0x80 => {
-                let start = i;
-                while i < bytes.len() {
-                    let c = bytes[i];
-                    if c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80 {
-                        i += 1;
-                    } else {
-                        break;
-                    }
-                }
-                let name = &binding[start..i];
-                let take = if depth_brace > 0 {
-                    // Inside an object pattern: `key: local` — only collect
-                    // the local. `{ a }` shorthand has no colon so `a`
-                    // counts. Look ahead: if the next non-ws byte is `:`,
-                    // this identifier is a key and must be skipped;
-                    // otherwise it is a binding (either the local after
-                    // a colon, or a shorthand entry).
-                    let mut j = i;
-                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                        j += 1;
-                    }
-                    bytes.get(j) != Some(&b':')
-                } else {
-                    true
-                };
-                if take {
-                    out.push(name);
-                }
-            }
-            _ => {
-                i += 1;
-            }
-        }
+/// Falls back to a single `__svn_each_unused` token when the slice
+/// binds nothing, so the emitted `void` line stays valid.
+pub(crate) fn pattern_binding_names(pattern: &str) -> Vec<SmolStr> {
+    use oxc_ast::ast::Statement;
+
+    let wrapped = format!("let {pattern} = 0;");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    let mut out = Vec::new();
+    if let Some(Statement::VariableDeclaration(decl)) = parsed.program.body.first()
+        && let Some(d) = decl.declarations.first()
+    {
+        out.extend(
+            collect_pattern_bindings(&d.id, 0)
+                .bindings
+                .into_iter()
+                .map(|b| b.name),
+        );
     }
     if out.is_empty() {
-        out.push("__svn_each_unused");
+        out.push(SmolStr::new_static("__svn_each_unused"));
     }
     out
+}
+
+/// Every identifier a snippet parameter list binds, in source order.
+/// Type annotations and default values are part of the list and are
+/// skipped by the parse.
+pub(crate) fn param_binding_names(params: &str) -> Vec<SmolStr> {
+    use oxc_ast::ast::{Expression, Statement};
+
+    let wrapped = format!("({params}) => 0;");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
+        return Vec::new();
+    };
+    let Expression::ArrowFunctionExpression(arrow) = &stmt.expression else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for param in &arrow.params.items {
+        out.extend(
+            collect_pattern_bindings(&param.pattern, 0)
+                .bindings
+                .into_iter()
+                .map(|b| b.name),
+        );
+    }
+    if let Some(rest) = &arrow.params.rest {
+        out.extend(
+            collect_pattern_bindings(&rest.rest.argument, 0)
+                .bindings
+                .into_iter()
+                .map(|b| b.name),
+        );
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{param_binding_names, pattern_binding_names};
+
+    fn pat(s: &str) -> Vec<String> {
+        pattern_binding_names(s)
+            .iter()
+            .map(|n| n.to_string())
+            .collect()
+    }
+    fn params(s: &str) -> Vec<String> {
+        param_binding_names(s)
+            .iter()
+            .map(|n| n.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn pattern_shapes() {
+        assert_eq!(pat("id"), ["id"]);
+        assert_eq!(pat("[id, { label }]"), ["id", "label"]);
+        assert_eq!(pat("{ a: x, b }"), ["x", "b"]);
+        assert_eq!(pat("{ 'my-key': v }"), ["v"]);
+        assert_eq!(pat("{ a = 'p,qq' }"), ["a"]);
+        assert_eq!(pat("{ [k]: v }"), ["v"]);
+        assert_eq!(pat(""), ["__svn_each_unused"]);
+    }
+
+    #[test]
+    fn param_shapes() {
+        assert_eq!(params("a: 'x' | 'y,zed'"), ["a"]);
+        assert_eq!(params("a: Map<() => void, string>, b = 2"), ["a", "b"]);
+        assert_eq!(
+            params("{ months, weekdays }, ...rest"),
+            ["months", "weekdays", "rest"]
+        );
+        assert!(params("").is_empty());
+    }
 }

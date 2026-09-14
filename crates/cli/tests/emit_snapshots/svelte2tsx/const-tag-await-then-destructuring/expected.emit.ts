@@ -33,8 +33,7 @@ async function $$render_e40e2c10() {
             void height;
         }
         {
-            const width = __svn_any();
-            const height = __svn_any();
+            const { width, height } = __svn_any();
             const {area, volume} = calculate(width, height, constant);
             void area;
             void volume;

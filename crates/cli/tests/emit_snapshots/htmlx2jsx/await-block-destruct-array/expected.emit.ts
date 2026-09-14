@@ -9,9 +9,7 @@ async function $$render_e40e2c10() {
             void b;
         }
         {
-            const c = __svn_any();
-            const d = __svn_any();
-            const e = __svn_any();
+            const [c, [d, e]] = __svn_any();
             void c;
             void d;
             void e;

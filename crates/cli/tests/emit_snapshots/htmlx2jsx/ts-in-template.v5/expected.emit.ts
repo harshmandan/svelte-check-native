@@ -80,7 +80,7 @@ async function $$render_e40e2c10() {
                 void result;
             }
             {
-                const error = __svn_any();
+                const error: any = __svn_any();
                 void error;
             }
             ;(item as string);

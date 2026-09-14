@@ -73,7 +73,7 @@ pub use store::{
     collect_type_only_import_bindings, collect_typed_top_level_lets, collect_typed_uninit_lets,
     find_store_refs, find_store_refs_with_bindings, has_svelte_store_derived_import,
 };
-pub use template_refs::find_template_refs;
+pub use template_refs::{TemplateExpression, find_template_refs, template_expression_ranges};
 pub use template_scope::extract_at_const_bindings;
 pub use void_refs::VoidRefRegistry;
 pub use walker::{

@@ -76,89 +76,135 @@ use svn_parser::{
 pub fn find_template_refs(fragment: &Fragment, source: &str) -> Vec<SmolStr> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    walk_fragment(fragment, source, &mut seen, &mut out);
+    walk_fragment(fragment, &mut |site| match site {
+        TemplateSite::Expression(range) | TemplateSite::Declaration(range) => {
+            extract_idents(source, range, &mut seen, &mut out)
+        }
+        TemplateSite::Name(name) => push_ident(name, &mut seen, &mut out),
+    });
     out
 }
 
-fn walk_fragment(
-    fragment: &Fragment,
-    source: &str,
-    seen: &mut HashSet<SmolStr>,
-    out: &mut Vec<SmolStr>,
-) {
+/// Every expression-bearing byte range in the template fragment —
+/// the positions `find_template_refs` reads identifiers from — in
+/// source order. A declaration payload (`{@const a = b}`, `{let a =
+/// b}`) is flagged: its text is a declarator list, not an expression.
+pub fn template_expression_ranges(fragment: &Fragment) -> Vec<TemplateExpression> {
+    let mut out = Vec::new();
+    walk_fragment(fragment, &mut |site| match site {
+        TemplateSite::Expression(range) => out.push(TemplateExpression {
+            range,
+            is_declaration: false,
+        }),
+        TemplateSite::Declaration(range) => out.push(TemplateExpression {
+            range,
+            is_declaration: true,
+        }),
+        TemplateSite::Name(_) => {}
+    });
+    out
+}
+
+/// One expression-bearing template range — see
+/// [`template_expression_ranges`].
+#[derive(Debug, Clone, Copy)]
+pub struct TemplateExpression {
+    pub range: Range,
+    /// The payload after `@const` / `const` / `let`: `NAME = EXPR`,
+    /// to be read as a declarator list.
+    pub is_declaration: bool,
+}
+
+/// One place the template refers to script-level values: an expression
+/// slice, a declaration-tag payload, or a bare name (a component tag,
+/// a directive name, a shorthand attribute).
+enum TemplateSite<'a> {
+    Expression(Range),
+    Declaration(Range),
+    Name(&'a str),
+}
+
+fn walk_fragment(fragment: &Fragment, sink: &mut dyn FnMut(TemplateSite<'_>)) {
     for node in &fragment.nodes {
-        walk_node(node, source, seen, out);
+        walk_node(node, sink);
     }
 }
 
-fn walk_node(node: &Node, source: &str, seen: &mut HashSet<SmolStr>, out: &mut Vec<SmolStr>) {
+fn walk_node(node: &Node, sink: &mut dyn FnMut(TemplateSite<'_>)) {
     match node {
         Node::Element(e) => {
-            walk_attributes(&e.attributes, source, seen, out);
-            walk_fragment(&e.children, source, seen, out);
+            walk_attributes(&e.attributes, sink);
+            walk_fragment(&e.children, sink);
         }
         Node::Component(c) => {
             // `<MyButton />` and `<ui.MyButton />` — the root identifier is
             // a value reference to the imported binding.
-            push_ident(component_root(&c.name), seen, out);
-            walk_attributes(&c.attributes, source, seen, out);
-            walk_fragment(&c.children, source, seen, out);
+            sink(TemplateSite::Name(component_root(&c.name)));
+            walk_attributes(&c.attributes, sink);
+            walk_fragment(&c.children, sink);
         }
         Node::SvelteElement(s) => {
-            walk_attributes(&s.attributes, source, seen, out);
-            walk_fragment(&s.children, source, seen, out);
+            walk_attributes(&s.attributes, sink);
+            walk_fragment(&s.children, sink);
         }
-        Node::Interpolation(i) => extract_idents(source, i.expression_range, seen, out),
+        Node::Interpolation(i) => {
+            use svn_parser::InterpolationKind;
+            if matches!(
+                i.kind,
+                InterpolationKind::AtConst
+                    | InterpolationKind::DeclConst
+                    | InterpolationKind::DeclLet
+            ) {
+                sink(TemplateSite::Declaration(i.expression_range))
+            } else {
+                sink(TemplateSite::Expression(i.expression_range))
+            }
+        }
         Node::IfBlock(b) => {
-            extract_idents(source, b.condition_range, seen, out);
-            walk_fragment(&b.consequent, source, seen, out);
+            sink(TemplateSite::Expression(b.condition_range));
+            walk_fragment(&b.consequent, sink);
             for arm in &b.elseif_arms {
-                extract_idents(source, arm.condition_range, seen, out);
-                walk_fragment(&arm.body, source, seen, out);
+                sink(TemplateSite::Expression(arm.condition_range));
+                walk_fragment(&arm.body, sink);
             }
             if let Some(alt) = &b.alternate {
-                walk_fragment(alt, source, seen, out);
+                walk_fragment(alt, sink);
             }
         }
         Node::EachBlock(b) => {
-            extract_idents(source, b.expression_range, seen, out);
+            sink(TemplateSite::Expression(b.expression_range));
             if let Some(c) = &b.as_clause {
                 if let Some(k) = c.key_range {
-                    extract_idents(source, k, seen, out);
+                    sink(TemplateSite::Expression(k));
                 }
             }
-            walk_fragment(&b.body, source, seen, out);
+            walk_fragment(&b.body, sink);
             if let Some(alt) = &b.alternate {
-                walk_fragment(alt, source, seen, out);
+                walk_fragment(alt, sink);
             }
         }
         Node::AwaitBlock(b) => {
-            extract_idents(source, b.expression_range, seen, out);
+            sink(TemplateSite::Expression(b.expression_range));
             if let Some(p) = &b.pending {
-                walk_fragment(p, source, seen, out);
+                walk_fragment(p, sink);
             }
             if let Some(t) = &b.then_branch {
-                walk_fragment(&t.body, source, seen, out);
+                walk_fragment(&t.body, sink);
             }
             if let Some(c) = &b.catch_branch {
-                walk_fragment(&c.body, source, seen, out);
+                walk_fragment(&c.body, sink);
             }
         }
         Node::KeyBlock(b) => {
-            extract_idents(source, b.expression_range, seen, out);
-            walk_fragment(&b.body, source, seen, out);
+            sink(TemplateSite::Expression(b.expression_range));
+            walk_fragment(&b.body, sink);
         }
-        Node::SnippetBlock(b) => walk_fragment(&b.body, source, seen, out),
+        Node::SnippetBlock(b) => walk_fragment(&b.body, sink),
         Node::Text(_) | Node::Comment(_) => {}
     }
 }
 
-fn walk_attributes(
-    attrs: &[Attribute],
-    source: &str,
-    seen: &mut HashSet<SmolStr>,
-    out: &mut Vec<SmolStr>,
-) {
+fn walk_attributes(attrs: &[Attribute], sink: &mut dyn FnMut(TemplateSite<'_>)) {
     for attr in attrs {
         match attr {
             Attribute::Plain(p) => {
@@ -168,26 +214,21 @@ fn walk_attributes(
                             expression_range, ..
                         } = part
                         {
-                            extract_idents(source, *expression_range, seen, out);
+                            sink(TemplateSite::Expression(*expression_range));
                         }
                     }
                 }
             }
-            Attribute::Expression(e) => extract_idents(source, e.expression_range, seen, out),
-            Attribute::Shorthand(s) => push_ident(&s.name, seen, out),
-            Attribute::Spread(s) => extract_idents(source, s.expression_range, seen, out),
-            Attribute::Directive(d) => walk_directive(d, source, seen, out),
+            Attribute::Expression(e) => sink(TemplateSite::Expression(e.expression_range)),
+            Attribute::Shorthand(s) => sink(TemplateSite::Name(&s.name)),
+            Attribute::Spread(s) => sink(TemplateSite::Expression(s.expression_range)),
+            Attribute::Directive(d) => walk_directive(d, sink),
             Attribute::Comment(_) => {}
         }
     }
 }
 
-fn walk_directive(
-    d: &Directive,
-    source: &str,
-    seen: &mut HashSet<SmolStr>,
-    out: &mut Vec<SmolStr>,
-) {
+fn walk_directive(d: &Directive, sink: &mut dyn FnMut(TemplateSite<'_>)) {
     // For directives where the name itself is a value reference (action,
     // transition, animation), record it. For the others (`on:click`,
     // `class:active`, `style:left`) the name is an event/CSS-name and
@@ -201,22 +242,22 @@ fn walk_directive(
             | DirectiveKind::Animate
     );
     if name_is_ref {
-        push_ident(&d.name, seen, out);
+        sink(TemplateSite::Name(&d.name));
     }
 
     match &d.value {
         Some(DirectiveValue::Expression {
             expression_range, ..
         }) => {
-            extract_idents(source, *expression_range, seen, out);
+            sink(TemplateSite::Expression(*expression_range));
         }
         Some(DirectiveValue::BindPair {
             getter_range,
             setter_range,
             ..
         }) => {
-            extract_idents(source, *getter_range, seen, out);
-            extract_idents(source, *setter_range, seen, out);
+            sink(TemplateSite::Expression(*getter_range));
+            sink(TemplateSite::Expression(*setter_range));
         }
         Some(DirectiveValue::Quoted(v)) => {
             for part in &v.parts {
@@ -224,7 +265,7 @@ fn walk_directive(
                     expression_range, ..
                 } = part
                 {
-                    extract_idents(source, *expression_range, seen, out);
+                    sink(TemplateSite::Expression(*expression_range));
                 }
             }
         }
@@ -243,7 +284,7 @@ fn walk_directive(
                 DirectiveKind::Bind | DirectiveKind::Class | DirectiveKind::Style
             );
             if bare_is_shorthand {
-                push_ident(&d.name, seen, out);
+                sink(TemplateSite::Name(&d.name));
             }
         }
     }

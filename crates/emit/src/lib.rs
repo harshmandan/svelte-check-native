@@ -383,6 +383,12 @@ fn emit_document_with_render_name(
     // `type $$Slots`, the render-fn return uses that as the slots
     // surface; the synthesised slot-defs are ignored.
     let has_strict_slots_decl = svelte4::compat::has_strict_slots_ast(parsed_instance.as_ref());
+    let runes_mode = is_runes_mode(
+        doc,
+        fragment,
+        parsed_instance.as_ref(),
+        parsed_module.as_ref(),
+    );
 
     // Single analyze-time resolution of every Props decision emit
     // makes downstream — type text, type root name, destructure
@@ -491,8 +497,7 @@ fn emit_document_with_render_name(
     // `createEventDispatcher<T>()` without opting into strict events —
     // narrowing those without opt-in produced 18 legitimate-but-new
     // errors on a Svelte-4 bench in the reverted commit 3c24f18.
-    let narrow_events =
-        has_strict_events_decl || has_strict_events_attr(doc) || is_runes_mode(doc, fragment);
+    let narrow_events = has_strict_events_decl || has_strict_events_attr(doc) || runes_mode;
     // If the component doesn't already declare `$$Events` but opted in
     // via one of the other two triggers, pull the dispatcher's type
     // argument as the source for a synthesised `type $$Events = T;`.
@@ -1556,6 +1561,7 @@ fn emit_document_with_render_name(
             events_alias_body.is_some(),
             has_strict_events_decl,
             has_bubbled_events,
+            runes_mode,
         );
     } else {
         emit_default_export_declarations_js(&mut buf, &render_name);
@@ -1806,7 +1812,7 @@ pub use is_ts::set_preserve_attribute_case;
 pub(crate) use is_ts::{IsTsGuard, emit_is_ts, preserve_attribute_case};
 pub(crate) use void_block::{emit_bind_pair_declarations, emit_void_block};
 
-pub(crate) use destructure_idents::all_identifiers;
+pub(crate) use destructure_idents::{param_binding_names, pattern_binding_names};
 
 #[cfg(test)]
 mod tests {

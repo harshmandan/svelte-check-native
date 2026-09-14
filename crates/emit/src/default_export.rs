@@ -22,9 +22,7 @@ use svn_parser::{Document, Fragment};
 
 use crate::emit_buffer::EmitBuffer;
 use crate::process_instance_script_content;
-use crate::svelte4::compat::{
-    contains_export_let, fragment_contains_slot, is_runes_mode, is_svelte4_component,
-};
+use crate::svelte4::compat::{contains_export_let, fragment_contains_slot, is_svelte4_component};
 use crate::util::{generic_arg_names, render_class_name};
 
 /// JS-overlay default-export shape. Captures Props via
@@ -126,6 +124,7 @@ pub(crate) fn emit_default_export_declarations_ts(
     has_synth_events_alias: bool,
     has_strict_events_decl: bool,
     has_bubbled_events: bool,
+    runes_mode: bool,
 ) {
     // Upstream's `addComponentExport.ts:343` selects between three
     // default-export shapes. For the **non-generic, runes, no-slots,
@@ -158,12 +157,12 @@ pub(crate) fn emit_default_export_declarations_ts(
         buf.push_str("void (0 as any as __svn_tpl_type_refs);\n");
     }
     if should_emit_fn_component_shape(
-        doc,
         fragment,
         generics,
         has_concrete_dispatcher_events,
         has_strict_events_decl,
         has_bubbled_events,
+        runes_mode,
     ) {
         // Round-9 follow-up #1: fn-shape doesn't carry the typed-
         // events marker (upstream's `__sveltets_2_fn_component` is a
@@ -487,17 +486,17 @@ pub(crate) fn emit_default_export_declarations_ts(
 /// satisfy a `new` ctor, so the iso interface fires false-positive
 /// TS2322s on those patterns.
 fn should_emit_fn_component_shape(
-    doc: &Document<'_>,
     fragment: &Fragment,
     generics: Option<&str>,
     has_concrete_dispatcher_events: bool,
     has_strict_events_decl: bool,
     has_bubbled_events: bool,
+    runes_mode: bool,
 ) -> bool {
     if generics.is_some() {
         return false;
     }
-    if !is_runes_mode(doc, fragment) {
+    if !runes_mode {
         return false;
     }
     if fragment_contains_slot(fragment) {

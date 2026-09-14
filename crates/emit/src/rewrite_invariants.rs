@@ -163,6 +163,7 @@ fn definite_assignment_edits_reconstruct() {
     let mut out = input.to_string();
     let edits = rewrite_definite_assignment_in_place(
         &mut out,
+        &(0..input.len()),
         &[SmolStr::from("el"), SmolStr::from("other")],
     );
     assert_edits_reconstruct(input, &out, &edits);
@@ -174,6 +175,7 @@ fn widen_untyped_exports_edits_reconstruct() {
     let mut out = input.to_string();
     let edits = widen_untyped_exported_props_in_place(
         &mut out,
+        &(0..input.len()),
         &[SmolStr::from("foo"), SmolStr::from("bar")],
         None,
     );
@@ -186,6 +188,7 @@ fn widen_untyped_exports_jsdoc_edits_reconstruct() {
     let mut out = input.to_string();
     let edits = widen_untyped_exports_jsdoc_in_place(
         &mut out,
+        &(0..input.len()),
         &[SmolStr::from("foo"), SmolStr::from("bar")],
         None,
     );
@@ -196,7 +199,11 @@ fn widen_untyped_exports_jsdoc_edits_reconstruct() {
 fn denarrow_typed_exports_edits_reconstruct() {
     let input = "let size: string = 'medium';\nsize;\n";
     let mut out = input.to_string();
-    let edits = denarrow_typed_exported_props_in_place(&mut out, &[SmolStr::from("size")]);
+    let edits = denarrow_typed_exported_props_in_place(
+        &mut out,
+        &(0..input.len()),
+        &[SmolStr::from("size")],
+    );
     assert_edits_reconstruct(input, &out, &edits);
 }
 

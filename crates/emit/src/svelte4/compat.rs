@@ -12,230 +12,179 @@
 //! along with the `// SVELTE-4-COMPAT` callsites in `lib.rs`. See
 //! `design/phase_g/DESIGN.md`.
 
+use std::ops::Range;
+
 use smol_str::SmolStr;
+use svn_parser::ScriptLang;
 
 use crate::process_instance_script_content;
 use crate::sveltekit;
-use crate::util::{is_ascii_ws, is_horiz_ws, is_ident_byte};
+use crate::util::{is_ascii_ws, is_ident_byte};
 
-/// Rewrite `let <name>: T;` → `let <name>!: T;` for each bind-target
-/// identifier, in-place inside the already-built output buffer.
+/// A top-level `let` declarator in the instance script body. Byte
+/// positions are absolute offsets into the emit buffer.
+struct LetDeclarator {
+    name: SmolStr,
+    /// Position right after the binding name, where `!` or `: T` goes.
+    name_end: usize,
+    has_type_annotation: bool,
+    /// Already carries a `!` definite-assignment assertion.
+    definite: bool,
+    init: DeclaratorInit,
+    /// Position right after the whole `let …` statement.
+    stmt_end: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeclaratorInit {
+    Absent,
+    /// `= undefined` or `= null`.
+    Nullish,
+    Other,
+}
+
+/// Parse the script body spliced at `body` inside `out` and list its
+/// top-level `let` declarators that bind a plain identifier.
 ///
-/// Svelte assigns a `bind:this` target asynchronously, after the binding
-/// element mounts. TypeScript's flow analysis can't see that, so any
-/// closure reading the variable would be flagged "used before being
-/// assigned" (TS2454). The `!:` definite-assignment assertion tells
-/// TypeScript to trust us.
-///
-/// Only matches `let <name>:` patterns with the colon — declarations with
-/// initializers (`let x = ...`) are already definitely assigned and don't
-/// need the `!`. Adding `!` to an initialized declaration is itself a TS
-/// error (TS1263).
-///
-/// Returns the insertions performed as ascending `(position, length)`
-/// pairs in PRE-rewrite buffer coordinates (none of the inserted text
-/// contains a newline). Callers that hold position metadata computed
-/// against the pre-rewrite buffer (token-map byte spans) must re-anchor
-/// it with these — see `EmitBuffer::adjust_token_map_for_insertions`.
-pub(crate) fn rewrite_definite_assignment_in_place(
-    out: &mut String,
-    target_names: &[SmolStr],
-) -> Vec<(u32, u32)> {
-    let mut edits: Vec<(u32, u32)> = Vec::new();
-    if target_names.is_empty() {
-        return edits;
+/// The in-place rewrites need to know where a declaration's name, type
+/// annotation and statement end sit. A byte scan misreads text that
+/// only looks like code — the word `let` in a comment followed by an
+/// unclosed `(`, an initializer continued onto the next line by a
+/// trailing `+` — so the positions come from the parser. Only
+/// top-level statements count: every rewrite target is a
+/// component-scope binding, and a nested `let` with the same name is a
+/// different variable.
+fn collect_top_level_lets(out: &str, body: &Range<usize>) -> Vec<LetDeclarator> {
+    use oxc_ast::ast::{
+        BindingPattern, Declaration, Expression, Statement, VariableDeclarationKind,
+    };
+
+    let Some(src) = out.get(body.clone()) else {
+        return Vec::new();
+    };
+    let alloc = oxc_allocator::Allocator::default();
+    // Always parse as TypeScript. It accepts every JS body, and a JS
+    // overlay's body can still hold TS-only syntax (a `lang`-less script
+    // with a type annotation) that would make a JS parse give up.
+    let parsed = svn_parser::parse_script_body(&alloc, src, ScriptLang::Ts);
+    if parsed.panicked {
+        return Vec::new();
     }
-    // Phase 1: scan for `!` insertion positions without touching the
-    // buffer. A statement match can only start at an ASCII `l`, never
-    // inside a multi-byte char, so a plain byte step is safe.
-    let bytes = out.as_bytes();
-    let mut positions: Vec<usize> = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if let Some((stmt_end, insertions)) = try_process_let_statement(bytes, i, target_names) {
-            positions.extend(insertions);
-            i = stmt_end;
-        } else {
-            i += 1;
+    let mut decls = Vec::new();
+    for stmt in &parsed.program.body {
+        let decl = match stmt {
+            Statement::VariableDeclaration(d) => d,
+            Statement::ExportDeclaration(e) => match &e.declaration {
+                Declaration::VariableDeclaration(d) => d,
+                _ => continue,
+            },
+            // None of these can declare a `let`.
+            Statement::FunctionDeclaration(_)
+            | Statement::ClassDeclaration(_)
+            | Statement::ImportDeclaration(_)
+            | Statement::ExportNamedDeclaration(_)
+            | Statement::ExportFromDeclaration(_)
+            | Statement::ExportAllDeclaration(_)
+            | Statement::ExportDefaultDeclaration(_)
+            | Statement::TSInterfaceDeclaration(_)
+            | Statement::TSTypeAliasDeclaration(_)
+            | Statement::TSEnumDeclaration(_)
+            | Statement::TSExternalModuleDeclaration(_)
+            | Statement::TSNamespaceDeclaration(_)
+            | Statement::TSGlobalDeclaration(_)
+            | Statement::TSImportEqualsDeclaration(_)
+            | Statement::TSExportAssignment(_)
+            | Statement::TSNamespaceExportDeclaration(_) => continue,
+            svn_analyze::non_declaration_statement!() => continue,
+        };
+        if decl.kind != VariableDeclarationKind::Let {
+            continue;
+        }
+        let stmt_end = body.start + decl.span.end as usize;
+        for d in &decl.declarations {
+            let BindingPattern::BindingIdentifier(id) = &d.id else {
+                continue;
+            };
+            let init = match &d.init {
+                None => DeclaratorInit::Absent,
+                Some(Expression::NullLiteral(_)) => DeclaratorInit::Nullish,
+                Some(Expression::Identifier(i)) if i.name.as_str() == "undefined" => {
+                    DeclaratorInit::Nullish
+                }
+                Some(_) => DeclaratorInit::Other,
+            };
+            decls.push(LetDeclarator {
+                name: SmolStr::from(id.name.as_str()),
+                name_end: body.start + id.span.end as usize,
+                has_type_annotation: d.type_annotation.is_some(),
+                definite: d.definite,
+                init,
+                stmt_end,
+            });
         }
     }
-    if positions.is_empty() {
-        return edits;
+    decls
+}
+
+fn is_target(target_names: &[SmolStr], name: &str) -> bool {
+    target_names.iter().any(|t| t == name)
+}
+
+/// Splice `(position, text)` insertions into `out` in one rebuild.
+/// Positions must be ascending. Returns the edits as `(position,
+/// length)` pairs in pre-rewrite coordinates, the shape
+/// `EmitBuffer::adjust_token_map_for_insertions` re-anchors with.
+fn splice_insertions(out: &mut String, insertions: &[(usize, String)]) -> Vec<(u32, u32)> {
+    if insertions.is_empty() {
+        return Vec::new();
     }
-    // Phase 2: rebuild once with bulk segment copies, a `!` spliced
-    // after each matched binding identifier. Positions are ascending.
     let original = std::mem::take(out);
-    let mut rebuilt = String::with_capacity(original.len() + positions.len());
+    let extra: usize = insertions.iter().map(|(_, text)| text.len()).sum();
+    let mut rebuilt = String::with_capacity(original.len() + extra);
+    let mut edits = Vec::with_capacity(insertions.len());
     let mut cursor = 0;
-    for pos in positions {
-        rebuilt.push_str(&original[cursor..pos]);
-        rebuilt.push('!');
-        edits.push((pos as u32, 1));
-        cursor = pos;
+    for (pos, text) in insertions {
+        rebuilt.push_str(&original[cursor..*pos]);
+        rebuilt.push_str(text);
+        edits.push((*pos as u32, text.len() as u32));
+        cursor = *pos;
     }
     rebuilt.push_str(&original[cursor..]);
     *out = rebuilt;
     edits
 }
 
-/// At byte position `i`, try to recognize an entire `let …;` statement
-/// and collect every binding identifier that needs a `!` definite-
-/// assignment assertion. Returns `Some((stmt_end, insertions))` on
-/// success, where `insertions` are byte positions (ascending) at which
-/// to splice `!`. `stmt_end` is the byte position AFTER the terminating
-/// `;` (or at newline / EOF if no `;`).
+/// Rewrite `let <name>: T;` → `let <name>!: T;` for each target
+/// declared at the top level of the script body at `body`.
 ///
-/// A declarator qualifies for insertion when its binding is a target
-/// name AND it has a `:` type annotation AND has NO `=` initializer
-/// before the next `,` or `;` (per TS1263: definite-assignment
-/// assertions are illegal with initializers).
+/// Svelte assigns these at runtime (a parent passes the prop, a
+/// `bind:this` element mounts), but TypeScript's flow analysis can't
+/// see that, so any read would be flagged "used before being
+/// assigned" (TS2454). The `!:` definite-assignment assertion tells
+/// TypeScript to trust us.
 ///
-/// Handles both the simple shape `let foo: T;` and the multi-
-/// declarator shape `let a: A = v, b: B, c: C = v;` — each declarator
-/// is checked independently.
-fn try_process_let_statement(
-    bytes: &[u8],
-    i: usize,
+/// Only typed declarators without an initializer qualify: an untyped
+/// one has no annotation to attach `!` to, and `!` next to an
+/// initializer is itself an error (TS1263).
+pub(crate) fn rewrite_definite_assignment_in_place(
+    out: &mut String,
+    body: &Range<usize>,
     target_names: &[SmolStr],
-) -> Option<(usize, Vec<usize>)> {
-    if i + 3 > bytes.len() || &bytes[i..i + 3] != b"let" {
-        return None;
+) -> Vec<(u32, u32)> {
+    if target_names.is_empty() {
+        return Vec::new();
     }
-    if i > 0 && is_ident_byte(bytes[i - 1]) {
-        return None;
-    }
-    let after_let = i + 3;
-    if after_let >= bytes.len() || !is_ascii_ws(bytes[after_let]) {
-        return None;
-    }
-
-    let mut insertions: Vec<usize> = Vec::new();
-    let mut p = after_let;
-    loop {
-        while p < bytes.len() && is_ascii_ws(bytes[p]) {
-            p += 1;
-        }
-        if p >= bytes.len()
-            || !(bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] == b'$')
-        {
-            return None;
-        }
-        let name_start = p;
-        while p < bytes.len() && is_ident_byte(bytes[p]) {
-            p += 1;
-        }
-        let name_end = p;
-        let name = &bytes[name_start..name_end];
-
-        // Use the same continuation scan as the denarrow/widen twins: a
-        // blanket whitespace skip swallows across an ASI newline into the
-        // next statement, so a semicolon-free `let foo` preceding a typed
-        // declaration mis-detected its type-annotation boundary and the
-        // definite-assignment `!` was dropped (spurious TS2454).
-        let mut s = skip_to_decl_continuation(bytes, name_end);
-        let has_type_annotation = s < bytes.len() && bytes[s] == b':';
-        if has_type_annotation {
-            s += 1;
-        }
-
-        let mut has_initializer = false;
-        let mut paren_depth: i32 = 0;
-        while s < bytes.len() {
-            let c = bytes[s];
-            match c {
-                b'"' | b'\'' | b'`' => {
-                    s = skip_string_literal(bytes, s, c);
-                    continue;
-                }
-                b'/' if bytes.get(s + 1).copied() == Some(b'/') => {
-                    while s < bytes.len() && bytes[s] != b'\n' {
-                        s += 1;
-                    }
-                    continue;
-                }
-                b'/' if bytes.get(s + 1).copied() == Some(b'*') => {
-                    let mut k = s + 2;
-                    while k + 1 < bytes.len() && !(bytes[k] == b'*' && bytes[k + 1] == b'/') {
-                        k += 1;
-                    }
-                    s = k.saturating_add(2).min(bytes.len());
-                    continue;
-                }
-                b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
-                b')' | b']' | b'}' => paren_depth -= 1,
-                b'>' => {
-                    // Two non-generic-close forms to guard against:
-                    //   `=>` — arrow return (prev byte is `=`)
-                    //   `>=` — greater-or-equal (next byte is `=`).
-                    let prev = if s > 0 { Some(bytes[s - 1]) } else { None };
-                    let next = bytes.get(s + 1).copied();
-                    let skip_decrement = prev == Some(b'=') || next == Some(b'=');
-                    if !skip_decrement {
-                        paren_depth -= 1;
-                    }
-                }
-                b'=' if paren_depth == 0 => {
-                    let next = bytes.get(s + 1).copied();
-                    match next {
-                        Some(b'>') => {
-                            s += 2;
-                            continue;
-                        }
-                        Some(b'=') => {
-                            s += 1;
-                        }
-                        _ => {
-                            has_initializer = true;
-                        }
-                    }
-                }
-                b',' | b';' if paren_depth == 0 => break,
-                b'\n' if paren_depth == 0 => {
-                    // ASI at a statement boundary — but only when the
-                    // next non-whitespace character doesn't continue
-                    // a type annotation. Multi-line union/
-                    // intersection types continue across newlines
-                    // with a leading `|` / `&`.
-                    let mut k = s + 1;
-                    while k < bytes.len() && matches!(bytes[k], b' ' | b'\t') {
-                        k += 1;
-                    }
-                    let next_nonws = bytes.get(k).copied();
-                    if !matches!(next_nonws, Some(b'|') | Some(b'&')) {
-                        break;
-                    }
-                }
-                _ => {}
-            }
-            s += 1;
-        }
-
-        if has_type_annotation
-            && !has_initializer
-            && target_names.iter().any(|t| t.as_bytes() == name)
-        {
-            insertions.push(name_end);
-        }
-
-        if s >= bytes.len() {
-            return Some((s, insertions));
-        }
-        match bytes[s] {
-            b',' => {
-                p = s + 1;
-                continue;
-            }
-            b';' => {
-                return Some((s + 1, insertions));
-            }
-            b'\n' => {
-                return Some((s, insertions));
-            }
-            _ => {
-                return Some((s, insertions));
-            }
-        }
-    }
+    let insertions: Vec<(usize, String)> = collect_top_level_lets(out, body)
+        .into_iter()
+        .filter(|d| {
+            d.has_type_annotation
+                && !d.definite
+                && d.init == DeclaratorInit::Absent
+                && is_target(target_names, &d.name)
+        })
+        .map(|d| (d.name_end, String::from("!")))
+        .collect();
+    splice_insertions(out, &insertions)
 }
 
 /// SVELTE-4-COMPAT: heuristic detector for components that use Svelte-4
@@ -815,265 +764,41 @@ fn skip_string_literal(bytes: &[u8], start: usize, quote: u8) -> usize {
     s
 }
 
-/// True iff a `\n` at byte position `s` is INSIDE a continued
-/// expression — i.e. the surrounding tokens make this newline an
-/// ASI-suppressed line break rather than a statement terminator.
+/// Append ` NAME = undefined as any;` after each top-level `let`
+/// statement that declares an initialized target.
 ///
-/// Continues if either side hints at continuation:
-///   - previous non-ws byte is `=` (RHS of assignment incomplete)
-///   - next non-ws byte is an operator that takes a LHS (`?:.&|+-*/%^=`)
-///     EXCLUDING comment starts (`//` and `/*`), where the `/` would
-///     otherwise be misread as division.
-///
-/// `*` could also start `*/` (block comment close), but a `*/` only
-/// appears inside a block comment which the scanner shouldn't be
-/// inside — block comments suppress `\n` handling at parse time.
-/// Conservative: `*` followed by `/` is also non-continuation.
-fn line_continues(bytes: &[u8], s: usize) -> bool {
-    let mut prev = s;
-    while prev > 0 {
-        prev -= 1;
-        let b = bytes[prev];
-        if b != b' ' && b != b'\t' {
-            break;
-        }
-    }
-    let prev_continues = bytes[prev] == b'=';
-
-    let mut next = s + 1;
-    while next < bytes.len() && matches!(bytes[next], b' ' | b'\t' | b'\n') {
-        next += 1;
-    }
-    let next_continues = if next >= bytes.len() {
-        false
-    } else {
-        let c = bytes[next];
-        if !matches!(
-            c,
-            b'?' | b':' | b'.' | b'&' | b'|' | b'+' | b'-' | b'*' | b'/' | b'%' | b'^' | b'='
-        ) {
-            false
-        } else {
-            let after = bytes.get(next + 1).copied();
-            // `//` line comment, `/*` block comment, `*/` block close
-            !matches!(
-                (c, after),
-                (b'/', Some(b'/')) | (b'/', Some(b'*')) | (b'*', Some(b'/'))
-            )
-        }
-    };
-
-    prev_continues || next_continues
-}
-
-/// Advance `s` past horizontal whitespace, then optionally past one
-/// `\n` (and following indentation) iff the next non-ws byte signals
-/// the declarator continues — i.e. is `:` (type annotation), `=`
-/// (initializer), or `!` (definite-assign marker). Returns the new
-/// `s`. Used by both declarator scanners to walk the post-name gap
-/// without misreading `let X\nlet Y = init` as one declarator.
-fn skip_to_decl_continuation(bytes: &[u8], mut s: usize) -> usize {
-    while s < bytes.len() && is_horiz_ws(bytes[s]) {
-        s += 1;
-    }
-    if s < bytes.len() && bytes[s] == b'\n' {
-        let mut probe = s + 1;
-        while probe < bytes.len() && is_ascii_ws(bytes[probe]) {
-            probe += 1;
-        }
-        let continues = probe < bytes.len() && matches!(bytes[probe], b':' | b'=' | b'!');
-        if continues {
-            s = probe;
-        }
-    }
-    s
-}
-
+/// `export let size: Size = 'medium'` narrows `size` to the literal, so
+/// a later `size === 'large'` fires TS2367 ("no overlap"). Assigning
+/// `any` right after the declaration widens it back to the annotation.
 pub(crate) fn denarrow_typed_exported_props_in_place(
     out: &mut String,
+    body: &Range<usize>,
     target_names: &[SmolStr],
 ) -> Vec<(u32, u32)> {
-    let mut edits: Vec<(u32, u32)> = Vec::new();
     if target_names.is_empty() {
-        return edits;
+        return Vec::new();
     }
-    // Phase 1: scan for qualifying statements without touching the
-    // buffer.
-    let bytes = out.as_bytes();
-    let mut sites: Vec<(usize, Vec<SmolStr>)> = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if let Some((stmt_end, matched_names)) =
-            try_process_let_statement_for_denarrow(bytes, i, target_names)
-        {
-            if !matched_names.is_empty() {
-                sites.push((stmt_end, matched_names));
-            }
-            i = stmt_end;
-        } else {
-            i += 1;
+    let mut insertions: Vec<(usize, String)> = Vec::new();
+    for d in collect_top_level_lets(out, body) {
+        if d.init == DeclaratorInit::Absent || !is_target(target_names, &d.name) {
+            continue;
         }
-    }
-    if sites.is_empty() {
-        return edits;
-    }
-    // Phase 2: rebuild once with bulk segment copies, appending the
-    // ` NAME = undefined as any;` trailer after each matched statement.
-    let original = std::mem::take(out);
-    let trailer_estimate: usize = sites
-        .iter()
-        .map(|(_, names)| 1 + names.iter().map(|n| n.len() + 21).sum::<usize>())
-        .sum();
-    let mut rebuilt = String::with_capacity(original.len() + trailer_estimate);
-    let mut cursor = 0;
-    for (stmt_end, matched_names) in sites {
-        rebuilt.push_str(&original[cursor..stmt_end]);
-        let before = rebuilt.len();
-        if !rebuilt.ends_with(';') {
-            rebuilt.push(';');
+        // Declarators of one statement share its trailer.
+        if insertions.last().map(|(pos, _)| *pos) != Some(d.stmt_end) {
+            let lead = if out[..d.stmt_end].ends_with(';') {
+                ""
+            } else {
+                ";"
+            };
+            insertions.push((d.stmt_end, String::from(lead)));
         }
-        for name in &matched_names {
-            rebuilt.push(' ');
-            rebuilt.push_str(name);
-            rebuilt.push_str(" = undefined as any;");
-        }
-        edits.push((stmt_end as u32, (rebuilt.len() - before) as u32));
-        cursor = stmt_end;
-    }
-    rebuilt.push_str(&original[cursor..]);
-    *out = rebuilt;
-    edits
-}
-
-/// Declarator scanner matched to `try_process_let_statement_*` twins.
-/// Qualifies a declarator when: name IS a target AND has a `:` type
-/// annotation AND has an `=` initializer. Returns the matched names
-/// so the caller can append assignments after the statement.
-fn try_process_let_statement_for_denarrow(
-    bytes: &[u8],
-    i: usize,
-    target_names: &[SmolStr],
-) -> Option<(usize, Vec<SmolStr>)> {
-    if i + 3 > bytes.len() || &bytes[i..i + 3] != b"let" {
-        return None;
-    }
-    if i > 0 && is_ident_byte(bytes[i - 1]) {
-        return None;
-    }
-    let after_let = i + 3;
-    if after_let >= bytes.len() || !is_ascii_ws(bytes[after_let]) {
-        return None;
-    }
-
-    let mut matched: Vec<SmolStr> = Vec::new();
-    let mut p = after_let;
-    loop {
-        while p < bytes.len() && is_ascii_ws(bytes[p]) {
-            p += 1;
-        }
-        if p >= bytes.len()
-            || !(bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] == b'$')
-        {
-            return None;
-        }
-        let name_start = p;
-        while p < bytes.len() && is_ident_byte(bytes[p]) {
-            p += 1;
-        }
-        let name_end = p;
-        let name_bytes = &bytes[name_start..name_end];
-
-        let mut s = skip_to_decl_continuation(bytes, name_end);
-        if s < bytes.len() && bytes[s] == b'!' {
-            s += 1;
-            s = skip_to_decl_continuation(bytes, s);
-        }
-        let has_type_annotation = s < bytes.len() && bytes[s] == b':';
-        if has_type_annotation {
-            s += 1;
-        }
-
-        let mut has_initializer = false;
-        let mut paren_depth: i32 = 0;
-        while s < bytes.len() {
-            let c = bytes[s];
-            // Inline `//` comment at top level ends the declarator-of-
-            // interest scan. The comment itself can contain anything
-            // (`= {} | "foo"` etc.) and walking through that text
-            // mis-fires the `=` / `\n` / `,` arms below. Stop at the
-            // `//` position so the trailer (if matched) is appended
-            // BEFORE the comment, not buried inside it. `/*` block
-            // comments behave the same way; skip to `*/` so the walk
-            // doesn't mis-fire on tokens inside.
-            if paren_depth == 0 && c == b'/' && bytes.get(s + 1).copied() == Some(b'/') {
-                break;
-            }
-            if paren_depth == 0 && c == b'/' && bytes.get(s + 1).copied() == Some(b'*') {
-                let mut k = s + 2;
-                while k + 1 < bytes.len() && !(bytes[k] == b'*' && bytes[k + 1] == b'/') {
-                    k += 1;
-                }
-                s = k.saturating_add(2).min(bytes.len());
-                continue;
-            }
-            match c {
-                b'"' | b'\'' | b'`' => {
-                    s = skip_string_literal(bytes, s, c);
-                    continue;
-                }
-                b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
-                b')' | b']' | b'}' => paren_depth -= 1,
-                b'>' => {
-                    let prev = if s > 0 { Some(bytes[s - 1]) } else { None };
-                    if prev != Some(b'=') {
-                        paren_depth -= 1;
-                    }
-                }
-                b'=' if paren_depth == 0 => {
-                    let next = bytes.get(s + 1).copied();
-                    match next {
-                        Some(b'>') => {
-                            s += 2;
-                            continue;
-                        }
-                        Some(b'=') => {
-                            s += 1;
-                        }
-                        _ => {
-                            has_initializer = true;
-                        }
-                    }
-                }
-                b',' | b';' if paren_depth == 0 => break,
-                b'\n' if paren_depth == 0 => {
-                    if !line_continues(bytes, s) {
-                        break;
-                    }
-                }
-                _ => {}
-            }
-            s += 1;
-        }
-
-        if has_initializer && target_names.iter().any(|t| t.as_bytes() == name_bytes) {
-            if let Ok(name_str) = std::str::from_utf8(name_bytes) {
-                matched.push(SmolStr::from(name_str));
-            }
-        }
-
-        if s >= bytes.len() {
-            return Some((s, matched));
-        }
-        match bytes[s] {
-            b',' => {
-                p = s + 1;
-                continue;
-            }
-            b';' => return Some((s + 1, matched)),
-            b'\n' => return Some((s, matched)),
-            _ => return Some((s, matched)),
+        if let Some((_, trailer)) = insertions.last_mut() {
+            trailer.push(' ');
+            trailer.push_str(&d.name);
+            trailer.push_str(" = undefined as any;");
         }
     }
+    splice_insertions(out, &insertions)
 }
 
 /// SVELTE-4-COMPAT: emit `let $$slots = …; let $$props = …; let
@@ -1152,237 +877,65 @@ pub(crate) fn emit_svelte4_ambients(out: &mut String, doc: &svn_parser::Document
 /// rules, no TS2322 secondary fires.
 pub(crate) fn widen_untyped_exports_jsdoc_in_place(
     out: &mut String,
+    body: &Range<usize>,
     target_names: &[SmolStr],
     route_kind: Option<sveltekit::RouteKind>,
 ) -> Vec<(u32, u32)> {
-    let mut edits: Vec<(u32, u32)> = Vec::new();
-    if target_names.is_empty() {
-        return edits;
-    }
-    // Phase 1: scan for insertion sites without touching the buffer.
-    let bytes = out.as_bytes();
-    let sites = collect_widening_sites(bytes, target_names);
-    if sites.is_empty() {
-        return edits;
-    }
-    // Phase 2: rebuild once with bulk segment copies.
-    let original = std::mem::take(out);
-    let mut rebuilt = String::with_capacity(original.len() + sites.len() * 64);
-    let mut cursor = 0;
-    for (pos, name) in &sites {
-        rebuilt.push_str(&original[cursor..*pos]);
-        let before = rebuilt.len();
-        let kit_type = route_kind.and_then(|k| sveltekit::kit_widen_type(name, k));
-        match kit_type {
-            Some(ty) => {
-                rebuilt.push_str(" = /** @type {");
-                rebuilt.push_str(ty);
-                rebuilt.push_str("} */ (/** @type {any} */ (null))");
-            }
-            None => {
-                rebuilt.push_str(" = /** @type {any} */ (null)");
-            }
-        }
-        edits.push((*pos as u32, (rebuilt.len() - before) as u32));
-        cursor = *pos;
-    }
-    rebuilt.push_str(&original[cursor..]);
-    *out = rebuilt;
-    edits
+    let insertions: Vec<(usize, String)> = collect_widening_sites(out, body, target_names)
+        .into_iter()
+        .map(|(pos, name)| {
+            let text = match route_kind.and_then(|k| sveltekit::kit_widen_type(&name, k)) {
+                Some(ty) => format!(" = /** @type {{{ty}}} */ (/** @type {{any}} */ (null))"),
+                None => String::from(" = /** @type {any} */ (null)"),
+            };
+            (pos, text)
+        })
+        .collect();
+    splice_insertions(out, &insertions)
 }
 
+/// Rewrite `let <name>;` → `let <name>: any;` (or the SvelteKit route
+/// type for `data` / `form`) for each untyped target, so an untyped
+/// Svelte-4 prop doesn't fire TS7034/TS7005.
 pub(crate) fn widen_untyped_exported_props_in_place(
     out: &mut String,
+    body: &Range<usize>,
     target_names: &[SmolStr],
     route_kind: Option<sveltekit::RouteKind>,
 ) -> Vec<(u32, u32)> {
-    let mut edits: Vec<(u32, u32)> = Vec::new();
-    if target_names.is_empty() {
-        return edits;
-    }
-    // Phase 1: scan for insertion sites without touching the buffer.
-    let bytes = out.as_bytes();
-    let sites = collect_widening_sites(bytes, target_names);
-    if sites.is_empty() {
-        return edits;
-    }
-    // Phase 2: rebuild once with bulk segment copies.
-    let original = std::mem::take(out);
-    let mut rebuilt = String::with_capacity(original.len() + sites.len() * 16);
-    let mut cursor = 0;
-    for (pos, name) in &sites {
-        rebuilt.push_str(&original[cursor..*pos]);
-        let widen_type = route_kind
-            .and_then(|k| sveltekit::kit_widen_type(name, k))
-            .unwrap_or("any");
-        rebuilt.push_str(": ");
-        rebuilt.push_str(widen_type);
-        edits.push((*pos as u32, (2 + widen_type.len()) as u32));
-        cursor = *pos;
-    }
-    rebuilt.push_str(&original[cursor..]);
-    *out = rebuilt;
-    edits
+    let insertions: Vec<(usize, String)> = collect_widening_sites(out, body, target_names)
+        .into_iter()
+        .map(|(pos, name)| {
+            let ty = route_kind
+                .and_then(|k| sveltekit::kit_widen_type(&name, k))
+                .unwrap_or("any");
+            (pos, format!(": {ty}"))
+        })
+        .collect();
+    splice_insertions(out, &insertions)
 }
 
-/// Shared phase-1 scan for the two widening rewrites: walk the whole
-/// buffer, collect every `(byte position, declarator name)` at which a
-/// widening insertion goes. A statement match can only start at an
-/// ASCII `l`, never inside a multi-byte char, so a plain byte step is
-/// safe.
-fn collect_widening_sites(bytes: &[u8], target_names: &[SmolStr]) -> Vec<(usize, SmolStr)> {
-    let mut sites: Vec<(usize, SmolStr)> = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if let Some((stmt_end, insertions)) =
-            try_process_let_statement_for_widening(bytes, i, target_names)
-        {
-            sites.extend(insertions);
-            i = stmt_end;
-        } else {
-            i += 1;
-        }
-    }
-    sites
-}
-
-/// Declarator scanner twin of `try_process_let_statement`. The
-/// traversal is byte-for-byte identical; only the qualification rule
-/// flips: widen when name IS a target AND has NO type AND NO
-/// initializer.
-fn try_process_let_statement_for_widening(
-    bytes: &[u8],
-    i: usize,
+/// Shared site list for the two widening rewrites: the name end of
+/// every untyped target declared without an initializer (or with a
+/// bare `undefined` / `null` one).
+fn collect_widening_sites(
+    out: &str,
+    body: &Range<usize>,
     target_names: &[SmolStr],
-) -> Option<(usize, Vec<(usize, SmolStr)>)> {
-    if i + 3 > bytes.len() || &bytes[i..i + 3] != b"let" {
-        return None;
+) -> Vec<(usize, SmolStr)> {
+    if target_names.is_empty() {
+        return Vec::new();
     }
-    if i > 0 && is_ident_byte(bytes[i - 1]) {
-        return None;
-    }
-    let after_let = i + 3;
-    if after_let >= bytes.len() || !is_ascii_ws(bytes[after_let]) {
-        return None;
-    }
-
-    let mut insertions: Vec<(usize, SmolStr)> = Vec::new();
-    let mut p = after_let;
-    loop {
-        while p < bytes.len() && is_ascii_ws(bytes[p]) {
-            p += 1;
-        }
-        if p >= bytes.len()
-            || !(bytes[p].is_ascii_alphabetic() || bytes[p] == b'_' || bytes[p] == b'$')
-        {
-            return None;
-        }
-        let name_start = p;
-        while p < bytes.len() && is_ident_byte(bytes[p]) {
-            p += 1;
-        }
-        let name_end = p;
-        let name = &bytes[name_start..name_end];
-
-        let mut s = skip_to_decl_continuation(bytes, name_end);
-        let has_type_annotation = s < bytes.len() && bytes[s] == b':';
-        if has_type_annotation {
-            s += 1;
-        }
-
-        let mut has_initializer = false;
-        let mut initializer_is_nullish = false;
-        let mut paren_depth: i32 = 0;
-        while s < bytes.len() {
-            let c = bytes[s];
-            match c {
-                b'"' | b'\'' | b'`' => {
-                    s = skip_string_literal(bytes, s, c);
-                    continue;
-                }
-                b'/' if bytes.get(s + 1).copied() == Some(b'/') => {
-                    while s < bytes.len() && bytes[s] != b'\n' {
-                        s += 1;
-                    }
-                    continue;
-                }
-                b'/' if bytes.get(s + 1).copied() == Some(b'*') => {
-                    let mut k = s + 2;
-                    while k + 1 < bytes.len() && !(bytes[k] == b'*' && bytes[k + 1] == b'/') {
-                        k += 1;
-                    }
-                    s = k.saturating_add(2).min(bytes.len());
-                    continue;
-                }
-                b'(' | b'[' | b'{' | b'<' => paren_depth += 1,
-                b')' | b']' | b'}' => paren_depth -= 1,
-                b'>' => {
-                    let prev = if s > 0 { Some(bytes[s - 1]) } else { None };
-                    if prev != Some(b'=') {
-                        paren_depth -= 1;
-                    }
-                }
-                b'=' if paren_depth == 0 => {
-                    let next = bytes.get(s + 1).copied();
-                    match next {
-                        Some(b'>') => {
-                            s += 2;
-                            continue;
-                        }
-                        Some(b'=') => {
-                            s += 1;
-                        }
-                        _ => {
-                            has_initializer = true;
-                            // Peek past whitespace for a literal
-                            // `undefined` / `null` initializer.
-                            let mut p2 = s + 1;
-                            while p2 < bytes.len() && is_ascii_ws(bytes[p2]) {
-                                p2 += 1;
-                            }
-                            let rest = &bytes[p2..];
-                            let is_word_end = |off: usize| {
-                                bytes
-                                    .get(p2 + off)
-                                    .copied()
-                                    .map(|b| !is_ident_byte(b))
-                                    .unwrap_or(true)
-                            };
-                            if (rest.starts_with(b"undefined") && is_word_end(9))
-                                || (rest.starts_with(b"null") && is_word_end(4))
-                            {
-                                initializer_is_nullish = true;
-                            }
-                        }
-                    }
-                }
-                b',' | b';' | b'\n' if paren_depth == 0 => break,
-                _ => {}
-            }
-            s += 1;
-        }
-
-        let should_widen = !has_type_annotation
-            && (!has_initializer || initializer_is_nullish)
-            && target_names.iter().any(|t| t.as_bytes() == name);
-        if should_widen {
-            let name_str = std::str::from_utf8(name).ok().map(SmolStr::from)?;
-            insertions.push((name_end, name_str));
-        }
-
-        if s >= bytes.len() {
-            return Some((s, insertions));
-        }
-        match bytes[s] {
-            b',' => {
-                p = s + 1;
-                continue;
-            }
-            b';' => return Some((s + 1, insertions)),
-            b'\n' => return Some((s, insertions)),
-            _ => return Some((s, insertions)),
-        }
-    }
+    collect_top_level_lets(out, body)
+        .into_iter()
+        .filter(|d| {
+            !d.has_type_annotation
+                && !d.definite
+                && d.init != DeclaratorInit::Other
+                && is_target(target_names, &d.name)
+        })
+        .map(|d| (d.name_end, d.name))
+        .collect()
 }
 
 #[cfg(test)]

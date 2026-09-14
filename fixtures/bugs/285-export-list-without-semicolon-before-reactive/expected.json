@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "The script splitter blanks `export { _class as class }` out of the render body. Written without a semicolon, the statement ends at the next `;` the parser finds — here the leading `;` of the reactive block's `;() => { $: … }` wrapper two lines down. Blanking that `;` along with the export left `let _class: any = ''` followed by `() => { … }`, which parses as a call on the string and is a syntax error that hides every type error in the workspace."
+}

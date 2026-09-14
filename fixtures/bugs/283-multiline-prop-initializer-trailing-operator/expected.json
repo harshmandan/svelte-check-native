@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Typed Svelte-4 props with an initializer get a `NAME = undefined as any;` trailer after the declaration so a literal default does not narrow the prop (the `size === 'large'` comparison would otherwise fire TS2367). The trailer must land after the whole statement. When the initializer continues across lines with a trailing `+`, placing it after the first operator produced `'first part, ' +; label = undefined as any;` — a syntax error that also hides every type error in the workspace."
+}

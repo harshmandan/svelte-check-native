@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "On the plain (non-generic) export path upstream keeps a component's events lax unless it declares `$$Events` or sets `strictEvents`; runes mode only tightens events on the generics class-wrapper path. Treating runes mode as a strict trigger everywhere rejected `$on('bar')` on a runes child with an untyped dispatcher, which upstream accepts."
+}

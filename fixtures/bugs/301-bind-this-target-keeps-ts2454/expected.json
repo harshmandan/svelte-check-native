@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 3, "column": 24, "code": 2454 }
+    ],
+    "_note": "Upstream leaves a `bind:this` target's declaration as written; the element assigns it inside the template arrow, so a read inside a closure is fine while a direct read at the top of the script still fires TS2454. Adding a `!` to every bind:this target hid that error."
+}

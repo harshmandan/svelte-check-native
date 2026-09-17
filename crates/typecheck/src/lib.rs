@@ -32,6 +32,7 @@ mod path_utils;
 mod position;
 mod replay;
 pub mod runner;
+mod template_nodes;
 mod types;
 
 use std::path::{Path, PathBuf};
@@ -40,7 +41,7 @@ use rayon::prelude::*;
 
 pub use cache::{CacheLayout, write_if_changed};
 pub use discovery::{DiscoveryError, TsgoBinary, discover};
-pub use filters::{scan_pug_template_ranges, workspace_svelte_is_5_plus};
+pub use filters::workspace_svelte_is_5_plus;
 pub use output::{RawDiagnostic, Severity, parse as parse_output};
 pub use runner::{RunError, run as run_tsgo};
 pub use types::{
@@ -534,7 +535,7 @@ impl CheckSession {
             // second copy here.
             InputKind::KitFile | InputKind::UserTsOverlay => std::sync::Arc::from(""),
         };
-        let pug_template_ranges = filters::scan_pug_template_ranges(&source_text);
+        let pug_template = template_nodes::pug_template_content(&source_text);
         let map_data = MapData {
             line_map: input.line_map,
             token_map: input.token_map,
@@ -548,7 +549,7 @@ impl CheckSession {
             // their source path's extension instead.
             svelte_script_is_ts: input.is_ts_overlay,
             kit_col_shifts: input.kit_col_shifts,
-            pug_template_ranges,
+            pug_template,
         };
         // `.svn.ts` (TS) Svelte overlays + Kit-file overlays land in
         // the tsconfig's `files` list directly. `.svn.js` (JS overlays
@@ -1308,62 +1309,19 @@ fn map_diagnostic(
                 }
             }
             // SVELTE-4-COMPAT: drop TS7028 ("Unused label") on the `$`
-            // identifier that prefixes a Svelte-4 reactive `$:`
-            // statement. Both we and upstream wrap unhandled reactive
-            // expressions in `;() => { $: <expr> }` so tsgo type-checks
-            // the body; the inner `$:` label is structural — not a
-            // real label the user wrote — but tsgo flags it under
-            // `allowUnusedLabels: false` (set in many real tsconfigs,
-            // including all of threlte's packages). Mirrors upstream
-            // svelte-check's `isUnusedReactiveStatementLabel` filter at
-            // `language-tools/packages/language-server/src/plugins/
-            // typescript/features/DiagnosticsProvider.ts:476-495`.
+            // label of a reactive statement — reported under
+            // `allowUnusedLabels: false`, but the label is how Svelte 4
+            // marks the statement, not one the user jumps to. Mirrors
+            // svelte-check's `isUnusedReactiveStatementLabel`, which
+            // decides on the overlay's syntax tree; see
+            // `filters::is_reactive_statement_label`.
             if raw.code == 7028
                 && let Some(offset) = position::overlay_byte_offset(data, raw.line, raw.column)
-                && filters::is_overlay_dollar_reactive_label(data.overlay_text.get(), offset)
-            {
-                return None;
-            }
-            // Drop TS1117 ("multiple properties same name") and
-            // TS2300 ("Duplicate identifier") when the overlay byte
-            // position is on an Element attribute name. Upstream's
-            // equivalent filter at
-            // `language-server/src/plugins/typescript/features/
-            // DiagnosticsProvider.ts:360-374` checks the Svelte AST
-            // node — `isAttributeName(node, 'Element') ||
-            // isEventHandler(node, 'Element')`. We don't carry the
-            // Svelte AST through to the diagnostic mapper, so the
-            // check here is a structural overlay scan: the user
-            // idiom `<el on:click={fn} on:click>` (handle + forward)
-            // produces duplicate `"on:NAME"` keys, and the spread-
-            // plus-attribute idiom `<el {...spread} class={x}>` can
-            // produce other duplicate keys when the spread also
-            // contains `class`. Both manifest in the overlay as a
-            // quoted-string property name in a `createElement` arg
-            // literal.
-            //
-            // The scan alone would also match a duplicate quoted key
-            // the USER wrote in their `<script>` block (`const o =
-            // { "mode": 1, "mode": 2 }`) — a genuine error upstream
-            // surfaces, since a script position is never an Element
-            // attribute node. Verbatim user code (script bodies,
-            // hoisted imports) is exactly what the emit line-map
-            // covers, while the synthesized template region — the
-            // only place emit writes element-attribute object
-            // literals — never gets line-map entries (only token-map
-            // spans). So restrict the filter to lines with no
-            // line-map coverage: synthesized-template positions can
-            // be filtered, verbatim-user-code positions never are.
-            //
-            // Still less general than upstream's AST check (a
-            // duplicate key inside a template-spliced `{expr}` is
-            // also suppressed where upstream would surface it), but
-            // covers every real-world pattern observed on benches
-            // through 2026-04-27 without eating user-script errors.
-            if (raw.code == 1117 || raw.code == 2300)
-                && position::translate_line(&data.line_map, raw.line).is_none()
-                && let Some(offset) = position::overlay_byte_offset(data, raw.line, raw.column)
-                && filters::is_overlay_attribute_key(data.overlay_text.get(), offset)
+                && filters::is_reactive_statement_label(
+                    data.overlay_text.get(),
+                    data.svelte_script_is_ts || data.identity_map,
+                    offset,
+                )
             {
                 return None;
             }
@@ -1436,31 +1394,68 @@ fn map_diagnostic(
             // file — the trade upstream already makes, and the one parity
             // requires. 6196 is deliberately absent: upstream lists only
             // NEVER_READ and ALL_IMPORTS_UNUSED.
-            if !data.pug_template_ranges.is_empty() && matches!(raw.code, 6133 | 6192) {
+            if data.pug_template.is_some() && matches!(raw.code, 6133 | 6192) {
                 return None;
             }
             match position::translate_position(data, raw.line, raw.column) {
                 Some((mapped_line, mapped_col)) => {
-                    // R-Conv #20 (B2 #1): drop diagnostics inside
-                    // `<template lang="pug">…</template>` containers.
-                    // Mirrors upstream LS's `isNoPugFalsePositive`
-                    // (DiagnosticsProvider.ts:391-401): pug bodies
-                    // type-check via the same overlay walker upstream
-                    // svelte2tsx uses for HTML markup, but pug is a
-                    // different syntax (indent-based), so every
-                    // diagnostic landing inside one is noise.
-                    //
-                    // TS6133 / TS6192 are handled separately, above —
-                    // those land on the SCRIPT, outside every pug
-                    // range, so this positional check never sees them.
-                    if !data.pug_template_ranges.is_empty()
-                        && let Some(byte) = position::position_to_byte(
+                    let mapped_byte = || {
+                        position::position_to_byte(
                             &data.source_line_starts,
                             &data.source_text,
                             mapped_line,
                             mapped_col,
                         )
-                        && filters::is_in_pug_template(&data.pug_template_ranges, byte)
+                    };
+                    // Duplicate-key errors (TS1117 / TS2300) on an element's
+                    // attribute name are dropped: `<el on:click={fn}
+                    // on:click>` (handle and forward) and a spread next to a
+                    // named attribute both write the same key twice into the
+                    // element's attribute literal. svelte-check decides this
+                    // on the Svelte AST at the mapped start, so a duplicate
+                    // key inside a `{…}` expression — in markup or in an
+                    // attribute value — and every component prop still
+                    // surface.
+                    if !data.identity_map
+                        && (raw.code == 1117 || raw.code == 2300)
+                        && let Some(byte) = mapped_byte()
+                        && crate::template_nodes::is_element_attribute_name(&data.source_text, byte)
+                    {
+                        return None;
+                    }
+                    // "Used before being assigned" (TS2454) on a name the
+                    // instance script exports is dropped: an `export let x`
+                    // without an initialiser is a prop the parent supplies.
+                    // svelte-check compares the source TEXT of the flagged
+                    // range with the exported names, so a local variable
+                    // that shadows a prop is dropped as well.
+                    if !data.identity_map
+                        && raw.code == 2454
+                        && let Some(byte) = mapped_byte()
+                        && let Some(text) = data.source_text.get(
+                            byte as usize
+                                ..(byte as usize)
+                                    .saturating_add(raw.span_length.unwrap_or(0) as usize),
+                        )
+                        && crate::template_nodes::instance_script_exports(&data.source_text, text)
+                    {
+                        return None;
+                    }
+                    // In a pug file every diagnostic inside the template
+                    // tag's content is noise: pug is indentation-based
+                    // markup the overlay does not model. svelte-check drops
+                    // a diagnostic whose start AND end both fall inside the
+                    // content range (ends inclusive); the start tag itself
+                    // is outside it, so its attributes still check.
+                    //
+                    // TS6133 / TS6192 are handled separately, above —
+                    // those land on the SCRIPT, outside the template, so
+                    // this positional check never sees them.
+                    if let Some((content_start, content_end)) = data.pug_template
+                        && let Some(byte) = mapped_byte()
+                        && (content_start..=content_end).contains(&byte)
+                        && (content_start..=content_end)
+                            .contains(&byte.saturating_add(raw.span_length.unwrap_or(0)))
                     {
                         return None;
                     }
@@ -2470,7 +2465,7 @@ mod tests {
                 source_text: "0123456789".repeat(4).into(),
                 // A pug container further down the file — deliberately
                 // nowhere near the import line the diagnostic sits on.
-                pug_template_ranges: vec![(30, 40)],
+                pug_template: Some((30, 40)),
                 ..Default::default()
             },
         );
@@ -2598,7 +2593,8 @@ mod tests {
         // the rewrite preserves line structure.
         let layout = CacheLayout::for_workspace("/ws");
         let emit_text =
-            "import { util } from '../../ext/util';\n;() => { $: util(); };\n".to_string();
+            "import { util } from '../../ext/util';\nfunction $$render_0() { ;() => { $: util(); }; }\n"
+                .to_string();
         let source_path = PathBuf::from("/ws/src/Foo.svelte");
         let gen_path = layout.generated_path_with_lang(&source_path, true);
         let input = CheckInput {

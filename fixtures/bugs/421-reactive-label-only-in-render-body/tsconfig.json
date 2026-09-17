@@ -1,0 +1,9 @@
+{
+    "extends": "../_shared/tsconfig.base.json",
+    "include": [
+        "**/*"
+    ],
+    "compilerOptions": {
+        "allowUnusedLabels": false
+    }
+}

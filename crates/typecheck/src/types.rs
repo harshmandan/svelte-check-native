@@ -115,13 +115,12 @@ pub struct MapData {
     pub svelte_script_is_ts: bool,
     /// See [`CheckInput::kit_col_shifts`]. Sorted by line, then column.
     pub kit_col_shifts: Vec<(u32, u32, u32)>,
-    /// Source byte-offset ranges of top-level `<template lang="pug">…
-    /// </template>` containers. Mirrors upstream's
-    /// `isNoPugFalsePositive` gate: diagnostics whose post-translation
-    /// byte position falls inside any of these are dropped in
-    /// `map_diagnostic` (with TS6133/6192/6196 as the only exceptions
-    /// that still surface). Empty for non-pug Svelte files.
-    pub pug_template_ranges: Vec<(u32, u32)>,
+    /// Source byte range of the content of the file's top-level
+    /// `<template>` tag when its language is pug (`None` otherwise). In a
+    /// pug file `map_diagnostic` drops every diagnostic inside this range
+    /// and the file's unused-name diagnostics (TS6133 / TS6192), as
+    /// svelte-check does.
+    pub pug_template: Option<(u32, u32)>,
 }
 
 /// One file to type-check.

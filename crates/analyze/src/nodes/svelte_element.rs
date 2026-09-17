@@ -2,6 +2,7 @@
 //! (Element.ts handles both static and dynamic).
 
 use smol_str::SmolStr;
+use svn_core::Range;
 use svn_parser::{SvelteElement, SvelteElementKind};
 
 use crate::nodes::attribute::{WalkCtx, walk_attributes};
@@ -32,6 +33,7 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
         SvelteElementKind::SelfRef => {
             collect_instantiation_inner(
                 SmolStr::from("__svn_self_default"),
+                None,
                 &s.attributes,
                 &s.children,
                 s.range.start,
@@ -53,13 +55,23 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
                 if e.name.as_str() != "this" {
                     return None;
                 }
-                v.source
-                    .get(e.expression_range.start as usize..e.expression_range.end as usize)
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(SmolStr::from)
+                let raw = v
+                    .source
+                    .get(e.expression_range.start as usize..e.expression_range.end as usize)?;
+                let text = raw.trim();
+                if text.is_empty() {
+                    return None;
+                }
+                let start = e.expression_range.start + (raw.len() - raw.trim_start().len()) as u32;
+                Some((
+                    SmolStr::from(text),
+                    Range::new(start, start + text.len() as u32),
+                ))
             });
-            let root = this_expr.unwrap_or_else(|| SmolStr::from("__svn_self_default"));
+            let (root, root_range) = match this_expr {
+                Some((text, range)) => (text, Some(range)),
+                None => (SmolStr::from("__svn_self_default"), None),
+            };
             // Filter out the `this={…}` directive itself from
             // the prop walk so it isn't surfaced as a regular
             // prop on the synthetic component.
@@ -77,6 +89,7 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
                 .collect();
             collect_instantiation_inner(
                 root,
+                root_range,
                 &attrs,
                 &s.children,
                 s.range.start,

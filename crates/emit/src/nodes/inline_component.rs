@@ -281,9 +281,11 @@ pub(crate) fn emit_component_call(
     // matches the simple-identifier path's behavior and is enough to
     // surface TS2304 on the root identifier.
     let _ = write!(buf, "{inner}const {local} = __svn_ensure_component(");
-    let name_start = inst.node_start.saturating_add(1);
-    let name_end = name_start.saturating_add(comp.len() as u32);
-    buf.append_with_source(comp.as_str(), svn_core::Range::new(name_start, name_end));
+    let name_range = inst.component_root_range.unwrap_or_else(|| {
+        let name_start = inst.node_start.saturating_add(1);
+        svn_core::Range::new(name_start, name_start.saturating_add(comp.len() as u32))
+    });
+    buf.append_with_source(comp.as_str(), name_range);
     buf.push_str(");\n");
 
     // Implicit-children synthesis: when the user has non-snippet body

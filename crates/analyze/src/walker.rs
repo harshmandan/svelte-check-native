@@ -299,6 +299,10 @@ pub struct ComponentInstantiation {
     /// Root identifier of the component name (e.g. `MyButton` from
     /// `<MyButton />` or `<ui.MyButton />`).
     pub component_root: SmolStr,
+    /// Where `component_root` was written, when that is not the tag
+    /// name: the `this` expression of `<svelte:component this={X}>`.
+    /// `None` means the root is the tag name right after `<`.
+    pub component_root_range: Option<Range>,
     /// Plain attributes + translated `bind:NAME={x}` directives (as
     /// `Expression` props) + `{...expr}` spreads. Excludes
     /// `on:event` (tracked separately in `on_events`), `bind:this`,

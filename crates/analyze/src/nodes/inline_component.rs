@@ -91,6 +91,7 @@ pub(crate) fn collect_component_instantiation(
 ) {
     collect_instantiation_inner(
         c.name.clone(),
+        None,
         &c.attributes,
         &c.children,
         c.range.start,
@@ -110,6 +111,7 @@ pub(crate) fn collect_component_instantiation(
 /// accordingly.
 pub(crate) fn collect_instantiation_inner(
     component_root: SmolStr,
+    component_root_range: Option<Range>,
     attributes: &[Attribute],
     children: &svn_parser::Fragment,
     range_start: u32,
@@ -475,6 +477,7 @@ pub(crate) fn collect_instantiation_inner(
         .component_instantiations
         .push(ComponentInstantiation {
             component_root,
+            component_root_range,
             props,
             has_implicit_children,
             on_events,

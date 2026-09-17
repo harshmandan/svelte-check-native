@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "src/Plain.svelte",
+            "line": 2,
+            "column": 4,
+            "code": 2339
+        }
+    ],
+    "warnings": []
+}

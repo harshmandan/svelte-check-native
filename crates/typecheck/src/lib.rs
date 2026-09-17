@@ -268,6 +268,9 @@ pub struct PreparedInput {
     /// Whether `gen_path` is listed in the overlay tsconfig's
     /// `files` array.
     list_in_files: bool,
+    /// A JS overlay of an in-scope component: listed in `files` only
+    /// when the project allows JavaScript (see `overlay::build`).
+    js_in_scope: bool,
 }
 
 /// Split-phase variant of [`check`] for callers that produce inputs
@@ -522,11 +525,10 @@ impl CheckSession {
         // `.svn.ts` (TS) Svelte overlays + Kit-file overlays land in
         // the tsconfig's `files` list directly. `.svn.js` (JS overlays
         // — script-less `.svelte` or `<script>` without `lang="ts"`)
-        // do NOT — listing a `.js` file in `compilerOptions.files`
-        // makes tsgo fire TS6504 under default `allowJs: false`, fatal
-        // at the program-config layer (issue #16). They reach the
-        // program through the `<cache>/svelte/**/*.svn.js` cache-mirror
-        // include glob.
+        // join `files` only when the project allows JavaScript —
+        // listing a `.js` file makes tsgo fire TS6504 under
+        // `allowJs: false`, fatal at the program-config layer (issue
+        // #16). `overlay::build` decides, from the extends chain.
         //
         // `SvelteAuxiliary` overlays — out-of-scope `.svelte` files
         // pulled in by transitive imports — also stay out of `files`.
@@ -550,7 +552,9 @@ impl CheckSession {
         // `__svn_self_default`, and the `.svn` infix.
         let is_js_overlay = matches!(input.kind, InputKind::Svelte | InputKind::SvelteAuxiliary)
             && !input.is_ts_overlay;
-        let list_in_files = !matches!(input.kind, InputKind::SvelteAuxiliary) && !is_js_overlay;
+        let in_scope = !matches!(input.kind, InputKind::SvelteAuxiliary);
+        let list_in_files = in_scope && !is_js_overlay;
+        let js_in_scope = in_scope && is_js_overlay;
         let kit_overlay_source = match input.kind {
             InputKind::Svelte | InputKind::SvelteAuxiliary => None,
             InputKind::KitFile | InputKind::UserTsOverlay => Some(input.source_path),
@@ -561,6 +565,7 @@ impl CheckSession {
             ambient_path,
             kit_overlay_source,
             list_in_files,
+            js_in_scope,
         })
     }
 
@@ -589,6 +594,7 @@ impl CheckSession {
         let mut written_paths: std::collections::HashSet<PathBuf> =
             std::collections::HashSet::with_capacity(prepared.len() * 2);
 
+        let mut js_overlay_paths: Vec<PathBuf> = Vec::new();
         // Fold the per-input results in input order.
         for p in prepared {
             written_paths.insert(p.gen_path.clone());
@@ -601,6 +607,8 @@ impl CheckSession {
             map_data.insert(p.gen_path.clone(), p.map_data);
             if p.list_in_files {
                 generated_paths.push(p.gen_path);
+            } else if p.js_in_scope {
+                js_overlay_paths.push(p.gen_path);
             }
         }
 
@@ -641,6 +649,7 @@ impl CheckSession {
             layout,
             user_tsconfig,
             &generated_paths,
+            &js_overlay_paths,
             &kit_overlay_sources,
             kit_types_mirror.as_deref(),
         );

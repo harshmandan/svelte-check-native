@@ -27,7 +27,7 @@ function $$render_e40e2c10() {
     });
     void bar;
     void foobar;
-    return { props: undefined as any as ({ bar: Bar; foobar?: typeof foobar; }), events: undefined as any as $$Events, slots: { 'default': { bar: (bar) } }, bindings: undefined as any as string, exports: undefined as any as ({ bar: Bar; foobar: typeof foobar; }) };
+    return { props: undefined as any as ({ bar: Bar; foobar?: typeof foobar; }), events: undefined as any as $$Events, slots: { 'default': { bar: (bar) } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 interface $$IsomorphicComponent {

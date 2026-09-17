@@ -7,7 +7,7 @@ function $$render_e40e2c10<const T extends readonly string[]>() {
         // template type-check body (incremental)
     });
     void items;
-    return { props: undefined as any as ({ items: T; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ items: T; }) };
+    return { props: undefined as any as ({ items: T; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 declare class __svn_Render_e40e2c10<const T extends readonly string[]> {

@@ -11,7 +11,7 @@ function $$render_e40e2c10() {
     void a;
     void b;
     void c;
-    return { props: /** @type {{ a: any; b: any; c?: typeof c; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ a: typeof a; b: typeof b; c: typeof c; }} */ ({}) };
+    return { props: /** @type {{ a: any; b: any; c?: typeof c; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

@@ -1,0 +1,59 @@
+{
+    "errors": [
+        {
+            "file": "src/Uaccessors__false__.svelte",
+            "line": 3,
+            "column": 8,
+            "code": 6133
+        },
+        {
+            "file": "src/Uaccessors__false__.svelte",
+            "line": 3,
+            "column": 20,
+            "code": 2454
+        },
+        {
+            "file": "src/Uaccessors__false__.svelte",
+            "line": 3,
+            "column": 22,
+            "code": 2339
+        },
+        {
+            "file": "src/Uaccessors_.svelte",
+            "line": 3,
+            "column": 8,
+            "code": 2322
+        },
+        {
+            "file": "src/Uaccessors_.svelte",
+            "line": 3,
+            "column": 8,
+            "code": 6133
+        },
+        {
+            "file": "src/Uaccessors_.svelte",
+            "line": 3,
+            "column": 20,
+            "code": 2454
+        },
+        {
+            "file": "src/BindThisConsumer.svelte",
+            "line": 8,
+            "column": 7,
+            "code": 2322
+        },
+        {
+            "file": "src/BindThisConsumer.svelte",
+            "line": 9,
+            "column": 7,
+            "code": 2322
+        },
+        {
+            "file": "src/BindThisConsumer.svelte",
+            "line": 10,
+            "column": 7,
+            "code": 2322
+        }
+    ],
+    "warnings": []
+}

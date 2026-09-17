@@ -57,7 +57,7 @@ function $$render_e40e2c10() {
     void RenameFoo;
     void renamebar;
     void renamebaz;
-    return { props: { ...__svn_ensure_right_props<{exported1: string,exported2?: string}>(__svn_any("") as $$Props) } as $$Props, events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ exported1: string; exported2: string; }) };
+    return { props: { ...__svn_ensure_right_props<{exported1: string,exported2?: string,name1?: typeof name1,name2?: typeof name2,rename1?: typeof rename1,rename2?: typeof rename2}>(__svn_any("") as $$Props) } as $$Props, events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ Foo: typeof Foo; bar: typeof bar; baz: typeof baz; RenamedFoo: typeof RenameFoo; renamedbar: typeof renamebar; renamedbaz: typeof renamebaz; }) };
 }
 $$render_e40e2c10;
 interface $$IsomorphicComponent {

@@ -20,47 +20,40 @@ use oxc_ast::ast::{BindingPattern, Expression, Statement, VariableDeclarator};
 use crate::process_instance_script_content;
 use crate::util::is_simple_js_identifier;
 
-/// Build the `{ name: sig; ... }` object-type text for each
-/// `export function` / `export const` / `export let` that process_instance_script_content
-/// surfaced. Consumed in two places:
-///   - the render body's `return { exports: undefined as any as (…) }`
-///     where body-local refs (`typeof handler`, `$$Props['x']`) resolve
-///     inside `$$render`'s own scope.
-///   - for non-class-wrapper arms, intersected into the default-export's
-///     SvelteComponent type directly (may fire TS2304 for body-local
-///     refs — rare and acceptable; class-wrapper arms take the other
-///     path and avoid it entirely).
+/// Build the component's `exports` object type — what consumers of
+/// `bind:this={x}` see as `x.name` — the way upstream's
+/// `ExportedNames.createExportsStr` does: every export that is not a
+/// `let` (a legacy `export let` is a prop, not an instance member), plus
+/// named `export { … }` lets in runes mode. Each member is required and
+/// keyed by the name the component exposes. `None` when nothing
+/// qualifies.
+///
+/// The text is embedded INSIDE `$$render`'s body
+/// (`return { … exports: undefined as any as <text> }`), where
+/// `typeof <local>` resolves against the body-local declaration; any
+/// module-scope use goes through the
+/// `Awaited<ReturnType<typeof $$render>>['exports']` projection.
 pub(crate) fn build_exports_object(
     split: Option<&process_instance_script_content::SplitScript>,
+    runes_mode: bool,
+    uses_accessors: bool,
 ) -> Option<String> {
     let s = split?;
-    if s.export_type_infos.is_empty() {
-        return None;
-    }
+    // Accessors make every export, props included, an instance member;
+    // runes mode has no accessors.
+    let all = uses_accessors && !runes_mode;
+    let mut members = s
+        .export_type_infos
+        .iter()
+        .filter(|info| all || !info.is_let || (runes_mode && info.is_named_export))
+        .peekable();
+    members.peek()?;
     let mut buf = String::from("{ ");
-    for info in &s.export_type_infos {
-        buf.push_str(info.name.as_str());
+    for info in members {
+        buf.push_str(info.exported_as.as_deref().unwrap_or(&info.name));
         buf.push_str(": ");
         match &info.type_source {
             Some(t) => buf.push_str(t),
-            // When no explicit type annotation exists on the local,
-            // use `typeof <name>` — a body-scope reference that
-            // resolves to whatever TS inferred from the local's
-            // initializer. Mirrors upstream svelte2tsx
-            // (ExportedNames.ts `createReturnElementsType`): upstream
-            // emits `translate?: typeof translate` so a local like
-            // `let translate = writable({x:0,y:0})` preserves its
-            // `Writable<{x,y}>` type through the default export's
-            // Exports slot instead of collapsing to `any`.
-            //
-            // Critical: the output is embedded INSIDE `$$render`'s
-            // body via `return { ... exports: undefined as any as
-            // <string> };`, so `typeof <name>` resolves against the
-            // body-local declaration. At module scope the same
-            // reference would fire TS2304, so any module-scope use
-            // of the Exports type MUST go through the
-            // `Awaited<ReturnType<typeof $$render>>['exports']`
-            // projection instead of the raw string.
             None => {
                 buf.push_str("typeof ");
                 buf.push_str(info.name.as_str());
@@ -70,6 +63,56 @@ pub(crate) fn build_exports_object(
     }
     buf.push('}');
     Some(buf)
+}
+
+/// Whether `<svelte:options accessors>` turns accessors on, read the way
+/// svelte2tsx's `handleSvelteOptions` reads it: a bare attribute is on;
+/// a `{…}` value is on when it is a truthy literal; a text value leaves
+/// the setting alone. The last `accessors` attribute decides.
+pub(crate) fn uses_accessors(fragment: &svn_parser::Fragment, source: &str) -> bool {
+    use svn_parser::{AttrValuePart, Attribute, Node, SvelteElementKind};
+    let truthy_literal = |range: svn_core::Range| {
+        let text = source
+            .get(range.start as usize..range.end as usize)
+            .unwrap_or("")
+            .trim();
+        !matches!(
+            text,
+            "false" | "0" | "null" | "undefined" | "\"\"" | "''" | "``"
+        ) && (text == "true"
+            || text.parse::<f64>().is_ok_and(|n| n != 0.0)
+            || text.starts_with(['"', '\'', '`']))
+    };
+    let mut on = false;
+    for node in &fragment.nodes {
+        let Node::SvelteElement(se) = node else {
+            continue;
+        };
+        if se.kind != SvelteElementKind::Options {
+            continue;
+        }
+        for attr in &se.attributes {
+            match attr {
+                Attribute::Plain(p) if p.name.as_str() == "accessors" => match &p.value {
+                    None => on = true,
+                    Some(v) => {
+                        if let Some(AttrValuePart::Expression {
+                            expression_range, ..
+                        }) = v.parts.first()
+                        {
+                            on = truthy_literal(*expression_range);
+                        }
+                    }
+                },
+                Attribute::Expression(e) if e.name.as_str() == "accessors" => {
+                    on = truthy_literal(e.expression_range);
+                }
+                Attribute::Shorthand(s) if s.name.as_str() == "accessors" => on = false,
+                _ => {}
+            }
+        }
+    }
+    on
 }
 
 /// Build the body of a JSDoc `@typedef <body> $$ComponentProps` from a

@@ -1482,7 +1482,11 @@ fn emit_document_with_render_name(
         .map(|s| s.exported_locals.clone())
         .unwrap_or_default();
 
-    let exports_object = build_exports_object(split.as_ref());
+    let exports_object = build_exports_object(
+        split.as_ref(),
+        runes_mode,
+        props_emit::uses_accessors(fragment, doc.source),
+    );
     emit_void_block(
         buf.raw_string_mut(),
         summary,

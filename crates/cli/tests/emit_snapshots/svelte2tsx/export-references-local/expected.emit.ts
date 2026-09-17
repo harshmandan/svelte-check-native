@@ -8,7 +8,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
     });
     void name;
-    return { props: /** @type {{ name?: typeof name; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ name: typeof name; }} */ ({}) };
+    return { props: /** @type {{ name?: typeof name; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

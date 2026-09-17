@@ -46,7 +46,7 @@ function $$render_76cc262b() {
         }
     });
     void list;
-    return { props: undefined as any as ({ list?: (Item | null)[]; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': { item: (__svn_unwrap_arr(list.filter((x): x is Item => x !== null))) } }, bindings: undefined as any as string, exports: undefined as any as ({ list: (Item | null)[]; }) };
+    return { props: undefined as any as ({ list?: (Item | null)[]; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': { item: (__svn_unwrap_arr(list.filter((x): x is Item => x !== null))) } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_76cc262b;
 interface $$IsomorphicComponent {
@@ -76,7 +76,7 @@ function $$render_758c71fe() {
         }
     });
     void list;
-    return { props: undefined as any as ({ list?: Item[] | undefined; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': { item: (__svn_unwrap_arr(list ?? [])) } }, bindings: undefined as any as string, exports: undefined as any as ({ list: Item[] | undefined; }) };
+    return { props: undefined as any as ({ list?: Item[] | undefined; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': { item: (__svn_unwrap_arr(list ?? [])) } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_758c71fe;
 interface $$IsomorphicComponent {

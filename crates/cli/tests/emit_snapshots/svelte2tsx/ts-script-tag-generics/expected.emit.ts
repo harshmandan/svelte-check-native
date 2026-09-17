@@ -7,7 +7,7 @@ function $$render_e40e2c10<T extends Record<string, any>>() {
         // template type-check body (incremental)
     });
     void init;
-    return { props: undefined as any as ({ init: T; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ init: T; }) };
+    return { props: undefined as any as ({ init: T; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 declare class __svn_Render_e40e2c10<T extends Record<string, any>> {

@@ -96,6 +96,12 @@ pub struct ExportedLocalInfo {
     /// state: TypeFilter` contributes `TypeFilter` so the synthesized
     /// module-scope Props references hoist alongside it.
     pub annotation_idents: Vec<SmolStr>,
+    /// The name the component exposes, when `export { name as other }`
+    /// renames it.
+    pub exported_as: Option<SmolStr>,
+    /// Came from an `export { … }` list rather than an exported
+    /// declaration.
+    pub is_named_export: bool,
 }
 
 /// A `type`/`interface` declaration whose hoist decision is deferred
@@ -278,6 +284,10 @@ pub fn split_imports(
     // Names of namespaces declared in the instance script — un-hoistable,
     // along with anything that depends on them.
     let mut namespace_names: Vec<SmolStr> = Vec::new();
+    // `export { local as exported }` entries, resolved once every
+    // top-level `let`/`var` is known.
+    let mut named_exports: Vec<(SmolStr, SmolStr)> = Vec::new();
+    let mut top_level_lets: HashSet<SmolStr> = HashSet::new();
 
     for stmt in &parsed.program.body {
         match stmt {
@@ -299,8 +309,17 @@ pub fn split_imports(
             Statement::VariableDeclaration(decl) => {
                 // Body-level `const/let/var` — stays in body. Record its
                 // names for the `declare const` stub pass.
+                let is_let = matches!(
+                    decl.kind,
+                    oxc_ast::ast::VariableDeclarationKind::Let
+                        | oxc_ast::ast::VariableDeclarationKind::Var
+                );
                 for d in &decl.declarations {
+                    let before = body_decl_names.len();
                     collect_binding_pattern_names(&d.id, &mut body_decl_names);
+                    if is_let {
+                        top_level_lets.extend(body_decl_names[before..].iter().cloned());
+                    }
                 }
             }
             Statement::FunctionDeclaration(decl) => {
@@ -387,7 +406,9 @@ pub fn split_imports(
                         if decl_type_only || spec.export_kind == ImportOrExportKind::Type {
                             continue;
                         }
-                        exported_locals.push(SmolStr::from(spec.local.name().as_str()));
+                        let local = SmolStr::from(spec.local.name().as_str());
+                        exported_locals.push(local.clone());
+                        named_exports.push((local, SmolStr::from(spec.exported.name().as_str())));
                     }
                 }
             }
@@ -574,6 +595,20 @@ pub fn split_imports(
     // callable, so the in-component `{@render children(realValue)}`
     // check compared the REAL value against the stub's callable shape
     // and fired an invented TS2322 whenever the value wasn't callable.
+    // `export { local as exported }` (`ExportedNames.handleExportDeclaration`):
+    // it counts as a `let` export exactly when `local` is a top-level
+    // `let`/`var`, and is always optional.
+    for (local, exported) in named_exports {
+        export_type_infos.push(ExportedLocalInfo {
+            is_let: top_level_lets.contains(&local),
+            exported_as: (exported != local).then_some(exported),
+            name: local,
+            type_source: None,
+            has_init: true,
+            annotation_idents: Vec::new(),
+            is_named_export: true,
+        });
+    }
     let mut props_reachable: HashSet<SmolStr> = HashSet::new();
     // Svelte-4-style: `export let state: TypeFilter | undefined`.
     // No single `Props` root — each exported local's annotation

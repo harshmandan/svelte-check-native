@@ -10,7 +10,7 @@ function $$render_d01ef561() {
         }
     });
     void a;
-    return { props: undefined as any as ({ a: number; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: number; }) };
+    return { props: undefined as any as ({ a: number; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_d01ef561;
 interface $$IsomorphicComponent {

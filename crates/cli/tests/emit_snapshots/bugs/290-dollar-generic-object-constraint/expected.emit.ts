@@ -10,7 +10,7 @@ function $$render_18ae338e/*svn:ignore_start*/<T extends { a: string, b: number 
         }
     });
     void x;
-    return { props: undefined as any as ({ x: T; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ x: T; }) };
+    return { props: undefined as any as ({ x: T; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_18ae338e;
 declare class __svn_Render_18ae338e<T extends { a: string, b: number }> {

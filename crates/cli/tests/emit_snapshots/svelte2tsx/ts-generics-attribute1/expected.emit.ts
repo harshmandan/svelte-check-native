@@ -26,7 +26,7 @@ function $$render_e40e2c10<A, B extends keyof A, C extends boolean>() {
     void b;
     void c;
     void getA;
-    return { props: undefined as any as ({ a: A; b: B; c: C; getA?: typeof getA; }), events: undefined as any as $$Events, slots: { 'default': { c: (c) } }, bindings: undefined as any as string, exports: undefined as any as ({ a: A; b: B; c: C; getA: typeof getA; }) };
+    return { props: undefined as any as ({ a: A; b: B; c: C; getA?: typeof getA; }), events: undefined as any as $$Events, slots: { 'default': { c: (c) } }, bindings: undefined as any as string, exports: undefined as any as ({ getA: typeof getA; }) };
 }
 $$render_e40e2c10;
 declare class __svn_Render_e40e2c10<A, B extends keyof A, C extends boolean> {

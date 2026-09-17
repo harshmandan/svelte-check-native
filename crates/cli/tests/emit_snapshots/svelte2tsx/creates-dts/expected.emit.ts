@@ -22,7 +22,7 @@ function $$render_e40e2c10() {
     });
     void bar;
     void foobar;
-    return { props: /** @type {{ bar: any; foobar?: typeof foobar; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { bar: (bar) } }, bindings: /** @type {string} */ (''), exports: /** @type {{ bar: typeof bar; foobar: typeof foobar; }} */ ({}) };
+    return { props: /** @type {{ bar: any; foobar?: typeof foobar; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { bar: (bar) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

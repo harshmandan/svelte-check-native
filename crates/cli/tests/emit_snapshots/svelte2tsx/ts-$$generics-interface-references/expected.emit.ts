@@ -22,7 +22,7 @@ function $$render_e40e2c10/*svn:ignore_start*/<A, B extends ReferencedByGeneric>
     });
     void a;
     void b;
-    return { props: undefined as any as ({ a: ReferencesGeneric; b: B; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ a: ReferencesGeneric; b: B; }) };
+    return { props: undefined as any as ({ a: ReferencesGeneric; b: B; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 declare class __svn_Render_e40e2c10<A, B extends ReferencedByGeneric> {

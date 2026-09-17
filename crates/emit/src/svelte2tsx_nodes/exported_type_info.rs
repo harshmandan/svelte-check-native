@@ -55,6 +55,8 @@ pub(crate) fn collect_export_type_infos(
             // illegal in a type literal) and diverges from upstream for no
             // benefit; `typeof <name>` already conveys the full signature.
             out.push(ExportedLocalInfo {
+                exported_as: None,
+                is_named_export: false,
                 name,
                 type_source: None,
                 is_let: false,
@@ -85,6 +87,8 @@ pub(crate) fn collect_export_type_infos(
                             })
                             .unwrap_or_default();
                         out.push(ExportedLocalInfo {
+                            exported_as: None,
+                            is_named_export: false,
                             name,
                             type_source,
                             is_let,
@@ -108,6 +112,8 @@ pub(crate) fn collect_export_type_infos(
         Declaration::ClassDeclaration(c) => {
             if let Some(id) = &c.id {
                 out.push(ExportedLocalInfo {
+                    exported_as: None,
+                    is_named_export: false,
                     name: SmolStr::from(id.name.as_str()),
                     type_source: None,
                     is_let: false,
@@ -135,6 +141,8 @@ fn collect_pattern_export_infos(
 ) {
     match pat {
         BindingPattern::BindingIdentifier(id) => out.push(ExportedLocalInfo {
+            exported_as: None,
+            is_named_export: false,
             name: SmolStr::from(id.name.as_str()),
             type_source: None,
             is_let,

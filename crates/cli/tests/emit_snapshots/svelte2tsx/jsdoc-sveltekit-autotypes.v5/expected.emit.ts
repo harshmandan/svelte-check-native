@@ -11,7 +11,7 @@ function $$render_aad4163e() {
     void data;
     void form;
     void snapshot;
-    return { props: /** @type {{ data: any; form: any; snapshot?: typeof snapshot; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ data: typeof data; form: typeof form; snapshot: typeof snapshot; }} */ ({}) };
+    return { props: /** @type {{ data: any; form: any; snapshot?: typeof snapshot; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ snapshot: typeof snapshot; }} */ ({}) };
 }
 $$render_aad4163e;
 /**

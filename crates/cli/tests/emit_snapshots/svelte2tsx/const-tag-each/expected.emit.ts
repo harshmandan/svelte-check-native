@@ -36,7 +36,7 @@ function $$render_e40e2c10() {
     });
     void boxes;
     void constant;
-    return { props: /** @type {{ boxes?: typeof boxes; constant?: typeof constant; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ boxes: typeof boxes; constant: typeof constant; }} */ ({}) };
+    return { props: /** @type {{ boxes?: typeof boxes; constant?: typeof constant; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

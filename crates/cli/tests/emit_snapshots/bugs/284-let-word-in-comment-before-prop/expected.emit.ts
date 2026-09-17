@@ -17,7 +17,7 @@ function $$render_6a78bc66() {
         }
     });
     void xyz;
-    return { props: undefined as any as ({ xyz: string; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': {  } }, bindings: undefined as any as string, exports: undefined as any as ({ xyz: string; }) };
+    return { props: undefined as any as ({ xyz: string; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': {  } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_6a78bc66;
 interface $$IsomorphicComponent {

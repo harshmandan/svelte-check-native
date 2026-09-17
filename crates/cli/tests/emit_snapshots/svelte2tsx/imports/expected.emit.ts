@@ -14,7 +14,7 @@ function $$render_e40e2c10() {
         }
     });
     void world;
-    return { props: /** @type {{ world?: typeof world; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ world: typeof world; }} */ ({}) };
+    return { props: /** @type {{ world?: typeof world; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

@@ -22,7 +22,7 @@ function $$render_e40e2c10() {
     });
     void label;
     void size;
-    return { props: undefined as any as ({ label?: string; size?: Size; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ label: string; size: Size; }) };
+    return { props: undefined as any as ({ label?: string; size?: Size; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 interface $$IsomorphicComponent {

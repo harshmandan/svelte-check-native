@@ -58,7 +58,7 @@ function $$render_e40e2c10() {
     void promise1;
     void promise2;
     void constant;
-    return { props: /** @type {{ promise1?: typeof promise1; promise2?: typeof promise2; constant?: typeof constant; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ promise1: typeof promise1; promise2: typeof promise2; constant: typeof constant; }} */ ({}) };
+    return { props: /** @type {{ promise1?: typeof promise1; promise2?: typeof promise2; constant?: typeof constant; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

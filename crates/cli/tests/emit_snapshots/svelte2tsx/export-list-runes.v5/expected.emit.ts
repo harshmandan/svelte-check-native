@@ -34,7 +34,7 @@ function $$render_e40e2c10() {
     void RenameFoo;
     void renamebar;
     void renamebaz;
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ name1: typeof name1; name2: typeof name2; renamed1: typeof rename1; renamed2: typeof rename2; Foo: typeof Foo; bar: typeof bar; baz: typeof baz; RenamedFoo: typeof RenameFoo; renamedbar: typeof renamebar; renamedbaz: typeof renamebaz; }} */ ({}) };
 }
 $$render_e40e2c10;
 /**

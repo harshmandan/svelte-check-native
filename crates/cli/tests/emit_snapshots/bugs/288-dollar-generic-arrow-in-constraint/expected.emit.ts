@@ -10,7 +10,7 @@ function $$render_e40e2c10/*svn:ignore_start*/<T extends Record<string, () => vo
         }
     });
     void x;
-    return { props: undefined as any as ({ x: T; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ x: T; }) };
+    return { props: undefined as any as ({ x: T; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 declare class __svn_Render_e40e2c10<T extends Record<string, () => void>> {

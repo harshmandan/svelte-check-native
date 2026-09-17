@@ -30,7 +30,7 @@ function $$render_e40e2c10() {
     void c;
     void d;
     void e;
-    return { props: /** @type {{ a: any; b: any; c: any; d: any; e: any; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ a: typeof a; b: typeof b; c: typeof c; d: typeof d; e: typeof e; }} */ ({}) };
+    return { props: /** @type {{ a: any; b: any; c: any; d: any; e: any; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

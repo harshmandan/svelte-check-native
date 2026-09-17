@@ -15,7 +15,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
     });
     void a;
-    return { props: /** @type {FOO} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ a: typeof a; }} */ ({}) };
+    return { props: /** @type {FOO} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /**

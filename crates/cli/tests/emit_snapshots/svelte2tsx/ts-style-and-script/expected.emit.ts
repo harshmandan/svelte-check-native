@@ -7,7 +7,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
     });
     void foo;
-    return { props: undefined as any as ({ foo: string; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({ foo: string; }) };
+    return { props: undefined as any as ({ foo: string; }), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 interface $$IsomorphicComponent {

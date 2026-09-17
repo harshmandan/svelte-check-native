@@ -10,7 +10,7 @@ async function $$render_e40e2c10() {
      * DOCS!
      * @typedef {'ABC'} ABC
      */
-           let a = /** @type {any} */ (null);
+           let a/*svn:ignore_start*/;a = __svn_any(a);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
     });

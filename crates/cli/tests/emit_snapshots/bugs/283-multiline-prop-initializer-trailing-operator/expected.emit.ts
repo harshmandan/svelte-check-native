@@ -9,9 +9,9 @@ async function $$render_e40e2c10() {
     // each line. Nothing may be inserted before the expression finishes.
            let label: string =
         'first part, ' +
-        'second part'; label = undefined as any;
+        'second part'/*svn:ignore_start*/;label = __svn_any(label);/*svn:ignore_end*/;
 
-           let size: Size = 'small'; size = undefined as any;
+           let size: Size = 'small'/*svn:ignore_start*/;size = __svn_any(size);/*svn:ignore_end*/;
 
     const isLarge = size === 'large';
     ;(async () => {

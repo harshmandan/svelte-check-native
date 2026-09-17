@@ -3,10 +3,10 @@
 async function $$render_e40e2c10() {
 
     let name1 = "world"
-    let name2 = /** @type {any} */ (null)
+    let name2/*svn:ignore_start*/;name2 = __svn_any(name2);/*svn:ignore_end*/
 
     let rename1 = '';
-    let rename2 = /** @type {any} */ (null);
+    let rename2/*svn:ignore_start*/;rename2 = __svn_any(rename2);/*svn:ignore_end*/;
 
     class Foo {}
     function bar() {}

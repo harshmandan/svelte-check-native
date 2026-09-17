@@ -1422,7 +1422,6 @@ fn emit_document_with_render_name(
         module_body,
         store_bases,
         &reactive_touched_names,
-        parsed_instance.as_ref(),
         source_path,
     );
 
@@ -1822,7 +1821,7 @@ mod tests {
     use super::*;
     use crate::nodes::if_else_block::extract_property_chains;
     use crate::svelte4::compat::{
-        rewrite_definite_assignment_in_place, widen_untyped_exported_props_in_place,
+        assert_exported_prop_types_in_place, rewrite_definite_assignment_in_place,
     };
     use std::path::PathBuf;
     use svn_analyze::walk_template;
@@ -1835,10 +1834,10 @@ mod tests {
         out
     }
 
-    fn widen(src: &str, targets: &[&str]) -> String {
+    fn assert_props(src: &str, targets: &[&str], is_ts: bool) -> String {
         let mut out = String::from(src);
         let targets: Vec<SmolStr> = targets.iter().map(|s| SmolStr::from(*s)).collect();
-        widen_untyped_exported_props_in_place(&mut out, &(0..src.len()), &targets, None);
+        assert_exported_prop_types_in_place(&mut out, &(0..src.len()), &targets, None, is_ts);
         out
     }
 
@@ -1923,63 +1922,56 @@ mod tests {
     }
 
     #[test]
-    fn widen_untyped_uninitialized_target() {
-        // Svelte-4 `export let data;` lands in body as `let data;` —
-        // untyped, uninitialized. Widen to `let data: any;` so strict
-        // mode treats it as `any` rather than `undefined`.
-        let got = widen("let data;", &["data"]);
-        assert_eq!(got, "let data: any;");
+    fn prop_assertion_after_uninitialized_typed_and_boolean_lets() {
+        let got = assert_props(
+            "let a;\nlet b: string;\nlet c = false;\nlet d = 1;\n",
+            &["a", "b", "c", "d"],
+            true,
+        );
+        assert_eq!(
+            got,
+            "let a/*svn:ignore_start*/;a = __svn_any(a);/*svn:ignore_end*/;\n\
+             let b: string/*svn:ignore_start*/;b = __svn_any(b);/*svn:ignore_end*/;\n\
+             let c = false/*svn:ignore_start*/;c = __svn_any(c);/*svn:ignore_end*/;\n\
+             let d = 1;\n"
+        );
     }
 
     #[test]
-    fn widen_skips_typed_declaration() {
-        // Already has `: Type` — don't double up.
-        let got = widen("let foo: string;", &["foo"]);
-        assert_eq!(got, "let foo: string;");
+    fn prop_assertion_reads_jsdoc_type() {
+        let got = assert_props(
+            "/** @type {string} */\nlet a = 'x';\n/** plain */\nlet b = 'y';\n",
+            &["a", "b"],
+            false,
+        );
+        assert_eq!(
+            got,
+            "/** @type {string} */\nlet a = 'x'/*svn:ignore_start*/;a = __svn_any(a);/*svn:ignore_end*/;\n\
+             /** plain */\nlet b = 'y';\n"
+        );
     }
 
     #[test]
-    fn widen_skips_initialized_declaration() {
-        // Has `= init` — TS will infer a type.
-        let got = widen("let foo = 0;", &["foo"]);
-        assert_eq!(got, "let foo = 0;");
+    fn prop_assertion_follows_multiline_initializer_and_skips_non_targets() {
+        let got = assert_props(
+            "let label: string =\n\t'a' +\n\t'b';\nlet other: string;\n",
+            &["label"],
+            true,
+        );
+        assert_eq!(
+            got,
+            "let label: string =\n\t'a' +\n\t'b'/*svn:ignore_start*/;label = __svn_any(label);/*svn:ignore_end*/;\n\
+             let other: string;\n"
+        );
     }
 
     #[test]
-    fn widen_skips_untarget_name() {
-        // Name not in the widen list — body-local, user intent is
-        // undefined-inference. Leave alone.
-        let got = widen("let temp;", &["data"]);
-        assert_eq!(got, "let temp;");
-    }
-
-    #[test]
-    fn widen_multi_declarator_per_decl() {
-        // Three declarators, mixed shapes. Only the untyped-uninitialized
-        // exported ones get widened.
-        let got = widen("let a, b: string, c = 0, d;", &["a", "b", "c", "d"]);
-        assert_eq!(got, "let a: any, b: string, c = 0, d: any;");
-    }
-
-    #[test]
-    fn widen_then_def_assign_composes_cleanly() {
-        // Pipeline order: widen runs first, then definite-assign.
-        // `let data;` → `let data: any;` (widen) → `let data!: any;` (def_assign).
-        let mut out = String::from("let data;");
-        let targets: Vec<SmolStr> = vec![SmolStr::from("data")];
-        let edits = widen_untyped_exported_props_in_place(&mut out, &(0..9), &targets, None);
-        let body = 0..9 + edits.iter().map(|&(_, len)| len as usize).sum::<usize>();
-        rewrite_definite_assignment_in_place(&mut out, &body, &targets);
-        assert_eq!(out, "let data!: any;");
-    }
-
-    #[test]
-    fn widen_preserves_arrow_typed_prop() {
-        // Regression: naive scanner that hides the `:` annotation behind
-        // `!` would re-widen already-typed props. With widen running
-        // BEFORE def-assign, the typed declarator is left alone.
-        let got = widen("let onChange: (value: string) => void;", &["onChange"]);
-        assert_eq!(got, "let onChange: (value: string) => void;");
+    fn prop_assertion_multi_declarator_appends_once_at_the_end() {
+        let got = assert_props("let a, b: string, c = 0;", &["a", "b", "c"], true);
+        assert_eq!(
+            got,
+            "let a, b: string, c = 0/*svn:ignore_start*/;a = __svn_any(a);/*svn:ignore_end*//*svn:ignore_start*/;b = __svn_any(b);/*svn:ignore_end*/;"
+        );
     }
 
     #[test]
@@ -2124,21 +2116,6 @@ mod tests {
         assert_eq!(
             got,
             "let el!: HTMLElement;\nfunction f() { let el: HTMLElement; return el; }\n"
-        );
-    }
-
-    #[test]
-    fn denarrow_trailer_follows_multiline_initializer() {
-        let src = "let label: string =\n\t'a' +\n\t'b';\nlabel;\n";
-        let mut out = String::from(src);
-        crate::svelte4::compat::denarrow_typed_exported_props_in_place(
-            &mut out,
-            &(0..src.len()),
-            &[SmolStr::from("label")],
-        );
-        assert_eq!(
-            out,
-            "let label: string =\n\t'a' +\n\t'b'; label = undefined as any;\nlabel;\n"
         );
     }
 

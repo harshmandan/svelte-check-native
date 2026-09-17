@@ -4,8 +4,8 @@
 async function $$render_e40e2c10() {
 
                   
-           let a: A;
-           let b: A = {};
+           let a: A/*svn:ignore_start*/;a = __svn_any(a);/*svn:ignore_end*/;
+           let b: A = {}/*svn:ignore_start*/;b = __svn_any(b);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
     });

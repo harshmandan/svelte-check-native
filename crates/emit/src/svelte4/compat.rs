@@ -23,14 +23,19 @@ use crate::sveltekit;
 /// positions are absolute offsets into the emit buffer.
 struct LetDeclarator {
     name: SmolStr,
+    /// Position of the binding name.
+    name_start: usize,
     /// Position right after the binding name, where `!` or `: T` goes.
     name_end: usize,
     has_type_annotation: bool,
+    /// A `/** @type {…} */` JSDoc block leads the statement.
+    has_jsdoc_type: bool,
     /// Already carries a `!` definite-assignment assertion.
     definite: bool,
     init: DeclaratorInit,
-    /// Position right after the whole `let …` statement.
-    stmt_end: usize,
+    /// Position right after the statement's last declarator (before
+    /// its `;`, if any).
+    list_end: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -38,6 +43,8 @@ enum DeclaratorInit {
     Absent,
     /// `= undefined` or `= null`.
     Nullish,
+    /// `= true` or `= false`.
+    BoolLiteral,
     Other,
 }
 
@@ -98,7 +105,23 @@ fn collect_top_level_lets(out: &str, body: &Range<usize>) -> Vec<LetDeclarator> 
         if decl.kind != VariableDeclarationKind::Let {
             continue;
         }
-        let stmt_end = body.start + decl.span.end as usize;
+        let Some(list_end) = decl
+            .declarations
+            .last()
+            .map(|d| body.start + d.span.end as usize)
+        else {
+            continue;
+        };
+        // `ts.getJSDocType(declaration)`: a JSDoc block right before
+        // the statement that carries an `@type` tag.
+        let has_jsdoc_type = parsed.program.comments.iter().any(|c| {
+            c.is_jsdoc()
+                && c.is_leading()
+                && c.attached_to == decl.span.start
+                && src
+                    .get(c.content_span().start as usize..c.content_span().end as usize)
+                    .is_some_and(|text| text.contains("@type"))
+        });
         for d in &decl.declarations {
             let BindingPattern::BindingIdentifier(id) = &d.id else {
                 continue;
@@ -109,15 +132,18 @@ fn collect_top_level_lets(out: &str, body: &Range<usize>) -> Vec<LetDeclarator> 
                 Some(Expression::Identifier(i)) if i.name.as_str() == "undefined" => {
                     DeclaratorInit::Nullish
                 }
+                Some(Expression::BooleanLiteral(_)) => DeclaratorInit::BoolLiteral,
                 Some(_) => DeclaratorInit::Other,
             };
             decls.push(LetDeclarator {
                 name: SmolStr::from(id.name.as_str()),
+                name_start: body.start + id.span.start as usize,
                 name_end: body.start + id.span.end as usize,
                 has_type_annotation: d.type_annotation.is_some(),
+                has_jsdoc_type,
                 definite: d.definite,
                 init,
-                stmt_end,
+                list_end,
             });
         }
     }
@@ -460,43 +486,6 @@ pub(crate) fn is_runes_mode(
     false
 }
 
-/// Append ` NAME = undefined as any;` after each top-level `let`
-/// statement that declares an initialized target.
-///
-/// `export let size: Size = 'medium'` narrows `size` to the literal, so
-/// a later `size === 'large'` fires TS2367 ("no overlap"). Assigning
-/// `any` right after the declaration widens it back to the annotation.
-pub(crate) fn denarrow_typed_exported_props_in_place(
-    out: &mut String,
-    body: &Range<usize>,
-    target_names: &[SmolStr],
-) -> Vec<(u32, u32)> {
-    if target_names.is_empty() {
-        return Vec::new();
-    }
-    let mut insertions: Vec<(usize, String)> = Vec::new();
-    for d in collect_top_level_lets(out, body) {
-        if d.init == DeclaratorInit::Absent || !is_target(target_names, &d.name) {
-            continue;
-        }
-        // Declarators of one statement share its trailer.
-        if insertions.last().map(|(pos, _)| *pos) != Some(d.stmt_end) {
-            let lead = if out[..d.stmt_end].ends_with(';') {
-                ""
-            } else {
-                ";"
-            };
-            insertions.push((d.stmt_end, String::from(lead)));
-        }
-        if let Some((_, trailer)) = insertions.last_mut() {
-            trailer.push(' ');
-            trailer.push_str(&d.name);
-            trailer.push_str(" = undefined as any;");
-        }
-    }
-    splice_insertions(out, &insertions)
-}
-
 /// SVELTE-4-COMPAT: emit `let $$slots = …; let $$props = …; let
 /// $$restProps = …;` at the top of the render function for each
 /// ambient the component refers to (an identifier reference in a
@@ -578,25 +567,120 @@ pub(crate) fn widen_untyped_exports_jsdoc_in_place(
     splice_insertions(out, &insertions)
 }
 
-/// Rewrite `let <name>;` → `let <name>: any;` (or the SvelteKit route
-/// type for `data` / `form`) for each untyped target, so an untyped
-/// Svelte-4 prop doesn't fire TS7034/TS7005.
-pub(crate) fn widen_untyped_exported_props_in_place(
+/// The SvelteKit type of a route-file prop upstream names without a
+/// declared type: `data`, `form` and `snapshot` in `+page` / `+layout`
+/// components (`ExportedNames.ts`, `kitType`).
+fn kit_prop_type(name: &str, route_kind: Option<sveltekit::RouteKind>) -> Option<String> {
+    if matches!(route_kind, None | Some(sveltekit::RouteKind::Error)) {
+        return None;
+    }
+    let ty = match name {
+        "data" => match route_kind? {
+            sveltekit::RouteKind::Layout => "LayoutData",
+            sveltekit::RouteKind::Page => "PageData",
+            // `+error.svelte` is not one of upstream's `kitPageFiles`.
+            sveltekit::RouteKind::Error => return None,
+        },
+        "form" => "ActionData",
+        "snapshot" => "Snapshot",
+        _ => return None,
+    };
+    Some(format!("import('./$types.js').{ty}"))
+}
+
+/// Append `;NAME = __svn_any(NAME);` (in ignore comments) after each
+/// exported `let` whose declared type TypeScript would otherwise
+/// narrow away — upstream `ExportedNames.propTypeAssertToUserDefined`.
+///
+/// Three declaration shapes qualify, and the one reassignment covers
+/// all three: no initializer (the assignment makes the prop count as
+/// initialised, and an untyped one becomes `any`); a declared type —
+/// TS annotation or JSDoc `@type` — with an initializer (the
+/// assignment resets the literal narrowing back to the annotation);
+/// and an untyped `= true` / `= false` (TypeScript keeps the literal
+/// type for the read that builds the props object, so a consumer
+/// passing the other value would be an error). A SvelteKit route
+/// file's `data` / `form` / `snapshot` without a declared type also
+/// gets its `$types` annotation, as a TS annotation in ignore
+/// comments or a JSDoc `@type` in a JS overlay.
+pub(crate) fn assert_exported_prop_types_in_place(
     out: &mut String,
     body: &Range<usize>,
-    target_names: &[SmolStr],
+    exported_names: &[SmolStr],
     route_kind: Option<sveltekit::RouteKind>,
+    is_ts: bool,
 ) -> Vec<(u32, u32)> {
-    let insertions: Vec<(usize, String)> = collect_widening_sites(out, body, target_names)
-        .into_iter()
-        .map(|(pos, name)| {
-            let ty = route_kind
-                .and_then(|k| sveltekit::kit_widen_type(&name, k))
-                .unwrap_or("any");
-            (pos, format!(": {ty}"))
-        })
-        .collect();
+    if exported_names.is_empty() {
+        return Vec::new();
+    }
+    let mut insertions: Vec<(usize, String)> = Vec::new();
+    for d in collect_top_level_lets(out, body) {
+        if !is_target(exported_names, &d.name) {
+            continue;
+        }
+        let has_type = d.has_type_annotation || d.has_jsdoc_type;
+        let kit_type = if has_type {
+            None
+        } else {
+            kit_prop_type(&d.name, route_kind)
+        };
+        let widen =
+            d.init == DeclaratorInit::Absent || has_type || d.init == DeclaratorInit::BoolLiteral;
+        if !widen {
+            if let Some(ty) = kit_type {
+                insertions.push(kit_type_insertion(&d, &ty, is_ts));
+            }
+            continue;
+        }
+        let assertion = format!(";{} = __svn_any({});", d.name, d.name);
+        match kit_type {
+            // `let data;` — the type annotation and the assertion share
+            // one ignore region after the name.
+            Some(ty) if d.init == DeclaratorInit::Absent && !d.has_type_annotation => {
+                if is_ts {
+                    insertions.push((
+                        d.list_end,
+                        format!("/*svn:ignore_start*/: {ty}{assertion}/*svn:ignore_end*/"),
+                    ));
+                } else {
+                    insertions.push((d.name_start, format!("/** @type {{{ty}}} */ ")));
+                    insertions.push((
+                        d.list_end,
+                        format!("/*svn:ignore_start*/{assertion}/*svn:ignore_end*/"),
+                    ));
+                }
+            }
+            Some(ty) => {
+                insertions.push(kit_type_insertion(&d, &ty, is_ts));
+                insertions.push((
+                    d.list_end,
+                    format!("/*svn:ignore_start*/{assertion}/*svn:ignore_end*/"),
+                ));
+            }
+            None => insertions.push((
+                d.list_end,
+                format!("/*svn:ignore_start*/{assertion}/*svn:ignore_end*/"),
+            )),
+        }
+    }
+    // Several declarators of one statement all append at its end;
+    // keep declaration order within the same position.
+    insertions.sort_by_key(|(pos, _)| *pos);
     splice_insertions(out, &insertions)
+}
+
+/// Upstream `ExportedNames.emitKitType`: the `$types` annotation for
+/// a route prop, as a TS annotation after the name (in ignore
+/// comments) or a JSDoc `@type` before it.
+fn kit_type_insertion(d: &LetDeclarator, ty: &str, is_ts: bool) -> (usize, String) {
+    if is_ts {
+        (
+            d.name_end,
+            format!("/*svn:ignore_start*/: {ty}/*svn:ignore_end*/"),
+        )
+    } else {
+        (d.name_start, format!("/** @type {{{ty}}} */ "))
+    }
 }
 
 /// Shared site list for the two widening rewrites: the name end of

@@ -3,7 +3,7 @@
 async function $$render_e40e2c10() {
 
     // type A = $$Generic;
-           let x!: A;
+           let x: A/*svn:ignore_start*/;x = __svn_any(x);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});             (x);

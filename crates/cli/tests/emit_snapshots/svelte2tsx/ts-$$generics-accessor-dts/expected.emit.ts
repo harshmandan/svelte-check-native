@@ -4,7 +4,7 @@ async function $$render_e40e2c10/*svn:ignore_start*/<A>/*svn:ignore_end*/() {
 
                        
 
-           let a!: A;
+           let a: A/*svn:ignore_start*/;a = __svn_any(a);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("svelte:options", {

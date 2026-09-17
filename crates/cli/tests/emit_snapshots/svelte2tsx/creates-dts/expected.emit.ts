@@ -8,7 +8,7 @@ async function $$render_e40e2c10() {
                                                  
 
   /** @type {boolean} */
-         let bar = /** @type {any} */ (null);
+         let bar/*svn:ignore_start*/;bar = __svn_any(bar);/*svn:ignore_end*/;
          let foobar = '';
 
   const dispatch = createEventDispatcher();

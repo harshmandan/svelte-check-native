@@ -34,7 +34,7 @@ export default __svn_component_default;
 async function $$render_76cc262b() {
 
                                
-         let list: (Item | null)[] = []; list = undefined as any;
+         let list: (Item | null)[] = []/*svn:ignore_start*/;list = __svn_any(list);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
         const __svn_create_slot = __svn_create_create_slot();
@@ -64,7 +64,7 @@ export default __svn_component_default;
 async function $$render_758c71fe() {
 
                                
-         let list: Item[] | undefined = undefined; list = undefined as any;
+         let list: Item[] | undefined = undefined/*svn:ignore_start*/;list = __svn_any(list);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
         const __svn_create_slot = __svn_create_create_slot();

@@ -11,7 +11,6 @@
 use std::path::{Path, PathBuf};
 
 use svn_core::sveltekit::{KitFilesSettings, classify};
-use walkdir::WalkDir;
 
 /// Does `path` contain a `node_modules` segment? Uses path components
 /// (not string-contains) so a directory named `my_node_modules_dir`
@@ -58,29 +57,37 @@ pub(crate) fn discover_relevant_files_with_settings(
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let mut svelte_files = Vec::new();
     let mut kit_files = Vec::new();
-    for e in WalkDir::new(workspace)
-        .into_iter()
-        // depth 0 is the workspace root itself — never prune it, even
-        // if its basename is hidden or `node_modules` (the user pointed
-        // us at it deliberately). Pruning the root yields zero files.
-        .filter_entry(|e| e.depth() == 0 || !e.file_type().is_dir() || !is_excluded_dir(e.path()))
-        .filter_map(Result::ok)
-        // A symlink POINTING AT a file counts as a file. We walk with
-        // `follow_links = false`, so such an entry reports
-        // `is_symlink()` rather than `is_file()` and a bare `is_file()`
-        // test drops it — a symlinked `+page.svelte` then gets no
-        // overlay, is never checked, and loses its route autotyping.
-        //
-        // Upstream's `fdir` admits an entry when
-        // `isFile() || (isSymbolicLink() && !resolveSymlinks &&
-        // !excludeSymlinks)`, and `findFiles` sets neither option
-        // (`utils.ts:63-75`). Symlinked DIRECTORIES stay excluded on
-        // both sides — fdir needs `resolveSymlink` to descend one, and
-        // `filter_entry` above only prunes `is_dir()` entries, which a
-        // symlinked dir is not, so it is never descended here either.
-        .filter(|e| e.file_type().is_file() || e.file_type().is_symlink())
-    {
-        let path = e.path();
+    // Visit order follows svelte-check's `fdir` crawl, which fixes the
+    // order files are reported in: Node lists each directory sorted by
+    // name (libuv's scandir), a directory's files are taken when its
+    // listing arrives, and its subdirectories are listed after every
+    // directory already queued, so shallower files come first.
+    let mut queue = std::collections::VecDeque::from([workspace.to_path_buf()]);
+    let mut files: Vec<PathBuf> = Vec::new();
+    while let Some(dir) = queue.pop_front() {
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries: Vec<(std::ffi::OsString, std::fs::FileType)> = read
+            .filter_map(Result::ok)
+            .filter_map(|e| e.file_type().ok().map(|t| (e.file_name(), t)))
+            .collect();
+        entries.sort_by(|a, b| a.0.as_encoded_bytes().cmp(b.0.as_encoded_bytes()));
+        for (name, file_type) in entries {
+            let path = dir.join(&name);
+            // A symlink POINTING AT a file counts as a file: `fdir`
+            // admits an entry when `isFile() || isSymbolicLink()` without
+            // resolving it. Symlinked directories are never descended.
+            if file_type.is_dir() {
+                if !is_excluded_dir(&path) {
+                    queue.push_back(path);
+                }
+            } else if file_type.is_file() || file_type.is_symlink() {
+                files.push(path);
+            }
+        }
+    }
+    for path in &files {
         let ext = path.extension().and_then(|s| s.to_str());
         match ext {
             Some("svelte") => svelte_files.push(path.to_path_buf()),

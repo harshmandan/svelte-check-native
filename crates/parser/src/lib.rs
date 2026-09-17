@@ -42,6 +42,7 @@ pub use ast::{
 };
 pub use document::{
     Document, ScriptAttr, ScriptContext, ScriptLang, ScriptSection, StyleSection, Template,
+    is_ts_svelte,
 };
 pub use error::ParseError;
 pub use script::{ParsedScript, parse_script_body};

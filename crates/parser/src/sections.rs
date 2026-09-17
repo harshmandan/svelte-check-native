@@ -490,11 +490,9 @@ fn build_style_section<'src>(_source: &'src str, raw: RawSection<'src>) -> Style
 }
 
 fn parse_context_attr(attrs: &[ScriptAttr], errors: &mut Vec<ParseError>) -> ScriptContext {
-    // Svelte 5 syntax: bare `module` attribute (boolean).
-    if attrs
-        .iter()
-        .any(|a| a.name.eq_ignore_ascii_case("module") && a.value.is_none())
-    {
+    // Svelte 5 syntax: a `module` attribute, whatever its value — svelte2tsx
+    // (`Scripts.getTopLevelScriptTags`) checks only the name.
+    if attrs.iter().any(|a| a.name.eq_ignore_ascii_case("module")) {
         return ScriptContext::Module;
     }
     // Svelte 4 syntax: `context="module"`.
@@ -541,13 +539,19 @@ fn parse_lang_attr(attrs: &[ScriptAttr], errors: &mut Vec<ParseError>) -> Script
     let Some(attr) = attrs.iter().find(|a| a.name.eq_ignore_ascii_case("lang")) else {
         return ScriptLang::Js;
     };
-    match attr.value.as_deref() {
+    // svelte-check compares the value case-insensitively (`isTsSvelte`).
+    match attr
+        .value
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         Some("ts") | Some("typescript") => ScriptLang::Ts,
         Some("js") | Some("javascript") | None => ScriptLang::Js,
         Some("") => ScriptLang::Js,
         Some(other) => {
             errors.push(ParseError::UnknownScriptLang {
-                value: other.to_string(),
+                value: attr.value.clone().unwrap_or_else(|| other.to_string()),
                 range: attr.range,
             });
             ScriptLang::Js

@@ -435,7 +435,6 @@ fn emit_document_with_render_name(
     let synth_override: Option<String> = route_props_synth.or_else(|| {
         let synth = if is_ts
             && !is_route_file
-            && doc.script_lang() == svn_parser::ScriptLang::Ts
             && raw_props_info.type_text.is_none()
             && (!raw_props_info.destructures.is_empty() || raw_props_info.props_with_unknown)
         {

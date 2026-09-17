@@ -1017,7 +1017,7 @@ fn missing_svelte_import_diagnostics(
     doc: &svn_parser::Document<'_>,
     resolver: &svn_enhance::SvelteImportResolver,
 ) -> Vec<svn_typecheck::CheckDiagnostic> {
-    let script_is_ts = matches!(doc.script_lang(), svn_parser::ScriptLang::Ts);
+    let script_is_ts = svn_parser::is_ts_svelte(source);
     svn_enhance::missing_svelte_import_diagnostics(file, source, doc, resolver)
         .into_iter()
         .map(|d| svn_typecheck::CheckDiagnostic {
@@ -2113,7 +2113,7 @@ fn check_project(
                 // `noImplicitAny:false` defaults) and lets tsgo natively
                 // parse user-authored JSDoc `@typedef` / `@type`
                 // annotations on Svelte-4 `export let` props.
-                let is_ts = doc.script_lang() == svn_parser::ScriptLang::Ts;
+                let is_ts = svn_parser::is_ts_svelte(source);
                 let emitted =
                     svn_emit::emit_document_with_lang(&doc, &fragment, &summary, file, is_ts);
                 let kind = if idx < svelte_sources_in_scope_end {
@@ -2560,7 +2560,7 @@ fn run_emit_ts(workspace: &Path) -> ExitCode {
         }
 
         let summary = svn_analyze::walk_template(&fragment, &source);
-        let is_ts = doc.script_lang() == svn_parser::ScriptLang::Ts;
+        let is_ts = svn_parser::is_ts_svelte(&source);
         let emitted = svn_emit::emit_document_with_lang(&doc, &fragment, &summary, file, is_ts);
         let display_path = file
             .strip_prefix(workspace)

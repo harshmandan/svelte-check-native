@@ -66,6 +66,18 @@ pub enum DeclarationKind {
     Synthetic,
 }
 
+/// What `$state(arg)`'s argument tells the compiler's `should_proxy`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StateArg {
+    /// Exactly one argument, of a kind the compiler never proxies.
+    Primitive,
+    /// Anything the compiler proxies, or not exactly one plain argument.
+    Proxied,
+    /// A single identifier argument; decided by what it was initialised
+    /// with, once bindings are known.
+    Ident(SmolStr),
+}
+
 /// Just enough info about the declarator's initializer that rules can
 /// answer "is this a rune call? with what argument?" without re-walking
 /// the AST.
@@ -85,7 +97,7 @@ pub enum InitialKind {
     /// only (upstream's discriminator).
     RuneCall {
         rune: RuneCall,
-        primitive_arg: bool,
+        primitive_arg: StateArg,
     },
     /// `import …` — carries the source specifier and whether the
     /// binding is a default import (`import Foo from '...'`). Both

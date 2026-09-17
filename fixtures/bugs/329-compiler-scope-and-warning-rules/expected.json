@@ -1,0 +1,137 @@
+{
+    "errors": [],
+    "warnings": [
+        {
+            "file": "src/R14Text.svelte",
+            "line": 1,
+            "column": 19,
+            "code": "unknown_code"
+        },
+        {
+            "file": "src/R14Text.svelte",
+            "line": 1,
+            "column": 19,
+            "code": "unknown_code"
+        },
+        {
+            "file": "src/R04Fn.svelte",
+            "line": 0,
+            "column": 39,
+            "code": "non_reactive_update"
+        },
+        {
+            "file": "src/R17Foo.svelte",
+            "line": 1,
+            "column": 7,
+            "code": "svelte_self_deprecated"
+        },
+        {
+            "file": "src/R13Runes.svelte",
+            "line": 0,
+            "column": 34,
+            "code": "non_reactive_update"
+        },
+        {
+            "file": "src/R23Legacy.svelte",
+            "line": 0,
+            "column": 27,
+            "code": "perf_avoid_nested_class"
+        },
+        {
+            "file": "src/R23Legacy.svelte",
+            "line": 0,
+            "column": 27,
+            "code": "perf_avoid_nested_class"
+        },
+        {
+            "file": "src/R07EachRest.svelte",
+            "line": 1,
+            "column": 22,
+            "code": "bind_invalid_each_rest"
+        },
+        {
+            "file": "src/R05Runes.svelte",
+            "line": 0,
+            "column": 48,
+            "code": "perf_avoid_nested_class"
+        },
+        {
+            "file": "src/R16Quoted.svelte",
+            "line": 0,
+            "column": 8,
+            "code": "attribute_global_event_reference"
+        },
+        {
+            "file": "src/R14Expr.svelte",
+            "line": 2,
+            "column": 9,
+            "code": "a11y_missing_attribute"
+        },
+        {
+            "file": "src/R09Ident.svelte",
+            "line": 0,
+            "column": 93,
+            "code": "state_referenced_locally"
+        },
+        {
+            "file": "src/R14Html.svelte",
+            "line": 1,
+            "column": 19,
+            "code": "legacy_code"
+        },
+        {
+            "file": "src/R16Paren.svelte",
+            "line": 0,
+            "column": 8,
+            "code": "attribute_global_event_reference"
+        },
+        {
+            "file": "src/R15Ce.svelte",
+            "line": 0,
+            "column": 16,
+            "code": "options_missing_custom_element"
+        },
+        {
+            "file": "src/R07Quoted.svelte",
+            "line": 0,
+            "column": 34,
+            "code": "non_reactive_update"
+        },
+        {
+            "file": "src/R04Let.svelte",
+            "line": 0,
+            "column": 34,
+            "code": "non_reactive_update"
+        },
+        {
+            "file": "src/R28By.svelte",
+            "line": 0,
+            "column": 49,
+            "code": "state_referenced_locally"
+        },
+        {
+            "file": "src/R07EachRestUnquoted.svelte",
+            "line": 1,
+            "column": 22,
+            "code": "bind_invalid_each_rest"
+        },
+        {
+            "file": "src/R16Plain.svelte",
+            "line": 0,
+            "column": 8,
+            "code": "attribute_global_event_reference"
+        },
+        {
+            "file": "src/R05Legacy.svelte",
+            "line": 0,
+            "column": 40,
+            "code": "perf_avoid_nested_class"
+        },
+        {
+            "file": "src/R03Legacy.svelte",
+            "line": 0,
+            "column": 19,
+            "code": "export_let_unused"
+        }
+    ]
+}

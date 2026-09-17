@@ -1014,7 +1014,7 @@ fn merge_native_diagnostics(
     per_file: Vec<NativeFileDiagnostics>,
     compiler_overrides: &std::collections::HashMap<String, CompilerWarningOverride>,
     diagnostics: &mut Vec<svn_typecheck::CheckDiagnostic>,
-    seen: &mut std::collections::HashSet<(String, PathBuf, u32, u32)>,
+    seen: &mut std::collections::HashSet<WarningKey>,
     broken: &mut std::collections::HashSet<PathBuf>,
 ) {
     // Phase 1: all fatal/structural diagnostics + broken flags, in
@@ -1030,9 +1030,10 @@ fn merge_native_diagnostics(
     }
 
     // Phase 2: all warnings, in source order — matches the old lint
-    // pass's emission slot. Dedups by `(code, path, line, col)` so
+    // pass's emission slot. Dedups by [`WarningKey`] so
     // `--svelte-warnings=both` doesn't double-report against the bridge.
     for (path, warnings) in warning_files {
+        let mut occurrences = std::collections::HashMap::new();
         for w in warnings {
             let code = w.code.as_str().to_string();
             // Apply user `--compiler-warnings` reclassification. Default
@@ -1044,7 +1045,8 @@ fn merge_native_diagnostics(
             };
             let severity = apply_compiler_override(&code, base, compiler_overrides);
             let Some(severity) = severity else { continue };
-            let key = (code.clone(), path.clone(), w.start_line, w.start_column);
+            let site = (code.clone(), w.start_line, w.start_column);
+            let key = warning_key(&mut occurrences, &path, site);
             if !seen.insert(key) {
                 continue;
             }
@@ -1065,6 +1067,22 @@ fn merge_native_diagnostics(
             });
         }
     }
+}
+
+/// Identity of a compiler warning for merging the native and bridge
+/// passes: code, file, position, and which repeat at that position it
+/// is. The compiler can report the same warning twice at one position
+/// (a `$:` body is walked twice), and both repeats are real.
+type WarningKey = (String, PathBuf, u32, u32, u32);
+
+fn warning_key(
+    occurrences: &mut std::collections::HashMap<(String, u32, u32), u32>,
+    path: &Path,
+    site: (String, u32, u32),
+) -> WarningKey {
+    let n = occurrences.entry(site.clone()).or_insert(0);
+    *n += 1;
+    (site.0, path.to_path_buf(), site.1, site.2, *n)
 }
 
 fn apply_compiler_override(
@@ -2127,8 +2145,7 @@ fn check_project(
         // Track which (code, path, offset) tuples we've already
         // pushed so `--svelte-warnings=both` can dedup bridge/native
         // overlap without double-counting.
-        let mut seen: std::collections::HashSet<(String, PathBuf, u32, u32)> =
-            std::collections::HashSet::new();
+        let mut seen: std::collections::HashSet<WarningKey> = std::collections::HashSet::new();
 
         if run_native {
             // Fatal compile diagnostics (syntax errors → marked broken so
@@ -2161,12 +2178,14 @@ fn check_project(
             match svn_svelte_compiler::compile_batch(workspace, bridge_sources) {
                 Ok(per_file) => {
                     for (path, warnings) in per_file {
+                        let mut occurrences = std::collections::HashMap::new();
                         for w in warnings {
                             let severity =
                                 apply_compiler_override(&w.code, w.severity, compiler_overrides);
                             let Some(severity) = severity else { continue };
                             let href = compiler_code_docs_url(&w.code, severity);
-                            let key = (w.code.clone(), path.clone(), w.start.line, w.start.column);
+                            let site = (w.code.clone(), w.start.line, w.start.column);
+                            let key = warning_key(&mut occurrences, &path, site);
                             if !seen.insert(key) {
                                 continue;
                             }

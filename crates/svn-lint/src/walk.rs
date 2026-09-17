@@ -103,6 +103,7 @@ pub fn walk_parsed(
     // depend on the mode); when the authoritative scope-derived answer
     // disagrees, the tree is rebuilt once under the correct mode.
     ctx.runes_option = runes;
+    ctx.filename = (path.as_os_str() != "(unknown)").then(|| path.to_path_buf());
     let forced: Option<bool> = svn_parser::runes_option(fragment, source)
         .or(runes)
         .or_else(|| runes_from_filename(path).then_some(true));
@@ -388,12 +389,10 @@ fn walk_fragment_impl(
         // the ignore to this one node and its subtree — mirror
         // upstream `_()` catchall visitor.
         //
-        // Only lintable nodes need their own ignore frame. Comment
-        // and Interpolation nodes don't emit warnings themselves AND
-        // shouldn't trigger a walk-back through a `<!-- svelte-ignore
-        // -->` comment — otherwise the comment would double-fire its
-        // own `legacy_code` / `unknown_code` (once for the comment,
-        // once for the lintable sibling that follows).
+        // Every node but a comment consumes the ignore comments right
+        // before it, as the compiler's catch-all visitor does; a
+        // comment consuming them would report each comment's
+        // `legacy_code` / `unknown_code` a second time.
         //
         // Text nodes DO emit warnings (bidi) so they need the ignore
         // frame. Whitespace-only Text is a neutral carrier in the
@@ -406,7 +405,10 @@ fn walk_fragment_impl(
             | Node::EachBlock(_)
             | Node::AwaitBlock(_)
             | Node::KeyBlock(_)
-            | Node::SnippetBlock(_) => true,
+            | Node::SnippetBlock(_)
+            // `{expr}`, `{@html}`, `{@render}`, `{@const}` and `{@debug}`
+            // consume a preceding ignore comment too.
+            | Node::Interpolation(_) => true,
             // Non-whitespace Text carries bidi warnings and needs
             // the ignore frame; whitespace-only Text is a neutral
             // carrier between the comment and its target element.

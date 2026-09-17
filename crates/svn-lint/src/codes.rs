@@ -55,6 +55,7 @@ pub enum Code {
     attribute_avoid_is,
     attribute_global_event_reference,
     attribute_illegal_colon,
+    attribute_invalid_event_handler,
     attribute_invalid_property_name,
     attribute_quoted,
     bidirectional_control_characters,
@@ -170,6 +171,7 @@ impl Code {
             Self::attribute_avoid_is => "attribute_avoid_is",
             Self::attribute_global_event_reference => "attribute_global_event_reference",
             Self::attribute_illegal_colon => "attribute_illegal_colon",
+            Self::attribute_invalid_event_handler => "attribute_invalid_event_handler",
             Self::attribute_invalid_property_name => "attribute_invalid_property_name",
             Self::attribute_quoted => "attribute_quoted",
             Self::bidirectional_control_characters => "bidirectional_control_characters",
@@ -293,6 +295,7 @@ impl Code {
             "attribute_avoid_is" => Some(Self::attribute_avoid_is),
             "attribute_global_event_reference" => Some(Self::attribute_global_event_reference),
             "attribute_illegal_colon" => Some(Self::attribute_illegal_colon),
+            "attribute_invalid_event_handler" => Some(Self::attribute_invalid_event_handler),
             "attribute_invalid_property_name" => Some(Self::attribute_invalid_property_name),
             "attribute_quoted" => Some(Self::attribute_quoted),
             "bidirectional_control_characters" => Some(Self::bidirectional_control_characters),
@@ -346,7 +349,7 @@ impl Code {
 }
 
 /// All known codes, alphabetically sorted.
-pub const CODES: &[&str; 88] = &[
+pub const CODES: &[&str; 89] = &[
     "a11y_accesskey",
     "a11y_aria_activedescendant_has_tabindex",
     "a11y_aria_attributes",
@@ -392,6 +395,7 @@ pub const CODES: &[&str; 88] = &[
     "attribute_avoid_is",
     "attribute_global_event_reference",
     "attribute_illegal_colon",
+    "attribute_invalid_event_handler",
     "attribute_invalid_property_name",
     "attribute_quoted",
     "bidirectional_control_characters",

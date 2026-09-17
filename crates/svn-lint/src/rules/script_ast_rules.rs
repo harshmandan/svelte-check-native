@@ -29,6 +29,7 @@ use crate::context::LintContext;
 use crate::messages;
 
 /// One buffered rule outcome from the shared script walk.
+#[derive(Clone)]
 pub(crate) enum ScriptRuleEvent {
     /// A warning fully decided at walk time.
     Warning {
@@ -88,7 +89,7 @@ fn has_bidi_char(s: &str) -> bool {
 impl ScriptRuleHooks {
     /// Class-declaration statement (named or exported).
     ///
-    /// `perf_avoid_nested_class`: runes mode only. Upstream
+    /// `perf_avoid_nested_class`, in either mode. Upstream
     /// (`visitors/ClassDeclaration.js:21`):
     ///   allowed_depth = ast_type === 'module' ? 0 : 1;
     ///   if (scope.function_depth > allowed_depth) w.perf_avoid_nested_class(node);
@@ -103,9 +104,6 @@ impl ScriptRuleHooks {
         function_depth: u32,
         range: Range,
     ) {
-        if !self.runes {
-            return;
-        }
         let allowed = if self.is_instance { 1 } else { 0 };
         if function_depth > allowed && !is_ignored(frames, Code::perf_avoid_nested_class) {
             events.push(ScriptRuleEvent::Warning {

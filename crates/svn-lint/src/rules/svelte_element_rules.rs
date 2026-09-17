@@ -14,12 +14,19 @@ pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::
         ctx.emit(Code::svelte_component_deprecated, msg, se.range);
     }
 
-    // svelte_self_deprecated: `<svelte:self>` in runes mode. Upstream
-    // threads the component name + basename inferred from filename —
-    // we don't have that at this layer yet; Phase A's best effort
-    // uses fallback values.
+    // svelte_self_deprecated: `<svelte:self>` in runes mode, naming the
+    // component the way the compiler does from its file name.
     if ctx.runes && se.kind == SvelteElementKind::SelfRef {
-        let msg = messages::svelte_self_deprecated("Self", "Self.svelte");
+        let (name, basename) = match &ctx.filename {
+            Some(path) => (
+                component_name(path, ctx.scope_tree.as_ref()),
+                path.file_name()
+                    .map(|b| b.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ),
+            None => ("Self".to_string(), "Self.svelte".to_string()),
+        };
+        let msg = messages::svelte_self_deprecated(&name, &basename);
         ctx.emit(Code::svelte_self_deprecated, msg, se.range);
     }
 
@@ -77,4 +84,58 @@ pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::
         }
         crate::rules::a11y_rules::visit_dynamic(se, ctx, ancestors);
     }
+}
+
+/// The compiler's component name: `get_component_name` (the file's
+/// base name without `.svelte`, or its directory for an `index`
+/// outside `src`, capitalised), then `scope.generate` (characters an
+/// identifier can't hold become `_`, and a name the component already
+/// uses gets a `_N` suffix).
+fn component_name(path: &std::path::Path, tree: Option<&crate::scope::ScopeTree>) -> String {
+    let basename = path
+        .file_name()
+        .map(|b| b.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut name = basename.replacen(".svelte", "", 1);
+    if name == "index"
+        && let Some(dir) = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|d| d.to_string_lossy().into_owned())
+        && !dir.is_empty()
+        && dir != "src"
+    {
+        name = dir;
+    }
+    let mut chars = name.chars();
+    let name: String = match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    };
+    let mut preferred: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '$' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if preferred.starts_with(|c: char| c.is_ascii_digit()) {
+        preferred.replace_range(0..1, "_");
+    }
+    let taken = |candidate: &str| {
+        tree.is_some_and(|t| {
+            t.all_bindings().any(|(_, b)| b.name == candidate)
+                || t.unresolved_refs.iter().any(|r| r.name == candidate)
+        })
+    };
+    if !taken(&preferred) {
+        return preferred;
+    }
+    (1..)
+        .map(|n| format!("{preferred}_{n}"))
+        .find(|candidate| !taken(candidate))
+        .unwrap_or(preferred)
 }

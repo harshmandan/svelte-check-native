@@ -104,6 +104,9 @@ pub struct ScopeTree {
     /// when it differs from `local`).
     nonrunes_export_idents: Vec<SmolStr>,
     nonrunes_export_specs: Vec<(SmolStr, Option<SmolStr>)>,
+    /// Local name of every `export { … }` specifier in the instance
+    /// script, in either mode.
+    export_spec_locals: Vec<SmolStr>,
     /// Script-AST rule events buffered by the [`ScriptRuleHooks`]
     /// callbacks during the module / instance script walks (see
     /// `crate::rules::script_ast_rules`). The walk itself emits no
@@ -189,7 +192,15 @@ pub fn build_with_template_and_runes(
         module_program,
         instance_program,
     );
-    if !runes {
+    if runes {
+        // `ExportSpecifier.js`: in runes mode an exported local counts
+        // as reassigned.
+        for local in std::mem::take(&mut tree.export_spec_locals) {
+            if let Some(bid) = tree.resolve(tree.instance_root, &local) {
+                tree.bindings[bid.0 as usize].reassigned = true;
+            }
+        }
+    } else {
         promote_non_runes_exports(&mut tree);
     }
     populate_compat_gated_fields(&mut tree, compat);
@@ -202,17 +213,46 @@ pub fn build_with_template_and_runes(
 /// post-walk passes that touch `reassigned` or kind — currently just
 /// `promote_non_runes_exports` on the non-runes path.
 fn populate_compat_gated_fields(tree: &mut ScopeTree, compat: crate::compat::CompatFeatures) {
-    for binding in &mut tree.bindings {
+    let primitive_by_ident: Vec<bool> = tree
+        .bindings
+        .iter()
+        .map(|binding| match &binding.initial {
+            InitialKind::RuneCall {
+                primitive_arg: StateArg::Ident(name),
+                ..
+            } => ident_initial_is_primitive(tree, binding.scope, name),
+            _ => false,
+        })
+        .collect();
+    for (binding, by_ident) in tree.bindings.iter_mut().zip(primitive_by_ident) {
         binding.fires_state_referenced_locally = match binding.kind {
             BindingKind::RawState | BindingKind::Derived => true,
             BindingKind::Prop => compat.state_locally_fires_on_props,
             BindingKind::RestProp => {
                 compat.state_locally_fires_on_props && compat.state_locally_rest_prop
             }
-            BindingKind::State => binding.reassigned || is_primitive_rune_init(&binding.initial),
+            BindingKind::State => {
+                binding.reassigned || is_primitive_rune_init(&binding.initial) || by_ident
+            }
             _ => false,
         };
     }
+}
+
+/// `should_proxy(identifier)`, negated: an identifier whose binding is
+/// never reassigned and was initialised with a value the compiler does
+/// not proxy is primitive; anything else (unresolved, reassigned, no
+/// initialiser, a declaration or import) is proxied.
+fn ident_initial_is_primitive(tree: &ScopeTree, scope: ScopeId, name: &str) -> bool {
+    let Some(bid) = tree.resolve(scope, name) else {
+        return false;
+    };
+    let b = tree.binding(bid);
+    !b.reassigned
+        && match &b.initial {
+            InitialKind::Expression { primitive } => *primitive,
+            _ => false,
+        }
 }
 
 /// Promote Svelte-4 `export` declarations in the instance script to
@@ -411,6 +451,9 @@ struct TreeBuilder {
     /// instance parse (see the matching `ScopeTree` fields).
     nonrunes_export_idents: Vec<SmolStr>,
     nonrunes_export_specs: Vec<(SmolStr, Option<SmolStr>)>,
+    /// Local name of every `export { … }` specifier in the instance
+    /// script, in either mode.
+    export_spec_locals: Vec<SmolStr>,
     /// Arena reused across the per-expression template mini-parses in
     /// `walk_expr_range`. Templates carry hundreds of tiny `{expr}`
     /// slices per file; constructing a fresh oxc Allocator for each
@@ -535,6 +578,7 @@ impl TreeBuilder {
             custom_element_props_ignored: Vec::new(),
             nonrunes_export_idents: Vec::new(),
             nonrunes_export_specs: Vec::new(),
+            export_spec_locals: Vec::new(),
             expr_alloc: None,
             has_await: false,
             script_rule_events: Vec::new(),
@@ -687,7 +731,9 @@ impl TreeBuilder {
                         | DirectiveKind::Out
                         | DirectiveKind::Animate
                 ) {
-                    self.record_template_ref(d.name.as_str(), d.range, ctx, RefFlags::default());
+                    // `use:tooltips.show` references `tooltips`.
+                    let root = d.name.split('.').next().unwrap_or_default();
+                    self.record_template_ref(root, d.range, ctx, RefFlags::default());
                 }
                 match &d.value {
                     Some(svn_parser::ast::DirectiveValue::Expression {
@@ -1400,13 +1446,18 @@ impl TreeBuilder {
                         let local = match &spec.local {
                             ModuleExportName::IdentifierName(id) => id.name.as_str(),
                             ModuleExportName::IdentifierReference(id) => id.name.as_str(),
-                            ModuleExportName::StringLiteral(_) => continue,
+                            ModuleExportName::StringLiteral(l) => l.value.as_str(),
                         };
-                        let exported = match &spec.exported {
-                            ModuleExportName::IdentifierName(id) => Some(id.name.as_str()),
-                            ModuleExportName::IdentifierReference(id) => Some(id.name.as_str()),
-                            ModuleExportName::StringLiteral(_) => None,
+                        self.export_spec_locals.push(SmolStr::from(local));
+                        // Legacy mode promotes only `export { a as b }`
+                        // with identifier names on both sides.
+                        let exported = match (&spec.local, &spec.exported) {
+                            (ModuleExportName::StringLiteral(_), _)
+                            | (_, ModuleExportName::StringLiteral(_)) => continue,
+                            (_, ModuleExportName::IdentifierName(id)) => id.name.as_str(),
+                            (_, ModuleExportName::IdentifierReference(id)) => id.name.as_str(),
                         };
+                        let exported = Some(exported);
                         // Record the alias only when it differs from the
                         // local — matches the old `alias != local` gate.
                         let alias = exported.filter(|a| *a != local).map(SmolStr::from);
@@ -1494,6 +1545,7 @@ impl TreeBuilder {
             custom_element_props_ignored: self.custom_element_props_ignored,
             nonrunes_export_idents: self.nonrunes_export_idents,
             nonrunes_export_specs: self.nonrunes_export_specs,
+            export_spec_locals: self.export_spec_locals,
             script_rule_events: self.script_rule_events,
         }
     }
@@ -2019,6 +2071,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     for p in &f.params.items {
                         w.declare_pattern(&p.pattern, DeclarationKind::Param);
                     }
+                    if let Some(rest) = &f.params.rest {
+                        w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
+                    }
                     if let Some(body) = &f.body {
                         for s in &body.statements {
                             w.visit_stmt(s);
@@ -2076,6 +2131,12 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                             self.with_function(|w| {
                                 for p in &f.params.items {
                                     w.declare_pattern(&p.pattern, DeclarationKind::Param);
+                                }
+                                if let Some(rest) = &f.params.rest {
+                                    w.declare_pattern(
+                                        &rest.rest.argument,
+                                        DeclarationKind::RestParam,
+                                    );
                                 }
                                 if let Some(body) = &f.body {
                                     for s in &body.statements {
@@ -2211,6 +2272,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                             for p in &f.params.items {
                                 w.declare_pattern(&p.pattern, DeclarationKind::Param);
                             }
+                            if let Some(rest) = &f.params.rest {
+                                w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
+                            }
                             if let Some(body) = &f.body {
                                 for s in &body.statements {
                                     w.visit_stmt(s);
@@ -2269,9 +2333,21 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     }
                 }
             }
+            // The compiler gives each top-level `$:` statement its own
+            // non-porous scope, one function level deeper.
             let prev = std::mem::replace(&mut self.in_reactive_statement, true);
-            self.visit_stmt(&lbl.body);
+            let parent_scope = self.cur_scope();
+            let scope = self.tree.new_scope(Some(parent_scope));
+            let events_before = self.tree.script_rule_events.len();
+            self.function_depth += 1;
+            self.with_scope(scope, |w| w.visit_stmt(&lbl.body));
+            self.function_depth -= 1;
             self.in_reactive_statement = prev;
+            // `LabeledStatement.js` walks a reactive statement's body
+            // twice (once to collect its dependencies, then again), so
+            // every script warning inside it is reported twice.
+            let repeated = self.tree.script_rule_events[events_before..].to_vec();
+            self.tree.script_rule_events.extend(repeated);
         } else {
             self.visit_stmt(&lbl.body);
         }
@@ -2330,6 +2406,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                         if let Some(body) = &md.value.body {
                             for p in &md.value.params.items {
                                 w.declare_pattern(&p.pattern, DeclarationKind::Param);
+                            }
+                            if let Some(rest) = &md.value.params.rest {
+                                w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
                             }
                             for s in &body.statements {
                                 w.visit_stmt(s);
@@ -2417,7 +2496,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     .init
                     .as_ref()
                     .map(state_rune_primitive_arg)
-                    .unwrap_or(true);
+                    .unwrap_or(StateArg::Proxied);
                 (
                     BindingKind::State,
                     InitialKind::RuneCall {
@@ -2431,7 +2510,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     .init
                     .as_ref()
                     .map(state_rune_primitive_arg)
-                    .unwrap_or(true);
+                    .unwrap_or(StateArg::Proxied);
                 (
                     BindingKind::RawState,
                     InitialKind::RuneCall {
@@ -2444,21 +2523,21 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 BindingKind::Derived,
                 InitialKind::RuneCall {
                     rune: RuneCall::Derived,
-                    primitive_arg: false,
+                    primitive_arg: StateArg::Proxied,
                 },
             ),
             Some(RuneCall::DerivedBy) => (
                 BindingKind::Derived,
                 InitialKind::RuneCall {
                     rune: RuneCall::DerivedBy,
-                    primitive_arg: false,
+                    primitive_arg: StateArg::Proxied,
                 },
             ),
             Some(RuneCall::Props) => (
                 BindingKind::Prop,
                 InitialKind::RuneCall {
                     rune: RuneCall::Props,
-                    primitive_arg: false,
+                    primitive_arg: StateArg::Proxied,
                 },
             ),
             _ => match d.init.as_ref() {
@@ -2604,7 +2683,11 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                         BindingKind::BindableProp,
                         InitialKind::RuneCall {
                             rune: RuneCall::Bindable,
-                            primitive_arg: primitive,
+                            primitive_arg: if primitive {
+                                StateArg::Primitive
+                            } else {
+                                StateArg::Proxied
+                            },
                         },
                     )
                 } else {
@@ -2720,6 +2803,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     for p in &arr.params.items {
                         w.declare_pattern(&p.pattern, DeclarationKind::Param);
                     }
+                    if let Some(rest) = &arr.params.rest {
+                        w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
+                    }
                     match &arr.body {
                         oxc_ast::ast::ArrowFunctionBody::FunctionBody(body) => {
                             for s in &body.statements {
@@ -2756,6 +2842,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     }
                     for p in &f.params.items {
                         w.declare_pattern(&p.pattern, DeclarationKind::Param);
+                    }
+                    if let Some(rest) = &f.params.rest {
+                        w.declare_pattern(&rest.rest.argument, DeclarationKind::RestParam);
                     }
                     if let Some(body) = &f.body {
                         for s in &body.statements {
@@ -2979,10 +3068,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // If this is a $derived(...) / $inspect(...) call, bump the
         // analyze-phase function_depth for its arguments.
         let rune = detect_rune_call_from_call(c);
-        let bump = matches!(
-            rune,
-            Some(RuneCall::Derived) | Some(RuneCall::DerivedBy) | Some(RuneCall::Inspect)
-        );
+        let bump = matches!(rune, Some(RuneCall::Derived) | Some(RuneCall::Inspect));
         // Track `nested_in_state_call` for refs inside arg subtrees —
         // used by state_referenced_locally's message discriminator.
         let push_state = matches!(rune, Some(RuneCall::State) | Some(RuneCall::StateRaw));

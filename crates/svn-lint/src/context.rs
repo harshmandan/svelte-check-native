@@ -93,6 +93,11 @@ pub struct LintContext<'src> {
     /// modern superset, which matches upstream main and the
     /// `upstream_validator` fixture suite.
     pub compat: crate::compat::CompatFeatures,
+
+    /// The file being linted, as the compiler's `filename` option;
+    /// `None` when the caller has no file name (the compiler's
+    /// `(unknown)`).
+    pub filename: Option<std::path::PathBuf>,
 }
 
 impl<'src> LintContext<'src> {
@@ -116,6 +121,7 @@ impl<'src> LintContext<'src> {
             scope_tree: None,
             custom_element_info: None,
             compat: crate::compat::CompatFeatures::MODERN,
+            filename: None,
         }
     }
 

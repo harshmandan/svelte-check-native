@@ -687,6 +687,11 @@ pub fn snippet_parameter_assignment() -> String {
         .to_string()
 }
 
+/// Event attribute must be a JavaScript expression, not a string
+pub fn attribute_invalid_event_handler() -> String {
+    "Event attribute must be a JavaScript expression, not a string\nhttps://svelte.dev/e/attribute_invalid_event_handler".to_string()
+}
+
 /// `bind:%name%` is not a valid binding. %explanation%
 pub fn bind_invalid_name(name: &str, explanation: Option<&str>) -> String {
     match explanation {

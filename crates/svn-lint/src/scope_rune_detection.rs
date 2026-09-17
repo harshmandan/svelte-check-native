@@ -8,7 +8,9 @@
 
 use oxc_ast::ast::{BindingPattern, CallExpression, Expression};
 
-use crate::scope_types::{InitialKind, RuneCall};
+use smol_str::SmolStr;
+
+use crate::scope_types::{InitialKind, RuneCall, StateArg};
 use crate::scope_util::unwrap_ts_wrappers;
 
 /// Matches upstream `utils.js::is_rune`. Keep in sync with the
@@ -44,24 +46,32 @@ pub(crate) fn is_primitive_rune_init(init: &InitialKind) -> bool {
     matches!(
         init,
         InitialKind::RuneCall {
-            primitive_arg: true,
+            primitive_arg: StateArg::Primitive,
             ..
         }
     )
 }
 
-/// For a `$state`/`$state.raw` call init, return whether the first
-/// argument is a primitive-like (matching upstream's `should_proxy`
-/// analog). `true` if no argument.
-pub(crate) fn state_rune_primitive_arg(e: &Expression<'_>) -> bool {
-    if let Expression::CallExpression(c) = e {
-        c.arguments
-            .first()
-            .and_then(|a| a.as_expression())
-            .map(|arg| is_primitive_expr(unwrap_ts_wrappers(arg)))
-            .unwrap_or(true)
+/// For a `$state`/`$state.raw` call init, classify the argument the
+/// way `Identifier.js` does before asking `should_proxy`: only a call
+/// with exactly one non-spread argument can be primitive.
+pub(crate) fn state_rune_primitive_arg(e: &Expression<'_>) -> StateArg {
+    let Expression::CallExpression(c) = e else {
+        return StateArg::Proxied;
+    };
+    let [arg] = c.arguments.as_slice() else {
+        return StateArg::Proxied;
+    };
+    let Some(arg) = arg.as_expression() else {
+        return StateArg::Proxied;
+    };
+    let arg = unwrap_ts_wrappers(arg);
+    if is_primitive_expr(arg) {
+        StateArg::Primitive
+    } else if let Expression::Identifier(id) = arg {
+        StateArg::Ident(SmolStr::from(id.name.as_str()))
     } else {
-        true
+        StateArg::Proxied
     }
 }
 
@@ -129,6 +139,7 @@ pub(crate) fn is_primitive_expr(e: &Expression<'_>) -> bool {
             | Expression::StringLiteral(_)
             | Expression::BooleanLiteral(_)
             | Expression::BigIntLiteral(_)
+            | Expression::RegExpLiteral(_)
             | Expression::TemplateLiteral(_)
             | Expression::ArrowFunctionExpression(_)
             | Expression::FunctionExpression(_)

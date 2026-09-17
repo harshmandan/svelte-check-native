@@ -69,9 +69,10 @@ pub fn visit(
         }
     }
 
-    // slot_element_deprecated: `<slot>` in runes mode (non-custom-element).
-    // Upstream `visitors/SlotElement.js:14` passes the whole node.
-    if ctx.runes && el.name == "slot" {
+    // slot_element_deprecated: `<slot>` in runes mode, unless the
+    // component is a custom element (`<svelte:options customElement>`).
+    // Upstream `visitors/SlotElement.js:13` passes the whole node.
+    if ctx.runes && ctx.custom_element_info.is_none() && el.name == "slot" {
         let msg = messages::slot_element_deprecated();
         ctx.emit(Code::slot_element_deprecated, msg, el.range);
     }
@@ -250,8 +251,24 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
                 ctx.emit(Code::attribute_quoted, msg, p.range);
             }
 
-            // attribute_global_event_reference only fires on the
-            // expression / shorthand forms below.
+            // An `on*` attribute on an element must hold exactly one
+            // expression; a quoted `"{handler}"` is that expression.
+            if parent_is_regular_or_svelte && name.starts_with("on") && name.len() > 2 {
+                match p.value.as_ref().map(|v| v.parts.as_slice()) {
+                    Some(
+                        [
+                            AttrValuePart::Expression {
+                                expression_range, ..
+                            },
+                        ],
+                    ) => global_event_reference(name, *expression_range, p.range, ctx),
+                    _ => ctx.emit_error(
+                        Code::attribute_invalid_event_handler,
+                        messages::attribute_invalid_event_handler(),
+                        p.range,
+                    ),
+                }
+            }
         }
         Attribute::Shorthand(s) => {
             let name = s.name.as_str();
@@ -298,26 +315,8 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
                 let msg = messages::attribute_invalid_property_name(name, correct);
                 ctx.emit(Code::attribute_invalid_property_name, msg, e.range);
             }
-            // attribute_global_event_reference: `on{event}={ident}`
-            // where `ident === attribute.name` and `ident` has no
-            // local binding. Upstream: shared/element.js:62-75.
-            if parent_is_regular_or_svelte
-                && name.starts_with("on")
-                && name.len() > 2
-                && let Some(tree) = &ctx.scope_tree
-            {
-                let expr_src = ctx
-                    .source
-                    .get(e.expression_range.start as usize..e.expression_range.end as usize)
-                    .map(str::trim);
-                if expr_src == Some(name)
-                    && tree
-                        .resolve(tree.innermost_template_scope_at(e.range.start), name)
-                        .is_none()
-                {
-                    let msg = messages::attribute_global_event_reference(name);
-                    ctx.emit(Code::attribute_global_event_reference, msg, e.range);
-                }
+            if parent_is_regular_or_svelte && name.starts_with("on") && name.len() > 2 {
+                global_event_reference(name, e.expression_range, e.range, ctx);
             }
         }
         Attribute::Directive(d) => {
@@ -366,6 +365,18 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
                         .source
                         .get(expression_range.start as usize..expression_range.end as usize)
                         .and_then(crate::scope_util::base_identifier_of_text),
+                    // The parser reads `bind:x="{y}"` as `bind:x={y}`.
+                    Some(DirectiveValue::Quoted(v)) => match v.parts.as_slice() {
+                        [
+                            AttrValuePart::Expression {
+                                expression_range, ..
+                            },
+                        ] => ctx
+                            .source
+                            .get(expression_range.start as usize..expression_range.end as usize)
+                            .and_then(crate::scope_util::base_identifier_of_text),
+                        _ => None,
+                    },
                     // `bind:foo` shorthand — the implied identifier.
                     None => Some(d.name.to_string()),
                     _ => None,
@@ -385,6 +396,57 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
             }
         }
         _ => {}
+    }
+}
+
+/// `attribute_global_event_reference` (upstream `shared/element.js`):
+/// an `on*` attribute whose expression is the bare identifier of the
+/// same name, with no binding in scope — the global handler property.
+/// The expression is compared as the compiler's AST sees it, so
+/// parentheses and type wrappers do not count.
+fn global_event_reference(
+    name: &str,
+    expression: svn_core::Range,
+    attr: svn_core::Range,
+    ctx: &mut LintContext<'_>,
+) {
+    use oxc_ast::ast::{Expression, Statement};
+    let Some(src) = ctx
+        .source
+        .get(expression.start as usize..expression.end as usize)
+    else {
+        return;
+    };
+    let wrapped = format!("({src});");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
+        return;
+    };
+    let mut expr = &stmt.expression;
+    loop {
+        expr = match expr {
+            Expression::ParenthesizedExpression(p) => &p.expression,
+            Expression::TSAsExpression(e) => &e.expression,
+            Expression::TSSatisfiesExpression(e) => &e.expression,
+            Expression::TSNonNullExpression(e) => &e.expression,
+            Expression::TSTypeAssertion(e) => &e.expression,
+            _ => break,
+        };
+    }
+    let Expression::Identifier(id) = expr else {
+        return;
+    };
+    if id.name != name {
+        return;
+    }
+    if let Some(tree) = &ctx.scope_tree
+        && tree
+            .resolve(tree.innermost_template_scope_at(attr.start), name)
+            .is_none()
+    {
+        let msg = messages::attribute_global_event_reference(name);
+        ctx.emit(Code::attribute_global_event_reference, msg, attr);
     }
 }
 

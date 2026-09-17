@@ -243,12 +243,16 @@ fn upstream_validator_fixtures() {
         enforced += 1;
 
         // Run our linter.
-        let warnings = svn_lint::lint_file(
-            &source,
-            &source_path,
-            None,
-            svn_lint::CompatFeatures::MODERN,
-        );
+        // The compiler runs these samples without a file name, which it
+        // reports as `(unknown)`; module samples keep theirs so the
+        // `.svelte.js` extension still selects runes mode.
+        let lint_path = if source_path.extension().is_some_and(|e| e == "svelte") {
+            std::path::PathBuf::from("(unknown)")
+        } else {
+            source_path.clone()
+        };
+        let warnings =
+            svn_lint::lint_file(&source, &lint_path, None, svn_lint::CompatFeatures::MODERN);
         // Upstream emits line-1-based, column-0-based; we store line
         // 1-based and column 0-based in LintContext::emit.
         let actual: Vec<ExpectedWarning> = warnings

@@ -86,6 +86,12 @@
             "code": "attribute_global_event_reference"
         },
         {
+            "file": "src/IgnoreNonAscii.svelte",
+            "line": 7,
+            "column": 0,
+            "code": "a11y_missing_attribute"
+        },
+        {
             "file": "src/R15Ce.svelte",
             "line": 0,
             "column": 16,

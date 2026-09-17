@@ -259,8 +259,10 @@ fn parse_ignore_codes(rest: &str, runes: bool) -> Vec<SmolStr> {
     out
 }
 
+/// The compiler's `/[\w$-]/` — ASCII only, so a multi-byte character
+/// ends a code rather than joining it.
 fn is_ident_char(b: u8) -> bool {
-    (b as char).is_alphanumeric() || matches!(b, b'_' | b'-' | b'$')
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'$')
 }
 
 /// Index of ALL comments in one script body, powering the

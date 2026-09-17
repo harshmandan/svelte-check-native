@@ -8,7 +8,7 @@ function $$render_86f64a55() {
         // template type-check body (incremental)
         {
             const __svn_C_3e = __svn_ensure_component(L);
-            const __svn_inst_3e = new __svn_C_3e({ target: __svn_any(), props: {"list": ([]), children: () => __svn_snippet_return()} });
+            const __svn_inst_3e = new __svn_C_3e({ target: __svn_any(), props: {children: () => __svn_snippet_return(), "list": ([])} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item: café } = __svn_inst_3e.$$slot_def.default; $$_$$;
                 (café.name);
@@ -125,7 +125,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         {
             const __svn_C_3e = __svn_ensure_component(L);
-            const __svn_inst_3e = new __svn_C_3e({ target: __svn_any(), props: {"list": ([]), children: () => __svn_snippet_return()} });
+            const __svn_inst_3e = new __svn_C_3e({ target: __svn_any(), props: {children: () => __svn_snippet_return(), "list": ([])} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item } = __svn_inst_3e.$$slot_def.default; $$_$$;
                 (item.name);

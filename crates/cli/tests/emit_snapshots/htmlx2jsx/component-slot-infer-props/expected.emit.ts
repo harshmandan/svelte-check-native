@@ -5,7 +5,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         {
             const __svn_C_0 = __svn_ensure_component(Parent);
-            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {"bare": true, shorthand, "text1": "val1", "text2": "val2", "text3": `a${a}b${b}`, "textEmpty": ``, "literal": (true), "strLiteral": ('foo'), "complex": ({a}), "a-dashed-complex": ({a}), ...__svn_css_prop({"--custom-cssprop": "foo"}), children: () => __svn_snippet_return()} });
+            const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {children: () => __svn_snippet_return(), "bare": true, shorthand, "text1": "val1", "text2": "val2", "text3": `a${a}b${b}`, "textEmpty": ``, "literal": (true), "strLiteral": ('foo'), "complex": ({a}), "a-dashed-complex": ({a}), ...__svn_css_prop({"--custom-cssprop": "foo"})} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo } = __svn_inst_0.$$slot_def.default; $$_$$;
                 {

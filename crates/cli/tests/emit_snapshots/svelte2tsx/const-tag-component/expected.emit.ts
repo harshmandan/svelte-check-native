@@ -14,7 +14,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         {
             const __svn_C_fe = __svn_ensure_component(Component);
-            const __svn_inst_fe = new __svn_C_fe({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} });
+            const __svn_inst_fe = new __svn_C_fe({ target: __svn_any(), props: {children: () => __svn_snippet_return(), box} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, box } = __svn_inst_fe.$$slot_def["box1"]; $$_$$;
                 { svelteHTML.createElement("svelte:fragment", {});                     const {area, volume} = calculate(box.width, box.height, constant);
@@ -61,7 +61,7 @@ function $$render_e40e2c10() {
         }
         {
             const __svn_C_530 = __svn_ensure_component(Component);
-            const __svn_inst_530 = new __svn_C_530({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} });
+            const __svn_inst_530 = new __svn_C_530({ target: __svn_any(), props: {children: () => __svn_snippet_return(), box} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, box } = __svn_inst_530.$$slot_def.default; $$_$$;
                 {
@@ -106,7 +106,7 @@ function $$render_e40e2c10() {
         }
         {
             const __svn_C_911 = __svn_ensure_component(Component);
-            const __svn_inst_911 = new __svn_C_911({ target: __svn_any(), props: {box, children: () => __svn_snippet_return()} });
+            const __svn_inst_911 = new __svn_C_911({ target: __svn_any(), props: {children: () => __svn_snippet_return(), box} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, box: {width, height} } = __svn_inst_911.$$slot_def.default; $$_$$;
                 const {area, volume} = calculate(width, height, constant);

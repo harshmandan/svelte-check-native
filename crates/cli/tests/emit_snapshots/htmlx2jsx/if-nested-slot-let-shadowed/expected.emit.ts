@@ -22,7 +22,7 @@ function $$render_e40e2c10() {
                     }
                     {
                         const __svn_C_ae = __svn_ensure_component(Comp);
-                        const __svn_inst_ae = new __svn_C_ae({ target: __svn_any(), props: {hello, children: () => __svn_snippet_return()} });
+                        const __svn_inst_ae = new __svn_C_ae({ target: __svn_any(), props: {children: () => __svn_snippet_return(), hello} });
                         {
                             const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, hello } = __svn_inst_ae.$$slot_def.default; $$_$$;
                             if ((hello)) {

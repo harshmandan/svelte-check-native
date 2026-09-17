@@ -58,7 +58,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         {
             const __svn_C_72 = __svn_ensure_component(Wrapper);
-            new __svn_C_72({
+            const __svn_inst_72 = new __svn_C_72({
                 target: __svn_any(),
                 props: {
                     children: (isOpen, toggle) => { async () => {
@@ -71,6 +71,8 @@ function $$render_e40e2c10() {
                     },
                 },
             });
+            /*svn:ignore_start*/const { children } = __svn_inst_72.$$prop_def;/*svn:ignore_end*/
+            /*svn:ignore_start*/void children;/*svn:ignore_end*/
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

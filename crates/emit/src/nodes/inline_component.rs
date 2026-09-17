@@ -232,28 +232,15 @@ pub(crate) fn emit_component_call(
     let inst_local = svn_core::synth_names::instance_local(inst.node_start);
     // Hoist when ANY post-construction emit needs the instance:
     // `$inst.$on(...)`, `bind:this`, slot-let consumer destructure,
-    // OR named snippet props that drive a `const { NAME } =
-    // __svn_inst.$$prop_def;` destructure so subsequent `{@render
-    // NAME(...)}` calls resolve.
-    //
-    // The implicit `children` snippet is excluded — it's handled by
-    // the parent's `let { children } = $props()` (if any) and never
-    // gets a post-instance destructure (would shadow / collide).
-    // Hoisting JUST for `children`-only snippets leaves
-    // `__svn_inst_NN` unreferenced → TS6133 reverse-maps onto the
-    // user's `<Comp>` source span. Skip the hoist entirely in that
-    // case. Mirrors upstream svelte2tsx's `snippetPropVariables` at
-    // `htmlxtojsx_v2/nodes/InlineComponent.ts:209-214` (its
-    // `snippetPropsTransformation` excludes implicit-`children` for
-    // the same reason).
-    let has_named_snippet = snippet_children
-        .iter()
-        .any(|s| s.name.as_str() != "children");
+    // OR snippet props, which drive a `const { NAME } =
+    // __svn_inst.$$prop_def;` destructure so `{@render NAME(...)}`
+    // inside the component resolves to the component's own prop
+    // (upstream's `snippetPropVariables`, InlineComponent.ts).
     let hoist_instance = !inst.on_events.is_empty()
         || inst.bind_this_target.is_some()
         || inst.bind_this_setter.is_some()
         || needs_inst_for_let
-        || has_named_snippet
+        || !snippet_children.is_empty()
         || !inst.bind_directives.is_empty();
     let ctor_lhs = if hoist_instance {
         format!("const {inst_local} = ")
@@ -286,23 +273,14 @@ pub(crate) fn emit_component_call(
     buf.push_str(");\n");
 
     // Implicit-children synthesis: when the user has non-snippet body
-    // content, inject `"children": () => __svn_snippet_return()` into
-    // the props literal. Matches upstream svelte2tsx's behavior so
-    // components declaring `children: Snippet` (required) accept
-    // `<Comp>body</Comp>` without a TS2741 at the satisfies trailer.
-    //
-    // Skipped when the user explicitly named a `children` prop OR
-    // wrote a `{#snippet children}` block — both paths already emit
-    // a `children:` key; a second synthesis would fire TS1117.
-    let user_named_children = inst
-        .props
-        .iter()
-        .any(|p| prop_shape_name(p).is_some_and(|n| n == "children"));
-    let user_named_children_snippet = snippet_children
-        .iter()
-        .any(|s| s.name.as_str() == "children");
-    let emit_implicit_children =
-        inst.has_implicit_children && !user_named_children && !user_named_children_snippet;
+    // content, the props literal starts with `children: () =>
+    // __svn_snippet_return()`, so components declaring a required
+    // `children: Snippet` accept `<Comp>body</Comp>`. Upstream adds
+    // this prop when it enters the component, before any attribute or
+    // snippet prop, and adds it even when the user also passes
+    // `children` — an explicit `children` attribute or `{#snippet
+    // children}` is then a duplicate key (TS1117) at the user's name.
+    let emit_implicit_children = inst.has_implicit_children;
 
     if snippet_children.is_empty() && inst.props.is_empty() && !emit_implicit_children {
         let _ = write!(buf, "{inner}{ctor_lhs}");
@@ -324,18 +302,16 @@ pub(crate) fn emit_component_call(
         write_new_ctor(buf, inst, &local);
         let _ = write!(buf, "({{ target: __svn_any(), props: {{");
         let mut first = true;
+        if emit_implicit_children {
+            let _ = write!(buf, "children: () => __svn_snippet_return()");
+            first = false;
+        }
         for p in &inst.props {
             if !first {
                 let _ = write!(buf, ", ");
             }
             first = false;
             write_prop_shape(buf, source, p);
-        }
-        if emit_implicit_children {
-            if !first {
-                let _ = write!(buf, ", ");
-            }
-            let _ = write!(buf, "children: () => __svn_snippet_return()");
         }
         let _ = write!(buf, "}} }})");
         push_component_call_token_map(buf, call_start, inst.node_start);
@@ -356,6 +332,10 @@ pub(crate) fn emit_component_call(
     let props_inner = "    ".repeat(depth + 3);
     let _ = writeln!(buf, "{opts_inner}target: __svn_any(),");
     let _ = writeln!(buf, "{opts_inner}props: {{");
+    if emit_implicit_children {
+        buf.push_str(&props_inner);
+        let _ = writeln!(buf, "children: () => __svn_snippet_return(),");
+    }
     for p in &inst.props {
         buf.push_str(&props_inner);
         write_prop_shape(buf, source, p);
@@ -365,10 +345,6 @@ pub(crate) fn emit_component_call(
         buf.push_str(&props_inner);
         write_snippet_arrow_prop(buf, source, s, depth + 3, insts, action_counter);
         let _ = writeln!(buf, ",");
-    }
-    if emit_implicit_children {
-        buf.push_str(&props_inner);
-        let _ = writeln!(buf, "children: () => __svn_snippet_return(),");
     }
     let _ = writeln!(buf, "{opts_inner}}},");
     let _ = write!(buf, "{inner}}})");
@@ -400,19 +376,11 @@ fn emit_snippet_prop_destructure(
     if snippet_children.is_empty() {
         return;
     }
-    // The implicit `children` snippet (declared via
-    // `{#snippet children}`) is special — `children` may already be a
-    // user local from `let { children } = $props()`. Skip it from the
-    // destructure to avoid TS2451 redeclaration. Other snippet names
-    // are unique-by-construction at the call site.
-    let names: Vec<&str> = snippet_children
-        .iter()
-        .map(|s| s.name.as_str())
-        .filter(|n| *n != "children")
-        .collect();
-    if names.is_empty() {
-        return;
-    }
+    // Every snippet prop, `children` included: the destructure sits in
+    // the component's own block, so it shadows (not redeclares) an
+    // outer `children` from `$props()`, and a `{@render children()}`
+    // inside the component reads the component's declared prop type.
+    let names: Vec<&str> = snippet_children.iter().map(|s| s.name.as_str()).collect();
     let _ = write!(buf, "{inner}/*svn:ignore_start*/const {{ ");
     for (i, n) in names.iter().enumerate() {
         if i > 0 {
@@ -531,21 +499,6 @@ fn push_component_call_token_map(buf: &mut EmitBuffer, call_start: u32, node_sta
         source_byte_start: source_start,
         source_byte_end: source_end,
     });
-}
-
-/// Extract the NAME from a `PropShape`, if it has one. Used at emit
-/// time to detect whether the user explicitly named a prop we'd
-/// otherwise synthesize (e.g. `children`).
-fn prop_shape_name(p: &svn_analyze::PropShape) -> Option<&str> {
-    match p {
-        svn_analyze::PropShape::Literal { name, .. }
-        | svn_analyze::PropShape::Expression { name, .. }
-        | svn_analyze::PropShape::Shorthand { name, .. }
-        | svn_analyze::PropShape::BoolShorthand { name, .. }
-        | svn_analyze::PropShape::GetSetBinding { name, .. }
-        | svn_analyze::PropShape::TemplateLiteral { name, .. } => Some(name),
-        svn_analyze::PropShape::Spread { .. } => None,
-    }
 }
 
 /// Emit one `$inst.$on("event", (handler))` line per `on:event`
@@ -853,7 +806,12 @@ pub(crate) fn write_snippet_arrow_prop(
         .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
         .unwrap_or("")
         .trim();
-    write_object_key(buf, &s.name);
+    // The key is the snippet's name as written, so a diagnostic on the
+    // key (a duplicate `children`) lands on `{#snippet NAME`.
+    match snippet_name_range(source, s) {
+        Some(range) if is_simple_js_identifier(&s.name) => buf.append_with_source(&s.name, range),
+        _ => write_object_key(buf, &s.name),
+    }
     if params_text.is_empty() {
         let _ = writeln!(buf, ": () => {{ async () => {{");
         emit_template_body(buf, source, &s.body, depth + 1, insts, action_counter);
@@ -872,6 +830,18 @@ pub(crate) fn write_snippet_arrow_prop(
 /// Write an object-literal key. Plain JS identifiers are emitted bare;
 /// anything with a hyphen, a non-ident character, or a JS reserved
 /// word lookalike is double-quoted (always safe).
+/// Source range of NAME in `{#snippet NAME…}`: the name follows the
+/// `{#snippet` keyword and its whitespace.
+fn snippet_name_range(source: &str, s: &SnippetBlock) -> Option<svn_core::Range> {
+    const OPENER: &str = "{#snippet";
+    let after = s.range.start as usize + OPENER.len();
+    let rest = source.get(after..)?;
+    let start = after + (rest.len() - rest.trim_start().len());
+    let end = start + s.name.len();
+    (source.get(start..end)? == s.name.as_str())
+        .then(|| svn_core::Range::new(start as u32, end as u32))
+}
+
 fn write_object_key(buf: &mut EmitBuffer, name: &str) {
     if is_simple_js_identifier(name) {
         buf.push_str(name);

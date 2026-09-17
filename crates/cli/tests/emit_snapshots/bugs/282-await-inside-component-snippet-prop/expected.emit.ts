@@ -58,7 +58,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         {
             const __svn_C_a5 = __svn_ensure_component(Wrapper);
-            new __svn_C_a5({
+            const __svn_inst_a5 = new __svn_C_a5({
                 target: __svn_any(),
                 props: {
                     children: () => { async () => {
@@ -78,6 +78,8 @@ function $$render_e40e2c10() {
                     },
                 },
             });
+            /*svn:ignore_start*/const { children } = __svn_inst_a5.$$prop_def;/*svn:ignore_end*/
+            /*svn:ignore_start*/void children;/*svn:ignore_end*/
         }
         {
             const __svn_C_164 = __svn_ensure_component(Row);

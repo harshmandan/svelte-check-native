@@ -2703,6 +2703,56 @@ mod tests {
     }
 
     #[test]
+    fn ts1117_on_component_prop_key_surfaces() {
+        // A component receiving `children` both as an attribute and as
+        // implicit body content gets the key twice in its props literal;
+        // upstream reports that duplicate (its filter covers element
+        // attributes only).
+        let gen_path = "/proj/.svelte-check/svelte/src/X.svelte.svn.ts";
+        let layout = CacheLayout::for_workspace("/proj");
+        let overlay_text = "function $$render() {\n\
+             new __svn_C_0({ target: __svn_any(), props: {children: () => 1, \"children\": (c)} });\n}\n"
+            .to_string();
+        let source_text = "<Comp children={c}>text</Comp>\n".to_string();
+        let overlay_line_starts = svn_emit::compute_line_starts(&overlay_text);
+        let source_line_starts = svn_emit::compute_line_starts(&source_text);
+        let key_start = overlay_text.rfind("\"children\"").unwrap() as u32;
+        let src_name_start = source_text.find("children").unwrap() as u32;
+        let mut m = HashMap::new();
+        m.insert(
+            PathBuf::from(gen_path),
+            MapData {
+                token_map: vec![TokenMapEntry {
+                    overlay_byte_start: key_start,
+                    overlay_byte_end: key_start + 10,
+                    source_byte_start: src_name_start,
+                    source_byte_end: src_name_start + 8,
+                }],
+                overlay_line_starts,
+                source_line_starts,
+                overlay_text: overlay_text.clone().into(),
+                source_text: source_text.into(),
+                ..Default::default()
+            },
+        );
+        let column = key_start - overlay_text.find("new").unwrap() as u32 + 1;
+        let raw = RawDiagnostic {
+            file: PathBuf::from(gen_path),
+            line: 2,
+            column,
+            severity: Severity::Error,
+            code: 1117,
+            message: "An object literal cannot have multiple properties with the same name."
+                .to_string(),
+            span_length: Some(10),
+        };
+        let mapped = map_diagnostic(raw, &layout, &m, &HashSet::new(), true)
+            .expect("duplicate component prop keys are reported");
+        assert_eq!(mapped.line, 1);
+        assert_eq!(mapped.column, src_name_start + 1);
+    }
+
+    #[test]
     fn ts1117_on_synthesized_element_attribute_key_stays_suppressed() {
         // The motivating case for the attribute-key filter: the
         // `<el on:click={fn} on:click>` handle-plus-forward idiom

@@ -79,11 +79,11 @@ function $$render_e40e2c10() {
             const __svn_inst_1f7 = new __svn_C_1f7({
                 target: __svn_any(),
                 props: {
+                    children: () => __svn_snippet_return(),
                     foo: () => { async () => {
                         };
                         return __svn_snippet_return();
                     },
-                    children: () => __svn_snippet_return(),
                 },
             });
             /*svn:ignore_start*/const { foo } = __svn_inst_1f7.$$prop_def;/*svn:ignore_end*/

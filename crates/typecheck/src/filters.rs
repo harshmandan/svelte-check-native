@@ -79,6 +79,31 @@ pub(crate) fn is_overlay_dollar_reactive_label(overlay: &str, offset: u32) -> bo
 /// positions with no line-map coverage (i.e. outside verbatim user
 /// code).
 pub(crate) fn is_overlay_attribute_key(overlay: &str, offset: u32) -> bool {
+    if in_component_props(overlay, offset) {
+        return false;
+    }
+    is_quoted_object_key(overlay, offset)
+}
+
+/// Is `offset` inside the props literal of a component instantiation
+/// (`new __svn_C_…({ target, props: { … } })`) rather than an element's
+/// `createElement(…)` attribute literal? Upstream keeps duplicate-key
+/// errors on component props — its filter only covers element
+/// attributes — so those must not be dropped. The nearer of the two
+/// emit markers before `offset` decides: a component's attribute props
+/// are written before any nested template content.
+fn in_component_props(overlay: &str, offset: u32) -> bool {
+    let Some(before) = overlay.get(..offset as usize) else {
+        return false;
+    };
+    match (before.rfind("new __svn_C_"), before.rfind("createElement(")) {
+        (Some(component), Some(element)) => component > element,
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
+fn is_quoted_object_key(overlay: &str, offset: u32) -> bool {
     let bytes = overlay.as_bytes();
     let off = offset as usize;
     // tsgo's TS1117/TS2300 sometimes points at the opening `"`, sometimes

@@ -48,13 +48,13 @@ function $$render_e40e2c10() {
             const __svn_inst_122 = new __svn_C_122({
                 target: __svn_any(),
                 props: {
+                    children: () => __svn_snippet_return(),
                     bar: (x) => { async () => {
                         { svelteHTML.createElement("div", {});                             (x);
                         }
                         };
                         return __svn_snippet_return();
                     },
-                    children: () => __svn_snippet_return(),
                 },
             });
             /*svn:ignore_start*/const { bar } = __svn_inst_122.$$prop_def;/*svn:ignore_end*/
@@ -98,6 +98,7 @@ function $$render_e40e2c10() {
             const __svn_inst_23c = new __svn_C_23c({
                 target: __svn_any(),
                 props: {
+                    children: () => __svn_snippet_return(),
                     "data": ([1, 2, 3]),
                     row1: (item) => { async () => {
                         (item);
@@ -109,7 +110,6 @@ function $$render_e40e2c10() {
                         };
                         return __svn_snippet_return();
                     },
-                    children: () => __svn_snippet_return(),
                 },
             });
             /*svn:ignore_start*/const { row1, row2 } = __svn_inst_23c.$$prop_def;/*svn:ignore_end*/

@@ -11,7 +11,7 @@ function $$render_e40e2c10() {
         }
         {
             const __svn_C_2b = __svn_ensure_component(testComponent);
-            new __svn_C_2b({ target: __svn_any(), props: {"propa": (5), children: () => __svn_snippet_return()} });
+            new __svn_C_2b({ target: __svn_any(), props: {children: () => __svn_snippet_return(), "propa": (5)} });
             { svelteHTML.createElement("h1", {});             }
         }
         { svelteHTML.createElement("svelte:window", {

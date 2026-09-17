@@ -1,0 +1,14 @@
+{
+    "errors": [
+        { "file": "src/ClassDirective.svelte", "line": 4, "column": 3, "code": "component_invalid_directive" },
+        { "file": "src/DirectiveBeforeBinding.svelte", "line": 4, "column": 23, "code": "component_invalid_directive" },
+        { "file": "src/DynamicComponent.svelte", "line": 4, "column": 27, "code": "component_invalid_directive" },
+        { "file": "src/ModifierTwice.svelte", "line": 3, "column": 8, "code": "event_handler_invalid_component_modifier" },
+        { "file": "src/Modifier.svelte", "line": 4, "column": 8, "code": "event_handler_invalid_component_modifier" },
+        { "file": "src/SelfComponent.svelte", "line": 3, "column": 30, "code": "component_invalid_directive" },
+        { "file": "src/SlotFirst.svelte", "line": 4, "column": 16, "code": "slot_attribute_invalid" },
+        { "file": "src/SlotOrder.svelte", "line": 4, "column": 16, "code": "component_invalid_directive" }
+    ],
+    "warnings": [],
+    "_note": "Components (<Comp>, <svelte:component>, <svelte:self>) accept only let:, on:, bind:, attachments and spreads; an on: directive may carry only a single `once` modifier. The compiler checks these, together with the slot attribute, for every attribute before it visits any attribute, so they win over a later-raised binding error but follow attribute order among themselves. Verified against svelte-check 4.4.6."
+}

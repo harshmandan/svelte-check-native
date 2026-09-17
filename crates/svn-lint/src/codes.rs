@@ -66,6 +66,7 @@ pub enum Code {
     bind_invalid_value,
     bindable_invalid_location,
     block_empty,
+    component_invalid_directive,
     component_name_lowercase,
     constant_assignment,
     constant_binding,
@@ -77,6 +78,7 @@ pub enum Code {
     element_implicitly_closed,
     element_invalid_self_closing_tag,
     event_directive_deprecated,
+    event_handler_invalid_component_modifier,
     experimental_async,
     export_let_unused,
     global_reference_invalid,
@@ -203,6 +205,7 @@ impl Code {
             Self::bind_invalid_value => "bind_invalid_value",
             Self::bindable_invalid_location => "bindable_invalid_location",
             Self::block_empty => "block_empty",
+            Self::component_invalid_directive => "component_invalid_directive",
             Self::component_name_lowercase => "component_name_lowercase",
             Self::constant_assignment => "constant_assignment",
             Self::constant_binding => "constant_binding",
@@ -214,6 +217,9 @@ impl Code {
             Self::element_implicitly_closed => "element_implicitly_closed",
             Self::element_invalid_self_closing_tag => "element_invalid_self_closing_tag",
             Self::event_directive_deprecated => "event_directive_deprecated",
+            Self::event_handler_invalid_component_modifier => {
+                "event_handler_invalid_component_modifier"
+            }
             Self::experimental_async => "experimental_async",
             Self::export_let_unused => "export_let_unused",
             Self::global_reference_invalid => "global_reference_invalid",
@@ -348,6 +354,7 @@ impl Code {
             "bind_invalid_value" => Some(Self::bind_invalid_value),
             "bindable_invalid_location" => Some(Self::bindable_invalid_location),
             "block_empty" => Some(Self::block_empty),
+            "component_invalid_directive" => Some(Self::component_invalid_directive),
             "component_name_lowercase" => Some(Self::component_name_lowercase),
             "constant_assignment" => Some(Self::constant_assignment),
             "constant_binding" => Some(Self::constant_binding),
@@ -359,6 +366,9 @@ impl Code {
             "element_implicitly_closed" => Some(Self::element_implicitly_closed),
             "element_invalid_self_closing_tag" => Some(Self::element_invalid_self_closing_tag),
             "event_directive_deprecated" => Some(Self::event_directive_deprecated),
+            "event_handler_invalid_component_modifier" => {
+                Some(Self::event_handler_invalid_component_modifier)
+            }
             "experimental_async" => Some(Self::experimental_async),
             "export_let_unused" => Some(Self::export_let_unused),
             "global_reference_invalid" => Some(Self::global_reference_invalid),
@@ -412,7 +422,7 @@ impl Code {
 }
 
 /// All known codes, alphabetically sorted.
-pub const CODES: &[&str; 110] = &[
+pub const CODES: &[&str; 112] = &[
     "a11y_accesskey",
     "a11y_aria_activedescendant_has_tabindex",
     "a11y_aria_attributes",
@@ -469,6 +479,7 @@ pub const CODES: &[&str; 110] = &[
     "bind_invalid_value",
     "bindable_invalid_location",
     "block_empty",
+    "component_invalid_directive",
     "component_name_lowercase",
     "constant_assignment",
     "constant_binding",
@@ -480,6 +491,7 @@ pub const CODES: &[&str; 110] = &[
     "element_implicitly_closed",
     "element_invalid_self_closing_tag",
     "event_directive_deprecated",
+    "event_handler_invalid_component_modifier",
     "experimental_async",
     "export_let_unused",
     "global_reference_invalid",

@@ -64,6 +64,9 @@ pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::
         SvelteElementKind::Body => AttrParent::SvelteSpecial("svelte:body"),
         _ => AttrParent::OtherSvelte,
     };
+    if matches!(parent, AttrParent::SvelteComponentLike) {
+        crate::rules::component_rules::check_component_attributes(&se.attributes, ctx);
+    }
     for attr in &se.attributes {
         visit_attribute(attr, ctx, parent);
     }

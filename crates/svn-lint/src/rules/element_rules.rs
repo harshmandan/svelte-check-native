@@ -194,6 +194,24 @@ fn visit_slot_element(el: &Element, ctx: &mut LintContext<'_>) {
     }
 }
 
+/// `validate_slot_attribute` for a component's `slot` attribute, where
+/// a misplaced `slot` is not an error.
+pub(crate) fn validate_component_slot_attribute(attr: &Attribute, ctx: &mut LintContext<'_>) {
+    match attr {
+        Attribute::Plain(p) if p.name == "slot" => {
+            let text = static_text_value(p, ctx.source);
+            validate_slot_attribute(ctx, text, p.range, true);
+        }
+        Attribute::Shorthand(s) if s.name == "slot" => {
+            validate_slot_attribute(ctx, None, s.range, true);
+        }
+        Attribute::Expression(e) if e.name == "slot" => {
+            validate_slot_attribute(ctx, None, e.range, true);
+        }
+        _ => {}
+    }
+}
+
 /// The value of an attribute that is exactly one text chunk
 /// (`is_text_attribute`); an empty quoted value is an empty chunk.
 fn static_text_value<'s>(p: &svn_parser::ast::PlainAttr, source: &'s str) -> Option<&'s str> {
@@ -333,11 +351,11 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
     );
     let fires_invalid_property_name = parent_is_regular_or_svelte;
     let fires_attr_name_checks = !matches!(parent, AttrParent::OtherSvelte);
-    // `validate_slot_attribute` runs for elements and components; for a
-    // component a misplaced `slot` is not an error.
+    // `validate_slot_attribute` runs for elements here; components
+    // check their `slot` attribute in their own first pass
+    // (`component_rules::check_component_attributes`).
     let slot_owner_kind = match parent {
         AttrParent::RegularElement { .. } | AttrParent::SvelteElement => Some(false),
-        AttrParent::Component | AttrParent::SvelteComponentLike => Some(true),
         _ => None,
     };
     // `on*` attributes / `on:` directives on elements, for

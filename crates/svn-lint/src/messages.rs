@@ -764,6 +764,16 @@ pub fn attribute_invalid_name(name: &str) -> String {
     format!("'{name}' is not a valid attribute name\nhttps://svelte.dev/e/attribute_invalid_name")
 }
 
+/// This type of directive is not valid on components
+pub fn component_invalid_directive() -> String {
+    "This type of directive is not valid on components\nhttps://svelte.dev/e/component_invalid_directive".to_string()
+}
+
+/// Event modifiers other than 'once' can only be used on DOM elements
+pub fn event_handler_invalid_component_modifier() -> String {
+    "Event modifiers other than 'once' can only be used on DOM elements\nhttps://svelte.dev/e/event_handler_invalid_component_modifier".to_string()
+}
+
 /// slot attribute must be a static value
 pub fn slot_attribute_invalid() -> String {
     "slot attribute must be a static value\nhttps://svelte.dev/e/slot_attribute_invalid".to_string()

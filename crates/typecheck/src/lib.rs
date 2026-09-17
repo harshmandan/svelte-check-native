@@ -34,6 +34,7 @@ mod replay;
 pub mod runner;
 mod template_nodes;
 mod types;
+mod upstream_overlay;
 
 use std::path::{Path, PathBuf};
 
@@ -127,7 +128,7 @@ fn strip_range_blanking(text: &str, begin_marker: &str, end_marker: &str) -> Str
 /// Walk up from `workspace` looking for `node_modules/svelte/package.json`.
 /// Returns `true` iff the user has the real `svelte` package installed
 /// somewhere in the resolution chain.
-fn has_real_svelte(workspace: &Path) -> bool {
+pub(crate) fn has_real_svelte(workspace: &Path) -> bool {
     svn_core::walk_up_dirs(workspace, |dir| {
         dir.join(svn_core::NODE_MODULES_DIR)
             .join("svelte")
@@ -808,6 +809,42 @@ impl CheckSession {
                 d
             })
             .collect();
+
+        // A diagnostic on our overlay tsconfig is reported where
+        // svelte-check reports it: on its own overlay path, at the line
+        // its overlay layout gives the same entry.
+        let overlay_config = path_utils::lexical_normalise(&layout.overlay_tsconfig);
+        if diagnostics.iter().any(|d| d.source_path == overlay_config) {
+            let chain = svn_core::tsconfig::load_chain(user_tsconfig).unwrap_or_default();
+            let mut emitted_sources: Vec<PathBuf> = map_data
+                .iter()
+                .filter(|(_, data)| !data.identity_map)
+                .filter_map(|(gen_path, _)| layout.original_from_generated(gen_path))
+                .collect();
+            emitted_sources.sort();
+            emitted_sources.extend(kit_overlay_sources.iter().cloned());
+            let theirs = upstream_overlay::overlay(&upstream_overlay::Inputs {
+                workspace: &layout.workspace,
+                user_tsconfig,
+                chain: &chain,
+                emitted_sources: &emitted_sources,
+            });
+            let their_lines = upstream_overlay::line_entries(&theirs);
+            let our_lines = upstream_overlay::line_entries(&overlay);
+            let display_path = upstream_overlay::cache_dir(&layout.workspace).join("tsconfig.json");
+            for d in diagnostics
+                .iter_mut()
+                .filter(|d| d.source_path == overlay_config)
+            {
+                if let Some(line) =
+                    upstream_overlay::translate_line(&our_lines, &their_lines, d.line)
+                {
+                    d.end_line = d.end_line + line - d.line;
+                    d.line = line;
+                }
+                d.source_path = display_path.clone();
+            }
+        }
 
         // Drop unused-import / unused-local hints whose source position
         // sits on an import statement that ALSO has a module-resolution

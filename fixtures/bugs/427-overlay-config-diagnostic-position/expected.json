@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": ".svelte-check/tsconfig.json",
+            "line": 30,
+            "column": 4,
+            "code": 5010
+        },
+        {
+            "file": ".svelte-check/tsconfig.json",
+            "line": 32,
+            "column": 4,
+            "code": 5010
+        }
+    ],
+    "_note": "A file-spec error on the overlay tsconfig is reported on svelte-check's overlay path, at the line svelte-check's own overlay layout gives the same entry (its rootDirs, paths pairs, files with the two shim declarations, and the rebased-then-virtual include list), not at the line of our differently laid-out overlay. Verified against svelte-check --tsgo."
+}

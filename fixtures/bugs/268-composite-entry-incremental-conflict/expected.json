@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": ".svelte-check/tsconfig.json",
+            "line": 2,
+            "column": 2,
+            "code": 6379
+        }
+    ],
+    "_note": "A composite entry config keeps `composite` in the overlay, whose `incremental: false` then conflicts with it: TS6379 on the overlay's compilerOptions, and the compiler checks nothing else. svelte-check --tsgo reports exactly that one error, on its own overlay path (`.svelte-check/tsconfig.json`, line 2, column 2), and the diagnostic is re-anchored there. The entry's references are carried into the overlay as svelte-check writes them."
+}

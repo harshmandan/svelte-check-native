@@ -1,0 +1,23 @@
+{
+    "errors": [
+        {
+            "file": "src/A.svelte",
+            "line": 1,
+            "column": 20,
+            "code": 6305
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 2,
+            "column": 8,
+            "code": 6133
+        },
+        {
+            "file": "src/b.ts",
+            "line": 0,
+            "column": 18,
+            "code": 6305
+        }
+    ],
+    "_note": "The entry config's references are carried into the overlay as svelte-check writes them, so an import into a referenced composite project resolves to its build output, and an unbuilt one is TS6305 at the import, from a component and from a plain .ts file alike. Verified against svelte-check --tsgo."
+}

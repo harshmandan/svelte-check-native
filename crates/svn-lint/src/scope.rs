@@ -78,6 +78,10 @@ pub struct ScopeTree {
     /// Arrow/FunctionExpression/FunctionDeclaration; module-script
     /// awaits are NOT consulted).
     pub has_await: bool,
+    /// Writes the compiler rejects (`validate_assignment`), in walk
+    /// order: module script, instance script, then template. Template
+    /// entries are drained by the template walk as it passes them.
+    pub write_violations: Vec<WriteViolation>,
     /// `$props()` declarators that would fire
     /// `custom_element_props_identifier` when the file compiles as a
     /// custom element without an explicit `customElement.props`
@@ -391,6 +395,7 @@ struct TreeBuilder {
     /// parent_kind, function_depth_at_use, nested_in_state, in_fn_closure).
     pending_refs: Vec<PendingRef>,
     pending_updates: Vec<PendingUpdate>,
+    pending_writes: Vec<PendingWrite>,
     /// Identifiers assigned by a top-level `$: x = …` in the instance
     /// script. Upstream collects them as `possible_implicit_declarations`
     /// and, once the script walk is done, declares each one without an
@@ -459,6 +464,52 @@ struct TemplateCtx<'src> {
     in_control_flow: bool,
 }
 
+/// Which walk a write was found in. The compiler walks the module
+/// script, the instance script and then the template, and stops at the
+/// first error, so this orders the write errors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteOrigin {
+    Module,
+    Instance,
+    Template,
+}
+
+/// A write the compiler's `validate_assignment` rejects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteViolationKind {
+    /// `constant_assignment` / `constant_binding`: the target is an
+    /// import, or a `const` that is not an each-block item.
+    Constant { import: bool },
+    /// `each_item_invalid_assignment` — runes mode only.
+    EachItem,
+    /// `snippet_parameter_assignment`.
+    SnippetParameter,
+}
+
+#[derive(Clone, Debug)]
+pub struct WriteViolation {
+    pub kind: WriteViolationKind,
+    /// The whole assignment, update or `bind:` directive.
+    pub range: Range,
+    pub is_binding: bool,
+    pub origin: WriteOrigin,
+}
+
+/// An assignment, update or `bind:` whose identifier targets still
+/// need resolving before the compiler's write checks can run.
+struct PendingWrite {
+    scope: ScopeId,
+    /// Identifiers the compiler checks, in its order: a bare target, or
+    /// the plain identifiers of a destructuring target (defaults and
+    /// rest elements are not checked).
+    targets: Vec<SmolStr>,
+    /// The target is a single identifier, not a pattern.
+    bare: bool,
+    range: Range,
+    is_binding: bool,
+    origin: WriteOrigin,
+}
+
 struct PendingUpdate {
     scope: ScopeId,
     /// Name of the base identifier being written. For `foo = …` that's
@@ -478,6 +529,7 @@ impl TreeBuilder {
             bindings: Vec::new(),
             pending_refs: Vec::new(),
             pending_updates: Vec::new(),
+            pending_writes: Vec::new(),
             implicit_reactive_decls: Vec::new(),
             custom_element_props_candidates: Vec::new(),
             custom_element_props_ignored: Vec::new(),
@@ -643,7 +695,7 @@ impl TreeBuilder {
                     }) => {
                         self.walk_expr_range(*expression_range, ctx, flags);
                         if d.kind == DirectiveKind::Bind {
-                            self.register_bind_update(*expression_range, ctx);
+                            self.register_bind_update(*expression_range, d.range, ctx);
                         }
                     }
                     Some(svn_parser::ast::DirectiveValue::BindPair {
@@ -663,6 +715,16 @@ impl TreeBuilder {
                                 self.walk_expr_range(*expression_range, ctx, flags);
                             }
                         }
+                        // The parser reads `bind:x="{y}"` as `bind:x={y}`.
+                        if d.kind == DirectiveKind::Bind
+                            && let [
+                                AttrValuePart::Expression {
+                                    expression_range, ..
+                                },
+                            ] = v.parts.as_slice()
+                        {
+                            self.register_bind_update(*expression_range, d.range, ctx);
+                        }
                     }
                     None => {
                         match d.kind {
@@ -676,6 +738,14 @@ impl TreeBuilder {
                                     name: SmolStr::from(d.name.as_str()),
                                     range: d.range,
                                     is_reassign: true,
+                                });
+                                self.pending_writes.push(PendingWrite {
+                                    scope: ctx.scope,
+                                    targets: vec![SmolStr::from(d.name.as_str())],
+                                    bare: true,
+                                    range: d.range,
+                                    is_binding: true,
+                                    origin: WriteOrigin::Template,
                                 });
                             }
                             // `class:foo` / `style:foo` without value
@@ -905,7 +975,7 @@ impl TreeBuilder {
     /// when the expression is a member chain like `rest[0]`) onto
     /// the backing binding's `bind_reference_count`, for
     /// `bind_invalid_each_rest`.
-    fn register_bind_update(&mut self, range: Range, ctx: &mut TemplateCtx<'_>) {
+    fn register_bind_update(&mut self, range: Range, directive: Range, ctx: &mut TemplateCtx<'_>) {
         let Some(raw) = ctx.source.get(range.start as usize..range.end as usize) else {
             return;
         };
@@ -923,6 +993,29 @@ impl TreeBuilder {
         let mut expr = &stmt.expression;
         while let Expression::ParenthesizedExpression(p) = expr {
             expr = &p.expression;
+        }
+        // The compiler strips TypeScript wrappers before it validates
+        // the binding, so `bind:value={x as T}` binds to `x`.
+        let mut target = expr;
+        loop {
+            target = match target {
+                Expression::ParenthesizedExpression(p) => &p.expression,
+                Expression::TSAsExpression(e) => &e.expression,
+                Expression::TSSatisfiesExpression(e) => &e.expression,
+                Expression::TSNonNullExpression(e) => &e.expression,
+                Expression::TSTypeAssertion(e) => &e.expression,
+                _ => break,
+            };
+        }
+        if let Expression::Identifier(id) = target {
+            self.pending_writes.push(PendingWrite {
+                scope: ctx.scope,
+                targets: vec![SmolStr::from(id.name.as_str())],
+                bare: true,
+                range: directive,
+                is_binding: true,
+                origin: WriteOrigin::Template,
+            });
         }
         // Bare identifier → also push a reassignment for
         // `non_reactive_update`.
@@ -1033,7 +1126,7 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
         let (declare_kind, retag_to_template) = match kind {
             ScopeKind::Each { .. } => (BindingKind::Each, false),
             ScopeKind::AwaitThen | ScopeKind::AwaitCatch => (BindingKind::Template, false),
-            ScopeKind::Snippet => (BindingKind::Each, true),
+            ScopeKind::Snippet => (BindingKind::Snippet, false),
             ScopeKind::LetDirective => (BindingKind::Each, true),
             ScopeKind::Fragment => unreachable!("walker doesn't call enter_scope for Fragment"),
         };
@@ -1043,13 +1136,20 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
             _ => bindings.len(),
         };
         let context_bindings = &bindings[..context_count];
+        // Snippet parameters are the one template binding the compiler
+        // declares with `let`.
+        let declaration_kind = if matches!(kind, ScopeKind::Snippet) {
+            DeclarationKind::Let
+        } else {
+            DeclarationKind::Const
+        };
         for b in context_bindings {
             let bid = self.builder.declare(
                 child,
                 b.name.clone(),
                 b.range,
                 declare_kind,
-                DeclarationKind::Const,
+                declaration_kind,
                 InitialKind::EachBlock,
             );
             self.builder.bindings[bid.0 as usize].inside_rest = b.inside_rest;
@@ -1080,7 +1180,7 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
         }
 
         if retag_to_template {
-            // Snippet params and let-directive bindings are declared
+            // Let-directive bindings are declared
             // with `BindingKind::Each` above (so the shared declarer
             // path stays uniform), then retagged to `Template` to
             // match upstream's per-kind classification. Mirrors what
@@ -1377,6 +1477,9 @@ impl TreeBuilder {
             }
         }
 
+        let pending_writes = std::mem::take(&mut self.pending_writes);
+        let write_violations = resolve_writes(&self, pending_writes);
+
         synthesize_store_subs(&mut self, &mut unresolved, module_root, instance_root);
 
         ScopeTree {
@@ -1386,6 +1489,7 @@ impl TreeBuilder {
             instance_root,
             unresolved_refs: unresolved,
             has_await: self.has_await,
+            write_violations,
             custom_element_props_candidates: self.custom_element_props_candidates,
             custom_element_props_ignored: self.custom_element_props_ignored,
             nonrunes_export_idents: self.nonrunes_export_idents,
@@ -1393,6 +1497,88 @@ impl TreeBuilder {
             script_rule_events: self.script_rule_events,
         }
     }
+}
+
+/// The identifiers of an assignment target that the compiler's
+/// `validate_no_const_assignment` inspects: the identifier itself, or
+/// the plain identifier leaves of array / object patterns. Defaults,
+/// rest elements and member expressions are not inspected.
+fn checked_write_targets(t: &AssignmentTarget<'_>, out: &mut Vec<SmolStr>) {
+    use oxc_ast::ast::AssignmentTargetMaybeDefault as ATMD;
+    use oxc_ast::ast::AssignmentTargetProperty as ATP;
+    match t {
+        AssignmentTarget::AssignmentTargetIdentifier(id) => {
+            out.push(SmolStr::from(id.name.as_str()))
+        }
+        AssignmentTarget::ArrayAssignmentTarget(arr) => {
+            for el in arr.elements.iter().flatten() {
+                if !matches!(el, ATMD::AssignmentTargetWithDefault(_))
+                    && let Some(target) = el.as_assignment_target()
+                {
+                    checked_write_targets(target, out);
+                }
+            }
+        }
+        AssignmentTarget::ObjectAssignmentTarget(obj) => {
+            for p in &obj.properties {
+                match p {
+                    ATP::AssignmentTargetPropertyIdentifier(pi) if pi.init.is_none() => {
+                        out.push(SmolStr::from(pi.binding.name.as_str()));
+                    }
+                    ATP::AssignmentTargetPropertyIdentifier(_) => {}
+                    ATP::AssignmentTargetPropertyProperty(pp) => {
+                        if !matches!(pp.binding, ATMD::AssignmentTargetWithDefault(_))
+                            && let Some(target) = pp.binding.as_assignment_target()
+                        {
+                            checked_write_targets(target, out);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The compiler's `validate_assignment` over every recorded write:
+/// the first import or non-each `const` among the targets rejects the
+/// write; otherwise a bare target that is an each-block item or a
+/// snippet parameter does.
+fn resolve_writes(tree: &TreeBuilder, writes: Vec<PendingWrite>) -> Vec<WriteViolation> {
+    let mut out = Vec::new();
+    for w in writes {
+        let binding = |name: &SmolStr| {
+            resolve_by_name(&tree.scopes, w.scope, name).map(|bid| &tree.bindings[bid.0 as usize])
+        };
+        let constant = w.targets.iter().filter_map(binding).find(|b| {
+            b.declaration_kind == DeclarationKind::Import
+                || (b.declaration_kind == DeclarationKind::Const && b.kind != BindingKind::Each)
+        });
+        let kind = match constant {
+            Some(b) => Some(WriteViolationKind::Constant {
+                import: b.declaration_kind == DeclarationKind::Import,
+            }),
+            None if w.bare => w
+                .targets
+                .first()
+                .and_then(binding)
+                .and_then(|b| match b.kind {
+                    BindingKind::Each => Some(WriteViolationKind::EachItem),
+                    BindingKind::Snippet => Some(WriteViolationKind::SnippetParameter),
+                    _ => None,
+                }),
+            None => None,
+        };
+        if let Some(kind) = kind {
+            out.push(WriteViolation {
+                kind,
+                range: w.range,
+                is_binding: w.is_binding,
+                origin: w.origin,
+            });
+        }
+    }
+    out
 }
 
 /// For each unresolved `$name` reference that would be a store
@@ -1680,6 +1866,29 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
 
     fn abs(&self, start: u32, end: u32) -> Range {
         Range::new(start + self.base_offset, end + self.base_offset)
+    }
+
+    fn write_origin(&self) -> WriteOrigin {
+        match &self.hooks {
+            Some(h) if h.is_instance => WriteOrigin::Instance,
+            Some(_) => WriteOrigin::Module,
+            None => WriteOrigin::Template,
+        }
+    }
+
+    fn push_write(&mut self, targets: Vec<SmolStr>, bare: bool, span: oxc_span::Span) {
+        if targets.is_empty() {
+            return;
+        }
+        let write = PendingWrite {
+            scope: self.cur_scope(),
+            targets,
+            bare,
+            range: self.abs(span.start, span.end),
+            is_binding: false,
+            origin: self.write_origin(),
+        };
+        self.tree.pending_writes.push(write);
     }
 
     fn with_scope<F, R>(&mut self, scope: ScopeId, f: F) -> R
@@ -2864,6 +3073,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     }
 
     fn visit_assignment(&mut self, a: &AssignmentExpression<'_>) {
+        let mut targets = Vec::new();
+        checked_write_targets(&a.left, &mut targets);
+        let bare = matches!(a.left, AssignmentTarget::AssignmentTargetIdentifier(_));
+        self.push_write(targets, bare, a.span);
         // Record the target.
         self.visit_assignment_target(&a.left);
         self.visit_expr(&a.right);
@@ -3098,6 +3311,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     fn visit_update(&mut self, u: &UpdateExpression<'_>) {
         // `foo++` / `foo.bar++`
         let target = &u.argument;
+        if let SimpleAssignmentTarget::AssignmentTargetIdentifier(id) = target {
+            self.push_write(vec![SmolStr::from(id.name.as_str())], true, u.span);
+        }
         match target {
             SimpleAssignmentTarget::AssignmentTargetIdentifier(id) => {
                 self.record_ref_id(

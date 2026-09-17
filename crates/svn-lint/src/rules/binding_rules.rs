@@ -9,7 +9,10 @@
 use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
-use crate::scope::{BindingKind, RefParentKind, Reference, ScopeTree, is_rune_name};
+use crate::scope::{
+    BindingKind, RefParentKind, Reference, ScopeTree, WriteOrigin, WriteViolation,
+    WriteViolationKind, is_rune_name,
+};
 
 /// Does `ref.ignored`'s snapshot include the rule's code? Port of
 /// upstream's `ignore_map.get(node)?.some(codes => codes.has(code))`.
@@ -80,11 +83,63 @@ fn global_reference_invalid(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
     }
 }
 
+/// Compiler errors from `validate_assignment` (upstream
+/// `2-analyze/visitors/shared/utils.js`), raised where the compiler's
+/// walk meets the write: script writes before the template walk,
+/// template writes as the template walk reaches them. Emits and drops
+/// every pending violation `take` selects.
+fn flush_write_violations(ctx: &mut LintContext<'_>, take: impl Fn(&WriteViolation) -> bool) {
+    let Some(tree) = ctx.scope_tree.as_mut() else {
+        return;
+    };
+    let (due, kept): (Vec<WriteViolation>, Vec<WriteViolation>) =
+        std::mem::take(&mut tree.write_violations)
+            .into_iter()
+            .partition(|v| take(v));
+    tree.write_violations = kept;
+    for v in due {
+        let (code, message) = match v.kind {
+            WriteViolationKind::Constant { import } => {
+                let thing = if import { "import" } else { "constant" };
+                if v.is_binding {
+                    (Code::constant_binding, messages::constant_binding(thing))
+                } else {
+                    (
+                        Code::constant_assignment,
+                        messages::constant_assignment(thing),
+                    )
+                }
+            }
+            WriteViolationKind::EachItem if ctx.runes => (
+                Code::each_item_invalid_assignment,
+                messages::each_item_invalid_assignment(),
+            ),
+            WriteViolationKind::EachItem => continue,
+            WriteViolationKind::SnippetParameter => (
+                Code::snippet_parameter_assignment,
+                messages::snippet_parameter_assignment(),
+            ),
+        };
+        ctx.emit_error(code, message, v.range);
+    }
+}
+
+/// Raise the template write errors that start before `offset` (or at
+/// it, when `inclusive`) — everything the compiler's template walk has
+/// passed by the time it reaches that position.
+pub fn flush_template_write_violations(ctx: &mut LintContext<'_>, offset: u32, inclusive: bool) {
+    flush_write_violations(ctx, |v| {
+        v.origin == WriteOrigin::Template
+            && (v.range.start < offset || (inclusive && v.range.start == offset))
+    });
+}
+
 /// Walk-time pass: rules whose upstream counterparts fire DURING the
 /// instance-script walk. Their emissions are merged and sorted by
 /// source position so interleaved anchors come out in walk order —
 /// upstream does not group `state_referenced_locally` per binding.
 pub fn visit(ctx: &mut LintContext<'_>) {
+    flush_write_violations(ctx, |v| v.origin != WriteOrigin::Template);
     // Take the tree out of the context so we can iterate its bindings
     // while still being able to `ctx.emit(...)`.
     let tree = match ctx.scope_tree.take() {

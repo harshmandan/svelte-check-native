@@ -666,6 +666,27 @@ pub fn global_reference_invalid(name: &str) -> String {
     )
 }
 
+/// Cannot assign to %thing%
+pub fn constant_assignment(thing: &str) -> String {
+    format!("Cannot assign to {thing}\nhttps://svelte.dev/e/constant_assignment")
+}
+
+/// Cannot bind to %thing%
+pub fn constant_binding(thing: &str) -> String {
+    format!("Cannot bind to {thing}\nhttps://svelte.dev/e/constant_binding")
+}
+
+/// Cannot reassign or bind to each block argument in runes mode. …
+pub fn each_item_invalid_assignment() -> String {
+    "Cannot reassign or bind to each block argument in runes mode. Use the array and index variables instead (e.g. `array[i] = value` instead of `entry = value`, or `bind:value={array[i]}` instead of `bind:value={entry}`)\nhttps://svelte.dev/e/each_item_invalid_assignment".to_string()
+}
+
+/// Cannot reassign or bind to snippet parameter
+pub fn snippet_parameter_assignment() -> String {
+    "Cannot reassign or bind to snippet parameter\nhttps://svelte.dev/e/snippet_parameter_assignment"
+        .to_string()
+}
+
 /// `bind:%name%` is not a valid binding. %explanation%
 pub fn bind_invalid_name(name: &str, explanation: Option<&str>) -> String {
     match explanation {

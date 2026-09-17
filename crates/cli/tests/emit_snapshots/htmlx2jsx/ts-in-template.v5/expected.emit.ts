@@ -87,7 +87,7 @@ function $$render_e40e2c10() {
             const __svn_inst_392 = new __svn_C_392({ target: __svn_any(), props: {} });
             x as any = __svn_inst_392;
         }
-        { svelteHTML.createElement("div", {});             x as any = (() => { const __svn_el = svelteHTML.createElement("div", {}); return __svn_el.clientWidth; })();
+        { svelteHTML.createElement("div", {});             x = (() => { const __svn_el = svelteHTML.createElement("div", {}); return __svn_el.clientWidth; })() as any;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

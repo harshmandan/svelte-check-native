@@ -339,10 +339,23 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
             // suppresses (verified against the compiler). Getter/
             // setter pairs (SequenceExpression) skip the binding
             // resolution upstream, so they don't fire.
-            if d.kind == DirectiveKind::Bind
-                && let Some(target) = parent.binding_target_name()
-            {
-                bind_name_checks(d, target, ctx);
+            if d.kind == DirectiveKind::Bind {
+                // The compiler checks the binding's name, then the
+                // write it performs; writes in earlier attributes came
+                // first.
+                crate::rules::binding_rules::flush_template_write_violations(
+                    ctx,
+                    d.range.start,
+                    false,
+                );
+                if let Some(target) = parent.binding_target_name() {
+                    bind_name_checks(d, target, ctx);
+                }
+                crate::rules::binding_rules::flush_template_write_violations(
+                    ctx,
+                    d.range.start,
+                    true,
+                );
             }
             if d.kind == DirectiveKind::Bind {
                 use svn_parser::ast::DirectiveValue;

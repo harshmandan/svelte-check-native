@@ -127,11 +127,11 @@ pub(crate) fn emit_element_bind_checks_inline(
                     _ => continue,
                 };
             buf.push_str(&indent);
-            match expr_range {
-                Some(r) => buf.append_with_source(&expr_text, r),
-                None => buf.push_str(&expr_text),
-            }
-            buf.push_str(" = __svn_any(null);\n");
+            let split = BindTarget::new(&expr_text, expr_range);
+            split.write_head(buf);
+            buf.push_str(" = __svn_any(null)");
+            split.write_tail(buf);
+            buf.push_str(";\n");
             continue;
         }
         // `None` for a binding with no known target type (`bind:innerWidth`
@@ -220,21 +220,16 @@ pub(crate) fn emit_element_bind_checks_inline(
         // references the bound variable, so a typo fires TS2304, and it
         // counts as an assignment, so an uninitialised `let` read
         // elsewhere in a closure doesn't fire TS2454.
+        let target = BindTarget::new(&expr_text, expr_source_range);
         let Some(ty) = ty else {
             buf.push_str(&indent);
             buf.push_str("/*svn:ignore_start*/void (() => { ");
-            match expr_source_range {
-                Some(range) => buf.append_with_source(&expr_text, range),
-                None => buf.push_str(&expr_text),
-            }
+            target.write_head(buf);
             buf.push_str(" = __svn_any(null); });/*svn:ignore_end*/\n");
             continue;
         };
         buf.push_str(&indent);
-        match expr_source_range {
-            Some(range) => buf.append_with_source(&expr_text, range),
-            None => buf.push_str(&expr_text),
-        }
+        target.write_head(buf);
         // R-Conv #20: for `<svelte:element this={tagExpr} bind:this={target}>`
         // narrow the RHS through `svelteHTML.createElement(tagExpr, {})` so
         // when `tagExpr` is a literal type (e.g. `'div'`), TS resolves the
@@ -270,24 +265,23 @@ pub(crate) fn emit_element_bind_checks_inline(
             buf.push_str(tag_name);
             buf.push_str("\", {}); return __svn_el.");
             buf.append_with_source(name, name_range);
-            buf.push_str("; })();\n");
+            buf.push_str("; })()");
+            target.write_tail(buf);
+            buf.push_str(";\n");
             continue;
         }
         if emit_is_ts() {
             if let Some((tag_expr, tag_range)) = &svelte_element_this_expr {
                 buf.push_str(" = svelteHTML.createElement(");
                 buf.append_with_source(tag_expr, *tag_range);
-                buf.push_str(", {});\n");
+                buf.push_str(", {})");
             } else {
-                let _ = writeln!(
-                    buf,
-                    " = /*svn:ignore_start*/null as {ty}/*svn:ignore_end*/;"
-                );
+                let _ = write!(buf, " = /*svn:ignore_start*/null as {ty}/*svn:ignore_end*/");
             }
         } else if let Some((tag_expr, tag_range)) = &svelte_element_this_expr {
             buf.push_str(" = svelteHTML.createElement(");
             buf.append_with_source(tag_expr, *tag_range);
-            buf.push_str(", {});\n");
+            buf.push_str(", {})");
         } else {
             // JS overlay: `as T` is TS-only syntax. Use a JSDoc cast
             // on the RHS instead — `/** @type {T} */(null)` gives the
@@ -297,12 +291,81 @@ pub(crate) fn emit_element_bind_checks_inline(
             // marks it ignored (`Binding.ts`, one-way bindings not on the
             // element) and a complaint about the cast never reaches the
             // user; only the assignment to their variable can.
-            let _ = writeln!(
+            let _ = write!(
                 buf,
-                " = /*svn:ignore_start*//** @type {{{ty}}} */ (null)/*svn:ignore_end*/;"
+                " = /*svn:ignore_start*//** @type {{{ty}}} */ (null)/*svn:ignore_end*/"
             );
         }
+        target.write_tail(buf);
+        buf.push_str(";\n");
     }
+}
+
+/// A bind target split the way upstream's `getEnd` splits it: a single
+/// TypeScript wrapper (`x as T`, `x satisfies T`, `x!`) is not part of
+/// the assignment target, so upstream writes `x = value as T;` rather
+/// than assigning to the wrapper, which TypeScript rejects.
+struct BindTarget<'a> {
+    text: &'a str,
+    range: Option<svn_core::Range>,
+    head_len: usize,
+}
+
+impl<'a> BindTarget<'a> {
+    fn new(text: &'a str, range: Option<svn_core::Range>) -> Self {
+        let head_len = ts_wrapped_operand_len(text).unwrap_or(text.len());
+        Self {
+            text,
+            range,
+            head_len,
+        }
+    }
+
+    fn write_head(&self, buf: &mut EmitBuffer) {
+        self.write_part(buf, 0, self.head_len);
+    }
+
+    fn write_tail(&self, buf: &mut EmitBuffer) {
+        self.write_part(buf, self.head_len, self.text.len());
+    }
+
+    fn write_part(&self, buf: &mut EmitBuffer, from: usize, to: usize) {
+        let part = &self.text[from..to];
+        if part.is_empty() {
+            return;
+        }
+        match self.range {
+            Some(r) => buf.append_with_source(
+                part,
+                svn_core::Range::new(r.start + from as u32, r.start + to as u32),
+            ),
+            None => buf.push_str(part),
+        }
+    }
+}
+
+/// Byte length of the operand of `expr`'s outermost TypeScript wrapper
+/// (`as`, `satisfies`, non-null), or `None` when `expr` has none.
+fn ts_wrapped_operand_len(expr: &str) -> Option<usize> {
+    use oxc_ast::ast::{Expression, Statement};
+    use oxc_span::GetSpan;
+    let wrapped = format!("({expr});");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
+        return None;
+    };
+    let Expression::ParenthesizedExpression(paren) = &stmt.expression else {
+        return None;
+    };
+    let operand_end = match &paren.expression {
+        Expression::TSAsExpression(e) => e.expression.span().end,
+        Expression::TSSatisfiesExpression(e) => e.expression.span().end,
+        Expression::TSNonNullExpression(e) => e.expression.span().end,
+        _ => return None,
+    };
+    // `wrapped` starts with the `(` added above.
+    Some(operand_end as usize - 1)
 }
 
 /// Extract the `this={EXPR}` expression text + source range from a

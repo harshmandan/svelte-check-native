@@ -1,0 +1,94 @@
+{
+    "errors": [
+        {
+            "file": "src/AwaitThen.svelte",
+            "line": 4,
+            "column": 9,
+            "code": "constant_binding"
+        },
+        {
+            "file": "src/Component.svelte",
+            "line": 4,
+            "column": 7,
+            "code": "constant_binding"
+        },
+        {
+            "file": "src/ConstTag.svelte",
+            "line": 5,
+            "column": 9,
+            "code": "constant_binding"
+        },
+        {
+            "file": "src/Const.svelte",
+            "line": 3,
+            "column": 7,
+            "code": "constant_binding"
+        },
+        {
+            "file": "src/EachIndex.svelte",
+            "line": 4,
+            "column": 9,
+            "code": "constant_binding"
+        },
+        {
+            "file": "src/EachRunes.svelte",
+            "line": 4,
+            "column": 9,
+            "code": "each_item_invalid_assignment"
+        },
+        {
+            "file": "src/Import.svelte",
+            "line": 3,
+            "column": 7,
+            "code": "constant_binding"
+        },
+        {
+            "file": "src/Order.svelte",
+            "line": 3,
+            "column": 5,
+            "code": "bind_invalid_name"
+        },
+        {
+            "file": "src/Pattern.svelte",
+            "line": 3,
+            "column": 2,
+            "code": "constant_assignment"
+        },
+        {
+            "file": "src/Quoted.svelte",
+            "line": 3,
+            "column": 7,
+            "code": "constant_binding"
+        },
+        {
+            "file": "src/ScriptAssign.svelte",
+            "line": 3,
+            "column": 24,
+            "code": "constant_assignment"
+        },
+        {
+            "file": "src/ScriptUpdate.svelte",
+            "line": 2,
+            "column": 2,
+            "code": "constant_assignment"
+        },
+        {
+            "file": "src/Shorthand.svelte",
+            "line": 3,
+            "column": 7,
+            "code": "constant_binding"
+        },
+        {
+            "file": "src/SnippetParam.svelte",
+            "line": 4,
+            "column": 9,
+            "code": "snippet_parameter_assignment"
+        },
+        {
+            "file": "src/TemplateAssign.svelte",
+            "line": 4,
+            "column": 23,
+            "code": "constant_assignment"
+        }
+    ]
+}

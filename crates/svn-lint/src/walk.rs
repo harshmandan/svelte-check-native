@@ -226,6 +226,7 @@ pub fn walk_parsed(
 
     let mut ancestors: Vec<Ancestor> = Vec::new();
     walk_fragment_impl(fragment, ctx, None, &mut ancestors, false);
+    crate::rules::binding_rules::flush_template_write_violations(ctx, u32::MAX, true);
 
     // Post-walk declaration loops (non_reactive_update /
     // export_let_unused) — upstream runs them after all three walks.
@@ -377,6 +378,11 @@ fn walk_fragment_impl(
 ) {
     let source = ctx.source;
     for (idx, node) in fragment.nodes.iter().enumerate() {
+        crate::rules::binding_rules::flush_template_write_violations(
+            ctx,
+            node.range().start,
+            false,
+        );
         // Ignore-stack: pull any svelte-ignore comments immediately
         // preceding this node (in the same fragment). These scope
         // the ignore to this one node and its subtree — mirror

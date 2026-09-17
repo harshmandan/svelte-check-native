@@ -8,7 +8,7 @@ async function $$render_e40e2c10() {
             } else if ((true)) {
             }
         } else {
-            for (const _ of __svn_each_items([])) {
+            for (let _ of __svn_each_items([])) {
                 void _;
             }
         }

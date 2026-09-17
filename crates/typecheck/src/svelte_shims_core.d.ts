@@ -212,7 +212,7 @@ declare type __SvnSvelte4SlotedProps<P, Widened> = P extends Record<
     never
 >
     ? any
-    : Partial<Widened> & { children?: any };
+    : Widened & { children?: any };
 
 // Applied CONDITIONALLY at the emit site (intersected into the widen
 // only when the child component uses `$$props` / `$$restProps`). Mirror

@@ -75,25 +75,22 @@ pub(crate) fn emit_each_block(
     if same_name {
         let _ = write!(buf, "{indent}{{ const __svn_each_arr = __svn_each_items(");
     } else {
-        let _ = write!(
-            buf,
-            "{indent}for (const {binding_text} of __svn_each_items("
-        );
+        let _ = write!(buf, "{indent}for (let {binding_text} of __svn_each_items(");
     }
     match expr_source_range {
         Some(r) => buf.append_with_source(expr_text, r),
         None => buf.push_str(expr_text),
     }
     if same_name {
-        let _ = writeln!(buf, "); for (const {binding_text} of __svn_each_arr) {{");
+        let _ = writeln!(buf, "); for (let {binding_text} of __svn_each_arr) {{");
     } else {
         let _ = writeln!(buf, ")) {{");
     }
     if let Some(ix) = index_binding {
         if emit_is_ts() {
-            let _ = writeln!(buf, "{indent}    const {ix}: number = 0;");
+            let _ = writeln!(buf, "{indent}    let {ix}: number = 0;");
         } else {
-            let _ = writeln!(buf, "{indent}    /** @type {{number}} */ const {ix} = 0;");
+            let _ = writeln!(buf, "{indent}    /** @type {{number}} */ let {ix} = 0;");
         }
     }
     // The `(key)` of a keyed each block is user code and gets checked

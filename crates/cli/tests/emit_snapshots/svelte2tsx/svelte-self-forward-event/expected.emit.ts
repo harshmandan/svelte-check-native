@@ -16,7 +16,7 @@ async function $$render_e40e2c10() {
     }>();
     ;(async () => {
         // template type-check body (incremental)
-        for (const item of __svn_each_items(a)) {
+        for (let item of __svn_each_items(a)) {
             {
                 const __svn_C_c6 = __svn_ensure_component(__svn_self_default);
                 const __svn_inst_c6 = new __svn_C_c6({ target: __svn_any(), props: {} });

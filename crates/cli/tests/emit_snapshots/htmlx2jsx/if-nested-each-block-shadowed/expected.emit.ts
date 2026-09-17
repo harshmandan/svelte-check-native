@@ -5,22 +5,22 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         if ((hello)) {
             void [hello];
-            for (const hello of __svn_each_items(items)) {
-                /** @type {number} */ const i = 0;
+            for (let hello of __svn_each_items(items)) {
+                /** @type {number} */ let i = 0;
                 (hello.id);
                 { svelteHTML.createElement("div", {});                     (hello);
                     (i);
                 }
                 if ((hello)) {
                     void [hello];
-                    for (const hello of __svn_each_items(items)) {
+                    for (let hello of __svn_each_items(items)) {
                         if ((hello)) {
                             void [hello];
                             (hello);
                         }
                         void hello;
                     }
-                    for (const foo of __svn_each_items(items)) {
+                    for (let foo of __svn_each_items(items)) {
                         const hello = foo;
                         void hello;
                         if ((hello)) {
@@ -39,7 +39,7 @@ async function $$render_e40e2c10() {
             }
             if ((hi && bye)) {
                 void [hi, bye];
-                for (const bye of __svn_each_items(items)) {
+                for (let bye of __svn_each_items(items)) {
                     { svelteHTML.createElement("div", {});                         (bye);
                     }
                     void bye;
@@ -50,8 +50,8 @@ async function $$render_e40e2c10() {
                 }
             } else if ((cool)) {
                 void [cool];
-                for (const item of __svn_each_items(items)) {
-                    /** @type {number} */ const cool = 0;
+                for (let item of __svn_each_items(items)) {
+                    /** @type {number} */ let cool = 0;
                     { svelteHTML.createElement("div", {});                         (item);
                         (cool);
                     }
@@ -59,15 +59,15 @@ async function $$render_e40e2c10() {
                     void cool;
                 }
             } else {
-                for (const hello of __svn_each_items(items)) {
+                for (let hello of __svn_each_items(items)) {
                     { svelteHTML.createElement("div", {});                         (hello);
                     }
                     void hello;
                 }
             }
         }
-        for (const hello of __svn_each_items(items)) {
-            /** @type {number} */ const i = 0;
+        for (let hello of __svn_each_items(items)) {
+            /** @type {number} */ let i = 0;
             if ((hello && i && bye)) {
                 void [hello, i, bye];
                 (hello);

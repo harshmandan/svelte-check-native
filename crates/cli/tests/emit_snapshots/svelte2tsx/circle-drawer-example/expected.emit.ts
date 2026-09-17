@@ -77,7 +77,7 @@ async function $$render_e40e2c10() {
         { svelteHTML.createElement("svg", {
             "on:click": (handleClick),
         });
-            for (const circle of __svn_each_items(circles)) {
+            for (let circle of __svn_each_items(circles)) {
                 { svelteHTML.createElement("circle", {
                     "cx": (circle.cx),
                     "cy": (circle.cy),

@@ -8,7 +8,7 @@ async function $$render_bd9efed1() {
 }
 $$render_bd9efed1;
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_bd9efed1>>['props']} __SvnDefaultProps
+ * @typedef {__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_bd9efed1>>['props'], Awaited<ReturnType<typeof $$render_bd9efed1>>['props']>} __SvnDefaultProps
  */
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_bd9efed1>>['exports']} __SvnDefaultExports
@@ -28,7 +28,7 @@ async function $$render_65aa230b() {
 }
 $$render_65aa230b;
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_65aa230b>>['props']} __SvnDefaultProps
+ * @typedef {__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_65aa230b>>['props'], Awaited<ReturnType<typeof $$render_65aa230b>>['props']>} __SvnDefaultProps
  */
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_65aa230b>>['exports']} __SvnDefaultExports
@@ -95,8 +95,8 @@ async function $$render_e40e2c10() {
 }
 $$render_e40e2c10;
 interface $$IsomorphicComponent {
-    new (options: import('svelte').ComponentConstructorOptions<__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>>): import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'] } & Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'];
-    (internal: unknown, props: __SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>): Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'] & { $set?: any; $on?: any };
+    new (options: import('svelte').ComponentConstructorOptions<__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'] } & Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'];
+    (internal: unknown, props: __SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>): Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

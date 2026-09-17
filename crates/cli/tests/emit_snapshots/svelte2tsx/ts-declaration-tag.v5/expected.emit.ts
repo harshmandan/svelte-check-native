@@ -11,7 +11,7 @@ async function $$render_e40e2c10() {
     ];
     ;(async () => {
         // template type-check body (incremental)
-        for (const box of __svn_each_items(boxes)) {
+        for (let box of __svn_each_items(boxes)) {
             const area = box.width * box.height;
             void area;
             let label = $state(`${area} square pixels`);

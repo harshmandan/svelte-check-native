@@ -14,7 +14,7 @@ async function $$render_e40e2c10() {
 	}
     ;(async () => {
         // template type-check body (incremental)
-        for (const { width, height } of __svn_each_items(boxes)) {
+        for (let { width, height } of __svn_each_items(boxes)) {
             const {area, volume} = calculate(width, height, constant);
             void area;
             void volume;

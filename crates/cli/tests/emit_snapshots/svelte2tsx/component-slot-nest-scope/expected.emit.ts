@@ -3,15 +3,15 @@
 async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        for (const item of __svn_each_items(items)) {
-            for (const { a } of __svn_each_items(item)) {
+        for (let item of __svn_each_items(items)) {
+            for (let { a } of __svn_each_items(item)) {
                 void a;
             }
             void item;
         }
         {
             const __svn_C_89 = __svn_ensure_component(Component);
-            const __svn_inst_89 = new __svn_C_89({ target: __svn_any(), props: {} });
+            const __svn_inst_89 = new __svn_C_89({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, c } = __svn_inst_89.$$slot_def.default; $$_$$;
                 void c;
@@ -28,7 +28,7 @@ async function $$render_e40e2c10() {
 }
 $$render_e40e2c10;
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
+ * @typedef {__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>} __SvnDefaultProps
  */
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports

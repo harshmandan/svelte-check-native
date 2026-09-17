@@ -18,7 +18,7 @@ use smol_str::SmolStr;
 use svn_parser::Fragment;
 
 use crate::emit_buffer::EmitBuffer;
-use crate::svelte4::compat::fragment_contains_slot;
+use crate::svelte4::compat::{fragment_contains_default_slot, fragment_contains_slot};
 use crate::util::{generic_arg_names, render_class_name};
 use svn_analyze::AmbientRefs;
 
@@ -60,11 +60,21 @@ use svn_analyze::AmbientRefs;
 /// the right utility because `Component<P>` is callable-only (no ctor
 /// signature), matching the TS fn-component path's choice in
 /// [`emit_fn_component_default_export`].
-pub(crate) fn emit_default_export_declarations_js(buf: &mut EmitBuffer, render_name: &SmolStr) {
-    let _ = writeln!(
-        buf,
-        "/**\n * @typedef {{Awaited<ReturnType<typeof {render_name}>>['props']}} __SvnDefaultProps\n */"
-    );
+pub(crate) fn emit_default_export_declarations_js(
+    buf: &mut EmitBuffer,
+    render_name: &SmolStr,
+    has_default_slot: bool,
+) {
+    // A default slot adds `children?: any` to the consumer-facing
+    // props (upstream `__sveltets_2_isomorphic_component_slots` →
+    // `__sveltets_2_PropsWithChildren`), the same as the TS shape.
+    let props = format!("Awaited<ReturnType<typeof {render_name}>>['props']");
+    let props = if has_default_slot {
+        format!("__SvnSvelte4SlotedProps<{props}, {props}>")
+    } else {
+        props
+    };
+    let _ = writeln!(buf, "/**\n * @typedef {{{props}}} __SvnDefaultProps\n */");
     // Project the render return's `exports` surface into `Component`'s
     // second type parameter — `ReturnType<Component<P, X>>` is
     // `{ $on?; $set? } & X`, so instance members (`export function` /
@@ -110,6 +120,7 @@ pub(crate) fn emit_default_export_declarations_js(buf: &mut EmitBuffer, render_n
 pub(crate) fn emit_default_export_declarations_ts(
     buf: &mut EmitBuffer,
     fragment: &Fragment,
+    source: &str,
     render_name: &SmolStr,
     generics: Option<&str>,
     prop_type_source: Option<&str>,
@@ -171,14 +182,6 @@ pub(crate) fn emit_default_export_declarations_ts(
     }
 
     let prop_ty_root_name = prop_type_source.and_then(svn_analyze::root_type_name_of);
-    // SVELTE-4-COMPAT widening. Consumers of Svelte-4 components pass
-    // `on:event` directives (rewritten to `on<event>` prop keys by us)
-    // and `<Foo slot="x">` slot-name attrs, neither of which are
-    // declared in the actual Props type. Widening with an
-    // `on${string}` index signature + optional `slot` key keeps those
-    // consumer writes valid without opening the door on Svelte-5
-    // codebases where widening would mask real typos.
-    let has_slot = fragment_contains_slot(fragment);
     // v0.3 Item 3: carry the typed event surface as `& { readonly
     // __svn_events: <Events> }` on the default export so
     // `__svn_ensure_component`'s marker branch resolves and
@@ -221,23 +224,16 @@ pub(crate) fn emit_default_export_declarations_ts(
     // `!uses$$Props` term made us accept excess props upstream rejects.
     let uses_any_props =
         (ambients.props || ambients.rest_props) && prop_ty_root_name.as_deref() != Some("$$Props");
-    let has_slots = has_slot;
-    let widen_for = |base: &str| -> String {
-        match (has_slots, uses_any_props) {
-            (false, false) => String::new(),
-            (true, false) => format!(" & __SvnSvelte4PropsWiden<{base}>"),
-            (false, true) => " & __SvnAllProps".to_string(),
-            (true, true) => format!(" & __SvnSvelte4PropsWiden<{base}> & __SvnAllProps"),
-        }
-    };
-    let svelte4_with_slot = has_slot;
-    let wrap_props = |inner: String| -> String {
-        if svelte4_with_slot {
-            format!("Partial<{inner}>")
+    let widen_for = |_base: &str| -> String {
+        if uses_any_props {
+            " & __SvnAllProps".to_string()
         } else {
-            inner
+            String::new()
         }
     };
+    // Upstream's `__sveltets_2_PropsWithChildren<Props, Slots>` adds
+    // `children?: any` only when the slots type has a `default` key.
+    let has_default_slot = fragment_contains_default_slot(fragment, source);
     // Upstream's `$$IsomorphicComponent` (addComponentExport.ts:170-179):
     // a single interface that types both `new C({props})` (Svelte-4
     // class form) and `C(anchor, props)` (Svelte-5 function form) via a
@@ -296,30 +292,15 @@ pub(crate) fn emit_default_export_declarations_ts(
         bindings_src.clone()
     };
 
-    let props_wrapped = wrap_props(props_typed.clone());
+    let props_wrapped = props_typed.clone();
     // `props_arg` is the Props type seen by consumer-side
-    // construction. For Svelte-4 components with a default slot we
-    // mirror upstream's `__sveltets_2_PropsWithChildren` shape via
-    // `__SvnSvelte4SlotedProps<P, Widened>`: it widens to `any` when
-    // P is `Record<string, never>`, sidestepping the index-signature
-    // trap that fires `Type '{ children: () => any }' is not
-    // assignable to 'Partial<Record<string, never>> & { children?:
-    // any }'` on consumers passing implicit-children to an
-    // empty-Props Svelte-4 component (e.g. `<StartLayout>...</StartLayout>`
-    // where `StartLayout` declares no `export let` / no `$props()`
-    // but takes a `<slot/>`). See upstream svelte-shims-v4.d.ts:258-266
-    // for the same trap and same workaround.
-    //
-    // For the non-svelte4-slot path we keep the existing inline
-    // shape: `props_wrapped` (already includes Partial<…> when
-    // svelte4_with_slot, identity otherwise) plus the conditional
-    // `& { children?: any }` for has_slot=true. Svelte-5 components
-    // declare `children` in their Props directly, so this branch
-    // doesn't need the widen-to-any short-circuit.
-    let props_arg: String = if svelte4_with_slot {
+    // construction: upstream's `__sveltets_2_PropsWithChildren`
+    // shape, mirrored by `__SvnSvelte4SlotedProps<P, Widened>`, when
+    // the component has a default slot. It widens to `any` when P is
+    // `Record<string, never>` (upstream's own index-signature
+    // workaround) and otherwise adds `children?: any`.
+    let props_arg: String = if has_default_slot {
         format!("__SvnSvelte4SlotedProps<{props_src}, {props_typed}>")
-    } else if has_slot {
-        format!("{props_wrapped} & {{ children?: any }}")
     } else {
         props_wrapped.clone()
     };

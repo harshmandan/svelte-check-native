@@ -5,8 +5,8 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         if ((hello)) {
             void [hello];
-            for (const item of __svn_each_items(items)) {
-                /** @type {number} */ const i = 0;
+            for (let item of __svn_each_items(items)) {
+                /** @type {number} */ let i = 0;
                 (item.id);
                 { svelteHTML.createElement("div", {});                     (item);
                     (i);
@@ -16,7 +16,7 @@ async function $$render_e40e2c10() {
             }
             if ((hi && bye)) {
                 void [hi, bye];
-                for (const item of __svn_each_items(items)) {
+                for (let item of __svn_each_items(items)) {
                     { svelteHTML.createElement("div", {});                         (item);
                     }
                     void item;
@@ -24,8 +24,8 @@ async function $$render_e40e2c10() {
                 { svelteHTML.createElement("p", {});                 }
             } else if ((cool)) {
                 void [cool];
-                for (const item of __svn_each_items(items)) {
-                    /** @type {number} */ const i = 0;
+                for (let item of __svn_each_items(items)) {
+                    /** @type {number} */ let i = 0;
                     { svelteHTML.createElement("div", {});                         (item);
                         (i);
                     }
@@ -33,7 +33,7 @@ async function $$render_e40e2c10() {
                     void i;
                 }
             } else {
-                for (const item of __svn_each_items(items)) {
+                for (let item of __svn_each_items(items)) {
                     { svelteHTML.createElement("div", {});                         (item);
                     }
                     void item;

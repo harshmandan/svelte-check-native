@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "`function reset() {} export { reset };` exposed `reset` as a required `any` prop, so every consumer reported TS2741 (property missing). Upstream registers a named export as optional (`reset?: typeof reset`) and reports nothing."
+}

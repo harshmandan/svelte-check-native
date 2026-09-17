@@ -15,8 +15,8 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         let __svn_action_attrs_0: any = {};
         void __svn_action_attrs_0;
-        for (const item of __svn_each_items(items)) {
-            const index: number = 0;
+        for (let item of __svn_each_items(items)) {
+            let index: number = 0;
             (index);
             const label = `slide-${index}`;
             void label;

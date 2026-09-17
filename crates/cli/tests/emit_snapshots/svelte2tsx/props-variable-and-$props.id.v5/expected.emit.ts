@@ -9,7 +9,7 @@ async function $$render_e40e2c10() {
         (id);
         (props);
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: __svn_$$bindings(), exports: {} };
 }
 $$render_e40e2c10;
 /**

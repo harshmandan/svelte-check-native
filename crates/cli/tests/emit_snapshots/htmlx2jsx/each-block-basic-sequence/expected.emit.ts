@@ -3,7 +3,7 @@
 async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        for (const item of __svn_each_items(true, items)) {
+        for (let item of __svn_each_items(true, items)) {
             { svelteHTML.createElement("div", {});                 (item);
             }
             void item;

@@ -3,7 +3,7 @@
 async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        { const __svn_each_arr = __svn_each_items(items); for (const items of __svn_each_arr) {
+        { const __svn_each_arr = __svn_each_items(items); for (let items of __svn_each_arr) {
             void items;
         }
         }
@@ -12,7 +12,7 @@ async function $$render_e40e2c10() {
 }
 $$render_e40e2c10;
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
+ * @typedef {__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>} __SvnDefaultProps
  */
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports

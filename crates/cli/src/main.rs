@@ -1297,6 +1297,11 @@ fn render_runs(
 ) -> ExitCode {
     use std::collections::HashSet;
     let mut diagnostics: Vec<svn_typecheck::CheckDiagnostic> = Vec::new();
+    // Identical diagnostics are collapsed only when several programs
+    // overlap; within one program tsgo's repeats are upstream's too
+    // (a comma sequence reports every unused operand at the same
+    // position).
+    let multi_run = runs.len() > 1;
     let mut seen: HashSet<(PathBuf, u32, u32, String)> = HashSet::new();
     let mut entry_set: HashSet<PathBuf> = HashSet::new();
     for run in runs {
@@ -1307,7 +1312,7 @@ fn render_runs(
                 d.column,
                 format!("{:?}|{}", d.code, d.message),
             );
-            if seen.insert(key) {
+            if !multi_run || seen.insert(key) {
                 diagnostics.push(d);
             }
         }

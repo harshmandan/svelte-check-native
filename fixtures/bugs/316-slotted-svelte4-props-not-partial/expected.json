@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "src/App.svelte",
+            "line": 1,
+            "column": 1,
+            "code": 2322
+        }
+    ],
+    "_note": "A Svelte-4 TypeScript component with a `<slot>` had its props wrapped in `Partial<\u2026>`, so a consumer omitting a required prop passed silently. Upstream's `__sveltets_2_PropsWithChildren` only adds `children?: any` (for a default slot) and never makes the props optional for a TS file; the missing `title` is reported. Upstream anchors this TS2322 at the last character of the tag name (a source-map artefact of its generated call text); ours lands on the tag name's first character, where upstream also puts the TS2741 of a slot-less component."
+}

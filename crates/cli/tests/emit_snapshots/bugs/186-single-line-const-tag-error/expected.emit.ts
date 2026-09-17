@@ -5,7 +5,7 @@ async function $$render_e40e2c10() {
     let items: number[] = [1, 2, 3];
     ;(async () => {
         // template type-check body (incremental)
-        for (const item of __svn_each_items(items)) {
+        for (let item of __svn_each_items(items)) {
             const doubled = nonexistentRef + item;
             void doubled;
             { svelteHTML.createElement("p", {});                 (doubled);

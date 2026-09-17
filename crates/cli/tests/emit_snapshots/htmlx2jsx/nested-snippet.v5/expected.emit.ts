@@ -34,7 +34,7 @@ async function $$render_e40e2c10() {
                     (foo());
                 }
             }
-            for (const item of __svn_each_items(arr)) {
+            for (let item of __svn_each_items(arr)) {
                 {
                     const foo = () => { async () => {
                         };

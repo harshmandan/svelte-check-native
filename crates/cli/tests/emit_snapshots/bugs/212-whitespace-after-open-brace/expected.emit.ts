@@ -13,7 +13,7 @@ async function $$render_e40e2c10() {
         } else {
             { svelteHTML.createElement("p", {});             }
         }
-        for (const item of __svn_each_items(items)) {
+        for (let item of __svn_each_items(items)) {
             { svelteHTML.createElement("li", {});                 (item);
             }
             void item;

@@ -21,8 +21,8 @@ async function $$render_6a78bc66() {
 }
 $$render_6a78bc66;
 interface $$IsomorphicComponent {
-    new (options: import('svelte').ComponentConstructorOptions<__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_6a78bc66>>['props'], Awaited<ReturnType<typeof $$render_6a78bc66>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_6a78bc66>>['props']>>>): import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_6a78bc66>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_6a78bc66>>['props']>>, Awaited<ReturnType<typeof $$render_6a78bc66>>['events'], Awaited<ReturnType<typeof $$render_6a78bc66>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_6a78bc66>>['bindings'] } & Awaited<ReturnType<typeof $$render_6a78bc66>>['exports'];
-    (internal: unknown, props: __SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_6a78bc66>>['props'], Awaited<ReturnType<typeof $$render_6a78bc66>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_6a78bc66>>['props']>>): Awaited<ReturnType<typeof $$render_6a78bc66>>['exports'] & { $set?: any; $on?: any };
+    new (options: import('svelte').ComponentConstructorOptions<__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_6a78bc66>>['props'], Awaited<ReturnType<typeof $$render_6a78bc66>>['props']>>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_6a78bc66>>['props'], Awaited<ReturnType<typeof $$render_6a78bc66>>['events'], Awaited<ReturnType<typeof $$render_6a78bc66>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_6a78bc66>>['bindings'] } & Awaited<ReturnType<typeof $$render_6a78bc66>>['exports'];
+    (internal: unknown, props: __SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_6a78bc66>>['props'], Awaited<ReturnType<typeof $$render_6a78bc66>>['props']>): Awaited<ReturnType<typeof $$render_6a78bc66>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_6a78bc66>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

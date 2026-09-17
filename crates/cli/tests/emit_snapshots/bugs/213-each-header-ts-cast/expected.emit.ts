@@ -7,7 +7,7 @@ async function $$render_e40e2c10() {
     const items: unknown = [{ name: 'a' }];
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("ul", {});             for (const item of __svn_each_items(items as unknown as Item[])) {
+        { svelteHTML.createElement("ul", {});             for (let item of __svn_each_items(items as unknown as Item[])) {
                 { svelteHTML.createElement("li", {});                     (item.name);
                 }
                 void item;

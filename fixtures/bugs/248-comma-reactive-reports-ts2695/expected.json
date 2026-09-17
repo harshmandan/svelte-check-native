@@ -1,0 +1,23 @@
+{
+    "errors": [
+        {
+            "file": "App.svelte",
+            "line": 4,
+            "column": 5,
+            "code": 2695
+        },
+        {
+            "file": "App.svelte",
+            "line": 4,
+            "column": 5,
+            "code": 2695
+        },
+        {
+            "file": "App.svelte",
+            "line": 4,
+            "column": 5,
+            "code": 2695
+        }
+    ],
+    "_note": "Svelte-4 comma-separated reactive-dependency idiom `$: a, b, c, expr`. `svelte-check --tsgo` reports TS2695 (\"Left side of comma operator is unused\") for each bare-identifier dep \u2014 the default engine's `resolveNoopsInReactiveStatements` filter needs the language service, which the tsgo command never runs \u2014 and so do we. An earlier version rewrote the commas to semicolons at emit and reported nothing."
+}

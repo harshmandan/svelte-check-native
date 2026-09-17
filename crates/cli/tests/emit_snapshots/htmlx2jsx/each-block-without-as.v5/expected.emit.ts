@@ -3,11 +3,11 @@
 async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        for (const __svn_each_unused of __svn_each_items({ length: 5 })) {
+        for (let __svn_each_unused of __svn_each_items({ length: 5 })) {
             void __svn_each_unused;
         }
-        for (const __svn_each_unused of __svn_each_items({ length: 5 })) {
-            /** @type {number} */ const index = 0;
+        for (let __svn_each_unused of __svn_each_items({ length: 5 })) {
+            /** @type {number} */ let index = 0;
             (index);
             void __svn_each_unused;
             void index;

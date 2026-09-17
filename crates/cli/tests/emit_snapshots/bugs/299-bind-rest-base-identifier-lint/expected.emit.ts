@@ -5,7 +5,7 @@ async function $$render_e40e2c10() {
     let xs = $state([{ a: 1, b: 'x' }]);
     ;(async () => {
         // template type-check body (incremental)
-        for (const { a, ...rést } of __svn_each_items(xs)) {
+        for (let { a, ...rést } of __svn_each_items(xs)) {
             { svelteHTML.createElement("input", {});                 (rést.b);
                 rést.b = null as any as string;
             }
@@ -13,7 +13,7 @@ async function $$render_e40e2c10() {
             void a;
             void rést;
         }
-        for (const { a, ...rest } of __svn_each_items(xs)) {
+        for (let { a, ...rest } of __svn_each_items(xs)) {
             { svelteHTML.createElement("input", {});                 (/* c */ rest.b);
                 /* c */ rest.b = null as any as string;
             }

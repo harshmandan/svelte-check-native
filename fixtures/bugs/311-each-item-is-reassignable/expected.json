@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Upstream declares the each-block item and index with `let` (`for(let item of …`); ours used `const`, so a `bind:` on the item or a handler assigning it reported TS2588 (cannot assign to a constant) on ordinary legacy code. Upstream reports nothing here."
+}

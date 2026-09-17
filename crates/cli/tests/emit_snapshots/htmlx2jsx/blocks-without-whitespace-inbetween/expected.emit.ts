@@ -6,7 +6,7 @@ async function $$render_e40e2c10() {
         if ((name == "world")) {
             void [name];
         }
-        for (const y of __svn_each_items(x)) {
+        for (let y of __svn_each_items(x)) {
             void y;
         }
         { const $$_promise = (x);

@@ -8,7 +8,7 @@ async function $$render_86f64a55() {
         // template type-check body (incremental)
         {
             const __svn_C_3e = __svn_ensure_component(L);
-            const __svn_inst_3e = new __svn_C_3e({ target: __svn_any(), props: {"list": ([])} });
+            const __svn_inst_3e = new __svn_C_3e({ target: __svn_any(), props: {"list": ([]), children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item: café } = __svn_inst_3e.$$slot_def.default; $$_$$;
                 (café.name);
@@ -38,7 +38,7 @@ async function $$render_76cc262b() {
     ;(async () => {
         // template type-check body (incremental)
         const __svn_create_slot = __svn_create_create_slot();
-        for (const item of __svn_each_items(list.filter((x): x is Item => x !== null))) {
+        for (let item of __svn_each_items(list.filter((x): x is Item => x !== null))) {
             {
                 __svn_create_slot("default", { item: item });
             }
@@ -50,8 +50,8 @@ async function $$render_76cc262b() {
 }
 $$render_76cc262b;
 interface $$IsomorphicComponent {
-    new (options: import('svelte').ComponentConstructorOptions<__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_76cc262b>>['props'], Awaited<ReturnType<typeof $$render_76cc262b>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_76cc262b>>['props']>>>): import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_76cc262b>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_76cc262b>>['props']>>, Awaited<ReturnType<typeof $$render_76cc262b>>['events'], Awaited<ReturnType<typeof $$render_76cc262b>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_76cc262b>>['bindings'] } & Awaited<ReturnType<typeof $$render_76cc262b>>['exports'];
-    (internal: unknown, props: __SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_76cc262b>>['props'], Awaited<ReturnType<typeof $$render_76cc262b>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_76cc262b>>['props']>>): Awaited<ReturnType<typeof $$render_76cc262b>>['exports'] & { $set?: any; $on?: any };
+    new (options: import('svelte').ComponentConstructorOptions<__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_76cc262b>>['props'], Awaited<ReturnType<typeof $$render_76cc262b>>['props']>>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_76cc262b>>['props'], Awaited<ReturnType<typeof $$render_76cc262b>>['events'], Awaited<ReturnType<typeof $$render_76cc262b>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_76cc262b>>['bindings'] } & Awaited<ReturnType<typeof $$render_76cc262b>>['exports'];
+    (internal: unknown, props: __SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_76cc262b>>['props'], Awaited<ReturnType<typeof $$render_76cc262b>>['props']>): Awaited<ReturnType<typeof $$render_76cc262b>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_76cc262b>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;
@@ -68,7 +68,7 @@ async function $$render_758c71fe() {
     ;(async () => {
         // template type-check body (incremental)
         const __svn_create_slot = __svn_create_create_slot();
-        for (const item of __svn_each_items(list ?? [])) {
+        for (let item of __svn_each_items(list ?? [])) {
             {
                 __svn_create_slot("default", { item: item });
             }
@@ -80,8 +80,8 @@ async function $$render_758c71fe() {
 }
 $$render_758c71fe;
 interface $$IsomorphicComponent {
-    new (options: import('svelte').ComponentConstructorOptions<__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_758c71fe>>['props'], Awaited<ReturnType<typeof $$render_758c71fe>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_758c71fe>>['props']>>>): import('svelte').SvelteComponent<Partial<Awaited<ReturnType<typeof $$render_758c71fe>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_758c71fe>>['props']>>, Awaited<ReturnType<typeof $$render_758c71fe>>['events'], Awaited<ReturnType<typeof $$render_758c71fe>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_758c71fe>>['bindings'] } & Awaited<ReturnType<typeof $$render_758c71fe>>['exports'];
-    (internal: unknown, props: __SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_758c71fe>>['props'], Awaited<ReturnType<typeof $$render_758c71fe>>['props'] & __SvnSvelte4PropsWiden<Awaited<ReturnType<typeof $$render_758c71fe>>['props']>>): Awaited<ReturnType<typeof $$render_758c71fe>>['exports'] & { $set?: any; $on?: any };
+    new (options: import('svelte').ComponentConstructorOptions<__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_758c71fe>>['props'], Awaited<ReturnType<typeof $$render_758c71fe>>['props']>>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_758c71fe>>['props'], Awaited<ReturnType<typeof $$render_758c71fe>>['events'], Awaited<ReturnType<typeof $$render_758c71fe>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_758c71fe>>['bindings'] } & Awaited<ReturnType<typeof $$render_758c71fe>>['exports'];
+    (internal: unknown, props: __SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_758c71fe>>['props'], Awaited<ReturnType<typeof $$render_758c71fe>>['props']>): Awaited<ReturnType<typeof $$render_758c71fe>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_758c71fe>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;
@@ -98,7 +98,7 @@ async function $$render_5b9f5cf4() {
         // template type-check body (incremental)
         {
             const __svn_C_3f = __svn_ensure_component(L);
-            const __svn_inst_3f = new __svn_C_3f({ target: __svn_any(), props: {} });
+            const __svn_inst_3f = new __svn_C_3f({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item } = __svn_inst_3f.$$slot_def.default; $$_$$;
                 void item;
@@ -128,7 +128,7 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         {
             const __svn_C_3e = __svn_ensure_component(L);
-            const __svn_inst_3e = new __svn_C_3e({ target: __svn_any(), props: {"list": ([])} });
+            const __svn_inst_3e = new __svn_C_3e({ target: __svn_any(), props: {"list": ([]), children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item } = __svn_inst_3e.$$slot_def.default; $$_$$;
                 void item;

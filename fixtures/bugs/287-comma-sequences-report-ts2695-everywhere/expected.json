@@ -1,0 +1,23 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 13,
+            "code": 2695
+        },
+        {
+            "file": "input.svelte",
+            "line": 3,
+            "column": 8,
+            "code": 2695
+        },
+        {
+            "file": "input.svelte",
+            "line": 4,
+            "column": 25,
+            "code": 2695
+        }
+    ],
+    "_note": "`void (a, b)` / `(a, b)` sequences report TS2695 on the unused left side wherever they are \u2014 inside a `$:` statement too. The default svelte-check filters the reactive ones through its language service, which `svelte-check --tsgo` never runs; an earlier version rewrote the sequences inside `$:` to array literals and reported only the one in the plain function."
+}

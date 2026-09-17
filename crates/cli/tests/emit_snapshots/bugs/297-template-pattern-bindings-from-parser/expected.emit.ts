@@ -29,7 +29,7 @@ async function $$render_3fd2a110() {
     const key = 1;
     ;(async () => {
         // template type-check body (incremental)
-        for (const { 'my-key': v } of __svn_each_items(xs)) {
+        for (let { 'my-key': v } of __svn_each_items(xs)) {
             (v);
             void v;
         }
@@ -54,7 +54,7 @@ async function $$render_924ed924() {
     const qq = 1;
     ;(async () => {
         // template type-check body (incremental)
-        for (const { a = 'p,qq' } of __svn_each_items(xs)) {
+        for (let { a = 'p,qq' } of __svn_each_items(xs)) {
             (a);
             void a;
         }

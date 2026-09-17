@@ -5,7 +5,7 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});             if ((foo)) {
                 void [foo];
-                { svelteHTML.createElement("div", {});                     for (const item of __svn_each_items(array)) {
+                { svelteHTML.createElement("div", {});                     for (let item of __svn_each_items(array)) {
                         if ((i)) {
                             void [i];
                             {

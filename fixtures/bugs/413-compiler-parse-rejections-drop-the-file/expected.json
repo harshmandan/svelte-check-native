@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "src/Ok.svelte",
+            "line": 0,
+            "column": 24,
+            "code": 2322
+        }
+    ],
+    "_note": "svelte-check converts components with svelte2tsx in strict mode, so a component the Svelte compiler's parse() rejects is left out of the run entirely: no TypeScript or compiler diagnostics and no entry in the file count. That now covers every structural error our parser reports (unclosed element or block, stray closing or continuation tag, open mustache or comment, duplicate script or style, unknown svelte: element, bad script context), an attribute list that stops at a stray `=` or quote, and, in a TypeScript component, an `{#each a, b as item}` head that the compiler reads as a sequence. Before, these files reported our parser's error (or type errors) instead."
+}

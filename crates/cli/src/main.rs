@@ -2057,12 +2057,12 @@ fn check_project(
                 // dropped from the run by upstream: svelte2tsx throws, so
                 // there is no overlay, no diagnostic of any source, and
                 // the file is not an entry.
-                let has_fatal = section_errors
+                let parse_rejected = section_errors
                     .iter()
                     .chain(template_errors.iter())
-                    .any(|e| e.is_fatal());
-                if !has_fatal
-                    && svn_lint::template_parse_rejected(&fragment, source, doc.script_lang())
+                    .any(|e| e.compiler_rejects());
+                if parse_rejected
+                    || svn_lint::template_parse_rejected(&fragment, source, doc.script_lang())
                 {
                     return (None, (None, Vec::new(), Some(file.clone())));
                 }

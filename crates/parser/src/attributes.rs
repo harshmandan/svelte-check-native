@@ -75,10 +75,19 @@ pub fn parse_attributes(
                     attrs.push(attr);
                 }
             }
-            Some(_) => {
+            Some(b) => {
                 if let Some(attr) = parse_named_attribute(scanner, errors) {
                     attrs.push(attr);
                 } else {
+                    // The compiler reads no attribute name at `=` or a
+                    // quote, ends the attribute list there and then
+                    // fails to find the tag's `>`.
+                    if matches!(b, b'=' | b'"' | b'\'') {
+                        let at = scanner.pos();
+                        errors.push(ParseError::MalformedOpenTag {
+                            range: Range::new(at, at + 1),
+                        });
+                    }
                     // Recovery: advance one byte to avoid infinite loops.
                     scanner.advance_byte();
                 }

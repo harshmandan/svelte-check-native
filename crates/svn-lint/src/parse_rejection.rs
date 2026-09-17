@@ -12,7 +12,11 @@
 //!   (`js_parse_error`, e.g. `{a +}`);
 //! - a `<svelte:options runes>` value that is not a static boolean
 //!   (`svelte_options_invalid_attribute_value`, e.g. `runes="true"` or
-//!   `runes={flag}`) — `read_options` runs inside `parse()`.
+//!   `runes={flag}`) — `read_options` runs inside `parse()`;
+//! - in a TypeScript component, an `{#each a, b as item}` head: the
+//!   compiler first reads `a, b as item` as one expression (a sequence
+//!   ending in a type assertion), keeps only `a`, and then needs an
+//!   index identifier after the comma (`expected_identifier`).
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Expression;
@@ -142,7 +146,45 @@ impl InvalidExpressionFinder<'_> {
     }
 }
 
+impl InvalidExpressionFinder<'_> {
+    /// The each-head rejection described in the module doc.
+    fn check_each_head(&mut self, block: &svn_parser::EachBlock) {
+        if self.found || self.lang != ScriptLang::Ts {
+            return;
+        }
+        let Some(clause) = &block.as_clause else {
+            return;
+        };
+        let Some(context) = clause.context_range else {
+            return;
+        };
+        // What follows the context (`, i`, `(key)`) cannot turn a
+        // sequence back into a single expression, so the head up to the
+        // context's end decides. A context that is no valid type
+        // (`{ x = 1 }`) fails to read, and the compiler then backs up to
+        // the `as` and reads the head normally.
+        let Some(text) = self
+            .source
+            .get(block.expression_range.start as usize..context.end as usize)
+        else {
+            return;
+        };
+        let source_type = SourceType::default()
+            .with_module(true)
+            .with_typescript(true);
+        self.allocator.reset();
+        let parsed = Parser::new(&self.allocator, text, source_type).parse_expression();
+        if let Ok(Expression::SequenceExpression(_)) = parsed {
+            self.found = true;
+        }
+    }
+}
+
 impl TemplateScopeVisitor for InvalidExpressionFinder<'_> {
+    fn visit_each_block(&mut self, block: &svn_parser::EachBlock) {
+        self.check_each_head(block);
+    }
+
     fn visit_expr(&mut self, range: Range) {
         self.check(range);
     }
@@ -184,6 +226,26 @@ mod tests {
         ));
         assert!(!rejected("<script lang=\"ts\"></script>{a as number}"));
         assert!(!rejected("{@debug a, b}{#each xs as x (x.id)}{x}{/each}"));
+    }
+
+    #[test]
+    fn each_head_read_as_a_sequence_is_rejected_in_typescript() {
+        let ts = "<script lang=\"ts\"></script>";
+        assert!(rejected(&format!(
+            "{ts}{{#each true, [1] as item}}{{/each}}"
+        )));
+        assert!(rejected(&format!("{ts}{{#each a, b as item, i}}{{/each}}")));
+        assert!(rejected(&format!(
+            "{ts}{{#each a, b as item (item)}}{{/each}}"
+        )));
+        assert!(rejected(&format!("{ts}{{#each a, b as [x]}}{{/each}}")));
+        assert!(!rejected(&format!(
+            "{ts}{{#each a, b as {{x = 1}}}}{{/each}}"
+        )));
+        assert!(!rejected(&format!("{ts}{{#each f(a, b) as x}}{{/each}}")));
+        assert!(!rejected(&format!("{ts}{{#each a, i}}{{/each}}")));
+        assert!(!rejected(&format!("{ts}{{#each a as item, i}}{{/each}}")));
+        assert!(!rejected("{#each true, [1] as item}{/each}"));
     }
 
     #[test]

@@ -77,6 +77,7 @@ mod void_block;
 // SVELTE-4-COMPAT: droppable submodule for Svelte-4 emit rewrites.
 // See design/phase_g/DESIGN.md.
 mod svelte2tsx_nodes;
+mod svelte2tsx_rejects;
 mod svelte2tsx_utils;
 mod svelte4;
 mod sveltekit;
@@ -151,6 +152,12 @@ pub struct EmitOutput {
     /// convert a TokenMapEntry's `source_byte` span back into a
     /// 1-based (line, column) for the user-facing diagnostic.
     pub source_line_starts: Vec<u32>,
+    /// svelte2tsx would refuse to convert this component (see
+    /// `svelte2tsx_rejects`). svelte-check then has no overlay for the
+    /// file: it reports no TypeScript diagnostics for it, and importers
+    /// only see Svelte's `*.svelte` wildcard. Callers type-checking the
+    /// overlay should leave this file out.
+    pub rejected_by_svelte2tsx: bool,
 }
 
 /// Single line mapping from the overlay back to the original `.svelte`
@@ -1690,6 +1697,11 @@ fn emit_document_with_render_name(
         token_map,
         overlay_line_starts,
         source_line_starts,
+        rejected_by_svelte2tsx: svelte2tsx_rejects::svelte2tsx_rejects(
+            doc,
+            parsed_instance.as_ref(),
+            parsed_module.as_ref(),
+        ),
     }
 }
 

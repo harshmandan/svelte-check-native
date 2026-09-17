@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "src/Accepted.svelte",
+            "line": 5,
+            "column": 8,
+            "code": 2322
+        }
+    ],
+    "_note": "Components svelte2tsx refuses to convert get no overlay, as in svelte-check (it catches the throw and relies on the Svelte compiler), so their own type errors (const s: string = 1) are not reported: a $$Generic alias with two type arguments, a $$Generic alias next to a generics attribute, a $$Events interface nested in the module script, and a $$Events member whose computed key is not a top-level string constant. Accepted.svelte uses the allowed forms (one $$Generic argument, a computed key naming a string constant, a string-literal key) and keeps its error. Importers of a rejected component resolve it through Svelte's *.svelte wildcard, which this svelte-less fixture cannot show. Warnings are not asserted. Verified against upstream svelte-check --tsgo with svelte 5.55."
+}

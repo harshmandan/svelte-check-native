@@ -2046,7 +2046,7 @@ fn check_project(
         // paths derived from this file's source path. rayon distributes
         // across the thread pool and the order-preserving `unzip` keeps
         // the resulting inputs matching `svelte_sources` index-for-index.
-        let (prepared_svelte, natives): (Vec<_>, Vec<_>) = svelte_sources
+        let (prepared_svelte, natives): (Vec<Option<_>>, Vec<_>) = svelte_sources
             .par_iter()
             .enumerate()
             .map(|(idx, (file, source))| {
@@ -2117,6 +2117,15 @@ fn check_project(
                 let is_ts = svn_parser::is_ts_svelte(source);
                 let emitted =
                     svn_emit::emit_document_with_lang(&doc, &fragment, &summary, file, is_ts);
+                // A component svelte2tsx refuses to convert leaves the
+                // run upstream: no overlay, no diagnostics of any kind,
+                // not counted; importers resolve it through Svelte's
+                // `*.svelte` wildcard.
+                // Leaving it out of the session also lets the cache GC
+                // remove an overlay an earlier run wrote for it.
+                if emitted.rejected_by_svelte2tsx {
+                    return (None, (None, Vec::new(), Some(file.clone())));
+                }
                 let kind = if idx < svelte_sources_in_scope_end {
                     svn_typecheck::InputKind::Svelte
                 } else {

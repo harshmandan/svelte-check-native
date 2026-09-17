@@ -7,11 +7,11 @@ function $$render_e40e2c10() {
         for (let item of __svn_each_items(items)) {
             for (let { a } of __svn_each_items(item)) {
                 {
-                    __svn_create_slot("default", { a: a });
+                    __svn_create_slot("default", { a });
                 }
             }
             {
-                __svn_create_slot("second", { a: a });
+                __svn_create_slot("second", { a });
             }
         }
         {
@@ -29,7 +29,7 @@ function $$render_e40e2c10() {
             }
         }
         {
-            __svn_create_slot("third", { d: d, c: c });
+            __svn_create_slot("third", { d, c });
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: ((({ a }) => a)(__svn_unwrap_arr((__svn_unwrap_arr(items))))) }, 'second': { a: (a) }, 'third': { d: (d), c: (c) } }, bindings: /** @type {string} */ (''), exports: {} };

@@ -84,7 +84,7 @@ function $$render_e40e2c10() {
             }
         }
     });
-    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': {  } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': { a: ((__svn_instance_of(Wrapper).$$slot_def['x'].thing)) } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 interface $$IsomorphicComponent {

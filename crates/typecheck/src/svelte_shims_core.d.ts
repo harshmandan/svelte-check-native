@@ -427,6 +427,14 @@ declare function __sveltets_2_unwrapArr<T>(arr: ArrayLike<T>): T;
 /** Value-level result of an `{#await}` source (`__sveltets_2_unwrapPromiseLike`). */
 declare function __svn_unwrap_promise_like<T>(promise: PromiseLike<T> | T): T;
 declare function __sveltets_2_unwrapPromiseLike<T>(promise: PromiseLike<T> | T): T;
+/**
+ * The instance a component constructor creates. A slot `let:` name
+ * resolves to `__svn_instance_of(Comp).$$slot_def['slot'].name`
+ * (`__sveltets_2_instanceOf`); a component that is not a constructor
+ * fails the argument check and resolves to `any`, as upstream's does.
+ */
+declare function __svn_instance_of<T = any>(type: new (...args: any[]) => T): T;
+declare function __sveltets_2_instanceOf<T = any>(type: new (...args: any[]) => T): T;
 
 /**
  * Reviewer follow-up #2: extract a child component's events surface

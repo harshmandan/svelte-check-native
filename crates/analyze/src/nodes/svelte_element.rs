@@ -29,6 +29,20 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
     //                       expression range and feeds it to
     //                       `__svn_ensure_component(EXPR)`)
     // Pre-fix these passed un-checked through a bare scope.
+    if matches!(
+        s.kind,
+        SvelteElementKind::SelfRef | SvelteElementKind::Component
+    ) {
+        crate::nodes::let_directive::enter_component_like(
+            v,
+            s.range.start,
+            &s.attributes,
+            &s.children,
+            None,
+        );
+    } else {
+        crate::nodes::let_directive::enter_element_like(v, s.range.start, &s.attributes);
+    }
     match s.kind {
         SvelteElementKind::SelfRef => {
             collect_instantiation_inner(

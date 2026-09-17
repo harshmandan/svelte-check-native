@@ -27,7 +27,7 @@ function $$render_e40e2c10() {
                 __svn_create_slot("default", { a: (b) });
             }
             {
-                __svn_create_slot("foo", { b: b });
+                __svn_create_slot("foo", { b });
             }
         }
     });

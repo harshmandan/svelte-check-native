@@ -9,11 +9,11 @@ function $$render_e40e2c10() {
         for (let one of __svn_each_items([item])) {
             const expanded = one.id;
             {
-                __svn_create_slot("default", { expanded: expanded });
+                __svn_create_slot("default", { expanded });
             }
         }
     });
-    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': {  } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': { expanded: (expanded) } }, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 interface $$IsomorphicComponent {

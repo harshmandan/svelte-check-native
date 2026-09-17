@@ -17,15 +17,13 @@
 //!    `slot=` — it fills the parent's default slot, so the same wrapper
 //!    destructures against `parent_inst.$$slot_def.default`.
 //!
-//! The "fallback" path for an `<element let:foo>` that's NOT inside a
-//! slot is [`emit_children_with_let_bindings`] — emits a loose
-//! `{ let foo: any; void foo; …children… }` wrapper so the names
-//! resolve as `any`. Type precision is the next iteration's job.
+//! Any other `<element let:foo>` gets no declaration: svelte2tsx writes
+//! the directive as an ordinary attribute (see
+//! [`emit_children_with_let_bindings`]).
 
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use smol_str::SmolStr;
 use svn_core::Range;
 use svn_parser::{Fragment, Node};
 
@@ -50,7 +48,6 @@ fn first_let_start(attributes: &[svn_parser::Attribute]) -> Option<u32> {
 }
 use crate::emit_template_body;
 use crate::emit_template_node;
-use crate::util::is_simple_js_identifier;
 
 /// One `<Comp let:NAME[={alias|pattern}]>` directive on a component
 /// instantiation, captured for the consumer-side slot-def
@@ -86,93 +83,28 @@ pub(crate) struct LetDestructure {
 
 /// Walk the children of an element that carries `let:NAME` directives.
 ///
-/// `let:` directives on a regular element (not a component) introduce
-/// names into the consumer's scope without a producer-side `slot=`
-/// binding. We emit a looser `let name: any;` block so the names
-/// resolve inside the subtree. Type precision is lost (the narrower
-/// flow-sensitive typing upstream does is the next iteration's job),
-/// but TS2304 goes away and any expression referencing the let-name
-/// type-checks as `any`.
-///
-/// If there are no `let:` directives, this is a straight passthrough
-/// to `emit_template_body`.
+/// When a parent component destructured the names (see
+/// [`walk_child_with_slot_let`]) they are already in scope. Otherwise
+/// svelte2tsx writes each `let:` as an ordinary attribute
+/// (`Let.ts` → `handleAttribute`) and declares nothing, so the names
+/// stay undeclared in the children as well.
 pub(crate) fn emit_children_with_let_bindings(
     buf: &mut EmitBuffer,
     source: &str,
-    attributes: &[svn_parser::Attribute],
+    _attributes: &[svn_parser::Attribute],
     children: &Fragment,
     depth: usize,
     insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
     action_counter: &mut usize,
 ) {
-    let let_names = collect_let_directive_names(source, attributes);
-    // When the element ALSO has `slot="X"`, the parent component's
-    // child-walk already opened a wrapper destructuring the same
-    // let-names against `parent_inst.$$slot_def["X"]` (see
-    // `try_emit_slot_let_consumer_open`). Re-emitting `let X: any`
-    // shadows here would mask the typed outer destructure — the
-    // consumer expressions inside would all resolve to `any` and lose
-    // strictness. Pass through to the children walk instead so the
-    // outer destructure stays in scope.
-    let parent_destructured = svn_analyze::literal_attr_value(attributes, "slot", source).is_some()
-        || first_let_start(attributes).is_some_and(|start| {
-            PARENT_DESTRUCTURED_LETS.with(|set| set.borrow().contains(&start))
-        });
-    if let_names.is_empty() || parent_destructured {
-        emit_template_body(buf, source, children, depth, insts, action_counter);
-        return;
-    }
-    let indent = "    ".repeat(depth);
-    let inner = "    ".repeat(depth + 1);
-    let _ = writeln!(buf, "{indent}{{");
-    for name in &let_names {
-        let _ = writeln!(buf, "{inner}let {name}: any;");
-        let _ = writeln!(buf, "{inner}void {name};");
-    }
-    for node in &children.nodes {
-        emit_template_node(buf, source, node, depth + 1, insts, action_counter);
-    }
-    let _ = writeln!(buf, "{indent}}}");
+    emit_template_body(buf, source, children, depth, insts, action_counter);
 }
 
-/// Extract every binding name introduced by `let:X` directives on
-/// `attributes`. Handles both shorthand (`let:item` → "item") and
-/// aliased form (`let:item={i}` → "i"). Non-identifier destructure
-/// patterns (`let:item={{a, b}}`) aren't narrowed — we take the
-/// original directive name as the binding instead, which is a
-/// harmless no-op but avoids parse-ambiguity.
-fn collect_let_directive_names(source: &str, attributes: &[svn_parser::Attribute]) -> Vec<SmolStr> {
-    use svn_parser::{Attribute, Directive, DirectiveKind, DirectiveValue};
-    let mut out: Vec<SmolStr> = Vec::new();
-    for attr in attributes {
-        if let Attribute::Directive(Directive {
-            kind: DirectiveKind::Let,
-            name,
-            value,
-            ..
-        }) = attr
-        {
-            let bound = match value {
-                Some(DirectiveValue::Expression {
-                    expression_range, ..
-                }) => {
-                    let start = expression_range.start as usize;
-                    let end = expression_range.end as usize;
-                    let slice = source.get(start..end).unwrap_or("").trim();
-                    if is_simple_js_identifier(slice) {
-                        SmolStr::from(slice)
-                    } else {
-                        name.clone()
-                    }
-                }
-                _ => name.clone(),
-            };
-            if !out.iter().any(|n| n == &bound) {
-                out.push(bound);
-            }
-        }
-    }
-    out
+/// Were the `let:` directives among `attributes` destructured by the
+/// enclosing component's child walk? Otherwise they are attributes.
+pub(crate) fn lets_destructured_by_parent(attributes: &[svn_parser::Attribute]) -> bool {
+    first_let_start(attributes)
+        .is_some_and(|start| PARENT_DESTRUCTURED_LETS.with(|set| set.borrow().contains(&start)))
 }
 
 /// Build the `LetDestructure` list for one let-bearing element/component.
@@ -412,6 +344,9 @@ fn try_emit_slot_let_consumer_open(
         return try_emit_default_slot_let_open(buf, source, node, attrs, parent_inst, depth);
     };
     let lets = collect_let_destructures(source, attrs);
+    if let Some(start) = first_let_start(attrs) {
+        PARENT_DESTRUCTURED_LETS.with(|set| set.borrow_mut().push(start));
+    }
     let indent = "    ".repeat(depth);
     let _ = writeln!(buf, "{indent}{{");
     emit_let_slot_destructure(

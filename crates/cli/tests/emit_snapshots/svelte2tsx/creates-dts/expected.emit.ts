@@ -21,7 +21,7 @@ function $$render_e40e2c10() {
         });
         }
         {
-            __svn_create_slot("default", { bar: bar });
+            __svn_create_slot("default", { bar });
         }
     });
     void bar;

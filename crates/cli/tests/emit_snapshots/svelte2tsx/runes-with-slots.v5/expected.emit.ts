@@ -11,7 +11,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         const __svn_create_slot = __svn_create_create_slot();
         {
-            __svn_create_slot("default", { x: x, y: y });
+            __svn_create_slot("default", { x, y });
         }
     });
     return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { x: (x), y: (y) } }, bindings: /** @type {string} */ (''), exports: {} };

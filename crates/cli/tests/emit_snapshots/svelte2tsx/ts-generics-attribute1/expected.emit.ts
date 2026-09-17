@@ -19,7 +19,7 @@ function $$render_e40e2c10<A, B extends keyof A, C extends boolean>() {
         // template type-check body (incremental)
         const __svn_create_slot = __svn_create_create_slot();
         {
-            __svn_create_slot("default", { c: c });
+            __svn_create_slot("default", { c });
         }
     });
     void a;

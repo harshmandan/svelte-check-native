@@ -26,7 +26,12 @@
 //!   `value[0].raw` off a value that is `true` or missing);
 //! - template: a direct child of a component whose first attribute
 //!   called `slot` is a bare `slot` (`svelteAst.ts` `getSlotName`
-//!   reads `.raw` off `true[0]`).
+//!   reads `.raw` off `true[0]`);
+//! - template: a `let:` whose value is an object literal with a spread,
+//!   on a component or on a component's direct child that names a slot
+//!   (`handleScopeAndResolveForSlot.ts` hands the object to periscopic's
+//!   `extract_identifiers`, which reads the missing `value` of the
+//!   spread).
 
 use oxc_ast::ast::{
     Declaration, Expression, Program, PropertyKey, Statement, TSInterfaceDeclaration, TSSignature,
@@ -46,7 +51,10 @@ pub(crate) fn svelte2tsx_rejects(
     parsed_instance: Option<&ParsedScript<'_>>,
     parsed_module: Option<&ParsedScript<'_>>,
 ) -> bool {
-    let mut template = TemplateProbe { rejected: false };
+    let mut template = TemplateProbe {
+        source: doc.source,
+        rejected: false,
+    };
     walk_with_visitor(fragment, doc.source, &mut template);
     if template.rejected {
         return true;
@@ -112,13 +120,18 @@ fn first_named<'a>(attributes: &'a [Attribute], name: &str) -> Option<&'a Attrib
     })
 }
 
-struct TemplateProbe {
+struct TemplateProbe<'s> {
+    source: &'s str,
     rejected: bool,
 }
 
-impl TemplateProbe {
-    /// A component's direct children are read for their slot name.
-    fn check_component_children(&mut self, children: &Fragment) {
+impl TemplateProbe<'_> {
+    /// A component's own `let:` directives, and its direct children's
+    /// slot names and (when they name a slot) `let:` directives.
+    fn check_component(&mut self, attributes: &[Attribute], children: &Fragment) {
+        if self.has_spreading_let(attributes) {
+            self.rejected = true;
+        }
         for child in &children.nodes {
             let attributes = match child {
                 Node::Element(e) => &e.attributes,
@@ -126,17 +139,62 @@ impl TemplateProbe {
                 Node::SvelteElement(e) => &e.attributes,
                 _ => continue,
             };
-            if matches!(
-                first_named(attributes, "slot"),
-                Some(Attribute::Plain(p)) if p.value.is_none()
-            ) {
-                self.rejected = true;
+            if let Some(Attribute::Plain(p)) = first_named(attributes, "slot") {
+                match &p.value {
+                    None => self.rejected = true,
+                    Some(v) => {
+                        let named = matches!(
+                            v.parts.first(),
+                            Some(svn_parser::AttrValuePart::Text { range }) if range.start < range.end
+                        );
+                        if named && self.has_spreading_let(attributes) {
+                            self.rejected = true;
+                        }
+                    }
+                }
             }
         }
     }
+
+    /// Does a `let:` directive's value read as an object literal with a
+    /// spread?
+    fn has_spreading_let(&self, attributes: &[Attribute]) -> bool {
+        attributes.iter().any(|a| {
+            let Attribute::Directive(d) = a else {
+                return false;
+            };
+            let (svn_parser::DirectiveKind::Let, Some(svn_parser::DirectiveValue::Expression { expression_range, .. })) =
+                (d.kind, &d.value)
+            else {
+                return false;
+            };
+            let Some(text) = self
+                .source
+                .get(expression_range.start as usize..expression_range.end as usize)
+            else {
+                return false;
+            };
+            let allocator = oxc_allocator::Allocator::default();
+            let wrapped = format!("({text})");
+            let parsed =
+                svn_parser::parse_script_body(&allocator, &wrapped, svn_parser::ScriptLang::Ts);
+            let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
+                return false;
+            };
+            let mut expr = &stmt.expression;
+            while let Expression::ParenthesizedExpression(p) = expr {
+                expr = &p.expression;
+            }
+            matches!(
+                expr,
+                Expression::ObjectExpression(obj)
+                    if obj.properties.iter().any(|p| matches!(p, oxc_ast::ast::ObjectPropertyKind::SpreadProperty(_)))
+            )
+        })
+    }
 }
 
-impl TemplateScopeVisitor for TemplateProbe {
+impl TemplateScopeVisitor for TemplateProbe<'_> {
     fn visit_element(&mut self, element: &Element) {
         if element.name != "slot" {
             return;
@@ -152,7 +210,7 @@ impl TemplateScopeVisitor for TemplateProbe {
     }
 
     fn visit_component(&mut self, component: &Component) {
-        self.check_component_children(&component.children);
+        self.check_component(&component.attributes, &component.children);
     }
 
     fn visit_svelte_element(&mut self, element: &SvelteElement) {
@@ -160,7 +218,7 @@ impl TemplateScopeVisitor for TemplateProbe {
             element.kind,
             SvelteElementKind::SelfRef | SvelteElementKind::Component
         ) {
-            self.check_component_children(&element.children);
+            self.check_component(&element.attributes, &element.children);
         }
     }
 }
@@ -310,6 +368,17 @@ mod tests {
         assert!(!rejects("<div><div slot></div></div>"));
         assert!(!rejects("<C><div slot=\"\"></div><div slot={x}></div></C>"));
         assert!(!rejects("<C><div on:slot slot></div></C>"));
+    }
+
+    #[test]
+    fn object_spread_in_a_resolved_let() {
+        assert!(rejects("<C let:item={{ a, ...rest }} />"));
+        assert!(rejects(
+            "<C><div slot=\"x\" let:item={{ ...rest }}></div></C>"
+        ));
+        assert!(!rejects("<C let:item={[a, ...rest]} />"));
+        assert!(!rejects("<div><span let:item={{ ...rest }}></span></div>"));
+        assert!(!rejects("<C><div let:item={{ ...rest }}></div></C>"));
     }
 
     #[test]

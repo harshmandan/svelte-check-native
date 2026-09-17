@@ -12,7 +12,7 @@ function $$render_e40e2c10() {
                 __svn_create_slot("default", { a: (b) });
             }
             {
-                __svn_create_slot("test", { c: (d), e: e });
+                __svn_create_slot("test", { c: (d), e });
             }
             {
                 __svn_create_slot("abc-cde.113", {  });

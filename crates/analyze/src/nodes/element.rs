@@ -24,4 +24,5 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, e: &Element) {
     if e.name.as_str() == "slot" {
         collect_slot_def(&e.attributes, v.source, &v.shadow, &mut v.summary);
     }
+    crate::nodes::let_directive::enter_element_like(v, e.range.start, &e.attributes);
 }

@@ -11,7 +11,7 @@ function $$render_e40e2c10() {
         }
         for (let { a } of __svn_each_items(items2)) {
             {
-                __svn_create_slot("second", { a: a });
+                __svn_create_slot("second", { a });
             }
         }
     });

@@ -633,6 +633,18 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
             // "a"}>` with later `x === "b"` falsely fires TS2367
             // because flow-narrowing collapses x to its initial literal.
             svn_parser::Attribute::Directive(d) => {
+                // A `let:` no parent component destructured is an
+                // ordinary attribute to svelte2tsx (`Let.ts` →
+                // `handleAttribute`, named `let:NAME`).
+                if d.kind == svn_parser::DirectiveKind::Let
+                    && !crate::nodes::let_directive::lets_destructured_by_parent(attributes)
+                {
+                    if !any {
+                        buf.push_str("\n");
+                        any = true;
+                    }
+                    emit_let_attribute(buf, source, d, depth + 1, should_lowercase);
+                }
                 if d.kind == svn_parser::DirectiveKind::On {
                     if !any {
                         buf.push_str("\n");
@@ -1052,6 +1064,43 @@ pub(crate) fn element_type_annotation(tag_name: &str) -> String {
     format!("HTMLElementTagNameMap['{tag_name}']")
 }
 
+/// Write a `let:NAME[={EXPR}]` directive as the attribute
+/// `"let:NAME": EXPR` (or `true`), keyed at the directive's start.
+fn emit_let_attribute(
+    buf: &mut EmitBuffer,
+    source: &str,
+    d: &svn_parser::Directive,
+    depth: usize,
+    should_lowercase: bool,
+) {
+    let name = format!("let:{}", d.name);
+    match &d.value {
+        Some(svn_parser::DirectiveValue::Expression {
+            expression_range, ..
+        }) => {
+            let attr = svn_parser::ExpressionAttr {
+                name: name.as_str().into(),
+                expression_range: *expression_range,
+                range: d.range,
+            };
+            emit_expression(buf, source, &attr, depth, should_lowercase);
+        }
+        _ => {
+            let key = if should_lowercase {
+                name.to_lowercase()
+            } else {
+                name.clone()
+            };
+            buf.push_str(&"    ".repeat(depth));
+            buf.append_with_source(
+                &format!("\"{key}\""),
+                svn_core::Range::new(d.range.start, d.range.start + name.len() as u32),
+            );
+            buf.push_str(": true,\n");
+        }
+    }
+}
+
 /// Emit a `__svn_create_slot("NAME", { prop1: <expr>, ... });` check
 /// for a `<slot>` element. The companion declaration `const
 /// __svn_create_slot = __svn_create_create_slot<$$Slots>();` lives at
@@ -1204,9 +1253,9 @@ fn emit_slot_check(buf: &mut EmitBuffer, source: &str, e: &svn_parser::Element, 
                 let leading_ws = (inner_text.len() - inner_text.trim_start().len()) as u32;
                 let name_start = s.range.start + 1 + leading_ws;
                 let name_end = name_start + s.name.len() as u32;
+                // Written as a shorthand property, as svelte2tsx writes
+                // it, so a name with no value in scope is TS18004.
                 let name_range = svn_core::Range::new(name_start, name_end);
-                emit_slot_prop_key(buf, s.name.as_str(), name_range);
-                buf.push_str(": ");
                 buf.append_with_source(s.name.as_str(), name_range);
             }
             Attribute::Spread(sp) => {

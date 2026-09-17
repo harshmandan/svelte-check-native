@@ -612,6 +612,7 @@ pub fn walk_template(fragment: &Fragment, source: &str) -> TemplateSummary {
         pending_each_items_range: None,
         pending_await_promise_range: None,
         pending_let_owner: None,
+        slot_let_owners: std::collections::HashMap::new(),
     };
     crate::template_scope::walk_with_visitor(fragment, source, &mut visitor);
     visitor.summary
@@ -699,26 +700,28 @@ pub(crate) struct AnalyzeVisitor<'src> {
     /// then branch). Reset per await-block so each branch picks up
     /// the same promise range.
     pub(crate) pending_await_promise_range: Option<Range>,
-    /// SlotHandler PLAN Stage 4: stashed by `visit_component` /
-    /// `visit_svelte_element` (Component / SelfRef kinds) and
-    /// consumed by the next `enter_scope(LetDirective, …)` call.
-    /// When present, `let:foo` bindings on this component resolve
-    /// to `__SvnComponentSlots<typeof <root>>['default']['foo']`.
-    /// `None` for elements that aren't producer-side let owners
-    /// (DOM elements, components with `slot=` consumer wrappers,
-    /// dynamic `<svelte:component this={EXPR}>` forms whose root
-    /// isn't a typeable identifier).
+    /// Owner of the `let:` directives on the node being visited, set by
+    /// its `visit_*` hook and consumed by the `enter_scope(LetDirective,
+    /// …)` that follows for that node's children. `None` when svelte2tsx
+    /// does not resolve the node's `let:` names at all (an element that
+    /// fills no named slot of a component), so they stay unshadowed.
     pub(crate) pending_let_owner: Option<LetOwnerInfo>,
+    /// Owners registered by a component for its direct children that
+    /// fill one of its named slots with `let:` directives, keyed by the
+    /// child's start offset.
+    pub(crate) slot_let_owners: std::collections::HashMap<u32, LetOwnerInfo>,
 }
 
-/// Producer-side let-owner info — see
+/// The component whose slot a set of `let:` directives reads — see
 /// `AnalyzeVisitor.pending_let_owner`.
 #[derive(Debug, Clone)]
 pub(crate) struct LetOwnerInfo {
-    /// `typeof <root>`-safe component identifier.
-    pub(crate) component_root: SmolStr,
-    /// Slot name the let-bindings target. `"default"` unless a
-    /// future stage adds named-slot let-forwarding.
+    /// The component value svelte2tsx takes the instance of: the tag
+    /// name as written (dotted names included). `None` for
+    /// `<svelte:component>` / `<svelte:self>`, whose instance type
+    /// svelte2tsx leaves unresolved (any).
+    pub(crate) component: Option<SmolStr>,
+    /// The slot the directives read.
     pub(crate) slot_name: SmolStr,
 }
 
@@ -763,6 +766,8 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
             }
             // The compiler-scope kinds never reach this visitor (it
             // keeps the default `COMPILER_SCOPES = false` walk).
+            // svelte2tsx's slot resolver tracks no other binders: a
+            // snippet parameter keeps its name as written.
             crate::template_scope::ScopeKind::Snippet
             | crate::template_scope::ScopeKind::Fragment
             | crate::template_scope::ScopeKind::Block
@@ -770,9 +775,7 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
             | crate::template_scope::ScopeKind::ElementFragment
             | crate::template_scope::ScopeKind::ComponentDefault
             | crate::template_scope::ScopeKind::ComponentSlot
-            | crate::template_scope::ScopeKind::AwaitValue => {
-                crate::nodes::snippet_block::enter_unresolved(self, bindings);
-            }
+            | crate::template_scope::ScopeKind::AwaitValue => {}
         }
         self.scope_marks.push(mark);
     }
@@ -795,9 +798,8 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
         crate::nodes::svelte_element::visit(self, s);
     }
 
-    fn visit_at_const(&mut self, bound_names: &[SmolStr], expr_range: svn_core::Range) {
-        crate::nodes::const_tag::visit_at_const(self, bound_names, expr_range);
-    }
+    // `{@const}` names are left untracked: svelte2tsx's slot resolver
+    // (`slot.ts`) keeps a `<slot>` attribute naming one as written.
 }
 
 #[cfg(test)]

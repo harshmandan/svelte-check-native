@@ -10,13 +10,13 @@ function $$render_e40e2c10() {
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, a } = __svn_inst_0.$$slot_def["b"]; $$_$$;
                 { svelteHTML.createElement("div", {});                     {
-                        __svn_create_slot("default", { a: a });
+                        __svn_create_slot("default", { a });
                     }
                 }
             }
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': {  } }, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: (__svn_instance_of(Component).$$slot_def['b'].a) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /** @type {__SvnIsomorphicComponent<__SvnSvelte4SlotedProps<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, __SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */

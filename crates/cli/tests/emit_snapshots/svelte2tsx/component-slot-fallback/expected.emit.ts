@@ -9,7 +9,7 @@ function $$render_e40e2c10() {
         }
         { svelteHTML.createElement("div", {});         }
         {
-            __svn_create_slot("foo", { bar: bar, baz: `boo` });
+            __svn_create_slot("foo", { bar, baz: `boo` });
         }
         { svelteHTML.createElement("p", {});         }
     });

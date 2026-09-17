@@ -1,0 +1,12 @@
+{
+    "clean": true,
+    "warnings": [
+        { "file": "src/Bidi.svelte", "line": 1, "column": 19, "code": "unknown_code" },
+        { "file": "src/Bidi.svelte", "line": 1, "column": 19, "code": "unknown_code" },
+        { "file": "src/Bidi.svelte", "line": 1, "column": 19, "code": "unknown_code" },
+        { "file": "src/Bidi.svelte", "line": 2, "column": 15, "code": "bidirectional_control_characters" },
+        { "file": "src/Bidi.svelte", "line": 2, "column": 18, "code": "bidirectional_control_characters" },
+        { "file": "src/BidiEarlier.svelte", "line": 1, "column": 77, "code": "unknown_code" }
+    ],
+    "_note": "Only non-text, non-comment nodes take the svelte-ignore comments before them (the scan back stops at the first other node), so a comment followed by text and then an element reports its unknown code once. A text node's bidi check instead parses every earlier comment in the fragment for each match, stopping at one that ignores the warning, and reports unknown codes again on each parse. Verified against svelte-check 4.4.6."
+}

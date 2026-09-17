@@ -86,6 +86,16 @@ pub fn collect_preceding_comment_ignores(
     result
 }
 
+/// Does this comment's `svelte-ignore` list name `code`? Parsing the
+/// comment reports its `legacy_code` / `unknown_code` tokens again on
+/// every call, exactly as each upstream `extract_svelte_ignore` call
+/// does.
+pub fn comment_ignores_code(c: &Comment, code: Code, ctx: &mut LintContext<'_>) -> bool {
+    extract_from_comment(c, ctx)
+        .iter()
+        .any(|ignored| ignored.as_str() == code.as_str())
+}
+
 /// Extract `svelte-ignore CODE, CODE` codes from one comment, and
 /// emit `legacy_code` / `unknown_code` for tokens that don't match a
 /// known warning code (runes mode only — upstream matches this).

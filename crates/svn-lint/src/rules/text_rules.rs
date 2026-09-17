@@ -1,7 +1,7 @@
 //! Text-content rules (fire on template Text nodes).
 
 use svn_core::Range;
-use svn_parser::ast::Text;
+use svn_parser::ast::{Node, Text};
 
 use crate::codes::Code;
 use crate::context::LintContext;
@@ -18,7 +18,8 @@ fn is_bidi_control(c: char) -> bool {
     )
 }
 
-pub fn visit_text(t: &Text, ctx: &mut LintContext<'_>) {
+/// `preceding` holds the siblings before `t` in its fragment.
+pub fn visit_text(t: &Text, preceding: &[Node], ctx: &mut LintContext<'_>) {
     // The `#text` `node_invalid_placement` ERROR (e.g. raw text where
     // the HTML5 tree model forbids it) is intentionally not emitted in
     // native mode — same stance as the element placement path. Native
@@ -44,6 +45,27 @@ pub fn visit_text(t: &Text, ctx: &mut LintContext<'_>) {
                 }
                 chars.next();
                 run_end = j + nc.len_utf8();
+            }
+            // A text node does not take the ignore comments before it
+            // the way elements do. Instead, each match looks at every
+            // earlier comment in the fragment (not just the adjacent
+            // ones) and stops at the first that ignores the warning;
+            // each comment it parses reports its unknown codes again.
+            let mut is_ignored = false;
+            for sibling in preceding {
+                if is_ignored {
+                    break;
+                }
+                if let Node::Comment(c) = sibling {
+                    is_ignored = crate::ignore::comment_ignores_code(
+                        c,
+                        Code::bidirectional_control_characters,
+                        ctx,
+                    );
+                }
+            }
+            if is_ignored {
+                continue;
             }
             let abs_start = (start_byte + run_start) as u32;
             let abs_end = (start_byte + run_end) as u32;

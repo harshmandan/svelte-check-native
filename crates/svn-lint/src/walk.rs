@@ -482,14 +482,13 @@ fn walk_fragment_impl(
         // the ignore to this one node and its subtree — mirror
         // upstream `_()` catchall visitor.
         //
-        // Every node but a comment consumes the ignore comments right
-        // before it, as the compiler's catch-all visitor does; a
-        // comment consuming them would report each comment's
-        // `legacy_code` / `unknown_code` a second time.
-        //
-        // Text nodes DO emit warnings (bidi) so they need the ignore
-        // frame. Whitespace-only Text is a neutral carrier in the
-        // preceding-comments chain.
+        // Every node but a comment or a text node consumes the ignore
+        // comments right before it, as the compiler's catch-all visitor
+        // does (`node.type !== 'Comment' && node.type !== 'Text'`). A
+        // comment or text consuming them would report each comment's
+        // `legacy_code` / `unknown_code` a second time. Text nodes run
+        // their own comment scan for the bidi warning
+        // (`text_rules::visit_text`).
         let is_target = match node {
             Node::Element(_)
             | Node::Component(_)
@@ -502,11 +501,7 @@ fn walk_fragment_impl(
             // `{expr}`, `{@html}`, `{@render}`, `{@const}` and `{@debug}`
             // consume a preceding ignore comment too.
             | Node::Interpolation(_) => true,
-            // Non-whitespace Text carries bidi warnings and needs
-            // the ignore frame; whitespace-only Text is a neutral
-            // carrier between the comment and its target element.
-            Node::Text(t) => t.range.slice(source).chars().any(|c| !c.is_whitespace()),
-            _ => false,
+            Node::Text(_) | Node::Comment(_) => false,
         };
         let ignores = if is_target {
             crate::ignore::collect_preceding_comment_ignores(&fragment.nodes, idx, ctx)
@@ -673,7 +668,7 @@ fn walk_fragment_impl(
                 {
                     text_placement_error(parent, t.range, ctx);
                 }
-                crate::rules::text_rules::visit_text(t, ctx);
+                crate::rules::text_rules::visit_text(t, &fragment.nodes[..idx], ctx);
             }
             Node::Interpolation(i) => {
                 if i.kind == svn_parser::InterpolationKind::Expression

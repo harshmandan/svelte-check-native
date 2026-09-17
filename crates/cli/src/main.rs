@@ -1776,18 +1776,24 @@ fn check_project(
         // against the tsconfig path (it exists and shares the mount
         // with the files being matched).
         let case_insensitive = discovery::path_fs_is_case_insensitive(tsconfig);
-        let include =
-            discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref())
-                .map(|pats| {
-                    discovery::build_glob_set_absolute(&pats, case_insensitive)
-                        .unwrap_or_else(globset::GlobSet::empty)
-                });
-        let exclude =
-            discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.exclude.as_deref())
-                .map(|pats| {
-                    discovery::build_glob_set_absolute(&pats, case_insensitive)
-                        .unwrap_or_else(globset::GlobSet::empty)
-                });
+        let include = discovery::resolve_patterns_against_declaring_dir(
+            &chain,
+            discovery::SpecKind::Include,
+            |f| f.include.as_deref(),
+        )
+        .map(|pats| {
+            discovery::build_glob_set_absolute(&pats, case_insensitive)
+                .unwrap_or_else(globset::GlobSet::empty)
+        });
+        let exclude = discovery::resolve_patterns_against_declaring_dir(
+            &chain,
+            discovery::SpecKind::Exclude,
+            |f| f.exclude.as_deref(),
+        )
+        .map(|pats| {
+            discovery::build_glob_set_absolute(&pats, case_insensitive)
+                .unwrap_or_else(globset::GlobSet::empty)
+        });
         // Files explicitly listed in tsconfig's `files` field bypass
         // both `include` glob matching AND `exclude` filtering (TS
         // spec: https://www.typescriptlang.org/tsconfig/#exclude —
@@ -1796,12 +1802,16 @@ fn check_project(
         // Canonicalized because the matcher compares against canonical
         // walker paths.
         let explicit_files: std::collections::HashSet<PathBuf> =
-            discovery::resolve_patterns_against_declaring_dir(&chain, |f| f.files.as_deref())
-                .unwrap_or_default()
-                .into_iter()
-                .map(PathBuf::from)
-                .filter_map(|p| dunce::canonicalize(&p).ok().or(Some(p)))
-                .collect();
+            discovery::resolve_patterns_against_declaring_dir(
+                &chain,
+                discovery::SpecKind::Files,
+                |f| f.files.as_deref(),
+            )
+            .unwrap_or_default()
+            .into_iter()
+            .map(PathBuf::from)
+            .filter_map(|p| dunce::canonicalize(&p).ok().or(Some(p)))
+            .collect();
         (include, exclude, explicit_files)
     });
     // TypeScript only admits `.js` sources under `allowJs` (or `checkJs`,

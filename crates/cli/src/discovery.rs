@@ -160,6 +160,7 @@ fn normalize_lexical(p: &Path) -> PathBuf {
 /// projection agree on which files are in the project.
 pub(crate) fn resolve_patterns_against_declaring_dir<F>(
     chain: &[svn_core::tsconfig::TsConfigFile],
+    kind: SpecKind,
     get: F,
 ) -> Option<Vec<String>>
 where
@@ -170,6 +171,7 @@ where
     Some(
         patterns
             .iter()
+            .filter(|s| kind.accepts(s))
             .map(|s| {
                 let resolved = if Path::new(s).is_absolute() {
                     PathBuf::from(s)
@@ -180,6 +182,39 @@ where
             })
             .collect(),
     )
+}
+
+/// Which tsconfig list a pattern came from. TypeScript drops invalid
+/// `include` / `exclude` entries (reporting TS5010 / TS5065) before
+/// matching anything; `files` entries are paths, not patterns.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpecKind {
+    Include,
+    Exclude,
+    Files,
+}
+
+impl SpecKind {
+    /// TypeScript's `specToDiagnostic`: an include may not end in a
+    /// recursive `**`, and no pattern may climb `..` after one.
+    fn accepts(self, spec: &str) -> bool {
+        if self == SpecKind::Files {
+            return true;
+        }
+        let parts: Vec<&str> = spec.split(['/', '\\']).collect();
+        let trailing_recursion = parts
+            .iter()
+            .rev()
+            .find(|p| !p.is_empty())
+            .is_some_and(|last| *last == "**");
+        if self == SpecKind::Include && trailing_recursion {
+            return false;
+        }
+        match parts.iter().position(|p| *p == "**") {
+            Some(i) => !parts[i + 1..].contains(&".."),
+            None => true,
+        }
+    }
 }
 
 /// Is the filesystem holding `probe` case-insensitive? Mirrors
@@ -383,8 +418,10 @@ mod tests {
         std::fs::write(&leaf, r#"{ "extends": ["./a.json", "./sub/b.json"] }"#).expect("write");
 
         let chain = svn_core::tsconfig::load_chain(&leaf).expect("chain");
-        let include = resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref())
-            .expect("include is declared in the chain");
+        let include = resolve_patterns_against_declaring_dir(&chain, SpecKind::Include, |f| {
+            f.include.as_deref()
+        })
+        .expect("include is declared in the chain");
         let expected = normalize_lexical(
             &dunce::canonicalize(&sub)
                 .expect("canonicalize")
@@ -408,12 +445,16 @@ mod tests {
         // Explicit `"include": []` REPLACES the parent's include:
         // declared-but-empty, not "fall through to the parent".
         assert_eq!(
-            resolve_patterns_against_declaring_dir(&chain, |f| f.include.as_deref()),
+            resolve_patterns_against_declaring_dir(&chain, SpecKind::Include, |f| f
+                .include
+                .as_deref()),
             Some(Vec::new())
         );
         // `exclude` is declared nowhere → None.
         assert_eq!(
-            resolve_patterns_against_declaring_dir(&chain, |f| f.exclude.as_deref()),
+            resolve_patterns_against_declaring_dir(&chain, SpecKind::Exclude, |f| f
+                .exclude
+                .as_deref()),
             None
         );
     }

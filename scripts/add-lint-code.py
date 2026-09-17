@@ -31,7 +31,9 @@ for code in sys.argv[1:]:
     idx = names_sorted.index(code)
     if idx + 1 < len(names_sorted):
         nxt = names_sorted[idx + 1]
-        body = body.replace(f"\n    {nxt},\n", f"\n    {code},\n    {nxt},\n", 1)
+        body = re.sub(
+            rf"\n    {nxt},(?=\n|$)", f"\n    {code},\n    {nxt},", body, count=1
+        )
     else:
         body = body + f"\n    {code},"
     s = s[:a] + body + s[b:]

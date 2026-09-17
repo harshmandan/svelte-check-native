@@ -12,8 +12,6 @@ function $$render_e40e2c10() {
                 /*svn:ignore_start*/void (() => { rést.b = __svn_any(null); });/*svn:ignore_end*/
             }
             (a);
-            void a;
-            void rést;
         }
         for (let { a, ...rest } of __svn_each_items(xs)) {
             { svelteHTML.createElement("input", {
@@ -22,8 +20,6 @@ function $$render_e40e2c10() {
                 /*svn:ignore_start*/void (() => { /* c */ rest.b = __svn_any(null); });/*svn:ignore_end*/
             }
             (a);
-            void a;
-            void rest;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

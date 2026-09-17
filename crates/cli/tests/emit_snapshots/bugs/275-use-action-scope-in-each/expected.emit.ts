@@ -16,10 +16,9 @@ function $$render_e40e2c10() {
         let __svn_action_attrs_0: any = {};
         void __svn_action_attrs_0;
         for (let item of __svn_each_items(items)) {
-            let index: number = 0;
+            let index = 1;
             (index);
             const label = `slide-${index}`;
-            void label;
                 const __svn_action_0 = __svn_ensure_action(intersection(__svn_map_element_tag('div'), ({
             cb: (_n) => {
                 active = index
@@ -29,8 +28,6 @@ function $$render_e40e2c10() {
             { svelteHTML.createElement("div", __svn_union(__svn_action_0), {});                 void __svn_action_0;
                 (item);
             }
-            void item;
-            void index;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

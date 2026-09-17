@@ -8,7 +8,17 @@ function $$render_e40e2c10() {
     let dashedName = $$slots['dashed-name'];
     ;(async () => {
         // template type-check body (incremental)
+        const __svn_create_slot = __svn_create_create_slot();
         { svelteHTML.createElement("h1", {});             (name);
+        }
+        {
+            __svn_create_slot("foo", {  });
+        }
+        {
+            __svn_create_slot("dashed-name", {  });
+        }
+        {
+            __svn_create_slot("default", {  });
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'foo': {  }, 'dashed-name': {  }, 'default': {  } }, bindings: /** @type {string} */ (''), exports: {} };

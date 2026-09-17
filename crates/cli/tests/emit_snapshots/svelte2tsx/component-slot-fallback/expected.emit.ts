@@ -3,7 +3,14 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
+        const __svn_create_slot = __svn_create_create_slot();
+        {
+            __svn_create_slot("default", {  });
+        }
         { svelteHTML.createElement("div", {});         }
+        {
+            __svn_create_slot("foo", { bar: bar, baz: `boo` });
+        }
         { svelteHTML.createElement("p", {});         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': {  }, 'foo': { bar: (bar), baz: ("boo") } }, bindings: /** @type {string} */ (''), exports: {} };

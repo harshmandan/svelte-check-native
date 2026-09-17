@@ -41,7 +41,6 @@ function $$render_e40e2c10() {
             __svn_inst_20b.$$bindings = 'prop';
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item } = __svn_inst_20b.$$slot_def.default; $$_$$;
-                void item;
             }
         }
     });

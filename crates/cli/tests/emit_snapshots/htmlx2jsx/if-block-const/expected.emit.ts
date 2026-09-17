@@ -4,43 +4,30 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((name == "world")) {
-            void [name];
             const hello = name;
-            void hello;
             { svelteHTML.createElement("h1", {});                 (hello);
             }
         } else if ((true)) {
             const hello = name;
-            void hello;
             { svelteHTML.createElement("h1", {});                 (hello);
             }
         } else {
             const hello = name;
-            void hello;
             { svelteHTML.createElement("h1", {});                 (hello);
             }
         }
         if ((typeof a === 'string')) {
-            void [a];
             const aStr = a;
-            void aStr;
             const aStr2 = aStr;
-            void aStr2;
             (a);
         } else if ((typeof a === 'number')) {
-            void [a];
             const aNum = a;
-            void aNum;
         }
         if ((typeof a === 'string')) {
-            void [a];
             const aStr = a;
-            void aStr;
         }
         if ((typeof a === 'string')) {
-            void [a];
             const aStr = a;
-            void aStr;
         } else {
         }
     });

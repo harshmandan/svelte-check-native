@@ -14,7 +14,6 @@ function $$render_e40e2c10() {
             const $$_await = await $$_promise; const value = $$_await;
             { svelteHTML.createElement("p", {});                 (value.toUpperCase());
             }
-            void value;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

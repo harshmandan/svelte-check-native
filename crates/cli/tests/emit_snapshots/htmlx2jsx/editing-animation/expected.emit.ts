@@ -8,7 +8,6 @@ function $$render_e40e2c10() {
             { svelteHTML.createElement("li", {});                 (flip(__svn_map_element_tag('li'), __svn_AnimationMove, (opt?.)));
                 (item);
             }
-            void item;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

@@ -4,8 +4,8 @@ function $$render_e40e2c10() {
 
     const store1 = '', store2 = ''/*svn:ignore_start*/;let $store1 = __svn_store_get(store1);;let $store2 = __svn_store_get(store2);/*svn:ignore_end*/;
     const { store3, store4 } = '', [ store5, store6 ] = ''/*svn:ignore_start*/;let $store3 = __svn_store_get(store3);;let $store4 = __svn_store_get(store4);;let $store5 = __svn_store_get(store5);;let $store6 = __svn_store_get(store6);/*svn:ignore_end*/;
-    let {store7, store8} = __svn_invalidate(() => (''))/*svn:ignore_start*/;let $store7 = __svn_store_get(store7);;let $store8 = __svn_store_get(store8);/*svn:ignore_end*/; void store7; void store8;
-    let [store9, store10] = __svn_invalidate(() => (''))/*svn:ignore_start*/;let $store9 = __svn_store_get(store9);;let $store10 = __svn_store_get(store10);/*svn:ignore_end*/; void store9; void store10;
+    let {store7, store8} = __svn_invalidate(() => (''))/*svn:ignore_start*/;let $store7 = __svn_store_get(store7);;let $store8 = __svn_store_get(store8);/*svn:ignore_end*/;
+    let [store9, store10] = __svn_invalidate(() => (''))/*svn:ignore_start*/;let $store9 = __svn_store_get(store9);;let $store10 = __svn_store_get(store10);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
         ($store1);

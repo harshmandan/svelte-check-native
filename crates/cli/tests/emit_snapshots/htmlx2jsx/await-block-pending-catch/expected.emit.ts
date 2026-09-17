@@ -8,13 +8,11 @@ function $$render_e40e2c10() {
             const $$_await = await $$_promise; const value = $$_await;
             { svelteHTML.createElement("h1", {});                 (value);
             }
-            void value;
         }
         {
             const error = __svn_any();
             { svelteHTML.createElement("h1", {});                 (error);
             }
-            void error;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

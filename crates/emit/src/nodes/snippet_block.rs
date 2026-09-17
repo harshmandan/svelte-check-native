@@ -9,8 +9,8 @@ use std::fmt::Write;
 use svn_parser::SnippetBlock;
 
 use crate::emit_buffer::EmitBuffer;
+use crate::emit_template_body;
 use crate::is_ts::emit_is_ts;
-use crate::{emit_template_body, param_binding_names};
 
 /// Emit a lexical-scope block wrapping a `{#snippet name(params)}` body
 /// so the snippet's parameter identifiers are in scope for references
@@ -120,7 +120,6 @@ pub(crate) fn emit_snippet_const(
     // unannotated param fires TS7006 under `noImplicitAny` exactly like
     // upstream, and diagnostics landing in the param list map back to
     // the user's source instead of being dropped.
-    let idents = param_binding_names(params);
     let raw = source
         .get(s.parameters_range.start as usize..s.parameters_range.end as usize)
         .unwrap_or("");
@@ -141,12 +140,6 @@ pub(crate) fn emit_snippet_const(
     }
     emit_template_body(buf, source, &s.body, body_depth, insts, action_counter);
     let _ = writeln!(buf, "{body_i}}};");
-    for ident in &idents {
-        if *ident == "__svn_each_unused" {
-            continue;
-        }
-        let _ = writeln!(buf, "{body_i}void {ident};");
-    }
     if is_ts {
         let _ = writeln!(buf, "{body_i}return null as any;");
     } else {

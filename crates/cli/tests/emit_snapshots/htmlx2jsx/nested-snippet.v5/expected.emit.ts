@@ -40,7 +40,6 @@ function $$render_e40e2c10() {
                 void foo;
                 (foo());
             }
-            void item;
         }
         ;(key);
         {
@@ -61,7 +60,6 @@ function $$render_e40e2c10() {
                 void foo;
                 (foo());
             }
-            void bar;
         }
         { svelteHTML.createElement("div", {});             {
                 const foo = () => { async () => {

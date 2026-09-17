@@ -25,7 +25,6 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::emit_buffer::EmitBuffer;
-use crate::emit_is_ts;
 use crate::nodes::action::{
     emit_dom_action_decls, emit_dom_action_void_refs, emit_use_directives_inline_legacy,
 };
@@ -97,7 +96,7 @@ pub(crate) fn emit_element_node(
     // declaration lives at the top of the template-check fn body
     // (`emit_template_check_fn`) gated on
     // `fragment_contains_slot`.
-    if e.name.as_str() == "slot" && emit_is_ts() {
+    if e.name.as_str() == "slot" {
         emit_slot_check(buf, source, e, depth);
     }
     // Action declarations emitted BEFORE createElement so the

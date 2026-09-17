@@ -11,7 +11,6 @@ function $$render_e40e2c10() {
         { const $$_promise = ($store);
             const $$_await = await $$_promise; const data = $$_await;
             (data);
-            void data;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

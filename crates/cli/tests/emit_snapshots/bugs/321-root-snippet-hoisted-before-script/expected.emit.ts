@@ -7,7 +7,6 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("h1", {});             (n);
         }
         };
-        void n;
         return null as any;
     };
     void defaultHeader;

@@ -4,13 +4,13 @@ function $$render_e40e2c10() {
 
 const a = function (shadowed1) {}
 const b = (shadowed2) => {}
-let c = __svn_invalidate(() => (function (shadowed3) {})); void c;
-let d = __svn_invalidate(() => ((shadowed4) => {})); void d;
+let c = __svn_invalidate(() => (function (shadowed3) {}));
+let d = __svn_invalidate(() => ((shadowed4) => {}));
 
-let shadowed1 = __svn_invalidate(() => (1)); void shadowed1;
-let shadowed2 = __svn_invalidate(() => (1)); void shadowed2;
-let shadowed3 = __svn_invalidate(() => (1)); void shadowed3;
-let shadowed4 = __svn_invalidate(() => (1)); void shadowed4;
+let shadowed1 = __svn_invalidate(() => (1));
+let shadowed2 = __svn_invalidate(() => (1));
+let shadowed3 = __svn_invalidate(() => (1));
+let shadowed4 = __svn_invalidate(() => (1));
     ;(async () => {
         // template type-check body (incremental)
     });

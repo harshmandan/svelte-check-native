@@ -4,7 +4,7 @@
 function $$render_e40e2c10() {
 
 	                
-	let team = __svn_invalidate(() => ({ search: "Real", players: [] } as Team)); void team;
+	let team = __svn_invalidate(() => ({ search: "Real", players: [] } as Team));
     ;(async () => {
         // template type-check body (incremental)
     });

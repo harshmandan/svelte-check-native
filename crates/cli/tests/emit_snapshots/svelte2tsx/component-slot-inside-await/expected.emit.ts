@@ -3,17 +3,24 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
+        const __svn_create_slot = __svn_create_create_slot();
         { const $$_promise = (promise);
             const $$_await = await $$_promise; const value = $$_await;
-            void value;
+            {
+                __svn_create_slot("default", { a: (value) });
+            }
         }
         {
             const err = __svn_any();
-            void err;
+            {
+                __svn_create_slot("err", { err: (err) });
+            }
         }
         { const $$_promise = (promise2);
             const $$_await = await $$_promise; const { b } = $$_await;
-            void b;
+            {
+                __svn_create_slot("second", { a: (b) });
+            }
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: ((__svn_unwrap_promise_like(promise))) }, 'err': { err: /** @type {(any)} */ (/** @type {any} */ (null)) }, 'second': { a: (((({ b }) => b)(__svn_unwrap_promise_like(promise2)))) } }, bindings: /** @type {string} */ (''), exports: {} };

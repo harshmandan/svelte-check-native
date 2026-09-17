@@ -4,83 +4,56 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((name == "world")) {
-            void [name];
             if ((bla)) {
-                void [bla];
             }
             if ((bla)) {
-                void [bla];
             }
         } else if ((foo)) {
-            void [foo];
             if ((bla)) {
-                void [bla];
             } else {
             }
         } else {
             if ((bla)) {
-                void [bla];
             } else if ((blubb)) {
-                void [blubb];
             }
         }
         if ((name == "world")) {
-            void [name];
             if ((bla)) {
-                void [bla];
             }
             if ((bla)) {
-                void [bla];
             } else {
             }
             if ((bla)) {
-                void [bla];
             } else if ((blubb)) {
-                void [blubb];
             }
             if ((bla)) {
-                void [bla];
             } else if ((blubb)) {
-                void [blubb];
             } else {
             }
         } else if ((foo)) {
-            void [foo];
             if ((bla)) {
-                void [bla];
             }
             if ((bla)) {
-                void [bla];
             } else {
             }
             if ((bla)) {
-                void [bla];
             } else if ((blubb)) {
-                void [blubb];
             }
             if ((bla)) {
-                void [bla];
             } else if ((blubb)) {
-                void [blubb];
             } else {
             }
         } else {
             if ((bla)) {
-                void [bla];
             }
             if ((bla)) {
-                void [bla];
             } else {
             }
             if ((bla)) {
-                void [bla];
             } else if ((blubb)) {
-                void [blubb];
             }
             if ((bla)) {
-                void [bla];
             } else if ((blubb)) {
-                void [blubb];
             } else {
             }
         }

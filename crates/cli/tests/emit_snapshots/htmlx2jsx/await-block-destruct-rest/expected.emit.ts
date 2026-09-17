@@ -5,33 +5,21 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         { const $$_promise = (object);
             const $$_await = await $$_promise; const { a, ...rest } = $$_await;
-            void a;
-            void rest;
         }
         { const $$_promise = (array);
             const $$_await = await $$_promise; const [a, b, ...rest] = $$_await;
-            void a;
-            void b;
-            void rest;
         }
         { const $$_promise = (objectReject);
             const $$_await = await $$_promise; const value = $$_await;
-            void value;
         }
         {
             const { a, ...rest } = __svn_any();
-            void a;
-            void rest;
         }
         { const $$_promise = (arrayReject);
             const $$_await = await $$_promise; const value = $$_await;
-            void value;
         }
         {
             const [a, b, ...rest] = __svn_any();
-            void a;
-            void b;
-            void rest;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

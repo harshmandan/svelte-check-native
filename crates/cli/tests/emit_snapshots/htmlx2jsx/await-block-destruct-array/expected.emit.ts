@@ -5,14 +5,9 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         { const $$_promise = (thePromise);
             const $$_await = await $$_promise; const [ a, b ] = $$_await;
-            void a;
-            void b;
         }
         {
             const [c, [d, e]] = __svn_any();
-            void c;
-            void d;
-            void e;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

@@ -3,8 +3,11 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
+        const __svn_create_slot = __svn_create_create_slot();
         { const __svn_each_arr = __svn_each_items(items); for (let items of __svn_each_arr) {
-            void items;
+            {
+                __svn_create_slot("default", { a: (items) });
+            }
         }
         }
     });

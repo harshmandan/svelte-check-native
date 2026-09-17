@@ -8,7 +8,6 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((flag)) {
-            void [flag];
             { svelteHTML.createElement("p", {});             }
         } else {
             { svelteHTML.createElement("p", {});             }
@@ -16,11 +15,9 @@ function $$render_e40e2c10() {
         for (let item of __svn_each_items(items)) {
             { svelteHTML.createElement("li", {});                 (item);
             }
-            void item;
         }
         (markup);
         const doubled = items.length * 2;
-        void doubled;
         (doubled);
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

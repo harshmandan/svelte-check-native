@@ -66,13 +66,11 @@ function $$render_e40e2c10() {
                             const $$_await = await $$_promise; const text = $$_await;
                             { svelteHTML.createElement("p", {});                                 (text.length);
                             }
-                            void text;
                         }
                         {
                             const err = __svn_any();
                             { svelteHTML.createElement("p", {});                                 (err);
                             }
-                            void err;
                         }
                         };
                         return __svn_snippet_return();
@@ -91,10 +89,8 @@ function $$render_e40e2c10() {
                             { svelteHTML.createElement("p", {});                                 (label.toUpperCase());
                                 (text);
                             }
-                            void text;
                         }
                         };
-                        void label;
                         return __svn_snippet_return();
                     },
                 },

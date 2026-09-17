@@ -5,7 +5,6 @@ function $$render_e40e2c10<T>() {
     const foo = (bar) => { async () => {
         (bar);
         };
-        void bar;
         return null;
     };
     void foo;
@@ -15,7 +14,11 @@ function $$render_e40e2c10<T>() {
   let rect;
     ;(async () => {
         // template type-check body (incremental)
+        const __svn_create_slot = __svn_create_create_slot();
         { svelteHTML.createElement("div", {});             rect = /*svn:ignore_start*//** @type {DOMRectReadOnly} */ (null)/*svn:ignore_end*/;
+        }
+        {
+            __svn_create_slot("default", {  });
         }
     });
     return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': {  } }, bindings: /** @type {string} */ (''), exports: {} };

@@ -6,7 +6,6 @@ function $$render_e40e2c10() {
         for (let item of __svn_each_items(items ?? [])) {
             { svelteHTML.createElement("div", {});                 (item);
             }
-            void item;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

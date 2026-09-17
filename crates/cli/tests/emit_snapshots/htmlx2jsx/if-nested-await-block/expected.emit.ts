@@ -4,40 +4,32 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((hello)) {
-            void [hello];
             { const $$_promise = (hello.foo);
                 const $$_await = await $$_promise; const y = $$_await;
                 (y);
-                void y;
             }
             { const $$_promise = (x);
                 const $$_await = await $$_promise; const y = $$_await;
                 (y);
-                void y;
             }
             (hello);
             { const $$_promise = (aPromise);
                 const $$_await = await $$_promise; void $$_await;
             }
             if ((hi && bye)) {
-                void [hi, bye];
                 { const $$_promise = (x);
                     const $$_await = await $$_promise; const y = $$_await;
                     (y);
-                    void y;
                 }
             } else if ((cool)) {
-                void [cool];
                 { const $$_promise = (x);
                     const $$_await = await $$_promise; const y = $$_await;
                     (y);
-                    void y;
                 }
             } else {
                 { const $$_promise = (x);
                     const $$_await = await $$_promise; const y = $$_await;
                     (y);
-                    void y;
                 }
             }
         }

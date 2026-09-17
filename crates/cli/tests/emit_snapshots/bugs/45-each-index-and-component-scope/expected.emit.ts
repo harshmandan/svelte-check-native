@@ -31,13 +31,11 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         for (let item of __svn_each_items(items)) {
-            let i: number = 0;
+            let i = 1;
             {
                 const __svn_C_a9 = __svn_ensure_component(Inner);
                 new __svn_C_a9({ target: __svn_any(), props: {"label": (item.text), "index": (i)} });
             }
-            void item;
-            void i;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

@@ -6,7 +6,6 @@ function $$render_e40e2c10() {
         { const $$_promise = (somePromise);
             const $$_await = await $$_promise; const value = $$_await;
             { svelteHTML.createElement("h1", {});             }
-            void value;
         }
         { svelteHTML.createElement("h1", {});         }
         { const $$_promise = (somePromise);

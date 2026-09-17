@@ -9,7 +9,6 @@ function $$render_e40e2c10() {
             }
         } else {
             for (let _ of __svn_each_items([])) {
-                void _;
             }
         }
     });

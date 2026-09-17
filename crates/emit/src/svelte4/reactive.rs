@@ -307,15 +307,12 @@ fn classify_and_rewrite(
                         // inferred `T` of the thunk, so template-
                         // side type-checking against NAME is
                         // unchanged. Mirrors upstream svelte2tsx's
-                        // `__sveltets_2_invalidate` helper. `void
-                        // NAME;` suppresses TS6133 when NAME is only
-                        // used in the template.
+                        // `__sveltets_2_invalidate` helper; like upstream, nothing
+                        // marks NAME as used, so an unused one reports TS6133.
                         return Edit {
                             start: full_start,
                             end: full_end,
-                            replacement: format!(
-                                "let {name} = __svn_invalidate(() => ({rhs})); void {name};"
-                            ),
+                            replacement: format!("let {name} = __svn_invalidate(() => ({rhs}));"),
                         };
                     }
                 }
@@ -347,16 +344,6 @@ fn classify_and_rewrite(
                     } else {
                         lhs_trimmed
                     };
-                    // Emit `void NAME;` for each destructured name
-                    // so TS6133 doesn't fire when the name is used
-                    // only in the template (separate function scope
-                    // later in the emit). Hoisting to `let NAME!: any`
-                    // at the top is DELIBERATELY skipped — see the
-                    // matching branch for the simple-identifier case.
-                    let voids: String = destructure_names
-                        .iter()
-                        .map(|n| format!(" void {n};"))
-                        .collect();
                     if destructure_names.iter().all(|n| !declared.contains(n)) {
                         // Every name is fresh — declare AND initialise in one
                         // `let { a, b } = expr;` (upstream's
@@ -365,7 +352,7 @@ fn classify_and_rewrite(
                             start: full_start,
                             end: full_end,
                             replacement: format!(
-                                "let {lhs_unwrap} = __svn_invalidate(() => ({rhs}));{voids}"
+                                "let {lhs_unwrap} = __svn_invalidate(() => ({rhs}));"
                             ),
                         };
                     }
@@ -387,7 +374,7 @@ fn classify_and_rewrite(
                             start: full_start,
                             end: full_end,
                             replacement: format!(
-                                "{lets}({lhs_unwrap} = __svn_invalidate(() => ({rhs})));{voids}"
+                                "{lets}({lhs_unwrap} = __svn_invalidate(() => ({rhs})));"
                             ),
                         };
                     }
@@ -517,19 +504,13 @@ mod tests {
     #[test]
     fn declaration_form_becomes_invalidate() {
         let src = "$: b = count * 2;";
-        assert_eq!(
-            ts(src),
-            "let b = __svn_invalidate(() => (count * 2)); void b;"
-        );
+        assert_eq!(ts(src), "let b = __svn_invalidate(() => (count * 2));");
     }
 
     #[test]
     fn declaration_form_without_semicolon() {
         let src = "$: b = count * 2";
-        assert_eq!(
-            ts(src),
-            "let b = __svn_invalidate(() => (count * 2)); void b;"
-        );
+        assert_eq!(ts(src), "let b = __svn_invalidate(() => (count * 2));");
     }
 
     #[test]
@@ -593,10 +574,7 @@ mod tests {
         // fire TS2448.
         let src = "$: ({ a, b } = question);";
         let got = ts(src);
-        assert_eq!(
-            got,
-            "let { a, b } = __svn_invalidate(() => (question)); void a; void b;"
-        );
+        assert_eq!(got, "let { a, b } = __svn_invalidate(() => (question));");
     }
 
     #[test]
@@ -605,7 +583,7 @@ mod tests {
         let got = ts(src);
         assert_eq!(
             got,
-            "let { a, b: renamed } = __svn_invalidate(() => (question)); void a; void renamed;"
+            "let { a, b: renamed } = __svn_invalidate(() => (question));"
         );
     }
 
@@ -613,10 +591,7 @@ mod tests {
     fn destructure_array_auto_declares() {
         let src = "$: ([x, y] = pair());";
         let got = ts(src);
-        assert_eq!(
-            got,
-            "let [x, y] = __svn_invalidate(() => (pair())); void x; void y;"
-        );
+        assert_eq!(got, "let [x, y] = __svn_invalidate(() => (pair()));");
     }
 
     #[test]
@@ -676,11 +651,11 @@ mod tests {
         let src = "$: a = 1;\n$: b = 2;";
         let got = ts(src);
         assert!(
-            got.contains("let a = __svn_invalidate(() => (1)); void a;"),
+            got.contains("let a = __svn_invalidate(() => (1));"),
             "a invalidate: {got:?}"
         );
         assert!(
-            got.contains("let b = __svn_invalidate(() => (2)); void b;"),
+            got.contains("let b = __svn_invalidate(() => (2));"),
             "b invalidate: {got:?}"
         );
     }
@@ -695,7 +670,7 @@ mod tests {
             "x reassignment: {got:?}",
         );
         assert!(
-            got.contains("let y = __svn_invalidate(() => (x * 2)); void y;"),
+            got.contains("let y = __svn_invalidate(() => (x * 2));"),
             "y invalidate: {got:?}"
         );
     }
@@ -707,7 +682,7 @@ mod tests {
         assert!(got.contains("const a = 1;"), "a preserved: {got:?}");
         assert!(got.contains("const c = 3;"), "c preserved: {got:?}");
         assert!(
-            got.contains("let b = __svn_invalidate(() => (a * 2)); void b;"),
+            got.contains("let b = __svn_invalidate(() => (a * 2));"),
             "b invalidate: {got:?}"
         );
     }

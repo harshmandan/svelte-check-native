@@ -67,8 +67,6 @@ function $$render_e40e2c10() {
                             new __svn_C_ac({ target: __svn_any(), props: {"open": (isOpen), "onToggle": (toggle)} });
                         }
                         };
-                        void isOpen;
-                        void toggle;
                         return __svn_snippet_return();
                     },
                 },

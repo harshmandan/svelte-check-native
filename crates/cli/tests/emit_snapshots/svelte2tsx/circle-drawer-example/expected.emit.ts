@@ -87,11 +87,9 @@ function $$render_e40e2c10() {
                     "fill": (circle === selected ? '#ccc': 'white'),
                 });
                 }
-                void circle;
             }
         }
         if ((adjusting)) {
-            void [adjusting];
             { svelteHTML.createElement("div", {
                 "class": `adjuster`,
             });

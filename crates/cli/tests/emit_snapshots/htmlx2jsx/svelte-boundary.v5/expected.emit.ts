@@ -9,7 +9,6 @@ function $$render_e40e2c10() {
                 { svelteHTML.createElement("p", {});                     (e);
                 }
                 };
-                void e;
                 return __svn_snippet_return();
             },
         });

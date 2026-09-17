@@ -13,7 +13,6 @@ const hoistable2 = (bar): any => { async () => {
     { svelteHTML.createElement("div", {});         (bar);
     }
     };
-    void bar;
     return null as any;
 };
 void hoistable2;
@@ -21,7 +20,6 @@ const hoistable3 = (bar: string): any => { async () => {
     { svelteHTML.createElement("div", {});         (bar);
     }
     };
-    void bar;
     return null as any;
 };
 void hoistable3;
@@ -29,7 +27,6 @@ const hoistable4 = (foo): any => { async () => {
     { svelteHTML.createElement("div", {});         (foo);
     }
     };
-    void foo;
     return null as any;
 };
 void hoistable4;
@@ -58,16 +55,13 @@ const hoistable8 = (): any => { async () => {
 void hoistable8;
 const hoistable9 = (props: HTMLAttributes<HTMLDivElement>): any => { async () => {
     };
-    void props;
     return null as any;
 };
 void hoistable9;
 const hoistable10 = (foo): any => { async () => {
     const bar = foo;
-    void bar;
     (bar);
     };
-    void foo;
     return null as any;
 };
 void hoistable10;

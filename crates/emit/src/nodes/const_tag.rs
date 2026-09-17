@@ -3,8 +3,6 @@
 //! Mirrors upstream svelte2tsx's
 //! `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/ConstTag.ts`.
 
-use std::fmt::Write;
-
 use crate::emit_buffer::EmitBuffer;
 
 /// If `interp` is an `{@const <pattern> = <expr>}` tag, emit it inline
@@ -92,14 +90,4 @@ fn emit_declaration(
     buf.push(' ');
     buf.append_with_source(body_raw, interp.expression_range);
     buf.push_str(";\n");
-
-    // Void every binding the pattern introduces — suppresses TS6133 on a
-    // `{@const}` / declaration tag whose binding isn't read elsewhere in
-    // the block. Names come from the oxc parse of the declaration
-    // (`svn_analyze::extract_at_const_bindings`), not a byte scan: correct
-    // for destructure patterns with delimiters inside string defaults,
-    // type annotations, nested rest, etc. (Rule #1).
-    for name in svn_analyze::extract_at_const_bindings(interp, source) {
-        let _ = writeln!(buf, "{indent}void {name};");
-    }
 }

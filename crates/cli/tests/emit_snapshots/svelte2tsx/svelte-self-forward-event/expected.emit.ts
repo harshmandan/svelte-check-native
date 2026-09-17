@@ -22,7 +22,6 @@ function $$render_e40e2c10() {
                 const __svn_inst_c6 = new __svn_C_c6({ target: __svn_any(), props: {} });
                 __svn_inst_c6.$on("foo", () => {});
             }
-            void item;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

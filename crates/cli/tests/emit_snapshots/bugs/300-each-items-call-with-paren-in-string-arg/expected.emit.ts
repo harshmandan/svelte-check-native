@@ -10,7 +10,6 @@ function $$render_e40e2c10() {
             {
                 __svn_create_slot("x", { r: (row) });
             }
-            void row;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'x': { r: ((__svn_unwrap_arr(f("(")(")")))) } }, bindings: undefined as any as string, exports: undefined as any as ({}) };

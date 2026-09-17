@@ -3,7 +3,7 @@
 function $$render_e40e2c10() {
 
 
-let b = __svn_invalidate(() => (7)); void b;
+let b = __svn_invalidate(() => (7));
 
 let a = /** @type {any} */ (null);
 a = __svn_invalidate(() => (5));

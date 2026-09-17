@@ -3,14 +3,17 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
+        const __svn_create_slot = __svn_create_create_slot();
         { svelteHTML.createElement("button", {
             "on:click": undefined,
         });
+            {
+                __svn_create_slot("default", {  });
+            }
         }
         { const $$_promise = (Promise.resolve(0));
             const $$_await = await $$_promise; const n = $$_await;
             (n);
-            void n;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': {  } }, bindings: /** @type {string} */ (''), exports: {} };

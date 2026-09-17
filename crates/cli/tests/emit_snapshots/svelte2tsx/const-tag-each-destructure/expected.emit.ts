@@ -16,14 +16,8 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         for (let { width, height } of __svn_each_items(boxes)) {
             const {area, volume} = calculate(width, height, constant);
-            void area;
-            void volume;
             const perimeter = (width + height) * constant;
-            void perimeter;
             const [_width, _height, sum] = [width * constant, height, width * constant + height];
-            void _width;
-            void _height;
-            void sum;
             { svelteHTML.createElement("div", {});                 (area);
                 (volume);
                 (perimeter);
@@ -31,8 +25,6 @@ function $$render_e40e2c10() {
                 (_height);
                 (sum);
             }
-            void width;
-            void height;
         }
     });
     void boxes;

@@ -3,11 +3,11 @@
 function $$render_e40e2c10() {
 
 
-let b = __svn_invalidate(() => ({ a: 1 }['a'])); void b;
-let c = __svn_invalidate(() => ({ a: { b: 1} }['a']['b'])); void c;
-let d = __svn_invalidate(() => ({ a: { b: 1} }['a']['b']?.['c'])); void d;
-let e = __svn_invalidate(() => ({a: 1} ?? { a: 1 })); void e;
-let f = __svn_invalidate(() => ({a: 1}[c] ? '' : '1')); void f;
+let b = __svn_invalidate(() => ({ a: 1 }['a']));
+let c = __svn_invalidate(() => ({ a: { b: 1} }['a']['b']));
+let d = __svn_invalidate(() => ({ a: { b: 1} }['a']['b']?.['c']));
+let e = __svn_invalidate(() => ({a: 1} ?? { a: 1 }));
+let f = __svn_invalidate(() => ({a: 1}[c] ? '' : '1'));
     ;(async () => {
         // template type-check body (incremental)
     });

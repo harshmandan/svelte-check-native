@@ -8,7 +8,6 @@ function $$render_e40e2c10() {
         }
         {
             const error = __svn_any();
-            void error;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

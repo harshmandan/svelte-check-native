@@ -3,13 +3,16 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
+        const __svn_create_slot = __svn_create_create_slot();
         if ((true)) {
             {
                 const __svn_C_b = __svn_ensure_component(__svn_self_default);
                 const __svn_inst_b = new __svn_C_b({ target: __svn_any(), props: {} });
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, prop } = __svn_inst_b.$$slot_def.default; $$_$$;
-                    void prop;
+                    {
+                        __svn_create_slot("default", { prop: prop });
+                    }
                 }
             }
         }
@@ -18,7 +21,9 @@ function $$render_e40e2c10() {
             const __svn_inst_4b = new __svn_C_4b({ target: __svn_any(), props: {} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, prop } = __svn_inst_4b.$$slot_def.default; $$_$$;
-                void prop;
+                {
+                    __svn_create_slot("default", { prop: prop });
+                }
             }
         }
     });

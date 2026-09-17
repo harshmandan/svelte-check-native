@@ -19,30 +19,23 @@ async function $$render_e40e2c10<T>() {
         (await promise);
         for (let item of __svn_each_items(await promise)) {
             (item);
-            void item;
         }
         for (let item of __svn_each_items(await promise)) {
-            let i: number = 0;
+            let i = 1;
             (item);
             (i);
-            void item;
-            void i;
         }
         for (let item of __svn_each_items(await promise)) {
-            let i: number = 0;
+            let i = 1;
             (item.x);
             (item);
             (i);
-            void item;
-            void i;
         }
         for (let __svn_each_unused of __svn_each_items(await promise)) {
-            void __svn_each_unused;
+            __svn_each_unused;
         }
         if ((await promise)) {
-            void [promise];
         } else if ((await promise)) {
-            void [promise];
         }
         {
             const __svn_C_1f6 = __svn_ensure_component(Component);
@@ -55,7 +48,6 @@ async function $$render_e40e2c10<T>() {
         (x(await promise));
         if ((true)) {
             const x = await promise;
-            void x;
             (x);
         }
     });

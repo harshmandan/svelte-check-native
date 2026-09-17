@@ -3,6 +3,10 @@
 function $$render_bd9efed1() {
     ;(async () => {
         // template type-check body (incremental)
+        const __svn_create_slot = __svn_create_create_slot();
+        {
+            __svn_create_slot("default", {  });
+        }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': {  } }, bindings: /** @type {string} */ (''), exports: {} };
 }
@@ -23,6 +27,10 @@ export default __svn_component_default;
 function $$render_65aa230b() {
     ;(async () => {
         // template type-check body (incremental)
+        const __svn_create_slot = __svn_create_create_slot();
+        {
+            __svn_create_slot("default", { thing: (42) });
+        }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { thing: (42) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
@@ -43,6 +51,10 @@ export default __svn_component_default;
 function $$render_74f92bad() {
     ;(async () => {
         // template type-check body (incremental)
+        const __svn_create_slot = __svn_create_create_slot();
+        {
+            __svn_create_slot("x", { thing: ("hello") });
+        }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'x': { thing: ("hello") } }, bindings: /** @type {string} */ (''), exports: {} };
 }
@@ -80,7 +92,6 @@ function $$render_e40e2c10() {
             }
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, thing } = __svn_inst_1cd.$$slot_def["x"]; $$_$$;
-                void thing;
                 {
                     const __svn_C_1e7 = __svn_ensure_component(Bar);
                     new __svn_C_1e7({ target: __svn_any(), props: {} });

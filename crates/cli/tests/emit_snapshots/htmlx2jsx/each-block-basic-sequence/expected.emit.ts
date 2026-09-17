@@ -3,10 +3,9 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        for (let item of __svn_each_items(true, items)) {
+        for (let item of __svn_each_items((true, items))) {
             { svelteHTML.createElement("div", {});                 (item);
             }
-            void item;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

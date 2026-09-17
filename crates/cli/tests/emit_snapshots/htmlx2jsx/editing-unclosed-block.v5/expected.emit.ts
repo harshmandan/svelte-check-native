@@ -4,16 +4,13 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});             if ((foo)) {
-                void [foo];
                 { svelteHTML.createElement("div", {});                     for (let item of __svn_each_items(array)) {
                         if ((i)) {
-                            void [i];
                             {
                                 const __svn_C_54 = __svn_ensure_component(Component);
                                 new __svn_C_54({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                             }
                         }
-                        void item;
                     }
                 }
             }

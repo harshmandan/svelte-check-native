@@ -54,12 +54,6 @@ pub(crate) struct LetDestructure {
     /// Spliced verbatim into the destructure literal — the leading
     /// `name_byte_len` bytes get a TokenMap entry, the rest is plain.
     pattern_text: String,
-    /// The local binding the destructure introduces — `name` for
-    /// shorthand, the alias for `let:foo={alias}`. None for
-    /// non-identifier nested patterns (`let:foo={{a, b}}`); those
-    /// don't get a `void <X>;` suppressor since the inner names
-    /// resolve in the body's natural scope.
-    void_target: Option<SmolStr>,
 }
 
 /// Walk the children of an element that carries `let:NAME` directives.
@@ -176,35 +170,22 @@ pub(crate) fn collect_let_destructures(
         else {
             continue;
         };
-        let (pattern_text, void_target): (String, Option<SmolStr>) = match value {
+        let pattern_text = match value {
             Some(DirectiveValue::Expression {
                 expression_range, ..
             }) => {
                 let start = expression_range.start as usize;
                 let end = expression_range.end as usize;
                 let slice = source.get(start..end).unwrap_or("").trim();
-                if slice.is_empty() {
-                    (name.to_string(), Some(name.clone()))
-                } else if is_simple_js_identifier(slice) && slice == name.as_str() {
-                    // `let:foo={foo}` — same name on both sides;
-                    // emit shorthand `foo`.
-                    (name.to_string(), Some(name.clone()))
-                } else if is_simple_js_identifier(slice) {
-                    // `let:foo={alias}` — alias rename. The introduced
-                    // local is the alias; `void <alias>;` suppresses
-                    // TS6133 on it.
-                    (
-                        format!("{}: {}", name.as_str(), slice),
-                        Some(SmolStr::from(slice)),
-                    )
+                if slice.is_empty() || slice == name.as_str() {
+                    // `let:foo` / `let:foo={foo}` — shorthand `foo`.
+                    name.to_string()
                 } else {
-                    // `let:foo={{a, b}}` — nested pattern. Emit as
-                    // `foo: <pattern>`. No `void` target — the inner
-                    // names resolve in the body's natural scope.
-                    (format!("{}: {}", name.as_str(), slice), None)
+                    // `let:foo={alias}` or `let:foo={{a, b}}`.
+                    format!("{}: {}", name.as_str(), slice)
                 }
             }
-            _ => (name.to_string(), Some(name.clone())),
+            _ => name.to_string(),
         };
         let name_start = range.start + DirectiveKind::Let.prefix_len_with_colon();
         let name_end = name_start + name.len() as u32;
@@ -212,7 +193,6 @@ pub(crate) fn collect_let_destructures(
             name_byte_len: name.len(),
             name_range: Range::new(name_start, name_end),
             pattern_text,
-            void_target,
         });
     }
     out
@@ -297,20 +277,6 @@ pub(crate) fn emit_let_slot_destructure(
                 buf,
                 " }} = {inst_local}.$$slot_def[\"{slot_name}\"]; $$_$$;"
             );
-        }
-    }
-    // `void <name>;` per let-binding suppresses TS6133 on names the
-    // user's slot body doesn't reference. Without this the new
-    // TokenMap entry on the destructure name surfaces 6133 at the
-    // source `let:NAME` position — a regression for slot-let
-    // wrappers that forward without consuming (canonical layerchart
-    // pattern: `<Wrapper let:tooltip><slot {tooltip} /></Wrapper>`).
-    // 2339 / 2367 / 2353 on the destructure entry still fire
-    // because they target the destructure pattern itself, not the
-    // local binding's later use.
-    for d in let_destructures {
-        if let Some(target) = &d.void_target {
-            let _ = writeln!(buf, "{indent}void {target};");
         }
     }
 }

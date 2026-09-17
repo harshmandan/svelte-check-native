@@ -53,15 +53,12 @@ function $$render_e40e2c10() {
                             (label.toUpperCase());
                         }
                         };
-                        void id;
-                        void label;
                         return __svn_snippet_return();
                     },
                     header: (columns) => { async () => {
                         { svelteHTML.createElement("h1", {});                             (joinLabels(columns));
                         }
                         };
-                        void columns;
                         return __svn_snippet_return();
                     },
                 },

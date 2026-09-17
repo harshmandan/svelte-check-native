@@ -42,7 +42,6 @@ function $$render_76cc262b() {
             {
                 __svn_create_slot("default", { item: item });
             }
-            void item;
         }
     });
     void list;
@@ -72,7 +71,6 @@ function $$render_758c71fe() {
             {
                 __svn_create_slot("default", { item: item });
             }
-            void item;
         }
     });
     void list;
@@ -101,7 +99,6 @@ function $$render_5b9f5cf4() {
             const __svn_inst_3f = new __svn_C_3f({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item } = __svn_inst_3f.$$slot_def.default; $$_$$;
-                void item;
                 (item.nope);
             }
         }
@@ -131,7 +128,6 @@ function $$render_e40e2c10() {
             const __svn_inst_3e = new __svn_C_3e({ target: __svn_any(), props: {"list": ([]), children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item } = __svn_inst_3e.$$slot_def.default; $$_$$;
-                void item;
                 (item.name);
             }
         }

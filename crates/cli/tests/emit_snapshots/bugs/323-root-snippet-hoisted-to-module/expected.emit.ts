@@ -6,7 +6,6 @@ const row = (n: number): any => { async () => {
     { svelteHTML.createElement("b", {});         (n);
     }
     };
-    void n;
     return null as any;
 };
 void row;

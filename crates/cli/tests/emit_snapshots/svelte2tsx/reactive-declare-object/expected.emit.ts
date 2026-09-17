@@ -3,7 +3,7 @@
 function $$render_e40e2c10() {
 
 
-let b = __svn_invalidate(() => ({ a: 1 })); void b;
+let b = __svn_invalidate(() => ({ a: 1 }));
     ;(async () => {
         // template type-check body (incremental)
     });

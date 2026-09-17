@@ -3,11 +3,16 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
+        const __svn_create_slot = __svn_create_create_slot();
         for (let item of __svn_each_items(items)) {
-            void item;
+            {
+                __svn_create_slot("default", { a: (item) });
+            }
         }
         for (let { a } of __svn_each_items(items2)) {
-            void a;
+            {
+                __svn_create_slot("second", { a: a });
+            }
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: ((__svn_unwrap_arr(items))) }, 'second': { a: ((({ a }) => a)(__svn_unwrap_arr(items2))) } }, bindings: /** @type {string} */ (''), exports: {} };

@@ -5,7 +5,6 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         for (let str of __svn_each_items([''])) {
             const lower = str.;
-            void str;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

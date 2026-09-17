@@ -11,7 +11,6 @@ function $$render_e40e2c10() {
                 const __svn_inst_3f = new __svn_C_3f({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
                 {
                     const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, t } = __svn_inst_3f.$$slot_def.default; $$_$$;
-                    void t;
                 }
             }
         }

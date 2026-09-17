@@ -9,7 +9,7 @@ use std::fmt::Write;
 use svn_parser::Fragment;
 
 use crate::emit_buffer::EmitBuffer;
-use crate::{emit_template_body, pattern_binding_names};
+use crate::emit_template_body;
 
 /// Walk `{:then v}` / `{:catch e}` body in a fresh lexical scope that
 /// declares the branch's context binding as `any`. Without the
@@ -41,7 +41,6 @@ pub(crate) fn emit_branch_with_binding(
         emit_template_body(buf, source, body, depth, insts, action_counter);
         return;
     }
-    let idents = pattern_binding_names(binding_text);
     let indent = "    ".repeat(depth);
     let _ = writeln!(buf, "{indent}{{");
     // Upstream binds the catch error as `const <err> = __sveltets_2_any();`
@@ -52,9 +51,6 @@ pub(crate) fn emit_branch_with_binding(
     // keeps its reference to `k`.
     let _ = writeln!(buf, "{indent}    const {binding_text} = __svn_any();");
     emit_template_body(buf, source, body, depth + 1, insts, action_counter);
-    for ident in &idents {
-        let _ = writeln!(buf, "{indent}    void {ident};");
-    }
     let _ = writeln!(buf, "{indent}}}");
 }
 
@@ -137,15 +133,11 @@ pub(crate) fn emit_await_then_branch(
     buf.push_str(");\n");
     match binding_text {
         Some(bind) => {
-            let idents = pattern_binding_names(bind);
             let _ = writeln!(
                 buf,
                 "{inner}const $$_await = await $$_promise; const {bind} = $$_await;"
             );
             emit_template_body(buf, source, body, depth + 1, insts, action_counter);
-            for ident in &idents {
-                let _ = writeln!(buf, "{inner}void {ident};");
-            }
         }
         None => {
             let _ = writeln!(

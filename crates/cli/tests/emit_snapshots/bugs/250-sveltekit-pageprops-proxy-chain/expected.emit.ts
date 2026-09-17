@@ -17,7 +17,6 @@ function $$render_aad4163e() {
         { svelteHTML.createElement("p", {});             (needsNumber(data.title));
         }
         if ((form?.ok)) {
-            void [form?.ok];
             { svelteHTML.createElement("span", {});             }
         }
     });

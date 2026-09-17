@@ -29,8 +29,6 @@ function $$render_e40e2c10() {
             }
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, foo, bar: baz } = __svn_inst_a6.$$slot_def["named"]; $$_$$;
-                void foo;
-                void baz;
                 { svelteHTML.createElement("svelte:fragment", {});                     { svelteHTML.createElement("p", {});                         (foo);
                         (baz);
                     }

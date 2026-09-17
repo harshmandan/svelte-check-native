@@ -7,7 +7,7 @@ function $$render_e40e2c10() {
     let constructor1: new (id: string) => { id: string };
     let obj: { hi(id: string): void }
 
-    let { id } = __svn_invalidate(() => ({ id: '' })); void id;
+    let { id } = __svn_invalidate(() => ({ id: '' }));
     ;(async () => {
         // template type-check body (incremental)
     });

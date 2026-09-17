@@ -4,7 +4,6 @@ function $$render_e40e2c10() {
     const s = (a: Map<() => void, Other>): any => { async () => {
         (a.size);
         };
-        void a;
         return null as any;
     };
     void s;

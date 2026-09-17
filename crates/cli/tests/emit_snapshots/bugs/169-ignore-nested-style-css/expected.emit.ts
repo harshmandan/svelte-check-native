@@ -8,7 +8,6 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("svelte:head", {});             { svelteHTML.createElement("style", {});             }
         }
         if ((visible)) {
-            void [visible];
             { svelteHTML.createElement("p", {});             }
         }
     });

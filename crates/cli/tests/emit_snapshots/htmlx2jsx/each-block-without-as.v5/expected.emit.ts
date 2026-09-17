@@ -4,13 +4,12 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         for (let __svn_each_unused of __svn_each_items({ length: 5 })) {
-            void __svn_each_unused;
+            __svn_each_unused;
         }
         for (let __svn_each_unused of __svn_each_items({ length: 5 })) {
-            /** @type {number} */ let index = 0;
+            __svn_each_unused;
+            let index = 1;
             (index);
-            void __svn_each_unused;
-            void index;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

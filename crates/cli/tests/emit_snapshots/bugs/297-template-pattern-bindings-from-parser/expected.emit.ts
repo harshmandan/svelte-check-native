@@ -31,7 +31,6 @@ function $$render_3fd2a110() {
         // template type-check body (incremental)
         for (let { 'my-key': v } of __svn_each_items(xs)) {
             (v);
-            void v;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -56,7 +55,6 @@ function $$render_924ed924() {
         // template type-check body (incremental)
         for (let { a = 'p,qq' } of __svn_each_items(xs)) {
             (a);
-            void a;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
@@ -87,7 +85,6 @@ function $$render_8d7b493f() {
                     row: (a: Map<() => void, string>) => { async () => {
                         (a.size);
                         };
-                        void a;
                         return __svn_snippet_return();
                     },
                 },
@@ -114,7 +111,6 @@ function $$render_2297bbcd() {
     const s = (a: 'x' | 'y,zed'): any => { async () => {
         (a);
         };
-        void a;
         return null as any;
     };
     void s;
@@ -147,12 +143,10 @@ function $$render_e40e2c10() {
         { const $$_promise = (p);
             const $$_await = await $$_promise; const n = $$_await;
             (n);
-            void n;
         }
         {
             const { [k]: v } = __svn_any();
             (v);
-            void v;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

@@ -4,14 +4,12 @@ function $$render_e40e2c10() {
     const generic = <T extends string>(val: T): any => { async () => {
         (val);
         };
-        void val;
         return null as any;
     };
     void generic;
     const complex_generic = <T extends { bracket: "<" } | "<" | Set<"<>">>(val: T): any => { async () => {
         (val);
         };
-        void val;
         return null as any;
     };
     void complex_generic;

@@ -4,77 +4,58 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((hello)) {
-            void [hello];
             for (let hello of __svn_each_items(items)) {
-                /** @type {number} */ let i = 0;
+                let i = 1;
                 (hello.id);
                 { svelteHTML.createElement("div", {});                     (hello);
                     (i);
                 }
                 if ((hello)) {
-                    void [hello];
                     for (let hello of __svn_each_items(items)) {
                         if ((hello)) {
-                            void [hello];
                             (hello);
                         }
-                        void hello;
                     }
                     for (let foo of __svn_each_items(items)) {
                         const hello = foo;
-                        void hello;
                         if ((hello)) {
-                            void [hello];
                             (hello);
                         }
-                        void foo;
                     }
                 }
-                void hello;
-                void i;
             }
             if ((hello)) {
-                void [hello];
                 (hello);
             }
             if ((hi && bye)) {
-                void [hi, bye];
                 for (let bye of __svn_each_items(items)) {
                     { svelteHTML.createElement("div", {});                         (bye);
                     }
-                    void bye;
                 }
                 if ((bye)) {
-                    void [bye];
                     (bye);
                 }
             } else if ((cool)) {
-                void [cool];
                 for (let item of __svn_each_items(items)) {
-                    /** @type {number} */ let cool = 0;
+                    let cool = 1;
                     { svelteHTML.createElement("div", {});                         (item);
                         (cool);
                     }
-                    void item;
-                    void cool;
                 }
             } else {
                 for (let hello of __svn_each_items(items)) {
                     { svelteHTML.createElement("div", {});                         (hello);
                     }
-                    void hello;
                 }
             }
         }
         for (let hello of __svn_each_items(items)) {
-            /** @type {number} */ let i = 0;
+            let i = 1;
             if ((hello && i && bye)) {
-                void [hello, i, bye];
                 (hello);
                 (i);
                 (bye);
             } else if ((hello && i && bye)) {
-                void [hello, i, bye];
                 (hello);
                 (i);
                 (bye);
@@ -83,16 +64,12 @@ function $$render_e40e2c10() {
                 (i);
                 (bye);
             }
-            void hello;
-            void i;
         }
         if ((hello && i && bye)) {
-            void [hello, i, bye];
             (hello);
             (i);
             (bye);
         } else if ((hello && i && bye)) {
-            void [hello, i, bye];
             (hello);
             (i);
             (bye);

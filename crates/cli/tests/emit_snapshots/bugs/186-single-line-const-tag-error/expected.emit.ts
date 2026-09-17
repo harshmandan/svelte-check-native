@@ -7,10 +7,8 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         for (let item of __svn_each_items(items)) {
             const doubled = nonexistentRef + item;
-            void doubled;
             { svelteHTML.createElement("p", {});                 (doubled);
             }
-            void item;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

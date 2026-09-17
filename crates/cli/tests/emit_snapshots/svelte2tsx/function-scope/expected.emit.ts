@@ -11,7 +11,7 @@ function $$render_e40e2c10() {
         set id(id) { }
     }
 
-    let { id } = __svn_invalidate(() => ({ id: '' })); void id;
+    let { id } = __svn_invalidate(() => ({ id: '' }));
     ;(async () => {
         // template type-check body (incremental)
     });

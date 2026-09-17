@@ -4,36 +4,29 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((hello)) {
-            void [hello];
             { const $$_promise = (aPromise);
                 const $$_await = await $$_promise; const hello = $$_await;
                 (hello);
-                void hello;
             }
             (hello);
             { const $$_promise = (aPromise);
                 const $$_await = await $$_promise; const foo = $$_await;
                 const hello = foo;
-                void hello;
                 (hello);
-                void foo;
             }
             (hello);
             { const $$_promise = (aPromise);
                 const $$_await = await $$_promise; const hi = $$_await;
                 (hello);
-                void hi;
             }
             {
                 const hello = __svn_any();
                 (hello);
-                void hello;
             }
             { const $$_promise = (hello);
                 const $$_await = await $$_promise; const hello = $$_await;
                 (hello);
                 if ((hello)) {
-                    void [hello];
                     (hello);
                     { const $$_promise = (aPromise);
                         const $$_await = await $$_promise; void $$_await;
@@ -45,102 +38,76 @@ function $$render_e40e2c10() {
                     {
                         const hello = __svn_any();
                         (hello);
-                        void hello;
                     }
                     { const $$_promise = (x);
                         const $$_await = await $$_promise; const hello = $$_await;
                         if ((hello)) {
-                            void [hello];
                             (hello);
                         }
-                        void hello;
                     }
                     { const $$_promise = (x);
                         const $$_await = await $$_promise; const foo = $$_await;
                         const hello = foo;
-                        void hello;
                         if ((hello)) {
-                            void [hello];
                             (hello);
                         }
-                        void foo;
                     }
                 }
-                void hello;
             }
             if ((hi && bye)) {
-                void [hi, bye];
                 { const $$_promise = (x);
                     const $$_await = await $$_promise; const bye = $$_await;
                     (bye);
-                    void bye;
                 }
                 {
                     const hello = __svn_any();
                     if ((hello)) {
-                        void [hello];
                         (hello);
                     }
-                    void hello;
                 }
             } else if ((cool)) {
-                void [cool];
                 { const $$_promise = (cool);
                     const $$_await = await $$_promise; const cool = $$_await;
                     if ((cool)) {
-                        void [cool];
                         (cool);
                     }
-                    void cool;
                 }
                 {
                     const cool = __svn_any();
-                    void cool;
                 }
                 { const $$_promise = (aPromise);
                     const $$_await = await $$_promise; const cool = $$_await;
                     (cool);
-                    void cool;
                 }
             } else {
                 { const $$_promise = (x);
                     const $$_await = await $$_promise; const hello = $$_await;
                     if ((hello)) {
-                        void [hello];
                         (hello);
                     }
-                    void hello;
                 }
             }
         }
         if ((cool)) {
-            void [cool];
             (cool);
         } else if ((hello)) {
-            void [hello];
             (hello);
         }
         { const $$_promise = (cool);
             const $$_await = await $$_promise; const cool = $$_await;
             if ((cool)) {
-                void [cool];
                 (cool);
             } else if ((hello)) {
-                void [hello];
                 (hello);
             }
-            void cool;
         }
         {
             const cool = __svn_any();
             if ((cool)) {
-                void [cool];
                 (cool);
             } else if ((hello)) {
-                void [hello];
                 (hello);
             }
-            void cool;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

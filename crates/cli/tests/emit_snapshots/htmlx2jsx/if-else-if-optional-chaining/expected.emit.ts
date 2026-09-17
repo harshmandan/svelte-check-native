@@ -4,11 +4,9 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((obj?.name1 == "world")) {
-            void [obj?.name1];
             { svelteHTML.createElement("h1", {});                 (name2);
             }
         } else if ((obj?.name3 == "person")) {
-            void [obj?.name3];
             { svelteHTML.createElement("h2", {});                 (name4);
             }
         }

@@ -4,13 +4,11 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         for (let item of __svn_each_items(items)) {
-            /** @type {number} */ let i = 0;
+            let i = 1;
             (item.id);
             { svelteHTML.createElement("div", {});                 (item);
                 (i);
             }
-            void item;
-            void i;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

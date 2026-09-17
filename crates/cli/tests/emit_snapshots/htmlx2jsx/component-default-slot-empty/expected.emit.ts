@@ -8,8 +8,6 @@ function $$render_e40e2c10() {
             const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, var: new_var, other_var } = __svn_inst_0.$$slot_def.default; $$_$$;
-                void new_var;
-                void other_var;
             }
         }
     });

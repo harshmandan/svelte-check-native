@@ -7,7 +7,17 @@ function $$render_e40e2c10() {
     let e = 5;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("div", {});         }
+        const __svn_create_slot = __svn_create_create_slot();
+        { svelteHTML.createElement("div", {});             {
+                __svn_create_slot("default", { a: (b) });
+            }
+            {
+                __svn_create_slot("test", { c: (d), e: e });
+            }
+            {
+                __svn_create_slot("abc-cde.113", {  });
+            }
+        }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: (b) }, 'test': { c: (d), e: (e) }, 'abc-cde.113': {  } }, bindings: /** @type {string} */ (''), exports: {} };
 }

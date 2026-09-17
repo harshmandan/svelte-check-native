@@ -8,11 +8,9 @@ function $$render_e40e2c10() {
         const __svn_create_slot = __svn_create_create_slot();
         for (let one of __svn_each_items([item])) {
             const expanded = one.id;
-            void expanded;
             {
                 __svn_create_slot("default", { expanded: expanded });
             }
-            void one;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: { 'default': {  } }, bindings: undefined as any as string, exports: undefined as any as ({}) };

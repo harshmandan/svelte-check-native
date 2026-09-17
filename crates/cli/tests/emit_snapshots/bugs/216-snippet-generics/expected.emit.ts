@@ -5,8 +5,6 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("li", {});             (format(item));
         }
         };
-        void item;
-        void format;
         return null as any;
     };
     void row;
@@ -14,7 +12,6 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("li", {});             (item.id);
         }
         };
-        void item;
         return null as any;
     };
     void keyed;

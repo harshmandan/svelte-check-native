@@ -14,14 +14,8 @@ function $$render_e40e2c10() {
         { const $$_promise = (promise1);
             const $$_await = await $$_promise; const box = $$_await;
             const {area, volume} = calculate(box.width, box.height, constant);
-            void area;
-            void volume;
             const perimeter = (box.width + box.height) * constant;
-            void perimeter;
             const [width, height, sum] = [box.width * constant, box.height, box.width * constant + box.height];
-            void width;
-            void height;
-            void sum;
             { svelteHTML.createElement("div", {});                 (area);
                 (volume);
                 (perimeter);
@@ -29,7 +23,6 @@ function $$render_e40e2c10() {
                 (height);
                 (sum);
             }
-            void box;
         }
         { const $$_promise = (promise2);
             const $$_await = await $$_promise; void $$_await;
@@ -37,14 +30,8 @@ function $$render_e40e2c10() {
         {
             const box = __svn_any();
             const {area, volume} = calculate(box.width, box.height, constant);
-            void area;
-            void volume;
             const perimeter = (box.width + box.height) * constant;
-            void perimeter;
             const [width, height, sum] = [box.width * constant, box.height, box.width * constant + box.height];
-            void width;
-            void height;
-            void sum;
             { svelteHTML.createElement("div", {});                 (area);
                 (volume);
                 (perimeter);
@@ -52,7 +39,6 @@ function $$render_e40e2c10() {
                 (height);
                 (sum);
             }
-            void box;
         }
     });
     void promise1;

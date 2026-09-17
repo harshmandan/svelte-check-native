@@ -5,7 +5,6 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("p", {});             (b);
         }
         };
-        void b;
         return null as any;
     };
     void row;
@@ -14,8 +13,6 @@ function $$render_e40e2c10() {
             (b);
         }
         };
-        void a;
-        void b;
         return null as any;
     };
     void pair;

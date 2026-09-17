@@ -4,17 +4,13 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((name == "world")) {
-            void [name];
         }
         for (let y of __svn_each_items(x)) {
-            void y;
         }
         { const $$_promise = (x);
             const $$_await = await $$_promise; const y = $$_await;
-            void y;
         }
         if ((bla)) {
-            void [bla];
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

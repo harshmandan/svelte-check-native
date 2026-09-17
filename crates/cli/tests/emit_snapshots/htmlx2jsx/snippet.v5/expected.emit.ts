@@ -5,7 +5,6 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("div", {});             (x);
         }
         };
-        void x;
         return null;
     };
     void foo;
@@ -19,7 +18,6 @@ function $$render_e40e2c10() {
         { const $$_promise = (foo);
             const $$_await = await $$_promise; const bar = $$_await;
             (bar);
-            void bar;
         }
         };
         return null;
@@ -29,14 +27,12 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("div", {});             (x);
         }
         };
-        void x;
         return null;
     };
     void defaultValue;
     const jsDoc = (/**@type {number}*/a) => { async () => {
         (a);
         };
-        void a;
         return null;
     };
     void jsDoc;
@@ -54,7 +50,6 @@ function $$render_e40e2c10() {
                         { svelteHTML.createElement("div", {});                             (x);
                         }
                         };
-                        void x;
                         return __svn_snippet_return();
                     },
                     children: () => __svn_snippet_return(),
@@ -74,14 +69,12 @@ function $$render_e40e2c10() {
                     row: (item) => { async () => {
                         (item);
                         };
-                        void item;
                         return __svn_snippet_return();
                     },
                     await_inside: () => { async () => {
                         { const $$_promise = (foo);
                             const $$_await = await $$_promise; const bar = $$_await;
                             (bar);
-                            void bar;
                         }
                         };
                         return __svn_snippet_return();
@@ -105,13 +98,11 @@ function $$render_e40e2c10() {
                     row1: (item) => { async () => {
                         (item);
                         };
-                        void item;
                         return __svn_snippet_return();
                     },
                     row2: (item) => { async () => {
                         (item);
                         };
-                        void item;
                         return __svn_snippet_return();
                     },
                     children: () => __svn_snippet_return(),

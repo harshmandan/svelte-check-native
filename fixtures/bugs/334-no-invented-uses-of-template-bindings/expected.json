@@ -1,0 +1,35 @@
+{
+    "errors": [
+        {
+            "file": "src/s2-06/A.svelte",
+            "line": 1,
+            "column": 5,
+            "code": 2774
+        },
+        {
+            "file": "src/s1-10/B.svelte",
+            "line": 2,
+            "column": 3,
+            "code": 6133
+        },
+        {
+            "file": "src/s2-13/A.svelte",
+            "line": 3,
+            "column": 25,
+            "code": 6133
+        },
+        {
+            "file": "src/s2-13/A.svelte",
+            "line": 1,
+            "column": 16,
+            "code": 6133
+        },
+        {
+            "file": "src/s2-13/A.svelte",
+            "line": 2,
+            "column": 19,
+            "code": 6133
+        }
+    ],
+    "warnings": []
+}

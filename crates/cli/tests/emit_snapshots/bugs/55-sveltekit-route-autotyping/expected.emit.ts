@@ -18,7 +18,6 @@ function $$render_aad4163e() {
         { svelteHTML.createElement("p", {});             (data.count);
         }
         if ((form)) {
-            void [form];
             { svelteHTML.createElement("span", {});             }
         }
     });

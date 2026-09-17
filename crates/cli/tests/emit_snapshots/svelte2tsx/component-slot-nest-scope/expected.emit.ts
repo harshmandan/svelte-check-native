@@ -3,25 +3,31 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
+        const __svn_create_slot = __svn_create_create_slot();
         for (let item of __svn_each_items(items)) {
             for (let { a } of __svn_each_items(item)) {
-                void a;
+                {
+                    __svn_create_slot("default", { a: a });
+                }
             }
-            void item;
+            {
+                __svn_create_slot("second", { a: a });
+            }
         }
         {
             const __svn_C_89 = __svn_ensure_component(Component);
             const __svn_inst_89 = new __svn_C_89({ target: __svn_any(), props: {children: () => __svn_snippet_return()} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, c } = __svn_inst_89.$$slot_def.default; $$_$$;
-                void c;
                 (c);
             }
         }
         { const $$_promise = (promise);
             const $$_await = await $$_promise; const d = $$_await;
             (d);
-            void d;
+        }
+        {
+            __svn_create_slot("third", { d: d, c: c });
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: ((({ a }) => a)(__svn_unwrap_arr((__svn_unwrap_arr(items))))) }, 'second': { a: (a) }, 'third': { d: (d), c: (c) } }, bindings: /** @type {string} */ (''), exports: {} };

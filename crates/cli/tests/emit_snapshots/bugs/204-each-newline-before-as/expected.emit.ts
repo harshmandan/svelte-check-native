@@ -6,13 +6,11 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("ul", {});             for (let item of __svn_each_items(items)) {
-                let i: number = 0;
+                let i = 1;
                 (item.id);
                 { svelteHTML.createElement("li", {});                     (i);
                     (item.name);
                 }
-                void item;
-                void i;
             }
         }
     });

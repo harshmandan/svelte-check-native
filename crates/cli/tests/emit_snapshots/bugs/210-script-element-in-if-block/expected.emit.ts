@@ -15,7 +15,6 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((load)) {
-            void [load];
             { svelteHTML.createElement("script", {
                 "defer": true,
                 "src": `https://example.com/some-script.js`,
@@ -24,7 +23,6 @@ function $$render_e40e2c10() {
             }
         }
         if ((loadNonce)) {
-            void [loadNonce];
             { svelteHTML.createElement("script", {
                 "defer": true,
                 "nonce": `%sveltekit.nonce%`,

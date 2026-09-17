@@ -16,7 +16,6 @@ function $$render_e40e2c10() {
             const $$_await = await $$_promise; const v = $$_await;
             { svelteHTML.createElement("span", {});                 (v.toFixed(2));
             }
-            void v;
         }
         { const $$_promise = (q);
             const $$_await = await $$_promise; void $$_await;
@@ -25,7 +24,6 @@ function $$render_e40e2c10() {
             const e = __svn_any();
             { svelteHTML.createElement("span", {});                 (String(e));
             }
-            void e;
         }
         { const $$_promise = (fetchData(
     'https://example.com',
@@ -34,7 +32,6 @@ function $$render_e40e2c10() {
             const $$_await = await $$_promise; const ok = $$_await;
             { svelteHTML.createElement("span", {});                 (ok ? 'yes' : 'no');
             }
-            void ok;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

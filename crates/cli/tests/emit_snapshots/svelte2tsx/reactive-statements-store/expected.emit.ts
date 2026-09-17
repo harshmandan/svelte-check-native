@@ -3,16 +3,16 @@
 function $$render_e40e2c10() {
 
     const uid = readable('')/*svn:ignore_start*/;let $uid = __svn_store_get(uid);/*svn:ignore_end*/
-    let foo1 = __svn_invalidate(() => (getFoo1($uid)))/*svn:ignore_start*/;let $foo1 = __svn_store_get(foo1);/*svn:ignore_end*/; void foo1;
+    let foo1 = __svn_invalidate(() => (getFoo1($uid)))/*svn:ignore_start*/;let $foo1 = __svn_store_get(foo1);/*svn:ignore_end*/;
     ;() => { $: console.log({ foo1: $foo1 }); };
     
-    let foo2 = __svn_invalidate(() => (getFoo2($uid)))/*svn:ignore_start*/;let $foo2 = __svn_store_get(foo2);/*svn:ignore_end*/; void foo2;
+    let foo2 = __svn_invalidate(() => (getFoo2($uid)))/*svn:ignore_start*/;let $foo2 = __svn_store_get(foo2);/*svn:ignore_end*/;
     ;() => { $: console.log({ foo2: $foo2 }) };
 
-    let {foo3} = __svn_invalidate(() => (getFoo3($uid)))/*svn:ignore_start*/;let $foo3 = __svn_store_get(foo3);/*svn:ignore_end*/; void foo3;
+    let {foo3} = __svn_invalidate(() => (getFoo3($uid)))/*svn:ignore_start*/;let $foo3 = __svn_store_get(foo3);/*svn:ignore_end*/;
     ;() => { $: console.log({ foo3: $foo3 }); };
     
-    let {foo4} = __svn_invalidate(() => (getFoo4($uid)))/*svn:ignore_start*/;let $foo4 = __svn_store_get(foo4);/*svn:ignore_end*/; void foo4;
+    let {foo4} = __svn_invalidate(() => (getFoo4($uid)))/*svn:ignore_start*/;let $foo4 = __svn_store_get(foo4);/*svn:ignore_end*/;
     ;() => { $: console.log({ foo4: $foo4 }) };
     ;(async () => {
         // template type-check body (incremental)

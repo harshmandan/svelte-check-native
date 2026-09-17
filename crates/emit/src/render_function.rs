@@ -87,8 +87,8 @@ pub(crate) fn emit_template_check_fn(
     // components silent. Mirrors upstream svelte2tsx's `;const
     // __sveltets_createSlot = __sveltets_2_createCreateSlot<$$Slots>();`
     // emission at `htmlxtojsx_v2/nodes/Slot.ts` + `addComponentExport.ts`.
-    if is_ts && svelte4::compat::fragment_contains_slot(fragment) {
-        if has_strict_slots_decl {
+    if svelte4::compat::fragment_contains_slot(fragment) {
+        if is_ts && has_strict_slots_decl {
             buf.push_str(
                 "        const __svn_create_slot = __svn_create_create_slot<$$Slots>();\n",
             );

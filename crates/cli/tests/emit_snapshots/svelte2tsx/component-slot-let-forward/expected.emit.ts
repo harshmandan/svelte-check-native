@@ -3,13 +3,15 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
+        const __svn_create_slot = __svn_create_create_slot();
         {
             const __svn_C_0 = __svn_ensure_component(Component);
             const __svn_inst_0 = new __svn_C_0({ target: __svn_any(), props: {} });
             {
                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, name: n, thing, whatever: { bla } } = __svn_inst_0.$$slot_def.default; $$_$$;
-                void n;
-                void thing;
+                {
+                    __svn_create_slot("default", { n: n, thing: thing, bla: bla });
+                }
             }
         }
     });

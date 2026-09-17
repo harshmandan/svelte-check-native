@@ -18,7 +18,6 @@ function $$render_e40e2c10() {
                             const __svn_inst_4d = new __svn_C_4d({ target: __svn_any(), props: {} });
                             {
                                 const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, value } = __svn_inst_4d.$$slot_def["named"]; $$_$$;
-                                void value;
                                 {
                                     const __svn_C_65 = __svn_ensure_component(Slotted);
                                     new __svn_C_65({ target: __svn_any(), props: {} });

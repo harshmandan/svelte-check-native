@@ -57,7 +57,6 @@
 pub const EMIT_SCHEMA_VERSION: u32 = 1;
 
 mod default_export;
-mod destructure_idents;
 mod emit_buffer;
 mod hoisted_imports;
 mod htmlxtojsx_utils;
@@ -1946,8 +1945,6 @@ pub use is_ts::set_preserve_attribute_case;
 pub(crate) use is_ts::{IsTsGuard, emit_is_ts, preserve_attribute_case};
 pub(crate) use void_block::{emit_bind_pair_declarations, emit_void_block};
 
-pub(crate) use destructure_idents::{param_binding_names, pattern_binding_names};
-
 /// For each root snippet, whether upstream hoists it to module scope:
 /// there must be a module script, and every free name of the snippet
 /// must be allowed there — not declared by the instance script, not a
@@ -2011,7 +2008,6 @@ fn module_hoistable_snippets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nodes::if_else_block::extract_property_chains;
     use crate::svelte4::compat::{
         assert_exported_prop_types_in_place, rewrite_definite_assignment_in_place,
     };
@@ -2031,86 +2027,6 @@ mod tests {
         let targets: Vec<SmolStr> = targets.iter().map(|s| SmolStr::from(*s)).collect();
         assert_exported_prop_types_in_place(&mut out, &(0..src.len()), &targets, None, is_ts);
         out
-    }
-
-    // ---------- extract_property_chains (Phase 3.2) ----------
-    // Gate the AST-based rewrite against the canonical shapes the
-    // byte walker handled.
-
-    fn chains(text: &str) -> Vec<String> {
-        extract_property_chains(text)
-    }
-
-    #[test]
-    fn chains_plain_identifier() {
-        assert_eq!(chains("foo"), vec!["foo"]);
-    }
-
-    #[test]
-    fn chains_member_access() {
-        assert_eq!(chains("ctx.GhostButton"), vec!["ctx.GhostButton"]);
-    }
-
-    #[test]
-    fn chains_optional_member_access() {
-        assert_eq!(chains("ctx?.GhostButton"), vec!["ctx?.GhostButton"]);
-    }
-
-    #[test]
-    fn chains_logical_and_chain() {
-        assert_eq!(
-            chains("editable && ctx.GhostButton && options.length < max"),
-            vec!["editable", "ctx.GhostButton", "options.length", "max"]
-        );
-    }
-
-    #[test]
-    fn chains_nullish_coalescing_with_equality() {
-        // Regression: the byte walker returned `name1` via its balanced-
-        // paren skip + next-identifier pickup. The AST walker must
-        // produce the same chain list.
-        assert_eq!(chains("(name1 ?? \"bla\") == \"world\""), vec!["name1"]);
-    }
-
-    #[test]
-    fn chains_call_keeps_callee_not_args() {
-        // Arrow body in the arg list must NOT leak: `m`, `m.role`
-        // are arrow-scope bindings.
-        assert_eq!(
-            chains("messages.some((m) => m.role === 'x')"),
-            vec!["messages.some"]
-        );
-    }
-
-    #[test]
-    fn chains_await_argument_recurses() {
-        // Regression: condition `await promise` must emit `[promise]`
-        // as the ref marker. The AST walker was dropping
-        // AwaitExpression in an earlier iteration.
-        assert_eq!(chains("await promise"), vec!["promise"]);
-    }
-
-    #[test]
-    fn chains_dedup_preserves_first_order() {
-        assert_eq!(chains("a && b && a.c && a"), vec!["a", "b", "a.c"]);
-    }
-
-    #[test]
-    fn chains_filters_keywords() {
-        // `typeof x === 'string'` — `typeof` is a keyword, skip.
-        assert_eq!(chains("typeof x === 'string'"), vec!["x"]);
-    }
-
-    #[test]
-    fn chains_filters_dollar_ident() {
-        // Svelte auto-subscribe `$store` is handled separately; it
-        // shouldn't appear in the marker.
-        assert_eq!(chains("$store && ok"), vec!["ok"]);
-    }
-
-    #[test]
-    fn chains_empty_input_returns_empty() {
-        assert!(chains("").is_empty());
     }
 
     #[test]

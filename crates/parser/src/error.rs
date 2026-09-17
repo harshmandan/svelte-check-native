@@ -145,10 +145,9 @@ impl ParseError {
     /// Whether the Svelte compiler's `parse()` throws on the input this
     /// error describes. svelte-check converts components with
     /// svelte2tsx in strict mode, so such a component is left out of
-    /// the run entirely. An unknown `lang=` is only our own notice: the
-    /// compiler accepts any value.
+    /// the run entirely.
     pub fn compiler_rejects(&self) -> bool {
-        self.is_fatal() && !matches!(self, Self::UnknownScriptLang { .. })
+        self.is_fatal()
     }
 
     /// A stable kebab-case slug per variant, used as the diagnostic

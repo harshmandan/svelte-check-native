@@ -82,6 +82,7 @@ mod svelte2tsx_utils;
 mod svelte4;
 mod sveltekit;
 mod util;
+mod verbatim_scripts;
 
 use render_function::{emit_render_body_return, emit_template_check_fn};
 
@@ -293,6 +294,58 @@ fn emit_document_with_render_name(
     // on TS-vs-JS overlay shape without threading `is_ts` through 9+
     // function signatures. Reset on scope exit via `IsTsGuard`.
     let _ts_guard = IsTsGuard::enter(is_ts);
+    // A script block svelte2tsx's own scan does not recognise is not a
+    // script to it: emit without it and keep its text in the template.
+    let spans = verbatim_scripts::recognised_script_spans(doc.source);
+    let unrecognised = |s: &Option<svn_parser::ScriptSection<'_>>| {
+        s.as_ref().is_some_and(|s| {
+            !verbatim_scripts::is_recognised(&spans, s.open_tag_range, s.close_tag_range)
+        })
+    };
+    if unrecognised(&doc.instance_script) || unrecognised(&doc.module_script) {
+        let mut verbatim: Vec<svn_core::Range> = Vec::new();
+        let mut keep = |s: &Option<svn_parser::ScriptSection<'_>>| {
+            if let Some(sec) = s.as_ref().filter(|_| unrecognised(s)) {
+                verbatim.push(svn_core::Range::new(
+                    sec.open_tag_range.start,
+                    sec.close_tag_range.end,
+                ));
+                true
+            } else {
+                false
+            }
+        };
+        let drop_module = keep(&doc.module_script);
+        let drop_instance = keep(&doc.instance_script);
+        let reduced = Document {
+            source: doc.source,
+            module_script: if drop_module {
+                None
+            } else {
+                doc.module_script.clone()
+            },
+            instance_script: if drop_instance {
+                None
+            } else {
+                doc.instance_script.clone()
+            },
+            style: doc.style.clone(),
+            template: svn_parser::Template {
+                text_runs: doc.template.text_runs.clone(),
+            },
+        };
+        verbatim.sort_by_key(|r| r.start);
+        return render_function::with_verbatim_template_text(verbatim, || {
+            emit_document_with_render_name(
+                &reduced,
+                fragment,
+                summary,
+                render_name,
+                source_path,
+                is_ts,
+            )
+        });
+    }
     let estimated_capacity = doc.source.len().saturating_mul(2).saturating_add(256);
     let mut buf = EmitBuffer::with_capacity(estimated_capacity);
 

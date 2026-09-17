@@ -107,15 +107,75 @@ pub(crate) fn emit_template_check_fn(
     let instantiations_by_start = instantiation_index(summary);
     let mut action_counter: usize = 0;
     buf.resync_current_line();
-    emit_template_body(
-        buf,
-        doc.source,
-        fragment,
-        2,
-        &instantiations_by_start,
-        &mut action_counter,
-    );
+    let verbatim = VERBATIM_TEMPLATE_TEXT.with(|v| v.borrow().clone());
+    if verbatim.is_empty() {
+        emit_template_body(
+            buf,
+            doc.source,
+            fragment,
+            2,
+            &instantiations_by_start,
+            &mut action_counter,
+        );
+    } else {
+        // Script text svelte2tsx does not treat as a script sits among
+        // the template's top-level nodes in source order.
+        let mut rest: &[svn_parser::Node] = &fragment.nodes;
+        for range in &verbatim {
+            let split = rest
+                .iter()
+                .position(|n| n.range().start >= range.end)
+                .unwrap_or(rest.len());
+            let (before, after) = rest.split_at(split);
+            let part = svn_parser::Fragment {
+                nodes: before.to_vec(),
+                ..fragment.clone()
+            };
+            emit_template_body(
+                buf,
+                doc.source,
+                &part,
+                2,
+                &instantiations_by_start,
+                &mut action_counter,
+            );
+            buf.push_str("        ");
+            buf.append_with_source(range.slice(doc.source), *range);
+            buf.push_str("\n");
+            rest = after;
+        }
+        let part = svn_parser::Fragment {
+            nodes: rest.to_vec(),
+            ..fragment.clone()
+        };
+        emit_template_body(
+            buf,
+            doc.source,
+            &part,
+            2,
+            &instantiations_by_start,
+            &mut action_counter,
+        );
+    }
     buf.push_str("    });\n");
+}
+
+thread_local! {
+    /// Source ranges of script blocks svelte2tsx leaves in the template
+    /// as text (see `verbatim_scripts`), set for one document's emit.
+    static VERBATIM_TEMPLATE_TEXT: std::cell::RefCell<Vec<svn_core::Range>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Run `f` with `ranges` written verbatim into the template check body.
+pub(crate) fn with_verbatim_template_text<R>(
+    ranges: Vec<svn_core::Range>,
+    f: impl FnOnce() -> R,
+) -> R {
+    let previous = VERBATIM_TEMPLATE_TEXT.with(|v| std::mem::replace(&mut *v.borrow_mut(), ranges));
+    let out = f();
+    VERBATIM_TEMPLATE_TEXT.with(|v| *v.borrow_mut() = previous);
+    out
 }
 
 /// Emit `$$render_<hash>`'s return statement at the tail of its body.

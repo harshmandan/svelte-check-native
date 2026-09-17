@@ -74,7 +74,7 @@ pub(crate) fn collect_component_instantiation(
         },
         &c.attributes,
         &c.children,
-        c.range.start,
+        c.range,
         source,
         summary,
     );
@@ -102,10 +102,12 @@ pub(crate) fn collect_instantiation_inner(
     root: InstantiationRoot,
     attributes: &[Attribute],
     children: &svn_parser::Fragment,
-    range_start: u32,
+    node_range: Range,
     source: &str,
     summary: &mut TemplateSummary,
 ) {
+    let range_start = node_range.start;
+    let range_end = node_range.end;
     let InstantiationRoot {
         text: component_root,
         range: root_range,
@@ -147,6 +149,25 @@ pub(crate) fn collect_instantiation_inner(
         None
     };
     let mut prop_comments: Vec<(Range, CommentThread)> = Vec::new();
+    let element_directives: Vec<svn_parser::Directive> = attributes
+        .iter()
+        .filter_map(|a| match a {
+            Attribute::Directive(d)
+                if matches!(
+                    d.kind,
+                    svn_parser::DirectiveKind::Class
+                        | svn_parser::DirectiveKind::Style
+                        | svn_parser::DirectiveKind::Transition
+                        | svn_parser::DirectiveKind::In
+                        | svn_parser::DirectiveKind::Out
+                        | svn_parser::DirectiveKind::Animate
+                ) =>
+            {
+                Some(d.clone())
+            }
+            _ => None,
+        })
+        .collect();
     for (index, attr) in attributes.iter().enumerate() {
         let comments = comment_thread(attributes, index, source);
         let props_before = props.len();
@@ -193,6 +214,8 @@ pub(crate) fn collect_instantiation_inner(
             bind_directives,
             prop_comments,
             implicit_children_anchor,
+            element_directives,
+            start_tag_end: start_tag_end(range_start, range_end, children, source),
             node_start: range_start,
         });
 }
@@ -433,6 +456,21 @@ fn kept_attribute_ranges(attr: &Attribute, source: &str, out: &mut Vec<(u32, u32
             }
         }
     }
+}
+
+/// svelte2tsx's `computeStartTagEnd` for a component node.
+fn start_tag_end(start: u32, end: u32, children: &svn_parser::Fragment, source: &str) -> u32 {
+    if let Some(first) = children.nodes.first() {
+        return first.range().start;
+    }
+    let bytes = source.as_bytes();
+    if end >= 2 && bytes.get(end as usize - 2) == Some(&b'/') {
+        return end;
+    }
+    source
+        .get(start as usize..end.saturating_sub(1) as usize)
+        .and_then(|s| s.rfind('>'))
+        .map_or(end, |i| start + i as u32 + 1)
 }
 
 /// Where [`collect_attribute`] records what one attribute contributes.

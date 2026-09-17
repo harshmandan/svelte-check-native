@@ -49,7 +49,7 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
                 self_root(s.range.start),
                 &s.attributes,
                 &s.children,
-                s.range.start,
+                s.range,
                 v.source,
                 &mut v.summary,
             );
@@ -106,7 +106,7 @@ pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, s: &SvelteElement) {
                 root,
                 &attrs,
                 &s.children,
-                s.range.start,
+                s.range,
                 v.source,
                 &mut v.summary,
             );

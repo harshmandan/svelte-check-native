@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/C.svelte",
+            "line": 0,
+            "column": 37,
+            "code": 6133
+        },
+        {
+            "file": "src/Plain.svelte",
+            "line": 0,
+            "column": 22,
+            "code": 2322
+        }
+    ],
+    "_note": "A `use:` action on a component, `<svelte:self>` or `<svelte:component>` makes svelte2tsx throw (the action handler calls `addAction`, which only elements have), so svelte-check leaves the file out entirely: none of its type errors or compiler errors are reported. Plain.svelte shows the rest of the run is unaffected."
+}

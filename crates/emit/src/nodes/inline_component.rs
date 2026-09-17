@@ -297,6 +297,7 @@ pub(crate) fn emit_component_call(
         buf.push_str(";\n");
         emit_component_bind_widen_trailers(buf, inst, &inner);
         emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
+        emit_component_element_directives(buf, source, inst, &inner);
         emit_on_event_calls(buf, source, inst, &inst_local, &inner);
         emit_component_bindings_post_check(buf, inst, &inst_local, &inner);
         return;
@@ -327,6 +328,7 @@ pub(crate) fn emit_component_call(
         buf.push_str(";\n");
         emit_component_bind_widen_trailers(buf, inst, &inner);
         emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
+        emit_component_element_directives(buf, source, inst, &inner);
         emit_on_event_calls(buf, source, inst, &inst_local, &inner);
         emit_component_bindings_post_check(buf, inst, &inst_local, &inner);
         return;
@@ -364,6 +366,7 @@ pub(crate) fn emit_component_call(
     buf.push_str(";\n");
     emit_component_bind_widen_trailers(buf, inst, &inner);
     emit_bind_this_assignment(buf, source, inst, &inst_local, &inner);
+    emit_component_element_directives(buf, source, inst, &inner);
     emit_on_event_calls(buf, source, inst, &inst_local, &inner);
     emit_component_bindings_post_check(buf, inst, &inst_local, &inner);
     emit_snippet_prop_destructure(buf, snippet_children, &inst_local, &inner);
@@ -492,7 +495,9 @@ fn emit_component_bindings_post_check(
         // surfaces the diagnostic at the directive's source position.
         let lhs = format!("{inst_local}.$$bindings");
         buf.append_with_source(&lhs, d.range);
-        buf.push_str(" = ");
+        // Upstream reports this error over the whole directive; the
+        // text right after the reference resolves to its end.
+        buf.append_with_source(" = ", svn_core::Range::new(d.range.end, d.range.end + 1));
         let literal = format!("'{}'", d.name.as_str());
         buf.append_with_source(&literal, d.range);
         buf.push_str(";\n");
@@ -571,6 +576,82 @@ fn emit_on_event_calls(
         buf.push_str("));");
         crate::nodes::comment::write_trailing_comments(buf, source, &ev.comments);
         buf.push('\n');
+    }
+}
+
+/// Write the `class:` / `style:` / transition / `animate:` directives on
+/// a component after its constructor call. svelte2tsx handles them as
+/// it does on an element, but a component has no element tag or typings
+/// namespace, so a transition or animation receives
+/// `undefined.mapElementTag('undefined')` (TS18050). That text follows
+/// the directive name, and resolves to the character after it (or the
+/// name's last character when the name ends the start tag).
+fn emit_component_element_directives(
+    buf: &mut EmitBuffer,
+    source: &str,
+    inst: &svn_analyze::ComponentInstantiation,
+    inner: &str,
+) {
+    use svn_parser::DirectiveKind;
+    for d in &inst.element_directives {
+        let name_start = d.range.start + d.kind.prefix_len_with_colon();
+        let name_end = name_start + d.name.len() as u32;
+        let name_range = svn_core::Range::new(name_start, name_end);
+        let expression = match &d.value {
+            Some(svn_parser::DirectiveValue::Expression {
+                expression_range, ..
+            }) => source
+                .get(expression_range.start as usize..expression_range.end as usize)
+                .filter(|t| !t.trim().is_empty())
+                .map(|t| (t, *expression_range)),
+            _ => None,
+        };
+        match d.kind {
+            DirectiveKind::Class => {
+                buf.push_str(inner);
+                match expression {
+                    Some((text, range)) => buf.append_with_source(text, range),
+                    None => buf.append_with_source(d.name.as_str(), name_range),
+                }
+                buf.push_str(";\n");
+            }
+            DirectiveKind::Style => {
+                crate::nodes::style_directive::emit_style_directive(buf, source, d, inner);
+            }
+            DirectiveKind::Transition
+            | DirectiveKind::In
+            | DirectiveKind::Out
+            | DirectiveKind::Animate => {
+                let anchor = if name_end + 1 < inst.start_tag_end {
+                    svn_core::Range::new(name_end, name_end + 1)
+                } else {
+                    svn_core::Range::new(name_end.saturating_sub(1), name_end)
+                };
+                let (wrapper, tail) = if d.kind == DirectiveKind::Animate {
+                    (
+                        "__svn_ensure_animation(",
+                        "(undefined.mapElementTag('undefined'),__svn_AnimationMove",
+                    )
+                } else {
+                    (
+                        "__svn_ensure_transition(",
+                        "(undefined.mapElementTag('undefined')",
+                    )
+                };
+                buf.push_str(inner);
+                buf.push_str(wrapper);
+                buf.append_with_source(d.name.as_str(), name_range);
+                buf.append_with_source(tail, anchor);
+                if let Some((text, range)) = expression {
+                    buf.append_with_source(",(", anchor);
+                    buf.append_with_source(text, range);
+                    buf.push(')');
+                }
+                buf.append_with_source(")", anchor);
+                buf.push_str(");\n");
+            }
+            _ => {}
+        }
     }
 }
 

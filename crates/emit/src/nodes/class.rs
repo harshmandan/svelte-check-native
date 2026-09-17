@@ -46,7 +46,13 @@ pub(crate) fn emit_class_directive(
         _ => {
             // Shorthand `class:foo` — type-check `foo` as an
             // identifier reference.
-            let _ = writeln!(buf, "{indent}({name});", name = d.name.as_str());
+            // svelte's parser gives the shorthand an identifier at the
+            // name, so a missing name is reported there.
+            let name_start = d.range.start + d.kind.prefix_len_with_colon();
+            let name_range = svn_core::Range::new(name_start, name_start + d.name.len() as u32);
+            let _ = write!(buf, "{indent}(");
+            buf.append_with_source(d.name.as_str(), name_range);
+            let _ = writeln!(buf, ");");
         }
     }
 }

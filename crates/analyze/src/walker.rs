@@ -390,6 +390,15 @@ pub struct ComponentInstantiation {
     /// Source character the synthesized implicit `children` prop maps
     /// to, when [`Self::has_implicit_children`] holds.
     pub implicit_children_anchor: Option<Range>,
+    /// `class:` / `style:` / transition / `animate:` directives on the
+    /// component, in source order. svelte2tsx writes each after the
+    /// constructor call as it would for an element, but with the
+    /// component standing in for the element's tag.
+    pub element_directives: Vec<svn_parser::Directive>,
+    /// Where svelte2tsx's rewrite of the start tag ends: the first
+    /// child's start, else the end of a self-closing tag, else just
+    /// past the start tag's `>`.
+    pub start_tag_end: u32,
     /// Byte offset of the `<Component` token in the source. Emit keys
     /// the prop-check on this to locate the correct enclosing scope
     /// (i.e. inside the right `{#each}` / `{#if}` / `{#snippet}` body)

@@ -27,6 +27,9 @@
 //! - template: a direct child of a component whose first attribute
 //!   called `slot` is a bare `slot` (`svelteAst.ts` `getSlotName`
 //!   reads `.raw` off `true[0]`);
+//! - template: a `use:` action on a component, `<svelte:self>` or
+//!   `<svelte:component>` (the action handler calls `addAction`, which
+//!   only elements have);
 //! - template: a `let:` whose value is an object literal with a spread,
 //!   on a component or on a component's direct child that names a slot
 //!   (`handleScopeAndResolveForSlot.ts` hands the object to periscopic's
@@ -129,7 +132,11 @@ impl TemplateProbe<'_> {
     /// A component's own `let:` directives, and its direct children's
     /// slot names and (when they name a slot) `let:` directives.
     fn check_component(&mut self, attributes: &[Attribute], children: &Fragment) {
-        if self.has_spreading_let(attributes) {
+        if self.has_spreading_let(attributes)
+            || attributes.iter().any(|a| {
+                matches!(a, Attribute::Directive(d) if d.kind == svn_parser::DirectiveKind::Use)
+            })
+        {
             self.rejected = true;
         }
         for child in &children.nodes {
@@ -368,6 +375,13 @@ mod tests {
         assert!(!rejects("<div><div slot></div></div>"));
         assert!(!rejects("<C><div slot=\"\"></div><div slot={x}></div></C>"));
         assert!(!rejects("<C><div on:slot slot></div></C>"));
+    }
+
+    #[test]
+    fn action_on_a_component() {
+        assert!(rejects("<C use:act />"));
+        assert!(rejects("<svelte:self use:act />"));
+        assert!(!rejects("<div use:act></div><svelte:window use:act />"));
     }
 
     #[test]

@@ -477,40 +477,6 @@ pub fn build(
         }
     }
     user_includes.extend(projected);
-    // Baseline catch-all for cache overlays. Required because our
-    // cache lives under `node_modules/.cache/svelte-check-native/`,
-    // and TypeScript's default include scan hardcodes `node_modules`
-    // exclusion. Without an explicit `include` glob into the cache,
-    // overlays NEVER reach the program for tsconfigs that omit
-    // `include` entirely (LS-fixture style: just `compilerOptions`
-    // + `exclude`). Upstream svelte-check sidesteps this — their
-    // cache lives at `<workspace>/.svelte-check/`, outside any
-    // default-excluded path, so default scan finds overlays even
-    // with no `include`. Different cache location is the structural
-    // divergence; this glob is its workaround. Documented as the
-    // third intentional divergence in `notes/PARITY_REFACTOR.md`.
-    //
-    // It is emitted ONLY when the user's chain declares neither
-    // `include` nor `files`, which is exactly the case TypeScript
-    // answers by scanning everything under the config directory. When
-    // they DO declare one, the projection above already covers every
-    // overlay their config admits, and adding the catch-all on top
-    // re-admits the ones it doesn't: a `.svelte` file under an
-    // `exclude`d directory, or outside a narrow `include`, came back
-    // into the program through its `.d.svelte.ts` sidecar and got
-    // type-checked anyway. That inflated both the error count and the
-    // FILES denominator on any project whose include is narrower than
-    // its workspace.
-    let declares_file_set = svn_core::tsconfig::winning_patterns(&chain, |f| f.include.as_deref())
-        .is_some()
-        || svn_core::tsconfig::winning_patterns(&chain, |f| f.files.as_deref()).is_some();
-    if !declares_file_set {
-        let cache_dts_glob = format!("{}/**/*.d.svelte.ts", layout.svelte_dir.to_string_lossy());
-        if !user_includes.contains(&cache_dts_glob) {
-            user_includes.push(cache_dts_glob);
-        }
-    }
-
     // The user's `files`, rebased onto the config that declared them.
     //
     // `files` is replace-on-child, so the array we write shadows theirs

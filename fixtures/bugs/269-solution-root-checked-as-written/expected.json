@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": ".svelte-check/tsconfig.json",
+            "line": 21,
+            "column": 4,
+            "code": 6306
+        },
+        {
+            "file": ".svelte-check/tsconfig.json",
+            "line": 24,
+            "column": 4,
+            "code": 6306
+        }
+    ],
+    "_note": "A project-references solution root is checked as written, as svelte-check checks it: its overlay extends the solution, which lists no sources, so no component is type-checked, and the solution's references are carried into the overlay, where the compiler rejects each non-composite referenced project (TS6306, reported on svelte-check's overlay path at the reference's line). Every app's components still count toward the denominator. Verified against svelte-check --tsgo."
+}

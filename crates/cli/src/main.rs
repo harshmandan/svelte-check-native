@@ -364,8 +364,8 @@ fn main() -> ExitCode {
         return ExitCode::from(0);
     }
 
-    let (tsconfig, escaped_solution) = match resolve_tsconfig(&workspace, cli.tsconfig.as_deref()) {
-        Ok(pair) => pair,
+    let tsconfig = match resolve_tsconfig(&workspace, cli.tsconfig.as_deref()) {
+        Ok(path) => path,
         Err(msg) => {
             if msg.ends_with("svelte-check failed") {
                 eprintln!("Error: {msg}");
@@ -375,75 +375,6 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    // If `resolve_tsconfig` escaped a project-references solution to a
-    // sub-app's `tsconfig.json`, redirect the workspace to that sub-app
-    // too. Without this, tsgo's cwd stays at the monorepo root and
-    // `node_modules` resolution for app-local packages
-    // (`@org/types`, workspace-scoped deps) fails from the wrong
-    // directory. The overlay cache, kit-file discovery, and diagnostic
-    // path-relativization all follow workspace.
-    //
-    // Gated on `escaped_solution` AND on the tsconfig having been
-    // DISCOVERED rather than named: an explicit `--tsconfig` must not
-    // relocate the workspace, because that silently changes the
-    // discovery root and the `<N> FILES` denominator. Upstream keeps
-    // workspace and tsconfig independent and has no solution-escape at
-    // all, so `--workspace sol --tsconfig sol/tsconfig.json` finds every
-    // app under `sol`; relocating to the first referenced project
-    // dropped the rest of them from the run entirely.
-    //
-    // The escape itself still applies to an explicit solution config —
-    // the overlay cannot usefully extend a `files: []` solution — but it
-    // only changes which config we compile with, not where we look for
-    // files.
-    let relocate = escaped_solution && cli.tsconfig.is_none();
-    // Explicit --tsconfig naming a solution root: the workspace is NOT
-    // relocated (the denominator must keep covering every app), but
-    // checking runs per referenced project so each app's files see
-    // their own config, cache anchor, and node_modules. See
-    // `run_typecheck`'s solution branch.
-    let solution_projects: Option<(PathBuf, Vec<(PathBuf, PathBuf)>)> =
-        if escaped_solution && cli.tsconfig.is_some() {
-            cli.tsconfig.as_deref().and_then(|p| {
-                let resolved = if p.is_absolute() {
-                    p.to_path_buf()
-                } else {
-                    workspace.join(p)
-                };
-                let named = dunce::canonicalize(&resolved).unwrap_or(resolved);
-                let projects = solution_reference_configs(&named);
-                if projects.is_empty() {
-                    None
-                } else {
-                    Some((named, projects))
-                }
-            })
-        } else {
-            None
-        };
-    let (workspace, solution_root_tsconfig) = match tsconfig.parent() {
-        Some(dir) if relocate && dir != workspace && dir.starts_with(&workspace) => {
-            eprintln!(
-                "svelte-check-native: redirected workspace to {} (parent of {}) — original looked like a TS project-references solution",
-                dir.display(),
-                tsconfig.display(),
-            );
-            // Record the ORIGINAL solution root's tsconfig. Overlay
-            // builder consults it to flatten sibling-project
-            // references into the overlay's include/exclude/paths,
-            // so transitive imports across projects remain visible
-            // to tsgo (see svn_core::tsconfig::flatten_references).
-            let solution_root = workspace.join("tsconfig.json");
-            let solution = if solution_root.is_file() {
-                Some(solution_root)
-            } else {
-                None
-            };
-            (dir.to_path_buf(), solution)
-        }
-        _ => (workspace, None),
-    };
-
     if cli.debug_paths {
         return run_debug_paths(&workspace, Some(&tsconfig));
     }
@@ -559,8 +490,6 @@ fn main() -> ExitCode {
 
     run_typecheck(
         &workspace,
-        solution_projects.as_ref(),
-        solution_root_tsconfig.as_deref(),
         &tsconfig,
         &output,
         threshold,
@@ -1165,20 +1094,11 @@ fn parse_compiler_warnings(
 /// `jsconfig.json`. (`--no-tsconfig` is rejected up front in `main` —
 /// a tsconfig is required, mirroring `svelte-check --tsgo`.)
 ///
-/// When the resolved tsconfig is a TS project-references solution
-/// (`files: []` + no `include` + non-empty `references`), redirect to a
-/// sub-project's tsconfig via [`escape_solution_tsconfig`]. Solution
-/// files coordinate multiple projects but own no source themselves —
-/// our overlay can't inherit useful `paths` / `baseUrl` / resolution
-/// settings from one, so extending it leaves every `$lib/*` import
-/// unresolved. Common root-of-monorepo case in SvelteKit apps.
-/// Returns `(tsconfig_path, escaped_solution)`. `escaped_solution` is
-/// `true` only when the resolved path is a sub-project we redirected to
-/// from a project-references *solution* config — the one case where the
-/// caller should also relocate the workspace. An explicit `--tsconfig`
-/// pointing at an ordinary config returns `false`, so the workspace
-/// stays put (upstream keeps workspace and tsconfig independent).
-fn resolve_tsconfig(workspace: &Path, explicit: Option<&Path>) -> Result<(PathBuf, bool), String> {
+/// A project-references solution (`files: []` plus `references`) is used
+/// as written, as svelte-check uses it: its overlay extends the solution,
+/// which lists no sources, so the compiler checks nothing and only the
+/// Svelte diagnostics of every component under the workspace are reported.
+fn resolve_tsconfig(workspace: &Path, explicit: Option<&Path>) -> Result<PathBuf, String> {
     let candidate: PathBuf = if let Some(p) = explicit {
         let resolved = if p.is_absolute() {
             p.to_path_buf()
@@ -1219,10 +1139,7 @@ fn resolve_tsconfig(workspace: &Path, explicit: Option<&Path>) -> Result<(PathBu
             err.1
         ));
     }
-    match escape_solution_tsconfig(&candidate) {
-        Some(escaped) => Ok((escaped, true)),
-        None => Ok((candidate, false)),
-    }
+    Ok(candidate)
 }
 
 /// The first thing TypeScript's own config reader (`readConfigFile`)
@@ -1310,74 +1227,6 @@ fn line_col(text: &str, offset: usize) -> (usize, usize) {
         .map_or(before.len(), |nl| before.len() - nl - 1)
         + 1;
     (line, col)
-}
-
-/// If `candidate` is a solution-style tsconfig, try to redirect to a
-/// sub-project's tsconfig that carries real `compilerOptions.paths`.
-///
-/// Algorithm:
-///   1. Parse `candidate`. Return `None` if not a solution.
-///   2. For each entry in `references[]`: if the reference points at a
-///      file, that IS the sub-project's config (TS references may name
-///      any file, not just `tsconfig.json`); if it points at a
-///      directory, fall back to the conventional `tsconfig.json` under
-///      it.
-///   3. Load the referenced config's full extends chain via
-///      [`load_chain`]. If any file in the chain declares non-empty
-///      `compilerOptions.paths`, return the leaf as the redirect
-///      target.
-///
-/// The extends walk matters in monorepos that declare `paths` once in a
-/// shared `tsconfig.base.json` and inherit it into each app; a single
-/// `parse_file` of the leaf misses those and leaves us stuck on the
-/// solution root with unresolvable `$lib`-style aliases.
-///
-/// Returns `None` when the tsconfig isn't a solution, no reference's
-/// chain declares paths, or any parse fails — keeps the caller's
-/// original in those cases.
-fn escape_solution_tsconfig(candidate: &Path) -> Option<PathBuf> {
-    let parsed = svn_core::tsconfig::parse_file(candidate).ok()?;
-    if !parsed.is_solution_style() {
-        return None;
-    }
-    let parent = candidate.parent()?;
-    for reference in &parsed.references {
-        let ref_path = parent.join(&reference.path);
-        let config_path = if ref_path.is_file() {
-            // References may name the config file directly (e.g.
-            // `./apps/foo/tsconfig.app.json`). The reference's
-            // filename is the user's explicit "this is the project
-            // config" and we must honor it — a monorepo that picks
-            // variant names like `tsconfig.app.json` for runtime code
-            // and `tsconfig.node.json` for build-time code would
-            // silently redirect to the wrong file (or no file at all)
-            // if we hardcoded `tsconfig.json`.
-            ref_path
-        } else if ref_path.is_dir() {
-            let default = ref_path.join("tsconfig.json");
-            if !default.is_file() {
-                continue;
-            }
-            default
-        } else {
-            continue;
-        };
-        let chain = match svn_core::tsconfig::load_chain(&config_path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let has_paths = chain.iter().any(|f| {
-            f.compiler_options
-                .paths
-                .as_ref()
-                .is_some_and(|p| !p.is_empty())
-        });
-        if !has_paths {
-            continue;
-        }
-        return Some(dunce::canonicalize(&config_path).unwrap_or(config_path));
-    }
-    None
 }
 
 /// Convert `kit_inject`'s byte-offset splices into the `(line, column,
@@ -1534,72 +1383,8 @@ fn render_runs(
     }
 }
 
-/// Every referenced project of a solution-style tsconfig whose config
-/// resolves and loads: `(project_dir, config_path)` per reference,
-/// deduplicated on directory (a solution can reference several configs
-/// in the same project — `tsconfig.playwright.json` next to
-/// `tsconfig.build.json` — and checking the same tree twice under
-/// different options would double every diagnostic; first reference
-/// wins, matching `escape_solution_tsconfig`'s ordering).
-fn solution_reference_configs(candidate: &Path) -> Vec<(PathBuf, PathBuf)> {
-    let Ok(parsed) = svn_core::tsconfig::parse_file(candidate) else {
-        return Vec::new();
-    };
-    if !parsed.is_solution_style() {
-        return Vec::new();
-    }
-    let Some(parent) = candidate.parent() else {
-        return Vec::new();
-    };
-    let mut out: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let mut seen_dirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    for reference in &parsed.references {
-        let ref_path = parent.join(&reference.path);
-        let config_path = if ref_path.is_file() {
-            ref_path
-        } else if ref_path.is_dir() {
-            let default = ref_path.join("tsconfig.json");
-            if !default.is_file() {
-                continue;
-            }
-            default
-        } else {
-            continue;
-        };
-        let config_path = dunce::canonicalize(&config_path).unwrap_or(config_path);
-        if svn_core::tsconfig::load_chain(&config_path).is_err() {
-            continue;
-        }
-        let Some(dir) = config_path.parent().map(Path::to_path_buf) else {
-            continue;
-        };
-        if seen_dirs.insert(dir.clone()) {
-            out.push((dir, config_path));
-        }
-    }
-    out
-}
-
-/// The svelte/vite config summary for one sub-project directory —
-/// the same vite-plugin-first, svelte.config-fallback chain the
-/// workspace-level resolution in `main` uses, so each referenced
-/// project's Kit `files` settings drive its own kit-file discovery.
-fn analyse_dir_svelte_config(dir: &Path) -> svelte_config::SvelteConfigSummary {
-    if let Some(summary) =
-        svelte_config::find_vite_config(dir).and_then(|p| svelte_config::analyse_vite_config(&p))
-    {
-        summary
-    } else if let Some(path) = svelte_config::find_svelte_config(dir) {
-        svelte_config::analyse_with_kit_files(&path)
-    } else {
-        svelte_config::SvelteConfigSummary::default()
-    }
-}
-
 /// Default flow: parse + emit each .svelte file, hand the lot to tsgo,
-/// format diagnostics, exit with the appropriate code. A named
-/// solution root fans out into one `check_project` sub-run per
-/// referenced project that contains a discovered component.
+/// format diagnostics, exit with the appropriate code.
 ///
 /// `threshold` controls which diagnostics are kept: `error` filters out
 /// warnings; `warning` keeps both. `fail_on_warnings` makes warnings
@@ -1612,8 +1397,6 @@ fn analyse_dir_svelte_config(dir: &Path) -> svelte_config::SvelteConfigSummary {
 #[allow(clippy::too_many_arguments)]
 fn run_typecheck(
     workspace: &Path,
-    solution_projects: Option<&(PathBuf, Vec<(PathBuf, PathBuf)>)>,
-    solution_root_tsconfig: Option<&Path>,
     tsconfig: &Path,
     output_format: &str,
     threshold: &str,
@@ -1630,112 +1413,36 @@ fn run_typecheck(
     include_suggestions: bool,
     disable_enhance: bool,
 ) -> ExitCode {
-    let Some((solution_root, projects)) = solution_projects else {
-        // Ordinary single-project run.
-        return match check_project(
-            workspace,
-            solution_root_tsconfig,
-            tsconfig,
-            output_format,
-            sources,
-            compiler_overrides,
-            timings,
-            tsgo_diagnostics,
-            svelte_warnings_mode,
-            ignore_node_modules_warnings,
-            config_resolver,
-            kit_files_settings,
-            include_suggestions,
-            disable_enhance,
-        ) {
-            Ok(run) => render_runs(
-                workspace,
-                vec![run],
-                output_format,
-                color,
-                threshold,
-                fail_on_warnings,
-            ),
-            Err(code) => code,
-        };
-    };
-
-    // Solution root named explicitly: the workspace (and therefore the
-    // discovery denominator and diagnostic path base) stays at the
-    // root, but each referenced project is CHECKED in its own context —
-    // its own tsconfig, its own directory as the cache/module-
-    // resolution anchor, its own svelte config for kit-file discovery.
-    // One program anchored at the root checked every app's files under
-    // the first reference's options, which invented resolution errors
-    // no upstream engine reports (bare workspace deps resolvable only
-    // from the owning app's node_modules).
-    //
-    // Only projects that CONTAIN a discovered `.svelte` file get a
-    // sub-run: svelte-check's surface is components plus whatever they
-    // import, so a pure-TS referenced project is reached through the
-    // importing app's program (where the compiler attributes its
-    // errors) rather than checked as a project of its own — surfacing
-    // a backend package's internal test errors is something no
-    // upstream engine's output does.
-    //
-    // The denominator stays a single root-wide enumeration — upstream's
-    // findFiles counts from the workspace root with no project scoping,
-    // so per-project discovery must not add to it (kit-file
-    // classification differs per anchor and would inflate the count).
-    let (root_svelte, root_kit) =
-        discovery::discover_relevant_files_with_settings(workspace, kit_files_settings);
-    let mut runs: Vec<ProjectRun> = Vec::new();
-    for (project_dir, project_config) in projects {
-        if !root_svelte.iter().any(|f| f.starts_with(project_dir)) {
-            continue;
-        }
-        let sub_summary = analyse_dir_svelte_config(project_dir);
-        match check_project(
-            project_dir,
-            Some(solution_root.as_path()),
-            project_config,
-            output_format,
-            sources,
-            compiler_overrides,
-            timings,
-            tsgo_diagnostics,
-            svelte_warnings_mode,
-            ignore_node_modules_warnings,
-            config_resolver,
-            &sub_summary.kit_files_settings,
-            include_suggestions,
-            disable_enhance,
-        ) {
-            Ok(run) => runs.push(ProjectRun {
-                diagnostics: run.diagnostics,
-                entries: Vec::new(),
-                file_order: run.file_order,
-            }),
-            Err(code) => return code,
-        }
-    }
-    if sources.svelte || sources.css {
-        let root_entries: Vec<PathBuf> = root_svelte.into_iter().chain(root_kit).collect();
-        runs.push(ProjectRun {
-            diagnostics: Vec::new(),
-            file_order: root_entries.clone(),
-            entries: root_entries,
-        });
-    }
-    render_runs(
+    match check_project(
         workspace,
-        runs,
+        tsconfig,
         output_format,
-        color,
-        threshold,
-        fail_on_warnings,
-    )
+        sources,
+        compiler_overrides,
+        timings,
+        tsgo_diagnostics,
+        svelte_warnings_mode,
+        ignore_node_modules_warnings,
+        config_resolver,
+        kit_files_settings,
+        include_suggestions,
+        disable_enhance,
+    ) {
+        Ok(run) => render_runs(
+            workspace,
+            vec![run],
+            output_format,
+            color,
+            threshold,
+            fail_on_warnings,
+        ),
+        Err(code) => code,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn check_project(
     workspace: &Path,
-    solution_root_tsconfig: Option<&Path>,
     tsconfig: &Path,
     output_format: &str,
     sources: DiagnosticSources,
@@ -1850,13 +1557,14 @@ fn check_project(
         if files.contains(path) {
             return true;
         }
-        // TS spec: when `files` is non-empty AND `include` is absent,
-        // ONLY entries listed in `files` are in the project (closed-
-        // world). Without this guard we'd default `include = match all`
-        // and pull every walked file into scope — wrong for the
-        // explicit-allowlist tsconfig pattern. Mirrors upstream
-        // svelte-check + tsc's project-membership rules.
-        if include.is_none() && !files.is_empty() {
+        // With no `include` anywhere in the chain, ONLY entries listed
+        // in `files` are in the project. The compiler would scan the
+        // whole config directory when `files` is absent too, but the
+        // overlay tsconfig svelte-check compiles always has a `files`
+        // list of its own (its shim declarations), which switches that
+        // default scan off: a project declaring neither is checked
+        // against nothing but its shims.
+        if include.is_none() {
             return false;
         }
         // Patterns are now absolute (resolved against the declaring
@@ -2001,7 +1709,7 @@ fn check_project(
         // background `.svelte-kit/types/` mirror start here, BEFORE
         // the emit fan-out, so the mirror's tree walk overlaps the
         // whole emit phase instead of just the overlay writes.
-        let session = match svn_typecheck::CheckSession::new(workspace, solution_root_tsconfig) {
+        let session = match svn_typecheck::CheckSession::new(workspace) {
             Ok(session) => session,
             Err(err) => {
                 let message = format!("type-check failed: {err}");
@@ -2694,103 +2402,5 @@ mod tests {
             compiler_code_docs_url("a11y-autofocus", Severity::Warning),
             Some("https://svelte.dev/docs/svelte/compiler-warnings#a11y_autofocus".to_string()),
         );
-    }
-
-    /// Write a tsconfig with the given JSON body and return its path.
-    fn write_tsconfig(dir: &Path, name: &str, body: &str) -> PathBuf {
-        let path = dir.join(name);
-        std::fs::write(&path, body).unwrap();
-        path
-    }
-
-    #[test]
-    fn escape_solution_keeps_referenced_file_name_not_just_dir() {
-        // Reference points at a variant filename like tsconfig.app.json.
-        // Pre-fix we'd drop the filename and try <dir>/tsconfig.json,
-        // miss it, and never redirect — leaving the user stuck on the
-        // solution root with unresolvable paths.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let app_dir = root.join("apps/foo");
-        std::fs::create_dir_all(&app_dir).unwrap();
-        write_tsconfig(
-            root,
-            "tsconfig.json",
-            r#"{ "files": [], "references": [{ "path": "./apps/foo/tsconfig.app.json" }] }"#,
-        );
-        let app_ts = write_tsconfig(
-            &app_dir,
-            "tsconfig.app.json",
-            r#"{ "compilerOptions": { "paths": { "$lib/*": ["./src/lib/*"] } } }"#,
-        );
-        let redirected = escape_solution_tsconfig(&root.join("tsconfig.json")).unwrap();
-        assert_eq!(
-            dunce::canonicalize(&redirected).unwrap(),
-            dunce::canonicalize(&app_ts).unwrap(),
-        );
-    }
-
-    #[test]
-    fn escape_solution_follows_extends_for_paths_discovery() {
-        // Leaf `tsconfig.json` declares no paths of its own but inherits
-        // them from a shared `tsconfig.base.json` via `extends`. Pre-fix
-        // we only looked at the leaf and missed the redirect entirely.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        write_tsconfig(
-            root,
-            "tsconfig.base.json",
-            r#"{ "compilerOptions": { "paths": { "$app/*": ["./src/app/*"] } } }"#,
-        );
-        let app_dir = root.join("apps/foo");
-        std::fs::create_dir_all(&app_dir).unwrap();
-        write_tsconfig(
-            root,
-            "tsconfig.json",
-            r#"{ "files": [], "references": [{ "path": "./apps/foo" }] }"#,
-        );
-        let leaf = write_tsconfig(
-            &app_dir,
-            "tsconfig.json",
-            r#"{ "extends": "../../tsconfig.base.json", "compilerOptions": { "strict": true } }"#,
-        );
-        let redirected = escape_solution_tsconfig(&root.join("tsconfig.json")).unwrap();
-        assert_eq!(
-            dunce::canonicalize(&redirected).unwrap(),
-            dunce::canonicalize(&leaf).unwrap(),
-        );
-    }
-
-    #[test]
-    fn escape_solution_skips_reference_whose_chain_has_no_paths() {
-        // References that inherit nothing path-related stay on the
-        // solution root. The escape only exists to rescue paths
-        // resolution; skipping leaves other flows untouched.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let app_dir = root.join("apps/foo");
-        std::fs::create_dir_all(&app_dir).unwrap();
-        write_tsconfig(
-            root,
-            "tsconfig.json",
-            r#"{ "files": [], "references": [{ "path": "./apps/foo" }] }"#,
-        );
-        write_tsconfig(
-            &app_dir,
-            "tsconfig.json",
-            r#"{ "compilerOptions": { "strict": true } }"#,
-        );
-        assert!(escape_solution_tsconfig(&root.join("tsconfig.json")).is_none());
-    }
-
-    #[test]
-    fn escape_solution_returns_none_for_non_solution_tsconfig() {
-        let tmp = tempfile::tempdir().unwrap();
-        let ts = write_tsconfig(
-            tmp.path(),
-            "tsconfig.json",
-            r#"{ "compilerOptions": { "strict": true }, "include": ["src/**/*"] }"#,
-        );
-        assert!(escape_solution_tsconfig(&ts).is_none());
     }
 }

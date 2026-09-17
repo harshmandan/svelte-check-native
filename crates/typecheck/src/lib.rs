@@ -238,13 +238,12 @@ pub(crate) fn incremental() -> bool {
 
 pub fn check(
     workspace: &Path,
-    solution_root_tsconfig: Option<&Path>,
     user_tsconfig: &Path,
     inputs: Vec<CheckInput>,
     extended_diagnostics: bool,
     include_suggestions: bool,
 ) -> Result<CheckOutput, CheckError> {
-    let session = CheckSession::new(workspace, solution_root_tsconfig)?;
+    let session = CheckSession::new(workspace)?;
     // Step 1: the per-input write fan-out. The work per input is 5-6
     // blocking filesystem ops (read-compare writes, sibling remove,
     // ambient stats) plus pure compute, with no shared mutable state —
@@ -325,14 +324,8 @@ pub struct CheckSession {
 impl CheckSession {
     /// Set up the cache and start the background kit-types mirror
     /// sync. See the struct docs for the phase layout.
-    pub fn new(
-        workspace: &Path,
-        solution_root_tsconfig: Option<&Path>,
-    ) -> Result<Self, CheckError> {
-        let layout = CacheLayout::for_workspace_with_solution_root(
-            workspace,
-            solution_root_tsconfig.map(|p| p.to_path_buf()),
-        );
+    pub fn new(workspace: &Path) -> Result<Self, CheckError> {
+        let layout = CacheLayout::for_workspace(workspace);
 
         // Version-stamp gate BEFORE anything touches the root (the kit
         // mirror task below writes under it): a cache written by a

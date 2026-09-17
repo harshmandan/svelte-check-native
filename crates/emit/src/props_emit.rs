@@ -252,17 +252,6 @@ enum AnnotationAction {
 
 fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAction> {
     use oxc_span::GetSpan;
-    let BindingPattern::ObjectPattern(obj) = &declarator.id else {
-        return None;
-    };
-    // Initializer must be a bare `$props()` call with NO explicit
-    // type argument. When the user wrote `$props<T>()` they already
-    // expressed the intended type — upstream's `ExportedNames` swaps
-    // the generic argument in place with `$$ComponentProps` (via
-    // ignore markers) rather than adding a destructure annotation,
-    // so we leave it alone on that shape to match. Annotating on top
-    // of `$props<T>()` would double-specify and silence downstream
-    // errors that upstream catches.
     let init = declarator.init.as_ref()?;
     let Expression::CallExpression(call) = init else {
         return None;
@@ -274,9 +263,10 @@ fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAc
         return None;
     }
     if let Some(args) = &call.type_arguments {
-        // `$props<{ … }>()`: upstream moves a literal type argument into
-        // the `$$ComponentProps` alias and leaves the alias name, marked
-        // ignored, as the argument. A named type stays where it is.
+        // `$props<{ … }>()`, destructured or not: upstream moves a
+        // literal type argument into the `$$ComponentProps` alias and
+        // leaves the alias name, marked generated, as the argument. A
+        // named type stays where it is.
         let arg = args.params.first()?;
         if matches!(arg, oxc_ast::ast::TSType::TSTypeReference(_)) {
             return None;
@@ -286,6 +276,10 @@ fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAc
             end: arg.span().end as usize,
         });
     }
+    // Without a type argument, only a destructure gets the annotation.
+    let BindingPattern::ObjectPattern(obj) = &declarator.id else {
+        return None;
+    };
     // CASE A — user wrote `let { … }: { lit } = $props()`. Replace
     // the literal annotation with `$$ComponentProps` (wrapped in
     // ignore markers to drop tsgo errors inside). This collapses a

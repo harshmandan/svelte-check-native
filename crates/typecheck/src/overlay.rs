@@ -273,11 +273,24 @@ pub fn build(
     // resolution doesn't need it (handled by `allowArbitraryExtensions`
     // + the `.d.svelte.ts` ambient sidecars whose `.ts` re-exports are
     // legal under declaration-file rules regardless of the flag).
-    compiler_options.insert("incremental".into(), json!(true));
-    compiler_options.insert(
-        "tsBuildInfoFile".into(),
-        json!(layout.tsbuildinfo.to_string_lossy()),
-    );
+    // Incremental only on request, as upstream (`incremental.ts`).
+    let incremental = crate::incremental();
+    compiler_options.insert("incremental".into(), json!(incremental));
+    if incremental {
+        compiler_options.insert(
+            "tsBuildInfoFile".into(),
+            json!(layout.tsbuildinfo.to_string_lossy()),
+        );
+    } else if svn_core::tsconfig::winning_field(&chain, |f| f.compiler_options.composite)
+        .is_some_and(|(_, on)| on)
+    {
+        // A composite project may not turn incremental compilation off
+        // (TS6379), and tsgo then checks nothing — upstream's `--tsgo`
+        // run on such a project reports only that error. We check the
+        // project instead, as a composite build would, with the
+        // composite contract (emit bookkeeping we never produce) off.
+        compiler_options.insert("composite".into(), json!(false));
+    }
     // `skipLibCheck` is INHERITED, not forced. Per CLAUDE.md ("not
     // stricter or lax-er than upstream"), the user's tsconfig setting
     // wins — when unset, tsgo defaults to `false` and type-checks
@@ -1202,8 +1215,9 @@ mod tests {
         let opts = &overlay["compilerOptions"];
         assert_eq!(opts["noEmit"], json!(true));
         assert_eq!(opts["allowArbitraryExtensions"], json!(true));
-        assert_eq!(opts["incremental"], json!(true));
-        assert!(opts["tsBuildInfoFile"].is_string());
+        // Incremental only under `--incremental`, as upstream.
+        assert_eq!(opts["incremental"], json!(false));
+        assert!(opts.get("tsBuildInfoFile").is_none());
     }
 
     #[test]

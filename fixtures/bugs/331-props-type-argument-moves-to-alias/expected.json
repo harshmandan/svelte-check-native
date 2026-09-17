@@ -1,0 +1,18 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 7,
+            "code": 2552
+        }
+    ],
+    "warnings": [
+        {
+            "file": "input.svelte",
+            "line": 5,
+            "column": 20,
+            "code": "state_referenced_locally"
+        }
+    ]
+}

@@ -114,12 +114,30 @@ pub(crate) fn is_overlay_attribute_key(overlay: &str, offset: u32) -> bool {
     false
 }
 
-/// Check whether `offset` falls inside any `(start, end)` range in
-/// `regions`. Linear scan; regions are typically few per file.
-pub(crate) fn is_in_ignore_region(regions: &[(u32, u32)], offset: u32) -> bool {
-    regions
-        .iter()
-        .any(|&(start, end)| offset >= start && offset < end)
+/// Upstream's `isInGeneratedCode` (`language-server/src/plugins/
+/// typescript/features/utils.ts`), verbatim: a diagnostic spanning
+/// overlay bytes `start..end` is generated when the nearest ignore-start
+/// marker at or before `start` follows the nearest ignore-end marker
+/// there (or that end marker is also the first one at or after `end`),
+/// and an ignore-end marker follows. A position on the start marker
+/// itself counts as generated.
+pub(crate) fn is_in_generated_code(text: &str, start: usize, end: usize) -> bool {
+    // `text.lastIndexOf(s, from)` / `text.indexOf(s, from)`, -1 for none.
+    let last_index_of = |s: &str, from: usize| -> i64 {
+        let limit = from.saturating_add(s.len()).min(text.len());
+        text.get(..limit)
+            .and_then(|head| head.rfind(s))
+            .map_or(-1, |i| i as i64)
+    };
+    let index_of = |s: &str, from: usize| -> i64 {
+        text.get(from.min(text.len())..)
+            .and_then(|tail| tail.find(s))
+            .map_or(-1, |i| (i + from) as i64)
+    };
+    let last_start = last_index_of(IGNORE_START_MARKER, start);
+    let last_end = last_index_of(IGNORE_END_MARKER, start);
+    let next_end = index_of(IGNORE_END_MARKER, end);
+    (last_start > last_end || last_end == next_end) && last_start < next_end
 }
 
 /// Does the diagnostic at `offset` fall inside an
@@ -196,38 +214,6 @@ pub(crate) fn is_overlay_in_ensure_transition_call(overlay: &str, offset: u32) -
 /// check.
 pub(crate) fn is_expected_three_arguments_message(message: &str) -> bool {
     message.contains(" 3")
-}
-
-/// Scan `overlay_text` for [`IGNORE_START_MARKER`] / [`IGNORE_END_MARKER`]
-/// pairs and return their byte-offset ranges in the overlay.
-///
-/// Each `ignore_start` pairs with the NEXT `ignore_end` (mirrors
-/// upstream's `isInGeneratedCode` pairing semantics). A stray
-/// unmatched `ignore_start` with no subsequent `ignore_end` extends
-/// to `overlay_text.len()` — equivalent to "everything after this
-/// marker is scaffolding". Empty result when the overlay has no
-/// markers.
-pub fn scan_ignore_regions(overlay_text: &str) -> Vec<(u32, u32)> {
-    let bytes = overlay_text.as_bytes();
-    let start_marker = IGNORE_START_MARKER.as_bytes();
-    let end_marker = IGNORE_END_MARKER.as_bytes();
-    let mut regions: Vec<(u32, u32)> = Vec::new();
-    let mut cursor: usize = 0;
-    while let Some(rel) = find_subslice(&bytes[cursor..], start_marker) {
-        let start = cursor + rel;
-        // Region begins AFTER the start marker (so the marker itself
-        // is tolerated — no diagnostic can legitimately originate
-        // inside a comment).
-        let region_start = start + start_marker.len();
-        let after_start = region_start;
-        let end = match find_subslice(&bytes[after_start..], end_marker) {
-            Some(rel_end) => after_start + rel_end,
-            None => bytes.len(),
-        };
-        regions.push((region_start as u32, end as u32));
-        cursor = end + end_marker.len().min(bytes.len() - end);
-    }
-    regions
 }
 
 /// True when the compacted attribute span carries a `lang` attribute

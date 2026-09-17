@@ -160,6 +160,9 @@ pub struct PropsInfo {
     /// or a freshly-synthesised object type for Svelte-4 export-let.
     /// `None` when `source == PropsSource::None`.
     pub type_text: Option<String>,
+    /// Byte span of `type_text` in the script content, when it is the
+    /// user's own `$props()` annotation or type argument.
+    pub type_span: Option<(u32, u32)>,
     /// Leading named-type reference in `type_text`, if any. Populated
     /// only when `type_text` starts with an identifier-ish token
     /// (e.g. `Props`, `Props<T>`, `ChannelMessageProps`). `None` for
@@ -203,6 +206,7 @@ impl PropsInfo {
     pub fn build(program: &oxc_ast::ast::Program<'_>, source: &str, runes_mode: bool) -> Self {
         let mut destructures: Vec<PropInfo> = Vec::new();
         let mut type_text: Option<String> = None;
+        let mut type_span: Option<(u32, u32)> = None;
         let mut props_source = PropsSource::None;
         let mut props_with_unknown = false;
         let mut props_rune = false;
@@ -231,6 +235,7 @@ impl PropsInfo {
                     let span = ty.type_annotation.span();
                     if let Some(slice) = source.get(span.start as usize..span.end as usize) {
                         type_text = Some(slice.to_string());
+                        type_span = Some((span.start, span.end));
                         props_source = PropsSource::RuneAnnotation;
                         continue;
                     }
@@ -242,6 +247,7 @@ impl PropsInfo {
                     let span = arg.span();
                     if let Some(slice) = source.get(span.start as usize..span.end as usize) {
                         type_text = Some(slice.to_string());
+                        type_span = Some((span.start, span.end));
                         props_source = PropsSource::RuneGeneric;
                     }
                 }
@@ -281,6 +287,7 @@ impl PropsInfo {
         Self {
             source: props_source,
             type_text,
+            type_span,
             type_root_name,
             destructures,
             props_with_unknown,

@@ -40,7 +40,7 @@ use rayon::prelude::*;
 
 pub use cache::{CacheLayout, write_if_changed};
 pub use discovery::{DiscoveryError, TsgoBinary, discover};
-pub use filters::{scan_ignore_regions, scan_pug_template_ranges, workspace_svelte_is_5_plus};
+pub use filters::{scan_pug_template_ranges, workspace_svelte_is_5_plus};
 pub use output::{RawDiagnostic, Severity, parse as parse_output};
 pub use runner::{RunError, run as run_tsgo};
 pub use types::{
@@ -221,6 +221,19 @@ fn gc_orphaned_overlays(svelte_dir: &Path, written_paths: &std::collections::Has
 /// matches upstream svelte-check's number — upstream prints the
 /// LanguageService program count, not just the `.svelte` walker
 /// count). On success with no problems the diagnostics vec is empty.
+static INCREMENTAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `--incremental`: let tsgo keep a build-info cache between runs. Off by
+/// default, as upstream runs it; tsgo's incremental mode can also miss
+/// edits to a `types` declaration file and report the previous result.
+pub fn set_incremental(on: bool) {
+    INCREMENTAL.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn incremental() -> bool {
+    INCREMENTAL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn check(
     workspace: &Path,
     solution_root_tsconfig: Option<&Path>,
@@ -403,7 +416,6 @@ impl CheckSession {
             disk_text.as_deref().unwrap_or(&input.generated_ts),
         )?;
         // Scanned from the emit text before it moves below.
-        let ignore_regions = scan_ignore_regions(&input.generated_ts);
         let overlay_text = emit_space_overlay_text(
             std::mem::take(&mut input.generated_ts),
             disk_text,
@@ -519,7 +531,6 @@ impl CheckSession {
             // their source path's extension instead.
             svelte_script_is_ts: input.is_ts_overlay,
             kit_col_shifts: input.kit_col_shifts,
-            ignore_regions,
             pug_template_ranges,
         };
         // `.svn.ts` (TS) Svelte overlays + Kit-file overlays land in
@@ -676,6 +687,7 @@ impl CheckSession {
                 // A replay stands in for a previously-completed run;
                 // treat it as having nothing unexplained to account for.
                 nonzero_exit: false,
+                program_files: Vec::new(),
             },
             None => {
                 let run = run_tsgo(
@@ -686,7 +698,7 @@ impl CheckSession {
                     include_suggestions,
                 )?;
                 if let Some(ctx) = replay_ctx {
-                    ctx.save(layout, &run.diagnostics);
+                    ctx.save(&run.diagnostics, &run.program_files);
                 }
                 run
             }
@@ -886,7 +898,7 @@ impl CheckSession {
 ///
 /// INVARIANT — the rewrite exists ONLY in the on-disk copy. Everything
 /// the diagnostic mapper reads (`MapData`: `overlay_text`,
-/// `overlay_line_starts`, `token_map` byte spans, `ignore_regions`)
+/// `overlay_line_starts`, `token_map` byte spans)
 /// stays in EMIT space, i.e. the text exactly as the emitter produced
 /// it, with the byte-offset tables emit computed for it. A rewritten
 /// specifier usually changes byte length, so mixing spaces — e.g.
@@ -1171,10 +1183,20 @@ fn map_diagnostic(
             // in these markers at emit time lets this filter drop
             // false-positive diagnostics that would otherwise surface
             // on overlay bytes the user never wrote.
-            if let Some(offset) = position::overlay_byte_offset(data, raw.line, raw.column)
-                && filters::is_in_ignore_region(&data.ignore_regions, offset)
-            {
-                return None;
+            if let Some(offset) = position::overlay_byte_offset(data, raw.line, raw.column) {
+                let end = position::overlay_byte_offset(
+                    data,
+                    raw.line,
+                    raw.column.saturating_add(raw.span_length.unwrap_or(0)),
+                )
+                .unwrap_or(offset);
+                if filters::is_in_generated_code(
+                    data.overlay_text.get(),
+                    offset as usize,
+                    end as usize,
+                ) {
+                    return None;
+                }
             }
             // SVELTE-4-COMPAT: drop TS7028 ("Unused label") on the `$`
             // identifier that prefixes a Svelte-4 reactive `$:`
@@ -1438,7 +1460,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     // Tests of moved helpers reference them via their new module
     // paths. Pulled in here so the test bodies stay verbatim.
-    use crate::filters::{is_in_ignore_region, scan_ignore_regions};
+    use crate::filters::is_in_generated_code;
     use crate::path_utils::lexical_normalise;
     use crate::position::{
         byte_to_position, find_tightest_token, overlay_byte_offset, position_to_byte,
@@ -1508,53 +1530,20 @@ mod tests {
     }
 
     #[test]
-    fn scan_ignore_regions_paired() {
-        let text = "line1\n/*svn:ignore_start*/inside/*svn:ignore_end*/outside\n".to_string();
-        let regions = scan_ignore_regions(&text);
-        // The scanned region covers bytes from END of start-marker to
-        // START of end-marker — i.e. just "inside".
-        assert_eq!(regions.len(), 1);
-        let (start, end) = regions[0];
-        let inside = &text[start as usize..end as usize];
-        assert_eq!(inside, "inside");
-    }
-
-    #[test]
-    fn scan_ignore_regions_unmatched_start_extends_to_eof() {
-        let text = "/*svn:ignore_start*/dangling".to_string();
-        let regions = scan_ignore_regions(&text);
-        assert_eq!(regions.len(), 1);
-        let (start, end) = regions[0];
-        assert_eq!(end as usize, text.len());
-        assert_eq!(&text[start as usize..end as usize], "dangling");
-    }
-
-    #[test]
-    fn scan_ignore_regions_multiple_non_overlapping() {
-        let text =
-            "a /*svn:ignore_start*/X/*svn:ignore_end*/ b /*svn:ignore_start*/Y/*svn:ignore_end*/ c"
-                .to_string();
-        let regions = scan_ignore_regions(&text);
-        assert_eq!(regions.len(), 2);
-        assert_eq!(&text[regions[0].0 as usize..regions[0].1 as usize], "X");
-        assert_eq!(&text[regions[1].0 as usize..regions[1].1 as usize], "Y");
-    }
-
-    #[test]
-    fn scan_ignore_regions_no_markers_returns_empty() {
-        let text = "plain overlay with no markers\n".to_string();
-        assert!(scan_ignore_regions(&text).is_empty());
-    }
-
-    #[test]
-    fn is_in_ignore_region_boundary_semantics() {
-        let regions = vec![(10u32, 20u32)];
-        // Exclusive end: 20 is NOT inside.
-        assert!(is_in_ignore_region(&regions, 10));
-        assert!(is_in_ignore_region(&regions, 15));
-        assert!(is_in_ignore_region(&regions, 19));
-        assert!(!is_in_ignore_region(&regions, 20));
-        assert!(!is_in_ignore_region(&regions, 9));
+    fn generated_code_follows_upstreams_marker_rule() {
+        let text = "a /*svn:ignore_start*/X/*svn:ignore_end*/ b";
+        let start = text.find("/*svn:ignore_start").unwrap();
+        let x = text.find('X').unwrap();
+        let end_marker = text.find("/*svn:ignore_end").unwrap();
+        assert!(!is_in_generated_code(text, 0, 1));
+        assert!(is_in_generated_code(text, start, start));
+        assert!(is_in_generated_code(text, x, x + 1));
+        // Starting on the end marker counts only for an empty span.
+        assert!(is_in_generated_code(text, end_marker, end_marker));
+        assert!(!is_in_generated_code(text, end_marker, end_marker + 1));
+        assert!(!is_in_generated_code(text, text.len() - 1, text.len()));
+        // An unclosed start marker marks nothing.
+        assert!(!is_in_generated_code("/*svn:ignore_start*/x", 20, 21));
     }
 
     #[test]

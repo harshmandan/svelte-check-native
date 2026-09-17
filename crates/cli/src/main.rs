@@ -140,8 +140,7 @@ struct Cli {
     #[arg(long = "ignore-node-modules-warnings", default_value_t = false)]
     ignore_node_modules_warnings: bool,
 
-    /// Enable disk caching. No-op for us — caching is always on; accepted
-    /// for upstream-compat.
+    /// Let tsgo keep build info between runs, as upstream's flag does.
     #[arg(long, default_value_t = false)]
     incremental: bool,
 
@@ -535,6 +534,7 @@ fn main() -> ExitCode {
     // emitted overlay (and the committed emit snapshots) don't depend
     // on where the checkout lives on disk.
     svn_emit::set_render_hash_root(&workspace);
+    svn_typecheck::set_incremental(cli.incremental);
 
     let svelte_warnings_mode = match cli.svelte_warnings.as_str() {
         "bridge" => SvelteWarningsMode::Bridge,

@@ -465,6 +465,7 @@ fn emit_document_with_render_name(
     let props_info: PropsInfo = match synth_override {
         Some(literal) => PropsInfo {
             type_text: Some(literal),
+            type_span: None,
             type_root_name: None,
             source: svn_analyze::PropsSource::SynthesisedFromDestructure,
             ..raw_props_info
@@ -1164,7 +1165,17 @@ fn emit_document_with_render_name(
     // $$render>>['props']` which already projects the destructure's
     // declared type. Skipping the alias on JS is safe.
     if is_ts && let Some(body) = alias_body.as_deref() {
-        let _ = writeln!(buf, "    type $$ComponentProps = {body};");
+        buf.push_str("    type $$ComponentProps = ");
+        // The user's own annotation or type argument moved here, as
+        // upstream moves it: its bytes keep their source positions.
+        match (props_info.type_span, doc.instance_script.as_ref()) {
+            (Some((start, end)), Some(script)) => {
+                let base = script.content_range.start;
+                buf.append_with_source(body, svn_core::Range::new(base + start, base + end));
+            }
+            _ => buf.push_str(body),
+        }
+        buf.push_str(";\n");
     }
     // Synthesised `type $$Events = { [K in keyof <T>]:
     // CustomEvent<<T>[K]> };` from a typed
@@ -2489,7 +2500,10 @@ mod tests {
                    <div bind:this={inputEl}></div>";
         let out = emit_str(src);
         assert!(out.contains("let inputEl: HTMLDivElement;"), "{out}");
-        assert!(out.contains("inputEl = /*svn:ignore_start*/null as HTMLElementTagNameMap"), "{out}");
+        assert!(
+            out.contains("inputEl = /*svn:ignore_start*/null as HTMLElementTagNameMap"),
+            "{out}"
+        );
     }
 
     #[test]

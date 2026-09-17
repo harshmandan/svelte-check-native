@@ -183,6 +183,19 @@ pub(crate) fn inject_component_props_annotation(
     };
     let mut out = String::with_capacity(content.len() + 32);
     match action {
+        AnnotationAction::ReplaceTypeArgument { start, end } => {
+            // Keep the line count, as for the annotation below. A type
+            // argument on a function that takes none is an error, and
+            // upstream's marks keep it from being reported.
+            let dropped_newlines = content[start..end].matches('\n').count();
+            out.push_str(&content[..start]);
+            out.push_str("/*svn:ignore_start*/$$ComponentProps");
+            for _ in 0..dropped_newlines {
+                out.push('\n');
+            }
+            out.push_str("/*svn:ignore_end*/");
+            out.push_str(&content[end..]);
+        }
         AnnotationAction::Insert(pos) => {
             out.push_str(&content[..pos]);
             out.push_str(": $$ComponentProps");
@@ -234,9 +247,11 @@ pub(crate) fn inject_component_props_annotation(
 enum AnnotationAction {
     Insert(usize),
     Replace { start: usize, end: usize },
+    ReplaceTypeArgument { start: usize, end: usize },
 }
 
 fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAction> {
+    use oxc_span::GetSpan;
     let BindingPattern::ObjectPattern(obj) = &declarator.id else {
         return None;
     };
@@ -258,8 +273,18 @@ fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAc
     if callee_id.name != "$props" {
         return None;
     }
-    if call.type_arguments.is_some() {
-        return None;
+    if let Some(args) = &call.type_arguments {
+        // `$props<{ … }>()`: upstream moves a literal type argument into
+        // the `$$ComponentProps` alias and leaves the alias name, marked
+        // ignored, as the argument. A named type stays where it is.
+        let arg = args.params.first()?;
+        if matches!(arg, oxc_ast::ast::TSType::TSTypeReference(_)) {
+            return None;
+        }
+        return Some(AnnotationAction::ReplaceTypeArgument {
+            start: arg.span().start as usize,
+            end: arg.span().end as usize,
+        });
     }
     // CASE A — user wrote `let { … }: { lit } = $props()`. Replace
     // the literal annotation with `$$ComponentProps` (wrapped in

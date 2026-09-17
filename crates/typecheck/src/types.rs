@@ -115,13 +115,6 @@ pub struct MapData {
     pub svelte_script_is_ts: bool,
     /// See [`CheckInput::kit_col_shifts`]. Sorted by line, then column.
     pub kit_col_shifts: Vec<(u32, u32, u32)>,
-    /// Byte-offset ranges (start, end) in the overlay where emit has
-    /// marked scaffolding with `IGNORE_START_MARKER` / `IGNORE_END_MARKER`.
-    /// Diagnostics whose start position falls inside any of these
-    /// ranges are dropped in `map_diagnostic`. Ranges are sorted by
-    /// start and non-overlapping (each `ignore_start` pairs with the
-    /// NEXT `ignore_end`).
-    pub ignore_regions: Vec<(u32, u32)>,
     /// Source byte-offset ranges of top-level `<template lang="pug">…
     /// </template>` containers. Mirrors upstream's
     /// `isNoPugFalsePositive` gate: diagnostics whose post-translation
@@ -333,7 +326,7 @@ pub struct CheckOutput {
 }
 
 /// Marker (start) for emit-synthesised regions whose diagnostics
-/// should be muted. See `MapData::ignore_regions`.
+/// should be muted (`filters::is_in_generated_code`).
 pub const IGNORE_START_MARKER: &str = "/*svn:ignore_start*/";
 /// Marker (end) for emit-synthesised regions whose diagnostics should
 /// be muted.

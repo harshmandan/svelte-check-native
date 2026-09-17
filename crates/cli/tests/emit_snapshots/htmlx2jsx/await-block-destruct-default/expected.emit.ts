@@ -3,23 +3,29 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        { const $$_promise = (object);
-            const $$_await = await $$_promise; const { a = 3, b = 4, c } = $$_await;
-        }
-        { const $$_promise = (array);
-            const $$_await = await $$_promise; const [a, b, c = 3] = $$_await;
-        }
-        { const $$_promise = (objectReject);
-            const $$_await = await $$_promise; const value = $$_await;
+        {
+            const $$_value = await (object);
+            { const { a = 3, b = 4, c } = $$_value;
+            }
         }
         {
-            const { a = 3, b = 4, c } = __svn_any();
-        }
-        { const $$_promise = (arrayReject);
-            const $$_await = await $$_promise; const value = $$_await;
+            const $$_value = await (array);
+            { const [a, b, c = 3] = $$_value;
+            }
         }
         {
-            const [a, b, c = 3] = __svn_any();
+            try { const $$_value = await (objectReject);
+            { const value = $$_value;
+            }
+            } catch ($$_e) { const { a = 3, b = 4, c } = __svn_any();
+            }
+        }
+        {
+            try { const $$_value = await (arrayReject);
+            { const value = $$_value;
+            }
+            } catch ($$_e) { const [a, b, c = 3] = __svn_any();
+            }
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

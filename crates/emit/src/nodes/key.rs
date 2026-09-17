@@ -33,18 +33,18 @@ pub(crate) fn emit_key_block(
     insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
     action_counter: &mut usize,
 ) {
+    // `{#key expr}…{/key}` → `expr; { … }` (`Key.ts`).
+    let indent = "    ".repeat(depth);
     let expr_start = b.expression_range.start as usize;
     let expr_end = b.expression_range.end as usize;
     if let Some(expr_raw) = source.get(expr_start..expr_end) {
         let trimmed = expr_raw.trim();
         if !trimmed.is_empty() {
-            // Shift the source range to point at the trimmed expression
-            // so a TS2304/TS2552 diagnostic blames the exact identifier
-            // bytes rather than including leading whitespace.
+            // Point the source range at the trimmed expression so a
+            // diagnostic blames the identifier bytes themselves.
             let leading_ws = expr_raw.len() - expr_raw.trim_start().len();
             let trimmed_source_start = b.expression_range.start + leading_ws as u32;
             let trimmed_source_end = trimmed_source_start + trimmed.len() as u32;
-            let indent = "    ".repeat(depth);
             buf.append_synthetic(&indent);
             buf.append_synthetic(";(");
             buf.append_with_source(
@@ -54,5 +54,9 @@ pub(crate) fn emit_key_block(
             buf.append_synthetic(");\n");
         }
     }
-    crate::emit_template_body(buf, source, &b.body, depth, insts, action_counter);
+    buf.append_synthetic(&indent);
+    buf.append_synthetic("{\n");
+    crate::emit_template_body(buf, source, &b.body, depth + 1, insts, action_counter);
+    buf.append_synthetic(&indent);
+    buf.append_synthetic("}\n");
 }

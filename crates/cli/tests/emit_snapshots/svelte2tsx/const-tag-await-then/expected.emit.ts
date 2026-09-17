@@ -11,8 +11,9 @@ function $$render_e40e2c10() {
 	}
     ;(async () => {
         // template type-check body (incremental)
-        { const $$_promise = (promise1);
-            const $$_await = await $$_promise; const box = $$_await;
+        {
+            const $$_value = await (promise1);
+            { const box = $$_value;
             const {area, volume} = calculate(box.width, box.height, constant);
             const perimeter = (box.width + box.height) * constant;
             const [width, height, sum] = [box.width * constant, box.height, box.width * constant + box.height];
@@ -23,12 +24,11 @@ function $$render_e40e2c10() {
                 (height);
                 (sum);
             }
-        }
-        { const $$_promise = (promise2);
-            const $$_await = await $$_promise; void $$_await;
+            }
         }
         {
-            const box = __svn_any();
+            try { await (promise2);
+            } catch ($$_e) { const box = __svn_any();
             const {area, volume} = calculate(box.width, box.height, constant);
             const perimeter = (box.width + box.height) * constant;
             const [width, height, sum] = [box.width * constant, box.height, box.width * constant + box.height];
@@ -38,6 +38,7 @@ function $$render_e40e2c10() {
                 (width);
                 (height);
                 (sum);
+            }
             }
         }
     });

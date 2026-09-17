@@ -3,11 +3,15 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        { const $$_promise = (somePromise);
-            const $$_await = await $$_promise; const value = $$_await;
+        {
+            try { const $$_value = await (somePromise);
+            { const value = $$_value;
             { svelteHTML.createElement("h1", {});             }
+            }
+            } catch ($$_e) {
+            { svelteHTML.createElement("h2", {});             }
+            }
         }
-        { svelteHTML.createElement("h2", {});         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

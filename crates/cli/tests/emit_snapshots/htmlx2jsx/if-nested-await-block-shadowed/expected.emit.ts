@@ -4,109 +4,130 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((hello)) {
-            { const $$_promise = (aPromise);
-                const $$_await = await $$_promise; const hello = $$_await;
+            {
+                try { const $$_value = await (aPromise);
+                { const hello = $$_value;
                 (hello);
-            }
-            (hello);
-            { const $$_promise = (aPromise);
-                const $$_await = await $$_promise; const foo = $$_await;
-                const hello = foo;
+                }
+                } catch ($$_e) {
                 (hello);
-            }
-            (hello);
-            { const $$_promise = (aPromise);
-                const $$_await = await $$_promise; const hi = $$_await;
-                (hello);
+                }
             }
             {
-                const hello = __svn_any();
+                try { const $$_value = await (aPromise);
+                { const foo = $$_value;
+                const hello = foo;
                 (hello);
+                }
+                } catch ($$_e) {
+                (hello);
+                }
             }
-            { const $$_promise = (hello);
-                const $$_await = await $$_promise; const hello = $$_await;
+            {
+                try { const $$_value = await (aPromise);
+                { const hi = $$_value;
+                (hello);
+                }
+                } catch ($$_e) { const hello = __svn_any();
+                (hello);
+                }
+            }
+            {
+                const $$_value = await (hello);
+                { const hello = $$_value;
                 (hello);
                 if ((hello)) {
-                    (hello);
-                    { const $$_promise = (aPromise);
-                        const $$_await = await $$_promise; void $$_await;
-                    }
-                    (hello);
-                    { const $$_promise = (aPromise);
-                        const $$_await = await $$_promise; void $$_await;
+                    {
+                        (hello);
+                        await (aPromise);
                     }
                     {
-                        const hello = __svn_any();
                         (hello);
+                        try { await (aPromise);
+                        } catch ($$_e) { const hello = __svn_any();
+                        (hello);
+                        }
                     }
-                    { const $$_promise = (x);
-                        const $$_await = await $$_promise; const hello = $$_await;
+                    {
+                        const $$_value = await (x);
+                        { const hello = $$_value;
                         if ((hello)) {
                             (hello);
                         }
+                        }
                     }
-                    { const $$_promise = (x);
-                        const $$_await = await $$_promise; const foo = $$_await;
+                    {
+                        const $$_value = await (x);
+                        { const foo = $$_value;
                         const hello = foo;
                         if ((hello)) {
                             (hello);
                         }
+                        }
                     }
+                }
                 }
             }
             if ((hi && bye)) {
-                { const $$_promise = (x);
-                    const $$_await = await $$_promise; const bye = $$_await;
-                    (bye);
-                }
                 {
-                    const hello = __svn_any();
+                    try { const $$_value = await (x);
+                    { const bye = $$_value;
+                    (bye);
+                    }
+                    } catch ($$_e) { const hello = __svn_any();
                     if ((hello)) {
                         (hello);
+                    }
                     }
                 }
             } else if ((cool)) {
-                { const $$_promise = (cool);
-                    const $$_await = await $$_promise; const cool = $$_await;
+                {
+                    try { const $$_value = await (cool);
+                    { const cool = $$_value;
                     if ((cool)) {
                         (cool);
                     }
+                    }
+                    } catch ($$_e) { const cool = __svn_any();
+                    }
                 }
                 {
-                    const cool = __svn_any();
-                }
-                { const $$_promise = (aPromise);
-                    const $$_await = await $$_promise; const cool = $$_await;
+                    const $$_value = await (aPromise);
+                    { const cool = $$_value;
                     (cool);
+                    }
                 }
             } else {
-                { const $$_promise = (x);
-                    const $$_await = await $$_promise; const hello = $$_await;
+                {
+                    const $$_value = await (x);
+                    { const hello = $$_value;
                     if ((hello)) {
                         (hello);
+                    }
                     }
                 }
             }
         }
-        if ((cool)) {
-            (cool);
-        } else if ((hello)) {
-            (hello);
-        }
-        { const $$_promise = (cool);
-            const $$_await = await $$_promise; const cool = $$_await;
+        {
             if ((cool)) {
                 (cool);
             } else if ((hello)) {
                 (hello);
             }
-        }
-        {
-            const cool = __svn_any();
+            try { const $$_value = await (cool);
+            { const cool = $$_value;
             if ((cool)) {
                 (cool);
             } else if ((hello)) {
                 (hello);
+            }
+            }
+            } catch ($$_e) { const cool = __svn_any();
+            if ((cool)) {
+                (cool);
+            } else if ((hello)) {
+                (hello);
+            }
             }
         }
     });

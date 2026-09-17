@@ -4,11 +4,17 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         ;(value);
-        { svelteHTML.createElement("p", {});         }
+        {
+            { svelteHTML.createElement("p", {});             }
+        }
         ;($store);
-        { svelteHTML.createElement("p", {});         }
+        {
+            { svelteHTML.createElement("p", {});             }
+        }
         ;(expr.obj);
-        { svelteHTML.createElement("p", {});         }
+        {
+            { svelteHTML.createElement("p", {});             }
+        }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

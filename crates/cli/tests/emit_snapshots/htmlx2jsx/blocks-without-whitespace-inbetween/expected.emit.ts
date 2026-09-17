@@ -7,8 +7,10 @@ function $$render_e40e2c10() {
         }
         for (let y of __svn_each_items(x)) {
         }
-        { const $$_promise = (x);
-            const $$_await = await $$_promise; const y = $$_await;
+        {
+            const $$_value = await (x);
+            { const y = $$_value;
+            }
         }
         if ((bla)) {
         }

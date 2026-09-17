@@ -22,9 +22,11 @@ function $$render_e40e2c10() {
                 (c);
             }
         }
-        { const $$_promise = (promise);
-            const $$_await = await $$_promise; const d = $$_await;
+        {
+            const $$_value = await (promise);
+            { const d = $$_value;
             (d);
+            }
         }
         {
             __svn_create_slot("third", { d: d, c: c });

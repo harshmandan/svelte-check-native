@@ -4,32 +4,46 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         if ((hello)) {
-            { const $$_promise = (hello.foo);
-                const $$_await = await $$_promise; const y = $$_await;
+            {
+                const $$_value = await (hello.foo);
+                { const y = $$_value;
                 (y);
+                }
             }
-            { const $$_promise = (x);
-                const $$_await = await $$_promise; const y = $$_await;
+            {
+                const $$_value = await (x);
+                { const y = $$_value;
                 (y);
+                }
             }
-            (hello);
-            { const $$_promise = (aPromise);
-                const $$_await = await $$_promise; void $$_await;
+            {
+                (hello);
+                await (aPromise);
             }
             if ((hi && bye)) {
-                { const $$_promise = (x);
-                    const $$_await = await $$_promise; const y = $$_await;
+                {
+                    try { const $$_value = await (x);
+                    { const y = $$_value;
                     (y);
+                    }
+                    } catch ($$_e) {
+                    }
                 }
             } else if ((cool)) {
-                { const $$_promise = (x);
-                    const $$_await = await $$_promise; const y = $$_await;
+                {
+                    try { const $$_value = await (x);
+                    { const y = $$_value;
                     (y);
+                    }
+                    } catch ($$_e) {
+                    }
                 }
             } else {
-                { const $$_promise = (x);
-                    const $$_await = await $$_promise; const y = $$_await;
+                {
+                    const $$_value = await (x);
+                    { const y = $$_value;
                     (y);
+                    }
                 }
             }
         }

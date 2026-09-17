@@ -11,9 +11,11 @@ function $$render_e40e2c10() {
                 __svn_create_slot("default", {  });
             }
         }
-        { const $$_promise = (Promise.resolve(0));
-            const $$_await = await $$_promise; const n = $$_await;
+        {
+            const $$_value = await (Promise.resolve(0));
+            { const n = $$_value;
             (n);
+            }
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': {  } }, bindings: /** @type {string} */ (''), exports: {} };

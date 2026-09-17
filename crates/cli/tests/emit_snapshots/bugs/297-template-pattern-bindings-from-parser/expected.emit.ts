@@ -140,13 +140,14 @@ function $$render_e40e2c10() {
     const p: Promise<number> = Promise.resolve(1);
     ;(async () => {
         // template type-check body (incremental)
-        { const $$_promise = (p);
-            const $$_await = await $$_promise; const n = $$_await;
-            (n);
-        }
         {
-            const { [k]: v } = __svn_any();
+            try { const $$_value = await (p);
+            { const n = $$_value;
+            (n);
+            }
+            } catch ($$_e) { const { [k]: v } = __svn_any();
             (v);
+            }
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

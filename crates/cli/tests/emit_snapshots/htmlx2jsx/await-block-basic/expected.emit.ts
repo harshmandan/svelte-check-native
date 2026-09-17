@@ -3,13 +3,15 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        { const $$_promise = (somePromise);
-            const $$_await = await $$_promise; const value = $$_await;
+        {
+            const $$_value = await (somePromise);
+            { const value = $$_value;
             { svelteHTML.createElement("h1", {});             }
+            }
         }
-        { svelteHTML.createElement("h1", {});         }
-        { const $$_promise = (somePromise);
-            const $$_await = await $$_promise; void $$_await;
+        {
+            { svelteHTML.createElement("h1", {});             }
+            await (somePromise);
             { svelteHTML.createElement("h1", {});             }
         }
     });

@@ -7,10 +7,12 @@ function $$render_e40e2c10() {
 	const store = readable(Promise.resolve('test'), () => {})/*svn:ignore_start*/;let $store = __svn_store_get(store);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});         }
-        { const $$_promise = ($store);
-            const $$_await = await $$_promise; const data = $$_await;
+        {
+            { svelteHTML.createElement("p", {});             }
+            const $$_value = await ($store);
+            { const data = $$_value;
             (data);
+            }
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

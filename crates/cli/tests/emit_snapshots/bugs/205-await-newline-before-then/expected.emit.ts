@@ -12,25 +12,28 @@ function $$render_e40e2c10() {
     }
     ;(async () => {
         // template type-check body (incremental)
-        { const $$_promise = (p);
-            const $$_await = await $$_promise; const v = $$_await;
+        {
+            const $$_value = await (p);
+            { const v = $$_value;
             { svelteHTML.createElement("span", {});                 (v.toFixed(2));
             }
-        }
-        { const $$_promise = (q);
-            const $$_await = await $$_promise; void $$_await;
-        }
-        {
-            const e = __svn_any();
-            { svelteHTML.createElement("span", {});                 (String(e));
             }
         }
-        { const $$_promise = (fetchData(
+        {
+            try { await (q);
+            } catch ($$_e) { const e = __svn_any();
+            { svelteHTML.createElement("span", {});                 (String(e));
+            }
+            }
+        }
+        {
+            const $$_value = await (fetchData(
     'https://example.com',
     3
 ));
-            const $$_await = await $$_promise; const ok = $$_await;
+            { const ok = $$_value;
             { svelteHTML.createElement("span", {});                 (ok ? 'yes' : 'no');
+            }
             }
         }
     });

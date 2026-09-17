@@ -3,11 +3,10 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        { const $$_promise = (somePromise);
-            const $$_await = await $$_promise; void $$_await;
-        }
         {
-            const error = __svn_any();
+            try { await (somePromise);
+            } catch ($$_e) { const error = __svn_any();
+            }
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

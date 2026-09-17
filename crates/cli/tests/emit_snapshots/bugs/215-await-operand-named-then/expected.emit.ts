@@ -9,10 +9,12 @@ function $$render_e40e2c10() {
     let flag = true;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("p", {});         }
-        { const $$_promise = (flag ? then : fallback);
-            const $$_await = await $$_promise; const value = $$_await;
+        {
+            { svelteHTML.createElement("p", {});             }
+            const $$_value = await (flag ? then : fallback);
+            { const value = $$_value;
             { svelteHTML.createElement("p", {});                 (value.toUpperCase());
+            }
             }
         }
     });

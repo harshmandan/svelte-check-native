@@ -3,15 +3,16 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("h1", {});         }
-        { const $$_promise = (somePromise);
-            const $$_await = await $$_promise; const value = $$_await;
+        {
+            { svelteHTML.createElement("h1", {});             }
+            try { const $$_value = await (somePromise);
+            { const value = $$_value;
             { svelteHTML.createElement("h1", {});                 (value);
             }
-        }
-        {
-            const error = __svn_any();
+            }
+            } catch ($$_e) { const error = __svn_any();
             { svelteHTML.createElement("h1", {});                 (error);
+            }
             }
         }
     });

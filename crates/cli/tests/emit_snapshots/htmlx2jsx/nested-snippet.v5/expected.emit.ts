@@ -43,15 +43,6 @@ function $$render_e40e2c10() {
         }
         ;(key);
         {
-            const foo = () => { async () => {
-                };
-                return null;
-            };
-            void foo;
-            (foo());
-        }
-        { const $$_promise = (Promise.resolve());
-            const $$_await = await $$_promise; const bar = $$_await;
             {
                 const foo = () => { async () => {
                     };
@@ -59,6 +50,19 @@ function $$render_e40e2c10() {
                 };
                 void foo;
                 (foo());
+            }
+        }
+        {
+            const $$_value = await (Promise.resolve());
+            { const bar = $$_value;
+            {
+                const foo = () => { async () => {
+                    };
+                    return null;
+                };
+                void foo;
+                (foo());
+            }
             }
         }
         { svelteHTML.createElement("div", {});             {

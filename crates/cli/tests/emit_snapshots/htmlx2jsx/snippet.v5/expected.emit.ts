@@ -15,9 +15,11 @@ function $$render_e40e2c10() {
     };
     void bar;
     const await_inside = () => { async () => {
-        { const $$_promise = (foo);
-            const $$_await = await $$_promise; const bar = $$_await;
+        {
+            const $$_value = await (foo);
+            { const bar = $$_value;
             (bar);
+            }
         }
         };
         return null;
@@ -72,9 +74,11 @@ function $$render_e40e2c10() {
                         return __svn_snippet_return();
                     },
                     await_inside: () => { async () => {
-                        { const $$_promise = (foo);
-                            const $$_await = await $$_promise; const bar = $$_await;
+                        {
+                            const $$_value = await (foo);
+                            { const bar = $$_value;
                             (bar);
+                            }
                         }
                         };
                         return __svn_snippet_return();

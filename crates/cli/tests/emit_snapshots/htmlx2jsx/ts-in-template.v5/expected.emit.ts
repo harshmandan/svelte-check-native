@@ -47,13 +47,16 @@ function $$render_e40e2c10() {
             (item);
             (item as string);
         }
-        { const $$_promise = (foo as Promise<void>);
-            const $$_await = await $$_promise; const result: any = $$_await;
-        }
         {
-            const error: any = __svn_any();
+            try { const $$_value = await (foo as Promise<void>);
+            { const result: any = $$_value;
+            }
+            } catch ($$_e) { const error: any = __svn_any();
+            }
         }
         ;(item as string);
+        {
+        }
         (foo(bar as string));
         { svelteHTML.createElement("button", {
             "onclick": ((e: Event) => {e as any}),

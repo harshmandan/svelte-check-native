@@ -11,8 +11,9 @@ function $$render_e40e2c10() {
 	}
     ;(async () => {
         // template type-check body (incremental)
-        { const $$_promise = (promise1);
-            const $$_await = await $$_promise; const { width, height } = $$_await;
+        {
+            const $$_value = await (promise1);
+            { const { width, height } = $$_value;
             const {area, volume} = calculate(width, height, constant);
             const perimeter = (width + height) * constant;
             const [_width, _height, sum] = [width * constant, height, width * constant + height];
@@ -23,12 +24,11 @@ function $$render_e40e2c10() {
                 (_height);
                 (sum);
             }
-        }
-        { const $$_promise = (promise2);
-            const $$_await = await $$_promise; void $$_await;
+            }
         }
         {
-            const { width, height } = __svn_any();
+            try { await (promise2);
+            } catch ($$_e) { const { width, height } = __svn_any();
             const {area, volume} = calculate(width, height, constant);
             const perimeter = (width + height) * constant;
             const [_width, _height, sum] = [width * constant, height, width * constant + height];
@@ -38,6 +38,7 @@ function $$render_e40e2c10() {
                 (_width);
                 (_height);
                 (sum);
+            }
             }
         }
     });

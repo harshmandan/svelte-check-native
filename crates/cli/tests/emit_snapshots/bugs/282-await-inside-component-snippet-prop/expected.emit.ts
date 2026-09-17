@@ -62,14 +62,15 @@ function $$render_e40e2c10() {
                 target: __svn_any(),
                 props: {
                     children: () => { async () => {
-                        { const $$_promise = (page);
-                            const $$_await = await $$_promise; const text = $$_await;
+                        {
+                            try { const $$_value = await (page);
+                            { const text = $$_value;
                             { svelteHTML.createElement("p", {});                                 (text.length);
                             }
-                        }
-                        {
-                            const err = __svn_any();
+                            }
+                            } catch ($$_e) { const err = __svn_any();
                             { svelteHTML.createElement("p", {});                                 (err);
+                            }
                             }
                         }
                         };
@@ -84,10 +85,12 @@ function $$render_e40e2c10() {
                 target: __svn_any(),
                 props: {
                     row: (label) => { async () => {
-                        { const $$_promise = (page);
-                            const $$_await = await $$_promise; const text = $$_await;
+                        {
+                            const $$_value = await (page);
+                            { const text = $$_value;
                             { svelteHTML.createElement("p", {});                                 (label.toUpperCase());
                                 (text);
+                            }
                             }
                         }
                         };

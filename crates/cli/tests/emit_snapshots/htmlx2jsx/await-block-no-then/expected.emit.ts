@@ -3,17 +3,16 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("div", {});         }
-        { const $$_promise = (aPromise);
-            const $$_await = await $$_promise; void $$_await;
-        }
-        { svelteHTML.createElement("div", {});         }
-        { const $$_promise = (aPromise);
-            const $$_await = await $$_promise; void $$_await;
+        {
+            { svelteHTML.createElement("div", {});             }
+            await (aPromise);
         }
         {
-            const error = __svn_any();
+            { svelteHTML.createElement("div", {});             }
+            try { await (aPromise);
+            } catch ($$_e) { const error = __svn_any();
             { svelteHTML.createElement("div", {});                 (error);
+            }
             }
         }
     });

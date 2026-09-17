@@ -47,8 +47,8 @@ function $$render_e40e2c10() {
     project = pool_get(name) ?? create_project(name);
     ;(async () => {
         // template type-check body (incremental)
-        { const $$_promise = (project.ready);
-            const $$_await = await $$_promise; void $$_await;
+        {
+            await (project.ready);
             (children?.({ project }));
         }
     });

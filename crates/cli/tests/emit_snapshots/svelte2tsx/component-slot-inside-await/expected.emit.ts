@@ -4,22 +4,25 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         const __svn_create_slot = __svn_create_create_slot();
-        { const $$_promise = (promise);
-            const $$_await = await $$_promise; const value = $$_await;
+        {
+            try { const $$_value = await (promise);
+            { const value = $$_value;
             {
                 __svn_create_slot("default", { a: (value) });
             }
-        }
-        {
-            const err = __svn_any();
+            }
+            } catch ($$_e) { const err = __svn_any();
             {
                 __svn_create_slot("err", { err: (err) });
             }
+            }
         }
-        { const $$_promise = (promise2);
-            const $$_await = await $$_promise; const { b } = $$_await;
+        {
+            const $$_value = await (promise2);
+            { const { b } = $$_value;
             {
                 __svn_create_slot("second", { a: (b) });
+            }
             }
         }
     });

@@ -89,6 +89,12 @@
             "line": 0,
             "column": 22,
             "code": "dollar_prefix_invalid"
+        },
+        {
+            "file": "src/SlotName.svelte",
+            "line": 0,
+            "column": 24,
+            "code": 6133
         }
     ],
     "warnings": [],

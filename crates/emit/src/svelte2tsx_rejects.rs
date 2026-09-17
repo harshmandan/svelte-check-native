@@ -20,21 +20,37 @@
 //!   (`nodes/ComponentEvents.ts`);
 //! - module script: a `generics` attribute on its tag, or any
 //!   `$$Generic` alias or `$$Events` / `$$Slots` / `$$Props` interface
-//!   or alias (`processModuleScriptTag.ts`).
+//!   or alias (`processModuleScriptTag.ts`);
+//! - template: a `<slot>` whose first attribute called `name` is a bare
+//!   `name` or a directive (`slot.ts` `handleSlot` reads
+//!   `value[0].raw` off a value that is `true` or missing);
+//! - template: a direct child of a component whose first attribute
+//!   called `slot` is a bare `slot` (`svelteAst.ts` `getSlotName`
+//!   reads `.raw` off `true[0]`).
 
 use oxc_ast::ast::{
     Declaration, Expression, Program, PropertyKey, Statement, TSInterfaceDeclaration, TSSignature,
     TSType, TSTypeAliasDeclaration, TSTypeName,
 };
 use oxc_ast_visit::{Visit, walk};
-use svn_parser::{Document, ParsedScript, ScriptSection};
+use svn_analyze::template_scope::{TemplateScopeVisitor, walk_with_visitor};
+use svn_parser::{
+    Attribute, Component, Document, Element, Fragment, Node, ParsedScript, ScriptSection,
+    SvelteElement, SvelteElementKind,
+};
 
 /// Would svelte2tsx throw while converting this component?
 pub(crate) fn svelte2tsx_rejects(
     doc: &Document<'_>,
+    fragment: &Fragment,
     parsed_instance: Option<&ParsedScript<'_>>,
     parsed_module: Option<&ParsedScript<'_>>,
 ) -> bool {
+    let mut template = TemplateProbe { rejected: false };
+    walk_with_visitor(fragment, doc.source, &mut template);
+    if template.rejected {
+        return true;
+    }
     if doc.module_script.as_ref().is_some_and(has_generics_attr) {
         return true;
     }
@@ -82,6 +98,71 @@ fn generic_alias_arity(alias: &TSTypeAliasDeclaration<'_>) -> Option<usize> {
             .as_ref()
             .map_or(0, |args| args.params.len())
     })
+}
+
+/// The first attribute written with `name` (a directive by the name
+/// after its prefix), as svelte2tsx's `attributes.find` sees them.
+fn first_named<'a>(attributes: &'a [Attribute], name: &str) -> Option<&'a Attribute> {
+    attributes.iter().find(|a| match a {
+        Attribute::Plain(p) => p.name == name,
+        Attribute::Expression(x) => x.name == name,
+        Attribute::Shorthand(x) => x.name == name,
+        Attribute::Directive(d) => d.name == name,
+        Attribute::Spread(_) | Attribute::Comment(_) => false,
+    })
+}
+
+struct TemplateProbe {
+    rejected: bool,
+}
+
+impl TemplateProbe {
+    /// A component's direct children are read for their slot name.
+    fn check_component_children(&mut self, children: &Fragment) {
+        for child in &children.nodes {
+            let attributes = match child {
+                Node::Element(e) => &e.attributes,
+                Node::Component(c) => &c.attributes,
+                Node::SvelteElement(e) => &e.attributes,
+                _ => continue,
+            };
+            if matches!(
+                first_named(attributes, "slot"),
+                Some(Attribute::Plain(p)) if p.value.is_none()
+            ) {
+                self.rejected = true;
+            }
+        }
+    }
+}
+
+impl TemplateScopeVisitor for TemplateProbe {
+    fn visit_element(&mut self, element: &Element) {
+        if element.name != "slot" {
+            return;
+        }
+        let unreadable = match first_named(&element.attributes, "name") {
+            Some(Attribute::Plain(p)) => p.value.is_none(),
+            Some(Attribute::Directive(_)) => true,
+            _ => false,
+        };
+        if unreadable {
+            self.rejected = true;
+        }
+    }
+
+    fn visit_component(&mut self, component: &Component) {
+        self.check_component_children(&component.children);
+    }
+
+    fn visit_svelte_element(&mut self, element: &SvelteElement) {
+        if matches!(
+            element.kind,
+            SvelteElementKind::SelfRef | SvelteElementKind::Component
+        ) {
+            self.check_component_children(&element.children);
+        }
+    }
 }
 
 struct ModuleProbe {
@@ -193,6 +274,7 @@ mod tests {
 
     fn rejects(src: &str) -> bool {
         let (doc, _) = svn_parser::parse_sections(src);
+        let (fragment, _) = svn_parser::parse_all_template_runs(src, &doc.template.text_runs);
         let alloc_i = oxc_allocator::Allocator::default();
         let alloc_m = oxc_allocator::Allocator::default();
         let instance = doc
@@ -203,7 +285,31 @@ mod tests {
             .module_script
             .as_ref()
             .map(|s| svn_parser::parse_script_body(&alloc_m, s.content, s.lang));
-        svelte2tsx_rejects(&doc, instance.as_ref(), module.as_ref())
+        svelte2tsx_rejects(&doc, &fragment, instance.as_ref(), module.as_ref())
+    }
+
+    #[test]
+    fn unreadable_slot_names() {
+        assert!(rejects("<slot name></slot>"));
+        assert!(rejects("<slot on:name></slot>"));
+        assert!(rejects("{#if a}<slot bind:name={x}></slot>{/if}"));
+        assert!(!rejects("<slot name=\"\"></slot><slot name={n}></slot>"));
+        assert!(!rejects("<slot {name}></slot><slot foo></slot>"));
+    }
+
+    #[test]
+    fn bare_slot_attribute_under_a_component() {
+        assert!(rejects("<C><div slot></div></C>"));
+        assert!(rejects("<C><C slot /></C>"));
+        assert!(rejects("<C><svelte:fragment slot></svelte:fragment></C>"));
+        assert!(rejects("<svelte:self><div slot></div></svelte:self>"));
+        assert!(rejects(
+            "<svelte:component this={C}><div slot></div></svelte:component>"
+        ));
+        assert!(!rejects("<C>{#if x}<div slot></div>{/if}</C>"));
+        assert!(!rejects("<div><div slot></div></div>"));
+        assert!(!rejects("<C><div slot=\"\"></div><div slot={x}></div></C>"));
+        assert!(!rejects("<C><div on:slot slot></div></C>"));
     }
 
     #[test]

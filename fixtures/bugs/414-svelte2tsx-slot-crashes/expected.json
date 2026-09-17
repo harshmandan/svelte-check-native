@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "src/EmptyName.svelte",
+            "line": 0,
+            "column": 92,
+            "code": 1135
+        }
+    ],
+    "_note": "svelte2tsx throws on a `<slot>` whose `name` attribute is bare or a directive, and on a component child with a bare `slot` attribute; svelte-check then leaves the file out. `<slot name=\"\">` is converted into an argument-less createSlot call, whose TS1135 is reported at the `<slot` and, being a syntax error, hides every semantic error in the program (the planted TS2322s here)."
+}

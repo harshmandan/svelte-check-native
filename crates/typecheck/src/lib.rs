@@ -747,7 +747,7 @@ impl CheckSession {
         // run can't be mistaken for a real result. Syntax errors in
         // user-authored files are not an internal error and pass
         // through the normal mapping instead.
-        let overlay_syntax_failures = overlay_syntax_failures(&run.diagnostics, layout);
+        let overlay_syntax_failures = overlay_syntax_failures(&run.diagnostics, layout, &map_data);
         // Probed once per run: upstream's message adjustments differ
         // between pre-5 and 5+ Svelte (see `adjust_message_if_necessary`).
         let svelte5_plus = filters::workspace_svelte_is_5_plus(&layout.workspace);
@@ -1053,10 +1053,15 @@ fn emit_space_overlay_text(
 /// See the callsite in [`CheckSession::finish`] for why this must be
 /// loud: one unparseable file suppresses every semantic diagnostic in
 /// the program. Syntax errors in user-authored files don't qualify —
-/// those pass through the normal mapping as the user's own errors.
+/// those pass through the normal mapping as the user's own errors —
+/// and neither does one reported on overlay text mapped to the user's
+/// source: svelte2tsx writes some malformed input through verbatim
+/// (`<slot name="">` becomes an argument-less call), so upstream's
+/// overlay fails to parse at the same place and reports it there.
 fn overlay_syntax_failures(
     raw_diagnostics: &[RawDiagnostic],
     layout: &CacheLayout,
+    map_data: &std::collections::HashMap<PathBuf, MapData>,
 ) -> Vec<CheckDiagnostic> {
     // Codes the PARSER emits — the class whose presence makes
     // TypeScript drop semantic diagnostics program-wide. The 1xxx
@@ -1121,6 +1126,14 @@ fn overlay_syntax_failures(
                 return None;
             }
             let source = layout.original_from_generated(&abs)?;
+            let on_user_text = map_data.get(&abs).is_some_and(|data| {
+                position::overlay_byte_offset(data, d.line, d.column).is_some_and(|byte| {
+                    position::find_tightest_token(&data.token_map, byte).is_some()
+                })
+            });
+            if on_user_text {
+                return None;
+            }
             seen.insert(source.clone()).then(|| CheckDiagnostic {
                 source_path: source,
                 line: 1,
@@ -1719,7 +1732,7 @@ mod tests {
             message: "Expression expected.".into(),
             span_length: None,
         }];
-        let out = overlay_syntax_failures(&raw, &layout);
+        let out = overlay_syntax_failures(&raw, &layout, &std::collections::HashMap::new());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].source_path, Path::new("/p/src/Foo.svelte"));
         assert!(matches!(out[0].severity, Severity::Error));
@@ -1796,7 +1809,7 @@ mod tests {
             // Semantic error in the overlay — not a syntax failure.
             mk(gen_path, 2322, Severity::Error),
         ];
-        let out = overlay_syntax_failures(&raw, &layout);
+        let out = overlay_syntax_failures(&raw, &layout, &std::collections::HashMap::new());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].source_path, Path::new("/p/src/Foo.svelte"));
     }

@@ -94,6 +94,18 @@ fn collect_expression_attr(
     }
 }
 
+/// The name an attribute is written with (a directive's name follows
+/// its `prefix:`); `None` for spreads and comments.
+fn attribute_name(attr: &Attribute) -> Option<&str> {
+    match attr {
+        Attribute::Plain(p) => Some(p.name.as_str()),
+        Attribute::Expression(e) => Some(e.name.as_str()),
+        Attribute::Shorthand(s) => Some(s.name.as_str()),
+        Attribute::Directive(d) => Some(d.name.as_str()),
+        Attribute::Spread(_) | Attribute::Comment(_) => None,
+    }
+}
+
 /// Capture a `<slot [name="X"] [attr=…]>` site into
 /// `summary.slot_defs`. Skips attrs whose expression references a
 /// name in the active shadow stack — those need full scope
@@ -108,18 +120,26 @@ pub(crate) fn collect_slot_def(
     summary: &mut TemplateSummary,
 ) {
     use svn_parser::{AttrValuePart, Attribute as A};
-    let mut slot_name = SmolStr::new("default");
+    // svelte2tsx's `handleSlot` names the slot after the raw text of the
+    // first attribute called `name`'s first value chunk; a `{…}` value
+    // has no raw text, which makes the key `undefined`.
+    let slot_name = match attrs.iter().find(|a| attribute_name(a) == Some("name")) {
+        None => SmolStr::new("default"),
+        Some(A::Plain(p)) => match p.value.as_ref().map(|v| v.parts.first()) {
+            Some(Some(AttrValuePart::Text { range })) => SmolStr::from(range.slice(source)),
+            Some(None) => SmolStr::default(),
+            _ => SmolStr::new("undefined"),
+        },
+        Some(_) => SmolStr::new("undefined"),
+    };
     let mut entries: Vec<SlotAttr> = Vec::new();
     for attr in attrs {
+        // Every attribute called `name` names the slot and is not a
+        // slot prop.
+        if attribute_name(attr) == Some("name") {
+            continue;
+        }
         match attr {
-            A::Plain(p) if p.name.as_str() == "name" => {
-                if let Some(v) = &p.value
-                    && v.parts.len() == 1
-                    && let AttrValuePart::Text { range } = &v.parts[0]
-                {
-                    slot_name = SmolStr::from(range.slice(source));
-                }
-            }
             A::Plain(p) => {
                 // Plain literal attrs on `<slot>` other than `name=`
                 // (e.g. `<slot kind="header">`). Single-text-part

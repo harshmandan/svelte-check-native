@@ -190,28 +190,34 @@ pub(crate) fn fragment_contains_slot(fragment: &svn_parser::Fragment) -> bool {
     fragment_has_slot_where(fragment, &|_| true)
 }
 
-/// Does the fragment contain a default slot — a `<slot>` with no `name`
-/// attribute, or `name="default"`? Upstream's
+/// Does the fragment contain a default slot? Upstream's
 /// `__sveltets_2_PropsWithChildren` widens the props with `children`
-/// only when the slots type has a `default` key.
+/// only when the slots type has a `default` key, and svelte2tsx keys a
+/// `<slot>` by the raw text of the first value chunk of its first
+/// attribute called `name` — `default` when there is none, `undefined`
+/// when that chunk is a `{…}` expression (`slot.ts` `handleSlot`).
 pub(crate) fn fragment_contains_default_slot(
     fragment: &svn_parser::Fragment,
     source: &str,
 ) -> bool {
+    use svn_parser::Attribute;
     fragment_has_slot_where(fragment, &|slot| {
-        slot.attributes.iter().all(|a| match a {
-            svn_parser::Attribute::Plain(p) if p.name.as_str() == "name" => match &p.value {
-                None => true,
-                Some(v) => match v.parts.as_slice() {
-                    [] => true,
-                    [svn_parser::AttrValuePart::Text { range }] => {
-                        source.get(range.start as usize..range.end as usize) == Some("default")
-                    }
-                    _ => false,
-                },
-            },
-            _ => true,
-        })
+        let name_attr = slot.attributes.iter().find(|a| match a {
+            Attribute::Plain(p) => p.name.as_str() == "name",
+            Attribute::Expression(x) => x.name.as_str() == "name",
+            Attribute::Shorthand(x) => x.name.as_str() == "name",
+            Attribute::Directive(d) => d.name.as_str() == "name",
+            Attribute::Spread(_) | Attribute::Comment(_) => false,
+        });
+        match name_attr {
+            None => true,
+            Some(Attribute::Plain(p)) => matches!(
+                p.value.as_ref().and_then(|v| v.parts.first()),
+                Some(svn_parser::AttrValuePart::Text { range })
+                    if source.get(range.start as usize..range.end as usize) == Some("default")
+            ),
+            Some(_) => false,
+        }
     })
 }
 

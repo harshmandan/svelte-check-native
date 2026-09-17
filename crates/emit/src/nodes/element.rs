@@ -1081,44 +1081,66 @@ fn emit_slot_check(buf: &mut EmitBuffer, source: &str, e: &svn_parser::Element, 
     // `"default"`. Source range maps to the `name` attribute's full
     // span when present, or the `<slot` token's `slot` identifier
     // otherwise.
-    let name_attr = e.attributes.iter().find_map(|a| match a {
-        Attribute::Plain(p) if p.name.as_str() == "name" => Some(p),
-        _ => None,
+    // svelte2tsx takes the first value chunk of the first attribute
+    // called `name` and writes its source text in quotes: a text chunk
+    // without its quotes, a `{…}` chunk with its braces, a `{name}`
+    // shorthand as the bare name. An empty `name=""` writes nothing,
+    // leaving an argument-less call that tsgo rejects at the `<slot`.
+    let name_attr = e.attributes.iter().find(|a| match a {
+        Attribute::Plain(p) => p.name.as_str() == "name",
+        Attribute::Expression(x) => x.name.as_str() == "name",
+        Attribute::Shorthand(x) => x.name.as_str() == "name",
+        Attribute::Directive(d) => d.name.as_str() == "name",
+        Attribute::Spread(_) | Attribute::Comment(_) => false,
     });
-    if let Some(p) = name_attr {
-        let (name, value_range) = match &p.value {
-            Some(v) => {
-                let text = source
-                    .get(v.range.start as usize..v.range.end as usize)
-                    .unwrap_or("");
-                let stripped = text
-                    .trim_start_matches(['"', '\''].as_ref())
-                    .trim_end_matches(['"', '\''].as_ref());
-                // Anchor on the inner content (`invalid`), not the
-                // surrounding quote. Upstream's TS2345 for unknown
-                // slot names points at the first byte of the literal
-                // text — quote excluded.
-                let inner_range = if v.quoted {
-                    svn_core::Range::new(v.range.start + 1, v.range.end.saturating_sub(1))
-                } else {
-                    v.range
-                };
-                (stripped.to_string(), inner_range)
-            }
-            None => ("default".to_string(), p.range),
-        };
-        let literal = format!("\"{}\"", name.replace('"', "\\\""));
-        buf.append_with_source(&literal, value_range);
-    } else {
-        // `<slot>` with no `name=` attr — implicit `"default"` slot.
-        // Anchor on the `<slot` token (5 bytes from `e.range.start +
-        // 1`) so any TS2345 from a missing `default` key in $$Slots
-        // reverse-maps onto the user's `<slot>` site.
-        let name_start = e.range.start.saturating_add(1);
-        let name_end = name_start.saturating_add(4); // "slot"
-        buf.append_with_source("\"default\"", svn_core::Range::new(name_start, name_end));
+    let name_chunk: Option<svn_core::Range> = match name_attr {
+        None => None,
+        Some(Attribute::Plain(p)) => match p.value.as_ref().and_then(|v| v.parts.first()) {
+            Some(svn_parser::AttrValuePart::Text { range }) => Some(*range),
+            Some(svn_parser::AttrValuePart::Expression { range, .. }) => Some(*range),
+            None if p.value.is_some() => Some(svn_core::Range::new(p.range.end, p.range.end)),
+            None => Some(p.range),
+        },
+        Some(Attribute::Expression(x)) => {
+            let open = source
+                .get(x.range.start as usize..x.expression_range.start as usize)
+                .and_then(|s| s.rfind('{'))
+                .map_or(x.expression_range.start, |i| x.range.start + i as u32);
+            Some(svn_core::Range::new(open, x.range.end))
+        }
+        Some(Attribute::Shorthand(x)) => {
+            let inner = source
+                .get(x.range.start as usize + 1..x.range.end as usize)
+                .unwrap_or("");
+            let start = x.range.start + 1 + (inner.len() - inner.trim_start().len()) as u32;
+            Some(svn_core::Range::new(start, start + x.name.len() as u32))
+        }
+        Some(other) => Some(other.range()),
+    };
+    match name_chunk {
+        Some(range) if range.start == range.end => {
+            buf.append_with_source(
+                ", { ",
+                svn_core::Range::new(e.range.start, e.range.start + 1),
+            );
+        }
+        Some(range) => {
+            let name = range.slice(source);
+            let literal = format!("\"{}\"", name.replace('"', "\\\""));
+            buf.append_with_source(&literal, range);
+            buf.push_str(", { ");
+        }
+        None => {
+            // `<slot>` with no `name=` attr — implicit `"default"` slot.
+            // Anchor on the `<slot` token (5 bytes from `e.range.start +
+            // 1`) so any TS2345 from a missing `default` key in $$Slots
+            // reverse-maps onto the user's `<slot>` site.
+            let name_start = e.range.start.saturating_add(1);
+            let name_end = name_start.saturating_add(4); // "slot"
+            buf.append_with_source("\"default\"", svn_core::Range::new(name_start, name_end));
+            buf.push_str(", { ");
+        }
     }
-    buf.push_str(", { ");
     // Slot props: every attr that isn't `name=`, emitted as
     // `"propName": (expr)` with the propName carrying the source
     // attr-name range and the expression carrying its source range.
@@ -1126,6 +1148,8 @@ fn emit_slot_check(buf: &mut EmitBuffer, source: &str, e: &svn_parser::Element, 
     for a in &e.attributes {
         match a {
             Attribute::Plain(p) if p.name.as_str() == "name" => continue,
+            Attribute::Expression(x) if x.name.as_str() == "name" => continue,
+            Attribute::Shorthand(x) if x.name.as_str() == "name" => continue,
             Attribute::Plain(p) => {
                 // Value goes through the shared plain-attr value
                 // transform (same one element/component attribute

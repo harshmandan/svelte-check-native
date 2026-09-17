@@ -1695,6 +1695,7 @@ fn emit_document_with_render_name(
         source_line_starts,
         rejected_by_svelte2tsx: svelte2tsx_rejects::svelte2tsx_rejects(
             doc,
+            fragment,
             parsed_instance.as_ref(),
             parsed_module.as_ref(),
         ),

@@ -21,7 +21,7 @@ function $$render_e40e2c10() {
         }
         { svelteHTML.createElement("img", {});             (classthing);
         }
-        { svelteHTML.createElement("img", {});             (thing(__svn_map_element_tag('img'), __svn_AnimationMove, (params)));
+        { svelteHTML.createElement("img", {});             __svn_ensure_animation(thing(__svn_map_element_tag('img'), __svn_AnimationMove, (params)));
         }
         { svelteHTML.createElement("img", {
             "bind:thing": (binding),
@@ -29,7 +29,7 @@ function $$render_e40e2c10() {
             /*svn:ignore_start*/void (() => { binding = __svn_any(null); });/*svn:ignore_end*/
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {(({ "click": __SvnComponentEvents<typeof Component>["click"] })) & { [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */

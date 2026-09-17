@@ -49,7 +49,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         {
             await (project.ready);
-            (children?.({ project }));
+            __svn_ensure_snippet(children?.({ project }));
         }
     });
     void project;

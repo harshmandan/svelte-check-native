@@ -3,11 +3,11 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("h1", {});             (blink(__svn_map_element_tag('h1'), __svn_AnimationMove, ({y: 50, duration: 500})));
+        { svelteHTML.createElement("h1", {});             __svn_ensure_animation(blink(__svn_map_element_tag('h1'), __svn_AnimationMove, ({y: 50, duration: 500})));
         }
-        { svelteHTML.createElement("h1", {});             (blink(__svn_map_element_tag('h1'), __svn_AnimationMove, ({y: 50, duration: 500})));
+        { svelteHTML.createElement("h1", {});             __svn_ensure_animation(blink(__svn_map_element_tag('h1'), __svn_AnimationMove, ({y: 50, duration: 500})));
         }
-        { svelteHTML.createElement("h1", {});             (blink(__svn_map_element_tag('h1'), __svn_AnimationMove, ({y: 50, duration: 500})));
+        { svelteHTML.createElement("h1", {});             __svn_ensure_animation(blink(__svn_map_element_tag('h1'), __svn_AnimationMove, ({y: 50, duration: 500})));
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

@@ -26,7 +26,7 @@ function $$render_e40e2c10() {
     });
     void bar;
     void foobar;
-    return { props: /** @type {{ bar: any; foobar?: typeof foobar; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { bar: (bar) } }, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {{ bar: any; foobar?: typeof foobar; }} */({}), events: /** @type {(Omit<({ "click": HTMLElementEventMap["click"] }), keyof ({ "hi": CustomEvent<any> })> & ({ "hi": CustomEvent<any> })) & { [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { bar: (bar) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /** @type {__SvnIsomorphicComponent<__SvnSvelte4SlotedProps<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, __SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */

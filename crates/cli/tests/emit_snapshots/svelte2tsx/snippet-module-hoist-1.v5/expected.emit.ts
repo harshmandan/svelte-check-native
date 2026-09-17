@@ -3,81 +3,81 @@
 
     let module = true;
     import { imported } from './x';
-const hoistable1 = (): any => { async () => {
+const hoistable1 = (): ReturnType<import('svelte').Snippet> => { async () => {
     { svelteHTML.createElement("div", {});     }
     };
-    return null as any;
+    return __svn_any(0);
 };
 void hoistable1;
-const hoistable2 = (bar): any => { async () => {
+const hoistable2 = (bar): ReturnType<import('svelte').Snippet> => { async () => {
     { svelteHTML.createElement("div", {});         (bar);
     }
     };
-    return null as any;
+    return __svn_any(0);
 };
 void hoistable2;
-const hoistable3 = (bar: string): any => { async () => {
+const hoistable3 = (bar: string): ReturnType<import('svelte').Snippet> => { async () => {
     { svelteHTML.createElement("div", {});         (bar);
     }
     };
-    return null as any;
+    return __svn_any(0);
 };
 void hoistable3;
-const hoistable4 = (foo): any => { async () => {
+const hoistable4 = (foo): ReturnType<import('svelte').Snippet> => { async () => {
     { svelteHTML.createElement("div", {});         (foo);
     }
     };
-    return null as any;
+    return __svn_any(0);
 };
 void hoistable4;
-const hoistable5 = (): any => { async () => {
+const hoistable5 = (): ReturnType<import('svelte').Snippet> => { async () => {
     { svelteHTML.createElement("button", {
         "onclick": (e => e),
     });
     }
     };
-    return null as any;
+    return __svn_any(0);
 };
 void hoistable5;
-const hoistable6 = (): any => { async () => {
+const hoistable6 = (): ReturnType<import('svelte').Snippet> => { async () => {
     { svelteHTML.createElement("div", {});         (module);
     }
     };
-    return null as any;
+    return __svn_any(0);
 };
 void hoistable6;
-const hoistable8 = (): any => { async () => {
+const hoistable8 = (): ReturnType<import('svelte').Snippet> => { async () => {
     { svelteHTML.createElement("div", {});         (global);
     }
     };
-    return null as any;
+    return __svn_any(0);
 };
 void hoistable8;
-const hoistable9 = (props: HTMLAttributes<HTMLDivElement>): any => { async () => {
+const hoistable9 = (props: HTMLAttributes<HTMLDivElement>): ReturnType<import('svelte').Snippet> => { async () => {
     };
-    return null as any;
+    return __svn_any(0);
 };
 void hoistable9;
-const hoistable10 = (foo): any => { async () => {
+const hoistable10 = (foo): ReturnType<import('svelte').Snippet> => { async () => {
     const bar = foo;
     (bar);
     };
-    return null as any;
+    return __svn_any(0);
 };
 void hoistable10;
 function $$render_e40e2c10() {
-    const hoistable7 = (): any => { async () => {
+    const hoistable7 = (): ReturnType<import('svelte').Snippet> => { async () => {
         { svelteHTML.createElement("div", {});             (imported);
         }
         };
-        return null as any;
+        return __svn_any(0);
     };
     void hoistable7;
-    const not_hoistable = (): any => { async () => {
+    const not_hoistable = (): ReturnType<import('svelte').Snippet> => { async () => {
         { svelteHTML.createElement("div", {});             (foo);
         }
         };
-        return null as any;
+        return __svn_any(0);
     };
     void not_hoistable;
 

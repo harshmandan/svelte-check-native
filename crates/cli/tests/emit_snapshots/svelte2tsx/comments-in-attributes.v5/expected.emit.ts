@@ -29,7 +29,7 @@ function $$render_e40e2c10() {
             // trailing comment same line
         });
             __svn_ensure_transition(fade(__svn_map_element_tag('div')));
-            (flip(__svn_map_element_tag('div'), __svn_AnimationMove));
+            __svn_ensure_animation(flip(__svn_map_element_tag('div'), __svn_AnimationMove));
             element = svelteHTML.createElement("div", {});
             void __svn_action_0;
         }

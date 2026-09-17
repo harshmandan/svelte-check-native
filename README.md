@@ -108,8 +108,8 @@ Every flag not listed below behaves the same as `svelte-check`.
 
 Run `svelte-check-native --help` for the full list.
 
-Output defaults to `machine` when run from a coding-agent CLI:
-`CLAUDECODE=1` (Claude Code), `GEMINI_CLI=1` (Gemini CLI), or `CODEX_CI=1` (OpenAI Codex CLI).
+Output defaults to `machine` when run from Claude Code (`CLAUDECODE=1`),
+as upstream's does.
 
 ## Environment variables
 
@@ -121,8 +121,8 @@ Output defaults to `machine` when run from a coding-agent CLI:
   subprocesses. Default `cores/2`, capped at 8; tracks the perf-core
   count on Apple Silicon. Override if you hit IPC contention on very
   large core counts.
-- `CLAUDECODE` / `GEMINI_CLI` / `CODEX_CI` — any set forces `machine`
-  output for agent-friendly parsing.
+- `CLAUDECODE=1` — makes `machine` the default output format.
+- `NO_COLOR` / `FORCE_COLOR` — turn colour off / on, as for upstream.
 
 ## Exit codes
 

@@ -13,7 +13,7 @@ function $$render_e40e2c10<A, B extends keyof A, C extends boolean>() {
         // template type-check body (incremental)
     });
     void getA;
-    return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ getA: typeof getA; }} */ ({}) };
+    return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{}} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ getA: typeof getA; }} */ ({}) };
 }
 $$render_e40e2c10;
 /** @type {import('svelte').Component<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */

@@ -61,8 +61,9 @@ pub use ast_walk::{WalkNode, collect_function_body_stmts, walk_statement_descend
 pub use events::{
     collect_ctor_locals, collect_inline_typed_dispatcher_member_names, find_dispatched_event_names,
     find_dispatcher_event_type_sources, find_dispatcher_local_names,
-    find_typed_dispatcher_local_names, find_untyped_dispatcher_local_names,
-    has_event_dispatcher_call, has_inline_typed_dispatcher_members,
+    find_template_dispatched_event_names, find_typed_dispatcher_local_names,
+    find_untyped_dispatcher_local_names, has_event_dispatcher_call,
+    has_inline_typed_dispatcher_members,
 };
 pub use jsdoc::{
     scan_jsdoc_props_typedef_keys, scan_jsdoc_typedef_name, should_synthesise_js_props,

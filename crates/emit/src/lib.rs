@@ -497,8 +497,9 @@ fn emit_document_with_render_name(
     // `createEventDispatcher<T>()` without opting into strict events —
     // narrowing those without opt-in produced 18 legitimate-but-new
     // errors on a Svelte-4 bench in the reverted commit 3c24f18.
-    let narrow_events =
-        has_strict_events_decl || has_strict_events_attr(doc) || (runes_mode && generics.is_some());
+    let narrow_events = has_strict_events_decl
+        || has_strict_events_attr(doc, fragment)
+        || (runes_mode && generics.is_some());
     // If the component doesn't already declare `$$Events` but opted in
     // via one of the other two triggers, pull the dispatcher's type
     // argument as the source for a synthesised `type $$Events = T;`.
@@ -575,6 +576,20 @@ fn emit_document_with_render_name(
                     svn_analyze::find_dispatched_event_names(&p.program)
                 })
                 .unwrap_or_default();
+            // Calls to an untyped dispatcher made in the template
+            // (`on:click={() => dispatch('save')}`) dispatch events too.
+            if let Some(p) = parsed_instance.as_ref() {
+                let dispatchers = svn_analyze::find_untyped_dispatcher_local_names(&p.program);
+                for name in svn_analyze::find_template_dispatched_event_names(
+                    fragment,
+                    doc.source,
+                    &dispatchers,
+                ) {
+                    if !untyped_names.contains(&name) {
+                        untyped_names.push(name);
+                    }
+                }
+            }
             // Round-8 follow-up #5: collapse names duplicated across
             // multiple inline typed dispatchers to `CustomEvent<any>`.
             // Upstream's `addToEvents` (`ComponentEvents.ts:279`)
@@ -1319,18 +1334,9 @@ fn emit_document_with_render_name(
         // unnecessary alias declaration).
         None
     };
-    // Reviewer follow-up #1: gate the `type $$Events = …` alias on
-    // TS-only emission. JS overlays (`.svelte.svn.js`) can't carry
-    // TS-only `type X = …` syntax — pure-JS parsers reject it, and
-    // even tsgo's `allowJs` mode flags it as syntactically invalid
-    // when `checkJs` is on. The JS render-fn's events field is
-    // therefore always the lax `{ [evt: string]: CustomEvent<any> }`
-    // index signature (JSDoc-cast), never a reference to this alias,
-    // and the JS default export (`Component<Props, Exports>`) has no
-    // events channel to feed either. Skip on JS; strict event
-    // narrowing for JS overlays is a separate (larger) port that
-    // requires JSDoc-friendly equivalents of the mapped/conditional
-    // types this alias produces.
+    // The `type $$Events = …` alias is TS-only syntax, which a JS
+    // overlay (`.svelte.svn.js`) cannot carry; the JS render return
+    // states the same body as a JSDoc type instead.
     if is_ts && let Some(body) = events_alias_body.as_deref() {
         let _ = writeln!(buf, "    type $$Events = {body};");
     }
@@ -1596,6 +1602,14 @@ fn emit_document_with_render_name(
         .is_some_and(|p| svn_analyze::has_inline_typed_dispatcher_members(&p.program));
     let has_concrete_dispatcher_events =
         has_inline_typed_members || synthesized_untyped_events.is_some();
+    // Upstream's `events.hasEvents()`: a declared `$$Events` is the
+    // only event source when present, and counts the events it names;
+    // otherwise dispatcher and bubbled events count.
+    let has_events = if has_strict_events_decl {
+        svelte4::compat::strict_events_decl_has_events(parsed_instance.as_ref())
+    } else {
+        has_concrete_dispatcher_events || has_bubbled_events
+    };
     if is_ts {
         // Round-7 follow-up #6 / Round-8 follow-up #4: the fn-shape
         // gate cares about CONCRETE events from the dispatcher path
@@ -1629,10 +1643,9 @@ fn emit_document_with_render_name(
             generics.as_deref(),
             prop_type_effective.as_deref(),
             has_dispatcher_call,
-            has_concrete_dispatcher_events,
+            has_events,
             events_alias_body.is_some(),
             has_strict_events_decl,
-            has_bubbled_events,
             runes_mode,
             ambients,
         );
@@ -1643,7 +1656,7 @@ fn emit_document_with_render_name(
             doc.source,
             &render_name,
             runes_mode,
-            has_strict_events_decl || has_concrete_dispatcher_events || has_bubbled_events,
+            has_events,
             ambients,
         );
     }

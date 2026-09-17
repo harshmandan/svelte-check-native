@@ -219,30 +219,17 @@ fn collect_dispatcher_locals_via_walker(
     }
 }
 
-/// Collect the set of locals that resolve to svelte's
-/// `createEventDispatcher`. Limited to imports whose source is
-/// exactly `'svelte'` — covers the un-aliased
-/// `import { createEventDispatcher } from 'svelte'`, the aliased
-/// `import { createEventDispatcher as <local> } from 'svelte'`,
-/// and the namespace `import * as <ns> from 'svelte'` form
-/// (consumers call `ns.createEventDispatcher`, but our existing
-/// callsites match `Identifier(callee)` and don't traverse member
-/// expressions, so namespace imports are out of scope today).
-///
-/// Reviewer follow-up #4: pre-fix this also unconditionally
-/// inserted the bare name on a "Svelte tooling injects it"
-/// rationale that no fixture or upstream sample actually exercises.
-/// Mirrors upstream `ComponentEvents.ts:386-389` exactly: only
-/// imports from `'svelte'` count. Without this gate, a local
-/// function (or non-Svelte import) named `createEventDispatcher`
-/// would force dispatcher detection, event surface synthesis, and
-/// the iso default-export shape on a value that has no actual
-/// Svelte event semantics.
+/// The local name `createEventDispatcher` is imported under, as
+/// upstream's `checkIfImportIsEventDispatcher` decides it: the first
+/// `svelte` import declaration that names `createEventDispatcher`
+/// (directly or aliased) wins, and within it the first such specifier.
+/// Any further alias of the same import is not a dispatcher
+/// constructor. Returned as a set (of at most one name) for the
+/// callers that test membership.
 pub fn collect_ctor_locals(
     program: &oxc_ast::ast::Program<'_>,
 ) -> std::collections::HashSet<String> {
-    use std::collections::HashSet;
-    let mut ctor_locals: HashSet<String> = HashSet::new();
+    let mut ctor_locals = std::collections::HashSet::new();
     for stmt in &program.body {
         let Statement::ImportDeclaration(decl) = stmt else {
             continue;
@@ -253,9 +240,9 @@ pub fn collect_ctor_locals(
         let Some(specifiers) = &decl.specifiers else {
             continue;
         };
-        for spec in specifiers {
+        let first = specifiers.iter().find_map(|spec| {
             let oxc_ast::ast::ImportDeclarationSpecifier::ImportSpecifier(s) = spec else {
-                continue;
+                return None;
             };
             // `imported` is the source-side name; `local` is the
             // value the user calls in this module. For the
@@ -265,9 +252,11 @@ pub fn collect_ctor_locals(
                 oxc_ast::ast::ModuleExportName::IdentifierReference(r) => r.name.as_str(),
                 oxc_ast::ast::ModuleExportName::StringLiteral(l) => l.value.as_str(),
             };
-            if imported == "createEventDispatcher" {
-                ctor_locals.insert(s.local.name.to_string());
-            }
+            (imported == "createEventDispatcher").then(|| s.local.name.to_string())
+        });
+        if let Some(local) = first {
+            ctor_locals.insert(local);
+            break;
         }
     }
     ctor_locals
@@ -1234,6 +1223,82 @@ fn expression_has_inline_typed_dispatcher(
         return false;
     };
     matches!(arg, oxc_ast::ast::TSType::TSTypeLiteral(lit) if !lit.members.is_empty())
+}
+
+/// Event names the template dispatches through `dispatchers`.
+///
+/// Upstream's `EventHandler` records the callee of every call in a
+/// template expression, and an untyped dispatcher's declaration picks
+/// up each recorded call to its name whose first argument is a literal
+/// (`on:click={() => dispatch('save')}` dispatches `save`). Names come
+/// back in template order, without duplicates.
+pub fn find_template_dispatched_event_names(
+    fragment: &svn_parser::Fragment,
+    source: &str,
+    dispatchers: &[String],
+) -> Vec<String> {
+    if dispatchers.is_empty() {
+        return Vec::new();
+    }
+    let mut collector = TemplateDispatchCollector {
+        dispatchers,
+        names: Vec::new(),
+    };
+    let alloc = oxc_allocator::Allocator::default();
+    for expr in crate::template_expression_ranges(fragment) {
+        let Some(text) = source.get(expr.range.start as usize..expr.range.end as usize) else {
+            continue;
+        };
+        if !dispatchers.iter().any(|d| text.contains(d.as_str())) {
+            continue;
+        }
+        let wrapped = if expr.is_declaration {
+            format!("let {text}\n;")
+        } else {
+            format!("({text}\n);")
+        };
+        let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+        oxc_ast_visit::Visit::visit_program(&mut collector, &parsed.program);
+    }
+    collector.names
+}
+
+struct TemplateDispatchCollector<'d> {
+    dispatchers: &'d [String],
+    names: Vec<String>,
+}
+
+impl<'a> oxc_ast_visit::Visit<'a> for TemplateDispatchCollector<'_> {
+    fn visit_call_expression(&mut self, it: &oxc_ast::ast::CallExpression<'a>) {
+        if let Expression::Identifier(callee) = &it.callee
+            && self.dispatchers.iter().any(|d| d == callee.name.as_str())
+            && let Some(name) = it
+                .arguments
+                .first()
+                .and_then(|a| a.as_expression())
+                .and_then(literal_event_name)
+            && !self.names.contains(&name)
+        {
+            self.names.push(name);
+        }
+        oxc_ast_visit::walk::walk_call_expression(self, it);
+    }
+}
+
+/// The event name a literal first argument stands for, as its runtime
+/// value would print (`'save'` → `save`, `1` → `1`, `null` → `null`).
+fn literal_event_name(expr: &Expression<'_>) -> Option<String> {
+    match expr {
+        Expression::StringLiteral(s) => Some(s.value.to_string()),
+        Expression::NumericLiteral(n) => Some(if n.value.fract() == 0.0 && n.value.abs() < 1e21 {
+            format!("{}", n.value as i64)
+        } else {
+            n.value.to_string()
+        }),
+        Expression::BooleanLiteral(b) => Some(b.value.to_string()),
+        Expression::NullLiteral(_) => Some("null".to_string()),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

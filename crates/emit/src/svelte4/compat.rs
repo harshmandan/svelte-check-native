@@ -259,42 +259,50 @@ fn fragment_has_slot_where(
     fragment: &svn_parser::Fragment,
     pred: &dyn Fn(&svn_parser::Element) -> bool,
 ) -> bool {
+    fragment_has_element_where(fragment, &|e| e.name.as_str() == "slot" && pred(e))
+}
+
+/// Walk every element of the fragment (through blocks and component
+/// children) and report whether any satisfies `pred`. Comments and
+/// text are never elements.
+fn fragment_has_element_where(
+    fragment: &svn_parser::Fragment,
+    pred: &dyn Fn(&svn_parser::Element) -> bool,
+) -> bool {
     use svn_parser::Node;
     for node in &fragment.nodes {
         let hit = match node {
-            Node::Element(e) => {
-                (e.name.as_str() == "slot" && pred(e)) || fragment_has_slot_where(&e.children, pred)
-            }
-            Node::Component(c) => fragment_has_slot_where(&c.children, pred),
-            Node::SvelteElement(e) => fragment_has_slot_where(&e.children, pred),
+            Node::Element(e) => pred(e) || fragment_has_element_where(&e.children, pred),
+            Node::Component(c) => fragment_has_element_where(&c.children, pred),
+            Node::SvelteElement(e) => fragment_has_element_where(&e.children, pred),
             Node::IfBlock(b) => {
-                fragment_has_slot_where(&b.consequent, pred)
+                fragment_has_element_where(&b.consequent, pred)
                     || b.elseif_arms
                         .iter()
-                        .any(|arm| fragment_has_slot_where(&arm.body, pred))
+                        .any(|arm| fragment_has_element_where(&arm.body, pred))
                     || b.alternate
                         .as_ref()
-                        .is_some_and(|alt| fragment_has_slot_where(alt, pred))
+                        .is_some_and(|alt| fragment_has_element_where(alt, pred))
             }
             Node::EachBlock(b) => {
-                fragment_has_slot_where(&b.body, pred)
+                fragment_has_element_where(&b.body, pred)
                     || b.alternate
                         .as_ref()
-                        .is_some_and(|alt| fragment_has_slot_where(alt, pred))
+                        .is_some_and(|alt| fragment_has_element_where(alt, pred))
             }
             Node::AwaitBlock(b) => {
                 b.pending
                     .as_ref()
-                    .is_some_and(|p| fragment_has_slot_where(p, pred))
+                    .is_some_and(|p| fragment_has_element_where(p, pred))
                     || b.then_branch
                         .as_ref()
-                        .is_some_and(|t| fragment_has_slot_where(&t.body, pred))
+                        .is_some_and(|t| fragment_has_element_where(&t.body, pred))
                     || b.catch_branch
                         .as_ref()
-                        .is_some_and(|c| fragment_has_slot_where(&c.body, pred))
+                        .is_some_and(|c| fragment_has_element_where(&c.body, pred))
             }
-            Node::KeyBlock(b) => fragment_has_slot_where(&b.body, pred),
-            Node::SnippetBlock(b) => fragment_has_slot_where(&b.body, pred),
+            Node::KeyBlock(b) => fragment_has_element_where(&b.body, pred),
+            Node::SnippetBlock(b) => fragment_has_element_where(&b.body, pred),
             Node::Text(_) | Node::Comment(_) | Node::Interpolation(_) => false,
         };
         if hit {
@@ -342,6 +350,62 @@ pub(crate) fn has_strict_events_ast(
         program.body.iter().any(statement_declares_events)
     };
     parsed_instance.is_some_and(|p| scan(&p.program))
+}
+
+/// Whether the instance script's `$$Events` declaration names any
+/// event, as upstream's `ComponentEventsFromInterface.extractEvents`
+/// counts them: the property signatures of an interface body, of a
+/// type-literal alias, or of the type-literal members of an
+/// intersection alias. Anything else (`type $$Events = Base`, an empty
+/// interface, method signatures) contributes no events. With several
+/// declarations the last one counts.
+pub(crate) fn strict_events_decl_has_events(
+    parsed_instance: Option<&svn_parser::ParsedScript<'_>>,
+) -> bool {
+    use oxc_ast::ast::{Declaration, Statement, TSSignature, TSType};
+    fn has_properties(members: &[TSSignature<'_>]) -> bool {
+        members
+            .iter()
+            .any(|m| matches!(m, TSSignature::TSPropertySignature(_)))
+    }
+    fn alias_has_events(ty: &TSType<'_>) -> bool {
+        match ty {
+            TSType::TSTypeLiteral(lit) => has_properties(&lit.members),
+            TSType::TSIntersectionType(i) => i.types.iter().any(|t| match t {
+                TSType::TSTypeLiteral(lit) => has_properties(&lit.members),
+                _ => false,
+            }),
+            _ => false,
+        }
+    }
+    let Some(parsed) = parsed_instance else {
+        return false;
+    };
+    let mut last: Option<bool> = None;
+    for stmt in &parsed.program.body {
+        let decl = match stmt {
+            Statement::TSInterfaceDeclaration(d) if d.id.name == "$$Events" => {
+                Some(has_properties(&d.body.body))
+            }
+            Statement::TSTypeAliasDeclaration(d) if d.id.name == "$$Events" => {
+                Some(alias_has_events(&d.type_annotation))
+            }
+            Statement::ExportDeclaration(e) => match &e.declaration {
+                Declaration::TSInterfaceDeclaration(d) if d.id.name == "$$Events" => {
+                    Some(has_properties(&d.body.body))
+                }
+                Declaration::TSTypeAliasDeclaration(d) if d.id.name == "$$Events" => {
+                    Some(alias_has_events(&d.type_annotation))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if decl.is_some() {
+            last = decl;
+        }
+    }
+    last.unwrap_or(false)
 }
 
 /// True when `stmt` is an `interface $$Events` or `type $$Events`
@@ -405,16 +469,32 @@ fn statement_declares_named_type(stmt: &oxc_ast::ast::Statement<'_>, name: &str)
     }
 }
 
-/// SVELTE-4-COMPAT: Detect the `<script strictEvents>` bare attribute
-/// that upstream svelte2tsx uses as a user opt-in for event-typing
-/// narrowing without requiring a `$$Events` interface. One of the
-/// three triggers that turns on event narrowing.
-pub(crate) fn has_strict_events_attr(doc: &svn_parser::Document<'_>) -> bool {
-    doc.instance_script.as_ref().is_some_and(|s| {
-        s.attrs
-            .iter()
-            .any(|a| a.name.eq_ignore_ascii_case("strictEvents") && a.value.is_none())
-    })
+/// SVELTE-4-COMPAT: detect the `strictEvents` opt-in, which turns on
+/// event-typing narrowing without a `$$Events` interface. Upstream
+/// (`htmlxtojsx_v2/index.ts`) enables it when any `<script>` or
+/// `<style>` tag of the file — the component's own sections or one
+/// written inside the markup — carries an attribute named exactly
+/// `strictEvents`, whatever its value.
+pub(crate) fn has_strict_events_attr(
+    doc: &svn_parser::Document<'_>,
+    fragment: &svn_parser::Fragment,
+) -> bool {
+    const NAME: &str = "strictEvents";
+    let on_section = |attrs: &[svn_parser::ScriptAttr]| attrs.iter().any(|a| a.name == NAME);
+    doc.instance_script
+        .as_ref()
+        .is_some_and(|s| on_section(&s.attrs))
+        || doc
+            .module_script
+            .as_ref()
+            .is_some_and(|s| on_section(&s.attrs))
+        || doc.style.as_ref().is_some_and(|s| on_section(&s.attrs))
+        || fragment_has_element_where(fragment, &|e| {
+            matches!(e.name.as_str(), "script" | "style")
+                && e.attributes.iter().any(
+                    |a| matches!(a, svn_parser::Attribute::Plain(p) if p.name.as_str() == NAME),
+                )
+        })
 }
 
 /// Infer Svelte 5 runes mode the way upstream svelte2tsx does

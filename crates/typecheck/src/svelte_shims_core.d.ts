@@ -1465,9 +1465,22 @@ declare module 'svelte' {
     export function setContext<T>(key: any, value: T): T;
     export function hasContext(key: any): boolean;
     export function getAllContexts<T extends Map<any, any> = Map<any, any>>(): T;
+    // Svelte's own dispatcher declarations.
+    interface DispatchOptions {
+        cancelable?: boolean;
+    }
+    export interface EventDispatcher<EventMap extends Record<string, any>> {
+        <Type extends keyof EventMap>(
+            ...args: null extends EventMap[Type]
+                ? [type: Type, parameter?: EventMap[Type] | null | undefined, options?: DispatchOptions]
+                : undefined extends EventMap[Type]
+                  ? [type: Type, parameter?: EventMap[Type] | null | undefined, options?: DispatchOptions]
+                  : [type: Type, parameter: EventMap[Type], options?: DispatchOptions]
+        ): boolean;
+    }
     export function createEventDispatcher<
-        Events extends Record<string, any> = Record<string, any>,
-    >(): <K extends Extract<keyof Events, string>>(type: K, detail?: Events[K]) => boolean;
+        EventMap extends Record<string, any> = any,
+    >(): EventDispatcher<EventMap>;
 }
 
 declare module 'svelte/store' {

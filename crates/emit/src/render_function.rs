@@ -226,18 +226,22 @@ pub(crate) fn emit_render_body_return(
         // consumers, so misuse (e.g. comparing a boolean export
         // against a string) goes undiagnosed. JSDoc casts replace
         // the TS-only `undefined as any as T` shape — validated at
-        // design/js_render_full_projection/. `$$Events` / `$$Slots`
-        // interfaces are TS-only declarations, so the events field
-        // is always the lax index signature here and the slots
-        // field always the synthesised literal.
+        // design/js_render_full_projection/. `$$Slots` interfaces are
+        // TS-only declarations, so the slots field is always the
+        // synthesised literal. The events field carries the same
+        // collected event map a TS component gets (upstream's
+        // ComponentEvents does not care about the script language),
+        // stated as a JSDoc type; with nothing collected it is the
+        // lax index signature.
         let exports_expr = match exports_object {
             Some(o) => format!("/** @type {{{o}}} */ ({{}})"),
             None => "{}".to_string(),
         };
+        let events_ty = synth_events_alias_body.unwrap_or("{ [evt: string]: CustomEvent<any> }");
         let bindings_field = build_bindings_field(props_info, false);
         let _ = write!(
             buf,
-            "    return {{ props: {props_expr}, events: /** @type {{{{ [evt: string]: CustomEvent<any> }}}} */ ({{}}), slots: ",
+            "    return {{ props: {props_expr}, events: /** @type {{{events_ty}}} */ ({{}}), slots: ",
         );
         write_slots_field_type(buf.raw_string_mut(), doc.source, slot_defs, false);
         let _ = writeln!(

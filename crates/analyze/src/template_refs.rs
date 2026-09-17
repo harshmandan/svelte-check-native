@@ -145,6 +145,31 @@ fn walk_node(node: &Node, sink: &mut dyn FnMut(TemplateSite<'_>)) {
     }
 }
 
+/// One reference-bearing site of an attribute list.
+pub enum AttributeSite {
+    /// An expression: `attr={expr}`, `attr="a{expr}b"`, `{...expr}`,
+    /// a directive's `={expr}` / `={get, set}` value.
+    Expression(Range),
+    /// `{name}` — the shorthand attribute is itself a reference.
+    Shorthand(smol_str::SmolStr),
+}
+
+/// Every reference-bearing site of `attrs`, in source order.
+pub fn attribute_expression_sites(attrs: &[Attribute]) -> Vec<AttributeSite> {
+    let mut out = Vec::new();
+    for attr in attrs {
+        if let Attribute::Shorthand(s) = attr {
+            out.push(AttributeSite::Shorthand(s.name.clone()));
+        }
+    }
+    walk_attributes(attrs, &mut |site| {
+        if let TemplateSite::Expression(range) = site {
+            out.push(AttributeSite::Expression(range));
+        }
+    });
+    out
+}
+
 fn walk_attributes(attrs: &[Attribute], sink: &mut dyn FnMut(TemplateSite<'_>)) {
     for attr in attrs {
         match attr {

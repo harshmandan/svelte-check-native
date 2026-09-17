@@ -3,7 +3,7 @@
 
     import { store1 } from './somewhere';
     const store2 = ''/*svn:ignore_start*/;let $store2 = __svn_store_get(store2);/*svn:ignore_end*/;
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
     /*svn:ignore_start*/;let $store1 = __svn_store_get(store1);/*svn:ignore_end*/
     ;(async () => {
         // template type-check body (incremental)

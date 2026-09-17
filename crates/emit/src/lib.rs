@@ -1075,6 +1075,51 @@ fn emit_document_with_render_name(
     // nothing after it, so an unmapped column there resolves backwards
     // to the tag.
     let header_start = buf.as_str().len() as u32;
+    // The render function is `async` only when the script awaits at
+    // its root scope (upstream `hasTopLevelAwait`): an `await` inside a
+    // block or a function does not count, and then TypeScript reports
+    // it (TS1308) the way upstream does.
+    let render_async = if parsed_instance
+        .as_ref()
+        .is_some_and(|p| svn_analyze::has_root_scope_await(&p.program))
+    {
+        "async "
+    } else {
+        ""
+    };
+    // Root `{#snippet}` blocks are hoisted out of the template
+    // (upstream `index.ts`, `rootSnippets`): to module scope when
+    // every free name they reference is allowed there — nothing the
+    // instance script declares — otherwise to the render function's
+    // start, ahead of the script body.
+    let root_snippets: Vec<&svn_parser::SnippetBlock> = fragment
+        .nodes
+        .iter()
+        .filter_map(|n| match n {
+            Node::SnippetBlock(b) => Some(b.as_ref()),
+            _ => None,
+        })
+        .collect();
+    let module_hoisted: Vec<bool> = module_hoistable_snippets(
+        &root_snippets,
+        doc,
+        parsed_instance.as_ref(),
+        parsed_module.as_ref(),
+    );
+    let instantiations = render_function::instantiation_index(summary);
+    let mut snippet_action_counter: usize = 0;
+    for (snippet, hoist) in root_snippets.iter().zip(&module_hoisted) {
+        if *hoist {
+            crate::nodes::snippet_block::emit_snippet_const(
+                &mut buf,
+                doc.source,
+                snippet,
+                0,
+                &instantiations,
+                &mut snippet_action_counter,
+            );
+        }
+    }
     match &generics_with_origin {
         // A `$$Generic`-synthesised parameter list is scaffolding: the
         // user wrote `type T = $$Generic;` in the body, never a `<T>`
@@ -1087,14 +1132,14 @@ fn emit_document_with_render_name(
         Some((g, util::GenericsOrigin::DollarGeneric)) => {
             let _ = writeln!(
                 buf,
-                "async function {render_name}/*svn:ignore_start*/<{g}>/*svn:ignore_end*/() {{"
+                "{render_async}function {render_name}/*svn:ignore_start*/<{g}>/*svn:ignore_end*/() {{"
             );
         }
         Some((g, util::GenericsOrigin::Attribute)) => {
-            let _ = writeln!(buf, "async function {render_name}<{g}>() {{");
+            let _ = writeln!(buf, "{render_async}function {render_name}<{g}>() {{");
         }
         None => {
-            let _ = writeln!(buf, "async function {render_name}() {{");
+            let _ = writeln!(buf, "{render_async}function {render_name}() {{");
         }
     }
     if let Some(script) = doc.instance_script.as_ref() {
@@ -1308,20 +1353,24 @@ fn emit_document_with_render_name(
     // harmless — the `let` just goes unused in the overlay.
     emit_svelte4_ambients(buf.raw_string_mut(), ambients, is_ts);
 
-    // Forward-declare top-level `{#snippet NAME(params)}` names at the
-    // `$$render_<hash>` function-body scope so the script body can
-    // reference them. Mirrors upstream svelte2tsx's `hoistSnippetBlock`
-    // (`SnippetBlock.ts:189-216`), which moves snippet blocks to the
-    // top of the enclosing fragment, so the resulting `const NAME =
-    // (...)` declarations land *before* the script body in the
-    // generated `$$render` function. Without this, `let snip =
-    // mySnippet;` in `<script>` fires TS2304 ("Cannot find name") even
-    // though the snippet is declared in the template — the inner-scope
-    // hoist inside the template-check IIFE is invisible from the script
-    // body. Only direct-child snippets at the root fragment qualify;
-    // snippets inside `{#if}` / `{#each}` / etc. stay block-scoped and
-    // are still emitted via the inner hoist in `emit_template_body`.
-    emit_top_level_snippet_forward_decls(&mut buf, doc.source, fragment, is_ts);
+    // Root snippets that stay in the component land here, at the
+    // render function's start — before the script body, as upstream
+    // moves them to `renderFunctionStart`. A closure in the snippet
+    // therefore precedes the declarations it captures, and sees their
+    // declared types rather than an initializer-narrowed one.
+    for (snippet, hoist) in root_snippets.iter().zip(&module_hoisted) {
+        if !*hoist {
+            crate::nodes::snippet_block::emit_snippet_const(
+                &mut buf,
+                doc.source,
+                snippet,
+                1,
+                &instantiations,
+                &mut snippet_action_counter,
+            );
+        }
+    }
+    buf.resync_current_line();
 
     let mut instance_body: Option<std::ops::Range<usize>> = None;
     if let Some(s) = &split {
@@ -1414,6 +1463,7 @@ fn emit_document_with_render_name(
         summary,
         is_ts,
         has_strict_slots_decl,
+        !root_snippets.is_empty(),
     );
 
     let exported_locals: Vec<SmolStr> = split
@@ -1759,29 +1809,6 @@ fn common_affix_spans(src: &[u8], body: &[u8]) -> Vec<(u32, u32, u32)> {
     spans
 }
 
-fn emit_top_level_snippet_forward_decls(
-    buf: &mut EmitBuffer,
-    _source: &str,
-    fragment: &Fragment,
-    is_ts: bool,
-) {
-    for node in &fragment.nodes {
-        let Node::SnippetBlock(s) = node else {
-            continue;
-        };
-        if is_ts {
-            let _ = writeln!(buf, "    const {}: any = undefined as any;", s.name);
-        } else {
-            let _ = writeln!(
-                buf,
-                "    /** @type {{any}} */ const {} = /** @type {{any}} */ (undefined);",
-                s.name,
-            );
-        }
-        let _ = writeln!(buf, "    void {};", s.name);
-    }
-}
-
 /// Walk the fragment tree and emit per-construct scaffolding.
 ///
 /// Currently emits a `for`-of loop for each `{#each}` block and recurses
@@ -1906,6 +1933,66 @@ pub(crate) use is_ts::{IsTsGuard, emit_is_ts, preserve_attribute_case};
 pub(crate) use void_block::{emit_bind_pair_declarations, emit_void_block};
 
 pub(crate) use destructure_idents::{param_binding_names, pattern_binding_names};
+
+/// For each root snippet, whether upstream hoists it to module scope:
+/// there must be a module script, and every free name of the snippet
+/// must be allowed there — not declared by the instance script, not a
+/// `$$props`-style ambient, not a `$store` subscription (upstream adds
+/// every accessed store to the disallowed set), and not another root
+/// snippet that itself stays in the component (upstream
+/// `HoistableInterfaces.analyzeSnippets`, which iterates until that
+/// last set is stable).
+fn module_hoistable_snippets(
+    root_snippets: &[&svn_parser::SnippetBlock],
+    doc: &Document<'_>,
+    parsed_instance: Option<&svn_parser::ParsedScript<'_>>,
+    parsed_module: Option<&svn_parser::ParsedScript<'_>>,
+) -> Vec<bool> {
+    if doc.module_script.is_none() || root_snippets.is_empty() {
+        return vec![false; root_snippets.len()];
+    }
+    let mut disallowed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Some(p) = parsed_instance {
+        svn_analyze::collect_top_level_bindings(&p.program, &mut disallowed);
+    }
+    // A `$name` reference is a store subscription when `name` is bound
+    // by either script; upstream disallows every accessed store.
+    let mut script_bound: std::collections::HashSet<String> = disallowed.clone();
+    if let Some(p) = parsed_module {
+        svn_analyze::collect_top_level_bindings(&p.program, &mut script_bound);
+    }
+    let globals: Vec<Vec<SmolStr>> = root_snippets
+        .iter()
+        .map(|s| svn_analyze::snippet_globals(s, doc.source))
+        .collect();
+    let allowed = |name: &str, disallowed: &std::collections::HashSet<String>| -> bool {
+        if matches!(name, "$$props" | "$$restProps" | "$$slots") {
+            return false;
+        }
+        if let Some(base) = name.strip_prefix('$')
+            && !base.starts_with('$')
+            && script_bound.contains(base)
+        {
+            return false;
+        }
+        !disallowed.contains(name)
+    };
+    let mut hoist = vec![true; root_snippets.len()];
+    loop {
+        let before = disallowed.len();
+        for (i, snippet) in root_snippets.iter().enumerate() {
+            if globals[i].iter().all(|g| allowed(g, &disallowed)) {
+                continue;
+            }
+            hoist[i] = false;
+            disallowed.insert(snippet.name.to_string());
+        }
+        if disallowed.len() == before {
+            break;
+        }
+    }
+    hoist
+}
 
 #[cfg(test)]
 mod tests {

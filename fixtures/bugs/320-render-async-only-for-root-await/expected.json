@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 11,
+            "code": 1308
+        },
+        {
+            "file": "input.svelte",
+            "line": 3,
+            "column": 27,
+            "code": 1308
+        }
+    ],
+    "_note": "The render function is `async` only when the script awaits at its root scope (upstream `hasTopLevelAwait`, which pushes a scope for every block and function). An `await` inside a bare block or an `if` body is not root-scope, so the render function stays synchronous and TypeScript reports TS1308 on each, as upstream does; we made every render function `async` and reported nothing. Upstream additionally reports the compiler's `experimental_async` error on such files (Svelte 5 without `experimental.async`), which is not ported yet."
+}

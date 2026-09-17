@@ -12,7 +12,7 @@ declare const children: { [key: string]: any } & ((...args: any[]) => any);
         project?: IProject;
         children?: import('svelte').Snippet<[{ project: IProject }]>;
     }
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
     // Threlte/theatre Project.svelte pattern: prop is optional, then
     // reassigned in the script body to a non-undefined value, then

@@ -6,7 +6,7 @@
     interface Props extends A {
         a: string;
     }
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
                  
                      

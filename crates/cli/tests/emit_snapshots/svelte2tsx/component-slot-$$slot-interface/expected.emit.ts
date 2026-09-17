@@ -9,7 +9,7 @@ declare const b: { [key: string]: any } & ((...args: any[]) => any);
             b: number
         }
     }
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
                        
                   

@@ -7,7 +7,7 @@ interface A extends B<A> {
     [key: string]: A
 }
 interface B<T> {}
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
                           
           

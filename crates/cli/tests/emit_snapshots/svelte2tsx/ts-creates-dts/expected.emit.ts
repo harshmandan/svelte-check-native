@@ -4,7 +4,7 @@
     export const foo = 'foo';
   import Bar from './bar';
   import { createEventDispatcher } from 'svelte';
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
     type $$Events = (Omit<{ [__svn_K in keyof (({swipe: string}))]: CustomEvent<(({swipe: string}))[__svn_K]> }, keyof ({ "click": HTMLElementEventMap["click"] })> & ({ "click": HTMLElementEventMap["click"] })) & { [evt: string]: CustomEvent<any> };
 
                           

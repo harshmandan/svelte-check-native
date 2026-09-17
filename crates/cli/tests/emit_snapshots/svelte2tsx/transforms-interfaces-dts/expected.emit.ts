@@ -13,7 +13,7 @@
     interface Bar4<T extends boolean> extends Bar1, Bar2 {
         c: false;
     }
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
                                      
            let foo: Foo/*svn:ignore_start*/;foo = __svn_any(foo);/*svn:ignore_end*/;

@@ -3,7 +3,7 @@
 
     type SomeType<T extends boolean> = T;
     type T = unknown;
-async function $$render_e40e2c10<T extends boolean>() {
+function $$render_e40e2c10<T extends boolean>() {
     type $$ComponentProps = { someProp: SomeType<T>; };
     type $$Events = {};
 

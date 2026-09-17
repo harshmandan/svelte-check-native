@@ -3,7 +3,7 @@
     type Action<N, T> = (node: N, params?: T) => {
         destroy?: () => void
     }
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
                                                   
                             

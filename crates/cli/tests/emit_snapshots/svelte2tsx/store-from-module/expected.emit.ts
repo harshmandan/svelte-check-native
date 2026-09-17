@@ -4,7 +4,7 @@
     import {store1, store2} from './store';
     const store3 = writable('')/*svn:ignore_start*/;let $store3 = __svn_store_get(store3);/*svn:ignore_end*/;
     const store4 = writable('')/*svn:ignore_start*/;let $store4 = __svn_store_get(store4);/*svn:ignore_end*/;
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
     /*svn:ignore_start*/;let $store1 = __svn_store_get(store1);;let $store2 = __svn_store_get(store2);/*svn:ignore_end*/
 
     $store1;

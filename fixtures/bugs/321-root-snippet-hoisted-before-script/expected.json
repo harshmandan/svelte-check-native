@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 2,
+            "column": 8,
+            "code": 2322
+        }
+    ],
+    "_note": "A root `{#snippet}` is hoisted to the start of the render function as its real `const NAME = (params) => \u2026` (upstream moves it to the script's start), so a script that uses it \u2014 here as a `$props()` default typed `Snippet<[string]>` while the snippet takes a `number` \u2014 is checked against its real signature. We forward-declared root snippets as `any`, hiding the mismatch."
+}

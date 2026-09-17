@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A root snippet whose free names are all allowed at module scope (nothing the instance script declares, no store subscription) is hoisted to module scope when the component has a `<script module>`, so `export { row }` from the module script resolves. We declared root snippets inside the render function only, and reported TS2304 on the export."
+}

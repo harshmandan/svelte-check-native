@@ -4,7 +4,7 @@ declare const title: { [key: string]: any } & ((...args: any[]) => any);
     interface InnerProps {
         title: string;
     }
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
     type $$ComponentProps = { props: InnerProps; title: string };
 
     // Threlte/theatre Declare.svelte pattern: the parent component

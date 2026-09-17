@@ -12,7 +12,7 @@ declare const name2: { [key: string]: any } & ((...args: any[]) => any);
         renamed1?: string;
         renamed2: string;
     }
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
 
                        

@@ -7,7 +7,7 @@ declare const Abc: { [key: string]: any } & ((...args: any[]) => any);
 interface A {
     Abc: number
 }
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
              
                

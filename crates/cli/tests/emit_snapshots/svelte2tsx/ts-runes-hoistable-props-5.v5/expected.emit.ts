@@ -7,7 +7,7 @@ declare const foo: { [key: string]: any } & ((...args: any[]) => any);
     interface Props {
         foo?: string;
     }
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
                                             
     

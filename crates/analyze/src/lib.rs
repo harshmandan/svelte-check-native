@@ -46,8 +46,10 @@ pub mod events;
 pub mod jsdoc;
 pub mod nodes;
 pub mod props;
+pub mod root_await;
 pub mod runes;
 pub mod slot_attr_rewrite;
+pub mod snippet_globals;
 pub mod store;
 pub mod template_refs;
 pub mod template_scope;
@@ -70,7 +72,9 @@ pub use nodes::const_tag::{
     CONST_TAG_INVALID_PLACEMENT_MSG, ConstPlacementError, check_const_placement,
 };
 pub use props::{PropInfo, PropsInfo, PropsSource, contains_typeof_ref, root_type_name_of};
+pub use root_await::has_root_scope_await;
 pub use runes::{RunesProbe, RunesRule};
+pub use snippet_globals::snippet_globals;
 pub use store::{
     RuneScanContext, collect_rune_scan_context, collect_top_level_bindings,
     collect_typed_top_level_lets, collect_typed_uninit_lets, find_store_refs,

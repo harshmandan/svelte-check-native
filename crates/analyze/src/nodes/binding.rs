@@ -1,38 +1,10 @@
 //! `bind:` directive analyze pass — mirrors upstream
 //! `htmlxtojsx_v2/nodes/Binding.ts`.
 
-use svn_parser::{Attribute, Directive, DirectiveValue};
+use svn_parser::{Directive, DirectiveValue};
 
-use crate::nodes::attribute::literal_attr_value;
 use crate::nodes::destructure::simple_identifier_in;
 use crate::walker::{BindThisTarget, Counters, TemplateSummary};
-
-/// Dispatch the target type for a `bind:value` directive based on the
-/// element tag + literal `type="..."` sibling attribute. Called by the
-/// emit side (`emit::nodes::binding::emit_element_bind_checks_inline`)
-/// which re-derives the bind checks inline from the element attributes.
-///
-/// Returns `None` for tags / type-attr combinations we don't model:
-/// - `<input type="file" | "checkbox" | "radio">`: handled by
-///   `bind:files` / `bind:checked` (different table entries).
-/// - `<select>`: target type depends on `<option>` values; not
-///   statically resolvable without option inspection.
-/// - Other tags: `bind:value` isn't meaningful.
-pub fn resolve_bind_value_type(
-    tag_name: &str,
-    attrs: &[Attribute],
-    source: &str,
-) -> Option<&'static str> {
-    match tag_name {
-        "input" => match literal_attr_value(attrs, "type", source) {
-            Some("number") | Some("range") => Some("number"),
-            Some("file") | Some("checkbox") | Some("radio") => None,
-            _ => Some("string"),
-        },
-        "textarea" => Some("string"),
-        _ => None,
-    }
-}
 
 /// Handle the `bind:` arm of `walk_directive`. Three sub-cases:
 ///

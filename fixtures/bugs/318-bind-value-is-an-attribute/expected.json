@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "`bind:value` on an `<input>` / `<select>` / `<textarea>` is passed as a `\"bind:value\": EXPR` attribute of the element, typed by `svelte/elements` (`'bind:value'?: any`), as upstream does \u2014 no assertion against a type derived from the literal `type=` attribute. The hand-typed assertion reported TS2322 on `number | null` targets, on inputs with a dynamic `type={t}`, and on every combination the table did not model."
+}

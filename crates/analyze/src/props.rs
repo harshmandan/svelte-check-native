@@ -178,6 +178,11 @@ pub struct PropsInfo {
     /// consumers passing extra props don't fire a false
     /// excess-property error.
     pub props_with_unknown: bool,
+    /// A `$props()` call initialises a top-level declarator. With no
+    /// destructure and no annotation (`let props = $props()`), upstream
+    /// names a `$$ComponentProps` alias it never declares, so the
+    /// component's props resolve to `any`.
+    pub props_rune: bool,
 }
 
 impl PropsInfo {
@@ -200,6 +205,7 @@ impl PropsInfo {
         let mut type_text: Option<String> = None;
         let mut props_source = PropsSource::None;
         let mut props_with_unknown = false;
+        let mut props_rune = false;
 
         // Shape 1 / Shape 2: explicit `$props()` annotation wins over
         // everything else. Collect the destructured names from the
@@ -215,6 +221,7 @@ impl PropsInfo {
                 if !is_props_call_like(init) {
                     continue;
                 }
+                props_rune = true;
                 props_with_unknown |=
                     collect_props_destructure(&declarator.id, source, &mut destructures);
                 if type_text.is_some() {
@@ -277,6 +284,7 @@ impl PropsInfo {
             type_root_name,
             destructures,
             props_with_unknown,
+            props_rune,
         }
     }
 }
@@ -402,13 +410,11 @@ fn synthesize_props_type_from_export_let(
 /// `local` in the program's top-level `let`/`const`/`var` declarations
 /// to pick up its type annotation and initializer (which decides the
 /// optional marker). When `local` has no annotation but does have an
-/// initializer, the prop is typed `typeof <local>` so TS enforces the
-/// initializer-inferred type — mirrors upstream svelte2tsx's
-/// `createReturnElementsType` fallback (`<alias>?: typeof <local>`),
-/// which makes `class={123}` fire TS2322 against `let className = ''`.
-/// When `local` can't be found or has neither annotation nor
-/// initializer, the prop is typed `any`. The alias becomes the public
-/// key so consumers write `<Foo {alias}=...>`.
+/// annotation, the prop is typed `typeof <local>` — for a `let`, a
+/// `function`, a `class` or an import alike — and is always optional:
+/// upstream registers a named export with `required = false`
+/// (`ExportedNames.addExport`), so consumers may omit it. The alias
+/// becomes the public key so consumers write `<Foo {alias}=...>`.
 fn append_prop_from_export_specifier(
     spec: &oxc_ast::ast::ExportSpecifier<'_>,
     program: &oxc_ast::ast::Program<'_>,
@@ -425,22 +431,10 @@ fn append_prop_from_export_specifier(
     let Some(local) = module_export_name_str(&spec.local) else {
         return;
     };
-    let (ty_text, has_init) = find_local_type_and_init(program, source, local);
-    let optional_marker = if has_init { "?" } else { "" };
-    // Same annotated / initialized / bare ladder as
-    // `append_props_from_var_decl`: annotation verbatim, else
-    // `typeof <local>` when an initializer exists (body-scope
-    // reference — module-scope consumers must project through
-    // `Awaited<ReturnType<typeof $$render>>['props']`, flagged via
-    // `contains_typeof_ref`), else `any`.
-    let ty_src = ty_text.map(ToOwned::to_owned).unwrap_or_else(|| {
-        if has_init {
-            format!("typeof {local}")
-        } else {
-            "any".to_string()
-        }
-    });
-    out.push(format!("{alias}{optional_marker}: {ty_src};"));
+    let ty_src = find_local_type_annotation(program, source, local)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("typeof {local}"));
+    out.push(format!("{alias}?: {ty_src};"));
 }
 
 /// Readable `str` from a `ModuleExportName` variant. Returns `None` for
@@ -455,17 +449,13 @@ fn module_export_name_str<'a>(name: &'a ModuleExportName<'_>) -> Option<&'a str>
     }
 }
 
-/// Walk the program's top-level `let`/`const`/`var` declarations looking
-/// for one that binds `name`. Returns `(type_text, has_init)` — the type
-/// annotation's source slice when present, and whether the declarator
-/// has an initializer (so the caller can mark the prop optional vs
-/// required the same way `append_props_from_var_decl` does for the
-/// `export let` form).
-fn find_local_type_and_init<'s>(
+/// The type annotation of the top-level `let`/`const`/`var` declarator
+/// that binds `name`, as its source slice.
+fn find_local_type_annotation<'s>(
     program: &oxc_ast::ast::Program<'_>,
     source: &'s str,
     name: &str,
-) -> (Option<&'s str>, bool) {
+) -> Option<&'s str> {
     for stmt in &program.body {
         let Statement::VariableDeclaration(decl) = stmt else {
             continue;
@@ -477,15 +467,11 @@ fn find_local_type_and_init<'s>(
             if id.name.as_str() != name {
                 continue;
             }
-            let ty_text = declarator
-                .type_annotation
-                .as_ref()
-                .map(|ty| ty.type_annotation.span())
-                .and_then(|span| source.get(span.start as usize..span.end as usize));
-            return (ty_text, declarator.init.is_some());
+            let span = declarator.type_annotation.as_ref()?.type_annotation.span();
+            return source.get(span.start as usize..span.end as usize);
         }
     }
-    (None, false)
+    None
 }
 
 fn append_props_from_var_decl(
@@ -1337,9 +1323,11 @@ mod tests {
     }
 
     #[test]
-    fn export_specifier_missing_init_marks_required() {
+    fn export_specifier_without_init_stays_optional() {
+        // A named export is registered with `required = false` upstream
+        // whatever its declaration looks like.
         let src = "let n: number;\nexport { n as count };";
-        assert_eq!(props_type(src).as_deref(), Some("{ count: number; }"));
+        assert_eq!(props_type(src).as_deref(), Some("{ count?: number; }"));
     }
 
     #[test]
@@ -1357,20 +1345,28 @@ mod tests {
     }
 
     #[test]
-    fn export_specifier_unannotated_without_init_stays_any() {
-        // No annotation AND no initializer: `typeof x` at a bare
-        // `let x;` site adds nothing (there is no inferred type to
-        // enforce), so keep the `any` fallback — same rule as the
-        // `export let` path above.
+    fn export_specifier_unannotated_without_init_uses_typeof_local() {
+        // No annotation: upstream types the prop as `typeof <local>`
+        // regardless of an initializer.
         let src = "let x;\nexport { x as y };";
-        assert_eq!(props_type(src).as_deref(), Some("{ y: any; }"));
+        assert_eq!(props_type(src).as_deref(), Some("{ y?: typeof x; }"));
     }
 
     #[test]
-    fn export_specifier_missing_local_falls_back_to_any() {
-        // Export of an undeclared local — pathological but don't panic.
+    fn export_specifier_of_function_or_missing_local_uses_typeof() {
+        // `export { reset }` of a function (or class, import, or an
+        // undeclared name) is an optional `typeof reset` prop, so a
+        // consumer omitting it is not an error.
+        let src = "function reset() {}\nexport { reset };";
+        assert_eq!(
+            props_type(src).as_deref(),
+            Some("{ reset?: typeof reset; }")
+        );
         let src = "export { missing as foo };";
-        assert_eq!(props_type(src).as_deref(), Some("{ foo: any; }"));
+        assert_eq!(
+            props_type(src).as_deref(),
+            Some("{ foo?: typeof missing; }")
+        );
     }
 
     #[test]

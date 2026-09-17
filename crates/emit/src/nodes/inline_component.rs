@@ -140,7 +140,7 @@ pub(crate) fn emit_component_node(
         let _ = writeln!(buf, "{inner_open_indent}{{");
         let dest_depth = child_depth + 1;
         if let Some(inst) = inst {
-            emit_let_slot_destructure(buf, inst, &let_destructures, "default", dest_depth);
+            emit_let_slot_destructure(buf, inst, &let_destructures, "default", None, dest_depth);
         }
         dest_depth
     } else {
@@ -508,6 +508,9 @@ fn emit_component_bindings_post_check(
 /// Push a TokenMapEntry for a `new __svn_C_<hex>(...)` component call.
 /// Source range is the 1-byte span at `node_start+1` — the first char
 /// of the component name after `<`.
+/// Map the whole `new C({ … })` call onto the first byte of the
+/// component's tag name, where upstream anchors a diagnostic on the
+/// call's props object (a missing required prop, an excess one).
 fn push_component_call_token_map(buf: &mut EmitBuffer, call_start: u32, node_start: u32) {
     let call_end = buf.len() as u32;
     let source_start = node_start.saturating_add(1);

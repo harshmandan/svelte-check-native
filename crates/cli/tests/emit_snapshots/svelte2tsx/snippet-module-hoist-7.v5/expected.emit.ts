@@ -3,30 +3,24 @@
 
     import { store2 } from './foo';
     import { store } from './foo';
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
     /*svn:ignore_start*/;let $store = __svn_store_get(store);;let $store2 = __svn_store_get(store2);/*svn:ignore_end*/
-    /** @type {any} */ const _foo = /** @type {any} */ (undefined);
+    const _foo = () => { async () => {
+        ($store);
+        };
+        return null;
+    };
     void _foo;
-    /** @type {any} */ const _foo2 = /** @type {any} */ (undefined);
+    const _foo2 = () => { async () => {
+        ($store2);
+        };
+        return null;
+    };
     void _foo2;
 
                                   
     ;(async () => {
         // template type-check body (incremental)
-        {
-            const _foo = () => { async () => {
-                ($store);
-                };
-                return null;
-            };
-            void _foo;
-            const _foo2 = () => { async () => {
-                ($store2);
-                };
-                return null;
-            };
-            void _foo2;
-        }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

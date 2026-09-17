@@ -1,0 +1,4 @@
+{
+  "bucket": "ls-only",
+  "reason": "Relies on `// @ts-check` in a JavaScript script, which only the language server honours (plugins/typescript/utils.ts); `svelte-check --tsgo` leaves the file unchecked. We mirror the tsgo command."
+}

@@ -11,7 +11,7 @@ declare const C: { [key: string]: any } & ((...args: any[]) => any);
         [B]: string;
         [C];
     }
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
     const A = 'a';
     const B = 'b', C = 'c';

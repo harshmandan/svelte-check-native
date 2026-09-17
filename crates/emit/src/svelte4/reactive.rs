@@ -54,12 +54,9 @@
 use std::collections::HashSet;
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{
-    BindingPattern, Expression, LabeledStatement, Statement, UnaryOperator, VariableDeclarator,
-};
+use oxc_ast::ast::{BindingPattern, Expression, LabeledStatement, Statement, VariableDeclarator};
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
-use svn_analyze::{WalkNode, walk_statement_descend};
 use svn_parser::{ScriptLang, parse_script_body};
 
 /// Rewrite the Svelte-4 `$: ...` forms in `content` and return the
@@ -400,42 +397,6 @@ fn classify_and_rewrite(
         }
     }
 
-    // Case 1c: comma-sequence `$: a, b, c, expr` — the Svelte-4
-    // comma-separated reactive-dependency idiom. Wrapped like Case 2, but
-    // the sequence's TOP-LEVEL commas are rewritten to semicolons so the
-    // bare-identifier deps don't fire TS2695 ("Left side of comma operator
-    // is unused and has no side effects"). The default `svelte-check`
-    // filters that diagnostic for reactive deps
-    // (`DiagnosticsProvider.resolveNoopsInReactiveStatements`); we prevent
-    // it at emit instead. `,`→`;` is length-preserving, so every source
-    // position (and the line/token map) is unchanged, and each dep stays a
-    // referenced expression statement so type-checking is identical.
-    //
-    // Only the sequence's own separators are touched — commas nested in a
-    // call (`$: foo(a, b), bar`) or an array live inside a child
-    // expression's span and are left alone, so the walk uses the AST spans
-    // rather than a text scan.
-    if let Statement::ExpressionStatement(expr_stmt) = &labeled.body
-        && let Expression::SequenceExpression(seq) = &expr_stmt.expression
-    {
-        let mut buf = content[full_start..full_end].to_string();
-        for pair in seq.expressions.windows(2) {
-            let gap_start = pair[0].span().end as usize;
-            let gap_end = (pair[1].span().start as usize).min(content.len());
-            if gap_start < gap_end
-                && let Some(off) = content[gap_start..gap_end].find(',')
-            {
-                let idx = gap_start + off - full_start;
-                buf.replace_range(idx..idx + 1, ";");
-            }
-        }
-        return Edit {
-            start: full_start,
-            end: full_end,
-            replacement: format!(";() => {{ {buf} }};"),
-        };
-    }
-
     // Case 2: anything else — block, expression statement without
     // `IDENT = expr`, etc. Wrap in `;() => { $: ORIGINAL };` — the
     // arrow form matches upstream svelte2tsx's emit (see its
@@ -456,55 +417,12 @@ fn classify_and_rewrite(
     //   splice with the arrow into a call chain
     //   `…then(…)(() => {…})`. The semicolon forces the prior
     //   statement to terminate.
-    let original = with_sequence_parens_swapped(labeled, content);
+    let original = &content[full_start..full_end];
     Edit {
         start: full_start,
         end: full_end,
         replacement: format!(";() => {{ {original} }};"),
     }
-}
-
-/// The labeled statement's source text with every parenthesised
-/// sequence that stands as its own statement — `void (a, b)` or a
-/// bare `(a, b)` — turned into an array literal: `void [a, b]`, `[a, b]`.
-///
-/// Both are the Svelte-4 way to list reactive dependencies. The comma
-/// operator fires TS2695 ("left side is unused") on each, which the
-/// default svelte-check filters inside `$:` statements
-/// (`DiagnosticsProvider.resolveNoopsInReactiveStatements`); in array
-/// position each reference counts as used, so the diagnostic never
-/// arises. Swapping `(` for `[` and `)` for `]` keeps every byte
-/// position in place. Statements outside `$:` are not touched — there
-/// upstream reports the comma, and so must we.
-fn with_sequence_parens_swapped(labeled: &LabeledStatement<'_>, content: &str) -> String {
-    let start = labeled.span.start as usize;
-    let mut text = content[start..labeled.span.end as usize].to_string();
-    let mut swap = |paren: &oxc_ast::ast::ParenthesizedExpression<'_>| {
-        if !matches!(paren.expression, Expression::SequenceExpression(_)) {
-            return;
-        }
-        let open = paren.span.start as usize - start;
-        let close = paren.span.end as usize - 1 - start;
-        if text.as_bytes().get(open) == Some(&b'(') && text.as_bytes().get(close) == Some(&b')') {
-            text.replace_range(open..open + 1, "[");
-            text.replace_range(close..close + 1, "]");
-        }
-    };
-    walk_statement_descend(&labeled.body, &mut |node| {
-        let WalkNode::Statement(Statement::ExpressionStatement(stmt)) = node else {
-            return;
-        };
-        match &stmt.expression {
-            Expression::ParenthesizedExpression(paren) => swap(paren),
-            Expression::UnaryExpression(unary) if unary.operator == UnaryOperator::Void => {
-                if let Expression::ParenthesizedExpression(paren) = &unary.argument {
-                    swap(paren);
-                }
-            }
-            _ => {}
-        }
-    });
-    text
 }
 
 /// Collect every identifier name introduced by a destructuring
@@ -583,37 +501,17 @@ mod tests {
     }
 
     #[test]
-    fn comma_sequence_reactive_uses_semicolons() {
-        // `$: a, b, c, expr` — the sequence's top-level commas become
-        // semicolons so bare-identifier reactive deps don't fire TS2695.
+    fn comma_sequences_are_kept_verbatim() {
+        // `$: a, b, expr` and `$: void (a, b)` list reactive
+        // dependencies with the comma operator. Upstream copies the
+        // statement as written, and `svelte-check --tsgo` reports
+        // TS2695 on each unused left side; so do we.
         assert_eq!(
             ts("$: button, prop, count, console.log(button);"),
-            ";() => { $: button; prop; count; console.log(button); };"
+            ";() => { $: button, prop, count, console.log(button); };"
         );
-    }
-
-    #[test]
-    fn parenthesised_sequences_become_array_literals() {
-        assert_eq!(ts("$: void (a, b);"), ";() => { $: void [a, b]; };");
-        assert_eq!(ts("$: (a, b);"), ";() => { $: [a, b]; };");
-        assert_eq!(
-            ts("$: { void (a, b); f(); }"),
-            ";() => { $: { void [a, b]; f(); } };"
-        );
-        // A single parenthesised expression has no comma to hide.
-        assert_eq!(ts("$: void (a);"), ";() => { $: void (a); };");
-        // Outside `$:` the comma stays: upstream reports it there.
-        assert_eq!(
-            ts("function f() { void (a, b); }\n$: g();"),
-            "function f() { void (a, b); }\n;() => { $: g(); };"
-        );
-    }
-
-    #[test]
-    fn comma_sequence_leaves_nested_commas() {
-        // Commas nested in a call/array are inside a child expression's
-        // span — only the sequence's OWN separators are rewritten.
-        assert_eq!(ts("$: foo(a, b), bar;"), ";() => { $: foo(a, b); bar; };");
+        assert_eq!(ts("$: void (a, b);"), ";() => { $: void (a, b); };");
+        assert_eq!(ts("$: foo(a, b), bar;"), ";() => { $: foo(a, b), bar; };");
     }
 
     #[test]

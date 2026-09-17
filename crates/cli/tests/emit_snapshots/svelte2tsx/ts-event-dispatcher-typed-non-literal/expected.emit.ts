@@ -7,7 +7,7 @@ declare const bye: { [key: string]: any } & ((...args: any[]) => any);
         bye: boolean;
         btn: string;
     };
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
     type $$Events = ({ [__svn_K in keyof ((Events))]: CustomEvent<((Events))[__svn_K]> }) & { [evt: string]: CustomEvent<any> };
 
                                                    

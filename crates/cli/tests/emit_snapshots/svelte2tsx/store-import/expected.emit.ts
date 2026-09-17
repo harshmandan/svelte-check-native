@@ -3,7 +3,7 @@
     import storeA from './store';
     import { storeB } from './store';
     import { storeB as storeC } from './store';
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
     /*svn:ignore_start*/;let $storeA = __svn_store_get(storeA);;let $storeB = __svn_store_get(storeB);;let $storeC = __svn_store_get(storeC);/*svn:ignore_end*/
 
                                  

@@ -3,7 +3,7 @@
 
     export const foo = 'foo';
   import { createEventDispatcher } from 'svelte';
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
                                                  
 
@@ -26,7 +26,7 @@ async function $$render_e40e2c10() {
 }
 $$render_e40e2c10;
 /**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
+ * @typedef {__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>} __SvnDefaultProps
  */
 /**
  * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports

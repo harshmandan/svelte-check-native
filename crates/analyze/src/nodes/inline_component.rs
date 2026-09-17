@@ -121,28 +121,19 @@ pub(crate) fn collect_instantiation_inner(
     let mut bind_this_target: Option<Range> = None;
     let mut component_bind_widen_targets: Vec<SmolStr> = Vec::new();
     let mut bind_directives: Vec<BindDirective> = Vec::new();
-    // Detect "implicit children": any non-snippet, non-whitespace
-    // child node between the open/close tags. Pure `{#snippet}`
-    // children hoist as explicit props (different code path); pure
-    // whitespace (formatting indent) is ignored.
-    //
-    // Skip when the component carries any `let:NAME` directive: the
-    // body content is then a slot-let scope, NOT a `children` prop
-    // surface. Emitting `children: () => __svn_snippet_return()`
-    // against a component declaring `Record<string, never>` props
-    // (no children, no slots either) fires TS2322 spuriously, where
-    // upstream silently routes the body through the slot scope.
-    // Example: `<Comp let:b>...</Comp>` against a Comp with no
-    // declared `children: Snippet`.
-    let has_let_directive = attributes
-        .iter()
-        .any(|a| matches!(a, Attribute::Directive(d) if d.kind == svn_parser::DirectiveKind::Let));
-    let has_implicit_children = !has_let_directive
-        && children.nodes.iter().any(|n| match n {
-            Node::SnippetBlock(_) => false,
-            Node::Text(t) => !t.range.slice(source).trim().is_empty(),
-            _ => true,
-        });
+    // Implicit `children`: upstream `SnippetBlock.ts`
+    // `handleImplicitChildren` fakes a `children` prop when any child
+    // other than a snippet, a comment, a `<slot>`, blank text, or an
+    // element / component / `<svelte:fragment>` placed in a named slot
+    // (`slot="x"`, `x` ≠ `default`) sits between the tags.
+    let has_implicit_children = children.nodes.iter().any(|n| match n {
+        Node::SnippetBlock(_) | Node::Comment(_) => false,
+        Node::Text(t) => !t.range.slice(source).trim().is_empty(),
+        Node::Element(e) => e.name.as_str() != "slot" && !in_named_slot(&e.attributes, source),
+        Node::Component(c) => !in_named_slot(&c.attributes, source),
+        Node::SvelteElement(e) => !in_named_slot(&e.attributes, source),
+        _ => true,
+    });
     for attr in attributes {
         match attr {
             Attribute::Plain(p) => {
@@ -492,4 +483,21 @@ pub(crate) fn collect_instantiation_inner(
             bind_directives,
             node_start: range_start,
         });
+}
+
+/// `slot="x"` with `x` other than `default` on a component child — the
+/// child fills a named slot of the component, so it is not part of its
+/// `children`.
+fn in_named_slot(attributes: &[Attribute], source: &str) -> bool {
+    attributes.iter().any(|a| match a {
+        Attribute::Plain(p) if p.name.as_str() == "slot" => match &p.value {
+            None => false,
+            Some(v) => match v.parts.as_slice() {
+                [svn_parser::AttrValuePart::Text { range }] => range.slice(source) != "default",
+                [] => false,
+                _ => true,
+            },
+        },
+        _ => false,
+    })
 }

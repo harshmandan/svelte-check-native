@@ -215,91 +215,83 @@ pub(crate) fn rewrite_definite_assignment_in_place(
 }
 
 /// Does the parsed template fragment contain a `<slot>` element?
-///
-/// Replaces an earlier `doc.source.contains("<slot")` substring check.
-/// The AST walk is strictly more accurate:
-/// - Correctly matches only `<slot>` / `<slot name="x">` (tag name is
-///   exactly `slot`), not `<slotfoo>` or `<Slot>`.
-/// - Skips comments and string content — those produce Text / Comment
-///   nodes, not Element nodes.
-/// - Recurses into all block children (if/each/await/key/snippet)
-///   and nested elements so a `<slot>` inside a branch of an
-///   `{#if}` is detected.
 pub(crate) fn fragment_contains_slot(fragment: &svn_parser::Fragment) -> bool {
+    fragment_has_slot_where(fragment, &|_| true)
+}
+
+/// Does the fragment contain a default slot — a `<slot>` with no `name`
+/// attribute, or `name="default"`? Upstream's
+/// `__sveltets_2_PropsWithChildren` widens the props with `children`
+/// only when the slots type has a `default` key.
+pub(crate) fn fragment_contains_default_slot(
+    fragment: &svn_parser::Fragment,
+    source: &str,
+) -> bool {
+    fragment_has_slot_where(fragment, &|slot| {
+        slot.attributes.iter().all(|a| match a {
+            svn_parser::Attribute::Plain(p) if p.name.as_str() == "name" => match &p.value {
+                None => true,
+                Some(v) => match v.parts.as_slice() {
+                    [] => true,
+                    [svn_parser::AttrValuePart::Text { range }] => {
+                        source.get(range.start as usize..range.end as usize) == Some("default")
+                    }
+                    _ => false,
+                },
+            },
+            _ => true,
+        })
+    })
+}
+
+/// Walk every element of the fragment (through blocks and component
+/// children) and report whether any `<slot>` satisfies `pred`. Tag
+/// names are exact: `<slotfoo>` / `<Slot>` do not match, and comments
+/// and text are never elements.
+fn fragment_has_slot_where(
+    fragment: &svn_parser::Fragment,
+    pred: &dyn Fn(&svn_parser::Element) -> bool,
+) -> bool {
     use svn_parser::Node;
     for node in &fragment.nodes {
-        match node {
+        let hit = match node {
             Node::Element(e) => {
-                if e.name.as_str() == "slot" {
-                    return true;
-                }
-                if fragment_contains_slot(&e.children) {
-                    return true;
-                }
+                (e.name.as_str() == "slot" && pred(e)) || fragment_has_slot_where(&e.children, pred)
             }
-            Node::Component(c) => {
-                if fragment_contains_slot(&c.children) {
-                    return true;
-                }
-            }
-            Node::SvelteElement(e) => {
-                if fragment_contains_slot(&e.children) {
-                    return true;
-                }
-            }
+            Node::Component(c) => fragment_has_slot_where(&c.children, pred),
+            Node::SvelteElement(e) => fragment_has_slot_where(&e.children, pred),
             Node::IfBlock(b) => {
-                if fragment_contains_slot(&b.consequent) {
-                    return true;
-                }
-                for arm in &b.elseif_arms {
-                    if fragment_contains_slot(&arm.body) {
-                        return true;
-                    }
-                }
-                if let Some(alt) = &b.alternate
-                    && fragment_contains_slot(alt)
-                {
-                    return true;
-                }
+                fragment_has_slot_where(&b.consequent, pred)
+                    || b.elseif_arms
+                        .iter()
+                        .any(|arm| fragment_has_slot_where(&arm.body, pred))
+                    || b.alternate
+                        .as_ref()
+                        .is_some_and(|alt| fragment_has_slot_where(alt, pred))
             }
             Node::EachBlock(b) => {
-                if fragment_contains_slot(&b.body) {
-                    return true;
-                }
-                if let Some(alt) = &b.alternate
-                    && fragment_contains_slot(alt)
-                {
-                    return true;
-                }
+                fragment_has_slot_where(&b.body, pred)
+                    || b.alternate
+                        .as_ref()
+                        .is_some_and(|alt| fragment_has_slot_where(alt, pred))
             }
             Node::AwaitBlock(b) => {
-                if let Some(p) = &b.pending
-                    && fragment_contains_slot(p)
-                {
-                    return true;
-                }
-                if let Some(t) = &b.then_branch
-                    && fragment_contains_slot(&t.body)
-                {
-                    return true;
-                }
-                if let Some(c) = &b.catch_branch
-                    && fragment_contains_slot(&c.body)
-                {
-                    return true;
-                }
+                b.pending
+                    .as_ref()
+                    .is_some_and(|p| fragment_has_slot_where(p, pred))
+                    || b.then_branch
+                        .as_ref()
+                        .is_some_and(|t| fragment_has_slot_where(&t.body, pred))
+                    || b.catch_branch
+                        .as_ref()
+                        .is_some_and(|c| fragment_has_slot_where(&c.body, pred))
             }
-            Node::KeyBlock(b) => {
-                if fragment_contains_slot(&b.body) {
-                    return true;
-                }
-            }
-            Node::SnippetBlock(b) => {
-                if fragment_contains_slot(&b.body) {
-                    return true;
-                }
-            }
-            Node::Text(_) | Node::Comment(_) | Node::Interpolation(_) => {}
+            Node::KeyBlock(b) => fragment_has_slot_where(&b.body, pred),
+            Node::SnippetBlock(b) => fragment_has_slot_where(&b.body, pred),
+            Node::Text(_) | Node::Comment(_) | Node::Interpolation(_) => false,
+        };
+        if hit {
+            return true;
         }
     }
     false

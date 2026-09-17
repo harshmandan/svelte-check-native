@@ -233,16 +233,19 @@ pub(crate) fn collect_let_destructures(
 /// ASCII `IGNORE_START_MARKER` pair, not this one. What keeps a
 /// diagnostic on `$$_$$` from surfacing is that the position has no
 /// token-map entry, so the mapper drops it as generated code.
+///
+/// `slot_anchor` is set for a `slot="X"` child: the start of that child
+/// and the range of the `X` text. A diagnostic on `$$slot_def["X"]`
+/// (an unknown slot name) then maps from the child's start to the end
+/// of the name, as upstream's does.
 pub(crate) fn emit_let_slot_destructure(
     buf: &mut EmitBuffer,
     inst: &svn_analyze::ComponentInstantiation,
     let_destructures: &[LetDestructure],
     slot_name: &str,
+    slot_anchor: Option<(u32, svn_core::Range)>,
     depth: usize,
 ) {
-    if let_destructures.is_empty() {
-        return;
-    }
     let inst_local = svn_core::synth_names::instance_local(inst.node_start);
     let indent = "    ".repeat(depth);
     // Upstream's `$$_$$` dummy keeps TS6133 quiet on unused
@@ -271,14 +274,31 @@ pub(crate) fn emit_let_slot_destructure(
             buf.push_str(&d.pattern_text[d.name_byte_len..]);
         }
     }
-    let _ = if slot_name == "default" {
-        writeln!(buf, " }} = {inst_local}.$$slot_def.default; $$_$$;")
-    } else {
-        writeln!(
-            buf,
-            " }} = {inst_local}.$$slot_def[\"{slot_name}\"]; $$_$$;"
-        )
-    };
+    match slot_anchor {
+        Some((child_start, name_range)) => {
+            // Upstream inserts the quotes around the moved slot name,
+            // so a diagnostic reported at the opening quote lands on
+            // the child's start and one at the closing quote on the
+            // name's end.
+            let child = svn_core::Range::new(child_start, child_start + 1);
+            let after_name = svn_core::Range::new(name_range.end, name_range.end + 1);
+            buf.push_str(" } = ");
+            buf.append_with_source(&format!("{inst_local}.$$slot_def["), child);
+            buf.append_with_source("\"", child);
+            buf.append_with_source(slot_name, name_range);
+            buf.append_with_source("\"", after_name);
+            buf.push_str("]; $$_$$;\n");
+        }
+        None if slot_name == "default" => {
+            let _ = writeln!(buf, " }} = {inst_local}.$$slot_def.default; $$_$$;");
+        }
+        None => {
+            let _ = writeln!(
+                buf,
+                " }} = {inst_local}.$$slot_def[\"{slot_name}\"]; $$_$$;"
+            );
+        }
+    }
     // `void <name>;` per let-binding suppresses TS6133 on names the
     // user's slot body doesn't reference. Without this the new
     // TokenMap entry on the destructure name surfaces 6133 at the
@@ -309,37 +329,31 @@ fn slot_let_attrs(node: &Node) -> Option<&[svn_parser::Attribute]> {
     }
 }
 
-/// True when `node` is a child element carrying both `slot="X"` and at
-/// least one `let:` directive — a slot-let consumer of its parent
-/// component. Used to pre-flag the parent so its instance gets hoisted
-/// to a local (the wrapper destructure references
+/// True when `node` is a child element carrying `slot="X"` — a slot
+/// consumer of its parent component. Used to pre-flag the parent so its
+/// instance gets hoisted to a local (the wrapper destructure references
 /// `parent_inst.$$slot_def["X"]`).
 pub(crate) fn child_is_slot_let_consumer(source: &str, node: &Node) -> bool {
     let Some(attrs) = slot_let_attrs(node) else {
         return false;
     };
-    if svn_analyze::literal_attr_value(attrs, "slot", source).is_none() {
-        return false;
-    }
-    !collect_let_destructures(source, attrs).is_empty()
+    svn_analyze::literal_attr_value(attrs, "slot", source).is_some()
 }
 
-/// If `node` is a child element carrying both `slot="X"` and one or
-/// more `let:` directives, open a wrapper block at the parent's
-/// child-walk depth and emit the consumer-side destructure against
-/// `parent_inst.$$slot_def["X"]`. Returns `true` when the wrapper was
-/// opened — caller closes it via `emit_slot_let_consumer_close` after
-/// walking the child.
+/// If `node` is a child element carrying `slot="X"`, open a wrapper
+/// block at the parent's child-walk depth and emit the consumer-side
+/// destructure against `parent_inst.$$slot_def["X"]` — with the
+/// child's `let:` names, or just upstream's `$$_$$` dummy when it has
+/// none, so a slot name the component does not declare is reported
+/// either way. Returns `true` when the wrapper was opened — caller
+/// closes it via `emit_slot_let_consumer_close` after walking the child.
 ///
-/// Mirrors upstream svelte2tsx's InlineComponent.ts:184-207, where the
-/// destructure for `<Inner slot="X" let:foo>` lives in the OUTER
-/// component's block — so `foo` is in scope across the inner emit
-/// (notably the inner component-call's `$on(...)` handler that
-/// references `foo`, which sits before the inner's own children walk).
+/// Mirrors upstream svelte2tsx's `Attribute.ts` (`addSlotName` for
+/// every `slot=` child of a component) and InlineComponent.ts:184-207,
+/// where the destructure lives in the OUTER component's block — so the
+/// let names are in scope across the inner emit.
 ///
 /// Accepts component, DOM-element, and `<svelte:fragment>` children.
-/// All three carry `slot=` + `let:` legally; the wrap mechanics are
-/// identical regardless of which element kind houses the directives.
 fn try_emit_slot_let_consumer_open(
     buf: &mut EmitBuffer,
     source: &str,
@@ -350,16 +364,22 @@ fn try_emit_slot_let_consumer_open(
     let Some(attrs) = slot_let_attrs(node) else {
         return false;
     };
-    let Some(slot_name) = svn_analyze::literal_attr_value(attrs, "slot", source) else {
+    let Some((slot_name, name_range)) =
+        svn_analyze::literal_attr_value_range(attrs, "slot", source)
+    else {
         return false;
     };
     let lets = collect_let_destructures(source, attrs);
-    if lets.is_empty() {
-        return false;
-    }
     let indent = "    ".repeat(depth);
     let _ = writeln!(buf, "{indent}{{");
-    emit_let_slot_destructure(buf, parent_inst, &lets, slot_name, depth + 1);
+    emit_let_slot_destructure(
+        buf,
+        parent_inst,
+        &lets,
+        slot_name,
+        Some((node.range().start, name_range)),
+        depth + 1,
+    );
     true
 }
 

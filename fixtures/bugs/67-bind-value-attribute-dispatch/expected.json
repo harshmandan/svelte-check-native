@@ -1,29 +1,4 @@
 {
-    "errors": [
-        {
-            "file": "Mismatch.svelte",
-            "line": 17,
-            "column": 33,
-            "code": 2322
-        },
-        {
-            "file": "Mismatch.svelte",
-            "line": 18,
-            "column": 31,
-            "code": 2322
-        },
-        {
-            "file": "Mismatch.svelte",
-            "line": 19,
-            "column": 22,
-            "code": 2322
-        },
-        {
-            "file": "SimpleIdMismatch.svelte",
-            "line": 9,
-            "column": 33,
-            "code": 2322
-        }
-    ],
-    "_note": "v0.3 Item 8 extended + §1.3 denarrow fix: bind:value dispatches the target type from (tag, literal type attribute). <input type='number'> → number; <input type='range'> → number; <input> / <input type='text'> / <textarea> → string. After §1.3, simple-identifier targets (`let strForNumber: string = ''`) ALSO fire — the denarrow rewrite no longer widens non-null/undefined-init lets to `any`. Only `let X: T = null` and `let X: T = undefined` literal patterns still get denarrowed (those need the widen to prevent TS's flow-narrowing to the literal null/undefined)."
+    "clean": true,
+    "_note": "`bind:value` is a `\"bind:value\": EXPR` attribute of the element, and `svelte/elements` types it `any` on every element, so no mismatch between the bound target and the input's `type=` is reported \u2014 upstream reports nothing on these components. An earlier version derived a target type from the literal `type=` attribute and asserted the bound expression against it, inventing TS2322 here."
 }

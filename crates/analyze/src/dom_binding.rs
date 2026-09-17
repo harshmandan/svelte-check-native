@@ -50,30 +50,6 @@ pub fn is_element_native_oneway(binding_name: &str) -> bool {
     )
 }
 
-/// Two-way DOM bindings whose value is checked AGAINST the element's
-/// attribute slot (value→slot), mirroring upstream's "transformed to
-/// normal attributes" path (Binding.ts:139-201). Emit checks the bound
-/// value against [`two_way_slot_type`] and emits a widening lambda,
-/// instead of the slot→value assignment the one-way families use. `value`
-/// is dispatched via `resolve_bind_value_type`; `group` has its own
-/// upstream branch.
-pub fn is_two_way(binding_name: &str) -> bool {
-    two_way_slot_type(binding_name).is_some()
-}
-
-/// The element-attribute slot type a two-way binding's value must be
-/// assignable to (value→slot), nullable to match `svelte/elements`'
-/// `'bind:NAME'?: T | undefined | null` declarations. Hardcoded here
-/// (rather than read from `svelte/elements`) so the check works even
-/// when that package isn't installed in the type-check environment.
-pub fn two_way_slot_type(binding_name: &str) -> Option<&'static str> {
-    match binding_name {
-        "checked" => Some("boolean | null | undefined"),
-        "files" => Some("FileList | null | undefined"),
-        _ => None,
-    }
-}
-
 /// Return the TS type to assert for `bind:NAME`. `None` means the
 /// binding isn't one we model (a typo like `bind:foo`, or the
 /// bidirectional family we don't yet type-check).
@@ -120,28 +96,6 @@ pub fn type_for(binding_name: &str) -> Option<&'static str> {
         "clientHeight" => Some("HTMLElement['clientHeight']"),
         "offsetWidth" => Some("HTMLElement['offsetWidth']"),
         "offsetHeight" => Some("HTMLElement['offsetHeight']"),
-
-        // --- Bidirectional bindings (v0.3 Item 8 — narrow subset) ---
-        //
-        // `bind:checked` / `bind:files` on `<input>` have a FIXED
-        // target type independent of the input's `type` attribute:
-        //
-        //   - `bind:checked` → boolean (for checkbox/radio; invalid
-        //     on other input types, but svelte accepts at runtime)
-        //   - `bind:files`   → FileList | null (only meaningful on
-        //     type="file" but type's value is a runtime concern)
-        //
-        // `bind:value` and `bind:group` are deferred: their type
-        // depends on the input's `type` attribute value
-        // (`type="number"` → number, default → string, etc.), which
-        // requires attribute-aware element-type dispatch. Tracked in
-        // NEXT.md as remaining Item 8 scope.
-        //
-        // Emit direction is assignment (same lambda shape as Item 6):
-        // the user's declared target type must accept the element
-        // property's type. Wrong-typed targets fire TS2322.
-        "checked" => Some("HTMLInputElement['checked']"),
-        "files" => Some("HTMLInputElement['files']"),
 
         _ => None,
     }
@@ -223,11 +177,12 @@ mod tests {
     fn bidirectional_bindings_partial_coverage() {
         // v0.3 Item 8 (narrow): bind:checked and bind:files have
         // fixed HTMLInputElement types, so they ARE in the table now.
-        assert_eq!(type_for("checked"), Some("HTMLInputElement['checked']"));
-        assert_eq!(type_for("files"), Some("HTMLInputElement['files']"));
-        // bind:value is context-aware (tag + `type` attribute); the
-        // static `type_for` table returns None. Dispatch happens via
-        // `nodes::binding::resolve_bind_value_type(tag, attrs)`.
+        // `checked` / `files` are attributes of the element upstream, not
+        // one-way bindings.
+        assert_eq!(type_for("checked"), None);
+        assert_eq!(type_for("files"), None);
+        // bind:value is an attribute of the element upstream, typed by
+        // `svelte/elements`; the one-way table has no entry for it.
         assert_eq!(type_for("value"), None);
         // bind:group is intentionally skipped — upstream widens to any
         // (`__sveltets_2_any(null)`); we mirror by staying silent.

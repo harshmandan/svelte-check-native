@@ -7,7 +7,7 @@
          a: boolean;
          b?: string;
     }
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
     let $$props: Record<string, any> = {};
     void $$props;
 

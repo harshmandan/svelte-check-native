@@ -4,7 +4,7 @@ declare const data: { [key: string]: any } & ((...args: any[]) => any);
 type Props = {
     data: {cfg: string};
 };
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
               
                         

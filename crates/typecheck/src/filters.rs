@@ -582,7 +582,7 @@ mod tests {
         ),
         (
             2695,
-            "not-applicable-cli: resolveNoopsInReactiveStatements needs the checker on both upstream variants; our void-sequence emit rewrite prevents the equivalent tsgo TS2871 shape from firing",
+            "not-applicable-cli: resolveNoopsInReactiveStatements needs the checker, which the --tsgo command never runs; the comma-operator diagnostics inside `$:` statements are reported as tsgo emits them",
         ),
         (
             6133,

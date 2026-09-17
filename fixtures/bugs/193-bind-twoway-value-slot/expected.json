@@ -1,6 +1,11 @@
 {
     "errors": [
-        { "file": "input.svelte", "line": 8, "column": 37, "code": 2322 }
+        {
+            "file": "input.svelte",
+            "line": 8,
+            "column": 21,
+            "code": 2322
+        }
     ],
-    "_note": "l003: two-way bind:checked/files check the bound value AGAINST the slot type (value→slot), matching upstream. `boolean | string` has a `string` arm the `boolean | null | undefined` slot rejects → TS2322. A `boolean | null` target is accepted (the slot is nullable). The old slot→value assignment direction missed the widened-union case."
+    "_note": "`bind:checked` is a `\"bind:checked\": EXPR` attribute of the element, typed `boolean | null | undefined` by `svelte/elements`; a widened union with an arm the slot can't accept fires TS2322, anchored at the directive as upstream anchors it, while a nullable target is fine."
 }

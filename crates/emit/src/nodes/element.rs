@@ -157,9 +157,8 @@ pub(crate) fn emit_element_node(
 
 /// Drive the DOM-element emit pipeline for `<svelte:element
 /// this={tagExpr}>`. The tag is runtime-dynamic, so the emission
-/// falls back to `HTMLElement` for bind:this and skips bind:value
-/// dispatch (empty tag_name → resolve_bind_value_type returns
-/// None). Otherwise the same shape as [`emit_element_node`].
+/// falls back to `HTMLElement` for bind:this. Otherwise the same shape
+/// as [`emit_element_node`].
 pub(crate) fn emit_svelte_element_node(
     buf: &mut EmitBuffer,
     source: &str,
@@ -251,6 +250,7 @@ pub(crate) fn emit_svelte_element_node(
                 inst,
                 &let_destructures,
                 "default",
+                None,
                 dest_depth,
             );
             dest_depth
@@ -609,7 +609,15 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                 // TS2353 there, and the expression is read.
                 if d.kind == svn_parser::DirectiveKind::Bind
                     && crate::nodes::binding::is_untyped_binding(d.name.as_str())
-                    && let Some(parts) = dom_bind_attribute_parts(source, d)
+                    && let Some(parts) = dom_bind_attribute_parts(
+                        source,
+                        d,
+                        attributes
+                            .iter()
+                            .take_while(|a| !std::ptr::eq(*a, attr))
+                            .last()
+                            .map(|prev| prev.range().end),
+                    )
                 {
                     if !any {
                         buf.push_str("\n");
@@ -649,14 +657,29 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
     }
 }
 
+/// The value side of a `"bind:NAME": …` attribute entry.
+enum BindValue<'a> {
+    /// `bind:NAME={expr}` / `bind:NAME` — the expression as written.
+    Expr {
+        text: &'a str,
+        range: svn_core::Range,
+    },
+    /// `bind:NAME={get, set}` — upstream passes
+    /// `__sveltets_2_get_set_binding(get, set)` as the value.
+    GetSet {
+        getter: &'a str,
+        getter_range: svn_core::Range,
+        setter: &'a str,
+        setter_range: svn_core::Range,
+    },
+}
+
 /// The pieces of a `"bind:NAME": (EXPR),` attribute entry: the key
-/// text and the source byte it anchors to, plus the expression text
-/// and its source range.
+/// text and the source byte it anchors to, plus the value.
 struct DomBindAttribute<'a> {
     key_text: &'a str,
     key_anchor: u32,
-    expr_text: &'a str,
-    expr_range: svn_core::Range,
+    value: BindValue<'a>,
 }
 
 /// Resolve a DOM `bind:` directive into its attribute-entry pieces
@@ -666,12 +689,16 @@ struct DomBindAttribute<'a> {
 ///
 /// The key is the source text from the directive start up to its `=`
 /// (so whitespace before the `=` stays part of the key, as upstream's
-/// diagnostic message shows it), and the excess-property diagnostic
-/// anchors where upstream's does: at the `=`, or at the directive
-/// start for the shorthand form.
+/// diagnostic message shows it). A diagnostic on the key anchors where
+/// upstream's does — an artefact of its source map, which puts the
+/// inserted opening quote at the end of the preceding original text:
+/// the tag's first attribute reports at its `=`, any later attribute
+/// at the last character of the attribute before it (`prev_end`), and
+/// the shorthand form at its start.
 fn dom_bind_attribute_parts<'a>(
     source: &'a str,
     d: &svn_parser::Directive,
+    prev_end: Option<u32>,
 ) -> Option<DomBindAttribute<'a>> {
     let name = d.name.as_str();
     let expression_range = match &d.value {
@@ -695,15 +722,37 @@ fn dom_bind_attribute_parts<'a>(
             return Some(DomBindAttribute {
                 key_text,
                 key_anchor: d.range.start,
-                expr_text: &key_text[5..],
-                expr_range: svn_core::Range::new(start, end),
+                value: BindValue::Expr {
+                    text: &key_text[5..],
+                    range: svn_core::Range::new(start, end),
+                },
             });
         }
-        Some(svn_parser::DirectiveValue::BindPair { .. }) => return None,
+        Some(svn_parser::DirectiveValue::BindPair {
+            getter_range,
+            setter_range,
+            ..
+        }) => {
+            let head = source.get(d.range.start as usize..getter_range.start as usize)?;
+            let eq = head.rfind('=')?;
+            return Some(DomBindAttribute {
+                key_text: &head[..eq],
+                key_anchor: match prev_end {
+                    Some(end) => end.saturating_sub(1),
+                    None => d.range.start + eq as u32,
+                },
+                value: BindValue::GetSet {
+                    getter: source.get(getter_range.start as usize..getter_range.end as usize)?,
+                    getter_range: *getter_range,
+                    setter: source.get(setter_range.start as usize..setter_range.end as usize)?,
+                    setter_range: *setter_range,
+                },
+            });
+        }
     };
     let expr = source.get(expression_range.start as usize..expression_range.end as usize)?;
-    let expr_text = expr.trim();
-    if expr_text.is_empty() {
+    let text = expr.trim();
+    if text.is_empty() {
         return None;
     }
     let leading_ws = (expr.len() - expr.trim_start().len()) as u32;
@@ -712,9 +761,14 @@ fn dom_bind_attribute_parts<'a>(
     let eq = head.rfind('=')?;
     Some(DomBindAttribute {
         key_text: &head[..eq],
-        key_anchor: d.range.start + eq as u32,
-        expr_text,
-        expr_range: svn_core::Range::new(start, start + expr_text.len() as u32),
+        key_anchor: match prev_end {
+            Some(end) => end.saturating_sub(1),
+            None => d.range.start + eq as u32,
+        },
+        value: BindValue::Expr {
+            text,
+            range: svn_core::Range::new(start, start + text.len() as u32),
+        },
     })
 }
 
@@ -727,7 +781,21 @@ fn emit_dom_bind_attribute(buf: &mut EmitBuffer, parts: DomBindAttribute<'_>, de
         svn_core::Range::new(parts.key_anchor, parts.key_anchor + 1),
     );
     buf.push_str(": (");
-    buf.append_with_source(parts.expr_text, parts.expr_range);
+    match parts.value {
+        BindValue::Expr { text, range } => buf.append_with_source(text, range),
+        BindValue::GetSet {
+            getter,
+            getter_range,
+            setter,
+            setter_range,
+        } => {
+            buf.push_str("__svn_get_set_binding(");
+            buf.append_with_source(getter, getter_range);
+            buf.push_str(", ");
+            buf.append_with_source(setter, setter_range);
+            buf.push_str(")");
+        }
+    }
     buf.push_str("),\n");
 }
 

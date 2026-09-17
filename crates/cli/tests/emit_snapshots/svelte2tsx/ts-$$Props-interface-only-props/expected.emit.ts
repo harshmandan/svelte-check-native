@@ -8,7 +8,7 @@
         renamed1?: string;
         renamed2: string;
     }
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
                     
                           

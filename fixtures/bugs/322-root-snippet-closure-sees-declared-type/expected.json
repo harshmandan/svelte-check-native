@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "Because a root snippet is hoisted ahead of the script body, a closure inside it precedes the declarations it captures, and TypeScript gives `icon` (`Player | null = $state(null)`, never reassigned) its declared type there rather than the initializer-narrowed `null`. Our snippet used to be emitted after the declaration, where `icon?.play()` reported TS2339 on `never` \u2014 a false error upstream does not report."
+}

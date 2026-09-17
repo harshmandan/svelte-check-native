@@ -4,7 +4,7 @@
     // @ts-ignore
     import B from './b.svelte';
 import C from './c.svelte';
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
                                
                  

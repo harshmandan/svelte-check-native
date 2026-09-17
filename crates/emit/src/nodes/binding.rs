@@ -14,16 +14,15 @@ use crate::emit_buffer::EmitBuffer;
 use crate::emit_is_ts;
 use crate::nodes::element::element_type_annotation;
 
-/// A `bind:` name none of the typed passes in this module handle:
-/// not `this` / `value` / `group`, not element-native one-way, not a
-/// two-way slot type, not in the not-on-element table. Upstream still
-/// emits these as `"bind:NAME": EXPR` attributes; the element emit
-/// does the same so the attribute type reports them.
+/// A `bind:` name upstream turns into a `"bind:NAME": EXPR` attribute
+/// of the element (Binding.ts, "other bindings which are transformed
+/// to normal attributes"): everything but `this`, `group`, the
+/// element-native one-way names and the not-on-element one-way names.
+/// `bind:value`, `bind:checked` and `bind:files` are among them — the
+/// element's attribute type (`svelte/elements`) is what checks their
+/// value.
 pub(crate) fn is_untyped_binding(name: &str) -> bool {
-    !matches!(name, "this" | "value" | "group")
-        && !svn_analyze::dom_binding::is_element_native_oneway(name)
-        && svn_analyze::dom_binding::two_way_slot_type(name).is_none()
-        && svn_analyze::dom_binding::type_for(name).is_none()
+    !matches!(name, "this" | "group") && svn_analyze::dom_binding::type_for(name).is_none()
 }
 
 /// Emit a type-check line per `bind:NAME` directive on a DOM element.
@@ -54,13 +53,13 @@ pub(crate) fn is_untyped_binding(name: &str) -> bool {
 ///     when `tag_name == ""`). Member expressions
 ///     (`bind:this={refs.input}`) and bare identifiers both work;
 ///     the assignment is verbatim from source.
-///   - `bind:value` — TYPE resolved once per element via
-///     `svn_analyze::resolve_bind_value_type`, which inspects the
-///     literal `type="..."` sibling attribute. Non-form elements
-///     return `None` and the directive is skipped.
-///   - Other one-way bindings (`bind:checked`, `bind:files`,
-///     `bind:group`, `bind:clientWidth`, `bind:naturalHeight`, …) —
-///     TYPE from `svn_analyze::dom_binding::type_for(name)`;
+///   - `bind:value` / `bind:checked` / `bind:files` and every other
+///     name upstream turns into an attribute — emitted as
+///     `"bind:NAME": EXPR` in the element's attribute literal
+///     (`element.rs`); here they only get the widening lambda.
+///   - One-way bindings (`bind:clientWidth`, `bind:naturalHeight`,
+///     `bind:contentRect`, …) — TYPE from
+///     `svn_analyze::dom_binding::type_for(name)`;
 ///     unknown names are skipped.
 ///
 /// EXPR resolution:
@@ -80,11 +79,6 @@ pub(crate) fn emit_element_bind_checks_inline(
     depth: usize,
 ) {
     let indent = "    ".repeat(depth);
-    // `bind:value`'s target type depends on the element tag + literal
-    // `type="..."` sibling attribute. Resolve once per element since
-    // every `bind:value` on the same element dispatches to the same
-    // target type.
-    let bind_value_type = svn_analyze::resolve_bind_value_type(tag_name, attributes, source);
     for attr in attributes {
         let svn_parser::Attribute::Directive(directive) = attr else {
             continue;
@@ -145,8 +139,6 @@ pub(crate) fn emit_element_bind_checks_inline(
         // upstream still emits its widening reassignment for those.
         let ty: Option<String> = if name == "this" {
             Some(element_type_annotation(tag_name))
-        } else if name == "value" {
-            bind_value_type.map(str::to_string)
         } else {
             svn_analyze::dom_binding::type_for(name).map(str::to_string)
         };
@@ -238,55 +230,6 @@ pub(crate) fn emit_element_bind_checks_inline(
             buf.push_str(" = __svn_any(null); });/*svn:ignore_end*/\n");
             continue;
         };
-        // Two-way bindings (`bind:checked` / `bind:files`): upstream
-        // (Binding.ts:139-201) checks the bound value AGAINST the slot
-        // type (value→slot) and emits a widening `() => EXPR = any` lambda.
-        // We reproduce both diagnostics:
-        //   1. A tuple-element check `const __svn_t: [<slot>] = [EXPR];`
-        //      fires TS2322 at the user's expression on a type mismatch —
-        //      same code, direction, and position as upstream's
-        //      createElement-property check. A tuple ELEMENT mismatch
-        //      reports at the element value (unlike an object-literal
-        //      property, which reports at the key, or an assignment, which
-        //      reports at the LHS — both synth positions that get dropped).
-        //      The nullable slot type is hardcoded so this works without
-        //      `svelte/elements` installed.
-        //   2. The ignore-wrapped, never-called widen lambda widens EXPR's
-        //      declared type. This replaces the one-way families'
-        //      slot→value assignment, which was laxer on widened-union
-        //      targets.
-        if let Some(slot) = svn_analyze::dom_binding::two_way_slot_type(name) {
-            buf.push_str(&indent);
-            if emit_is_ts() {
-                let _ = write!(buf, "{{ const __svn_t: [{slot}] = [");
-            } else {
-                let _ = write!(buf, "{{ /** @type {{[{slot}]}} */ const __svn_t = [");
-            }
-            match expr_source_range {
-                Some(range) => buf.append_with_source(&expr_text, range),
-                None => buf.push_str(&expr_text),
-            }
-            buf.push_str("]; void __svn_t; }\n");
-            buf.push_str(&indent);
-            buf.push_str("/*svn:ignore_start*/void (() => { ");
-            buf.push_str(&expr_text);
-            buf.push_str(" = __svn_any(null); });/*svn:ignore_end*/\n");
-            continue;
-        }
-        // Upstream passes a two-way binding's expression as an attribute
-        // value (`"bind:value": v`), which reads it; the one-way families
-        // (`bind:this`, element-native `clientWidth`, …) are pure writes.
-        // Keep the same read so a variable only bound this way is not
-        // reported as never read.
-        if name == "value" {
-            buf.push_str(&indent);
-            buf.push_str("(");
-            match expr_source_range {
-                Some(range) => buf.append_with_source(&expr_text, range),
-                None => buf.push_str(&expr_text),
-            }
-            buf.push_str(");\n");
-        }
         buf.push_str(&indent);
         match expr_source_range {
             Some(range) => buf.append_with_source(&expr_text, range),

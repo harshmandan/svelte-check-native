@@ -3,15 +3,15 @@
         {
             "file": "Mismatch.svelte",
             "line": 6,
-            "column": 37,
+            "column": 21,
             "code": 2322
         },
         {
             "file": "Mismatch.svelte",
             "line": 7,
-            "column": 31,
+            "column": 17,
             "code": 2322
         }
     ],
-    "_note": "v0.3 Item 8 (narrow): dom_binding::type_for now covers bind:checked (HTMLInputElement['checked']) and bind:files (HTMLInputElement['files']) — the two bidirectional bindings whose target type is independent of the input's `type` attribute. bind:value and bind:group are deferred: their type varies with `type='number'` / `type='file'` / etc., needing attribute-aware element-type dispatch. Row/column are 0-based."
+    "_note": "`bind:checked` / `bind:files` are `\"bind:NAME\": EXPR` attributes of the element, typed `boolean | null | undefined` / `FileList | null | undefined` by `svelte/elements`; a mismatched target fires TS2322 anchored where upstream's source map puts it \u2014 at the last character of the attribute preceding the directive. Clean.svelte's correctly typed targets report nothing."
 }

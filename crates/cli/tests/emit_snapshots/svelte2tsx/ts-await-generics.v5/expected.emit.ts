@@ -3,7 +3,11 @@
 async function $$render_e40e2c10<T>() {
     type $$ComponentProps = { prop?: T };
     type $$Events = {};
-    const x: any = undefined as any;
+    const x = (): any => { async () => {
+        (await promise);
+        };
+        return null as any;
+    };
     void x;
 
     let { prop }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
@@ -11,56 +15,48 @@ async function $$render_e40e2c10<T>() {
     const promise = fetch('/bar');
     ;(async () => {
         // template type-check body (incremental)
+        (foo);
+        (await promise);
+        for (let item of __svn_each_items(await promise)) {
+            (item);
+            void item;
+        }
+        for (let item of __svn_each_items(await promise)) {
+            let i: number = 0;
+            (item);
+            (i);
+            void item;
+            void i;
+        }
+        for (let item of __svn_each_items(await promise)) {
+            let i: number = 0;
+            (item.x);
+            (item);
+            (i);
+            void item;
+            void i;
+        }
+        for (let __svn_each_unused of __svn_each_items(await promise)) {
+            void __svn_each_unused;
+        }
+        if ((await promise)) {
+            void [promise];
+        } else if ((await promise)) {
+            void [promise];
+        }
         {
-            const x = (): any => { async () => {
-                (await promise);
-                };
-                return null as any;
-            };
+            const __svn_C_1f6 = __svn_ensure_component(Component);
+            new __svn_C_1f6({ target: __svn_any(), props: {"prop": (await promise)} });
+        }
+        { svelteHTML.createElement("p", {
+            "attribute": (await promise),
+        });
+        }
+        (x(await promise));
+        if ((true)) {
+            const x = await promise;
             void x;
-            (foo);
-            (await promise);
-            for (const item of __svn_each_items(await promise)) {
-                (item);
-                void item;
-            }
-            for (const item of __svn_each_items(await promise)) {
-                const i: number = 0;
-                (item);
-                (i);
-                void item;
-                void i;
-            }
-            for (const item of __svn_each_items(await promise)) {
-                const i: number = 0;
-                (item.x);
-                (item);
-                (i);
-                void item;
-                void i;
-            }
-            for (const __svn_each_unused of __svn_each_items(await promise)) {
-                void __svn_each_unused;
-            }
-            if ((await promise)) {
-                void [promise];
-            } else if ((await promise)) {
-                void [promise];
-            }
-            {
-                const __svn_C_1f6 = __svn_ensure_component(Component);
-                new __svn_C_1f6({ target: __svn_any(), props: {"prop": (await promise)} });
-            }
-            { svelteHTML.createElement("p", {
-                "attribute": (await promise),
-            });
-            }
-            (x(await promise));
-            if ((true)) {
-                const x = await promise;
-                void x;
-                (x);
-            }
+            (x);
         }
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as $$Events, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };

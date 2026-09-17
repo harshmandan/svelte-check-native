@@ -3,7 +3,7 @@
     interface WithItems<T> {
         items: T[];
     }
-async function $$render_e40e2c10<T extends { a: string }>() {
+function $$render_e40e2c10<T extends { a: string }>() {
     type $$Events = {};
 
                             

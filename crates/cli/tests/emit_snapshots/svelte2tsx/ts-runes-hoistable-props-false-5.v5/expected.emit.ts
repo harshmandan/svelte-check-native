@@ -3,7 +3,7 @@
 
     type Shadowed = string;
     type Shadowed = boolean;
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
     type $$ComponentProps = { someProp: Shadowed };
 
                             

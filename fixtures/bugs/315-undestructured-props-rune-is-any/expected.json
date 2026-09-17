@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "`let props = $props()` with no destructure and no annotation typed the component's props as `Record<string, never>`, so a consumer passing any attribute reported TS2322. Upstream names a `$$ComponentProps` alias it never declares in this case, which resolves to `any`; a spread-wrapper component accepts anything."
+}

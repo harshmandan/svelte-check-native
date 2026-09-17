@@ -40,17 +40,11 @@
 //! whole-function `@type` for `+server.js` handlers, and `@satisfies`
 //! casts for non-function `load` values.
 //!
-//! Deliberately NOT handled here (yet):
-//!
-//! - `actions` const satisfies pattern.
-//! - `entries` function in `+page.server.ts` / `+server.ts`.
-//! - `+server.ts` page-option / `load` / `actions` / `entries`
-//!   typing. The `ServerEndpoint` branch below annotates HTTP
-//!   handler parameters and return types; it intentionally skips
-//!   page-option consts (`ssr` / `csr` / `prerender` / `trailingSlash`),
-//!   `load`, `actions`, and `entries`. Upstream does inject those on
-//!   `+server.ts`, so this is a deliberate laxer-than-upstream
-//!   divergence for those degenerate cases.
+//! `actions` gets a `satisfies import('./$types.js').Actions` trailer,
+//! a parameterless `entries` its `ReturnType<EntryGenerator>` return
+//! annotation, and `+server` files receive the page-option and
+//! `load` / `entries` typing as well as their HTTP handlers — every
+//! export upstream's `upsertKitFile` annotates on a kit route file.
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{BindingPattern, Declaration, Statement};
@@ -71,8 +65,8 @@ const SERVER_HANDLER_NAMES: &[&str] = &[
 /// richer `KitRole` so the conversion is one place, not threaded
 /// through every match arm.
 enum KitFileKind {
-    /// `+server.ts` — HTTP handlers get `RequestEvent`. No config
-    /// exports (`ssr`/`csr`/etc. are page-only).
+    /// `+server.ts` — HTTP handlers get `RequestEvent`; page options,
+    /// `load` and `entries` are typed as on a server page file.
     ServerEndpoint,
     /// `+page.ts`, `+layout.ts`, `+page.server.ts`, `+layout.server.ts`.
     /// `load` gets a type-matrix-derived `LoadEvent`; page-option
@@ -244,10 +238,7 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                     continue;
                 }
                 match &kind {
-                    KitFileKind::ServerEndpoint => {
-                        if !SERVER_HANDLER_NAMES.contains(&name) {
-                            continue;
-                        }
+                    KitFileKind::ServerEndpoint if SERVER_HANDLER_NAMES.contains(&name) => {
                         if is_ts {
                             collect_handler_insert(
                                 func,
@@ -292,14 +283,37 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                             );
                         }
                     }
-                    KitFileKind::Route {
-                        is_layout,
-                        is_server,
-                    } => {
+                    KitFileKind::Route { .. } | KitFileKind::ServerEndpoint => {
+                        let (is_layout, is_server) = route_flags(&kind);
+                        // A parameterless `entries` with no declared
+                        // return type: upstream annotates the return
+                        // as `ReturnType<EntryGenerator>` (TS: at the
+                        // body's `{`; JS: a `@type` on the function),
+                        // on every kit route file but a layout.
+                        if name == "entries" {
+                            if !is_layout
+                                && func.params.items.is_empty()
+                                && func.return_type.is_none()
+                                && let Some(body) = func.body.as_ref()
+                            {
+                                if is_ts {
+                                    insertions.push((
+                                        body.span.start as usize,
+                                        format!(": ReturnType<{ENTRY_GENERATOR}> "),
+                                    ));
+                                } else {
+                                    insertions.push((
+                                        export.span.start as usize,
+                                        format!("/** @type {{{ENTRY_GENERATOR}}} */ "),
+                                    ));
+                                }
+                            }
+                            continue;
+                        }
                         if name != "load" {
                             continue;
                         }
-                        let event_type = load_event_type(*is_layout, *is_server);
+                        let event_type = load_event_type(is_layout, is_server);
                         if is_ts {
                             collect_handler_insert(func, &event_type, false, &mut insertions);
                         } else {
@@ -361,11 +375,11 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                     // function-expression value as a function and
                     // `insertApiMethod` types it like the declaration
                     // form.
-                    if matches!(kind, KitFileKind::ServerEndpoint) {
+                    if matches!(kind, KitFileKind::ServerEndpoint)
+                        && SERVER_HANDLER_NAMES.contains(&id.name.as_str())
+                    {
                         use oxc_ast::ast::Expression;
-                        if !SERVER_HANDLER_NAMES.contains(&id.name.as_str())
-                            || declarator.type_annotation.is_some()
-                        {
+                        if declarator.type_annotation.is_some() {
                             continue;
                         }
                         let Some(init) = declarator.init.as_ref() else {
@@ -388,13 +402,87 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                         continue;
                     }
 
-                    let KitFileKind::Route {
-                        is_layout,
-                        is_server,
-                    } = &kind
-                    else {
+                    let (is_layout, is_server) = route_flags(&kind);
+                    let is_layout = &is_layout;
+                    let is_server = &is_server;
+
+                    // `export const actions = { … }` — upstream's
+                    // `satisfies import('./$types.js').Actions` trailer
+                    // (TS) or `@satisfies` cast (JS), unless the user
+                    // annotated the variable.
+                    if id.name.as_str() == "actions" {
+                        if declarator.type_annotation.is_none()
+                            && let Some(init) = declarator.init.as_ref()
+                        {
+                            let sp = init.span();
+                            if is_ts {
+                                insertions.push((sp.end as usize, format!(" satisfies {ACTIONS}")));
+                            } else {
+                                insertions.push((
+                                    sp.start as usize,
+                                    format!("/** @satisfies {{{ACTIONS}}} */ ("),
+                                ));
+                                insertions.push((sp.end as usize, ")".to_string()));
+                            }
+                        }
                         continue;
-                    };
+                    }
+
+                    // `export const entries = () => …` — the value form
+                    // of the `entries` generator, typed like the
+                    // declaration form.
+                    if id.name.as_str() == "entries" {
+                        use oxc_ast::ast::Expression;
+                        if !*is_layout
+                            && declarator.type_annotation.is_none()
+                            && let Some(init) = declarator.init.as_ref()
+                        {
+                            match init {
+                                Expression::ArrowFunctionExpression(arrow)
+                                    if arrow.params.items.is_empty()
+                                        && arrow.return_type.is_none() =>
+                                {
+                                    if is_ts {
+                                        if let Some(at) = arrow_token_pos(
+                                            source,
+                                            arrow.params.span.end as usize,
+                                            arrow.body.span().start as usize,
+                                        ) {
+                                            insertions.push((
+                                                at,
+                                                format!(": ReturnType<{ENTRY_GENERATOR}> "),
+                                            ));
+                                        }
+                                    } else {
+                                        insertions.push((
+                                            arrow.span.start as usize,
+                                            format!("/** @type {{{ENTRY_GENERATOR}}} */ "),
+                                        ));
+                                    }
+                                }
+                                Expression::FunctionExpression(func)
+                                    if func.params.items.is_empty()
+                                        && func.return_type.is_none() =>
+                                {
+                                    if is_ts {
+                                        if let Some(body) = func.body.as_ref() {
+                                            insertions.push((
+                                                body.span.start as usize,
+                                                format!(": ReturnType<{ENTRY_GENERATOR}> "),
+                                            ));
+                                        }
+                                    } else {
+                                        insertions.push((
+                                            func.span.start as usize,
+                                            format!("/** @type {{{ENTRY_GENERATOR}}} */ "),
+                                        ));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        continue;
+                    }
 
                     // Page-option export (`prerender`, `ssr`, etc.):
                     // splice `: type` after the identifier (TS) or a
@@ -544,6 +632,24 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
         text: out,
         insertions: placed,
     })
+}
+
+const ACTIONS: &str = "import('./$types.js').Actions";
+const ENTRY_GENERATOR: &str = "import('./$types.js').EntryGenerator";
+
+/// `(is_layout, is_server)` for the route-like typing shared by route
+/// scripts and `+server` files; upstream derives both from the file's
+/// basename (`layout` / `server` substrings), so `+server` counts as a
+/// server page file.
+fn route_flags(kind: &KitFileKind) -> (bool, bool) {
+    match kind {
+        KitFileKind::Route {
+            is_layout,
+            is_server,
+        } => (*is_layout, *is_server),
+        KitFileKind::ServerEndpoint => (false, true),
+        KitFileKind::Hooks { .. } | KitFileKind::Params => (false, false),
+    }
 }
 
 /// Mirrors upstream's load-event naming matrix. Server-side gets
@@ -1144,12 +1250,48 @@ export async function POST({ request }) { return new Response(''); }
     }
 
     #[test]
-    fn server_endpoint_ignores_page_options() {
-        // +server.ts doesn't support `ssr` etc. — our ServerEndpoint
-        // branch only looks at HTTP handlers, so page-options are
-        // untouched even if the user happens to write one.
-        let source = "export const ssr = true;";
-        assert!(inject(&server_path(), source).is_none());
+    fn server_endpoint_types_page_options_and_entries() {
+        // Upstream annotates page options and `entries` on every kit
+        // route file, `+server` included.
+        let source = "export const ssr = true;\nexport const entries = () => [];\n";
+        let got = inject(&server_path(), source).unwrap();
+        assert!(got.contains("ssr: boolean = true"), "{got}");
+        // The annotation lands where upstream inserts it: at the `=>`.
+        assert!(
+            got.contains("entries = () : ReturnType<import('./$types.js').EntryGenerator> => []"),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn actions_get_satisfies_trailer_and_entries_a_return_type() {
+        let source = "export const actions = { default: async (e) => {} };\nexport function entries() { return []; }\n";
+        let got = inject(&PathBuf::from("src/routes/+page.server.ts"), source).unwrap();
+        assert!(got.contains("} satisfies import('./$types.js').Actions;"));
+        // Inserted at the body's `{`, as upstream does.
+        assert!(got.contains(
+            "export function entries() : ReturnType<import('./$types.js').EntryGenerator> {"
+        ));
+        // A layout has no `entries`; an annotated `actions` is left alone.
+        let layout = inject(&layout_path(), "export function entries() { return []; }\n");
+        assert!(layout.is_none());
+        let typed = inject(
+            &PathBuf::from("src/routes/+page.server.ts"),
+            "export const actions: Actions = {};\n",
+        );
+        assert!(typed.is_none());
+    }
+
+    #[test]
+    fn js_actions_and_entries_get_jsdoc_forms() {
+        let source = "export const actions = { default: async (e) => {} };\nexport function entries() { return []; }\n";
+        let got = inject(&PathBuf::from("src/routes/+page.server.js"), source).unwrap();
+        assert!(got.contains(
+            "export const actions = /** @satisfies {import('./$types.js').Actions} */ ({ default: async (e) => {} });"
+        ));
+        assert!(got.contains(
+            "/** @type {import('./$types.js').EntryGenerator} */ export function entries()"
+        ));
     }
 
     // .js route files — JSDoc-form injections (upstream's !isTsFile

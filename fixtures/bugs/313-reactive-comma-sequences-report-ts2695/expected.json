@@ -1,0 +1,8 @@
+{
+    "errors": [
+        { "file": "input.svelte", "line": 3, "column": 11, "code": 2695 },
+        { "file": "input.svelte", "line": 4, "column": 6, "code": 2695 },
+        { "file": "input.svelte", "line": 5, "column": 13, "code": 2695 }
+    ],
+    "_note": "Reactive dependency lists written with the comma operator — `$: void (a, b)`, `$: (a, b)`, `$: { void (a, b); … }` — are copied verbatim by upstream, and `svelte-check --tsgo` reports TS2695 on each unused left side (the default engine filters these through the language service, which the tsgo command never runs). We rewrote the sequences to arrays and the commas to semicolons, hiding every one of them."
+}

@@ -1,0 +1,4 @@
+{
+  "bucket": "ls-only",
+  "reason": "`// @ts-check` in a JavaScript script: the language server detects the directive itself (plugins/typescript/utils.ts) and turns checking on for the file; svelte2tsx does not hoist it, so under `svelte-check --tsgo` the comment sits inside the render function where TypeScript ignores it and the file is unchecked (0 diagnostics measured). We mirror the tsgo command."
+}

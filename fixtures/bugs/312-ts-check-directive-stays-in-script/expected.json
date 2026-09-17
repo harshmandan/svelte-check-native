@@ -1,0 +1,4 @@
+{
+    "clean": true,
+    "_note": "A `// @ts-check` comment at the top of a JavaScript `<script>` was hoisted to the head of the generated file, turning on checking for a file the project has `checkJs: false` for. Upstream copies the script into the render function, where the comment has no file-level effect, and reports nothing."
+}

@@ -3,7 +3,7 @@
 
     import { } from 'svelte/action';
     import { } from 'svelte';
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
                              
     ;(async () => {

@@ -8,7 +8,7 @@
     /** @param {import('../../mhm'.mhm)} mhm */
     function f(mhm) {}
     import foo2 from '../../foo';
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
                                  
     import('../../bar');

@@ -1,0 +1,35 @@
+{
+    "errors": [
+        {
+            "file": "src/routes/api/+server.ts",
+            "line": 0,
+            "column": 13,
+            "code": 2322
+        },
+        {
+            "file": "src/routes/api/+server.ts",
+            "line": 1,
+            "column": 13,
+            "code": 2322
+        },
+        {
+            "file": "src/routes/api/+server.ts",
+            "line": 2,
+            "column": 32,
+            "code": 2353
+        },
+        {
+            "file": "src/routes/form/+page.server.ts",
+            "line": 5,
+            "column": 15,
+            "code": 2322
+        },
+        {
+            "file": "src/routes/form/+page.server.ts",
+            "line": 8,
+            "column": 25,
+            "code": 2353
+        }
+    ],
+    "_note": "SvelteKit route scripts get every typing upstream's `upsertKitFile` injects: `export const actions` carries `satisfies import('./$types.js').Actions` (so an action's event is contextually typed and a wrong return is reported), a parameterless `entries` gets `ReturnType<EntryGenerator>` as its return type, and a `+server` file receives the page-option (`prerender`, `trailingSlash`, \u2026) and `entries` typing in addition to its HTTP handlers. Before, `actions` and `entries` were untyped (TS7031 on every action's destructured event; wrong shapes unchecked) and `+server` page options were never typed. Shape and positions were verified against upstream on a real SvelteKit app; the `$types.d.ts` files here are stand-ins for `svelte-kit sync`'s output."
+}

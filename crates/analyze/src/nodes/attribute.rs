@@ -59,6 +59,29 @@ fn walk_directive(
 /// or None if the attribute is absent, quoted with an expression
 /// interpolation, or bound via `name={expr}`. Used for context-aware
 /// bind dispatch (`<input type="number" bind:value={...}>`).
+/// Like [`literal_attr_value`], but also returns the value's source
+/// range (without quotes).
+pub fn literal_attr_value_range<'a>(
+    attrs: &[Attribute],
+    name: &str,
+    source: &'a str,
+) -> Option<(&'a str, svn_core::Range)> {
+    for attr in attrs {
+        let Attribute::Plain(p) = attr else {
+            continue;
+        };
+        if p.name.as_str() != name {
+            continue;
+        }
+        let value = p.value.as_ref()?;
+        let [svn_parser::AttrValuePart::Text { range }] = value.parts.as_slice() else {
+            return None;
+        };
+        return Some((range.slice(source), *range));
+    }
+    None
+}
+
 pub fn literal_attr_value<'a>(attrs: &[Attribute], name: &str, source: &'a str) -> Option<&'a str> {
     for attr in attrs {
         let Attribute::Plain(p) = attr else {

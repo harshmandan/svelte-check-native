@@ -41,6 +41,10 @@ use svn_analyze::{TemplateSummary, scan_jsdoc_typedef_name, should_synthesise_js
 /// via `raw_string_mut`, so the buffer's line counter needs
 /// `resync_current_line()` before the walk starts — any `LineMapEntry`
 /// the walk pushes reads the current overlay line from that counter.
+///
+/// `root_snippets_hoisted`: the fragment's own `{#snippet}` blocks were
+/// already emitted at the render function's start (or at module
+/// scope), so the walk skips them here.
 pub(crate) fn emit_template_check_fn(
     buf: &mut EmitBuffer,
     doc: &svn_parser::Document<'_>,
@@ -48,7 +52,23 @@ pub(crate) fn emit_template_check_fn(
     summary: &TemplateSummary,
     is_ts: bool,
     has_strict_slots_decl: bool,
+    root_snippets_hoisted: bool,
 ) {
+    let without_root_snippets;
+    let fragment = if root_snippets_hoisted {
+        without_root_snippets = svn_parser::Fragment {
+            nodes: fragment
+                .nodes
+                .iter()
+                .filter(|n| !matches!(n, svn_parser::Node::SnippetBlock(_)))
+                .cloned()
+                .collect(),
+            ..fragment.clone()
+        };
+        &without_root_snippets
+    } else {
+        fragment
+    };
     // Arrow expression statement (NOT a function declaration) — TS's
     // control-flow narrowing carries assignment-narrowed types from
     // the enclosing render scope INTO the closure body. A named
@@ -85,14 +105,7 @@ pub(crate) fn emit_template_check_fn(
     // the top level of `__svn_tpl_check`, which silently broke any
     // check whose prop expressions referenced a binding introduced by
     // a block.
-    let instantiations_by_start: std::collections::HashMap<
-        u32,
-        &svn_analyze::ComponentInstantiation,
-    > = summary
-        .component_instantiations
-        .iter()
-        .map(|i| (i.node_start, i))
-        .collect();
+    let instantiations_by_start = instantiation_index(summary);
     let mut action_counter: usize = 0;
     buf.resync_current_line();
     emit_template_body(
@@ -490,4 +503,16 @@ fn build_exported_lets_shape(infos: &[ExportedLocalInfo]) -> String {
     }
     out.push('}');
     out
+}
+
+/// Component instantiations indexed by the source byte offset of their
+/// node, the lookup every component-call emit site uses.
+pub(crate) fn instantiation_index(
+    summary: &TemplateSummary,
+) -> std::collections::HashMap<u32, &svn_analyze::ComponentInstantiation> {
+    summary
+        .component_instantiations
+        .iter()
+        .map(|inst| (inst.node_start, inst))
+        .collect()
 }

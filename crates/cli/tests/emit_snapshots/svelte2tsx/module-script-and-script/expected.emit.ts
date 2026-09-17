@@ -3,7 +3,7 @@
 
     export function preload() {}
     let b = 5;
-async function $$render_e40e2c10() {
+function $$render_e40e2c10() {
 
            let world = "name"
     ;(async () => {

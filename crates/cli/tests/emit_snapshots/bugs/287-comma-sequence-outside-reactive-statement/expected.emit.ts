@@ -3,8 +3,8 @@
 async function $$render_e40e2c10() {
 
     let a = 1, b = 2;
-    ;() => { $: void [a, b]; };
-    ;() => { $: [a, b]; };
+    ;() => { $: void (a, b); };
+    ;() => { $: (a, b); };
     function f() { void (a, b); }
     f();
     ;(async () => {

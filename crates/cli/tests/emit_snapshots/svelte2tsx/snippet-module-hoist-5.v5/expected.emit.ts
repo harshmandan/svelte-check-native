@@ -7,6 +7,7 @@ const foo = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { async
     return __svn_any(0);
 };
 void foo;
+
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)

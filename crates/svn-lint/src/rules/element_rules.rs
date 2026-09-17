@@ -1,5 +1,6 @@
 //! Rules that fire on regular DOM elements.
 
+use smol_str::SmolStr;
 use svn_parser::ast::{AttrValuePart, Attribute, DirectiveKind, Element};
 
 use crate::codes::Code;
@@ -154,6 +155,7 @@ fn visit_slot_element(el: &Element, ctx: &mut LintContext<'_>) {
         let msg = messages::slot_element_deprecated();
         ctx.emit(Code::slot_element_deprecated, msg, el.range);
     }
+    record_slot_name(el, ctx);
     for attr in &el.attributes {
         match attr {
             Attribute::Plain(p) if p.name == "name" => match static_text_value(p, ctx.source) {
@@ -209,6 +211,28 @@ pub(crate) fn validate_component_slot_attribute(attr: &Attribute, ctx: &mut Lint
             validate_slot_attribute(ctx, None, e.range, true);
         }
         _ => {}
+    }
+}
+
+/// Record the slot this `<slot>` fills in the compiler's
+/// `slot_names` map: keyed by name (`default` without a `name`
+/// attribute), iterated in first-insertion order, holding the latest
+/// element per name. Only the first entry is ever read. A non-static
+/// name has already failed the component.
+fn record_slot_name(el: &Element, ctx: &mut LintContext<'_>) {
+    let mut name = "default";
+    for attr in &el.attributes {
+        if let Attribute::Plain(p) = attr
+            && p.name == "name"
+            && let Some(text) = static_text_value(p, ctx.source)
+        {
+            name = text;
+        }
+    }
+    match &mut ctx.first_slot {
+        None => ctx.first_slot = Some((SmolStr::new(name), el.range)),
+        Some((first, range)) if first == name => *range = el.range,
+        Some(_) => {}
     }
 }
 

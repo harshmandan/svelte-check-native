@@ -119,6 +119,13 @@ pub struct LintContext<'src> {
     /// compiler raises once the walks are done.
     pub(crate) event_directive: Option<(SmolStr, Range)>,
     pub(crate) uses_event_attributes: bool,
+
+    /// Whether the template has a `{@render}` tag, and the `<slot>`
+    /// standing for the first slot name seen (the latest `<slot>` of
+    /// that name, as the compiler's name-keyed map keeps it) — the
+    /// inputs of the `slot_snippet_conflict` check.
+    pub(crate) uses_render_tags: bool,
+    pub(crate) first_slot: Option<(SmolStr, Range)>,
 }
 
 impl<'src> LintContext<'src> {
@@ -148,6 +155,8 @@ impl<'src> LintContext<'src> {
             experimental_async: false,
             event_directive: None,
             uses_event_attributes: false,
+            uses_render_tags: false,
+            first_slot: None,
         }
     }
 

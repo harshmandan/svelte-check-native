@@ -774,6 +774,11 @@ pub fn event_handler_invalid_component_modifier() -> String {
     "Event modifiers other than 'once' can only be used on DOM elements\nhttps://svelte.dev/e/event_handler_invalid_component_modifier".to_string()
 }
 
+/// Cannot use `<slot>` syntax and `{@render ...}` tags in the same component. Migrate towards `{@render ...}` tags completely
+pub fn slot_snippet_conflict() -> String {
+    "Cannot use `<slot>` syntax and `{@render ...}` tags in the same component. Migrate towards `{@render ...}` tags completely\nhttps://svelte.dev/e/slot_snippet_conflict".to_string()
+}
+
 /// slot attribute must be a static value
 pub fn slot_attribute_invalid() -> String {
     "slot attribute must be a static value\nhttps://svelte.dev/e/slot_attribute_invalid".to_string()

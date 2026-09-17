@@ -256,6 +256,32 @@ pub fn walk_parsed(
             range,
         );
     }
+
+    // A component may not use both `{@render}` tags and slots: a
+    // `<slot>` element (custom-element components excepted) or a
+    // `$$slots` reference. The error points at the first slot name's
+    // `<slot>`, or else at the first `$$slot` text in the source.
+    if ctx.uses_render_tags {
+        let uses_slots = ctx
+            .scope_tree
+            .as_ref()
+            .is_some_and(|tree| tree.unresolved_refs.iter().any(|r| r.name == "$$slots"));
+        let uses_slot_elements = ctx.first_slot.is_some() && ctx.custom_element_info.is_none();
+        if uses_slots || uses_slot_elements {
+            let range = match ctx.first_slot.as_ref() {
+                Some((_, range)) => *range,
+                None => {
+                    let at = source.find("$$slot").unwrap_or(0) as u32;
+                    svn_core::Range::new(at, at)
+                }
+            };
+            ctx.emit_error(
+                Code::slot_snippet_conflict,
+                messages::slot_snippet_conflict(),
+                range,
+            );
+        }
+    }
 }
 
 /// Scan the top-level fragment for `<svelte:options>` and fire the
@@ -671,6 +697,9 @@ fn walk_fragment_impl(
                 crate::rules::text_rules::visit_text(t, &fragment.nodes[..idx], ctx);
             }
             Node::Interpolation(i) => {
+                if i.kind == svn_parser::InterpolationKind::AtRender {
+                    ctx.uses_render_tags = true;
+                }
                 if i.kind == svn_parser::InterpolationKind::Expression
                     && let Some(parent) = parent_tag
                 {

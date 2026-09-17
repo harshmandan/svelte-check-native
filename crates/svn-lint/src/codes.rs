@@ -113,6 +113,7 @@ pub enum Code {
     slot_element_invalid_attribute,
     slot_element_invalid_name,
     slot_element_invalid_name_default,
+    slot_snippet_conflict,
     snippet_conflict,
     snippet_parameter_assignment,
     state_referenced_locally,
@@ -258,6 +259,7 @@ impl Code {
             Self::slot_element_invalid_attribute => "slot_element_invalid_attribute",
             Self::slot_element_invalid_name => "slot_element_invalid_name",
             Self::slot_element_invalid_name_default => "slot_element_invalid_name_default",
+            Self::slot_snippet_conflict => "slot_snippet_conflict",
             Self::snippet_conflict => "snippet_conflict",
             Self::snippet_parameter_assignment => "snippet_parameter_assignment",
             Self::state_referenced_locally => "state_referenced_locally",
@@ -407,6 +409,7 @@ impl Code {
             "slot_element_invalid_attribute" => Some(Self::slot_element_invalid_attribute),
             "slot_element_invalid_name" => Some(Self::slot_element_invalid_name),
             "slot_element_invalid_name_default" => Some(Self::slot_element_invalid_name_default),
+            "slot_snippet_conflict" => Some(Self::slot_snippet_conflict),
             "snippet_conflict" => Some(Self::snippet_conflict),
             "snippet_parameter_assignment" => Some(Self::snippet_parameter_assignment),
             "state_referenced_locally" => Some(Self::state_referenced_locally),
@@ -422,7 +425,7 @@ impl Code {
 }
 
 /// All known codes, alphabetically sorted.
-pub const CODES: &[&str; 112] = &[
+pub const CODES: &[&str; 113] = &[
     "a11y_accesskey",
     "a11y_aria_activedescendant_has_tabindex",
     "a11y_aria_attributes",
@@ -526,6 +529,7 @@ pub const CODES: &[&str; 112] = &[
     "slot_element_invalid_attribute",
     "slot_element_invalid_name",
     "slot_element_invalid_name_default",
+    "slot_snippet_conflict",
     "snippet_conflict",
     "snippet_parameter_assignment",
     "state_referenced_locally",
@@ -570,6 +574,7 @@ pub const COMPILER_ERROR_CODES: &[&str] = &[
     "slot_element_invalid_attribute",
     "slot_element_invalid_name",
     "slot_element_invalid_name_default",
+    "slot_snippet_conflict",
     "snippet_conflict",
     "snippet_parameter_assignment",
     "svelte_self_invalid_placement",

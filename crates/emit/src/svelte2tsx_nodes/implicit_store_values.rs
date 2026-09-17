@@ -18,9 +18,6 @@
 //! `$NAME` sigils whose base name matches a top-level binding, returning a
 //! `Vec<SmolStr>` of base names; the emit consumes the result via:
 //!
-//! - [`crate::svelte4::compat::rewrite_definite_assignment_in_place`] —
-//!   adds `!` to the underlying `let NAME: Writable<T>;` declaration
-//!   so TS flow doesn't fire TS2454 on subsequent `typeof NAME` reads.
 //! - The default-export shape's `Awaited<ReturnType<typeof
 //!   $$render>>['exports']` projection naturally preserves the
 //!   `Writable<T>` shape via the body-local `typeof <name>` reference.

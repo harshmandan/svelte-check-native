@@ -34,11 +34,8 @@ use svn_parser::ScriptLang;
 
 use crate::props_emit::inject_component_props_annotation;
 use crate::svelte2tsx_nodes::component_events::rewrite_dispatcher_typing;
-use crate::svelte4::compat::{
-    assert_exported_prop_types_in_place, rewrite_definite_assignment_in_place,
-    widen_untyped_exports_jsdoc_in_place,
-};
-use crate::svelte4::reactive::rewrite_with_touched_names;
+use crate::svelte4::compat::assert_exported_prop_types_in_place;
+use crate::svelte4::reactive::rewrite;
 use crate::util::blank_dollar_generic_decls;
 use crate::{common_affix_spans, process_instance_script_content::split_imports};
 
@@ -102,7 +99,7 @@ fn reactive_rewrite_preserves_line_count() {
                $: doubled = count * 2;\n\
                $: count = doubled - count;\n\
                $: {\n\tconsole.log(count);\n}\n";
-    let (out, _) = rewrite_with_touched_names(src, ScriptLang::Ts);
+    let out = rewrite(src, ScriptLang::Ts);
     assert_line_preserving_rewrite(src, &out);
 }
 
@@ -155,31 +152,6 @@ fn split_imports_body_preserves_length_and_lines() {
 
 // ---- post-splice rewrites (must report exact edits for
 // ---- adjust_token_map_for_insertions) ----
-
-#[test]
-fn definite_assignment_edits_reconstruct() {
-    let input = "let el: HTMLElement;\nlet other: string;\n";
-    let mut out = input.to_string();
-    let edits = rewrite_definite_assignment_in_place(
-        &mut out,
-        &(0..input.len()),
-        &[SmolStr::from("el"), SmolStr::from("other")],
-    );
-    assert_edits_reconstruct(input, &out, &edits);
-}
-
-#[test]
-fn widen_untyped_exports_jsdoc_edits_reconstruct() {
-    let input = "let foo;\nlet bar;\n";
-    let mut out = input.to_string();
-    let edits = widen_untyped_exports_jsdoc_in_place(
-        &mut out,
-        &(0..input.len()),
-        &[SmolStr::from("foo"), SmolStr::from("bar")],
-        None,
-    );
-    assert_edits_reconstruct(input, &out, &edits);
-}
 
 #[test]
 fn prop_type_assertion_edits_reconstruct() {

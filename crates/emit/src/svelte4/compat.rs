@@ -4,9 +4,9 @@
 //!   1. Detection — `is_svelte4_component`, the various
 //!      `has_*` / `contains_*` / `is_runes_mode` predicates that decide
 //!      whether to apply the rewrites or widening intersections.
-//!   2. Source-text rewrites of the script body (definite-assignment
-//!      `!`, de-narrowing reassignments, untyped-export widening) and
-//!      the `$$slots` / `$$props` / `$$restProps` ambient emission.
+//!   2. Source-text rewrites of the script body (exported-prop type
+//!      assertions) and the `$$slots` / `$$props` / `$$restProps`
+//!      ambient emission.
 //!
 //! When Svelte 4 is officially retired this whole module gets deleted
 //! along with the `// SVELTE-4-COMPAT` callsites in `lib.rs`. See
@@ -30,8 +30,6 @@ struct LetDeclarator {
     has_type_annotation: bool,
     /// A `/** @type {…} */` JSDoc block leads the statement.
     has_jsdoc_type: bool,
-    /// Already carries a `!` definite-assignment assertion.
-    definite: bool,
     init: DeclaratorInit,
     /// Position right after the statement's last declarator (before
     /// its `;`, if any).
@@ -148,7 +146,6 @@ fn collect_top_level_declarators(
                 name_end: body.start + id.span.end as usize,
                 has_type_annotation: d.type_annotation.is_some(),
                 has_jsdoc_type,
-                definite: d.definite,
                 init,
                 list_end,
             });
@@ -186,39 +183,6 @@ pub(crate) fn splice_insertions(
     rebuilt.push_str(&original[cursor..]);
     *out = rebuilt;
     edits
-}
-
-/// Rewrite `let <name>: T;` → `let <name>!: T;` for each target
-/// declared at the top level of the script body at `body`.
-///
-/// Svelte assigns these at runtime (a parent passes the prop, a
-/// `bind:this` element mounts), but TypeScript's flow analysis can't
-/// see that, so any read would be flagged "used before being
-/// assigned" (TS2454). The `!:` definite-assignment assertion tells
-/// TypeScript to trust us.
-///
-/// Only typed declarators without an initializer qualify: an untyped
-/// one has no annotation to attach `!` to, and `!` next to an
-/// initializer is itself an error (TS1263).
-pub(crate) fn rewrite_definite_assignment_in_place(
-    out: &mut String,
-    body: &Range<usize>,
-    target_names: &[SmolStr],
-) -> Vec<(u32, u32)> {
-    if target_names.is_empty() {
-        return Vec::new();
-    }
-    let insertions: Vec<(usize, String)> = collect_top_level_lets(out, body)
-        .into_iter()
-        .filter(|d| {
-            d.has_type_annotation
-                && !d.definite
-                && d.init == DeclaratorInit::Absent
-                && is_target(target_names, &d.name)
-        })
-        .map(|d| (d.name_end, String::from("!")))
-        .collect();
-    splice_insertions(out, &insertions)
 }
 
 /// Does the parsed template fragment contain a `<slot>` element?
@@ -606,46 +570,6 @@ pub(crate) fn emit_svelte4_ambients(out: &mut String, refs: svn_analyze::Ambient
         out.push_str("    void $$props;\n");
     }
 }
-/// JS-overlay equivalent of `rewrite_definite_assignment_in_place` +
-/// `widen_untyped_exported_props_in_place` rolled into one. For each
-/// `let NAME[, NAME…];` declaration where NAME is a target AND that
-/// declarator has no initializer, splice `= /** @type {any} */ (null)`
-/// between NAME (or its type annotation) and the terminator — turning
-/// `let b;` into `let b = /** @type {any} */ (null);`.
-///
-/// Fixes three TS-strict-mode JS-overlay diagnostics in one pass:
-///   - TS7034/TS7005 on the declaration ("variable implicitly any in
-///     some locations") — the initializer's `any` gives TS an explicit
-///     type for subsequent flow.
-///   - TS2454 on later reads ("used before being assigned") — the
-///     initializer satisfies definite-assign flow.
-///   - TS2367/TS2322 on type-check expressions that would have
-///     otherwise narrowed against a body-local `undefined`-inferred
-///     type.
-///
-/// User-authored JSDoc `/** @type {T} */` preceding the declaration is
-/// preserved and takes priority: TS reads user's `@type` to declare
-/// NAME as `T`, the initializer's `any` is assignable to `T` via JS-loose
-/// rules, no TS2322 secondary fires.
-pub(crate) fn widen_untyped_exports_jsdoc_in_place(
-    out: &mut String,
-    body: &Range<usize>,
-    target_names: &[SmolStr],
-    route_kind: Option<sveltekit::RouteKind>,
-) -> Vec<(u32, u32)> {
-    let insertions: Vec<(usize, String)> = collect_widening_sites(out, body, target_names)
-        .into_iter()
-        .map(|(pos, name)| {
-            let text = match route_kind.and_then(|k| sveltekit::kit_widen_type(&name, k)) {
-                Some(ty) => format!(" = /** @type {{{ty}}} */ (/** @type {{any}} */ (null))"),
-                None => String::from(" = /** @type {any} */ (null)"),
-            };
-            (pos, text)
-        })
-        .collect();
-    splice_insertions(out, &insertions)
-}
-
 /// The SvelteKit type of a route-file prop upstream names without a
 /// declared type: `data`, `form` and `snapshot` in `+page` / `+layout`
 /// components (`ExportedNames.ts`, `kitType`).
@@ -795,29 +719,6 @@ fn kit_type_insertion(d: &LetDeclarator, ty: &str, is_ts: bool) -> (usize, Strin
     } else {
         (d.name_start, format!("/** @type {{{ty}}} */ "))
     }
-}
-
-/// Shared site list for the two widening rewrites: the name end of
-/// every untyped target declared without an initializer (or with a
-/// bare `undefined` / `null` one).
-fn collect_widening_sites(
-    out: &str,
-    body: &Range<usize>,
-    target_names: &[SmolStr],
-) -> Vec<(usize, SmolStr)> {
-    if target_names.is_empty() {
-        return Vec::new();
-    }
-    collect_top_level_lets(out, body)
-        .into_iter()
-        .filter(|d| {
-            !d.has_type_annotation
-                && !d.definite
-                && d.init != DeclaratorInit::Other
-                && is_target(target_names, &d.name)
-        })
-        .map(|d| (d.name_end, d.name))
-        .collect()
 }
 
 #[cfg(test)]

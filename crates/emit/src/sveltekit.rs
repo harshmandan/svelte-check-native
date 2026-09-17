@@ -96,44 +96,6 @@ pub fn kit_prop_decl(name: &str, kind: RouteKind) -> Option<&'static str> {
     }
 }
 
-/// Return just the TYPE source (no name, no `:`) for a Kit-auto-typed
-/// Svelte-4 `export let <name>` declaration on a route file. The
-/// caller splices `: <type>` after the identifier in the overlay.
-///
-/// Mirrors upstream `svelte2tsx/src/svelte2tsx/nodes/ExportedNames.ts`
-/// `handleTypeAssertion` (lines 424-440): when the exported local is
-/// one of `data` / `form` / `snapshot` on a Kit route file AND the
-/// user didn't already annotate it, upstream synthesizes
-/// `: import('./$types.js').<Type>`. We match the same set but widen
-/// `form`/`snapshot` with `| undefined` because `let X: T;` can't
-/// carry TS's object-member `?` optional marker — the declaration
-/// needs a value-position `T | undefined` union. `data` stays
-/// required (upstream emits `: PageData` without `| undefined` since
-/// the reassignment via `__sveltets_2_any(data)` loosens it
-/// downstream anyway; our `!` definite-assign has the same net
-/// effect).
-///
-/// Returns `None` for names that aren't kit-auto-typed — the caller
-/// falls back to `: any` (our legacy widen).
-///
-/// `form` is intentionally gated to `RouteKind::Page` only. A layout's
-/// `$types` exports no `ActionData` symbol, so widening `form` on a
-/// layout would emit a `import('./$types.js').ActionData` reference that
-/// fires TS2694 ("has no exported member 'ActionData'"). An `export let
-/// form` on a layout is itself nonsensical — layouts don't receive form
-/// action data — so the `: any` fallback is the correct, parity-safe
-/// behavior there.
-pub fn kit_widen_type(name: &str, kind: RouteKind) -> Option<&'static str> {
-    match (kind, name) {
-        (RouteKind::Page, "data") => Some("import('./$types.js').PageData"),
-        (RouteKind::Page, "form") => Some("import('./$types.js').ActionData"),
-        (RouteKind::Page, "snapshot") => Some("import('./$types.js').Snapshot | undefined"),
-        (RouteKind::Layout, "data") => Some("import('./$types.js').LayoutData"),
-        (RouteKind::Layout, "snapshot") => Some("import('./$types.js').Snapshot | undefined"),
-        _ => None,
-    }
-}
-
 /// Build the props type for a SvelteKit route component whose
 /// `$props()` destructure carries no type of its own, or `None` when
 /// the component's props end up untyped.

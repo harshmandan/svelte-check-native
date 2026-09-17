@@ -27,7 +27,7 @@
 //!
 //! - `kit_inject`'s actual `: import('./$types.js').…` splicing logic
 //!   (uses `oxc_parser` to find handler-param spans).
-//! - `sveltekit.rs`'s `kit_prop_decl` / `kit_widen_type` /
+//! - `sveltekit.rs`'s `kit_prop_decl` /
 //!   `synthesize_route_props_type` (string formatting that depends on
 //!   the classifier output but doesn't classify anything itself).
 //! - `svelte_config.rs`'s `defineConfig({...})` / `satisfies` /

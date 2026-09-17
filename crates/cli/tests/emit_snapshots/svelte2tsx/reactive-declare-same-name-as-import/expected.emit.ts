@@ -6,7 +6,7 @@ function $$render_e40e2c10() {
                              
 let b = __svn_invalidate(() => (7));
 
-let a = /** @type {any} */ (null);
+let a;
 a = __svn_invalidate(() => (5));
     ;(async () => {
         // template type-check body (incremental)

@@ -890,7 +890,6 @@ fn emit_document_with_render_name(
     //   - `$: count++`     → `count++;`                (re-assignment, label dropped)
     //   - `$: console.log` → `() => { $: console.log };` (expr/block wrap)
     // See crates/emit/src/svelte4/reactive.rs.
-    let mut reactive_touched_names: Vec<SmolStr> = Vec::new();
     // Pre-compute whether we'll emit `type $$ComponentProps = {...}`
     // at module scope. The script-rewrite pipeline needs to know so
     // it can also annotate the `$props()` destructure with
@@ -929,9 +928,7 @@ fn emit_document_with_render_name(
         .is_some_and(|s| s.generics.is_none())
         && generics.is_some();
     let rewritten_content: Option<String> = doc.instance_script.as_ref().map(|s| {
-        let (after_reactive, touched) =
-            svelte4::reactive::rewrite_with_touched_names(s.content, s.lang);
-        reactive_touched_names = touched;
+        let after_reactive = svelte4::reactive::rewrite(s.content, s.lang);
         let after_reactive = if strip_dollar_generic {
             blank_dollar_generic_decls(&after_reactive)
         } else {
@@ -1498,7 +1495,6 @@ fn emit_document_with_render_name(
         split.as_ref().zip(instance_body),
         module_body,
         store_bases,
-        &reactive_touched_names,
         source_path,
     );
 
@@ -2066,20 +2062,10 @@ fn module_hoistable_snippets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::svelte4::compat::{
-        assert_exported_prop_types_in_place, rewrite_definite_assignment_in_place,
-    };
+    use crate::svelte4::compat::assert_exported_prop_types_in_place;
     use std::path::PathBuf;
     use svn_analyze::walk_template;
     use svn_parser::{parse_all_template_runs, parse_sections};
-
-    fn def_assign(src: &str, targets: &[&str]) -> String {
-        let mut out = String::from(src);
-        let targets: Vec<SmolStr> = targets.iter().map(|s| SmolStr::from(*s)).collect();
-        rewrite_definite_assignment_in_place(&mut out, &(0..src.len()), &targets);
-        out
-    }
-
     fn assert_props(src: &str, targets: &[&str], is_ts: bool) -> String {
         let mut out = String::from(src);
         let targets: Vec<SmolStr> = targets.iter().map(|s| SmolStr::from(*s)).collect();
@@ -2137,151 +2123,6 @@ mod tests {
         assert_eq!(
             got,
             "let a, b: string, c = 0/*svn:ignore_start*/;a = __svn_any(a);/*svn:ignore_end*//*svn:ignore_start*/;b = __svn_any(b);/*svn:ignore_end*/;"
-        );
-    }
-
-    #[test]
-    fn def_assign_single_declarator() {
-        let got = def_assign("let foo: string;", &["foo"]);
-        assert_eq!(got, "let foo!: string;");
-    }
-
-    #[test]
-    fn def_assign_skips_declaration_with_initializer() {
-        // Has `=` before `;` → TS1263 forbids `!`, so leave alone.
-        let got = def_assign("let foo: string = 'hi';", &["foo"]);
-        assert_eq!(got, "let foo: string = 'hi';");
-    }
-
-    #[test]
-    fn def_assign_skips_untyped_declaration() {
-        // No `:`, no type annotation → no assertion site.
-        let got = def_assign("let foo;", &["foo"]);
-        assert_eq!(got, "let foo;");
-    }
-
-    #[test]
-    fn def_assign_skips_non_target_name() {
-        let got = def_assign("let other: string;", &["foo"]);
-        assert_eq!(got, "let other: string;");
-    }
-
-    #[test]
-    fn def_assign_multi_declarator_mixed_init() {
-        // Core regression: second declarator is uninitialized-typed.
-        let got = def_assign(
-            "let name3: string = '', name4: string;",
-            &["name3", "name4"],
-        );
-        assert_eq!(got, "let name3: string = '', name4!: string;");
-    }
-
-    #[test]
-    fn def_assign_multi_declarator_all_need_assertion() {
-        let got = def_assign("let a: string, b: number, c: boolean;", &["a", "b", "c"]);
-        assert_eq!(got, "let a!: string, b!: number, c!: boolean;");
-    }
-
-    #[test]
-    fn def_assign_multi_declarator_only_targets_assert() {
-        let got = def_assign("let a: string, b: number, c: boolean;", &["a", "c"]);
-        assert_eq!(got, "let a!: string, b: number, c!: boolean;");
-    }
-
-    #[test]
-    fn def_assign_inside_generic_types_not_tripped_by_angle_brackets() {
-        // `<T = U>` is a default-type-param, not a let-initializer.
-        let got = def_assign("let foo: Map<string, number>;", &["foo"]);
-        assert_eq!(got, "let foo!: Map<string, number>;");
-    }
-
-    #[test]
-    fn def_assign_inside_function_type_not_tripped_by_arrow() {
-        let got = def_assign("let foo: () => void;", &["foo"]);
-        assert_eq!(got, "let foo!: () => void;");
-    }
-
-    #[test]
-    fn def_assign_arrow_in_type_plus_initializer_correctly_detected() {
-        // Real-world regression: `let foo: (x: T) => R = () => ...;`
-        // has a `=` inside `=>`, a `>` after it, AND a real `=` before
-        // the initializer. The scanner must not flip paren_depth
-        // negative on the arrow's `>`, and must detect the real `=`.
-        let got = def_assign("let foo: () => void = () => {};", &["foo"]);
-        assert_eq!(got, "let foo: () => void = () => {};", "has init → no !");
-    }
-
-    #[test]
-    fn def_assign_complex_function_type_with_init() {
-        let got = def_assign(
-            "let onclick: ((e: MouseEvent) => void) | undefined = undefined;",
-            &["onclick"],
-        );
-        assert_eq!(
-            got, "let onclick: ((e: MouseEvent) => void) | undefined = undefined;",
-            "union of function type + initializer → no !",
-        );
-    }
-
-    #[test]
-    fn def_assign_fn_type_with_nested_object_and_init() {
-        let got = def_assign(
-            "let onclick: (e: MouseEvent, { data }: { data: any }) => any = () => {};",
-            &["onclick"],
-        );
-        assert_eq!(
-            got, "let onclick: (e: MouseEvent, { data }: { data: any }) => any = () => {};",
-            "function type with destructure param + arrow-body init → no !",
-        );
-    }
-
-    #[test]
-    fn def_assign_real_emit_shape() {
-        // The exact body shape our emit produces for ts-export-list-runes.v5.
-        // ASI-terminated name1 initializer must not swallow name2 through.
-        let src = "    let name1: string = \"world\"\n    let name2: string;\n    let name3: string = '', name4: string;\n";
-        let got = def_assign(src, &["name1", "name2", "name3", "name4"]);
-        // name1 has init → no !. name2, name4 typed-no-init → ! each.
-        assert!(
-            got.contains("let name2!: string;"),
-            "name2 should get !, got: {got:?}"
-        );
-        assert!(
-            got.contains("name4!: string;"),
-            "name4 should get !, got: {got:?}"
-        );
-        assert!(
-            got.contains("let name1: string = \"world\""),
-            "name1 unchanged (has init): {got:?}"
-        );
-    }
-
-    #[test]
-    fn def_assign_preserves_surrounding_content() {
-        let got = def_assign("before();\nlet name: string;\nafter();\n", &["name"]);
-        assert_eq!(got, "before();\nlet name!: string;\nafter();\n");
-    }
-
-    #[test]
-    fn def_assign_not_fooled_by_let_in_comment() {
-        // An unclosed `<` or `(` after the word `let` in a comment must
-        // not swallow the real declaration below it.
-        let src = "// let the parent pick a class for the <span\n\
-                   /* We let consumers decide (e.g. \"big\" */\n\
-                   let xyz: string;\n";
-        let got = def_assign(src, &["xyz"]);
-        assert!(got.contains("let xyz!: string;"), "got: {got:?}");
-    }
-
-    #[test]
-    fn def_assign_leaves_nested_shadowing_let_alone() {
-        // A function-local `let` of the same name is a different variable;
-        // TS2454 on it is a real error.
-        let src = "let el: HTMLElement;\nfunction f() { let el: HTMLElement; return el; }\n";
-        let got = def_assign(src, &["el"]);
-        assert_eq!(
-            got,
-            "let el!: HTMLElement;\nfunction f() { let el: HTMLElement; return el; }\n"
         );
     }
 

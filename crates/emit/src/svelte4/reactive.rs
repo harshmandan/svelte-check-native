@@ -54,37 +54,32 @@
 use std::collections::HashSet;
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{BindingPattern, Expression, LabeledStatement, Statement, VariableDeclarator};
+use oxc_ast::ast::{
+    BindingPattern, Declaration, Expression, ForStatementInit, ForStatementLeft, LabeledStatement,
+    Statement, VariableDeclaration, VariableDeclarator,
+};
 use oxc_span::GetSpan;
 use smol_str::SmolStr;
 use svn_parser::{ScriptLang, parse_script_body};
 
-/// Rewrite the Svelte-4 `$: ...` forms in `content` and return the
-/// resulting source text + the set of identifier names the rewrite
-/// TOUCHED on the LHS of a reactive-destructure or a
-/// reactive-reassignment to an already-declared name. Callers can
-/// feed the touched names to the downstream definite-assign pass so
-/// the pre-existing `let X: T;` declarations (Svelte-4's bare-typed
-/// prop pattern) get a `!` — the reactive assignment counts as
-/// "assigned" at runtime, but from TS's perspective the declaration
-/// is an uninitialized let + later branch assignment hidden inside
-/// an uncalled arrow body. Without the `!`, references elsewhere in
-/// the script fire TS2454 "used before being assigned".
+/// Rewrite the Svelte-4 `$: ...` forms in `content`.
 ///
 /// Cheap early-out: if the source contains no `$:` literal substring
 /// at all (the common case on pure Svelte 5 components), returns
-/// `(content.to_string(), Vec::new())` without a parse.
-pub fn rewrite_with_touched_names(content: &str, lang: ScriptLang) -> (String, Vec<SmolStr>) {
+/// `content` unchanged without a parse.
+pub fn rewrite(content: &str, lang: ScriptLang) -> String {
     if !content.contains("$:") {
-        return (content.to_string(), Vec::new());
+        return content.to_string();
     }
     let alloc = Allocator::default();
     let parsed = parse_script_body(&alloc, content, lang);
 
-    let declared_vars = collect_top_level_var_names(&parsed.program);
+    let mut declared_vars = HashSet::new();
+    for stmt in &parsed.program.body {
+        collect_root_declared(stmt, &mut declared_vars);
+    }
 
     let mut edits: Vec<Edit> = Vec::new();
-    let mut touched_names: Vec<SmolStr> = Vec::new();
     for stmt in &parsed.program.body {
         let Statement::LabeledStatement(labeled) = stmt else {
             continue;
@@ -92,12 +87,7 @@ pub fn rewrite_with_touched_names(content: &str, lang: ScriptLang) -> (String, V
         if labeled.label.name.as_str() != "$" {
             continue;
         }
-        collect_touched_names_for_statement(labeled, &declared_vars, &mut touched_names);
         edits.push(classify_and_rewrite(labeled, content, &declared_vars));
-    }
-
-    if edits.is_empty() {
-        return (content.to_string(), touched_names);
     }
 
     // Apply edits in reverse byte order so earlier positions don't
@@ -107,51 +97,7 @@ pub fn rewrite_with_touched_names(content: &str, lang: ScriptLang) -> (String, V
     for edit in edits {
         out.replace_range(edit.start..edit.end, &edit.replacement);
     }
-    (out, touched_names)
-}
-
-/// Walk a single `$:` labeled statement; if the LHS identifies (or
-/// destructures) ALREADY-declared names, those names need a `!`
-/// assertion on their original declaration — the reactive assignment
-/// is hidden inside an arrow body and TS's flow analysis can't see
-/// it. Names NOT already declared aren't added here (they get a
-/// fresh `let NAME = $derived(…)` at the same position).
-fn collect_touched_names_for_statement(
-    labeled: &LabeledStatement<'_>,
-    declared: &HashSet<SmolStr>,
-    out: &mut Vec<SmolStr>,
-) {
-    let Statement::ExpressionStatement(expr_stmt) = &labeled.body else {
-        return;
-    };
-    let inner_expr = match &expr_stmt.expression {
-        Expression::ParenthesizedExpression(p) => &p.expression,
-        other => other,
-    };
-    let Expression::AssignmentExpression(assign) = inner_expr else {
-        return;
-    };
-    if !matches!(assign.operator, oxc_ast::ast::AssignmentOperator::Assign) {
-        return;
-    }
-    // Case A: simple identifier LHS, already declared → re-assignment.
-    if let oxc_ast::ast::AssignmentTarget::AssignmentTargetIdentifier(id) = &assign.left {
-        let name = SmolStr::from(id.name.as_str());
-        if declared.contains(&name) && !out.iter().any(|n| n == &name) {
-            out.push(name);
-        }
-        return;
-    }
-    // Case B: destructure LHS — every destructured name counts (the
-    // names might be pre-declared via bare `let X: T;` or freshly
-    // introduced. For pre-declared ones we need the `!`; for fresh
-    // ones the rewriter itself emits `let {…} = expr` which already
-    // initialises, so the `!` is harmless in either case).
-    for name in collect_destructure_names(&assign.left) {
-        if declared.contains(&name) && !out.iter().any(|n| n == &name) {
-            out.push(name);
-        }
-    }
+    out
 }
 
 struct Edit {
@@ -160,57 +106,94 @@ struct Edit {
     replacement: String,
 }
 
-/// Walk top-level `let`/`const`/`var` declarators and collect simple
-/// identifier names. Used to tell a `$: x = expr` declaration from a
-/// `$: x = expr` re-assignment.
-fn collect_top_level_var_names(program: &oxc_ast::ast::Program<'_>) -> HashSet<SmolStr> {
-    let mut out = HashSet::new();
-    for stmt in &program.body {
-        match stmt {
-            Statement::VariableDeclaration(decl) => {
-                for d in &decl.declarations {
-                    collect_binding_names(d, &mut out);
-                }
-            }
-            // `export let X = …` / `export const X = …` — Svelte 4
-            // prop declarations. Their `X` IS declared at module scope
-            // after our process_instance_script_content strips the export keyword, so a
-            // subsequent `$: X = …` must be treated as re-assignment
-            // (drop the label) rather than a fresh declaration.
-            Statement::ExportDeclaration(decl) => {
-                if let oxc_ast::ast::Declaration::VariableDeclaration(vd) = &decl.declaration {
-                    for d in &vd.declarations {
-                        collect_binding_names(d, &mut out);
-                    }
-                }
-            }
-            // `export { x }` / `export { x } from 'm'` declare nothing.
-            Statement::ExportNamedDeclaration(_) | Statement::ExportFromDeclaration(_) => {}
-            // Top-level-only contract: this scan exists to tell a
-            // `$: x = …` DECLARATION from a re-assignment, and only
-            // `let`/`const`/`var` names participate in that decision
-            // (matching what the rewrite emits). Other declaration
-            // shapes are deliberately not collected — `$: f = …`
-            // against a same-named function/class/import is left to
-            // tsgo to diagnose as the redeclaration it is.
-            Statement::FunctionDeclaration(_)
-            | Statement::ClassDeclaration(_)
-            | Statement::ImportDeclaration(_)
-            | Statement::ExportAllDeclaration(_)
-            | Statement::ExportDefaultDeclaration(_)
-            | Statement::TSTypeAliasDeclaration(_)
-            | Statement::TSInterfaceDeclaration(_)
-            | Statement::TSEnumDeclaration(_)
-            | Statement::TSExternalModuleDeclaration(_)
-            | Statement::TSNamespaceDeclaration(_)
-            | Statement::TSGlobalDeclaration(_)
-            | Statement::TSImportEqualsDeclaration(_)
-            | Statement::TSExportAssignment(_)
-            | Statement::TSNamespaceExportDeclaration(_) => {}
-            svn_analyze::non_declaration_statement!() => {}
+/// Names declared in the script's root scope, which decide whether
+/// `$: x = …` declares `x` or re-assigns it. A name counts when a
+/// variable declaration or an import binds it outside every block and
+/// function body; a declaration under an unbraced `if`/loop body, a
+/// `for` head or a `catch` binding is still in the root scope.
+/// Function, class, enum and type declarations do not count, so
+/// `$: f = …` after `function f() {}` still declares.
+fn collect_root_declared(stmt: &Statement<'_>, out: &mut HashSet<SmolStr>) {
+    let var_decl = |decl: &VariableDeclaration<'_>, out: &mut HashSet<SmolStr>| {
+        for d in &decl.declarations {
+            collect_binding_names(d, out);
         }
+    };
+    let body = |body: &Statement<'_>, out: &mut HashSet<SmolStr>| {
+        if !matches!(body, Statement::BlockStatement(_)) {
+            collect_root_declared(body, out);
+        }
+    };
+    match stmt {
+        Statement::VariableDeclaration(decl) => var_decl(decl, out),
+        Statement::ExportDeclaration(decl) => {
+            if let Declaration::VariableDeclaration(vd) = &decl.declaration {
+                var_decl(vd, out);
+            }
+        }
+        Statement::ImportDeclaration(decl) => {
+            for spec in decl.specifiers.iter().flatten() {
+                out.insert(SmolStr::from(spec.local().name.as_str()));
+            }
+        }
+        Statement::IfStatement(s) => {
+            body(&s.consequent, out);
+            if let Some(alt) = &s.alternate {
+                body(alt, out);
+            }
+        }
+        Statement::ForStatement(s) => {
+            if let Some(ForStatementInit::VariableDeclaration(decl)) = &s.init {
+                var_decl(decl, out);
+            }
+            body(&s.body, out);
+        }
+        Statement::ForInStatement(s) => {
+            if let ForStatementLeft::VariableDeclaration(decl) = &s.left {
+                var_decl(decl, out);
+            }
+            body(&s.body, out);
+        }
+        Statement::ForOfStatement(s) => {
+            if let ForStatementLeft::VariableDeclaration(decl) = &s.left {
+                var_decl(decl, out);
+            }
+            body(&s.body, out);
+        }
+        Statement::WhileStatement(s) => body(&s.body, out),
+        Statement::DoWhileStatement(s) => body(&s.body, out),
+        Statement::WithStatement(s) => body(&s.body, out),
+        Statement::LabeledStatement(s) => body(&s.body, out),
+        Statement::TryStatement(s) => {
+            if let Some(param) = s.handler.as_ref().and_then(|h| h.param.as_ref()) {
+                collect_from_pattern(&param.pattern, out);
+            }
+        }
+        Statement::BlockStatement(_)
+        | Statement::FunctionDeclaration(_)
+        | Statement::ClassDeclaration(_)
+        | Statement::ExportNamedDeclaration(_)
+        | Statement::ExportFromDeclaration(_)
+        | Statement::ExportAllDeclaration(_)
+        | Statement::ExportDefaultDeclaration(_)
+        | Statement::TSTypeAliasDeclaration(_)
+        | Statement::TSInterfaceDeclaration(_)
+        | Statement::TSEnumDeclaration(_)
+        | Statement::TSExternalModuleDeclaration(_)
+        | Statement::TSNamespaceDeclaration(_)
+        | Statement::TSGlobalDeclaration(_)
+        | Statement::TSImportEqualsDeclaration(_)
+        | Statement::TSExportAssignment(_)
+        | Statement::TSNamespaceExportDeclaration(_)
+        | Statement::BreakStatement(_)
+        | Statement::ContinueStatement(_)
+        | Statement::DebuggerStatement(_)
+        | Statement::EmptyStatement(_)
+        | Statement::ExpressionStatement(_)
+        | Statement::ReturnStatement(_)
+        | Statement::SwitchStatement(_)
+        | Statement::ThrowStatement(_) => {}
     }
-    out
 }
 
 fn collect_binding_names(declarator: &VariableDeclarator<'_>, out: &mut HashSet<SmolStr>) {
@@ -484,7 +467,7 @@ mod tests {
     use super::*;
 
     fn ts(src: &str) -> String {
-        rewrite_with_touched_names(src, ScriptLang::Ts).0
+        rewrite(src, ScriptLang::Ts)
     }
 
     #[test]
@@ -505,6 +488,38 @@ mod tests {
     fn declaration_form_becomes_invalidate() {
         let src = "$: b = count * 2;";
         assert_eq!(ts(src), "let b = __svn_invalidate(() => (count * 2));");
+    }
+
+    #[test]
+    fn root_scope_bindings_count_as_declared() {
+        // Imports and declarations outside every block are assignments.
+        for pre in [
+            "import { x } from 'm';",
+            "import x from 'm';",
+            "import * as x from 'm';",
+            "if (c) var x = 1;",
+            "for (let x of y) f();",
+            "try {} catch (x) {}",
+        ] {
+            let out = ts(&format!("{pre}\n$: x = 1;"));
+            assert!(
+                out.ends_with("x = __svn_invalidate(() => (1));"),
+                "{pre}: {out}"
+            );
+        }
+        // Block, function and class scopes do not declare at the root.
+        for pre in [
+            "{ let x = 1; }",
+            "function x() {}",
+            "class x {}",
+            "function f() { let x; }",
+        ] {
+            let out = ts(&format!("{pre}\n$: x = 1;"));
+            assert!(
+                out.ends_with("let x = __svn_invalidate(() => (1));"),
+                "{pre}: {out}"
+            );
+        }
     }
 
     #[test]

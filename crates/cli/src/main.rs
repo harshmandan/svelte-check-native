@@ -291,20 +291,13 @@ fn main() -> ExitCode {
         }
     }
 
-    // Coding-agent CLIs set marker env vars on spawned subprocesses so child
-    // tools can adapt their output. Upstream svelte-check honors CLAUDECODE=1;
-    // we extend the same machine-output default to Gemini CLI (GEMINI_CLI=1)
-    // and OpenAI Codex CLI (CODEX_CI=1) since they consume tool output the
-    // same way.
+    // Coding agents set marker env vars on the tools they spawn; like
+    // upstream, `CLAUDECODE=1` makes machine output the default.
     //
     // The override only fires when the user didn't pass `--output`. An
     // explicit `--output machine-verbose` (e.g. from scripts/bench.mjs)
-    // must reach the formatter unchanged — pre-fix, the agent-env check
-    // silently downgraded verbose JSON to the line-oriented `machine`
-    // format, breaking any caller's JSON parser.
-    let in_agent_cli = ["CLAUDECODE", "GEMINI_CLI", "CODEX_CI"]
-        .iter()
-        .any(|k| std::env::var(k).as_deref() == Ok("1"));
+    // must reach the formatter unchanged.
+    let in_agent_cli = std::env::var("CLAUDECODE").as_deref() == Ok("1");
     const OUTPUT_FORMATS: [&str; 4] = ["human", "human-verbose", "machine", "machine-verbose"];
     let output = cli
         .output
@@ -333,6 +326,20 @@ fn main() -> ExitCode {
     // a workspace root passed in verbatim form and our lexical include-
     // glob matching (forward slashes in user patterns) doesn't survive
     // the prefix either — "0 files, 0 errors" on Windows traces back here.
+    if let Ok(cwd) = std::env::current_dir() {
+        // `path.resolve(workspace)`: absolute, `.`/`..` folded lexically.
+        let mut shown = PathBuf::new();
+        for part in cwd.join(&workspace_arg).components() {
+            match part {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    shown.pop();
+                }
+                other => shown.push(other),
+            }
+        }
+        output::set_shown_workspace(shown);
+    }
     let workspace = match dunce::canonicalize(&workspace_arg) {
         Ok(p) => p,
         Err(err) => {
@@ -541,9 +548,7 @@ fn main() -> ExitCode {
     let threshold = match cli.threshold.as_str() {
         "error" | "warning" => cli.threshold.as_str(),
         other => {
-            eprintln!(
-                "svelte-check-native: invalid threshold \"{other}\", using \"warning\" instead"
-            );
+            eprintln!("Invalid threshold \"{other}\", using \"warning\" instead");
             "warning"
         }
     };
@@ -611,17 +616,32 @@ pub(crate) enum ColorMode {
 }
 
 impl ColorMode {
+    /// picocolors' `isColorSupported`, which decides upstream's colours:
+    /// `--no-color` or `NO_COLOR` turn colour off, `--color` or
+    /// `FORCE_COLOR` turn it on, and otherwise it is on for Windows, a
+    /// terminal whose `TERM` isn't `dumb`, or CI.
     pub(crate) fn use_color(self) -> bool {
         match self {
             Self::Always => true,
             Self::Never => false,
-            Self::Auto => std::io::IsTerminal::is_terminal(&std::io::stdout()),
+            Self::Auto => {
+                env_set("FORCE_COLOR")
+                    || cfg!(windows)
+                    || (std::io::IsTerminal::is_terminal(&std::io::stdout())
+                        && std::env::var("TERM").as_deref() != Ok("dumb"))
+                    || env_set("CI")
+            }
         }
     }
 }
 
+/// A JavaScript `!!process.env[name]`: set and non-empty.
+fn env_set(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|v| !v.is_empty())
+}
+
 fn resolve_color_mode(force_on: bool, force_off: bool) -> ColorMode {
-    if force_off {
+    if force_off || env_set("NO_COLOR") {
         ColorMode::Never
     } else if force_on {
         ColorMode::Always
@@ -1117,18 +1137,17 @@ fn parse_compiler_warnings(
         if entry.is_empty() {
             continue;
         }
-        let Some((code, severity)) = entry.split_once(':') else {
-            eprintln!(
-                "svelte-check-native: malformed --compiler-warnings entry {entry:?} (expected `code:severity`); ignoring"
-            );
-            continue;
+        // `setting.split(':')`: the name is the text before the first
+        // colon and the value the text up to the next one, compared
+        // exactly; anything else is dropped silently.
+        let mut parts = entry.split(':');
+        let code = parts.next().unwrap_or_default();
+        let severity = match parts.next() {
+            Some("ignore") => CompilerWarningOverride::Ignore,
+            Some("error") => CompilerWarningOverride::Error,
+            _ => continue,
         };
-        let severity = match severity.trim() {
-            "ignore" => CompilerWarningOverride::Ignore,
-            "error" => CompilerWarningOverride::Error,
-            _ => continue, // upstream drops unrecognized values
-        };
-        out.insert(code.trim().to_string(), severity);
+        out.insert(code.to_string(), severity);
     }
     out
 }
@@ -1297,6 +1316,9 @@ fn kit_inject_col_shifts(injected: &svn_emit::kit_inject::Injected) -> Vec<(u32,
 struct ProjectRun {
     diagnostics: Vec<svn_typecheck::CheckDiagnostic>,
     entries: Vec<PathBuf>,
+    /// Every discovered `.svelte` file, then every Kit file, in
+    /// discovery order — the order upstream reports files in.
+    file_order: Vec<PathBuf>,
 }
 
 /// Merge one or more project runs and render the single
@@ -1322,6 +1344,13 @@ fn render_runs(
     let multi_run = runs.len() > 1;
     let mut seen: HashSet<(PathBuf, u32, u32, String)> = HashSet::new();
     let mut entry_set: HashSet<PathBuf> = HashSet::new();
+    let mut file_rank: std::collections::HashMap<PathBuf, usize> = std::collections::HashMap::new();
+    for run in &runs {
+        for path in &run.file_order {
+            let next = file_rank.len();
+            file_rank.entry(path.clone()).or_insert(next);
+        }
+    }
     for run in runs {
         for d in run.diagnostics {
             let key = (
@@ -1336,6 +1365,21 @@ fn render_runs(
         }
         entry_set.extend(run.entries);
     }
+    // Upstream reports file by file: discovered components and Kit
+    // files in discovery order, then any other file in the order tsgo
+    // first reported it; within a file, the Svelte compiler's
+    // diagnostics come before TypeScript's.
+    for d in &diagnostics {
+        let next = file_rank.len();
+        file_rank.entry(d.source_path.clone()).or_insert(next);
+    }
+    diagnostics.sort_by_key(|d| {
+        let is_ts = !matches!(
+            d.source,
+            svn_typecheck::DiagnosticSource::Svelte | svn_typecheck::DiagnosticSource::Css
+        );
+        (file_rank[&d.source_path], is_ts)
+    });
 
     // NOTE: `--threshold error` is a PRINT-TIME filter only — applied
     // per-diagnostic inside `print_diagnostics`. The counts and exit
@@ -1556,14 +1600,17 @@ fn run_typecheck(
             Ok(run) => runs.push(ProjectRun {
                 diagnostics: run.diagnostics,
                 entries: Vec::new(),
+                file_order: run.file_order,
             }),
             Err(code) => return code,
         }
     }
     if sources.svelte || sources.css {
+        let root_entries: Vec<PathBuf> = root_svelte.into_iter().chain(root_kit).collect();
         runs.push(ProjectRun {
             diagnostics: Vec::new(),
-            entries: root_svelte.into_iter().chain(root_kit).collect(),
+            file_order: root_entries.clone(),
+            entries: root_entries,
         });
     }
     render_runs(
@@ -2310,14 +2357,20 @@ fn check_project(
     // toward `<N> FILES` while a `svelte` or `css` source is enabled —
     // upstream's per-entry seeding early-returns for js-only selections
     // and the count collapses to diagnostic-bearing files.
-    let mut entries: Vec<PathBuf> = Vec::new();
-    if sources.svelte || sources.css {
-        entries.extend(svelte_files_all.iter().cloned());
-        entries.extend(kit_files_raw.iter().cloned());
-    }
+    let file_order: Vec<PathBuf> = svelte_files_all
+        .iter()
+        .chain(kit_files_raw.iter())
+        .cloned()
+        .collect();
+    let entries = if sources.svelte || sources.css {
+        file_order.clone()
+    } else {
+        Vec::new()
+    };
     Ok(ProjectRun {
         diagnostics,
         entries,
+        file_order,
     })
 }
 

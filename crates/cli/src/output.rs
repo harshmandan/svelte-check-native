@@ -68,6 +68,25 @@ fn relative_path(target: &Path, base: &Path) -> PathBuf {
     rel
 }
 
+static SHOWN_WORKSPACE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Record the workspace as the user named it. Upstream prints the path
+/// it was given (made absolute, `..` resolved) rather than resolving
+/// symlinks, while everything else here works on the canonical path.
+pub(crate) fn set_shown_workspace(path: PathBuf) {
+    let _ = SHOWN_WORKSPACE.set(path);
+}
+
+/// The workspace path to print: the user's spelling when it names
+/// `workspace`, else `workspace` itself (e.g. after the run moved to a
+/// referenced project).
+fn shown_workspace(workspace: &Path) -> &Path {
+    match SHOWN_WORKSPACE.get() {
+        Some(shown) if dunce::canonicalize(shown).ok().as_deref() == Some(workspace) => shown,
+        _ => workspace,
+    }
+}
+
 /// Whether a diagnostic clears the `--threshold` bar for *display*.
 /// `error` shows only errors; `warning` (the default) shows everything.
 /// Summary counts are computed independently of this — the threshold is
@@ -173,7 +192,7 @@ pub(crate) fn print_diagnostics(
             outln!(
                 out,
                 "Loading svelte-check in workspace: {}",
-                workspace.display()
+                shown_workspace(workspace).display()
             );
             outln!(out, "Getting Svelte diagnostics...");
             outln!(out);
@@ -205,8 +224,9 @@ fn print_machine(
     // JSON-escape the workspace path (mirrors upstream's
     // `START ${JSON.stringify(workspaceDir)}`) so a path containing a
     // quote or backslash doesn't break machine-output parsers.
-    let ws = serde_json::to_string(&workspace.display().to_string())
-        .unwrap_or_else(|_| format!("\"{}\"", workspace.display()));
+    let shown = shown_workspace(workspace);
+    let ws = serde_json::to_string(&shown.display().to_string())
+        .unwrap_or_else(|_| format!("\"{}\"", shown.display()));
     outln!(out, "{now_ms} START {ws}");
     for d in diagnostics {
         if !passes_threshold(d.severity, threshold) {
@@ -317,7 +337,7 @@ fn print_human(
     color: bool,
     threshold: &str,
 ) {
-    let workspace_display = workspace.display().to_string();
+    let workspace_display = shown_workspace(workspace).display().to_string();
     // Code-frame source memo. Diagnostics arrive grouped by file, so a
     // one-entry cache turns N-diagnostics-per-file into one read per
     // distinct file instead of one full read + line-split per
@@ -337,27 +357,22 @@ fn print_human(
             out,
             "{workspace_display}{}{}:{}:{}",
             std::path::MAIN_SEPARATOR,
-            paint(&filename, "32", color),
+            paint(&filename, GREEN, color),
             d.line,
             d.column,
         );
-        let label = match d.severity {
-            svn_typecheck::Severity::Error => paint("Error", "31", color),
-            svn_typecheck::Severity::Warning => paint("Warn", "33", color),
-            svn_typecheck::Severity::Hint => paint("Hint", "36", color),
-        };
-        // Span length for the code-frame caret. We have a real
-        // [start, end) so prefer that; fall back to 1 char when the
-        // span is empty (zero-width markers still get visualized).
-        let span = d.end_column.saturating_sub(d.column);
-        let span = if span == 0 { Some(1) } else { Some(span) };
-        // Upstream prints the diagnostic SOURCE (`(svelte)` / `(js)` /
-        // `(css)`), not the code — `${message} (${diagnostic.source})`.
+        // `(svelte)` / `(js)` / `(ts)` / `(css)`, as upstream prints it.
         let source = d.source.as_str();
+        let label = match d.severity {
+            svn_typecheck::Severity::Error => paint("Error", RED, color),
+            svn_typecheck::Severity::Warning => paint("Warn", YELLOW, color),
+            // Upstream prints a hint's location and nothing else.
+            svn_typecheck::Severity::Hint => {
+                outln!(out);
+                continue;
+            }
+        };
         if verbose {
-            // Code frame: try to read the source file (through the
-            // per-file memo above) and emit a short excerpt around the
-            // diagnostic line, with a caret pointer.
             if frame_source
                 .as_ref()
                 .is_none_or(|(p, _)| *p != d.source_path.as_path())
@@ -368,19 +383,15 @@ fn print_human(
                 ));
             }
             let frame = match &frame_source {
-                Some((_, Some(source))) => render_code_frame(source, d.line, d.column, span),
+                Some((_, Some(text))) => code_frame(text, d, color),
                 _ => String::new(),
             };
-            if frame.is_empty() {
-                outln!(out, "{label}: {} ({source})", d.message);
-            } else {
-                outln!(
-                    out,
-                    "{label}: {} ({source})\n{}",
-                    d.message,
-                    paint(&frame, "36", color),
-                );
-            }
+            outln!(
+                out,
+                "{label}: {} ({source})\n{}",
+                d.message,
+                paint(frame.trim_end(), CYAN, color),
+            );
         } else {
             outln!(out, "{label}: {} ({source})", d.message);
         }
@@ -410,79 +421,97 @@ fn print_human_summary(
     } else {
         String::new()
     };
+    // The trailing newline sits inside the colour codes upstream.
     let parts = format!(
-        "svelte-check-native found {} error{} and {} warning{}{in_files}",
+        "svelte-check-native found {} error{} and {} warning{}{in_files}\n",
         errors,
         if errors == 1 { "" } else { "s" },
         warnings,
         if warnings == 1 { "" } else { "s" },
     );
-    if errors > 0 {
-        outln!(out, "{}", paint(&parts, "31", color));
+    let tint = if errors > 0 {
+        RED
     } else if warnings > 0 {
-        outln!(out, "{}", paint(&parts, "33", color));
+        YELLOW
     } else {
-        outln!(out, "{}", paint(&parts, "32", color));
-    }
-}
-
-/// Wrap `text` in an ANSI color code if `color` is true. Cheap fallback to
-/// plain text when stdout isn't a terminal.
-fn paint(text: &str, code: &str, color: bool) -> String {
-    if color {
-        format!("\x1b[{code}m{text}\x1b[0m")
-    } else {
-        text.to_string()
-    }
-}
-
-/// Pure code-frame renderer. Takes the whole
-/// file's text plus a 1-based (line, column) and produces a 3-line frame
-/// with the target line highlighted by a `^^^` caret underneath.
-///
-/// Tab handling: the source line is printed verbatim (tabs preserved),
-/// and the caret line mirrors the source's whitespace through column-1
-/// — writing a tab where the source had a tab, space elsewhere. The
-/// terminal's own tab expansion then aligns both lines to the same
-/// visual column regardless of the configured tab width. Without this,
-/// tab-indented files render with the caret several visual columns
-/// left of the actual error site (filed by a user with a Svelte project
-/// whose indent was tabs: `bind:value={addAssemblyPrice}` fired TS2322
-/// but the caret appeared under `type="number"` on the line above).
-fn render_code_frame(source: &str, line: u32, column: u32, span_length: Option<u32>) -> String {
-    let lines: Vec<&str> = source.lines().collect();
-    let target_idx = match (line as usize).checked_sub(1) {
-        Some(i) if i < lines.len() => i,
-        _ => return String::new(),
+        GREEN
     };
-    let start = target_idx.saturating_sub(1);
-    let end = (target_idx + 2).min(lines.len());
-    let mut out = String::new();
-    let width = (end).to_string().len();
-    for (i, &content) in lines[start..end].iter().enumerate() {
-        let ln = start + i + 1;
-        let _ = std::fmt::Write::write_fmt(&mut out, format_args!("{ln:>width$} | {content}\n"));
-        if ln == line as usize {
-            // Gutter: "<ln> | " — `width` digits + space + pipe + space.
-            for _ in 0..(width + 3) {
-                out.push(' ');
-            }
-            // Preserve each whitespace kind from the source line up to
-            // the error column so terminal tab-expansion aligns caret
-            // and source identically. Non-whitespace chars before the
-            // column (rare for error sites but possible for multi-byte
-            // identifiers etc.) still get a single space — sufficient
-            // for caret counting since `column` is 1-based char index.
-            let column_idx = column.saturating_sub(1) as usize;
-            for ch in content.chars().take(column_idx) {
-                out.push(if ch == '\t' { '\t' } else { ' ' });
-            }
-            let underline = "^".repeat(span_length.unwrap_or(1).max(1) as usize);
-            out.push_str(&underline);
-            out.push('\n');
-        }
+    let _ = write!(out, "{}", paint(&parts, tint, color));
+}
+
+const RED: &str = "\x1b[31m";
+const GREEN: &str = "\x1b[32m";
+const YELLOW: &str = "\x1b[33m";
+const MAGENTA: &str = "\x1b[35m";
+const CYAN: &str = "\x1b[36m";
+/// picocolors closes every foreground colour with this code.
+const FG_CLOSE: &str = "\x1b[39m";
+
+/// picocolors' `formatter(open, close)`: wrap `text`, re-opening the
+/// colour wherever an inner colour closed, so nested colours survive.
+fn paint(text: &str, open: &str, color: bool) -> String {
+    if !color {
+        return text.to_string();
     }
+    let mut out = String::with_capacity(text.len() + 10);
+    out.push_str(open);
+    // The search starts `open.len()` bytes in, as picocolors' does.
+    match text
+        .get(open.len()..)
+        .and_then(|rest| rest.find(FG_CLOSE))
+        .map(|i| i + open.len())
+    {
+        Some(first) => {
+            out.push_str(&text[..first]);
+            out.push_str(&text[first..].replace(FG_CLOSE, open));
+        }
+        None => out.push_str(text),
+    }
+    out.push_str(FG_CLOSE);
     out
+}
+
+/// Upstream's `formatRelatedCode`: the line before the diagnostic, the
+/// diagnostic's lines with its range highlighted, and the line after,
+/// each with its line break. Positions follow `offsetAt`: a line past
+/// the end reads as empty, a column past the line end stops at the
+/// line break.
+fn code_frame(text: &str, d: &svn_typecheck::CheckDiagnostic, color: bool) -> String {
+    let line_starts: Vec<usize> = std::iter::once(0)
+        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    // `offsetAt({ line, character })` with 0-based line and a UTF-16
+    // character count.
+    let offset_at = |line: i64, character: usize| -> usize {
+        if line < 0 {
+            return 0;
+        }
+        let line = line as usize;
+        let Some(&start) = line_starts.get(line) else {
+            return text.len();
+        };
+        let next = line_starts.get(line + 1).copied().unwrap_or(text.len());
+        let mut units = 0;
+        for (i, ch) in text[start..next].char_indices() {
+            if units >= character {
+                return start + i;
+            }
+            units += ch.len_utf16();
+        }
+        next
+    };
+    let start_line = i64::from(d.line) - 1;
+    let end_line = i64::from(d.end_line) - 1;
+    let start = offset_at(start_line, d.column.saturating_sub(1) as usize);
+    let end = offset_at(end_line, d.end_column.saturating_sub(1) as usize).max(start);
+    let line_text = |line: i64| &text[offset_at(line, 0)..offset_at(line, usize::MAX)];
+    let mut frame = String::new();
+    frame.push_str(line_text(start_line - 1));
+    frame.push_str(&text[offset_at(start_line, 0)..start]);
+    frame.push_str(&paint(&text[start..end], MAGENTA, color));
+    frame.push_str(&text[end..offset_at(end_line, usize::MAX)]);
+    frame.push_str(line_text(end_line + 1));
+    frame
 }
 
 #[cfg(test)]
@@ -491,68 +520,56 @@ mod tests {
 
     use super::*;
 
-    /// Return the caret line from a rendered code frame — the line that
-    /// starts at the gutter padding and contains the `^` underline.
-    fn extract_caret_line(frame: &str) -> &str {
-        frame
-            .lines()
-            .find(|l| l.trim_start().starts_with('^'))
-            .unwrap_or("")
-    }
-
-    /// Return the target source line from a rendered frame — the one with
-    /// gutter `N | ` matching the requested line number.
-    fn extract_source_line(frame: &str, line: u32) -> &str {
-        let prefix = format!("{line} | ");
-        // Also tolerate right-aligned gutters (`"  3 | "`): strip leading
-        // spaces before comparing.
-        frame
-            .lines()
-            .find(|l| l.trim_start().starts_with(&prefix))
-            .unwrap_or("")
+    fn diag(
+        line: u32,
+        column: u32,
+        end_line: u32,
+        end_column: u32,
+    ) -> svn_typecheck::CheckDiagnostic {
+        svn_typecheck::CheckDiagnostic {
+            source_path: PathBuf::from("/w/A.svelte"),
+            line,
+            column,
+            end_line,
+            end_column,
+            severity: svn_typecheck::Severity::Error,
+            code: svn_typecheck::DiagnosticCode::Numeric(2322),
+            message: String::new(),
+            source: svn_typecheck::DiagnosticSource::Ts,
+            code_description_url: None,
+        }
     }
 
     #[test]
-    fn code_frame_caret_aligns_with_error_on_tab_indented_source() {
-        // Regression: a user reported that on Windows, a tab-indented
-        // file showed the `^^^` caret several visual columns left of
-        // the actual error site. Root cause was spaces-only caret
-        // padding while the source line rendered its tabs verbatim —
-        // terminal tab-expansion made the source wider than the caret
-        // counted for. Fix is to mirror the source's whitespace kind.
-        let src = "line one\n\t\t\tbind:value={x}\nline three\n";
-        // `bind:value={x}` starts at char column 4 (3 tabs + 1-based).
-        let frame = render_code_frame(src, 2, 4, Some(14));
-        let src_line = extract_source_line(&frame, 2);
-        let caret_line = extract_caret_line(&frame);
-
-        // After the gutter, the caret prefix must contain exactly the
-        // same TABS as the source line before the error column.
-        let src_prefix_tabs = src_line.chars().filter(|&c| c == '\t').count();
-        let caret_prefix_tabs = caret_line.chars().filter(|&c| c == '\t').count();
+    fn code_frame_is_the_surrounding_lines_verbatim() {
+        let src = "one\n\tlet x = 1;\nthree\nfour\n";
         assert_eq!(
-            src_prefix_tabs, caret_prefix_tabs,
-            "caret line must mirror source tabs so terminal expansion aligns them\n\
-             frame:\n{frame}",
-        );
-        assert!(
-            caret_line.contains("^^^^^^^^^^^^^^"),
-            "14-char underline missing; frame:\n{frame}",
+            code_frame(src, &diag(2, 6, 2, 7), false),
+            "one\n\tlet x = 1;\nthree\n"
         );
     }
 
     #[test]
-    fn code_frame_caret_uses_spaces_on_space_indented_source() {
-        // Sanity: space-indented source must still produce a
-        // space-only caret prefix (no tabs sneaking in).
-        let src = "line one\n    bind:value={x}\nline three\n";
-        let frame = render_code_frame(src, 2, 5, Some(14));
-        let caret_line = extract_caret_line(&frame);
-        assert!(
-            !caret_line.contains('\t'),
-            "caret line must not contain tabs when source is space-indented\nframe:\n{frame}",
+    fn code_frame_highlights_the_range_in_magenta() {
+        let src = "a\nbcd\n";
+        assert_eq!(
+            code_frame(src, &diag(2, 2, 2, 3), true),
+            "a\nb\x1b[35mc\x1b[39md\n"
         );
-        assert!(caret_line.contains("^^^^^^^^^^^^^^"), "frame:\n{frame}");
+    }
+
+    #[test]
+    fn code_frame_at_the_edges_reads_missing_lines_as_empty() {
+        let src = "only";
+        assert_eq!(code_frame(src, &diag(1, 1, 1, 5), false), "only");
+    }
+
+    #[test]
+    fn nested_colours_reopen_the_outer_colour() {
+        assert_eq!(
+            paint("x\x1b[35my\x1b[39mz", CYAN, true),
+            "\x1b[36mx\x1b[35my\x1b[36mz\x1b[39m"
+        );
     }
 
     #[test]
@@ -571,24 +588,6 @@ mod tests {
         assert_eq!(
             relative_path(target, base),
             Path::new("../shared/Lib.svelte"),
-        );
-    }
-
-    #[test]
-    fn code_frame_returns_empty_for_line_out_of_range() {
-        let src = "only one line\n";
-        assert_eq!(render_code_frame(src, 5, 1, Some(1)), "");
-    }
-
-    #[test]
-    fn code_frame_handles_first_line_with_no_preceding_line() {
-        // No `line - 1` context available; we still emit the target
-        // line + any trailing context.
-        let src = "first line\nsecond line\n";
-        let frame = render_code_frame(src, 1, 1, Some(5));
-        assert!(
-            frame.contains("first line"),
-            "target line missing from frame:\n{frame}",
         );
     }
 }

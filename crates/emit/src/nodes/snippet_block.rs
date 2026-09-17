@@ -61,6 +61,31 @@ const SNIPPET_RETURN_JSDOC: &str = "/** @returns {ReturnType<import('svelte').Sn
 /// `decl_depth`. Shared by both the `emit_template_body` hoist loop and `emit_snippet_block`, so
 /// the snippet shape is single-sourced and matches upstream svelte2tsx's
 /// `SnippetBlock.ts:117-140` (`const NAME = (params) => { … }`).
+/// Write `const NAME`, mapping NAME to the snippet's name in the
+/// source: svelte2tsx moves the name there, so a diagnostic on the
+/// declaration (a script variable of the same name, TS2451) is
+/// reported at `{#snippet NAME`.
+fn write_snippet_const_head(buf: &mut EmitBuffer, source: &str, s: &SnippetBlock, decl: &str) {
+    buf.push_str(decl);
+    buf.push_str("const ");
+    let head = source.get(s.range.start as usize..).unwrap_or("");
+    let name_start = head
+        .strip_prefix("{#snippet")
+        .map(|rest| s.range.start + 9 + (rest.len() - rest.trim_start().len()) as u32)
+        .filter(|&start| {
+            source
+                .get(start as usize..)
+                .is_some_and(|t| t.starts_with(s.name.as_str()))
+        });
+    match name_start {
+        Some(start) => buf.append_with_source(
+            s.name.as_str(),
+            svn_core::Range::new(start, start + s.name.len() as u32),
+        ),
+        None => buf.push_str(s.name.as_str()),
+    }
+}
+
 pub(crate) fn emit_snippet_const(
     buf: &mut EmitBuffer,
     source: &str,
@@ -100,18 +125,14 @@ pub(crate) fn emit_snippet_const(
         // their `await` inline (see `await_pending_catch_block.rs`)
         // and still have an async context inside the sync snippet
         // arrow.
+        write_snippet_const_head(buf, source, s, &decl);
         if is_ts {
             let _ = writeln!(
                 buf,
-                "{decl}const {} = {generics}(){SNIPPET_RETURN_TS} => {{ async () => {{",
-                s.name
+                " = {generics}(){SNIPPET_RETURN_TS} => {{ async () => {{"
             );
         } else {
-            let _ = writeln!(
-                buf,
-                "{decl}const {} = {SNIPPET_RETURN_JSDOC}() => {{ async () => {{",
-                s.name
-            );
+            let _ = writeln!(buf, " = {SNIPPET_RETURN_JSDOC}() => {{ async () => {{");
         }
         emit_template_body(buf, source, &s.body, body_depth, insts, action_counter);
         let _ = writeln!(buf, "{body_i}}};");
@@ -136,7 +157,8 @@ pub(crate) fn emit_snippet_const(
     let params_start = s.parameters_range.start + leading_ws;
     let params_range = svn_core::Range::new(params_start, params_start + params.len() as u32);
     let jsdoc = if is_ts { "" } else { SNIPPET_RETURN_JSDOC };
-    let _ = write!(buf, "{decl}const {} = {jsdoc}{generics}(", s.name);
+    write_snippet_const_head(buf, source, s, &decl);
+    let _ = write!(buf, " = {jsdoc}{generics}(");
     buf.append_with_source(params, params_range);
     // Inner `async () =>` wrapper: upstream's "inner async function
     // for potential #await blocks" (`SnippetBlock.ts:70`), giving

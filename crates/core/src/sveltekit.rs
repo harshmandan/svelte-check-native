@@ -14,7 +14,6 @@
 //! - The recognition rules (basenames, suffixes, hooks dir-form,
 //!   params filtering) for every kind of SvelteKit-aware file.
 //! - The `KitFilesSettings` struct that carries `kit.files` overrides.
-//! - The `normalise_path` helper for `kit.files` path strings.
 //! - The `user_source_needles` catalogue used by
 //!   `kit_types_mirror`'s chain rewriter.
 //!
@@ -366,19 +365,6 @@ fn lang_from_basename(basename: &str) -> Option<ScriptLang> {
     } else {
         None
     }
-}
-
-/// Normalise a `kit.files` path string into the canonical shape
-/// `classify`'s suffix matchers expect: drop a leading `./` and a
-/// trailing `/`. Without this, a user-written `./src/myparams` would
-/// never match an absolute walker path because the `./` prefix has
-/// no analogue in the normalised path.
-///
-/// Moves from `cli::svelte_config::normalise_kit_path` so the
-/// settings-population code in `cli/` and the suffix-match code here
-/// share a single normalisation rule.
-pub fn normalise_path(s: &str) -> String {
-    s.trim_start_matches("./").trim_end_matches('/').to_string()
 }
 
 /// Path-separator normalisation used internally. Backslash-bearing
@@ -759,28 +745,6 @@ mod tests {
             Cow::Borrowed(_) => {}
             Cow::Owned(_) => panic!("clean path should borrow"),
         }
-    }
-
-    // ----- normalise_path (kit.files string form) ---------------
-
-    #[test]
-    fn normalise_path_strips_dotslash_prefix() {
-        assert_eq!(normalise_path("./src/myparams"), "src/myparams");
-    }
-
-    #[test]
-    fn normalise_path_strips_trailing_slash() {
-        assert_eq!(normalise_path("src/myparams/"), "src/myparams");
-    }
-
-    #[test]
-    fn normalise_path_strips_both() {
-        assert_eq!(normalise_path("./src/myparams/"), "src/myparams");
-    }
-
-    #[test]
-    fn normalise_path_leaves_clean_input_alone() {
-        assert_eq!(normalise_path("src/myparams"), "src/myparams");
     }
 
     // ----- user_source_needles ----------------------------------

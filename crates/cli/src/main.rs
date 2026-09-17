@@ -498,14 +498,14 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
         let summary = svelte_config::analyse_vite_config(&resolved)
-            .unwrap_or_else(|| svelte_config::analyse(&resolved));
+            .unwrap_or_else(|| svelte_config::analyse_with_kit_files(&resolved));
         (Some(resolved), summary)
     } else if let Some((path, summary)) = svelte_config::find_vite_config(&workspace)
         .and_then(|p| svelte_config::analyse_vite_config(&p).map(|s| (p, s)))
     {
         (Some(path), summary)
     } else if let Some(path) = svelte_config::find_svelte_config(&workspace) {
-        let summary = svelte_config::analyse(&path);
+        let summary = svelte_config::analyse_with_kit_files(&path);
         (Some(path), summary)
     } else {
         (None, svelte_config::SvelteConfigSummary::default())
@@ -526,6 +526,7 @@ fn main() -> ExitCode {
             experimental_async: svelte_config_summary.experimental_async,
         },
         cli.config.is_some(),
+        analysed_config.is_some(),
     );
     let kit_files_settings = svelte_config_summary.kit_files_settings;
     // Set the project-wide preserve-attribute-case flag (svelte config
@@ -1591,7 +1592,7 @@ fn analyse_dir_svelte_config(dir: &Path) -> svelte_config::SvelteConfigSummary {
     {
         summary
     } else if let Some(path) = svelte_config::find_svelte_config(dir) {
-        svelte_config::analyse(&path)
+        svelte_config::analyse_with_kit_files(&path)
     } else {
         svelte_config::SvelteConfigSummary::default()
     }

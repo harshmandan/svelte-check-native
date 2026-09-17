@@ -1,0 +1,23 @@
+{
+    "errors": [
+        {
+            "file": "src/matchers/foo.ts",
+            "line": 0,
+            "column": 36,
+            "code": 2339
+        },
+        {
+            "file": "src/hooks.server.ts",
+            "line": 0,
+            "column": 31,
+            "code": 7031
+        },
+        {
+            "file": "src/hooks.server.ts",
+            "line": 0,
+            "column": 38,
+            "code": 7031
+        }
+    ],
+    "warnings": []
+}

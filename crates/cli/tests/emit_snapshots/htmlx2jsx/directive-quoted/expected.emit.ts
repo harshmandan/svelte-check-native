@@ -6,26 +6,27 @@ function $$render_e40e2c10() {
         /** @type {any} */ let __svn_action_attrs_0 = {};
         void __svn_action_attrs_0;
         { svelteHTML.createElement("h1", {
-            "on:click": undefined,
+            "on:click": (()=>console.log("click")),
         });
         }
         {
             const __svn_C_36 = __svn_ensure_component(Component);
             const __svn_inst_36 = new __svn_C_36({ target: __svn_any(), props: {} });
-            __svn_inst_36.$on("click", () => {});
+            __svn_inst_36.$on("click", (test));
         }
-            const __svn_action_0 = __svn_ensure_action(action(__svn_map_element_tag('img')));
+            const __svn_action_0 = __svn_ensure_action(action(__svn_map_element_tag('img'), (thing)));
         { svelteHTML.createElement("img", __svn_union(__svn_action_0), {});             void __svn_action_0;
         }
-        { svelteHTML.createElement("img", {});             __svn_ensure_transition(fade(__svn_map_element_tag('img')));
+        { svelteHTML.createElement("img", {});             __svn_ensure_transition(fade(__svn_map_element_tag('img'), (params)));
         }
-        { svelteHTML.createElement("img", {});             (thing);
+        { svelteHTML.createElement("img", {});             (classthing);
         }
-        { svelteHTML.createElement("img", {});             (thing(__svn_map_element_tag('img'), __svn_AnimationMove));
+        { svelteHTML.createElement("img", {});             (thing(__svn_map_element_tag('img'), __svn_AnimationMove, (params)));
         }
         { svelteHTML.createElement("img", {
             "bind:thing": (binding),
         });
+            /*svn:ignore_start*/void (() => { binding = __svn_any(null); });/*svn:ignore_end*/
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

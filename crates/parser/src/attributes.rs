@@ -482,6 +482,32 @@ fn parse_directive_value(
         }
         Some(b'"') | Some(b'\'') => {
             let quoted = parse_quoted_value(scanner, errors)?;
+            // The Svelte parser reads a quoted value that is exactly one
+            // `{…}` as that expression for every directive but `style:`
+            // (`1-parse/state/element.js`), so `on:click="{h}"` is
+            // `on:click={h}` everywhere downstream.
+            if kind != DirectiveKind::Style
+                && let [
+                    AttrValuePart::Expression {
+                        expression_range, ..
+                    },
+                ] = quoted.parts.as_slice()
+            {
+                let (expr_start, end) = (expression_range.start, expression_range.end);
+                if matches!(kind, DirectiveKind::Bind)
+                    && let Some(comma_pos) = bind_pair_split(scanner.source(), expr_start, end)
+                {
+                    return Some(DirectiveValue::BindPair {
+                        getter_range: Range::new(expr_start, comma_pos),
+                        setter_range: Range::new(comma_pos + 1, end),
+                        range: quoted.range,
+                    });
+                }
+                return Some(DirectiveValue::Expression {
+                    expression_range: *expression_range,
+                    range: quoted.range,
+                });
+            }
             Some(DirectiveValue::Quoted(quoted))
         }
         _ => {

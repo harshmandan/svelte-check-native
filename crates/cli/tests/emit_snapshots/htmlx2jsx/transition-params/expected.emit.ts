@@ -9,9 +9,9 @@ function $$render_e40e2c10() {
         }
         { svelteHTML.createElement("h1", {});             __svn_ensure_transition(blink(__svn_map_element_tag('h1'), ({y: 50, duration: 500})));
         }
-        { svelteHTML.createElement("h1", {});             __svn_ensure_transition(blink(__svn_map_element_tag('h1')));
+        { svelteHTML.createElement("h1", {});             __svn_ensure_transition(blink(__svn_map_element_tag('h1'), ({y: 50, duration: 500})));
         }
-        { svelteHTML.createElement("h1", {});             __svn_ensure_transition(blink(__svn_map_element_tag('h1')));
+        { svelteHTML.createElement("h1", {});             __svn_ensure_transition(blink(__svn_map_element_tag('h1'), ({y: 50, duration: 500})));
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

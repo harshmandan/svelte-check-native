@@ -13,11 +13,13 @@ function $$render_e40e2c10() {
             "type": `text`,
             "bind:value": (test),
         });
+            /*svn:ignore_start*/void (() => { test = __svn_any(null); });/*svn:ignore_end*/
         }
         { svelteHTML.createElement("input", {
             "type": `text`,
             "bind:value": (test),
         });
+            /*svn:ignore_start*/void (() => { test = __svn_any(null); });/*svn:ignore_end*/
         }
         {
             const __svn_C_7a = __svn_ensure_component(Input);
@@ -27,11 +29,15 @@ function $$render_e40e2c10() {
         }
         {
             const __svn_C_a1 = __svn_ensure_component(Input);
-            new __svn_C_a1({ target: __svn_any(), props: {"type": "text"} });
+            const __svn_inst_a1 = new __svn_C_a1({ target: __svn_any(), props: {"type": "text", "value": (test)} });
+            /*svn:ignore_start*/void (() => { test = __svn_any(null); });/*svn:ignore_end*/
+            __svn_inst_a1.$$bindings = 'value';
         }
         {
             const __svn_C_ca = __svn_ensure_component(Input);
-            new __svn_C_ca({ target: __svn_any(), props: {"type": "text"} });
+            const __svn_inst_ca = new __svn_C_ca({ target: __svn_any(), props: {"type": "text", "value": (test)} });
+            /*svn:ignore_start*/void (() => { test = __svn_any(null); });/*svn:ignore_end*/
+            __svn_inst_ca.$$bindings = 'value';
         }
         {
             const __svn_C_f3 = __svn_ensure_component(Input);

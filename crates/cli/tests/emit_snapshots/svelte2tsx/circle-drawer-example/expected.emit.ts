@@ -64,12 +64,12 @@ function $$render_e40e2c10() {
             "class": `controls`,
         });
             { svelteHTML.createElement("button", {
-                "on:click": undefined,
+                "on:click": (() => travel(-1)),
                 "disabled": (i === 0),
             });
             }
             { svelteHTML.createElement("button", {
-                "on:click": undefined,
+                "on:click": (() => travel(+1)),
                 "disabled": (i === undoStack.length -1),
             });
             }
@@ -82,8 +82,11 @@ function $$render_e40e2c10() {
                     "cx": (circle.cx),
                     "cy": (circle.cy),
                     "r": (circle.r),
-                    "on:click": undefined,
-                    "on:contextmenu": undefined,
+                    "on:click": (event => select(circle, event)),
+                    "on:contextmenu": (() => {
+				adjusting = !adjusting;
+				if (adjusting) selected = circle;
+			}),
                     "fill": (circle === selected ? '#ccc': 'white'),
                 });
                 }

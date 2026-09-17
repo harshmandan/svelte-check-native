@@ -5,7 +5,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         { svelteHTML.createElement("h1", {});             ("test"=="test");
         }
-        { svelteHTML.createElement("h1", {});             (active);
+        { svelteHTML.createElement("h1", {});             ("test"=="test");
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

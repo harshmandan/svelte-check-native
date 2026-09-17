@@ -12,10 +12,10 @@ function $$render_e40e2c10() {
             const __svn_action_0 = __svn_ensure_action(blink(__svn_map_element_tag('h1'), (500,2)));
         { svelteHTML.createElement("h1", __svn_union(__svn_action_0), {});             void __svn_action_0;
         }
-            const __svn_action_1 = __svn_ensure_action(blink(__svn_map_element_tag('h1')));
+            const __svn_action_1 = __svn_ensure_action(blink(__svn_map_element_tag('h1'), (500,2)));
         { svelteHTML.createElement("h1", __svn_union(__svn_action_1), {});             void __svn_action_1;
         }
-            const __svn_action_2 = __svn_ensure_action(blink(__svn_map_element_tag('h1')));
+            const __svn_action_2 = __svn_ensure_action(blink(__svn_map_element_tag('h1'), (500,2)));
         { svelteHTML.createElement("h1", __svn_union(__svn_action_2), {});             void __svn_action_2;
         }
     });

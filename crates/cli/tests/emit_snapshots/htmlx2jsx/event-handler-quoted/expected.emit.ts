@@ -4,11 +4,11 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("button", {
-            "on:click": undefined,
+            "on:click": ((e) => {}),
         });
         }
         { svelteHTML.createElement("button", {
-            "on:click": undefined,
+            "on:click": ((e) => {}),
         });
         }
     });

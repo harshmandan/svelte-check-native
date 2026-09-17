@@ -119,10 +119,10 @@ pub(crate) fn transform_attribute_case(name: &str, should_lowercase: bool) -> Co
     Cow::Owned(name.to_ascii_lowercase())
 }
 
-/// Drop attributes that the svelte-jsx typings reject at the strict
-/// interface but real Svelte allows: `aria-*`, CSS custom properties,
-/// the `this` directive on `<svelte:element>`, and the `slot=""`
-/// directive. Namespaced attributes (`xml:lang`, `xlink:href`) are NOT
+/// Attributes `Attribute.ts` does not pass through to the element's
+/// attribute object: `this` on `<svelte:element>`, and a text `slot`.
+/// CSS custom properties (`--x={…}`) are passed like any attribute and
+/// checked against the element's typings. Namespaced attributes (`xml:lang`, `xlink:href`) are NOT
 /// dropped — they flow through `createElement` with a quoted key so they
 /// reproduce upstream's diagnostics. React-style camelCase synonyms
 /// (`className`, `tabIndex`, …) are likewise NOT dropped — they're
@@ -136,15 +136,23 @@ pub(crate) fn transform_attribute_case(name: &str, should_lowercase: bool) -> Co
 /// attributes). Mirrors upstream svelte2tsx's `Attribute.ts:86-94`.
 /// `data-sveltekit-*` is the carve-out: those are typed in svelte-jsx
 /// directly so the wrap would add noise — pass them through unwrapped.
-pub(crate) fn should_skip(name: &str) -> bool {
-    if name.starts_with("--") {
-        return true;
-    }
+pub(crate) fn should_skip(
+    name: &str,
+    value: Option<&svn_parser::AttrValue>,
+    svelte_element: bool,
+) -> bool {
+    // `this` on `<svelte:element>` is its tag, not an attribute.
     if name == "this" {
-        return true;
+        return svelte_element;
     }
+    // A text `slot="…"` places the element in a component's named slot
+    // (`Attribute.ts` hands it to the slot handling); as a DOM attribute
+    // it would only be a valid string anyway.
     if name == "slot" {
-        return true;
+        return matches!(
+            value.map(|v| v.parts.as_slice()),
+            Some([svn_parser::AttrValuePart::Text { .. }])
+        );
     }
     false
 }
@@ -201,12 +209,43 @@ fn is_number_only_attr(name: &str) -> bool {
     )
 }
 
+/// JavaScript's `Number(text)`, `None` for `NaN`: surrounding
+/// whitespace ignored, empty text is 0, unsigned `0x`/`0o`/`0b`
+/// integers, and decimal literals or `Infinity` with an optional sign.
+fn js_number(text: &str) -> Option<f64> {
+    let t = text.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    if t.is_empty() {
+        return Some(0.0);
+    }
+    for (prefix, radix) in [("0x", 16), ("0o", 8), ("0b", 2)] {
+        if t.len() > 2 && t[..2].eq_ignore_ascii_case(prefix) {
+            return u64::from_str_radix(&t[2..], radix).ok().map(|n| n as f64);
+        }
+    }
+    let unsigned = t.strip_prefix(['+', '-']).unwrap_or(t);
+    if unsigned == "Infinity" {
+        return Some(if t.starts_with('-') {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        });
+    }
+    let decimal = unsigned
+        .bytes()
+        .all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-'));
+    if !decimal || !unsigned.bytes().any(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    t.parse::<f64>().ok()
+}
+
 pub(crate) fn emit_plain(
     buf: &mut EmitBuffer,
     source: &str,
     p: &svn_parser::PlainAttr,
     depth: usize,
     should_lowercase: bool,
+    parent_is_element: bool,
 ) {
     let indent = "    ".repeat(depth);
     let name = p.name.as_str();
@@ -240,35 +279,20 @@ pub(crate) fn emit_plain(
             let _ = writeln!(buf, ": {value}{line_suffix}");
         }
         Some(v) => {
-            // numberOnlyAttributes carve-out (single text part on a
-            // DOM element): emit bare number literal when the text
-            // parses as a number.
-            //
-            // Upstream's test is `!isNaN(Number(x))`, so reject
-            // only the textual values Rust's `parse::<f64>`
-            // accepts that JS `Number()` does not: the `nan` /
-            // `inf` spellings and the lowercase `infinity`
-            // form. JS does accept exactly-cased `Infinity`
-            // (and signed variants), which become bare global
-            // `Infinity` — keep those as numbers.
+            // numberOnlyAttributes: a plain number text on an element is
+            // written as the number itself (`!isNaN(value)`).
             if let [svn_parser::AttrValuePart::Text { range }] = v.parts.as_slice() {
                 let content = range.slice(source);
-                let t = content.trim();
-                let parses_as_number = t.parse::<f64>().is_ok()
-                    && !t.eq_ignore_ascii_case("nan")
-                    && !t.eq_ignore_ascii_case("inf")
-                    && (t == "Infinity"
-                        || t == "+Infinity"
-                        || t == "-Infinity"
-                        || !t.eq_ignore_ascii_case("infinity"));
-                if is_number_only_attr(&name.to_ascii_lowercase())
+                if parent_is_element
+                    && is_number_only_attr(&name.to_ascii_lowercase())
                     && !content.is_empty()
-                    && parses_as_number
+                    && !content.trim_end().ends_with('}')
+                    && js_number(content).is_some()
                 {
                     buf.push_str(&indent);
                     buf.push_str(key_prefix);
                     buf.append_with_source(&key_text, name_range);
-                    let _ = writeln!(buf, ": {}{line_suffix}", content.trim());
+                    let _ = writeln!(buf, ": {content}{line_suffix}");
                     return;
                 }
             }
@@ -430,7 +454,6 @@ pub(crate) fn emit_shorthand(
     source: &str,
     s: &svn_parser::ShorthandAttr,
     depth: usize,
-    should_lowercase: bool,
 ) {
     let indent = "    ".repeat(depth);
     let name = s.name.as_str();
@@ -442,19 +465,7 @@ pub(crate) fn emit_shorthand(
     let name_end = name_start + name.len() as u32;
     let name_range = svn_core::Range::new(name_start, name_end);
     buf.push_str(&indent);
-    // `{foo}` shorthand means `foo={foo}`. When the attribute name must
-    // lowercase for a DOM element, the key and the value variable
-    // diverge (`tabIndex` var → `tabindex` key), so emit the explicit
-    // `"tabindex": (tabIndex)` form instead of object shorthand.
-    match transform_attribute_case(name, should_lowercase) {
-        Cow::Owned(lowered) => {
-            let _ = write!(buf, "\"{lowered}\": (");
-            buf.append_with_source(name, name_range);
-            buf.push_str("),\n");
-        }
-        Cow::Borrowed(_) => {
-            buf.append_with_source(name, name_range);
-            buf.push_str(",\n");
-        }
-    }
+    // `{foo}` is written as-is, never case-folded (`Attribute.ts`).
+    buf.append_with_source(name, name_range);
+    buf.push_str(",\n");
 }

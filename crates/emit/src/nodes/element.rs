@@ -499,7 +499,7 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
     // tag contains `-`) or customized built-in (`<div is="x-y">`, an `is`
     // attribute whose value contains `-`). Mirrors upstream's
     // `Element.isCustomElement()` (Element.ts:263-275).
-    let is_custom_element = tag_name.contains('-')
+    let is_custom_element = (tag_literal && tag_name.contains('-'))
         || attributes.iter().any(|a| match a {
             svn_parser::Attribute::Plain(p) if p.name.as_str() == "is" => p
                 .value
@@ -514,21 +514,35 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
     // `namespace: 'foreign'` (svelte config) preserves ALL attribute
     // case — upstream `transformAttributeCase` is gated on `!preserveCase`
     // (htmlxtojsx_v2/index.ts:109). Mirror that here.
-    let should_lowercase = tag_literal && !is_custom_element && !crate::preserve_attribute_case();
+    // A `<svelte:window>`-style element is not an `Element` node to
+    // svelte2tsx, so its attribute names keep their case and its numeric
+    // attributes stay strings; `<svelte:element>` (passed with a
+    // non-literal tag) is one.
+    let svelte_element = !tag_literal;
+    let parent_is_element = !(tag_literal && tag_name.starts_with("svelte:"));
+    let should_lowercase =
+        parent_is_element && !is_custom_element && !crate::preserve_attribute_case();
     for attr in attributes {
         match attr {
             svn_parser::Attribute::Plain(p) => {
-                if should_skip(p.name.as_str()) {
+                if should_skip(p.name.as_str(), p.value.as_ref(), svelte_element) {
                     continue;
                 }
                 if !any {
                     buf.push_str("\n");
                     any = true;
                 }
-                emit_plain(buf, source, p, depth + 1, should_lowercase);
+                emit_plain(
+                    buf,
+                    source,
+                    p,
+                    depth + 1,
+                    should_lowercase,
+                    parent_is_element,
+                );
             }
             svn_parser::Attribute::Expression(e) => {
-                if should_skip(e.name.as_str()) {
+                if should_skip(e.name.as_str(), None, svelte_element) {
                     continue;
                 }
                 if !any {
@@ -538,14 +552,14 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                 emit_expression(buf, source, e, depth + 1, should_lowercase);
             }
             svn_parser::Attribute::Shorthand(s) => {
-                if should_skip(s.name.as_str()) {
+                if should_skip(s.name.as_str(), None, svelte_element) {
                     continue;
                 }
                 if !any {
                     buf.push_str("\n");
                     any = true;
                 }
-                emit_shorthand(buf, source, s, depth + 1, should_lowercase);
+                emit_shorthand(buf, source, s, depth + 1);
             }
             svn_parser::Attribute::Comment(c) => {
                 // Thread an in-tag JS comment verbatim onto its own line
@@ -954,37 +968,35 @@ pub(crate) fn emit_svelte_element_open(
             let _ = writeln!(buf, "{indent}{{");
         }
         Element => {
-            // Find `this={expr}` among attributes.
-            let this_expr = s.attributes.iter().find_map(|a| {
-                let svn_parser::Attribute::Expression(e) = a else {
-                    return None;
-                };
-                if e.name.as_str() != "this" {
-                    return None;
-                }
-                source
+            // The tag is `this`: an expression, a static string, or — when
+            // missing — the empty string, as `Element.ts` writes it.
+            let tag = s.attributes.iter().find_map(|a| match a {
+                svn_parser::Attribute::Expression(e) if e.name.as_str() == "this" => source
                     .get(e.expression_range.start as usize..e.expression_range.end as usize)
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
-                    .map(str::to_string)
+                    .map(|expr| format!("({expr})")),
+                svn_parser::Attribute::Plain(p) if p.name.as_str() == "this" => {
+                    let text = match p.value.as_ref().map(|v| v.parts.as_slice()) {
+                        Some([svn_parser::AttrValuePart::Text { range }]) => range.slice(source),
+                        _ => "",
+                    };
+                    Some(format!(
+                        "\"{}\"",
+                        text.replace('\\', "\\\\").replace('"', "\\\"")
+                    ))
+                }
+                _ => None,
             });
-            match this_expr {
-                Some(expr) => {
-                    emit_dom_element_open(
-                        buf,
-                        source,
-                        &format!("({expr})"),
-                        false,
-                        &s.attributes,
-                        depth,
-                        action_indices,
-                    );
-                }
-                None => {
-                    // Missing `this` — bare scope. Child emit still runs.
-                    let _ = writeln!(buf, "{indent}{{");
-                }
-            }
+            emit_dom_element_open(
+                buf,
+                source,
+                tag.as_deref().unwrap_or("\"\""),
+                false,
+                &s.attributes,
+                depth,
+                action_indices,
+            );
         }
         SelfRef | Component => {
             // Not a DOM element — bare scope for children. The full

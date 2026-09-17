@@ -27,7 +27,9 @@ function $$render_e40e2c10() {
             "data-sveltekit-replacestate": true,
         });
         }
-        {
+        { svelteHTML.createElement("a", {
+            "data-sveltekit-preload-data": true,
+        });
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

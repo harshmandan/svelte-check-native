@@ -7,7 +7,10 @@ function $$render_e40e2c10() {
             const __svn_C_0 = __svn_ensure_component(Hello);
             new __svn_C_0({ target: __svn_any(), props: {"|-wtf": "foo"} });
         }
-        { svelteHTML.createElement("div", {});         }
+        { svelteHTML.createElement("div", {
+            "--custom-prop": `foo`,
+        });
+        }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }

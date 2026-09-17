@@ -9,7 +9,7 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("div", {
             "classname": `x`,
             "tabindex": (1),
-            "contenteditable": (contentEditable),
+            contentEditable,
         });
         }
         { svelteHTML.createElement("svg", {

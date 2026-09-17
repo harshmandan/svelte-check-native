@@ -6,8 +6,7 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement((tag), {});         }
-        {
-        }
+        { svelteHTML.createElement("tag", {});         }
         { svelteHTML.createElement((tag ? 'a' : 'b'), {});         }
         { svelteHTML.createElement((tag), {});             (tag);
         }

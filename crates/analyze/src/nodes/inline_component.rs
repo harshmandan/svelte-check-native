@@ -492,15 +492,19 @@ pub(crate) fn collect_instantiation_inner(
 /// child fills a named slot of the component, so it is not part of its
 /// `children`.
 fn in_named_slot(attributes: &[Attribute], source: &str) -> bool {
+    // `a.value[0]?.data !== 'default'` (`SnippetBlock.ts`): only a text
+    // value reading exactly `default` keeps the child in the default
+    // slot; a bare, empty or `{…}` value does not.
     attributes.iter().any(|a| match a {
         Attribute::Plain(p) if p.name.as_str() == "slot" => match &p.value {
-            None => false,
-            Some(v) => match v.parts.as_slice() {
-                [svn_parser::AttrValuePart::Text { range }] => range.slice(source) != "default",
-                [] => false,
+            Some(v) => match v.parts.first() {
+                Some(svn_parser::AttrValuePart::Text { range }) => range.slice(source) != "default",
                 _ => true,
             },
+            None => true,
         },
+        Attribute::Expression(e) => e.name.as_str() == "slot",
+        Attribute::Shorthand(s) => s.name.as_str() == "slot",
         _ => false,
     })
 }

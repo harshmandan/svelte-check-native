@@ -4,7 +4,7 @@ async function $$render_e40e2c10() {
 
     /**@type { string | number }*/
            let name = "world",
-        world = '';
+        world = ''/*svn:ignore_start*/;name = __svn_any(name);/*svn:ignore_end*//*svn:ignore_start*/;world = __svn_any(world);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
     });

@@ -6,9 +6,9 @@ async function $$render_e40e2c10<A, B extends keyof A, C extends boolean>() {
 
                                                    
 
-           let a!: A;
-           let b!: B;
-           let c!: C;
+           let a: A/*svn:ignore_start*/;a = __svn_any(a);/*svn:ignore_end*/;
+           let b: B/*svn:ignore_start*/;b = __svn_any(b);/*svn:ignore_end*/;
+           let c: C/*svn:ignore_start*/;c = __svn_any(c);/*svn:ignore_end*/;
 
     const dispatch = createEventDispatcher<{a: A}>();
 

@@ -6,12 +6,12 @@ async function $$render_e40e2c10() {
                                             
 
     const selected = writable(false)/*svn:ignore_start*/;let $selected = __svn_store_get(selected);/*svn:ignore_end*/
-           let label: string = ''; label = undefined as any;
-           let checklist: boolean | undefined = undefined; checklist = undefined as any;
-    let _class: any = ''
+           let label: string = ''/*svn:ignore_start*/;label = __svn_any(label);/*svn:ignore_end*/
+           let checklist: boolean | undefined = undefined/*svn:ignore_start*/;checklist = __svn_any(checklist);/*svn:ignore_end*/
+    let _class: any = ''/*svn:ignore_start*/;_class = __svn_any(_class);/*svn:ignore_end*/
                               
 
-    ; _class = undefined as any;() => { $: if (checklist !== undefined) {
+    ;() => { $: if (checklist !== undefined) {
         selected.set(checklist)
     } };
     ;(async () => {

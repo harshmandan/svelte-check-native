@@ -24,14 +24,14 @@ async function $$render_e40e2c10() {
                          
      
 
-           let exported1!: string;
-           let exported2: string = ''; exported2 = undefined as any;
+           let exported1: string/*svn:ignore_start*/;exported1 = __svn_any(exported1);/*svn:ignore_end*/;
+           let exported2: string = ''/*svn:ignore_start*/;exported2 = __svn_any(exported2);/*svn:ignore_end*/;
 
-    let name1: string = "world"; name1 = undefined as any;
-    let name2!: string;
+    let name1: string = "world"/*svn:ignore_start*/;name1 = __svn_any(name1);/*svn:ignore_end*/
+    let name2: string/*svn:ignore_start*/;name2 = __svn_any(name2);/*svn:ignore_end*/;
 
-    let rename1: string = ''; rename1 = undefined as any;
-    let rename2!: string;
+    let rename1: string = ''/*svn:ignore_start*/;rename1 = __svn_any(rename1);/*svn:ignore_end*/;
+    let rename2: string/*svn:ignore_start*/;rename2 = __svn_any(rename2);/*svn:ignore_end*/;
 
     class Foo {}
     function bar() {}

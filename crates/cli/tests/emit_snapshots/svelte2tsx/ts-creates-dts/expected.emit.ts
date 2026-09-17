@@ -10,8 +10,8 @@ async function $$render_e40e2c10() {
                           
                                                  
 
-         let bar!: Bar;
-         let foobar = ''; foobar = undefined as any;
+         let bar: Bar/*svn:ignore_start*/;bar = __svn_any(bar);/*svn:ignore_end*/;
+         let foobar = '';
 
   const dispatch = createEventDispatcher<{swipe: string}>();
     ;(async () => {

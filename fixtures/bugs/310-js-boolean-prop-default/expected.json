@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "A JavaScript component with `export let outline = false` (untyped, or typed `boolean` via JSDoc) reported TS2322 `Type true is not assignable to type false` at every consumer passing the prop, in JS and TS consumers alike: the props type read `typeof outline` after TypeScript had narrowed the binding to its `false` initializer. Upstream appends `;outline = __sveltets_2_any(outline);` after every exported `let` that has no initializer, a declared type, or an untyped boolean initializer, which resets the narrowing; that mechanism is now ported for both TS and JS overlays, replacing three separate rewrites that never covered the untyped-boolean case."
+}

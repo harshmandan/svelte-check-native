@@ -5,23 +5,23 @@ async function $$render_e40e2c10() {
     /**
      * DOCS!
      */
-           let a = /** @type {any} */ (null);
+           let a/*svn:ignore_start*/;a = __svn_any(a);/*svn:ignore_end*/;
     /**
      * not this
      */
     /**
      * MORE DOCS!
      */
-           let b = /** @type {any} */ (null);
-           let c = /** @type {any} */ (null);
+           let b/*svn:ignore_start*/;b = __svn_any(b);/*svn:ignore_end*/;
+           let c/*svn:ignore_start*/;c = __svn_any(c);/*svn:ignore_end*/;
     /**
      * d
      */
-           let d = /** @type {any} */ (null),
+           let d,
     /**
      * e
      */
-     e = /** @type {any} */ (null);
+     e/*svn:ignore_start*/;d = __svn_any(d);/*svn:ignore_end*//*svn:ignore_start*/;e = __svn_any(e);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
     });

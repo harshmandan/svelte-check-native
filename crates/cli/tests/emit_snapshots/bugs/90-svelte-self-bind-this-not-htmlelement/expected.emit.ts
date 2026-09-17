@@ -12,7 +12,7 @@ async function $$render_e40e2c10() {
     // `<svelte:self bind:this={…}>` site. The full
     // component-instantiation port (#1b) is deferred — for now
     // we just stop emitting the wrong DOM-element check.
-    let me: any = null; me = undefined as any;
+    let me: any = null
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("svelte:options", {

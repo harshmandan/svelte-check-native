@@ -7,7 +7,7 @@ async function $$render_e40e2c10() {
   // (the old slot→value direction silently accepted this). A nullable
   // target is fine — the slot itself is `boolean | null | undefined`.
   let widened: boolean | string = false;
-  let nullableOk: boolean | null = null; nullableOk = undefined as any;
+  let nullableOk: boolean | null = null;
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("input", {

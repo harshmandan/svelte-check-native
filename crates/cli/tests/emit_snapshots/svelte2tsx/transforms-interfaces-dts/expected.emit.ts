@@ -16,7 +16,7 @@
 async function $$render_e40e2c10() {
 
                                      
-           let foo!: Foo;
+           let foo: Foo/*svn:ignore_start*/;foo = __svn_any(foo);/*svn:ignore_end*/;
                     
                 
      
@@ -29,7 +29,7 @@ async function $$render_e40e2c10() {
                                                           
                  
      
-           let bar!: Bar3;
+           let bar: Bar3/*svn:ignore_start*/;bar = __svn_any(bar);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
     });

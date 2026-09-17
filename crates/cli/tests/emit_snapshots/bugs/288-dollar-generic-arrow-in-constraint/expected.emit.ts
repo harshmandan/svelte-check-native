@@ -3,7 +3,7 @@
 async function $$render_e40e2c10/*svn:ignore_start*/<T extends Record<string, () => void>>/*svn:ignore_end*/() {
 
                                                    
-           let x!: T;
+           let x: T/*svn:ignore_start*/;x = __svn_any(x);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
         { svelteHTML.createElement("p", {});             (Object.keys(x).length);

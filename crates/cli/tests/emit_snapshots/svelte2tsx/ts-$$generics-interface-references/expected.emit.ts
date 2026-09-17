@@ -15,8 +15,8 @@ async function $$render_e40e2c10/*svn:ignore_start*/<A, B extends ReferencedByGe
                        
                                             
 
-           let a!: ReferencesGeneric;
-           let b!: B;
+           let a: ReferencesGeneric/*svn:ignore_start*/;a = __svn_any(a);/*svn:ignore_end*/;
+           let b: B/*svn:ignore_start*/;b = __svn_any(b);/*svn:ignore_end*/;
     ;(async () => {
         // template type-check body (incremental)
     });

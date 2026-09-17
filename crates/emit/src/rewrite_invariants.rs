@@ -35,8 +35,8 @@ use svn_parser::ScriptLang;
 use crate::props_emit::inject_component_props_annotation;
 use crate::svelte2tsx_nodes::component_events::rewrite_dispatcher_typing;
 use crate::svelte4::compat::{
-    denarrow_typed_exported_props_in_place, rewrite_definite_assignment_in_place,
-    widen_untyped_exported_props_in_place, widen_untyped_exports_jsdoc_in_place,
+    assert_exported_prop_types_in_place, rewrite_definite_assignment_in_place,
+    widen_untyped_exports_jsdoc_in_place,
 };
 use crate::svelte4::reactive::rewrite_with_touched_names;
 use crate::util::blank_dollar_generic_decls;
@@ -169,19 +169,6 @@ fn definite_assignment_edits_reconstruct() {
 }
 
 #[test]
-fn widen_untyped_exports_edits_reconstruct() {
-    let input = "let foo;\nlet bar;\n";
-    let mut out = input.to_string();
-    let edits = widen_untyped_exported_props_in_place(
-        &mut out,
-        &(0..input.len()),
-        &[SmolStr::from("foo"), SmolStr::from("bar")],
-        None,
-    );
-    assert_edits_reconstruct(input, &out, &edits);
-}
-
-#[test]
 fn widen_untyped_exports_jsdoc_edits_reconstruct() {
     let input = "let foo;\nlet bar;\n";
     let mut out = input.to_string();
@@ -195,13 +182,19 @@ fn widen_untyped_exports_jsdoc_edits_reconstruct() {
 }
 
 #[test]
-fn denarrow_typed_exports_edits_reconstruct() {
-    let input = "let size: string = 'medium';\nsize;\n";
+fn prop_type_assertion_edits_reconstruct() {
+    let input = "let foo;\nlet size: string = 'medium';\nlet on = false;\n";
     let mut out = input.to_string();
-    let edits = denarrow_typed_exported_props_in_place(
+    let edits = assert_exported_prop_types_in_place(
         &mut out,
         &(0..input.len()),
-        &[SmolStr::from("size")],
+        &[
+            SmolStr::from("foo"),
+            SmolStr::from("size"),
+            SmolStr::from("on"),
+        ],
+        None,
+        true,
     );
     assert_edits_reconstruct(input, &out, &edits);
 }

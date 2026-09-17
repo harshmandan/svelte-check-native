@@ -1,0 +1,89 @@
+{
+    "errors": [
+        {
+            "file": "src/s2-09/A.svelte",
+            "line": 0,
+            "column": 22,
+            "code": 6133
+        },
+        {
+            "file": "src/s2-09/A.svelte",
+            "line": 1,
+            "column": 22,
+            "code": 2740
+        },
+        {
+            "file": "src/s2-35/A.svelte",
+            "line": 0,
+            "column": 58,
+            "code": 6133
+        },
+        {
+            "file": "src/s2-35/A.svelte",
+            "line": 1,
+            "column": 47,
+            "code": 2345
+        },
+        {
+            "file": "src/s2-10/D.svelte",
+            "line": 1,
+            "column": 19,
+            "code": 2322
+        },
+        {
+            "file": "src/s2-10/D.svelte",
+            "line": 1,
+            "column": 21,
+            "code": 2345
+        },
+        {
+            "file": "src/s2-10/D.svelte",
+            "line": 1,
+            "column": 31,
+            "code": 6133
+        },
+        {
+            "file": "src/s2-10/B.svelte",
+            "line": 1,
+            "column": 20,
+            "code": 2322
+        },
+        {
+            "file": "src/s2-10/B.svelte",
+            "line": 1,
+            "column": 37,
+            "code": 2345
+        },
+        {
+            "file": "src/s2-10/B.svelte",
+            "line": 1,
+            "column": 47,
+            "code": 6133
+        },
+        {
+            "file": "src/s2-10/C.svelte",
+            "line": 1,
+            "column": 20,
+            "code": 2322
+        },
+        {
+            "file": "src/s2-10/C.svelte",
+            "line": 1,
+            "column": 39,
+            "code": 2345
+        },
+        {
+            "file": "src/s2-10/C.svelte",
+            "line": 1,
+            "column": 49,
+            "code": 6133
+        },
+        {
+            "file": "src/s2-27/A.svelte",
+            "line": 1,
+            "column": 24,
+            "code": 2353
+        }
+    ],
+    "warnings": []
+}

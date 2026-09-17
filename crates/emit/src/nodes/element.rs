@@ -342,7 +342,15 @@ pub(crate) fn emit_svelte_element_node(
         }
         emit_dom_directive_checks(buf, source, "", &s.attributes, inner_depth);
     }
-    emit_element_bind_checks_inline(buf, source, "", &s.attributes, inner_depth);
+    // `bind:this` assigns the element on `<svelte:body>` (as `body`) and
+    // `<svelte:element>`; elsewhere it is an attribute (`Binding.ts`'s
+    // `supportsBindThis`), which the open tag already wrote.
+    let bind_tag = match s.kind {
+        SvelteElementKind::Element => String::new(),
+        SvelteElementKind::Body => "body".to_string(),
+        other => format!("svelte:{}", other.as_str()),
+    };
+    emit_element_bind_checks_inline(buf, source, &bind_tag, &s.attributes, inner_depth);
     if dom_emit {
         emit_dom_action_void_refs(buf, &action_indices, inner_depth);
     } else {
@@ -621,7 +629,11 @@ pub(crate) fn emit_dom_element_open_with_snippet_props(
                 // the element's attribute type doesn't declare fires
                 // TS2353 there, and the expression is read.
                 if d.kind == svn_parser::DirectiveKind::Bind
-                    && crate::nodes::binding::is_untyped_binding(d.name.as_str())
+                    && (crate::nodes::binding::is_untyped_binding(d.name.as_str())
+                        || (d.name.as_str() == "this"
+                            && tag_literal
+                            && tag_name.starts_with("svelte:")
+                            && tag_name != "svelte:body"))
                     && let Some(parts) = dom_bind_attribute_parts(
                         source,
                         d,
@@ -750,8 +762,9 @@ fn dom_bind_attribute_parts<'a>(
             let eq = head.rfind('=')?;
             return Some(DomBindAttribute {
                 key_text: &head[..eq],
+                // A get/set key maps where the previous attribute ended.
                 key_anchor: match prev_end {
-                    Some(end) => end.saturating_sub(1),
+                    Some(end) => end,
                     None => d.range.start + eq as u32,
                 },
                 value: BindValue::GetSet {

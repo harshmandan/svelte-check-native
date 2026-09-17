@@ -251,6 +251,7 @@ pub(crate) fn emit_component_call(
         .any(|s| s.name.as_str() != "children");
     let hoist_instance = !inst.on_events.is_empty()
         || inst.bind_this_target.is_some()
+        || inst.bind_this_setter.is_some()
         || needs_inst_for_let
         || has_named_snippet
         || !inst.bind_directives.is_empty();
@@ -605,6 +606,20 @@ fn emit_bind_this_assignment(
         buf.append_with_source(expr, *range);
         buf.push_str(" = ");
         buf.push_str(inst_local);
+        buf.push_str(";\n");
+    }
+    if let Some(range) = &inst.bind_this_setter
+        && let Some(setter) = source.get(range.start as usize..range.end as usize)
+    {
+        buf.push_str(inner);
+        buf.push('(');
+        buf.append_with_source(setter, *range);
+        // Upstream writes this over the character after the setter, so
+        // the call maps there.
+        buf.append_with_source(
+            &format!(")({inst_local})"),
+            svn_core::Range::new(range.end, range.end + 1),
+        );
         buf.push_str(";\n");
     }
 }

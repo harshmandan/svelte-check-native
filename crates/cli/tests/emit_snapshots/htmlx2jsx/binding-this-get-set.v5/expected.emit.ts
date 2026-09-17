@@ -17,11 +17,13 @@ function $$render_e40e2c10() {
         }
         {
             const __svn_C_54 = __svn_ensure_component(Input);
-            new __svn_C_54({ target: __svn_any(), props: {} });
+            const __svn_inst_54 = new __svn_C_54({ target: __svn_any(), props: {} });
+            ( set)(__svn_inst_54);
         }
         {
             const __svn_C_7a = __svn_ensure_component(Input);
-            new __svn_C_7a({ target: __svn_any(), props: {} });
+            const __svn_inst_7a = new __svn_C_7a({ target: __svn_any(), props: {} });
+            ( new_v => v = new_v)(__svn_inst_7a);
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

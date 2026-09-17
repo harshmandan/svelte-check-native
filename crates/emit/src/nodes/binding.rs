@@ -137,6 +137,11 @@ pub(crate) fn emit_element_bind_checks_inline(
         // `None` for a binding with no known target type (`bind:innerWidth`
         // on `<svelte:window>`, `bind:value` on an element that has none):
         // upstream still emits its widening reassignment for those.
+        // `bind:this` on an element that doesn't support it is an
+        // attribute, written with the element's other attributes.
+        if name == "this" && tag_name.starts_with("svelte:") {
+            continue;
+        }
         let ty: Option<String> = if name == "this" {
             Some(element_type_annotation(tag_name))
         } else {
@@ -270,7 +275,11 @@ pub(crate) fn emit_element_bind_checks_inline(
             buf.push_str(";\n");
             continue;
         }
-        if emit_is_ts() {
+        if name == "this" && !tag_name.is_empty() {
+            // `el = $$_div` upstream: the element `createElement` returns,
+            // an `SVGPathElement` for `<path>`, `any` for a custom tag.
+            let _ = write!(buf, " = svelteHTML.createElement(\"{tag_name}\", {{}})");
+        } else if emit_is_ts() {
             if let Some((tag_expr, tag_range)) = &svelte_element_this_expr {
                 buf.push_str(" = svelteHTML.createElement(");
                 buf.append_with_source(tag_expr, *tag_range);

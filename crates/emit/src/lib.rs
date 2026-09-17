@@ -2449,7 +2449,7 @@ mod tests {
         let out = emit_str(src);
         assert!(out.contains("let inputEl: HTMLDivElement;"), "{out}");
         assert!(
-            out.contains("inputEl = /*svn:ignore_start*/null as HTMLElementTagNameMap"),
+            out.contains("inputEl = svelteHTML.createElement(\"div\", {})"),
             "{out}"
         );
     }

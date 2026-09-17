@@ -337,6 +337,9 @@ pub struct ComponentInstantiation {
     /// path; the assignment emitted here is the only type-check
     /// flow for them.
     pub bind_this_target: Option<Range>,
+    /// Source range of the setter in `<Comp bind:this={get, set}>`;
+    /// emit calls it with the instance.
+    pub bind_this_setter: Option<Range>,
     /// SVELTE-4-COMPAT: `on:event={handler}` directives on this
     /// component. Emit binds each via `$inst.$on("event", handler)`
     /// on the hoisted instance local, mirroring upstream svelte2tsx's

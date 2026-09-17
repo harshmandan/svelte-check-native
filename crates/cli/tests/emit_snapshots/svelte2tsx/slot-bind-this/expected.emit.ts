@@ -7,7 +7,7 @@ function $$render_e40e2c10() {
         {
             __svn_create_slot("s", {  });
         }
-        s = /*svn:ignore_start*//** @type {HTMLElementTagNameMap['slot']} */ (null)/*svn:ignore_end*/;
+        s = svelteHTML.createElement("slot", {});
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 's': {  } }, bindings: /** @type {string} */ (''), exports: {} };
 }

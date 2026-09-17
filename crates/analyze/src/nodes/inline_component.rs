@@ -121,6 +121,7 @@ pub(crate) fn collect_instantiation_inner(
     let mut props: Vec<PropShape> = Vec::with_capacity(attributes.len());
     let mut on_events: Vec<OnEventDirective> = Vec::new();
     let mut bind_this_target: Option<Range> = None;
+    let mut bind_this_setter: Option<Range> = None;
     let mut component_bind_widen_targets: Vec<SmolStr> = Vec::new();
     let mut bind_directives: Vec<BindDirective> = Vec::new();
     // Implicit `children`: upstream `SnippetBlock.ts`
@@ -328,6 +329,13 @@ pub(crate) fn collect_instantiation_inner(
                         // applies to simple `let` declarations.
                         bind_this_target = Some(*expression_range);
                     }
+                    // `bind:this={get, set}`: upstream calls the setter
+                    // with the instance (`Binding.ts`).
+                    if let Some(svn_parser::DirectiveValue::BindPair { setter_range, .. }) =
+                        &d.value
+                    {
+                        bind_this_setter = Some(*setter_range);
+                    }
                     continue;
                 }
                 if d.kind == svn_parser::DirectiveKind::Bind
@@ -482,6 +490,7 @@ pub(crate) fn collect_instantiation_inner(
             has_implicit_children,
             on_events,
             bind_this_target,
+            bind_this_setter,
             component_bind_widen_targets,
             bind_directives,
             node_start: range_start,

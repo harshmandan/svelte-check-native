@@ -3,7 +3,7 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("svelte:body", {});             element = /*svn:ignore_start*//** @type {HTMLElement} */ (null)/*svn:ignore_end*/;
+        { svelteHTML.createElement("svelte:body", {});             element = svelteHTML.createElement("body", {});
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

@@ -10,13 +10,11 @@ function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void _foo;
     const _foo2 = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { async () => {
         ($store2);
         };
         return __svn_any(0);
     };
-    void _foo2;
 
                                   
     ;(async () => {

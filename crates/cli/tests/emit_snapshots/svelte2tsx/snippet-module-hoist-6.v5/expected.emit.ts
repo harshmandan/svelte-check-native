@@ -5,7 +5,6 @@ const _foo = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { asyn
     };
     return __svn_any(0);
 };
-void _foo;
 
     export const foo = _foo;
 function $$render_e40e2c10() {

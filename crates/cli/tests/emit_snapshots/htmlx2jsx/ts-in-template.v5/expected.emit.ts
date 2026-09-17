@@ -5,37 +5,30 @@ function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void foo;
     const foo2 = (bar : string): ReturnType<import('svelte').Snippet> => { async () => {
         };
         return __svn_any(0);
     };
-    void foo2;
     const foo3 = (bar    : string | number): ReturnType<import('svelte').Snippet> => { async () => {
         };
         return __svn_any(0);
     };
-    void foo3;
     const foo4 = (bar    : string | number, baz     : (str: string)=>void): ReturnType<import('svelte').Snippet> => { async () => {
         };
         return __svn_any(0);
     };
-    void foo4;
     const foo5 = (bar: {baz: string}): ReturnType<import('svelte').Snippet> => { async () => {
         };
         return __svn_any(0);
     };
-    void foo5;
     const foo6 = (bar?: string): ReturnType<import('svelte').Snippet> => { async () => {
         };
         return __svn_any(0);
     };
-    void foo6;
     const foo7 = (bar, baz = ''): ReturnType<import('svelte').Snippet> => { async () => {
         };
         return __svn_any(0);
     };
-    void foo7;
 
     ;(async () => {
         // template type-check body (incremental)

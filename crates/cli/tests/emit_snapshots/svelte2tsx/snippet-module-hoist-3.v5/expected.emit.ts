@@ -6,14 +6,12 @@ const hoistable1 = (): ReturnType<import('svelte').Snippet> => { async () => {
     };
     return __svn_any(0);
 };
-void hoistable1;
 const hoistable2 = (): ReturnType<import('svelte').Snippet> => { async () => {
     { svelteHTML.createElement("div", {});         (foo);
     }
     };
     return __svn_any(0);
 };
-void hoistable2;
 
     let foo = true;
 function $$render_e40e2c10() {

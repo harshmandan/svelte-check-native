@@ -6,7 +6,6 @@ function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void bar;
 
     let foo = true;
     bar;

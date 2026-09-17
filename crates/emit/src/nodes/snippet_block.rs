@@ -36,8 +36,8 @@ pub(crate) fn emit_snippet_block(
     insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
     action_counter: &mut usize,
 ) {
-    // Emit the same consolidated `const NAME = (params) => { … };
-    // void NAME;` declaration the hoist path in `emit_template_body`
+    // Emit the same consolidated `const NAME = (params) => { … };`
+    // declaration the hoist path in `emit_template_body`
     // produces. The old shape here was a bare `{ void ((params) => {…}) }`
     // wrapper that never DECLARED `NAME`, so a sibling `{@render NAME()}`
     // fired a spurious TS2304. This path is reached when a snippet is
@@ -57,7 +57,7 @@ const SNIPPET_RETURN_TS: &str = ": ReturnType<import('svelte').Snippet>";
 const SNIPPET_RETURN_JSDOC: &str = "/** @returns {ReturnType<import('svelte').Snippet>} */ ";
 
 /// Emit one `const NAME = (params): ReturnType<Snippet> => { <body>
-/// … return __svn_any(0); }; void NAME;` snippet declaration at
+/// … return __svn_any(0); };` snippet declaration at
 /// `decl_depth`. Shared by both the `emit_template_body` hoist loop and `emit_snippet_block`, so
 /// the snippet shape is single-sourced and matches upstream svelte2tsx's
 /// `SnippetBlock.ts:117-140` (`const NAME = (params) => { … }`).
@@ -117,7 +117,7 @@ pub(crate) fn emit_snippet_const(
     };
     // Empty-params snippet: skip the `(params)` site entirely so an
     // unused-arrow-param lint doesn't fire on a synthetic empty
-    // signature, AND no identifier needs to be `void`'d.
+    // signature.
     if params.is_empty() {
         // The body sits inside an inner `async () =>` wrapper —
         // upstream's "inner async function for potential #await
@@ -138,7 +138,6 @@ pub(crate) fn emit_snippet_const(
         let _ = writeln!(buf, "{body_i}}};");
         let _ = writeln!(buf, "{body_i}return __svn_any(0);");
         let _ = writeln!(buf, "{decl}}};");
-        let _ = writeln!(buf, "{decl}void {};", s.name);
         return;
     }
     // The arrow params are the binding introductions — their type
@@ -174,5 +173,4 @@ pub(crate) fn emit_snippet_const(
     let _ = writeln!(buf, "{body_i}}};");
     let _ = writeln!(buf, "{body_i}return __svn_any(0);");
     let _ = writeln!(buf, "{decl}}};");
-    let _ = writeln!(buf, "{decl}void {};", s.name);
 }

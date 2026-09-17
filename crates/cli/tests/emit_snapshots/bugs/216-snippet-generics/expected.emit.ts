@@ -7,14 +7,12 @@ function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void row;
     const keyed = <T extends { id: number }>(item: T): ReturnType<import('svelte').Snippet> => { async () => {
         { svelteHTML.createElement("li", {});             (item.id);
         }
         };
         return __svn_any(0);
     };
-    void keyed;
 
     const nums = [1, 2, 3];
     const names = ['a', 'b'];

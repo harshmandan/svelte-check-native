@@ -7,7 +7,6 @@ async function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void x;
 
     let { prop = true } = $props();
     const foo = await fetch('/foo');

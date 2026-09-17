@@ -7,7 +7,6 @@ function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void row;
     const pair = (a = 1 < 2, b): ReturnType<import('svelte').Snippet> => { async () => {
         { svelteHTML.createElement("p", {});             (a);
             (b);
@@ -15,7 +14,6 @@ function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void pair;
 
     const greeting: string = 'hi';
     ;(async () => {

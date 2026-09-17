@@ -8,7 +8,6 @@ async function $$render_e40e2c10<T>() {
         };
         return __svn_any(0);
     };
-    void x;
 
     let { prop }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     const foo = await fetch('/foo');

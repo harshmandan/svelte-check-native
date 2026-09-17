@@ -113,7 +113,6 @@ function $$render_2297bbcd() {
         };
         return __svn_any(0);
     };
-    void s;
 
     const zed = 1;
     ;(async () => {

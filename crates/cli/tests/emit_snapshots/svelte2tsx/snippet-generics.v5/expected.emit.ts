@@ -6,13 +6,11 @@ function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void generic;
     const complex_generic = <T extends { bracket: "<" } | "<" | Set<"<>">>(val: T): ReturnType<import('svelte').Snippet> => { async () => {
         (val);
         };
         return __svn_any(0);
     };
-    void complex_generic;
 
     ;(async () => {
         // template type-check body (incremental)

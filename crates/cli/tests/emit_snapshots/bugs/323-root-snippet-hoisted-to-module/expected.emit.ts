@@ -8,7 +8,6 @@ const row = (n: number): ReturnType<import('svelte').Snippet> => { async () => {
     };
     return __svn_any(0);
 };
-void row;
 function $$render_e40e2c10() {
 
   let count = $state(0);

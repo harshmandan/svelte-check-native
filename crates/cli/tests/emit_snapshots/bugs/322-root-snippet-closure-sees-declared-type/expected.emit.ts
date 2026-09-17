@@ -10,7 +10,6 @@ function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void row;
 
   type Player = { play(): void };
   let icon: Player | null = $state(null);

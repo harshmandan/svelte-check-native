@@ -7,14 +7,12 @@ function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void hoistable;
     const not_hoistable = (): ReturnType<import('svelte').Snippet> => { async () => {
         { svelteHTML.createElement("div", {});             (foo);
         }
         };
         return __svn_any(0);
     };
-    void not_hoistable;
 
                                    
     let foo = true;

@@ -6,7 +6,6 @@ function $$render_e40e2c10<T>() {
         };
         return __svn_any(0);
     };
-    void foo;
 
   /** @type {{ b: T }}*/
   let { b } = $props();

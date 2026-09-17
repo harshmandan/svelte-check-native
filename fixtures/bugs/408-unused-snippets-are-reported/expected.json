@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/Inst.svelte",
+            "line": 4,
+            "column": 10,
+            "code": 6133
+        },
+        {
+            "file": "src/Mod.svelte",
+            "line": 4,
+            "column": 10,
+            "code": 6133
+        }
+    ],
+    "warnings": []
+}

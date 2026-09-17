@@ -7,13 +7,11 @@ function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void foo;
     const bar = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { async () => {
         { svelteHTML.createElement("div", {});         }
         };
         return __svn_any(0);
     };
-    void bar;
     const await_inside = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { async () => {
         {
             const $$_value = await (foo);
@@ -24,20 +22,17 @@ function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void await_inside;
     const defaultValue = /** @returns {ReturnType<import('svelte').Snippet>} */ (x = '') => { async () => {
         { svelteHTML.createElement("div", {});             (x);
         }
         };
         return __svn_any(0);
     };
-    void defaultValue;
     const jsDoc = /** @returns {ReturnType<import('svelte').Snippet>} */ (/**@type {number}*/a) => { async () => {
         (a);
         };
         return __svn_any(0);
     };
-    void jsDoc;
     ;(async () => {
         // template type-check body (incremental)
         __svn_ensure_snippet(foo(1));

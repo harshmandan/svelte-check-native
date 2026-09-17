@@ -18,7 +18,6 @@ function $$render_e40e2c10() {
                     };
                     return __svn_any(0);
                 };
-                void foo;
                 const area = box.width * box.height;
                 let label = $state(await `${area} square pixels`);
                 { svelteHTML.createElement("p", {});                     (label);

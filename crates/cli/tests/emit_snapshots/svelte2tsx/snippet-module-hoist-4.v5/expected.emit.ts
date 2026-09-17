@@ -7,7 +7,6 @@ const hoistable = (): ReturnType<import('svelte').Snippet> => { async () => {
     };
     return __svn_any(0);
 };
-void hoistable;
 function $$render_e40e2c10() {
     const chain = (): ReturnType<import('svelte').Snippet> => { async () => {
         { svelteHTML.createElement("div", {});             (foo);
@@ -15,19 +14,16 @@ function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void chain;
     const chain2 = (): ReturnType<import('svelte').Snippet> => { async () => {
         __svn_ensure_snippet(chain());
         };
         return __svn_any(0);
     };
-    void chain2;
     const chain3 = (): ReturnType<import('svelte').Snippet> => { async () => {
         __svn_ensure_snippet(chain2());
         };
         return __svn_any(0);
     };
-    void chain3;
 
     let foo = true;
     ;(async () => {

@@ -7,18 +7,15 @@ function $$render_e40e2c10() {
                 };
                 return __svn_any(0);
             };
-            void foo;
             const foo2 = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { async () => {
                 };
                 return __svn_any(0);
             };
-            void foo2;
             __svn_ensure_snippet(foo());
         }
         };
         return __svn_any(0);
     };
-    void snippetBlock;
     ;(async () => {
         // template type-check body (incremental)
         if ((true)) {
@@ -27,7 +24,6 @@ function $$render_e40e2c10() {
                     };
                     return __svn_any(0);
                 };
-                void foo;
                 __svn_ensure_snippet(foo());
             }
         }
@@ -37,7 +33,6 @@ function $$render_e40e2c10() {
                     };
                     return __svn_any(0);
                 };
-                void foo;
                 __svn_ensure_snippet(foo());
             }
         }
@@ -48,7 +43,6 @@ function $$render_e40e2c10() {
                     };
                     return __svn_any(0);
                 };
-                void foo;
                 __svn_ensure_snippet(foo());
             }
         }
@@ -60,7 +54,6 @@ function $$render_e40e2c10() {
                     };
                     return __svn_any(0);
                 };
-                void foo;
                 __svn_ensure_snippet(foo());
             }
             }
@@ -70,7 +63,6 @@ function $$render_e40e2c10() {
                     };
                     return __svn_any(0);
                 };
-                void foo;
                 __svn_ensure_snippet(foo());
             }
         }

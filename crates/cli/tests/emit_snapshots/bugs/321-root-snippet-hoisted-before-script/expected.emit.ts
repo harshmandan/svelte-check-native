@@ -9,7 +9,6 @@ function $$render_e40e2c10() {
         };
         return __svn_any(0);
     };
-    void defaultHeader;
 
                                         
   let { header = defaultHeader }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();

@@ -1330,26 +1330,21 @@ fn map_diagnostic(
                     }
                     (orig, mapped_line, mapped_col, data.svelte_script_is_ts)
                 }
-                // No token-map or line-map entry covers this position,
-                // which means it sits in code we generated rather than
-                // in anything the user wrote — drop it, as upstream
-                // drops diagnostics that map into generated code.
+                // Nothing we copied from the user precedes this position
+                // on its overlay line, so it sits in code we generated
+                // and has no source counterpart — drop it, as upstream
+                // drops a position its source map cannot resolve.
                 //
-                // This fires constantly and legitimately: slot wrappers,
-                // `$$slot_def` scaffolding and the `$$_$$` dummy all
-                // draw errors at positions with no user counterpart. A
-                // survey across the fixture corpus found 30 fixtures
-                // relying on it, every one of them error-severity, so
-                // surfacing these instead (at line 1, say) would
-                // manufacture false positives by the dozen.
+                // A position that follows user text on the same line is
+                // not dropped: `translate_position` resolves it to that
+                // text, the way a source-map lookup does. Generated code
+                // whose diagnostics upstream suppresses must therefore
+                // be marked with the ignore markers, as upstream marks
+                // it, rather than rely on being unmapped.
                 //
-                // The residual risk is real but unmeasured: a genuine
-                // gap in our partial map is indistinguishable here from
-                // generated code, and upstream's map is total so it
-                // never faces the question. `SVN_PROBE_MAP_MISS=1`
-                // prints what was dropped, which is the first thing to
-                // reach for when a diagnostic the compiler produced
-                // never reaches the user.
+                // `SVN_PROBE_MAP_MISS=1` prints what was dropped, which
+                // is the first thing to reach for when a diagnostic the
+                // compiler produced never reaches the user.
                 None => {
                     if std::env::var("SVN_PROBE_MAP_MISS").is_ok() {
                         eprintln!(

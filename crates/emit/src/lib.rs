@@ -2489,7 +2489,7 @@ mod tests {
                    <div bind:this={inputEl}></div>";
         let out = emit_str(src);
         assert!(out.contains("let inputEl: HTMLDivElement;"), "{out}");
-        assert!(out.contains("inputEl = null as any as"), "{out}");
+        assert!(out.contains("inputEl = /*svn:ignore_start*/null as HTMLElementTagNameMap"), "{out}");
     }
 
     #[test]

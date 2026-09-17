@@ -7,7 +7,7 @@ function $$render_e40e2c10() {
             "type": `radio`,
             "value": `Plain`,
         });
-            element = /** @type {HTMLElementTagNameMap['input']} */ (null);
+            element = /*svn:ignore_start*//** @type {HTMLElementTagNameMap['input']} */ (null)/*svn:ignore_end*/;
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

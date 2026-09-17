@@ -3,7 +3,7 @@
 function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
-        s = /** @type {HTMLElementTagNameMap['slot']} */ (null);
+        s = /*svn:ignore_start*//** @type {HTMLElementTagNameMap['slot']} */ (null)/*svn:ignore_end*/;
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 's': {  } }, bindings: /** @type {string} */ (''), exports: {} };
 }

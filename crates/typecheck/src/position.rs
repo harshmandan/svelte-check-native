@@ -67,7 +67,8 @@ pub(crate) fn translate_line(map: &[LineMapEntry], overlay_line: u32) -> Option<
 /// token-map entry matches; the column is returned unchanged in that
 /// case (the line-map covers verbatim script blocks, where overlay
 /// column == source column because the script content is emitted
-/// verbatim).
+/// verbatim). A position covered by neither resolves to the user text
+/// generated before it on its line — see [`preceding_token_source_byte`].
 ///
 /// For `identity_map` inputs (Kit overlays) returns `(line, col)`
 /// unchanged when neither map covers the position.
@@ -115,6 +116,15 @@ pub(crate) fn translate_position(
     if let Some(mapped) = translate_line(&data.line_map, overlay_line) {
         return Some((mapped, overlay_col));
     }
+    if !data.identity_map
+        && let Some(byte) = preceding_token_source_byte(data, overlay_line, overlay_col)
+    {
+        return Some(byte_to_position(
+            &data.source_line_starts,
+            &data.source_text,
+            byte,
+        ));
+    }
     // Identity-map kit files: `kit_inject` splices `: T` annotations on
     // existing lines and never adds one, so the line passes through and
     // only the column can move — by exactly the length of whatever was
@@ -126,6 +136,62 @@ pub(crate) fn translate_position(
         ));
     }
     None
+}
+
+/// Map a position in generated text to the user text generated just
+/// before it on the same overlay line.
+///
+/// This is how a source-map lookup resolves a position that sits on no
+/// mapping of its own: it takes the closest mapping at or before it on
+/// that line. Upstream maps tsgo positions exactly this way, so a
+/// diagnostic on the generated `)` or wrapper call that follows a
+/// spliced expression is reported against that expression rather than
+/// dropped. Only a position with no mapped text before it on its line
+/// has no source counterpart.
+///
+/// The answer is the source byte a source map would record there: the
+/// last character for text copied byte-for-byte, and the start for
+/// text that stands in for its source range.
+fn preceding_token_source_byte(data: &MapData, overlay_line: u32, overlay_col: u32) -> Option<u32> {
+    if data.token_map.is_empty() || overlay_line == 0 {
+        return None;
+    }
+    let byte = position_to_byte(
+        &data.overlay_line_starts,
+        data.overlay_text.get(),
+        overlay_line,
+        overlay_col,
+    )?;
+    let line_start = *data.overlay_line_starts.get((overlay_line - 1) as usize)?;
+    let mut best: Option<TokenMapEntry> = None;
+    for entry in &data.token_map {
+        if entry.overlay_byte_end > byte
+            || entry.overlay_byte_end <= line_start
+            || entry.overlay_byte_end == entry.overlay_byte_start
+        {
+            continue;
+        }
+        let closer = match best {
+            None => true,
+            Some(prev) => {
+                entry.overlay_byte_end > prev.overlay_byte_end
+                    || (entry.overlay_byte_end == prev.overlay_byte_end
+                        && entry.overlay_byte_end - entry.overlay_byte_start
+                            <= prev.overlay_byte_end - prev.overlay_byte_start)
+            }
+        };
+        if closer {
+            best = Some(*entry);
+        }
+    }
+    let entry = best?;
+    let copied = entry.overlay_byte_end - entry.overlay_byte_start
+        == entry.source_byte_end - entry.source_byte_start;
+    Some(if copied {
+        entry.source_byte_end - 1
+    } else {
+        entry.source_byte_start
+    })
 }
 
 /// Walk an overlay column back to the source column by subtracting the
@@ -271,7 +337,55 @@ pub(crate) fn byte_to_position(line_starts: &[u32], text: &str, byte: u32) -> (u
 
 #[cfg(test)]
 mod tests {
-    use super::unshift_column;
+    use super::{translate_position, unshift_column};
+    use crate::types::MapData;
+    use svn_emit::TokenMapEntry;
+
+    /// Overlay `f(ab);\nxy(ab)` where both `ab`s were copied from source
+    /// bytes 10..12, and the second line's `xy(` is generated. Source is
+    /// ten filler bytes, `ab`, then more filler, all on one line.
+    fn spliced(copied: bool) -> MapData {
+        let entry = |start| TokenMapEntry {
+            overlay_byte_start: start,
+            overlay_byte_end: start + 2,
+            source_byte_start: 10,
+            source_byte_end: if copied { 12 } else { 11 },
+        };
+        MapData {
+            token_map: vec![entry(2), entry(10)],
+            overlay_line_starts: vec![0, 7, 13],
+            overlay_text: "f(ab);\nxy(ab)".into(),
+            source_line_starts: vec![0, 20],
+            source_text: "0123456789ab34567890".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn generated_text_after_user_text_resolves_to_its_last_character() {
+        // `)` and `;` on line 1 follow the copied `ab`: they report at
+        // `b`, source column 12.
+        assert_eq!(translate_position(&spliced(true), 1, 5), Some((1, 12)));
+        assert_eq!(translate_position(&spliced(true), 1, 6), Some((1, 12)));
+        // Inside the copy the column still moves byte for byte.
+        assert_eq!(translate_position(&spliced(true), 1, 3), Some((1, 11)));
+    }
+
+    #[test]
+    fn generated_text_after_a_stand_in_resolves_to_its_start() {
+        // A splice that is not a byte-for-byte copy stands in for its
+        // whole source range, so what follows reports at its start.
+        assert_eq!(translate_position(&spliced(false), 1, 5), Some((1, 11)));
+    }
+
+    #[test]
+    fn generated_text_with_nothing_before_it_on_the_line_is_dropped() {
+        // `xy(` opens line 2; the copy on line 1 does not reach it.
+        assert_eq!(translate_position(&spliced(true), 2, 1), None);
+        assert_eq!(translate_position(&spliced(true), 2, 3), None);
+        // The `)` after line 2's own copy resolves again.
+        assert_eq!(translate_position(&spliced(true), 2, 6), Some((1, 12)));
+    }
 
     /// The two splices `kit_inject` makes in
     ///

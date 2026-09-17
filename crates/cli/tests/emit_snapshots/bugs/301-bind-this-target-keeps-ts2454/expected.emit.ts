@@ -7,7 +7,7 @@ function $$render_e40e2c10() {
     console.log(read(), el);
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("div", {});             el = null as any as HTMLElementTagNameMap['div'];
+        { svelteHTML.createElement("div", {});             el = /*svn:ignore_start*/null as HTMLElementTagNameMap['div']/*svn:ignore_end*/;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

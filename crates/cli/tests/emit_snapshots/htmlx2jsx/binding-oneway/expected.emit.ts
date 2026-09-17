@@ -15,10 +15,10 @@ function $$render_e40e2c10() {
             "src": (clip),
         });
             duration = (() => { const __svn_el = svelteHTML.createElement("video", {}); return __svn_el.duration; })();
-            buffered = /** @type {import('svelte/elements').SvelteMediaTimeRange[]} */ (null);
-            seekable = /** @type {import('svelte/elements').SvelteMediaTimeRange[]} */ (null);
+            buffered = /*svn:ignore_start*//** @type {import('svelte/elements').SvelteMediaTimeRange[]} */ (null)/*svn:ignore_end*/;
+            seekable = /*svn:ignore_start*//** @type {import('svelte/elements').SvelteMediaTimeRange[]} */ (null)/*svn:ignore_end*/;
             seeking = (() => { const __svn_el = svelteHTML.createElement("video", {}); return __svn_el.seeking; })();
-            played = /** @type {import('svelte/elements').SvelteMediaTimeRange[]} */ (null);
+            played = /*svn:ignore_start*//** @type {import('svelte/elements').SvelteMediaTimeRange[]} */ (null)/*svn:ignore_end*/;
             ended = (() => { const __svn_el = svelteHTML.createElement("video", {}); return __svn_el.ended; })();
         }
     });

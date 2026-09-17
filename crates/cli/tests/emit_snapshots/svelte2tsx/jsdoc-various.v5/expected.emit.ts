@@ -15,7 +15,7 @@ function $$render_e40e2c10<T>() {
   let rect;
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("div", {});             rect = /** @type {DOMRectReadOnly} */ (null);
+        { svelteHTML.createElement("div", {});             rect = /*svn:ignore_start*//** @type {DOMRectReadOnly} */ (null)/*svn:ignore_end*/;
         }
     });
     return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': {  } }, bindings: /** @type {string} */ (''), exports: {} };

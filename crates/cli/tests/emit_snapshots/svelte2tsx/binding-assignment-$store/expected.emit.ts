@@ -7,9 +7,9 @@ function $$render_e40e2c10() {
         }
         { svelteHTML.createElement("div", {});             $compile_options.foo = (() => { const __svn_el = svelteHTML.createElement("div", {}); return __svn_el.offsetHeight; })();
         }
-        { svelteHTML.createElement("div", {});             $compile_options = /** @type {HTMLElementTagNameMap['div']} */ (null);
+        { svelteHTML.createElement("div", {});             $compile_options = /*svn:ignore_start*//** @type {HTMLElementTagNameMap['div']} */ (null)/*svn:ignore_end*/;
         }
-        { svelteHTML.createElement("div", {});             $compile_options.foo = /** @type {HTMLElementTagNameMap['div']} */ (null);
+        { svelteHTML.createElement("div", {});             $compile_options.foo = /*svn:ignore_start*//** @type {HTMLElementTagNameMap['div']} */ (null)/*svn:ignore_end*/;
         }
         { svelteHTML.createElement("div", {
             "bind:noAssignment": ($compile_options),

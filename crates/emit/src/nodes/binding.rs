@@ -27,7 +27,7 @@ pub(crate) fn is_untyped_binding(name: &str) -> bool {
 
 /// Emit a type-check line per `bind:NAME` directive on a DOM element.
 ///
-/// Shape: `{indent}EXPR = null as any as TYPE;` — direct assignment
+/// Shape: `{indent}EXPR = null as TYPE;` (the cast ignore-marked) — direct assignment
 /// (NOT wrapped in a never-called lambda).
 ///
 /// For upstream's ONE-WAY bindings (`bind:this`, `clientWidth`,
@@ -279,7 +279,10 @@ pub(crate) fn emit_element_bind_checks_inline(
                 buf.append_with_source(tag_expr, *tag_range);
                 buf.push_str(", {});\n");
             } else {
-                let _ = writeln!(buf, " = null as any as {ty};");
+                let _ = writeln!(
+                    buf,
+                    " = /*svn:ignore_start*/null as {ty}/*svn:ignore_end*/;"
+                );
             }
         } else if let Some((tag_expr, tag_range)) = &svelte_element_this_expr {
             buf.push_str(" = svelteHTML.createElement(");
@@ -290,8 +293,14 @@ pub(crate) fn emit_element_bind_checks_inline(
             // on the RHS instead — `/** @type {T} */(null)` gives the
             // null literal type T, which assigns into the LHS (the
             // bound variable) and fires TS2322 when the LHS's declared
-            // type can't accept T.
-            let _ = writeln!(buf, " = /** @type {{{ty}}} */ (null);");
+            // type can't accept T. The cast itself is ours, so upstream
+            // marks it ignored (`Binding.ts`, one-way bindings not on the
+            // element) and a complaint about the cast never reaches the
+            // user; only the assignment to their variable can.
+            let _ = writeln!(
+                buf,
+                " = /*svn:ignore_start*//** @type {{{ty}}} */ (null)/*svn:ignore_end*/;"
+            );
         }
     }
 }

@@ -30,7 +30,7 @@ function $$render_e40e2c10() {
         });
             __svn_ensure_transition(fade(__svn_map_element_tag('div')));
             (flip(__svn_map_element_tag('div'), __svn_AnimationMove));
-            element = /** @type {HTMLElementTagNameMap['div']} */ (null);
+            element = /*svn:ignore_start*//** @type {HTMLElementTagNameMap['div']} */ (null)/*svn:ignore_end*/;
             void __svn_action_0;
         }
         {

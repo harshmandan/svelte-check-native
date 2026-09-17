@@ -6,7 +6,7 @@ function $$render_e40e2c10() {
 	if (el) el.focus();
     ;(async () => {
         // template type-check body (incremental)
-        { svelteHTML.createElement("input", {});             el = null as any as HTMLElementTagNameMap['input'];
+        { svelteHTML.createElement("input", {});             el = /*svn:ignore_start*/null as HTMLElementTagNameMap['input']/*svn:ignore_end*/;
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

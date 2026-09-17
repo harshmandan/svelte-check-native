@@ -306,10 +306,7 @@ fn classify_and_rewrite(
                 // template reference to `a` / `b` fires TS2304.
                 //
                 // Rewrite to `let { a, b } = expr;` (or `let [a, b]`)
-                // which declares AND initialises in one step. If any
-                // name is already declared elsewhere in the script,
-                // fall through to Case 2 (block wrap) — we can't
-                // safely emit a fresh `let` for already-bound names.
+                // which declares AND initialises in one step.
                 let destructure_names = collect_destructure_names(&assign.left);
                 if !destructure_names.is_empty() {
                     let rhs_span = assign.right.span();
@@ -339,29 +336,24 @@ fn classify_and_rewrite(
                             ),
                         };
                     }
-                    let fresh: Vec<&SmolStr> = destructure_names
+                    // Some or all names are already declared. Mirror
+                    // upstream ImplicitTopLevelNames.modifyCode's `else`
+                    // branch: declare only the fresh names with `let <n>;`
+                    // and keep the invalidate-wrapped assignment as a
+                    // top-level statement, so flow analysis sees every
+                    // destructured name assigned from here on.
+                    let lets: String = destructure_names
                         .iter()
                         .filter(|n| !declared.contains(*n))
+                        .map(|n| format!("let {n}; "))
                         .collect();
-                    if !fresh.is_empty() {
-                        // Mixed: some names already declared. Mirror upstream
-                        // ImplicitTopLevelNames.modifyCode's `else` branch
-                        // (ImplicitTopLevelNames.ts:100-104) — declare only
-                        // the FRESH names with `let <n>;`, then keep the
-                        // invalidate-wrapped assignment. The old all-or-
-                        // nothing guard dropped this to the arrow wrap, which
-                        // never declared the fresh name → spurious TS18004 /
-                        // TS2304 on it in the template.
-                        let lets: String = fresh.iter().map(|n| format!("let {n}; ")).collect();
-                        return Edit {
-                            start: full_start,
-                            end: full_end,
-                            replacement: format!(
-                                "{lets}({lhs_unwrap} = __svn_invalidate(() => ({rhs})));"
-                            ),
-                        };
-                    }
-                    // All names already declared → fall through to Case 2.
+                    return Edit {
+                        start: full_start,
+                        end: full_end,
+                        replacement: format!(
+                            "{lets}({lhs_unwrap} = __svn_invalidate(() => ({rhs})));"
+                        ),
+                    };
                 }
             }
         }
@@ -557,6 +549,12 @@ mod tests {
     }
 
     #[test]
+    fn declared_destructure_stays_a_top_level_assignment() {
+        let src = "let a: string; let b: number;\n$: ({ a, b } = obj);";
+        assert!(ts(src).ends_with("({ a, b } = __svn_invalidate(() => (obj)));"));
+    }
+
+    #[test]
     fn block_wrapped_in_arrow() {
         let src = "$: { a = b; c = d; }";
         let got = ts(src);
@@ -622,19 +620,6 @@ mod tests {
         assert!(
             got.contains("let b; ({ a, b } = __svn_invalidate(() => (question)));"),
             "declare only fresh name, keep assignment: {got:?}"
-        );
-    }
-
-    #[test]
-    fn destructure_with_all_declared_names_falls_back_to_wrap() {
-        // Every destructured name already declared — no fresh `let` to emit,
-        // so fall through to the arrow wrap (preserves assignment semantics
-        // without a duplicate declaration).
-        let src = "let a = 0;\nlet b = 0;\n$: ({ a, b } = question);";
-        let got = ts(src);
-        assert!(
-            got.contains(";() => { $: ({ a, b } = question); };"),
-            "arrow wrap fallback: {got:?}"
         );
     }
 

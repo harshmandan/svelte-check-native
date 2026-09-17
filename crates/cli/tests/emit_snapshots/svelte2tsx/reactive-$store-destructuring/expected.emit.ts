@@ -5,14 +5,14 @@ function $$render_e40e2c10() {
   let { count } = __svn_invalidate(() => ($data));
   let { count2 } = __svn_invalidate(() => ($data));
   let count3;
-  ;() => { $: ({ count3 } = $data) };
+  ({ count3 } = __svn_invalidate(() => ($data)));
   let bla4;
   let bla5; ({ bla4, bla5 } = __svn_invalidate(() => ($data)));
 
   let [ count ] = __svn_invalidate(() => ($data));
   let [ count2 ] = __svn_invalidate(() => ($data));
   let count3;
-  ;() => { $: ([ count3 ] = $data) };
+  ([ count3 ] = __svn_invalidate(() => ($data)));
   let bla4;
   let bla5; ([ bla4, bla5 ] = __svn_invalidate(() => ($data)));
     ;(async () => {

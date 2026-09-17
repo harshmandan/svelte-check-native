@@ -284,8 +284,24 @@ pub(crate) fn emit_svelte_element_node(
     }
     let dom_emit = dom_element_emit_enabled();
     let inner_depth = if dom_emit { depth + 1 } else { depth };
+    // The tag a `use:` / `transition:` / `animate:` directive sees as its
+    // element, as upstream's `Element` computes it: `<svelte:body>` is
+    // the document body, every other special element keeps its own
+    // `svelte:*` name, which types the element as `any`.
+    let directive_tag = if matches!(s.kind, SvelteElementKind::Body) {
+        "body".to_string()
+    } else {
+        format!("svelte:{}", s.kind.as_str())
+    };
     let action_indices = if dom_emit {
-        emit_dom_action_decls(buf, source, "", &s.attributes, inner_depth, action_counter)
+        emit_dom_action_decls(
+            buf,
+            source,
+            &directive_tag,
+            &s.attributes,
+            inner_depth,
+            action_counter,
+        )
     } else {
         let first = *action_counter;
         first..first
@@ -340,7 +356,7 @@ pub(crate) fn emit_svelte_element_node(
         } else {
             emit_svelte_element_open(buf, source, s, depth, &action_indices);
         }
-        emit_dom_directive_checks(buf, source, "", &s.attributes, inner_depth);
+        emit_dom_directive_checks(buf, source, &directive_tag, &s.attributes, inner_depth);
     }
     // `bind:this` assigns the element on `<svelte:body>` (as `body`) and
     // `<svelte:element>`; elsewhere it is an attribute (`Binding.ts`'s
@@ -357,7 +373,7 @@ pub(crate) fn emit_svelte_element_node(
         emit_use_directives_inline_legacy(
             buf,
             source,
-            "",
+            &directive_tag,
             &s.attributes,
             inner_depth,
             action_counter,

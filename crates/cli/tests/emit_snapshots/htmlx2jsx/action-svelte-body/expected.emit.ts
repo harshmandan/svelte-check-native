@@ -5,7 +5,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         /** @type {any} */ let __svn_action_attrs_0 = {};
         void __svn_action_attrs_0;
-            const __svn_action_0 = __svn_ensure_action(blink(__svn_map_element_tag('' as string)));
+            const __svn_action_0 = __svn_ensure_action(blink(__svn_map_element_tag('body')));
         { svelteHTML.createElement("svelte:body", __svn_union(__svn_action_0), {});             void __svn_action_0;
         }
     });

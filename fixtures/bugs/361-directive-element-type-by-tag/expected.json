@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/T.svelte",
+            "line": 5,
+            "column": 31,
+            "code": 2339
+        },
+        {
+            "file": "src/T.svelte",
+            "line": 11,
+            "column": 54,
+            "code": 2339
+        }
+    ],
+    "_note": "The element handed to a use:/transition: function is typed from the tag the way upstream's mapElementTag does it: a known HTML/SVG tag maps to its element type, <svelte:body> maps to HTMLBodyElement, and a custom element or any other svelte:* element maps to any. A generic directive's callback therefore sees HTMLBodyElement / HTMLDivElement (property typos are TS2339) but any on my-widget, svelte:window, svelte:document and svelte:element. Before, every unknown tag was HTMLElement and every svelte:* element was typed from an empty tag name. Verified against upstream svelte-check --tsgo with svelte 5.55."
+}

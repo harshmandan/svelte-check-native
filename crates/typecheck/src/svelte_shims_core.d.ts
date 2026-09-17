@@ -1039,21 +1039,21 @@ declare function __svn_union<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>(
 /**
  * Map an HTML/SVG tag name back to the real element type so action
  * directives emit `action(__svn_map_element_tag('form'), params)` with
- * a proper `HTMLFormElement` in the first slot rather than `unknown`
- * or `any`. Actions that declare a specific element type (e.g.
- * `Action<HTMLFormElement, P>`) will TS2345 against the concrete type
- * if the tag doesn't match.
+ * a proper `HTMLFormElement` in the first slot. Actions that declare a
+ * specific element type (e.g. `Action<HTMLFormElement, P>`) are checked
+ * against the concrete type.
  *
- * Unknown tags fall through to `HTMLElement` — matching upstream
- * svelte2tsx's `svelteHTML.mapElementTag` behavior.
+ * Same overloads as upstream's `svelteHTML.mapElementTag`: any other
+ * tag — a custom element, `svelte:window`, `svelte:element` — maps to
+ * `any`, so the directive's element parameter is unconstrained there.
  */
-declare function __svn_map_element_tag<K extends keyof HTMLElementTagNameMap>(
+declare function __svn_map_element_tag<K extends keyof ElementTagNameMap>(
     tag: K,
-): HTMLElementTagNameMap[K];
+): ElementTagNameMap[K];
 declare function __svn_map_element_tag<K extends keyof SVGElementTagNameMap>(
     tag: K,
 ): SVGElementTagNameMap[K];
-declare function __svn_map_element_tag(tag: string): HTMLElement;
+declare function __svn_map_element_tag(tag: any): any;
 
 /**
  * Phantom value used as the second argument to animate-directive call

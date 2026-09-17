@@ -2778,7 +2778,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 }
                 self.visit_expr(&n.callee);
                 for a in &n.arguments {
-                    self.visit_argument(a, false);
+                    self.visit_argument(a, false, false);
                 }
             }
             Expression::ClassExpression(cls) => self.visit_class_common(cls),
@@ -2986,14 +2986,15 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // Track `nested_in_state_call` for refs inside arg subtrees —
         // used by state_referenced_locally's message discriminator.
         let push_state = matches!(rune, Some(RuneCall::State) | Some(RuneCall::StateRaw));
-        // Callee — flag the identifier (if any) as being the callee
-        // of a CallExpression for `store_rune_conflict`'s sake.
+        // Callee — flag the identifier (if any) as a child of the
+        // CallExpression for `store_rune_conflict`'s sake; arguments
+        // are flagged in `visit_argument`.
         self.visit_callee(&c.callee);
         if bump {
             self.rune_bump += 1;
         }
         for a in &c.arguments {
-            self.visit_argument(a, push_state);
+            self.visit_argument(a, push_state, true);
         }
         if bump {
             self.rune_bump -= 1;
@@ -3005,7 +3006,12 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     /// `f(...props)` must record the references inside the spread
     /// argument (verified: upstream counts them, and a `$state` read
     /// inside `f(...[count])` fires `state_referenced_locally`).
-    fn visit_argument(&mut self, a: &oxc_ast::ast::Argument<'_>, in_state_call: bool) {
+    fn visit_argument(
+        &mut self,
+        a: &oxc_ast::ast::Argument<'_>,
+        in_state_call: bool,
+        of_call: bool,
+    ) {
         if let oxc_ast::ast::Argument::SpreadElement(s) = a {
             // Anchor leading ignores at the `...`, mirroring the
             // array-spread path.
@@ -3023,6 +3029,37 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 self.ignore_frames.pop();
             }
         } else if let Some(e) = a.as_expression() {
+            // A `$name` passed straight to a call has the call as its
+            // parent node once parentheses and type wrappers are gone,
+            // which is what `store_rune_conflict` asks about.
+            let mut bare = e;
+            loop {
+                bare = match bare {
+                    Expression::ParenthesizedExpression(p) => &p.expression,
+                    Expression::TSAsExpression(x) => &x.expression,
+                    Expression::TSSatisfiesExpression(x) => &x.expression,
+                    Expression::TSNonNullExpression(x) => &x.expression,
+                    Expression::TSTypeAssertion(x) => &x.expression,
+                    _ => break,
+                };
+            }
+            if of_call
+                && let Expression::Identifier(id) = bare
+                && id.name.starts_with('$')
+            {
+                let pushed = self.push_leading_ignores(Some(e.span().start));
+                self.record_ref_id_full(
+                    id.name.as_str(),
+                    id.span.start,
+                    id.span.end,
+                    RefParentKind::Read,
+                    true,
+                );
+                if pushed {
+                    self.ignore_frames.pop();
+                }
+                return;
+            }
             if in_state_call {
                 self.visit_arg_inside_state_call(e);
             } else {

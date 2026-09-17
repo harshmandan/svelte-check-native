@@ -1,0 +1,41 @@
+{
+    "errors": [],
+    "warnings": [
+        {
+            "file": "src/Arg.svelte",
+            "line": 3,
+            "column": 14,
+            "code": "store_rune_conflict"
+        },
+        {
+            "file": "src/Arg.svelte",
+            "line": 4,
+            "column": 15,
+            "code": "store_rune_conflict"
+        },
+        {
+            "file": "src/Callee.svelte",
+            "line": 3,
+            "column": 2,
+            "code": "store_rune_conflict"
+        },
+        {
+            "file": "src/Callee.svelte",
+            "line": 4,
+            "column": 12,
+            "code": "store_rune_conflict"
+        },
+        {
+            "file": "src/Render.svelte",
+            "line": 5,
+            "column": 18,
+            "code": "store_rune_conflict"
+        },
+        {
+            "file": "src/Render.svelte",
+            "line": 6,
+            "column": 8,
+            "code": "store_rune_conflict"
+        }
+    ]
+}

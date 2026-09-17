@@ -383,17 +383,13 @@ type __SvnEachItem<T> = 0 extends 1 & T
 
 /**
  * Value-level item of an `{#each}` source, used to resolve a binding
- * exposed through a `<slot>`. Mirrors upstream's
- * `__sveltets_2_unwrapArr<T>(arr: ArrayLike<T>): T`, widened to the
- * iterables Svelte 5 accepts; both names are declared so overlay-diff
- * tooling resolves either side.
+ * exposed through a `<slot>`. Same signature as upstream's
+ * `__sveltets_2_unwrapArr`: only an array-like source yields its item
+ * type; any other source (a `Set`, a `Map`) infers `unknown`, so the
+ * slot binding a consumer receives is `unknown` too.
  */
-declare function __svn_unwrap_arr<T extends ArrayLike<unknown> | Iterable<unknown>>(
-    value: T | undefined | null,
-): __SvnEachItem<T>;
-declare function __sveltets_2_unwrapArr<T extends ArrayLike<unknown> | Iterable<unknown>>(
-    value: T | undefined | null,
-): __SvnEachItem<T>;
+declare function __svn_unwrap_arr<T>(arr: ArrayLike<T>): T;
+declare function __sveltets_2_unwrapArr<T>(arr: ArrayLike<T>): T;
 /** Value-level result of an `{#await}` source (`__sveltets_2_unwrapPromiseLike`). */
 declare function __svn_unwrap_promise_like<T>(promise: PromiseLike<T> | T): T;
 declare function __sveltets_2_unwrapPromiseLike<T>(promise: PromiseLike<T> | T): T;

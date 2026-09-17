@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/Parent.svelte",
+            "line": 4,
+            "column": 3,
+            "code": 18046
+        },
+        {
+            "file": "src/Parent.svelte",
+            "line": 5,
+            "column": 48,
+            "code": 2339
+        }
+    ],
+    "_note": "A slot prop that comes from an {#each} item is typed through upstream's unwrapArr<T>(arr: ArrayLike<T>): T. Only an array-like source yields its item type; a Set infers unknown, so the consumer's let:item is unknown (TS18046 on use), while an array source keeps number (TS2339 on a bad member). Before, the helper also unwrapped iterables and the Set item was typed. Verified against upstream svelte-check --tsgo."
+}

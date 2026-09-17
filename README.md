@@ -9,7 +9,7 @@
 
 </div>
 
-Blazing fast CLI type-checker for **Svelte** projects. Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check) — compatible flags, byte-identical diagnostics, same exit codes. Single Rust binary, powered by TypeScript 7's native `tsc`, incremental via `tsbuildinfo`. Built for AI agents, CI/CD, and pre-commit hooks that actually stay enabled.
+Blazing fast CLI type-checker for **Svelte** projects. Drop-in replacement for [`svelte-check`](https://www.npmjs.com/package/svelte-check) — compatible flags, byte-identical diagnostics, same exit codes. Single Rust binary, powered by TypeScript 7's native `tsc`. Built for AI agents, CI/CD, and pre-commit hooks that actually stay enabled.
 
 Not an LSP, CSS linter, or formatter.
 
@@ -101,7 +101,6 @@ Every flag not listed below behaves the same as `svelte-check`.
 - `--watch` / `--preserveWatchOutput` — use [`watchexec`](https://github.com/watchexec/watchexec)
   or your editor's file watcher externally.
 - `--no-tsconfig` — errors out. A tsconfig is required.
-- `--incremental` — always on. TypeScript's `tsbuildinfo` handles it.
 - `--tsgo` — always on. TypeScript 7's native `tsc` is used.
 - `--diagnostic-sources css` — accepted but no-op (a CSS language
   service isn't bundled). Roadmap below.
@@ -136,10 +135,10 @@ as upstream's does.
 
 ## Troubleshooting
 
-**Stale errors after editing `tsconfig.json` or path aliases** — wipe
-the cache: `rm -rf node_modules/.cache/svelte-check-native` and re-run.
-The overlay config is regenerated from your live tsconfig on every
-run, but tsgo's `tsbuildinfo` can hold onto stale resolution state.
+**Stale errors with `--incremental`** — wipe the cache:
+`rm -rf node_modules/.cache/svelte-check-native` and re-run. tsgo's
+`tsbuildinfo` can hold onto stale results; runs without
+`--incremental` (the default, as upstream) never read it.
 
 **TS2321 "Excessive stack depth"** on your own types — usually a
 `UnionToRecord<T>` that round-trips through `UnionToTuple<T>[number]`.

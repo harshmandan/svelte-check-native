@@ -514,7 +514,7 @@ by the suites above. Their error counts are not a shipping metric.
   target. Mid-migration SvelteKit monorepo, mostly Svelte-4-
   syntax components. The "1000-file mid-migration" number in the
   public README and CHANGELOG refers to this workspace's primary
-  sub-app (~1124 files after monorepo-root auto-escape). Ties
+  sub-app (~1124 files, checked from inside the sub-app). Ties
   upstream `svelte-check --tsgo` at 0 user errors.
 - A Svelte-5 control-rig bench — the latest fresh extract of the
   same upstream repo's `main` branch (Svelte 5.55+ and further

@@ -1282,7 +1282,10 @@ fn map_diagnostic(
     // The tuple carries `svelte_script_is_ts` out of the overlay arm so
     // the `ts`/`js` label can be decided below without a second
     // `map_data` lookup — only that arm has the snapshot that knows.
-    let (source_path, line, column, svelte_script_is_ts) = match layout
+    // Upstream reads the span length from the compiler's `~~~` underline
+    // and takes 1 when there is none.
+    let span = raw.span_length.unwrap_or(1);
+    let (source_path, (line, column), (end_line, end_column), svelte_script_is_ts) = match layout
         .original_from_generated(&absolute_file)
     {
         Some(orig) => {
@@ -1410,16 +1413,74 @@ fn map_diagnostic(
             if data.pug_template.is_some() && matches!(raw.code, 6133 | 6192) {
                 return None;
             }
-            match position::translate_position(data, raw.line, raw.column) {
-                Some((mapped_line, mapped_col)) => {
-                    let mapped_byte = || {
+            // Both ends of the range map through the overlay on their own,
+            // as a source-map lookup maps them. An end with no source
+            // counterpart leaves the range unresolvable, and upstream
+            // drops such a diagnostic just like one whose start is
+            // unmapped.
+            let mapped = position::translate_position(data, raw.line, raw.column).zip(
+                position::translate_position(data, raw.line, raw.column.saturating_add(span)),
+            );
+            match mapped {
+                Some(((mapped_line, mapped_col), (mapped_end_line, mut mapped_end_col))) => {
+                    // A range whose end lands on the last character it
+                    // covers (the lookup resolves an end position to the
+                    // character before it) comes out one short on a single
+                    // line; upstream lengthens it back.
+                    if mapped_end_line == mapped_line
+                        && mapped_end_col >= mapped_col
+                        && mapped_end_col - mapped_col + 1 == span
+                    {
+                        mapped_end_col += 1;
+                    }
+                    let to_byte = |line: u32, col: u32| {
                         position::position_to_byte(
                             &data.source_line_starts,
                             &data.source_text,
-                            mapped_line,
-                            mapped_col,
+                            line,
+                            col,
                         )
                     };
+                    // Our overlay anchors some generated text to the start
+                    // of the element it belongs to, so an end inside it can
+                    // resolve before the start. Such a range keeps the
+                    // compiler's length on the start's line instead.
+                    let (mapped_end_line, mapped_end_col) =
+                        if (mapped_end_line, mapped_end_col) < (mapped_line, mapped_col) {
+                            (mapped_line, mapped_col.saturating_add(span))
+                        } else {
+                            (mapped_end_line, mapped_end_col)
+                        };
+                    // A missing-prop error arrives as an empty range at a
+                    // component's start tag; upstream widens it to the tag
+                    // name.
+                    let (mapped_end_line, mapped_end_col) = if !data.identity_map
+                        && (mapped_end_line, mapped_end_col) == (mapped_line, mapped_col)
+                        && (matches!(raw.code, 2739 | 2741) || raw.message.contains("'Properties<"))
+                        && let Some(byte) = to_byte(mapped_line, mapped_col)
+                        && let Some((name_start, name_end)) =
+                            filters::start_tag_name_around(&data.source_text, byte)
+                    {
+                        let (line, col) = position::byte_to_position(
+                            &data.source_line_starts,
+                            &data.source_text,
+                            name_start,
+                        );
+                        let (end_line, end_col) = position::byte_to_position(
+                            &data.source_line_starts,
+                            &data.source_text,
+                            name_end,
+                        );
+                        if (line, col) == (mapped_line, mapped_col) {
+                            (end_line, end_col)
+                        } else {
+                            (mapped_end_line, mapped_end_col)
+                        }
+                    } else {
+                        (mapped_end_line, mapped_end_col)
+                    };
+                    let mapped_byte = || to_byte(mapped_line, mapped_col);
+                    let mapped_end_byte = || to_byte(mapped_end_line, mapped_end_col);
                     // Duplicate-key errors (TS1117 / TS2300) on an element's
                     // attribute name are dropped: `<el on:click={fn}
                     // on:click>` (handle and forward) and a spread next to a
@@ -1445,11 +1506,8 @@ fn map_diagnostic(
                     if !data.identity_map
                         && raw.code == 2454
                         && let Some(byte) = mapped_byte()
-                        && let Some(text) = data.source_text.get(
-                            byte as usize
-                                ..(byte as usize)
-                                    .saturating_add(raw.span_length.unwrap_or(0) as usize),
-                        )
+                        && let Some(end) = mapped_end_byte()
+                        && let Some(text) = data.source_text.get(byte as usize..end as usize)
                         && crate::template_nodes::instance_script_exports(&data.source_text, text)
                     {
                         return None;
@@ -1466,13 +1524,18 @@ fn map_diagnostic(
                     // this positional check never sees them.
                     if let Some((content_start, content_end)) = data.pug_template
                         && let Some(byte) = mapped_byte()
+                        && let Some(end) = mapped_end_byte()
                         && (content_start..=content_end).contains(&byte)
-                        && (content_start..=content_end)
-                            .contains(&byte.saturating_add(raw.span_length.unwrap_or(0)))
+                        && (content_start..=content_end).contains(&end)
                     {
                         return None;
                     }
-                    (orig, mapped_line, mapped_col, data.svelte_script_is_ts)
+                    (
+                        orig,
+                        (mapped_line, mapped_col),
+                        (mapped_end_line, mapped_end_col),
+                        data.svelte_script_is_ts,
+                    )
                 }
                 // Nothing we copied from the user precedes this position
                 // on its overlay line, so it sits in code we generated
@@ -1513,21 +1576,25 @@ fn map_diagnostic(
         // positions pass through unchanged. Nothing here is a
         // `.svelte` file either, so the `ts`/`js` flag goes unread and
         // the extension decides on its own.
-        None => match layout.original_from_kit_types_mirror(&absolute_file) {
-            Some(orig) => (orig, raw.line, raw.column, false),
-            None => (absolute_file, raw.line, raw.column, false),
-        },
+        //
+        // Upstream reports the range on the start's line, `length`
+        // characters on.
+        None => {
+            let start = (raw.line, raw.column);
+            let end = (raw.line, raw.column.saturating_add(span));
+            match layout.original_from_kit_types_mirror(&absolute_file) {
+                Some(orig) => (orig, start, end, false),
+                None => (absolute_file, start, end, false),
+            }
+        }
     };
-    let span = raw.span_length.unwrap_or(0);
     let source = diagnostic_source(&source_path, svelte_script_is_ts);
     Some(CheckDiagnostic {
         source_path,
         line,
         column,
-        // tsgo emits a single-line span_length, no end-line info — so
-        // for TS diagnostics we collapse end_line == start_line.
-        end_line: line,
-        end_column: column.saturating_add(span),
+        end_line,
+        end_column,
         severity: raw.severity,
         code: DiagnosticCode::Numeric(raw.code),
         message: raw.message,
@@ -2450,6 +2517,117 @@ mod tests {
         assert_eq!(mapped.line, 5, "line must follow the token span");
         assert_eq!(mapped.column, 5, "column must follow the token span");
         assert_eq!(mapped.end_column, 9, "end column = column + span_length");
+    }
+
+    fn one_token_overlay(
+        overlay_text: &str,
+        source_text: &str,
+        token: TokenMapEntry,
+    ) -> HashMap<PathBuf, MapData> {
+        let mut m = HashMap::new();
+        m.insert(
+            PathBuf::from("/proj/.svelte-check/svelte/src/E.svelte.ts"),
+            MapData {
+                token_map: vec![token],
+                overlay_line_starts: svn_emit::compute_line_starts(overlay_text),
+                overlay_text: overlay_text.to_string().into(),
+                source_line_starts: svn_emit::compute_line_starts(source_text),
+                source_text: source_text.into(),
+                ..Default::default()
+            },
+        );
+        m
+    }
+
+    fn raw_at(column: u32, code: u32, message: &str, span: u32) -> RawDiagnostic {
+        RawDiagnostic {
+            file: PathBuf::from("/proj/.svelte-check/svelte/src/E.svelte.ts"),
+            line: 1,
+            column,
+            severity: Severity::Error,
+            code,
+            message: message.to_string(),
+            span_length: Some(span),
+        }
+    }
+
+    #[test]
+    fn range_end_maps_through_the_overlay_on_its_own() {
+        // A copied expression `foo.bar` whose diagnostic covers `bar`:
+        // the end resolves to the character before it and is lengthened
+        // back by one, landing right after `bar` in the source.
+        let overlay = "x(foo.bar);";
+        let source = "<p>{foo.bar}</p>";
+        let m = one_token_overlay(
+            overlay,
+            source,
+            TokenMapEntry {
+                overlay_byte_start: 2,
+                overlay_byte_end: 9,
+                source_byte_start: 4,
+                source_byte_end: 11,
+            },
+        );
+        let layout = CacheLayout::for_workspace("/proj");
+        let d = map_diagnostic(raw_at(7, 2339, "x", 3), &layout, &m, &HashSet::new(), true)
+            .expect("mapped");
+        assert_eq!((d.line, d.column, d.end_line, d.end_column), (1, 9, 1, 12));
+    }
+
+    #[test]
+    fn range_end_before_its_start_keeps_the_compiler_length() {
+        // Generated text anchored to the element start: the end resolves
+        // before the start, so the range keeps the compiler's length.
+        let overlay = "new C({ \"a\": (v) });";
+        let source = "<C a={v} />";
+        let mut m = one_token_overlay(
+            overlay,
+            source,
+            TokenMapEntry {
+                overlay_byte_start: 8,
+                overlay_byte_end: 11,
+                source_byte_start: 3,
+                source_byte_end: 8,
+            },
+        );
+        if let Some(data) = m.values_mut().next() {
+            data.token_map.push(TokenMapEntry {
+                overlay_byte_start: 0,
+                overlay_byte_end: 20,
+                source_byte_start: 0,
+                source_byte_end: 1,
+            });
+        }
+        let layout = CacheLayout::for_workspace("/proj");
+        let d = map_diagnostic(raw_at(9, 2322, "x", 3), &layout, &m, &HashSet::new(), true)
+            .expect("mapped");
+        assert_eq!((d.line, d.column, d.end_line, d.end_column), (1, 4, 1, 7));
+    }
+
+    #[test]
+    fn empty_missing_prop_range_widens_to_the_tag_name() {
+        let overlay = "new Comp({ });";
+        let source = "<Comp />";
+        let m = one_token_overlay(
+            overlay,
+            source,
+            TokenMapEntry {
+                overlay_byte_start: 4,
+                overlay_byte_end: 8,
+                source_byte_start: 1,
+                source_byte_end: 2,
+            },
+        );
+        let layout = CacheLayout::for_workspace("/proj");
+        let d = map_diagnostic(
+            raw_at(5, 2741, "Property 'a' is missing", 4),
+            &layout,
+            &m,
+            &HashSet::new(),
+            true,
+        )
+        .expect("mapped");
+        assert_eq!((d.line, d.column, d.end_line, d.end_column), (1, 2, 1, 6));
     }
 
     #[test]

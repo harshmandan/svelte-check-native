@@ -92,6 +92,32 @@ pub(crate) fn is_reactive_statement_label(overlay: &str, is_ts: bool, offset: u3
 /// emit crate appends a per-file hash.
 const RENDER_FUNCTION_PREFIX: &str = "$$render_";
 
+/// The byte range of the tag name of the start tag containing byte
+/// `offset` in a `.svelte` source, when `offset` lies inside one.
+///
+/// Upstream remaps an empty missing-prop range onto the tag name of the
+/// start tag it falls in (`getNodeIfIsInStartTag`). The name is the run
+/// of tag-name characters after the `<` that opens the tag.
+pub(crate) fn start_tag_name_around(source: &str, offset: u32) -> Option<(u32, u32)> {
+    let bytes = source.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let off = (offset as usize).min(bytes.len() - 1);
+    let open = bytes[..=off]
+        .iter()
+        .rposition(|&b| b == b'<' || b == b'>')?;
+    if bytes[open] != b'<' {
+        return None;
+    }
+    let name_start = open + 1;
+    let name_len = bytes[name_start..]
+        .iter()
+        .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b':' | b'-' | b'_' | b'$'))
+        .count();
+    (name_len > 0).then_some((name_start as u32, (name_start + name_len) as u32))
+}
+
 /// Upstream's `isInGeneratedCode` (`language-server/src/plugins/
 /// typescript/features/utils.ts`), verbatim: a diagnostic spanning
 /// overlay bytes `start..end` is generated when the nearest ignore-start

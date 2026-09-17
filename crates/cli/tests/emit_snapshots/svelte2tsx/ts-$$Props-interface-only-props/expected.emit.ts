@@ -13,7 +13,7 @@ function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
     });
-    return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
+    return { props: { ...__svn_ensure_right_props<{}>(__svn_any("") as $$Props) } as $$Props, events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };
 }
 $$render_e40e2c10;
 interface $$IsomorphicComponent {

@@ -339,6 +339,12 @@ impl<'a> Visit<'a> for StoreRefProbe<'_> {
         {
             return;
         }
+        // A `$name` the script declares itself is that declaration, not a
+        // subscription (upstream `resolveStore` skips names declared in
+        // scope).
+        if self.bound.contains(full) {
+            return;
+        }
         if self.bound.contains(ident) && self.seen.insert(SmolStr::from(full)) {
             self.out.push(SmolStr::from(full));
         }

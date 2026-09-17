@@ -40,9 +40,9 @@
 //!
 //! 1. `let { ... }: PropType = $props()` → PropType source slice.
 //! 2. `let { ... } = $props<PropType>()` → PropType source slice.
-//! 3. `interface $$Props { ... }` at module scope → the literal string
-//!    `"$$Props"`. The interface declaration itself hoists via
-//!    script_split alongside other user interfaces.
+//! 3. `interface $$Props { ... }` or `type $$Props = ...`, exported or
+//!    not, at the top of the instance script → the literal string
+//!    `"$$Props"`.
 //! 4. `export let foo: T; export let bar = 42;` (Svelte-4) →
 //!    synthesize `{ foo: T; bar?: any; ... }` from each top-level
 //!    `export let`/`export const` declaration (plus `export { alias }`
@@ -173,6 +173,12 @@ pub struct PropsInfo {
     /// top-level, in source order. Empty for Svelte-4 components and
     /// for components with no `$props()` call.
     pub destructures: Vec<PropInfo>,
+    /// How many leading entries of `destructures` the first `$props()`
+    /// declarator introduced. Upstream synthesises the props type from
+    /// each `$props()` declaration in turn, but only the first alias
+    /// declaration takes effect, so the component's props are the first
+    /// destructure's.
+    pub first_props_call_len: usize,
     /// Upstream handle$propsRune's `withUnknown`: true when the
     /// `$props()` object pattern has any non-simple element (nested
     /// pattern, non-identifier key, or `...rest`). The synthesised
@@ -190,11 +196,12 @@ pub struct PropsInfo {
     /// (`let { … } = $props()`), the only shape upstream's best-effort
     /// synthesis reads — `let props = $props()` has no prop surface.
     pub props_object_pattern: bool,
-    /// The first `$props()` declaration carries a leading comment
-    /// mentioning `@type`, which is how a JS component types its props.
-    /// Upstream then keeps the comment as the props type and skips its
-    /// synthesis from the destructure entirely.
-    pub props_type_comment: bool,
+    /// The leading comment mentioning `@type` on the first `$props()`
+    /// declaration — the last such comment before the declarator, else
+    /// the last one before its statement — which is how a JS component
+    /// types its props. Upstream then uses that comment as the props
+    /// type and skips its synthesis from the destructure entirely.
+    pub props_type_comment: Option<String>,
     /// Script-relative byte where upstream anchors the text it inserts
     /// for the first `$props()` declarator: the end of the token before
     /// it (the `let` / `const` keyword, or the separating comma).
@@ -222,9 +229,10 @@ impl PropsInfo {
         let mut type_span: Option<(u32, u32)> = None;
         let mut props_source = PropsSource::None;
         let mut props_with_unknown = false;
+        let mut first_props_call_len = 0usize;
         let mut props_rune = false;
         let mut props_object_pattern = false;
-        let mut props_type_comment = false;
+        let mut props_type_comment: Option<String> = None;
         let mut props_decl_anchor: Option<u32> = None;
 
         // Shape 1 / Shape 2: explicit `$props()` annotation wins over
@@ -263,16 +271,24 @@ impl PropsInfo {
                         &program.comments,
                         trivia_start,
                         declarator.span.start as usize,
-                    ) || leading_comments_mention_type(
-                        source,
-                        &program.comments,
-                        stmt_trivia_start,
-                        decl.span.start as usize,
-                    );
+                    )
+                    .or_else(|| {
+                        leading_comments_mention_type(
+                            source,
+                            &program.comments,
+                            stmt_trivia_start,
+                            decl.span.start as usize,
+                        )
+                    });
                 }
+                let first_call = !props_rune;
                 props_rune = true;
-                props_with_unknown |=
+                let with_unknown =
                     collect_props_destructure(&declarator.id, source, &mut destructures);
+                if first_call {
+                    props_with_unknown = with_unknown;
+                    first_props_call_len = destructures.len();
+                }
                 if type_text.is_some() {
                     continue;
                 }
@@ -301,14 +317,9 @@ impl PropsInfo {
 
         if type_text.is_none() {
             // Shape 3: Svelte-4 `interface $$Props { ... }`.
-            for stmt in &program.body {
-                if let Statement::TSInterfaceDeclaration(iface) = stmt
-                    && iface.id.name == "$$Props"
-                {
-                    type_text = Some("$$Props".to_string());
-                    props_source = PropsSource::LegacyInterface;
-                    break;
-                }
+            if dollar_props_decl_name_span(program).is_some() {
+                type_text = Some("$$Props".to_string());
+                props_source = PropsSource::LegacyInterface;
             }
         }
 
@@ -335,6 +346,7 @@ impl PropsInfo {
             type_span,
             type_root_name,
             destructures,
+            first_props_call_len,
             props_with_unknown,
             props_rune,
             props_object_pattern,
@@ -344,8 +356,26 @@ impl PropsInfo {
     }
 }
 
-/// True when a comment TypeScript treats as leading trivia of the node
-/// starting at `node_start` mentions the `@type` tag. `trivia_start` is
+/// The name span of the instance script's top-level `$$Props`
+/// declaration — an interface or a type alias, exported or not, as
+/// upstream's `isInterfaceOrTypeDeclaration` accepts.
+fn dollar_props_decl_name_span(program: &oxc_ast::ast::Program<'_>) -> Option<oxc_span::Span> {
+    program.body.iter().find_map(|stmt| {
+        let decl = match stmt {
+            Statement::ExportDeclaration(e) => &e.declaration,
+            other => other.as_declaration()?,
+        };
+        let id = match decl {
+            Declaration::TSInterfaceDeclaration(i) => &i.id,
+            Declaration::TSTypeAliasDeclaration(t) => &t.id,
+            _ => return None,
+        };
+        (id.name == "$$Props").then_some(id.span)
+    })
+}
+
+/// The last comment TypeScript treats as leading trivia of the node
+/// starting at `node_start` that mentions the `@type` tag. `trivia_start` is
 /// the end of the token before the node (0 at the start of the script),
 /// so everything between the two is whitespace and `comments`.
 ///
@@ -360,9 +390,10 @@ fn leading_comments_mention_type(
     comments: &[oxc_ast::Comment],
     trivia_start: usize,
     node_start: usize,
-) -> bool {
+) -> Option<String> {
     let mut collecting = trivia_start == 0;
     let mut gap_start = trivia_start;
+    let mut found = None;
     for comment in comments {
         let (start, end) = (comment.span.start as usize, comment.span.end as usize);
         if start < trivia_start || end > node_start {
@@ -370,12 +401,15 @@ fn leading_comments_mention_type(
         }
         let gap = source.get(gap_start..start).unwrap_or("");
         collecting |= gap.contains(['\n', '\r']);
-        if collecting && source.get(start..end).is_some_and(mentions_type_tag) {
-            return true;
+        if collecting
+            && let Some(text) = source.get(start..end)
+            && mentions_type_tag(text)
+        {
+            found = Some(text.to_string());
         }
         gap_start = end;
     }
-    false
+    found
 }
 
 /// `/@type\b/` — `@type` not followed by an identifier character, so
@@ -580,10 +614,24 @@ fn append_props_from_var_decl(
     out: &mut Vec<String>,
 ) {
     for declarator in &var_decl.declarations {
-        let BindingPattern::BindingIdentifier(id) = &declarator.id else {
-            // Destructured exports aren't valid Svelte prop declarations;
-            // skip them rather than invent a synthetic name.
-            continue;
+        let id = match &declarator.id {
+            BindingPattern::BindingIdentifier(id) => id,
+            // `export let { a, b } = obj`: each name the pattern binds
+            // directly becomes an optional prop of its own inferred type
+            // (upstream `handleExportedVariableDeclarationList`).
+            BindingPattern::ObjectPattern(o) => {
+                for prop in &o.properties {
+                    push_pattern_leaf_prop(&prop.value, out);
+                }
+                continue;
+            }
+            BindingPattern::ArrayPattern(a) => {
+                for el in a.elements.iter().flatten() {
+                    push_pattern_leaf_prop(el, out);
+                }
+                continue;
+            }
+            BindingPattern::AssignmentPattern(_) => continue,
         };
         let name = id.name.as_str();
         let has_init = declarator.init.is_some();
@@ -596,24 +644,8 @@ fn append_props_from_var_decl(
         // the default kicks in). No initializer + no type → required
         // `any`. No initializer + type → required of that type.
         let optional_marker = if has_init { "?" } else { "" };
-        // Inference fallback when there's no explicit annotation.
-        // For `export let fn = (x: T, y: U) => …` we synthesize the
-        // arrow's parameter signature — this is what lets a consumer
-        // passing `<Comp fn={cond ? (x, y) => … : alt} />` contextually
-        // type its arrow's params against the component prop. Without
-        // the signature, the prop collapses to `any` and every
-        // consumer's callback param fires TS7006 implicit-any.
-        let arrow_sig = if ty_text.is_none() {
-            declarator
-                .init
-                .as_ref()
-                .and_then(|init| arrow_signature_from_init(init, source))
-        } else {
-            None
-        };
         let ty_src = ty_text
             .map(ToOwned::to_owned)
-            .or(arrow_sig)
             // Unannotated with an initializer: `typeof <name>` lets
             // TS pick up the initializer-inferred type (e.g.
             // `let translate = writable({x,y})` →
@@ -645,6 +677,20 @@ fn append_props_from_var_decl(
     }
 }
 
+/// One prop for a name a destructuring `export let` binds directly;
+/// nested patterns contribute nothing, as upstream reads only the
+/// pattern's own elements.
+fn push_pattern_leaf_prop(pat: &BindingPattern<'_>, out: &mut Vec<String>) {
+    let pat = match pat {
+        BindingPattern::AssignmentPattern(a) => &a.left,
+        other => other,
+    };
+    if let BindingPattern::BindingIdentifier(id) = pat {
+        let name = id.name.as_str();
+        out.push(format!("{name}?: typeof {name};"));
+    }
+}
+
 /// Cheap substring check: does a Props type-source string reference
 /// any body-local via `typeof <name>`? Used by emit to decide whether
 /// the literal is safe to name at module scope or must go through the
@@ -655,46 +701,6 @@ pub fn contains_typeof_ref(ty: &str) -> bool {
     // real concern because this synthesis never embeds user comments
     // into the output; it only concatenates structured type text.
     ty.contains("typeof ")
-}
-
-/// For `init` = an arrow function, synthesize a function-type
-/// annotation from its parameter signatures. Return type defaults
-/// to `any` — we don't try to infer it without running TS. Returns
-/// `None` if the init isn't an arrow, or any param uses a pattern
-/// we don't emit (destructure, rest) — better to fall back to `any`
-/// than emit an incomplete signature that tsgo rejects.
-fn arrow_signature_from_init(init: &Expression<'_>, source: &str) -> Option<String> {
-    let Expression::ArrowFunctionExpression(arrow) = init else {
-        return None;
-    };
-    let mut parts: Vec<String> = Vec::new();
-    for param in &arrow.params.items {
-        let BindingPattern::BindingIdentifier(id) = &param.pattern else {
-            // Destructure / rest / assignment patterns — give up and
-            // let the caller fall back to `any`. Writing these as
-            // prop-type-position types needs the full TS
-            // destructure-type machinery we don't reproduce.
-            return None;
-        };
-        let name = id.name.as_str();
-        let ty = param
-            .type_annotation
-            .as_ref()
-            .map(|ty| ty.type_annotation.span())
-            .and_then(|span| source.get(span.start as usize..span.end as usize))
-            .unwrap_or("any");
-        parts.push(format!("{name}: {ty}"));
-    }
-    // Return type — honor an explicit annotation, otherwise `any`.
-    // We don't run an inference pass; `any` is strictly looser than
-    // the real return, which is safe for prop-sig contextual typing.
-    let ret = arrow
-        .return_type
-        .as_ref()
-        .map(|r| r.type_annotation.span())
-        .and_then(|span| source.get(span.start as usize..span.end as usize))
-        .unwrap_or("any");
-    Some(format!("({}) => {}", parts.join(", "), ret))
 }
 
 /// Does this expression look like a call to the `$props` rune?
@@ -1499,19 +1505,49 @@ mod tests {
     fn props_declaration_shape_and_type_comment() {
         let info = build("\n  let { a } = $props();");
         assert!(info.props_object_pattern);
-        assert!(!info.props_type_comment);
+        assert!(info.props_type_comment.is_none());
+        assert_eq!(
+            build("type $$Props = { a: 1 };").type_text.as_deref(),
+            Some("$$Props")
+        );
+        assert_eq!(
+            build("export interface $$Props { a: 1 }")
+                .type_text
+                .as_deref(),
+            Some("$$Props")
+        );
         // Anchored right after the `let` keyword.
         assert_eq!(info.props_decl_anchor, Some(6));
 
         assert!(!build("let props = $props();").props_object_pattern);
 
         // A leading `@type` comment, on its own line or at the very start.
-        assert!(build("/** @type {{ a: 1 }} */\nlet { a } = $props();").props_type_comment);
-        assert!(build("foo();\n/** @type {P} */ let { a } = $props();").props_type_comment);
-        assert!(build("let\n /** @type {P} */ { a } = $props();").props_type_comment);
+        assert!(
+            build("/** @type {{ a: 1 }} */\nlet { a } = $props();")
+                .props_type_comment
+                .is_some()
+        );
+        assert!(
+            build("foo();\n/** @type {P} */ let { a } = $props();")
+                .props_type_comment
+                .is_some()
+        );
+        assert!(
+            build("let\n /** @type {P} */ { a } = $props();")
+                .props_type_comment
+                .is_some()
+        );
         // Not leading: on the previous token's line, or `@typedef`.
-        assert!(!build("foo(); /** @type {P} */\nlet { a } = $props();").props_type_comment);
-        assert!(!build("/** @typedef {{a: 1}} P */\nlet { a } = $props();").props_type_comment);
+        assert!(
+            build("foo(); /** @type {P} */\nlet { a } = $props();")
+                .props_type_comment
+                .is_none()
+        );
+        assert!(
+            build("/** @typedef {{a: 1}} P */\nlet { a } = $props();")
+                .props_type_comment
+                .is_none()
+        );
 
         // A later declarator anchors after its comma.
         let info = build("let x = 1, { a } = $props();");

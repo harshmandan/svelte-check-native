@@ -9,7 +9,6 @@
 //! - **`export const/let/var/function/class`** — TS1184 / TS1233
 //! - **`export { a, b }` / `export { a as b }`** — TS1233
 //! - **`export { a } from 'mod'`** — TS1233
-//! - **`export default x`** — TS1232
 //! - **`export * from 'mod'`** — TS1232
 //!
 //! All are hoisted to a module-level prelude. The original spans inside
@@ -91,57 +90,22 @@ pub struct ExportedLocalInfo {
     pub is_named_export: bool,
 }
 
-/// Walk backwards from `span_start` through contiguous
-/// `@ts-ignore` / `@ts-expect-error` / `@ts-nocheck` comments (line or
-/// block form) that sit on their own lines directly above it, and
-/// return the position that includes them. Returns `span_start`
-/// unchanged when the preceding line isn't such a directive.
-///
-/// Used when hoisting imports so the directive travels with the
-/// import it annotates. Without this, hoisting strands the directive
-/// in the body (where it suppresses nothing) and the import fires
-/// unsuppressed errors at module scope.
-fn extend_span_for_ts_directives(
-    content: &str,
+/// Where an import's leading comments begin: the first comment between
+/// the end of the previous statement (`trivia_start`) and the import.
+/// Upstream moves every one of those comments along with the import
+/// (`moveNode`), whatever its kind or line, so a `@ts-ignore` written
+/// above or before an import keeps applying to it at module scope.
+fn leading_comments_start(
     comments: &[oxc_ast::Comment],
+    trivia_start: usize,
     span_start: usize,
 ) -> usize {
-    let is_directive = |c: &oxc_ast::Comment| {
-        let text = content[c.content_span().start as usize..c.content_span().end as usize]
-            .trim_start_matches('*')
-            .trim();
-        text.starts_with("@ts-ignore")
-            || text.starts_with("@ts-expect-error")
-            || text.starts_with("@ts-nocheck")
-    };
-    let mut new_start = span_start;
-    loop {
-        // The comment must end on the line above `new_start` with only
-        // whitespace between, and nothing but indentation before it on
-        // its own line.
-        let Some(prev) = comments
-            .iter()
-            .filter(|c| (c.span.end as usize) <= new_start)
-            .max_by_key(|c| c.span.end)
-        else {
-            return new_start;
-        };
-        let gap = &content[prev.span.end as usize..new_start];
-        if !gap.contains('\n') || !gap.trim().is_empty() || !is_directive(prev) {
-            return new_start;
-        }
-        let line_start = content[..prev.span.start as usize]
-            .rfind('\n')
-            .map(|p| p + 1)
-            .unwrap_or(0);
-        if !content[line_start..prev.span.start as usize]
-            .trim()
-            .is_empty()
-        {
-            return new_start;
-        }
-        new_start = line_start;
-    }
+    comments
+        .iter()
+        .filter(|c| c.span.start as usize >= trivia_start && c.span.end as usize <= span_start)
+        .map(|c| c.span.start as usize)
+        .min()
+        .unwrap_or(span_start)
 }
 
 /// Split out every module-level statement (imports, exports of all
@@ -181,8 +145,7 @@ pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> 
     // break those references.
     let mut strip_keyword_spans: Vec<(usize, usize)> = Vec::new();
     // Spans we drop entirely (blank in body, don't add to hoisted prelude).
-    // For `export { x, y }` (no `from`) re-exports of local names, and
-    // `export default x`.
+    // For `export { x, y }` (no `from`) re-exports of local names.
     let mut drop_spans: Vec<(usize, usize)> = Vec::new();
     let mut exported_locals: Vec<SmolStr> = Vec::new();
     let mut export_type_infos: Vec<ExportedLocalInfo> = Vec::new();
@@ -191,19 +154,15 @@ pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> 
     let mut named_exports: Vec<(SmolStr, SmolStr)> = Vec::new();
     let mut top_level_lets: HashSet<SmolStr> = HashSet::new();
 
+    let mut prev_stmt_end = 0usize;
     for stmt in &parsed.program.body {
+        let trivia_start = prev_stmt_end;
+        prev_stmt_end = oxc_span::GetSpan::span(stmt).end as usize;
         match stmt {
             Statement::ImportDeclaration(decl) => {
-                // Extend the span backwards to eat any immediately-
-                // preceding `@ts-ignore` / `@ts-expect-error` /
-                // `@ts-nocheck` directive comment(s). The comment has
-                // to travel WITH the import it annotates — otherwise
-                // hoisting strands it in the body where it suppresses
-                // nothing and the import fires unsuppressed errors at
-                // module scope.
-                let start = extend_span_for_ts_directives(
-                    content,
+                let start = leading_comments_start(
                     &parsed.program.comments,
+                    trivia_start,
                     decl.span.start as usize,
                 );
                 hoist_spans.push((start, decl.span.end as usize));
@@ -283,12 +242,9 @@ pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> 
                     }
                 }
             }
-            Statement::ExportDefaultDeclaration(decl) => {
-                // `export default <expr>` — drop. Expressions may reference
-                // locals; we don't try to disambiguate. The default export
-                // surface goes away but the body keeps type-checking.
-                drop_spans.push((decl.span.start as usize, decl.span.end as usize));
-            }
+            // `export default …` stays in the render function as written,
+            // where it is an error (TS1258), as upstream leaves it.
+            Statement::ExportDefaultDeclaration(_) => {}
             Statement::ExportAllDeclaration(decl) => {
                 hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
             }
@@ -608,15 +564,31 @@ let x = 1;
     }
 
     #[test]
-    fn export_default_is_dropped() {
-        // `export default x` could reference a local; we don't try to
-        // disambiguate. Drop is safer than hoisting. Consumer-side
-        // default-export surface goes away but body type-checks.
+    fn export_default_stays_in_the_body() {
         let src = "let x = 1;\nexport default x;";
         let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(!s.hoisted.contains("export default"));
-        assert!(!s.body.contains("export default"));
-        assert!(s.body.contains("let x = 1;"));
+        assert_eq!(s.body, src);
+    }
+
+    #[test]
+    fn every_leading_comment_moves_with_its_import() {
+        let src = "let x = 1;\n// note\n/* @ts-ignore */ import a from 'a';\nlet y = 2; // trailing\nimport b from 'b';";
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
+        assert!(
+            s.hoisted
+                .contains("// note\n/* @ts-ignore */ import a from 'a';"),
+            "{}",
+            s.hoisted
+        );
+        // A comment after the previous statement on its line leads the
+        // next statement too.
+        assert!(
+            s.hoisted.contains("// trailing\nimport b from 'b';"),
+            "{}",
+            s.hoisted
+        );
+        assert!(!s.body.contains("note"));
     }
 
     #[test]

@@ -65,9 +65,7 @@ pub use events::{
     find_untyped_dispatcher_local_names, has_event_dispatcher_call,
     has_inline_typed_dispatcher_members,
 };
-pub use jsdoc::{
-    scan_jsdoc_props_typedef_keys, scan_jsdoc_typedef_name, should_synthesise_js_props,
-};
+pub use jsdoc::should_synthesise_js_props;
 pub use nodes::attribute::{literal_attr_value, literal_attr_value_range};
 pub use nodes::const_tag::{
     CONST_TAG_INVALID_PLACEMENT_MSG, ConstPlacementError, check_const_placement,

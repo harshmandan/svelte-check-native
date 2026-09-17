@@ -475,14 +475,116 @@ pub(crate) fn has_strict_events_attr(
 /// else counts — a rune name in markup text or a comment is not a
 /// reference, and `$inspect` alone does not switch modes.
 ///
-/// A `$state` that resolves to a store subscription (`const state =
-/// writable(…)` in a Svelte-4 component) is not a global either, so
-/// the top-level bindings of both scripts are excluded first.
+/// Only the instance script and the template are looked at; the module
+/// script never switches the mode. A `$state` that resolves to a store
+/// subscription is not a global either: upstream removes the names of
+/// the instance script's top-level variables, its imports and its
+/// reactive `$:` assignments (`ImplicitStoreValues.getGlobals`) — but
+/// not its functions or classes.
+/// Names a `$name` read can subscribe to as a store: the script's
+/// top-level variables, its default and named imports, and the targets
+/// of its top-level `$:` assignments.
+fn store_base_names(program: &oxc_ast::ast::Program<'_>) -> std::collections::HashSet<String> {
+    use oxc_ast::ast::{Declaration, Expression, ImportDeclarationSpecifier, Statement};
+    let mut names: Vec<smol_str::SmolStr> = Vec::new();
+    for stmt in &program.body {
+        match stmt {
+            Statement::VariableDeclaration(v) => {
+                for d in &v.declarations {
+                    crate::process_instance_script_content::collect_binding_pattern_names(
+                        &d.id, &mut names,
+                    );
+                }
+            }
+            Statement::ExportDeclaration(e) => {
+                if let Declaration::VariableDeclaration(v) = &e.declaration {
+                    for d in &v.declarations {
+                        crate::process_instance_script_content::collect_binding_pattern_names(
+                            &d.id, &mut names,
+                        );
+                    }
+                }
+            }
+            Statement::ImportDeclaration(i) => {
+                for spec in i.specifiers.iter().flatten() {
+                    match spec {
+                        ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                            names.push(s.local.name.as_str().into());
+                        }
+                        ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
+                            names.push(s.local.name.as_str().into());
+                        }
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
+                    }
+                }
+            }
+            Statement::LabeledStatement(l) if l.label.name == "$" => {
+                if let Statement::ExpressionStatement(e) = &l.body
+                    && let Expression::AssignmentExpression(a) = e.expression.without_parentheses()
+                {
+                    collect_assignment_target_names(&a.left, &mut names);
+                }
+            }
+            _ => {}
+        }
+    }
+    names.into_iter().map(String::from).collect()
+}
+
+fn collect_assignment_target_names(
+    target: &oxc_ast::ast::AssignmentTarget<'_>,
+    out: &mut Vec<smol_str::SmolStr>,
+) {
+    use oxc_ast::ast::{AssignmentTarget, AssignmentTargetMaybeDefault, AssignmentTargetProperty};
+    match target {
+        AssignmentTarget::AssignmentTargetIdentifier(id) => out.push(id.name.as_str().into()),
+        AssignmentTarget::ObjectAssignmentTarget(o) => {
+            for p in &o.properties {
+                match p {
+                    AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(i) => {
+                        out.push(i.binding.name.as_str().into());
+                    }
+                    AssignmentTargetProperty::AssignmentTargetPropertyProperty(pp) => {
+                        collect_maybe_default(&pp.binding, out);
+                    }
+                }
+            }
+            if let Some(rest) = &o.rest {
+                collect_assignment_target_names(&rest.target, out);
+            }
+        }
+        AssignmentTarget::ArrayAssignmentTarget(a) => {
+            for el in a.elements.iter().flatten() {
+                collect_maybe_default(el, out);
+            }
+            if let Some(rest) = &a.rest {
+                collect_assignment_target_names(&rest.target, out);
+            }
+        }
+        _ => {}
+    }
+
+    fn collect_maybe_default(
+        t: &AssignmentTargetMaybeDefault<'_>,
+        out: &mut Vec<smol_str::SmolStr>,
+    ) {
+        match t {
+            AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(d) => {
+                collect_assignment_target_names(&d.binding, out);
+            }
+            other => {
+                if let Some(t) = other.as_assignment_target() {
+                    collect_assignment_target_names(t, out);
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn is_runes_mode(
     doc: &svn_parser::Document<'_>,
     fragment: &svn_parser::Fragment,
     parsed_instance: Option<&svn_parser::ParsedScript<'_>>,
-    parsed_module: Option<&svn_parser::ParsedScript<'_>>,
 ) -> bool {
     let source = doc.source;
     // An explicit `<svelte:options runes>` / `runes={true}` forces runes
@@ -491,12 +593,11 @@ pub(crate) fn is_runes_mode(
     if svn_parser::runes_option(fragment, source) == Some(true) {
         return true;
     }
-    let mut bound: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for parsed in [parsed_instance, parsed_module].into_iter().flatten() {
-        svn_analyze::collect_top_level_bindings(&parsed.program, &mut bound);
-    }
+    let bound = parsed_instance
+        .map(|p| store_base_names(&p.program))
+        .unwrap_or_default();
     let mut probe = svn_analyze::RunesProbe::new(svn_analyze::RunesRule::Svelte2tsx, &bound);
-    for parsed in [parsed_instance, parsed_module].into_iter().flatten() {
+    if let Some(parsed) = parsed_instance {
         probe.scan_program(&parsed.program);
         if probe.found {
             return true;
@@ -540,23 +641,31 @@ pub(crate) fn is_runes_mode(
 /// ambient the component refers to (an identifier reference in a
 /// script or template expression — see `svn_analyze::find_ambient_refs`).
 ///
-/// Types: `Record<string, any>` for all three. Upstream's
-/// `__sveltets_2_slotsType({…slot names…})` is more precise (each
-/// slot is typed as `boolean | ''`), but that requires walking the
-/// template to collect slot names and emit a shape literal.
-pub(crate) fn emit_svelte4_ambients(out: &mut String, refs: svn_analyze::AmbientRefs, is_ts: bool) {
+/// `$$slots` is typed from the slots the template declares, as
+/// upstream's `__sveltets_2_slotsType({'name': '', …})`: a `boolean`
+/// per slot name, so reading a slot the component doesn't have is an
+/// error. `slot_names` lists them in template order.
+pub(crate) fn emit_svelte4_ambients(
+    out: &mut String,
+    refs: svn_analyze::AmbientRefs,
+    is_ts: bool,
+    slot_names: &[&str],
+) {
     // In TS overlays we emit inline `: T` annotations. In JS overlays
     // we must not — tsgo fires TS8010 and aborts project-wide once
     // hit, silently suppressing every legitimate diagnostic
     // elsewhere. Emit JSDoc casts on the RHS for JS overlays.
     if refs.slots {
-        if is_ts {
-            out.push_str("    let $$slots: Record<string, boolean | undefined> = {};\n");
-        } else {
-            out.push_str(
-                "    let $$slots = /** @type {Record<string, boolean | undefined>} */ ({});\n",
-            );
+        out.push_str("    let $$slots = __svn_slots_type({");
+        for (i, name) in slot_names.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push('\'');
+            out.push_str(name);
+            out.push_str("': ''");
         }
+        out.push_str("});\n");
         out.push_str("    void $$slots;\n");
     }
     if refs.rest_props {
@@ -741,11 +850,25 @@ mod tests {
             .instance_script
             .as_ref()
             .map(|s| svn_parser::parse_script_body(&alloc, s.content, s.lang));
-        let module = doc
-            .module_script
-            .as_ref()
-            .map(|s| svn_parser::parse_script_body(&alloc, s.content, s.lang));
-        is_runes_mode(&doc, &fragment, instance.as_ref(), module.as_ref())
+        is_runes_mode(&doc, &fragment, instance.as_ref())
+    }
+
+    #[test]
+    fn store_names_follow_upstream_globals() {
+        // A module-script store of the same name is not an instance
+        // declaration, and neither is a function.
+        assert!(runes(
+            "<script module>export const state = 1;</script><script>$state;</script>"
+        ));
+        assert!(runes("<script>function state() {}\n$state;</script>"));
+        // Instance variables, imports and `$:` targets are.
+        assert!(!runes("<script>const state = 1;\n$state;</script>"));
+        assert!(!runes(
+            "<script>import { state } from './s';\n$state;</script>"
+        ));
+        assert!(!runes("<script>$: state = 1;\n$state;</script>"));
+        // The module script never switches the mode.
+        assert!(!runes("<script module>let x = $state(0);</script>"));
     }
 
     #[test]

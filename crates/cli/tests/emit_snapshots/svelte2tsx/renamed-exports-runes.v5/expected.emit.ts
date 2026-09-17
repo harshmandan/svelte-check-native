@@ -14,7 +14,7 @@ function $$render_e40e2c10() {
     });
     void name;
     void name2;
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ name3: typeof name; name4: typeof name2; }} */ ({}) };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ name3: typeof name; name4: typeof name2; }} */ ({}) };
 }
 $$render_e40e2c10;
 /** @type {import('svelte').Component<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */

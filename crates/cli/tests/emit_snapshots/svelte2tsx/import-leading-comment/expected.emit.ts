@@ -3,13 +3,13 @@
     import A from './a.svelte';
     // @ts-ignore
     import B from './b.svelte';
-import C from './c.svelte';
+    /*hi*/import C from './c.svelte';
 function $$render_e40e2c10() {
 
                                
                  
                                
-    /*hi*/                           
+                                     
     ;(async () => {
         // template type-check body (incremental)
     });

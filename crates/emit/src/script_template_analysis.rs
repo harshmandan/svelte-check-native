@@ -97,17 +97,24 @@ pub(crate) fn collect_store_refs<'alloc>(
         .map(|ms| parse_script_body(&alloc_mod, ms.content, ms.lang));
 
     let mut script_bindings: HashSet<String> = HashSet::new();
+    // Type-only imports count too: upstream declares `$name` for any
+    // imported `name` it sees read that way (inside ignore comments,
+    // so a type that isn't a store just leaves `$name` as `any`).
+    let mut imports: HashSet<SmolStr> = HashSet::new();
     if let Some(parsed) = &parsed_mod {
         collect_top_level_bindings(&parsed.program, &mut script_bindings);
+        crate::store_subscriptions::import_local_names(&parsed.program, &mut imports);
     }
     if let (Some(instance), Some(parsed_orig)) = (&doc.instance_script, parsed_instance) {
         collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
+        crate::store_subscriptions::import_local_names(&parsed_orig.program, &mut imports);
         if let Some(rewritten) = rewritten_content {
             let alloc_rw = Allocator::default();
             let parsed_rw = parse_script_body(&alloc_rw, rewritten, instance.lang);
             collect_top_level_bindings(&parsed_rw.program, &mut script_bindings);
         }
     }
+    script_bindings.extend(imports.into_iter().map(String::from));
 
     // Store auto-subscribe scan happens AFTER both module + instance
     // bindings are collected, so a `$properties` use in instance can

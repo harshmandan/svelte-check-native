@@ -78,9 +78,6 @@ pub enum ParseError {
     #[error("unknown script context {value:?}; expected \"module\" or nothing")]
     UnknownScriptContext { value: String, range: Range },
 
-    #[error("unknown script lang {value:?}; expected \"ts\", \"typescript\", \"js\", or nothing")]
-    UnknownScriptLang { value: String, range: Range },
-
     #[error("unterminated HTML comment")]
     UnterminatedComment { range: Range },
 
@@ -120,7 +117,6 @@ impl ParseError {
             Self::DuplicateStyle { range, .. } => *range,
             Self::MalformedOpenTag { range } => *range,
             Self::UnknownScriptContext { range, .. } => *range,
-            Self::UnknownScriptLang { range, .. } => *range,
             Self::UnterminatedComment { range } => *range,
             Self::UnterminatedMustache { range } => *range,
             Self::UnexpectedEof { range } => *range,
@@ -165,7 +161,6 @@ impl ParseError {
             Self::DuplicateStyle { .. } => "duplicate-style",
             Self::MalformedOpenTag { .. } => "malformed-open-tag",
             Self::UnknownScriptContext { .. } => "unknown-script-context",
-            Self::UnknownScriptLang { .. } => "unknown-script-lang",
             Self::UnterminatedComment { .. } => "unterminated-comment",
             Self::UnterminatedMustache { .. } => "unterminated-mustache",
             Self::UnexpectedEof { .. } => "unexpected-eof",

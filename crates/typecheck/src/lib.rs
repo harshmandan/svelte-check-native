@@ -1147,6 +1147,16 @@ fn overlay_syntax_failures(
             {
                 return None;
             }
+            // A syntax error on a line copied verbatim from the user's
+            // script is the user's own (a `<script lang="coffee">` body,
+            // say), reported through the normal mapping as upstream
+            // reports it — not a fault in what we generated.
+            if map_data
+                .get(&abs)
+                .is_some_and(|data| position::translate_line(&data.line_map, d.line).is_some())
+            {
+                return None;
+            }
             let source = layout.original_from_generated(&abs)?;
             let on_user_text = map_data.get(&abs).is_some_and(|data| {
                 position::overlay_byte_offset(data, d.line, d.column).is_some_and(|byte| {

@@ -143,7 +143,7 @@ pub(crate) fn synthesise_js_props_typedef_body(
 ) -> Option<String> {
     let mut body = String::from("{");
     let mut first = true;
-    for entry in &props_info.destructures {
+    for entry in &props_info.destructures[..props_info.first_props_call_len] {
         if entry.is_rest || entry.local_only {
             // Covered by the `withUnknown` widening below — upstream
             // pushes no prop key for these elements.
@@ -203,27 +203,32 @@ pub(crate) fn inject_component_props_annotation(
 ) -> String {
     let alloc = Allocator::default();
     let parsed = svn_parser::parse_script_body(&alloc, content, lang);
-    let mut action: Option<AnnotationAction> = None;
+    // Upstream rewrites every top-level `$props()` declaration the same
+    // way. Each rewrite declares its own `$$ComponentProps`, and only the
+    // first declaration counts, so a later destructure is typed by the
+    // first one's props.
+    let mut actions: Vec<AnnotationAction> = Vec::new();
     for stmt in &parsed.program.body {
-        let decl = match stmt {
-            Statement::VariableDeclaration(d) => d,
-            _ => continue,
+        let Statement::VariableDeclaration(decl) = stmt else {
+            continue;
         };
         for declarator in &decl.declarations {
             if let Some(a) = annotation_action(declarator) {
-                // Use the FIRST $props destructure — upstream only
-                // recognises one.
-                action = Some(a);
-                break;
+                actions.push(a);
             }
         }
-        if action.is_some() {
-            break;
-        }
     }
-    let Some(action) = action else {
+    if actions.is_empty() {
         return content.to_string();
-    };
+    }
+    let mut out = content.to_string();
+    for action in actions.into_iter().rev() {
+        out = apply_annotation_action(&out, action);
+    }
+    out
+}
+
+fn apply_annotation_action(content: &str, action: AnnotationAction) -> String {
     let mut out = String::with_capacity(content.len() + 32);
     match action {
         AnnotationAction::ReplaceTypeArgument { start, end } => {
@@ -377,7 +382,11 @@ fn annotation_action(declarator: &VariableDeclarator<'_>) -> Option<AnnotationAc
         return Some(AnnotationAction::Replace { start, end });
     }
     // CASE B — no existing annotation. Splice after the destructure
-    // pattern's closing `}`.
+    // pattern's closing `}` — unless the pattern is empty, which gives
+    // upstream nothing to declare the alias from.
+    if obj.properties.is_empty() && obj.rest.is_none() {
+        return None;
+    }
     Some(AnnotationAction::Insert(obj.span.end as usize))
 }
 

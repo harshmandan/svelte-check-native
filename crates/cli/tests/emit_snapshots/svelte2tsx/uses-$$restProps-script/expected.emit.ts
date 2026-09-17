@@ -10,7 +10,7 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("h1", {});             (name);
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: {}, events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>> & __SvnAllProps, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */

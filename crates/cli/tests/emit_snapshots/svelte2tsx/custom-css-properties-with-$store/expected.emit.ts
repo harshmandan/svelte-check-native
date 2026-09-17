@@ -8,7 +8,7 @@ function $$render_e40e2c10() {
             new __svn_C_0({ target: __svn_any(), props: {...__svn_css_prop({"--custom-css-property1": ($jo)}), ...__svn_css_prop({"--custom-css-property2": `hi${$jo}hi`}), ...__svn_css_prop({"--custom-css-property3": `hi${$jo}hi`}), ...__svn_css_prop({"--custom-css-property4": `hi${$jo}hi`})} });
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */

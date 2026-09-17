@@ -1,0 +1,11 @@
+{
+    "errors": [
+        {
+            "file": "src/A.svelte",
+            "line": 1,
+            "column": 31,
+            "code": 2307
+        }
+    ],
+    "_note": "Every comment leading an import moves to module scope with it, so the hoisted line keeps the source columns and the TS2307 lands on the specifier. Verified against svelte-check --tsgo."
+}

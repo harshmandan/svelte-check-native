@@ -62,6 +62,14 @@ declare function __sveltets_2_store_get<Store extends __SvnStore<any> | undefine
 ): Store extends __SvnStore<infer T> ? T : Store;
 
 /**
+ * `$$slots`: one `boolean` per slot the template declares, keyed by the
+ * slot names passed in (`{ name: '' }`), as upstream's
+ * `__sveltets_2_slotsType`.
+ */
+declare function __svn_slots_type<Slots, Key extends keyof Slots>(slots: Slots): Record<Key, boolean>;
+declare function __sveltets_2_slotsType<Slots, Key extends keyof Slots>(slots: Slots): Record<Key, boolean>;
+
+/**
  * Surface a type-only template reference inside the type-check function
  * so TS6196 doesn't fire on `import type { Foo }` that's only used in a
  * `<Component prop={value as Foo} />`-style assertion. The body is a

@@ -1,0 +1,4 @@
+{
+  "bucket": "tsgo-divergence",
+  "reason": "the language server moves the `$$Props` cross-check error (TS2345) onto the `$$Props` declaration; svelte-check --tsgo has no language service to do so and drops it, and we follow --tsgo"
+}

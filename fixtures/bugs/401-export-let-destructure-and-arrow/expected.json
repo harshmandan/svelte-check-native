@@ -1,0 +1,23 @@
+{
+    "errors": [
+        {
+            "file": "src/Parent.svelte",
+            "line": 5,
+            "column": 13,
+            "code": 2322
+        },
+        {
+            "file": "src/Parent.svelte",
+            "line": 6,
+            "column": 7,
+            "code": 2322
+        },
+        {
+            "file": "src/Parent.svelte",
+            "line": 7,
+            "column": 7,
+            "code": 2322
+        }
+    ],
+    "_note": "`export let { a, b } = obj` adds each name as an optional prop of its own type, and an unannotated `export let fn = (\u2026) => \u2026` is typed `typeof fn`, keeping its real return type. Verified against svelte-check --tsgo."
+}

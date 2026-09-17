@@ -32,7 +32,7 @@ function $$render_e40e2c10() {
             __svn_create_slot("third", { d, c });
         }
     });
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: ((({ a }) => a)(__svn_unwrap_arr((__svn_unwrap_arr(items))))) }, 'second': { a: (a) }, 'third': { d: (d), c: (c) } }, bindings: /** @type {string} */ (''), exports: {} };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { a: ((({ a }) => a)(__svn_unwrap_arr((__svn_unwrap_arr(items))))) }, 'second': { a: (a) }, 'third': { d: (d), c: (c) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
 /** @type {__SvnIsomorphicComponent<__SvnSvelte4SlotedProps<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, __SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */

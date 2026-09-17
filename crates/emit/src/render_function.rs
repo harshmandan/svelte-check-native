@@ -27,7 +27,7 @@ use crate::nodes::action::emit_legacy_action_attrs;
 use crate::process_instance_script_content::ExportedLocalInfo;
 use crate::props_emit::write_slots_field_type;
 use crate::svelte4;
-use svn_analyze::{TemplateSummary, scan_jsdoc_typedef_name};
+use svn_analyze::TemplateSummary;
 
 /// Emit the `async function __svn_tpl_check() { … }` wrapper that
 /// carries every template expression as real TypeScript. The walk
@@ -148,26 +148,27 @@ pub(crate) fn emit_render_body_return(
     synth_events_alias_body: Option<&str>,
     exports_object: Option<&str>,
     export_type_infos: &[ExportedLocalInfo],
-    dollar_props_name_range: Option<svn_core::Range>,
     props_info: &svn_analyze::PropsInfo,
     js_props_typedef_synthesised: bool,
     slot_defs: &[svn_analyze::SlotDef],
     has_strict_events_decl: bool,
     has_strict_slots_decl: bool,
+    runes_mode: bool,
+    ambients: svn_analyze::AmbientRefs,
 ) {
     // JS overlay: always emit a return so the default-export's
     // `Awaited<ReturnType<typeof $$render>>['props']` extraction
-    // resolves to a real Props type. When the script has a
-    // `/** @typedef {Object} Props */` block and
-    // `/** @type {Props} */ let {...} = $props()`, PropsInfo captures
-    // the root name ("Props"), and we reference it here via
-    // `/** @type {Props} */({})`. Without a Props name, fall back to
-    // `any` (degrades to no excess-prop check, but no regression).
+    // resolves to a real Props type. The props expression follows
+    // upstream's `ExportedNames.createPropsStr` for a JS component:
+    //
+    //   - runes mode: the synthesised `$$ComponentProps` typedef, else
+    //     the `@type` comment leading the `$props()` declaration, else
+    //     `Record<string, never>`;
+    //   - legacy mode: the component's exports, else `{}` when it reads
+    //     `$$props` / `$$restProps`, else `Record<string, never>`.
+    //
+    // Neither mode looks at unrelated JSDoc such as a `@typedef` block.
     if !emit_is_ts() {
-        // Prefer a TS-annotated Props name if PropsInfo captured one,
-        // else fall back to scanning the instance script for a JSDoc
-        // `@typedef {Object} <Name>` declaration — the standard
-        // Svelte-4/JS-Svelte props shape.
         let name_from_ts = prop_type_source.and_then(|ty| {
             let root = ty.trim();
             if !root.is_empty()
@@ -181,17 +182,11 @@ pub(crate) fn emit_render_body_return(
                 None
             }
         });
-        let name_from_jsdoc = doc
-            .instance_script
-            .as_ref()
-            .and_then(|s| scan_jsdoc_typedef_name(s.content));
         // Svelte-4 `export let` synthesis: PropsInfo captures a
-        // literal `{k: T, …}` type_text (PropsSource::SynthesisedFromExports)
-        // that doesn't match the named-type predicate above. Embed the
-        // literal body directly as the JSDoc `@type` so the default
-        // export's `Awaited<ReturnType<…>>['props']` resolves to the
-        // typed shape (e.g. `{b: any}`) — restoring the required-prop
-        // signal that powers TS2741 on consumers.
+        // literal `{k: T, …}` type_text (PropsSource::SynthesisedFromExports).
+        // Embed the literal body directly as the JSDoc `@type` so the
+        // default export's `Awaited<ReturnType<…>>['props']` resolves
+        // to the typed shape.
         let literal_from_exports = prop_type_source
             .filter(|_| {
                 matches!(
@@ -200,22 +195,24 @@ pub(crate) fn emit_render_body_return(
                 )
             })
             .map(|ty| ty.trim().to_string());
-        // Selection precedence — mirrors the synthesis decision in
-        // emit_render (must match or `$$ComponentProps` won't be in
-        // scope for this cast):
-        //   1. Synthesised `$$ComponentProps`.
-        //   2. TS-annotated Props name.
-        //   3. User-declared `@typedef {Object} <Name>` block.
-        //   4. Svelte-4 `export let` literal shape from PropsInfo.
-        //   5. `any` cast.
-        let synthesised_name = js_props_typedef_synthesised.then(|| "$$ComponentProps".to_string());
-        let props_expr = match synthesised_name
-            .or(name_from_ts)
-            .or(name_from_jsdoc)
-            .or(literal_from_exports)
-        {
-            Some(body) => format!("/** @type {{{body}}} */({{}})"),
-            None => "/** @type {any} */({})".to_string(),
+        let never = "/** @type {Record<string, never>} */ ({})".to_string();
+        let as_type = |body: String| format!("/** @type {{{body}}} */({{}})");
+        let props_expr = if runes_mode {
+            if js_props_typedef_synthesised {
+                as_type("$$ComponentProps".to_string())
+            } else if let Some(name) = name_from_ts {
+                as_type(name)
+            } else if let Some(comment) = props_info.props_type_comment.as_deref() {
+                format!("{comment}({{}})")
+            } else {
+                never
+            }
+        } else if let Some(body) = literal_from_exports.or(name_from_ts) {
+            as_type(body)
+        } else if ambients.props || ambients.rest_props {
+            "{}".to_string()
+        } else {
+            never
         };
         // Full projection, JS-safe: upstream createRenderFunction.ts
         // returns { props, exports, bindings, slots, events } for JS
@@ -346,22 +343,18 @@ pub(crate) fn emit_render_body_return(
     // an empty-typed call into `__svn_ensure_right_props<{<lets>}>(
     // __svn_any("") as $$Props)` so TS fires TS2345 when `$$Props`
     // is wider/narrower than the declared `export let X: T` shape.
+    //
+    // The call is generated code with no source position, so svelte-check
+    // drops that TS2345: the language server moves it onto the `$$Props`
+    // declaration, but the `--tsgo` path has no language service to do
+    // so and discards the unmapped diagnostic.
     if matches!(props_info.source, svn_analyze::PropsSource::LegacyInterface) {
         let lets_shape: String = build_exported_lets_shape(export_type_infos);
         let _ = write!(
             buf,
             "    return {{ props: {{ ...__svn_ensure_right_props<{lets_shape}>("
         );
-        // Anchor the cast expression to the source's `$$Props`
-        // declaration name. TS2345 fired on the type-assertion
-        // argument reverse-maps onto the interface's name span,
-        // matching upstream LS's `movePropsErrorRangeBackIfNecessary`.
-        let cast = "__svn_any(\"\") as $$Props";
-        if let Some(range) = dollar_props_name_range {
-            buf.append_with_source(cast, range);
-        } else {
-            buf.push_str(cast);
-        }
+        buf.push_str("__svn_any(\"\") as $$Props");
         let _ = write!(
             buf,
             ") }} as $$Props, events: undefined as any as {events_field}, slots: ",

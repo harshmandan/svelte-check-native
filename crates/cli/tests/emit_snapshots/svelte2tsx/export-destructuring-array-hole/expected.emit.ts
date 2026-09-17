@@ -16,7 +16,7 @@ function $$render_e40e2c10() {
     void e_one;
     void A;
     void C;
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ A: typeof A; C: typeof C; }} */ ({}) };
+    return { props: /** @type {{ a?: typeof a; A?: typeof A; }} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ A: typeof A; C: typeof C; }} */ ({}) };
 }
 $$render_e40e2c10;
 /** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_e40e2c10>>['slots']>>, Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */

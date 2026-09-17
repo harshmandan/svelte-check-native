@@ -389,17 +389,11 @@ fn emit_document_with_render_name(
     // `type $$Slots`, the render-fn return uses that as the slots
     // surface; the synthesised slot-defs are ignored.
     let has_strict_slots_decl = svelte4::compat::has_strict_slots_ast(parsed_instance.as_ref());
-    let runes_mode = is_runes_mode(
-        doc,
-        fragment,
-        parsed_instance.as_ref(),
-        parsed_module.as_ref(),
-    );
+    let runes_mode = is_runes_mode(doc, fragment, parsed_instance.as_ref());
     let ambients = svn_analyze::find_ambient_refs(
         fragment,
         doc.source,
         parsed_instance.as_ref().map(|p| &p.program),
-        parsed_module.as_ref().map(|p| &p.program),
     );
 
     // Single analyze-time resolution of every Props decision emit
@@ -461,11 +455,11 @@ fn emit_document_with_render_name(
             raw_props_info.props_rune
                 && raw_props_info.props_object_pattern
                 && raw_props_info.type_text.is_none()
-                && (is_ts || !raw_props_info.props_type_comment)
+                && (is_ts || raw_props_info.props_type_comment.is_none())
         })
         .map(|kind| {
-            let keys: Vec<&str> = raw_props_info
-                .destructures
+            let keys: Vec<&str> = raw_props_info.destructures
+                [..raw_props_info.first_props_call_len]
                 .iter()
                 .filter(|p| !p.is_rest && !p.local_only)
                 .map(|p| p.prop_key.as_str())
@@ -482,7 +476,7 @@ fn emit_document_with_render_name(
         let synth = if is_ts
             && !is_route_file
             && raw_props_info.type_text.is_none()
-            && (!raw_props_info.destructures.is_empty() || raw_props_info.props_with_unknown)
+            && (raw_props_info.first_props_call_len > 0 || raw_props_info.props_with_unknown)
         {
             synthesise_js_props_typedef_body(&raw_props_info)
         } else {
@@ -498,8 +492,7 @@ fn emit_document_with_render_name(
             (raw_props_info.props_rune
                 && raw_props_info.type_text.is_none()
                 && !raw_props_info.props_with_unknown
-                && raw_props_info
-                    .destructures
+                && raw_props_info.destructures[..raw_props_info.first_props_call_len]
                     .iter()
                     .all(|d| d.local_only || d.is_rest))
             .then(|| "any".to_string())
@@ -1052,12 +1045,7 @@ fn emit_document_with_render_name(
     let synthesised_js_props_typedef = if let (false, Some(route)) = (is_ts, &route_props_synth) {
         route.clone()
     } else if !is_ts {
-        let script = doc
-            .instance_script
-            .as_ref()
-            .map(|s| s.content)
-            .unwrap_or("");
-        if should_synthesise_js_props(&props_info, script) {
+        if should_synthesise_js_props(&props_info) {
             synthesise_js_props_typedef_body(&props_info)
         } else {
             None
@@ -1439,7 +1427,29 @@ fn emit_document_with_render_name(
     // (script + template). Ambiguity risk: a literal `$$slots` inside
     // a string or comment would trigger the declaration, but that's
     // harmless — the `let` just goes unused in the overlay.
-    emit_svelte4_ambients(buf.raw_string_mut(), ambients, is_ts);
+    let mut slot_names: Vec<&str> = Vec::new();
+    for def in &summary.slot_defs {
+        if !slot_names.contains(&def.slot_name.as_str()) {
+            slot_names.push(def.slot_name.as_str());
+        }
+    }
+    let ambients_start = buf.as_str().len() as u32;
+    emit_svelte4_ambients(buf.raw_string_mut(), ambients, is_ts, &slot_names);
+    // Upstream writes these declarations into the text that replaces the
+    // instance `<script ...>` tag, so a diagnostic on one reports at the
+    // character after the tag's `<`.
+    let ambients_end = buf.as_str().len() as u32;
+    if ambients_end > ambients_start
+        && let Some(instance) = &doc.instance_script
+    {
+        let tag = instance.open_tag_range.start + 1;
+        buf.push_token_map(TokenMapEntry {
+            overlay_byte_start: ambients_start,
+            overlay_byte_end: ambients_end,
+            source_byte_start: tag,
+            source_byte_end: tag + 1,
+        });
+    }
 
     // Root snippets that stay in the component land here, at the
     // render function's start — before the script body, as upstream
@@ -1574,29 +1584,6 @@ fn emit_document_with_render_name(
         .as_ref()
         .map(|s| s.export_type_infos.as_slice())
         .unwrap_or(&[]);
-    // Locate the `interface $$Props` name span (in absolute source
-    // bytes) so emit can anchor the synthesized
-    // `__svn_ensure_right_props<…>(__svn_any("") as $$Props)` cast to
-    // it. Upstream's LS does the same remap in
-    // `DiagnosticsProvider.movePropsErrorRangeBackIfNecessary` —
-    // a TS2345 fired in synthesized return-statement bytes resolves
-    // onto the user-source interface declaration name.
-    let dollar_props_name_range: Option<svn_core::Range> = doc
-        .instance_script
-        .as_ref()
-        .zip(parsed_instance.as_ref())
-        .and_then(|(s, p)| {
-            for stmt in &p.program.body {
-                if let oxc_ast::ast::Statement::TSInterfaceDeclaration(iface) = stmt
-                    && iface.id.name == "$$Props"
-                {
-                    let span = iface.id.span;
-                    let base = s.content_range.start;
-                    return Some(svn_core::Range::new(base + span.start, base + span.end));
-                }
-            }
-            None
-        });
     emit_render_body_return(
         &mut buf,
         doc,
@@ -1605,12 +1592,13 @@ fn emit_document_with_render_name(
         events_alias_body.as_deref(),
         exports_object.as_deref(),
         export_type_infos,
-        dollar_props_name_range,
         &props_info,
         synthesised_js_props_typedef.is_some(),
         &summary.slot_defs,
         has_strict_events_decl,
         has_strict_slots_decl,
+        runes_mode,
+        ambients,
     );
 
     buf.push_str("}\n");

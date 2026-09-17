@@ -8,7 +8,7 @@ function $$render_aad4163e() {
         // template type-check body (incremental)
     });
     void snapshot;
-    return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ snapshot: any; }} */ ({}) };
+    return { props: /** @type {Record<string, never>} */ ({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ snapshot: any; }} */ ({}) };
 }
 $$render_aad4163e;
 /** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_aad4163e>>['props']>>, Awaited<ReturnType<typeof $$render_aad4163e>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_aad4163e>>['slots']>>, Awaited<ReturnType<typeof $$render_aad4163e>>['exports'], Awaited<ReturnType<typeof $$render_aad4163e>>['bindings']>} */

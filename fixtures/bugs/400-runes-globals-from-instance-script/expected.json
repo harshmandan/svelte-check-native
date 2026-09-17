@@ -1,0 +1,25 @@
+{
+    "errors": [
+        {
+            "file": "src/Use.svelte",
+            "line": 4,
+            "column": 3,
+            "code": 2322
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 5,
+            "column": 3,
+            "code": 2322
+        }
+    ],
+    "warnings": [
+        {
+            "file": "src/B.svelte",
+            "line": 3,
+            "column": 12,
+            "code": "store_rune_conflict"
+        }
+    ],
+    "_note": "Runes mode follows svelte2tsx's globals: only the instance script and the template count, and a `$state` read counts unless `state` is an instance variable, import or `$:` target \u2014 a module-script store or an instance function doesn't stop it. Runes mode makes the consumer's unknown `on:foo` an error. Verified against svelte-check --tsgo."
+}

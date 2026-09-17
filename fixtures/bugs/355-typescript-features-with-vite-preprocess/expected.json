@@ -1,0 +1,36 @@
+{
+    "errors": [
+        {
+            "file": "src/InstanceDecorator.svelte",
+            "line": 1,
+            "column": 2,
+            "code": "typescript_invalid_feature"
+        },
+        {
+            "file": "src/InstanceStripped.svelte",
+            "line": 1,
+            "column": 2,
+            "code": "typescript_invalid_feature"
+        },
+        {
+            "file": "src/ModuleEnum.svelte",
+            "line": 2,
+            "column": 9,
+            "code": "typescript_invalid_feature"
+        },
+        {
+            "file": "src/NamespaceValue.svelte",
+            "line": 1,
+            "column": 2,
+            "code": "typescript_invalid_feature"
+        },
+        {
+            "file": "src/TemplateFirst.svelte",
+            "line": 8,
+            "column": 17,
+            "code": "typescript_invalid_feature"
+        }
+    ],
+    "warnings": [],
+    "_note": "vitePreprocess() without script: true leaves scripts alone, so every enum, namespace holding values and constructor parameter property fails, first in template, then instance, then module order. Verified against svelte-check 4.4.6."
+}

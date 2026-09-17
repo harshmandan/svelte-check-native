@@ -1534,6 +1534,7 @@ fn lint_auto(source: &str) -> Vec<Warning> {
     let options = svn_lint::LintOptions {
         runes: None,
         experimental_async: true,
+        ..svn_lint::LintOptions::default()
     };
     svn_lint::lint_file_with_options(
         source,

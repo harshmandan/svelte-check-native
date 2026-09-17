@@ -122,6 +122,7 @@ pub enum Code {
     svelte_element_invalid_this,
     svelte_self_deprecated,
     svelte_self_invalid_placement,
+    typescript_invalid_feature,
     unknown_code,
 }
 
@@ -268,6 +269,7 @@ impl Code {
             Self::svelte_element_invalid_this => "svelte_element_invalid_this",
             Self::svelte_self_deprecated => "svelte_self_deprecated",
             Self::svelte_self_invalid_placement => "svelte_self_invalid_placement",
+            Self::typescript_invalid_feature => "typescript_invalid_feature",
             Self::unknown_code => "unknown_code",
         }
     }
@@ -418,6 +420,7 @@ impl Code {
             "svelte_element_invalid_this" => Some(Self::svelte_element_invalid_this),
             "svelte_self_deprecated" => Some(Self::svelte_self_deprecated),
             "svelte_self_invalid_placement" => Some(Self::svelte_self_invalid_placement),
+            "typescript_invalid_feature" => Some(Self::typescript_invalid_feature),
             "unknown_code" => Some(Self::unknown_code),
             _ => None,
         }
@@ -425,7 +428,7 @@ impl Code {
 }
 
 /// All known codes, alphabetically sorted.
-pub const CODES: &[&str; 113] = &[
+pub const CODES: &[&str; 114] = &[
     "a11y_accesskey",
     "a11y_aria_activedescendant_has_tabindex",
     "a11y_aria_attributes",
@@ -538,6 +541,7 @@ pub const CODES: &[&str; 113] = &[
     "svelte_element_invalid_this",
     "svelte_self_deprecated",
     "svelte_self_invalid_placement",
+    "typescript_invalid_feature",
     "unknown_code",
 ];
 
@@ -578,4 +582,5 @@ pub const COMPILER_ERROR_CODES: &[&str] = &[
     "snippet_conflict",
     "snippet_parameter_assignment",
     "svelte_self_invalid_placement",
+    "typescript_invalid_feature",
 ];

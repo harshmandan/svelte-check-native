@@ -121,15 +121,25 @@ pub fn walk_parsed(
     // script-AST rules below both walk the same `Program`. The
     // allocator is hoisted to this frame so the parsed ASTs outlive
     // both consumers.
+    // The compiler parses every script as TypeScript when the
+    // component is TypeScript, whatever each tag's own `lang`.
+    let compiler_ts = crate::rules::typescript_features::compiler_parses_as_ts(source);
+    let script_lang = |s: &svn_parser::ScriptSection<'_>| {
+        if compiler_ts {
+            svn_parser::ScriptLang::Ts
+        } else {
+            s.lang
+        }
+    };
     let script_alloc = oxc_allocator::Allocator::default();
     let parsed_module = doc
         .module_script
         .as_ref()
-        .map(|s| parse_script_body(&script_alloc, s.content, s.lang));
+        .map(|s| parse_script_body(&script_alloc, s.content, script_lang(s)));
     let parsed_instance = doc
         .instance_script
         .as_ref()
-        .map(|s| parse_script_body(&script_alloc, s.content, s.lang));
+        .map(|s| parse_script_body(&script_alloc, s.content, script_lang(s)));
     let module_program = parsed_module.as_ref().map(|p| &p.program);
     let instance_program = parsed_instance.as_ref().map(|p| &p.program);
     ctx.runes = forced.unwrap_or_else(|| scripts_signal_runes(module_program, instance_program));
@@ -182,6 +192,12 @@ pub fn walk_parsed(
     ctx.pending_template_events = std::mem::take(&mut tree.template_rule_events).into();
     let declaration_error = tree.declaration_error.take();
     ctx.scope_tree = Some(tree);
+
+    // Stripping TypeScript happens before analysis, so its failure
+    // precedes everything else.
+    if compiler_ts {
+        typescript_feature_check(doc, fragment, source, module_program, instance_program, ctx);
+    }
 
     // An invalid `$` name raised while the compiler builds its scopes
     // precedes every analysis diagnostic.
@@ -281,6 +297,50 @@ pub fn walk_parsed(
                 range,
             );
         }
+    }
+}
+
+/// `typescript_invalid_feature` for a TypeScript component: the
+/// template, then the instance script, then the module script, as the
+/// compiler strips them. A `<script lang="ts">` the project's
+/// preprocessors transpile is checked for what the transpiled code
+/// keeps.
+fn typescript_feature_check(
+    doc: &svn_parser::Document<'_>,
+    fragment: &Fragment,
+    source: &str,
+    module_program: Option<&oxc_ast::ast::Program<'_>>,
+    instance_program: Option<&oxc_ast::ast::Program<'_>>,
+    ctx: &mut LintContext<'_>,
+) {
+    use crate::rules::typescript_features::{Finding, first_finding, first_template_finding};
+    let preprocessed = ctx.ts_scripts_transpiled;
+    let transpiled = |s: &svn_parser::ScriptSection<'_>| {
+        // The preprocessor sees the tag's attributes as an object, so
+        // the last `lang` wins; only the exact value `ts` is handled.
+        preprocessed
+            && s.attrs
+                .iter()
+                .rev()
+                .find(|a| a.name == "lang")
+                .is_some_and(|a| a.value.as_deref() == Some("ts"))
+    };
+    let script_finding = |s: Option<&svn_parser::ScriptSection<'_>>,
+                          program: Option<&oxc_ast::ast::Program<'_>>| {
+        let (s, program) = (s?, program?);
+        first_finding(program, s.content_range.start, transpiled(s))
+    };
+    let finding = first_template_finding(fragment, source)
+        .or_else(|| script_finding(doc.instance_script.as_ref(), instance_program))
+        .or_else(|| script_finding(doc.module_script.as_ref(), module_program));
+    match finding {
+        Some(Finding::Invalid { feature, range }) => ctx.emit_error(
+            Code::typescript_invalid_feature,
+            messages::typescript_invalid_feature(feature),
+            range,
+        ),
+        Some(Finding::Crash) => ctx.abort(),
+        None => {}
     }
 }
 

@@ -779,6 +779,13 @@ pub fn slot_snippet_conflict() -> String {
     "Cannot use `<slot>` syntax and `{@render ...}` tags in the same component. Migrate towards `{@render ...}` tags completely\nhttps://svelte.dev/e/slot_snippet_conflict".to_string()
 }
 
+/// TypeScript language features like %feature% are not natively supported, ...
+pub fn typescript_invalid_feature(feature: &str) -> String {
+    format!(
+        "TypeScript language features like {feature} are not natively supported, and their use is generally discouraged. Outside of `<script>` tags, these features are not supported. For use within `<script>` tags, you will need to use a preprocessor to convert it to JavaScript before it gets passed to the Svelte compiler. If you are using `vitePreprocess`, make sure to specifically enable preprocessing script tags (`vitePreprocess({{ script: true }})`)\nhttps://svelte.dev/e/typescript_invalid_feature"
+    )
+}
+
 /// slot attribute must be a static value
 pub fn slot_attribute_invalid() -> String {
     "slot attribute must be a static value\nhttps://svelte.dev/e/slot_attribute_invalid".to_string()

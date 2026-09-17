@@ -208,6 +208,12 @@ pub struct SvelteConfigSummary {
     /// suspend in template expressions, `$derived` and at the top
     /// level of a component.
     pub experimental_async: bool,
+    /// The config's `preprocess` turns `<script lang="ts">` bodies into
+    /// JavaScript before the compiler sees them (see
+    /// [`preprocess_transpiles_ts`]). Without any config the language
+    /// server's fallback preprocessor does the same, so callers set this
+    /// for the no-config case themselves.
+    pub ts_scripts_transpiled: bool,
 }
 
 /// The per-file subset of a config — the settings upstream applies PER
@@ -220,6 +226,20 @@ pub struct ResolvedConfig {
     pub runes: Option<bool>,
     /// See [`SvelteConfigSummary::experimental_async`].
     pub experimental_async: bool,
+    /// See [`SvelteConfigSummary::ts_scripts_transpiled`].
+    pub ts_scripts_transpiled: bool,
+}
+
+impl ResolvedConfig {
+    /// A file with no Svelte config above it: the language server
+    /// compiles it with its fallback preprocessor, which transpiles
+    /// `<script lang="ts">` bodies.
+    pub fn without_config() -> Self {
+        Self {
+            ts_scripts_transpiled: true,
+            ..Self::default()
+        }
+    }
 }
 
 /// Per-file nearest-config resolution for `warningFilter` / `runes`.
@@ -309,6 +329,7 @@ impl ConfigResolver {
                     warning_filter_plan: summary.warning_filter_plan,
                     runes: summary.runes,
                     experimental_async: summary.experimental_async,
+                    ts_scripts_transpiled: summary.ts_scripts_transpiled,
                 });
                 self.nested.push((cfg_path, rc.clone()));
                 rc
@@ -417,6 +438,8 @@ pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
         default_export_config_object(&parsed.program).and_then(|obj| runes_in_object(obj));
     summary.experimental_async = default_export_config_object(&parsed.program)
         .is_some_and(|obj| experimental_async_in_object(obj));
+    summary.ts_scripts_transpiled = default_export_config_object(&parsed.program)
+        .is_some_and(|obj| preprocess_transpiles_ts(obj, &parsed.program));
 
     summary
 }
@@ -492,6 +515,7 @@ pub fn analyse_vite_config(config_path: &Path) -> Option<SvelteConfigSummary> {
     // `svelte.config.js`.
     summary.runes = runes_in_object(plugin_obj);
     summary.experimental_async = experimental_async_in_object(plugin_obj);
+    summary.ts_scripts_transpiled = preprocess_transpiles_ts(plugin_obj, &parsed.program);
 
     Some(summary)
 }
@@ -686,6 +710,125 @@ fn experimental_async_in_object(obj: &ObjectExpression<'_>) -> bool {
         lookup_object_property(experimental, "async"),
         Some(Expression::BooleanLiteral(b)) if b.value
     )
+}
+
+/// Whether the config-root object's `preprocess` transpiles
+/// `<script lang="ts">` bodies to JavaScript before the compiler runs:
+///
+/// - `vitePreprocess()` only does so with `{ script: true }`;
+/// - `sveltePreprocess(...)` does unless given `typescript: false`;
+/// - a hand-written preprocessor object does when it has a `script`
+///   hook;
+/// - an array does when any of its preprocessors does.
+///
+/// Anything else (no `preprocess`, an unrecognised call) is taken to
+/// leave scripts alone.
+fn preprocess_transpiles_ts(
+    obj: &ObjectExpression<'_>,
+    program: &oxc_ast::ast::Program<'_>,
+) -> bool {
+    lookup_object_property(obj, "preprocess")
+        .is_some_and(|value| preprocessor_transpiles_ts(value, program, 0))
+}
+
+fn preprocessor_transpiles_ts(
+    expr: &Expression<'_>,
+    program: &oxc_ast::ast::Program<'_>,
+    depth: u8,
+) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    match expr {
+        Expression::ParenthesizedExpression(p) => {
+            preprocessor_transpiles_ts(&p.expression, program, depth + 1)
+        }
+        Expression::TSAsExpression(e) => {
+            preprocessor_transpiles_ts(&e.expression, program, depth + 1)
+        }
+        Expression::TSSatisfiesExpression(e) => {
+            preprocessor_transpiles_ts(&e.expression, program, depth + 1)
+        }
+        Expression::ArrayExpression(arr) => arr.elements.iter().any(|el| {
+            el.as_expression()
+                .is_some_and(|e| preprocessor_transpiles_ts(e, program, depth + 1))
+        }),
+        Expression::ObjectExpression(o) => o.properties.iter().any(|p| {
+            matches!(p, ObjectPropertyKind::ObjectProperty(p)
+                if matches!(&p.key, PropertyKey::StaticIdentifier(id) if id.name == "script"))
+        }),
+        Expression::Identifier(id) => top_level_const_init(program, id.name.as_str())
+            .is_some_and(|init| preprocessor_transpiles_ts(init, program, depth + 1)),
+        Expression::CallExpression(call) => {
+            let Expression::Identifier(callee) = &call.callee else {
+                return false;
+            };
+            let options = call
+                .arguments
+                .first()
+                .and_then(|a| a.as_expression())
+                .and_then(|e| match e {
+                    Expression::ObjectExpression(o) => Some(&**o),
+                    _ => None,
+                });
+            let flag = |key: &str| match options.and_then(|o| lookup_object_property(o, key)) {
+                Some(Expression::BooleanLiteral(b)) => Some(b.value),
+                _ => None,
+            };
+            match import_source(program, callee.name.as_str()) {
+                Some(("@sveltejs/vite-plugin-svelte" | "@sveltejs/kit/vite", "vitePreprocess")) => {
+                    flag("script") == Some(true)
+                }
+                Some(("svelte-preprocess", _)) => flag("typescript") != Some(false),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// The module and imported name a top-level import binds to `local`
+/// (`"default"` for a default import).
+fn import_source<'a>(
+    program: &'a oxc_ast::ast::Program<'a>,
+    local: &str,
+) -> Option<(&'a str, &'a str)> {
+    use oxc_ast::ast::ImportDeclarationSpecifier as S;
+    program.body.iter().find_map(|stmt| {
+        let Statement::ImportDeclaration(decl) = stmt else {
+            return None;
+        };
+        decl.specifiers
+            .iter()
+            .flatten()
+            .find_map(|spec| match spec {
+                S::ImportSpecifier(s) if s.local.name == local => {
+                    Some((decl.source.value.as_str(), s.imported.name().as_str()))
+                }
+                S::ImportDefaultSpecifier(s) if s.local.name == local => {
+                    Some((decl.source.value.as_str(), "default"))
+                }
+                _ => None,
+            })
+    })
+}
+
+/// The initializer of a top-level `const`/`let`/`var` named `name`.
+fn top_level_const_init<'a>(
+    program: &'a oxc_ast::ast::Program<'a>,
+    name: &str,
+) -> Option<&'a Expression<'a>> {
+    program.body.iter().find_map(|stmt| {
+        let Statement::VariableDeclaration(vd) = stmt else {
+            return None;
+        };
+        vd.declarations.iter().find_map(|d| match &d.id {
+            oxc_ast::ast::BindingPattern::BindingIdentifier(id) if id.name == name => {
+                d.init.as_ref()
+            }
+            _ => None,
+        })
+    })
 }
 
 /// Strip common one-level wrappers that don't change the underlying
@@ -1723,7 +1866,7 @@ export default {
             ResolvedConfig {
                 warning_filter_plan: WarningFilterPlan::default(),
                 runes: Some(false),
-                experimental_async: false,
+                ..ResolvedConfig::default()
             },
             true,
             true,
@@ -1844,6 +1987,40 @@ export default {
         let path = dir.path().join("svelte.config.mjs");
         std::fs::write(&path, src).unwrap();
         analyse(&path)
+    }
+
+    #[test]
+    fn script_preprocessors_that_transpile_typescript() {
+        let transpiles = |src: &str| summary_of(src).ts_scripts_transpiled;
+        let vite = "import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';\n";
+        assert!(!transpiles("export default {};"));
+        assert!(!transpiles(&format!(
+            "{vite}export default {{ preprocess: vitePreprocess() }};"
+        )));
+        assert!(!transpiles(&format!(
+            "{vite}export default {{ preprocess: vitePreprocess({{ script: false }}) }};"
+        )));
+        assert!(transpiles(&format!(
+            "{vite}export default {{ preprocess: vitePreprocess({{ script: true }}) }};"
+        )));
+        assert!(transpiles(&format!(
+            "{vite}const pre = [vitePreprocess({{ script: true }})];\nexport default {{ preprocess: pre }};"
+        )));
+        assert!(transpiles(
+            "import { vitePreprocess } from '@sveltejs/kit/vite';\nexport default { preprocess: [vitePreprocess({ script: true })] };"
+        ));
+        assert!(transpiles(
+            "import sveltePreprocess from 'svelte-preprocess';\nexport default { preprocess: sveltePreprocess() };"
+        ));
+        assert!(!transpiles(
+            "import sveltePreprocess from 'svelte-preprocess';\nexport default { preprocess: sveltePreprocess({ typescript: false }) };"
+        ));
+        assert!(transpiles(
+            "export default { preprocess: { script: ({ content }) => ({ code: content }) } };"
+        ));
+        assert!(!transpiles(
+            "import { mdsvex } from 'mdsvex';\nexport default { preprocess: [mdsvex()] };"
+        ));
     }
 
     #[test]

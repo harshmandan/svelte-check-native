@@ -23,6 +23,7 @@ pub mod script_ast_rules;
 pub mod script_rules;
 pub mod svelte_element_rules;
 pub mod text_rules;
+pub(crate) mod typescript_features;
 
 // Utility helpers shared by rule modules.
 pub mod util;

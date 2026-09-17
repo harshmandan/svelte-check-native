@@ -125,6 +125,9 @@ pub struct LintContext<'src> {
     /// that name, as the compiler's name-keyed map keeps it) — the
     /// inputs of the `slot_snippet_conflict` check.
     pub(crate) uses_render_tags: bool,
+
+    /// See [`crate::LintOptions::ts_scripts_transpiled`].
+    pub(crate) ts_scripts_transpiled: bool,
     pub(crate) first_slot: Option<(SmolStr, Range)>,
 }
 
@@ -156,6 +159,7 @@ impl<'src> LintContext<'src> {
             event_directive: None,
             uses_event_attributes: false,
             uses_render_tags: false,
+            ts_scripts_transpiled: false,
             first_slot: None,
         }
     }
@@ -228,6 +232,13 @@ impl<'src> LintContext<'src> {
             end_line: end.line + 1,
             end_column: end.character,
         });
+    }
+
+    /// The compiler crashed on the component: nothing it would have
+    /// reported survives, and nothing more is reported.
+    pub(crate) fn abort(&mut self) {
+        self.errored = true;
+        self.warnings.clear();
     }
 
     pub fn take_warnings(self) -> Vec<Warning> {

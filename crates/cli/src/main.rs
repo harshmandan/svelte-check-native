@@ -437,7 +437,14 @@ fn main() -> ExitCode {
         let summary = svelte_config::analyse_with_kit_files(&path);
         (Some(path), summary)
     } else {
-        (None, svelte_config::SvelteConfigSummary::default())
+        (
+            None,
+            svelte_config::SvelteConfigSummary {
+                ts_scripts_transpiled: svelte_config::ResolvedConfig::without_config()
+                    .ts_scripts_transpiled,
+                ..svelte_config::SvelteConfigSummary::default()
+            },
+        )
     };
     if let Some(cfg) = &analysed_config {
         warn_partial_warning_filter(cfg, &svelte_config_summary.warning_filter_plan);
@@ -453,6 +460,7 @@ fn main() -> ExitCode {
             warning_filter_plan: svelte_config_summary.warning_filter_plan,
             runes: svelte_config_summary.runes,
             experimental_async: svelte_config_summary.experimental_async,
+            ts_scripts_transpiled: svelte_config_summary.ts_scripts_transpiled,
         },
         cli.config.is_some(),
         analysed_config.is_some(),
@@ -924,6 +932,7 @@ fn native_diagnostics_for_parsed(
     let options = svn_lint::LintOptions {
         runes: config.runes,
         experimental_async: config.experimental_async,
+        ts_scripts_transpiled: config.ts_scripts_transpiled,
     };
     let warnings = svn_lint::lint_parsed(doc, fragment, source, pm, path, options, compat);
 

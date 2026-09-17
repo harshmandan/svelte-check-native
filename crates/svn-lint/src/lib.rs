@@ -71,6 +71,9 @@ pub struct LintOptions {
     pub runes: Option<bool>,
     /// `compilerOptions.experimental.async`.
     pub experimental_async: bool,
+    /// The project's preprocessors transpile `<script lang="ts">`
+    /// bodies to JavaScript before the compiler runs.
+    pub ts_scripts_transpiled: bool,
 }
 
 /// Run the compile-warning pass on one source file.
@@ -90,7 +93,7 @@ pub fn lint_file(
 ) -> Vec<Warning> {
     let options = LintOptions {
         runes,
-        experimental_async: false,
+        ..LintOptions::default()
     };
     lint_file_with_options(source, path, options, compat)
 }
@@ -105,6 +108,7 @@ pub fn lint_file_with_options(
     let mut ctx = LintContext::new(source);
     ctx.compat = compat;
     ctx.experimental_async = options.experimental_async;
+    ctx.ts_scripts_transpiled = options.ts_scripts_transpiled;
     // `walk` resolves runes mode from the document it parses (reusing
     // that parse) — pass the caller's hint through rather than running
     // a separate `infer_runes_mode` parse here.
@@ -132,6 +136,7 @@ pub fn lint_parsed<'src>(
     let mut ctx = LintContext::with_positions(source, positions);
     ctx.compat = compat;
     ctx.experimental_async = options.experimental_async;
+    ctx.ts_scripts_transpiled = options.ts_scripts_transpiled;
     crate::walk::walk_parsed(doc, fragment, source, path, options.runes, &mut ctx);
     ctx.take_warnings()
 }

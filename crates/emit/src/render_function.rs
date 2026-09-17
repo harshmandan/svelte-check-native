@@ -25,9 +25,9 @@ use crate::emit_is_ts;
 use crate::emit_template_body;
 use crate::nodes::action::emit_legacy_action_attrs;
 use crate::process_instance_script_content::ExportedLocalInfo;
-use crate::props_emit::{synthesise_js_props_typedef_body, write_slots_field_type};
+use crate::props_emit::write_slots_field_type;
 use crate::svelte4;
-use svn_analyze::{TemplateSummary, scan_jsdoc_typedef_name, should_synthesise_js_props};
+use svn_analyze::{TemplateSummary, scan_jsdoc_typedef_name};
 
 /// Emit the `async function __svn_tpl_check() { … }` wrapper that
 /// carries every template expression as real TypeScript. The walk
@@ -151,6 +151,7 @@ pub(crate) fn emit_render_body_return(
     export_type_infos: &[ExportedLocalInfo],
     dollar_props_name_range: Option<svn_core::Range>,
     props_info: &svn_analyze::PropsInfo,
+    js_props_typedef_synthesised: bool,
     slot_defs: &[svn_analyze::SlotDef],
     has_strict_events_decl: bool,
     has_strict_slots_decl: bool,
@@ -208,16 +209,7 @@ pub(crate) fn emit_render_body_return(
         //   3. User-declared `@typedef {Object} <Name>` block.
         //   4. Svelte-4 `export let` literal shape from PropsInfo.
         //   5. `any` cast.
-        let script = doc
-            .instance_script
-            .as_ref()
-            .map(|s| s.content)
-            .unwrap_or("");
-        let synthesised_name = if should_synthesise_js_props(props_info, script) {
-            synthesise_js_props_typedef_body(props_info).map(|_| "$$ComponentProps".to_string())
-        } else {
-            None
-        };
+        let synthesised_name = js_props_typedef_synthesised.then(|| "$$ComponentProps".to_string());
         let props_expr = match synthesised_name
             .or(name_from_ts)
             .or(name_from_jsdoc)

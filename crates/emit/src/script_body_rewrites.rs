@@ -16,6 +16,8 @@
 //!    after each exported `let` with no initializer, a declared type,
 //!    or an untyped boolean initializer, so the prop keeps its declared
 //!    (or widened) type instead of the initializer's literal type.
+//!    A SvelteKit route's untyped `export const snapshot` gets its
+//!    `Snapshot` type from `$types` right after.
 //! 3. **Store subscriptions** — `;let $x = __svn_store_get(x);` after
 //!    each declaration that binds a store read as `$x`.
 //!
@@ -33,8 +35,8 @@ use crate::emit_is_ts;
 use crate::process_instance_script_content;
 use crate::store_subscriptions;
 use crate::svelte4::compat::{
-    assert_exported_prop_types_in_place, rewrite_definite_assignment_in_place,
-    widen_untyped_exports_jsdoc_in_place,
+    annotate_exported_kit_consts_in_place, assert_exported_prop_types_in_place,
+    rewrite_definite_assignment_in_place, widen_untyped_exports_jsdoc_in_place,
 };
 use crate::sveltekit;
 
@@ -66,7 +68,7 @@ pub(crate) fn apply_script_body_rewrites(
     // re-extended before the next pass reads it.
     let apply = |buf: &mut EmitBuffer, body: &mut Range<usize>, edits: Vec<(u32, u32)>| {
         body.end += edits.iter().map(|&(_, len)| len as usize).sum::<usize>();
-        buf.adjust_token_map_for_insertions(&edits);
+        buf.adjust_token_map_for_anchored_insertions(&edits);
     };
     // A store declared in the module script gets its `$store`
     // declaration there, at module scope, as upstream does. This runs
@@ -110,6 +112,20 @@ pub(crate) fn apply_script_body_rewrites(
         buf.raw_string_mut(),
         &body,
         &s.exported_locals,
+        route_kind,
+        emit_is_ts(),
+    );
+    apply(buf, &mut body, edits);
+    let exported_consts: Vec<SmolStr> = s
+        .export_type_infos
+        .iter()
+        .filter(|info| !info.is_let)
+        .map(|info| info.name.clone())
+        .collect();
+    let edits = annotate_exported_kit_consts_in_place(
+        buf.raw_string_mut(),
+        &body,
+        &exported_consts,
         route_kind,
         emit_is_ts(),
     );

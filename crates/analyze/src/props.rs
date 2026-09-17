@@ -186,6 +186,19 @@ pub struct PropsInfo {
     /// names a `$$ComponentProps` alias it never declares, so the
     /// component's props resolve to `any`.
     pub props_rune: bool,
+    /// The first `$props()` call binds an object pattern
+    /// (`let { … } = $props()`), the only shape upstream's best-effort
+    /// synthesis reads — `let props = $props()` has no prop surface.
+    pub props_object_pattern: bool,
+    /// The first `$props()` declaration carries a leading comment
+    /// mentioning `@type`, which is how a JS component types its props.
+    /// Upstream then keeps the comment as the props type and skips its
+    /// synthesis from the destructure entirely.
+    pub props_type_comment: bool,
+    /// Script-relative byte where upstream anchors the text it inserts
+    /// for the first `$props()` declarator: the end of the token before
+    /// it (the `let` / `const` keyword, or the separating comma).
+    pub props_decl_anchor: Option<u32>,
 }
 
 impl PropsInfo {
@@ -210,20 +223,52 @@ impl PropsInfo {
         let mut props_source = PropsSource::None;
         let mut props_with_unknown = false;
         let mut props_rune = false;
+        let mut props_object_pattern = false;
+        let mut props_type_comment = false;
+        let mut props_decl_anchor: Option<u32> = None;
 
         // Shape 1 / Shape 2: explicit `$props()` annotation wins over
         // everything else. Collect the destructured names from the
         // same call while we're here.
+        let mut prev_stmt_end = 0usize;
         for stmt in &program.body {
+            let stmt_trivia_start = prev_stmt_end;
+            prev_stmt_end = stmt.span().end as usize;
             let Statement::VariableDeclaration(decl) = stmt else {
                 continue;
             };
+            let mut declarator_trivia_start = decl.span.start as usize + decl.kind.as_str().len();
             for declarator in &decl.declarations {
+                let trivia_start = declarator_trivia_start;
+                // The next declarator's leading trivia starts after the
+                // comma that separates it from this one.
+                declarator_trivia_start = source
+                    .get(declarator.span.end as usize..)
+                    .and_then(|rest| rest.find(','))
+                    .map_or(declarator.span.end as usize, |i| {
+                        declarator.span.end as usize + i + 1
+                    });
                 let Some(init) = declarator.init.as_ref() else {
                     continue;
                 };
                 if !is_props_call_like(init) {
                     continue;
+                }
+                if !props_rune {
+                    props_decl_anchor = u32::try_from(trivia_start).ok();
+                    props_object_pattern =
+                        matches!(declarator.id, BindingPattern::ObjectPattern(_));
+                    props_type_comment = leading_comments_mention_type(
+                        source,
+                        &program.comments,
+                        trivia_start,
+                        declarator.span.start as usize,
+                    ) || leading_comments_mention_type(
+                        source,
+                        &program.comments,
+                        stmt_trivia_start,
+                        decl.span.start as usize,
+                    );
                 }
                 props_rune = true;
                 props_with_unknown |=
@@ -292,8 +337,56 @@ impl PropsInfo {
             destructures,
             props_with_unknown,
             props_rune,
+            props_object_pattern,
+            props_type_comment,
+            props_decl_anchor,
         }
     }
+}
+
+/// True when a comment TypeScript treats as leading trivia of the node
+/// starting at `node_start` mentions the `@type` tag. `trivia_start` is
+/// the end of the token before the node (0 at the start of the script),
+/// so everything between the two is whitespace and `comments`.
+///
+/// TypeScript only counts a comment as leading once a line break has
+/// been crossed outside any comment — a comment on the previous token's
+/// line trails that token instead — unless the run starts at the very
+/// beginning of the text. Mirrors `ts.getLeadingCommentRanges`, which
+/// upstream uses to find a JSDoc props annotation on a `$props()`
+/// declaration.
+fn leading_comments_mention_type(
+    source: &str,
+    comments: &[oxc_ast::Comment],
+    trivia_start: usize,
+    node_start: usize,
+) -> bool {
+    let mut collecting = trivia_start == 0;
+    let mut gap_start = trivia_start;
+    for comment in comments {
+        let (start, end) = (comment.span.start as usize, comment.span.end as usize);
+        if start < trivia_start || end > node_start {
+            continue;
+        }
+        let gap = source.get(gap_start..start).unwrap_or("");
+        collecting |= gap.contains(['\n', '\r']);
+        if collecting && source.get(start..end).is_some_and(mentions_type_tag) {
+            return true;
+        }
+        gap_start = end;
+    }
+    false
+}
+
+/// `/@type\b/` — `@type` not followed by an identifier character, so
+/// `@typedef` does not count.
+fn mentions_type_tag(comment: &str) -> bool {
+    comment.match_indices("@type").any(|(i, m)| {
+        !comment[i + m.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    })
 }
 
 /// Compute the leading named-type reference of `ty`, if any. Returns
@@ -1400,6 +1493,29 @@ mod tests {
         let alloc = Allocator::default();
         let parsed = parse_script_body(&alloc, src, ScriptLang::Ts);
         build_with_probe(&parsed.program, src)
+    }
+
+    #[test]
+    fn props_declaration_shape_and_type_comment() {
+        let info = build("\n  let { a } = $props();");
+        assert!(info.props_object_pattern);
+        assert!(!info.props_type_comment);
+        // Anchored right after the `let` keyword.
+        assert_eq!(info.props_decl_anchor, Some(6));
+
+        assert!(!build("let props = $props();").props_object_pattern);
+
+        // A leading `@type` comment, on its own line or at the very start.
+        assert!(build("/** @type {{ a: 1 }} */\nlet { a } = $props();").props_type_comment);
+        assert!(build("foo();\n/** @type {P} */ let { a } = $props();").props_type_comment);
+        assert!(build("let\n /** @type {P} */ { a } = $props();").props_type_comment);
+        // Not leading: on the previous token's line, or `@typedef`.
+        assert!(!build("foo(); /** @type {P} */\nlet { a } = $props();").props_type_comment);
+        assert!(!build("/** @typedef {{a: 1}} P */\nlet { a } = $props();").props_type_comment);
+
+        // A later declarator anchors after its comma.
+        let info = build("let x = 1, { a } = $props();");
+        assert_eq!(info.props_decl_anchor, Some(10));
     }
 
     #[test]

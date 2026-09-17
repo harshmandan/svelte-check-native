@@ -287,6 +287,48 @@ pub(crate) fn inject_component_props_annotation(
     out
 }
 
+/// Wrap the initializer of the first top-level `let/const { … } =
+/// $props()` declaration in a `/** @type {$$ComponentProps} */ (…)`
+/// JSDoc cast, so a JS component's destructured locals take the
+/// synthesised `$$ComponentProps` typedef.
+///
+/// Upstream svelte2tsx places the `@type` tag on the declaration
+/// itself; typing the initializer gives the locals the same types and
+/// the same errors (a key missing from the typedef is TS2339 on the
+/// key either way), while leaving every column before the call
+/// untouched — the script body maps back to the source by line only.
+pub(crate) fn inject_jsdoc_props_cast(content: &str, lang: svn_parser::ScriptLang) -> String {
+    let alloc = Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, content, lang);
+    let init_span = parsed.program.body.iter().find_map(|stmt| {
+        let Statement::VariableDeclaration(decl) = stmt else {
+            return None;
+        };
+        decl.declarations.iter().find_map(|declarator| {
+            let init = declarator.init.as_ref()?;
+            let Expression::CallExpression(call) = init else {
+                return None;
+            };
+            let Expression::Identifier(callee) = &call.callee else {
+                return None;
+            };
+            (callee.name == "$props" && matches!(declarator.id, BindingPattern::ObjectPattern(_)))
+                .then_some(call.span)
+        })
+    });
+    let Some(span) = init_span else {
+        return content.to_string();
+    };
+    let (start, end) = (span.start as usize, span.end as usize);
+    let mut out = String::with_capacity(content.len() + 40);
+    out.push_str(&content[..start]);
+    out.push_str("/** @type {$$ComponentProps} */ (");
+    out.push_str(&content[start..end]);
+    out.push(')');
+    out.push_str(&content[end..]);
+    out
+}
+
 enum AnnotationAction {
     Insert(usize),
     Replace { start: usize, end: usize },

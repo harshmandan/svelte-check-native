@@ -49,7 +49,8 @@ enum DeclaratorInit {
 }
 
 /// Parse the script body spliced at `body` inside `out` and list its
-/// top-level `let` declarators that bind a plain identifier.
+/// top-level `let` declarators that bind a plain identifier (`const`
+/// ones with `kind = Const`).
 ///
 /// The in-place rewrites need to know where a declaration's name, type
 /// annotation and statement end sit. A byte scan misreads text that
@@ -60,9 +61,15 @@ enum DeclaratorInit {
 /// component-scope binding, and a nested `let` with the same name is a
 /// different variable.
 fn collect_top_level_lets(out: &str, body: &Range<usize>) -> Vec<LetDeclarator> {
-    use oxc_ast::ast::{
-        BindingPattern, Declaration, Expression, Statement, VariableDeclarationKind,
-    };
+    collect_top_level_declarators(out, body, oxc_ast::ast::VariableDeclarationKind::Let)
+}
+
+fn collect_top_level_declarators(
+    out: &str,
+    body: &Range<usize>,
+    kind: oxc_ast::ast::VariableDeclarationKind,
+) -> Vec<LetDeclarator> {
+    use oxc_ast::ast::{BindingPattern, Declaration, Expression, Statement};
 
     let Some(src) = out.get(body.clone()) else {
         return Vec::new();
@@ -102,7 +109,7 @@ fn collect_top_level_lets(out: &str, body: &Range<usize>) -> Vec<LetDeclarator> 
             | Statement::TSNamespaceExportDeclaration(_) => continue,
             svn_analyze::non_declaration_statement!() => continue,
         };
-        if decl.kind != VariableDeclarationKind::Let {
+        if decl.kind != kind {
             continue;
         }
         let Some(list_end) = decl
@@ -658,6 +665,41 @@ pub(crate) fn assert_exported_prop_types_in_place(
     // Several declarators of one statement all append at its end;
     // keep declaration order within the same position.
     insertions.sort_by_key(|(pos, _)| *pos);
+    splice_insertions(out, &insertions)
+}
+
+/// Give an exported `const snapshot` on a SvelteKit page or layout
+/// the `Snapshot` type from its `$types` when it declares no type of
+/// its own — upstream `ExportedNames.handleVariableStatement`, which
+/// does this for `export const` statements only (`const_names` lists
+/// the names those statements declare). The annotation lands like the
+/// `let` props' one: after the name in a TS overlay, a JSDoc `@type`
+/// before it in a JS one.
+pub(crate) fn annotate_exported_kit_consts_in_place(
+    out: &mut String,
+    body: &Range<usize>,
+    const_names: &[SmolStr],
+    route_kind: Option<sveltekit::RouteKind>,
+    is_ts: bool,
+) -> Vec<(u32, u32)> {
+    if !matches!(
+        route_kind,
+        Some(sveltekit::RouteKind::Page | sveltekit::RouteKind::Layout)
+    ) || !is_target(const_names, "snapshot")
+    {
+        return Vec::new();
+    }
+    let insertions: Vec<(usize, String)> =
+        collect_top_level_declarators(out, body, oxc_ast::ast::VariableDeclarationKind::Const)
+            .into_iter()
+            .filter(|d| {
+                d.name == "snapshot"
+                    && !d.has_type_annotation
+                    && !d.has_jsdoc_type
+                    && is_target(const_names, &d.name)
+            })
+            .map(|d| kit_type_insertion(&d, "import('./$types.js').Snapshot", is_ts))
+            .collect();
     splice_insertions(out, &insertions)
 }
 

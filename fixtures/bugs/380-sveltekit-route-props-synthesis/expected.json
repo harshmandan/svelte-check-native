@@ -1,0 +1,54 @@
+{
+    "errors": [
+        {
+            "file": "src/routes/+page.svelte",
+            "line": 3,
+            "column": 14,
+            "code": 2339
+        },
+        {
+            "file": "src/routes/[slug]/+page.svelte",
+            "line": 2,
+            "column": 8,
+            "code": 2322
+        },
+        {
+            "file": "src/routes/js/+page.svelte",
+            "line": 4,
+            "column": 6,
+            "code": 2339
+        },
+        {
+            "file": "src/routes/legacy/+layout.svelte",
+            "line": 1,
+            "column": 13,
+            "code": 2694
+        },
+        {
+            "file": "src/routes/legacy/+layout.svelte",
+            "line": 3,
+            "column": 17,
+            "code": 2339
+        },
+        {
+            "file": "src/routes/noform/+page.svelte",
+            "line": 1,
+            "column": 5,
+            "code": 2694
+        },
+        {
+            "file": "src/routes/snap/+page.svelte",
+            "line": 1,
+            "column": 15,
+            "code": 2741
+        }
+    ],
+    "warnings": [
+        {
+            "file": "src/routes/[slug]/+page.svelte",
+            "line": 2,
+            "column": 20,
+            "code": "state_referenced_locally"
+        }
+    ]
+}

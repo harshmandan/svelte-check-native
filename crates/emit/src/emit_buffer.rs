@@ -282,6 +282,40 @@ impl EmitBuffer {
         self.token_map = adjusted;
     }
 
+    /// [`Self::adjust_token_map_for_insertions`], plus a source anchor
+    /// for each inserted text that lands on user text.
+    ///
+    /// Upstream svelte2tsx inserts text by overwriting the character at
+    /// the insertion point with `inserted + character`, so a source-map
+    /// lookup anywhere in the inserted text resolves to that character.
+    /// An insertion inside a 1:1 verbatim entry therefore gets its own
+    /// entry: the inserted overlay span, anchored to the one source
+    /// byte that follows it. Insertions outside every 1:1 entry get
+    /// none.
+    pub fn adjust_token_map_for_anchored_insertions(&mut self, insertions: &[(u32, u32)]) {
+        let mut anchors: Vec<TokenMapEntry> = Vec::new();
+        let mut inserted_before: u32 = 0;
+        for &(pos, len) in insertions {
+            let source_byte = self.token_map.iter().find_map(|entry| {
+                let one_to_one = entry.overlay_byte_end - entry.overlay_byte_start
+                    == entry.source_byte_end - entry.source_byte_start;
+                (one_to_one && entry.overlay_byte_start <= pos && pos < entry.overlay_byte_end)
+                    .then(|| entry.source_byte_start + (pos - entry.overlay_byte_start))
+            });
+            if let Some(source_byte) = source_byte {
+                anchors.push(TokenMapEntry {
+                    overlay_byte_start: pos + inserted_before,
+                    overlay_byte_end: pos + inserted_before + len,
+                    source_byte_start: source_byte,
+                    source_byte_end: source_byte + 1,
+                });
+            }
+            inserted_before += len;
+        }
+        self.adjust_token_map_for_insertions(insertions);
+        self.token_map.extend(anchors);
+    }
+
     /// Consume the buffer and return its parts.
     pub fn finish(self) -> (String, Vec<LineMapEntry>, Vec<TokenMapEntry>) {
         (self.out, self.line_map, self.token_map)

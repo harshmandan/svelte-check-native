@@ -87,12 +87,12 @@ fn v5_fixtures_suite() {
     // Subprocess-failure path (no summary line) → 0/0 → MIN_PASSED
     // assertion fires immediately.
     let (passed, failed, skipped) = parse_summary(summary_line);
-    const MIN_PASSED: usize = 47;
+    const MIN_PASSED: usize = 51;
     // `declaration-tag-async.v5` awaits in a template expression; the
     // compiler rejects that with `experimental_async` unless the
     // project enables `experimental.async`, which these bare samples
     // cannot, so it counts as a failure here while matching upstream.
-    const MAX_FAILED: usize = 17;
+    const MAX_FAILED: usize = 16;
     assert!(
         passed >= MIN_PASSED,
         "v5 fixture pass count regressed: got {passed}, baseline is {MIN_PASSED}.\n\

@@ -4,7 +4,7 @@ function $$render_aad4163e() {
 
            let /** @type {import('./$types.js').PageData} */ data/*svn:ignore_start*/;data = __svn_any(data);/*svn:ignore_end*/;
            let /** @type {import('./$types.js').ActionData} */ form/*svn:ignore_start*/;form = __svn_any(form);/*svn:ignore_end*/;
-           const snapshot = {};
+           const /** @type {import('./$types.js').Snapshot} */ snapshot = {};
     ;(async () => {
         // template type-check body (incremental)
     });

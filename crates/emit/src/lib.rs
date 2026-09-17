@@ -91,7 +91,8 @@ use nodes::snippet_block::emit_snippet_block;
 
 use default_export::{emit_default_export_declarations_js, emit_default_export_declarations_ts};
 use props_emit::{
-    build_exports_object, inject_component_props_annotation, synthesise_js_props_typedef_body,
+    build_exports_object, inject_component_props_annotation, inject_jsdoc_props_cast,
+    synthesise_js_props_typedef_body,
 };
 use svelte4::compat::{emit_svelte4_ambients, has_strict_events_attr, is_runes_mode};
 use svn_analyze::should_synthesise_js_props;
@@ -402,36 +403,44 @@ fn emit_document_with_render_name(
     // real-diagnostic gap on the CMS-style bench — only
     // TS-source components are load-bearing, so scope the change
     // narrowly and expand later if needed.
-    // SvelteKit route files (+page.svelte / +layout.svelte) with an
-    // untyped `$props()` destructure: synthesise
-    // `{ data: import('./$types.js').PageData }` etc. from the
-    // destructure + the route kind. Mirrors upstream svelte2tsx's
-    // `ExportedNames.handle$propsRune` route-aware branch.
+    // SvelteKit route files (+page.svelte / +layout.svelte /
+    // +error.svelte) with an untyped `$props()` object destructure:
+    // upstream's best-effort synthesis takes its route-aware branch and
+    // types only the props SvelteKit passes (`data: PageData` etc.,
+    // see `sveltekit::synthesize_route_props_type`). It runs for JS
+    // components too, unless a leading `@type` comment already types
+    // the declaration. The outer `Some` says the route branch applies;
+    // an inner `None` means it produced no type and upstream leaves the
+    // props `any`.
     //
-    // Feeds `props_info.type_text` so the downstream `$$ComponentProps`
-    // alias emission AND the `: $$ComponentProps` destructure-annotation
-    // injection both trigger. Without this, consumers like
-    // `<LineChart data={data.chartData} y={(d) => …} />` see `data`
-    // typed as `any`, generic `TData` collapses to `unknown`, and
-    // implicit-any / TS18046 fires on the arrow parameter.
+    // For TS the result feeds `props_info.type_text`, so the
+    // `$$ComponentProps` alias and the destructure annotation both
+    // land. For JS it becomes the `@typedef` below and a JSDoc cast on
+    // the `$props()` call types the destructured locals.
     let is_route_file = sveltekit::route_kind(source_path).is_some();
-    let route_props_synth: Option<String> = if is_route_file
-        && is_ts
-        && doc.script_lang() == svn_parser::ScriptLang::Ts
-        && raw_props_info.type_text.is_none()
-    {
-        sveltekit::route_kind(source_path).and_then(|kind| {
-            let names_borrow: Vec<&str> = raw_props_info
+    let route_props_synth: Option<Option<String>> = sveltekit::route_kind(source_path)
+        .filter(|_| {
+            raw_props_info.props_rune
+                && raw_props_info.props_object_pattern
+                && raw_props_info.type_text.is_none()
+                && (is_ts || !raw_props_info.props_type_comment)
+        })
+        .map(|kind| {
+            let keys: Vec<&str> = raw_props_info
                 .destructures
                 .iter()
-                .map(|p| p.local_name.as_str())
+                .filter(|p| !p.is_rest && !p.local_only)
+                .map(|p| p.prop_key.as_str())
                 .collect();
-            sveltekit::synthesize_route_props_type(kind, &names_borrow)
-        })
-    } else {
-        None
+            sveltekit::synthesize_route_props_type(kind, &keys, raw_props_info.props_with_unknown)
+        });
+    let route_props_override: Option<String> = match &route_props_synth {
+        Some(Some(body)) if is_ts => Some(body.clone()),
+        Some(Some(_)) => None,
+        Some(None) => Some("any".to_string()),
+        None => None,
     };
-    let synth_override: Option<String> = route_props_synth.or_else(|| {
+    let synth_override: Option<String> = route_props_override.or_else(|| {
         let synth = if is_ts
             && !is_route_file
             && raw_props_info.type_text.is_none()
@@ -442,6 +451,9 @@ fn emit_document_with_render_name(
             None
         };
         synth.or_else(|| {
+            if route_props_synth.is_some() {
+                return None;
+            }
             // `let props = $props()` with nothing to name: upstream's
             // `$$ComponentProps` alias goes undeclared and the props
             // type is `any`.
@@ -885,6 +897,10 @@ fn emit_document_with_render_name(
     // tsgo fires TS2300 ("Duplicate identifier") on each one. Mirrors
     // upstream svelte2tsx's `Generics.ts` strip pass at
     // `language-tools/packages/svelte2tsx/src/svelte2tsx/nodes/Generics.ts`.
+    // JS route component with a synthesised `$$ComponentProps`
+    // typedef: the destructured locals read their types through a
+    // JSDoc cast on the `$props()` call.
+    let js_route_props_typed = !is_ts && matches!(route_props_synth, Some(Some(_)));
     let strip_dollar_generic = doc
         .instance_script
         .as_ref()
@@ -919,6 +935,8 @@ fn emit_document_with_render_name(
         // breaking generic-component inference on consumers.
         if will_emit_component_props_alias {
             inject_component_props_annotation(&after_state, s.lang)
+        } else if js_route_props_typed {
+            inject_jsdoc_props_cast(&after_state, s.lang)
         } else {
             after_state
         }
@@ -970,7 +988,9 @@ fn emit_document_with_render_name(
     // `Function`, `= {}` → `Record<string, any>`, `= null` → widen
     // to `any`, …) so the synthesised typedef matches upstream's
     // shape on the synth path.
-    let synthesised_js_props_typedef = if !is_ts {
+    let synthesised_js_props_typedef = if let (false, Some(route)) = (is_ts, &route_props_synth) {
+        route.clone()
+    } else if !is_ts {
         let script = doc
             .instance_script
             .as_ref()
@@ -988,9 +1008,18 @@ fn emit_document_with_render_name(
         // JSDoc `@typedef {<typespec>} Name` — body already includes
         // the outer `{}` for object-literal types, so the JSDoc
         // wrapping pair gives `{{...}}` in the final output.
-        buf.push_str("/** @typedef {");
-        buf.push_str(body);
-        buf.push_str("} $$ComponentProps */\n");
+        let typedef = format!("/** @typedef {{{body}}} $$ComponentProps */");
+        // Upstream writes the typedef in front of the `$props()`
+        // declarator, so an error inside it (a `$types` member the
+        // route doesn't export) is reported at that point.
+        match (props_info.props_decl_anchor, doc.instance_script.as_ref()) {
+            (Some(anchor), Some(script)) => {
+                let at = script.content_range.start + anchor;
+                buf.append_with_source(&typedef, svn_core::Range::new(at, at + 1));
+            }
+            _ => buf.push_str(&typedef),
+        }
+        buf.push_str("\n");
     }
 
     // TS overlay: wrap inline-literal Props types in a module-scope
@@ -1311,7 +1340,6 @@ fn emit_document_with_render_name(
         store_refs,
     } = analyze_script_and_template_refs(
         doc,
-        source_path,
         fragment,
         parsed_instance.as_ref(),
         split.as_ref(),
@@ -1529,6 +1557,7 @@ fn emit_document_with_render_name(
         export_type_infos,
         dollar_props_name_range,
         &props_info,
+        synthesised_js_props_typedef.is_some(),
         &summary.slot_defs,
         has_strict_events_decl,
         has_strict_slots_decl,

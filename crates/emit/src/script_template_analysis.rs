@@ -25,7 +25,6 @@
 //! and this 150-line analyze concern lives with its data.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use oxc_allocator::Allocator;
 use smol_str::SmolStr;
@@ -36,7 +35,6 @@ use svn_analyze::{
 use svn_parser::parse_script_body;
 
 use crate::process_instance_script_content;
-use crate::sveltekit;
 
 /// Props, store auto-subscribes, and template-referenced identifier
 /// buckets — see module docs.
@@ -57,7 +55,6 @@ pub(crate) struct ScriptAndTemplateAnalysis {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn analyze_script_and_template_refs<'alloc>(
     doc: &svn_parser::Document<'_>,
-    source_path: &Path,
     fragment: &svn_parser::Fragment,
     parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
     split: Option<&process_instance_script_content::SplitScript>,
@@ -92,23 +89,7 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
     let prop_type_source: Option<String> = if let (Some(_s), Some(instance), Some(parsed_orig)) =
         (split, &doc.instance_script, parsed_instance)
     {
-        // SvelteKit auto-typing: route components (+page.svelte,
-        // +layout.svelte) with an untyped `$props()` pick up
-        // `PageData` / `LayoutData` / `ActionData` from the file
-        // path + the list of destructured prop names. Only fires
-        // when PropsInfo saw no user-provided source.
-        let ty = effective_props_type_text
-            .map(|s| s.to_string())
-            .or_else(|| {
-                sveltekit::route_kind(source_path).and_then(|kind| {
-                    let names_borrow: Vec<&str> = props_info
-                        .destructures
-                        .iter()
-                        .map(|p| p.local_name.as_str())
-                        .collect();
-                    sveltekit::synthesize_route_props_type(kind, &names_borrow)
-                })
-            });
+        let ty = effective_props_type_text.map(|s| s.to_string());
 
         collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
         if let Some(rewritten) = rewritten_content {

@@ -4,7 +4,7 @@ function $$render_aad4163e() {
 
            let /** @type {import('./$types.js').PageData} */ data/*svn:ignore_start*/;data = __svn_any(data);/*svn:ignore_end*/;
            let /** @type {import('./$types.js').ActionData} */ form/*svn:ignore_start*/;form = __svn_any(form);/*svn:ignore_end*/;
-           const snapshot = {};
+           const /** @type {import('./$types.js').Snapshot} */ snapshot = {};
 
            let nope/*svn:ignore_start*/;nope = __svn_any(nope);/*svn:ignore_end*/;
            let /** @type {import('./$types.js').ActionData} */ form = {}

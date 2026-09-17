@@ -45,12 +45,20 @@ pub(crate) enum ScriptRuleEvent {
     LegacyCreationCandidate { callee: SmolStr, range: Range },
 }
 
+impl ScriptRuleEvent {
+    /// The source range the event reports.
+    pub(crate) fn range(&self) -> Range {
+        match self {
+            Self::Warning { range, .. } | Self::LegacyCreationCandidate { range, .. } => *range,
+        }
+    }
+}
+
 /// Per-script-walk configuration for the rule hooks. Carried as
 /// `Option<ScriptRuleHooks>` by the scope builder's `ScriptWalker`:
-/// `Some` for the module / instance script walks, `None` for the
-/// template mini-expression walks — these rules are scoped to the
-/// `<script>` bodies and do not fire inside template `{…}`
-/// expressions.
+/// `Some` for the module / instance script walks and for the template
+/// expression walks (whose events are kept apart and replayed in
+/// template order).
 ///
 /// The walker's `function_depth` convention matches upstream's
 /// analyze-phase convention byte-for-byte — the module root scope has
@@ -271,31 +279,52 @@ fn legacy_creation_candidate<'a>(expr: &'a Expression<'_>) -> Option<(&'a str, o
 /// source.
 pub(crate) fn flush(events: Vec<ScriptRuleEvent>, ctx: &mut LintContext<'_>) {
     for event in events {
-        match event {
-            ScriptRuleEvent::Warning {
-                code,
-                message,
-                range,
-            } => ctx.emit(code, message, range),
-            ScriptRuleEvent::LegacyCreationCandidate { callee, range } => {
-                let Some(tree) = &ctx.scope_tree else {
-                    continue;
-                };
-                let Some(bid) = tree.resolve_from_template(&callee) else {
-                    continue;
-                };
-                let is_svelte_default_import = matches!(
-                    &tree.binding(bid).initial,
-                    crate::scope::InitialKind::Import { source, is_default: true }
-                        if source.ends_with(".svelte")
+        emit_event(event, ctx);
+    }
+}
+
+/// Emit the pending template-expression events that start before
+/// `until`. The template walk calls this as it passes each node's
+/// expressions, so the warnings interleave with the element and block
+/// warnings the way the compiler's single template walk produces them,
+/// under the ignore frames active at that point.
+pub(crate) fn flush_template_events_before(until: u32, ctx: &mut LintContext<'_>) {
+    while ctx
+        .pending_template_events
+        .front()
+        .is_some_and(|e| e.range().start < until)
+    {
+        if let Some(event) = ctx.pending_template_events.pop_front() {
+            emit_event(event, ctx);
+        }
+    }
+}
+
+fn emit_event(event: ScriptRuleEvent, ctx: &mut LintContext<'_>) {
+    match event {
+        ScriptRuleEvent::Warning {
+            code,
+            message,
+            range,
+        } => ctx.emit(code, message, range),
+        ScriptRuleEvent::LegacyCreationCandidate { callee, range } => {
+            let Some(tree) = &ctx.scope_tree else {
+                return;
+            };
+            let Some(bid) = tree.resolve_from_template(&callee) else {
+                return;
+            };
+            let is_svelte_default_import = matches!(
+                &tree.binding(bid).initial,
+                crate::scope::InitialKind::Import { source, is_default: true }
+                    if source.ends_with(".svelte")
+            );
+            if is_svelte_default_import {
+                ctx.emit(
+                    Code::legacy_component_creation,
+                    messages::legacy_component_creation(),
+                    range,
                 );
-                if is_svelte_default_import {
-                    ctx.emit(
-                        Code::legacy_component_creation,
-                        messages::legacy_component_creation(),
-                        range,
-                    );
-                }
             }
         }
     }

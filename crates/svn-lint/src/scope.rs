@@ -113,6 +113,12 @@ pub struct ScopeTree {
     /// warnings — `walk_parsed` takes this buffer once the tree is
     /// final and flushes it at the stage where those rules emit.
     pub(crate) script_rule_events: Vec<crate::rules::script_ast_rules::ScriptRuleEvent>,
+    /// The same rule events raised inside template expressions. The
+    /// compiler's template walk runs the Literal / TemplateElement /
+    /// NewExpression / … visitors on every `{…}` expression, so these
+    /// surface in template order, interleaved with the element and
+    /// block warnings. Sorted by source position.
+    pub(crate) template_rule_events: Vec<crate::rules::script_ast_rules::ScriptRuleEvent>,
 }
 
 impl ScopeTree {
@@ -150,7 +156,8 @@ impl ScopeTree {
     /// own scope (svelte compiler shared/element.js). Script scopes have
     /// `range == None` and never match; template byte offsets are
     /// disjoint from script offsets anyway. The smallest-containing
-    /// scope wins (innermost).
+    /// scope wins (innermost); between scopes with the same range the
+    /// later-created one is nested inside the earlier, so it wins.
     pub fn innermost_template_scope_at(&self, offset: u32) -> ScopeId {
         let mut best = self.instance_root;
         let mut best_len = u32::MAX;
@@ -158,7 +165,7 @@ impl ScopeTree {
             if let Some(r) = s.range
                 && r.start <= offset
                 && offset < r.end
-                && (r.end - r.start) < best_len
+                && (r.end - r.start) <= best_len
             {
                 best_len = r.end - r.start;
                 best = ScopeId(i as u32);
@@ -368,6 +375,7 @@ pub fn build_with_template(
     instance_program: Option<&Program<'_>>,
 ) -> ScopeTree {
     let mut tree_builder = TreeBuilder::new();
+    tree_builder.runes = runes;
 
     // Module scope: if there's no module script at all we still create
     // a synthetic empty one so resolve() has a stable root. Matches
@@ -412,11 +420,10 @@ pub fn build_with_template(
         // so template refs don't look like "same function_depth" as
         // instance-root bindings (important for
         // `state_referenced_locally`).
+        // The walk opens the root fragment's own scope beneath this one
+        // (stamped with the whole-fragment range), exactly as the
+        // compiler's `Fragment` visitor does.
         let template_root = tree_builder.new_scope(Some(instance_root));
-        // Stamp the whole-fragment range so top-level template positions
-        // (e.g. a top-level `{@const}` declaration) resolve to
-        // `template_root` via `innermost_template_scope_at` (l275).
-        tree_builder.scopes[template_root.0 as usize].range = Some(frag.range);
         let lang = doc
             .instance_script
             .as_ref()
@@ -463,6 +470,10 @@ struct TreeBuilder {
     expr_alloc: Option<oxc_allocator::Allocator>,
     /// See [`ScopeTree::has_await`].
     has_await: bool,
+    /// See [`ScopeTree::template_rule_events`].
+    template_rule_events: Vec<ScriptRuleEvent>,
+    /// The file's runes mode, for the template-expression rule hooks.
+    runes: bool,
     /// See [`ScopeTree::script_rule_events`] — filled by the
     /// [`ScriptRuleHooks`] callbacks during the script walks.
     script_rule_events: Vec<ScriptRuleEvent>,
@@ -582,6 +593,8 @@ impl TreeBuilder {
             expr_alloc: None,
             has_await: false,
             script_rule_events: Vec::new(),
+            template_rule_events: Vec::new(),
+            runes: false,
         }
     }
 
@@ -676,14 +689,6 @@ impl TreeBuilder {
             control_flow_stack: Vec::new(),
         };
         svn_analyze::template_scope::walk_with_visitor(fragment, source, &mut visitor);
-    }
-
-    fn bindings_in(&self, scope: ScopeId) -> Vec<BindingId> {
-        self.scopes[scope.0 as usize]
-            .declarations
-            .values()
-            .copied()
-            .collect()
     }
 
     fn walk_template_attr(&mut self, attr: &svn_parser::ast::Attribute, ctx: &mut TemplateCtx<'_>) {
@@ -901,7 +906,14 @@ impl TreeBuilder {
         let leading = slice
             .bytes()
             .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'));
-        let needs_wrap = leading.and_then(|i| slice.as_bytes().get(i).copied()) == Some(b'{');
+        // A slice starting with a string literal needs the same
+        // treatment: at statement level oxc reads it as a directive
+        // prologue (`"use strict"`), not an expression, and the
+        // literal would never be visited.
+        let needs_wrap = matches!(
+            leading.and_then(|i| slice.as_bytes().get(i).copied()),
+            Some(b'{' | b'"' | b'\'')
+        );
         let wrapped: String;
         let (effective_slice, base_adjust): (&str, u32) = if needs_wrap && range.start > 0 {
             wrapped = format!("({slice})");
@@ -914,6 +926,7 @@ impl TreeBuilder {
         let mut alloc = self.expr_alloc.take().unwrap_or_default();
         let parsed = parse_script_body(&alloc, effective_slice, ctx.lang);
         let start_depth = self.scopes[ctx.scope.0 as usize].function_depth;
+        let runes = self.runes;
         let mut walker = ScriptWalker {
             tree: self,
             // The prepended `(` shifts every oxc span by +1; offset
@@ -937,11 +950,22 @@ impl TreeBuilder {
             // Template expressions count toward the runes await
             // trigger (upstream: fragment create_scopes has_await).
             counts_await: true,
-            hooks: None,
+            // The compiler's template walk runs the same expression
+            // visitors as its script walks. `is_instance: false` gives
+            // the non-instance class-nesting allowance, which a
+            // template expression (always nested deeper) exceeds
+            // either way.
+            hooks: Some(ScriptRuleHooks {
+                runes,
+                is_instance: false,
+            }),
         };
+        let events_before = walker.tree.script_rule_events.len();
         for stmt in &parsed.program.body {
             walker.visit_stmt(stmt);
         }
+        let template_events = self.script_rule_events.split_off(events_before);
+        self.template_rule_events.extend(template_events);
         // Apply template flags to refs produced during that walk.
         // PendingRef doesn't yet carry template flags; set them on
         // the refs produced in this slice via a post-pass.
@@ -1142,6 +1166,43 @@ struct LintScopeVisitor<'a, 'src> {
 }
 
 impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisitor<'_, 'src> {
+    // Lint answers the compiler's questions, so it needs the compiler's
+    // scope tree rather than the overlay's.
+    const COMPILER_SCOPES: bool = true;
+
+    fn declare_in_current_scope(&mut self, bindings: &[svn_analyze::template_scope::BoundIdent]) {
+        for b in bindings {
+            let bid = self.builder.declare(
+                self.ctx.scope,
+                b.name.clone(),
+                b.range,
+                BindingKind::Template,
+                DeclarationKind::Const,
+                InitialKind::EachBlock,
+            );
+            self.builder.bindings[bid.0 as usize].inside_rest = b.inside_rest;
+        }
+    }
+
+    /// The compiler declares a snippet's name in the scope enclosing
+    /// the `{#snippet}` block (`scope.declare(node.expression, 'normal',
+    /// 'function', node)`), so `{@render name()}` and other template
+    /// references resolve to the snippet rather than to a same-named
+    /// script binding.
+    fn visit_snippet_block(&mut self, block: &svn_parser::SnippetBlock) {
+        let Some(range) = snippet_name_range(block, self.ctx.source) else {
+            return;
+        };
+        self.builder.declare(
+            self.ctx.scope,
+            block.name.clone(),
+            range,
+            BindingKind::Normal,
+            DeclarationKind::Function,
+            InitialKind::SnippetBlock,
+        );
+    }
+
     fn enter_scope(
         &mut self,
         kind: svn_analyze::template_scope::ScopeKind,
@@ -1149,13 +1210,24 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
         scope_range: svn_core::Range,
     ) {
         use svn_analyze::template_scope::ScopeKind;
-        let parent = self.ctx.scope;
-        let child = self.builder.new_scope(Some(parent));
-        // Record the scope's lexical span so an on-event reference
-        // resolves against the element's scope, not the whole-file
-        // declaration set (l275).
+        let current = self.ctx.scope;
+        // A named-slot child's scope is a sibling of the component's
+        // default scope: its parent is the scope the default scope was
+        // opened from.
+        let parent = match kind {
+            ScopeKind::ComponentSlot => self.scope_stack.last().copied().unwrap_or(current),
+            _ => current,
+        };
+        let child = match kind {
+            // An element's children fragment is porous (`transparent`).
+            ScopeKind::ElementFragment => self.builder.new_porous_scope(parent),
+            _ => self.builder.new_scope(Some(parent)),
+        };
+        // Record the scope's lexical span so a reference inside it
+        // resolves against this scope, not the whole-file declaration
+        // set.
         self.builder.scopes[child.0 as usize].range = Some(scope_range);
-        self.scope_stack.push(parent);
+        self.scope_stack.push(current);
         self.ctx.scope = child;
 
         // Per-kind binding declaration. Convention for `Each`:
@@ -1169,11 +1241,22 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
         // them as `Each` lets each-specific rules
         // (`bind_invalid_each_rest`, etc.) misfire on `{:then
         // {...rest}}` / `{:catch {...rest}}` destructures.
-        let (declare_kind, retag_to_template) = match kind {
-            ScopeKind::Each { .. } => (BindingKind::Each, false),
-            ScopeKind::AwaitThen | ScopeKind::AwaitCatch => (BindingKind::Template, false),
-            ScopeKind::Snippet => (BindingKind::Snippet, false),
-            ScopeKind::LetDirective => (BindingKind::Each, true),
+        //
+        // `let:` bindings (on elements and component default scopes)
+        // are `Template`; the `{:then}` / `{:catch}` value scope
+        // declares the pattern's names as plain bindings.
+        let declare_kind = match kind {
+            ScopeKind::Each { .. } => BindingKind::Each,
+            ScopeKind::AwaitThen | ScopeKind::AwaitCatch => BindingKind::Template,
+            ScopeKind::AwaitValue => BindingKind::Normal,
+            ScopeKind::Snippet => BindingKind::Snippet,
+            ScopeKind::LetDirective | ScopeKind::Element | ScopeKind::ComponentDefault => {
+                BindingKind::Template
+            }
+            ScopeKind::Block | ScopeKind::ElementFragment | ScopeKind::ComponentSlot => {
+                debug_assert!(bindings.is_empty(), "{kind:?} scopes declare nothing");
+                BindingKind::Template
+            }
             ScopeKind::Fragment => unreachable!("walker doesn't call enter_scope for Fragment"),
         };
 
@@ -1223,23 +1306,6 @@ impl<'src> svn_analyze::template_scope::TemplateScopeVisitor for LintScopeVisito
                 DeclarationKind::Const,
                 InitialKind::EachBlock,
             );
-        }
-
-        if retag_to_template {
-            // Let-directive bindings are declared
-            // with `BindingKind::Each` above (so the shared declarer
-            // path stays uniform), then retagged to `Template` to
-            // match upstream's per-kind classification. Mirrors what
-            // the pre-Phase-4 `declare_snippet_params` /
-            // `declare_let_directive` did.
-            for bid in self.builder.bindings_in(child) {
-                if matches!(
-                    self.builder.bindings[bid.0 as usize].kind,
-                    BindingKind::Each
-                ) {
-                    self.builder.bindings[bid.0 as usize].kind = BindingKind::Template;
-                }
-            }
         }
     }
 
@@ -1531,7 +1597,7 @@ impl TreeBuilder {
         let pending_writes = std::mem::take(&mut self.pending_writes);
         let write_violations = resolve_writes(&self, pending_writes);
 
-        synthesize_store_subs(&mut self, &mut unresolved, module_root, instance_root);
+        synthesize_store_subs(&mut self, &mut unresolved, instance_root);
 
         ScopeTree {
             scopes: self.scopes,
@@ -1547,6 +1613,11 @@ impl TreeBuilder {
             nonrunes_export_specs: self.nonrunes_export_specs,
             export_spec_locals: self.export_spec_locals,
             script_rule_events: self.script_rule_events,
+            template_rule_events: {
+                let mut events = self.template_rule_events;
+                events.sort_by_key(|e| e.range().start);
+                events
+            },
         }
     }
 }
@@ -1643,7 +1714,6 @@ fn resolve_writes(tree: &TreeBuilder, writes: Vec<PendingWrite>) -> Vec<WriteVio
 fn synthesize_store_subs(
     tree: &mut TreeBuilder,
     unresolved: &mut Vec<UnresolvedRef>,
-    module_root: ScopeId,
     instance_root: ScopeId,
 ) {
     use std::collections::HashMap as StdMap;
@@ -1658,8 +1728,9 @@ fn synthesize_store_subs(
             continue;
         }
         let store_name = &n[1..];
-        let backing = resolve_by_name(&tree.scopes, module_root, store_name)
-            .or_else(|| resolve_by_name(&tree.scopes, instance_root, store_name));
+        // `instance.scope.get(store_name)` upstream: the instance scope
+        // first, then the module scope it is a child of.
+        let backing = resolve_by_name(&tree.scopes, instance_root, store_name);
         // No backing declaration → upstream leaves the reference in
         // `module.scope.references` (no store-sub synthesis). For
         // rune names that surviving reference is what flips the file
@@ -1674,28 +1745,28 @@ fn synthesize_store_subs(
         //   as a conflict).
         if let Some(bid) = backing {
             let backing_binding = &tree.bindings[bid.0 as usize];
-            if let InitialKind::RuneCall { rune, .. } = backing_binding.initial {
+            // The compiler synthesizes store subscriptions before its
+            // analyze pass rewires each `$props()` destructure binding's
+            // `initial` to the property default, so what it inspects is
+            // still the declarator's `$props()` call — for plain
+            // (`let { a } = $props()`), `$bindable` (`let { a =
+            // $bindable() } = $props()`) and rest bindings alike. Our
+            // builder has already applied that rewire, so the binding
+            // kinds that only a `$props()` destructure produces stand
+            // in for the original initializer.
+            let init_rune = match (&backing_binding.kind, &backing_binding.initial) {
+                (BindingKind::Prop | BindingKind::BindableProp, _) => Some(RuneCall::Props),
+                (_, InitialKind::RuneCall { rune, .. }) => Some(*rune),
+                _ => None,
+            };
+            // Upstream guards: a rune-initialised declaration is not a
+            // store, except that a `$props()` value named anything but
+            // `props` still is (`const foo = $props(); $foo()`).
+            if let Some(rune) = init_rune {
                 let props_exception = store_name != "props" && rune == RuneCall::Props;
                 if !props_exception {
                     continue;
                 }
-            }
-            // Additional carve-out: `let { props } = $props()` destructures
-            // a field NAMED `props` out of the rune call. Our destructure
-            // handler rewires the field's `initial` to `None` (matching
-            // upstream `VariableDeclarator.js:104-130`), so the
-            // `RuneCall { Props }` check above doesn't catch it. The
-            // destructured `props` field carries `BindingKind::Prop`,
-            // which is unique to fields destructured from `$props()` —
-            // that's the signal we use to skip synthesis here.
-            //
-            // Without this skip, `let { props } = $props()` fires a
-            // false-positive `store_rune_conflict` on every reference to
-            // `$props(...)` in the script — verified against upstream
-            // svelte/compiler 5.53.6 on threlte/theatre, which does NOT
-            // fire the warning for this canonical pattern.
-            if store_name == "props" && backing_binding.kind == BindingKind::Prop {
-                continue;
             }
             // `import { derived } from 'svelte/store'` must not
             // capture `$derived` as a subscription — upstream skips
@@ -1832,6 +1903,23 @@ fn is_reserved_word(token: &str) -> bool {
             | "with"
             | "yield"
     )
+}
+
+/// Source range of a `{#snippet NAME(…)}` block's name: the identifier
+/// following the `{#snippet` keyword.
+fn snippet_name_range(block: &svn_parser::SnippetBlock, source: &str) -> Option<Range> {
+    let text = source.get(block.range.start as usize..block.range.end as usize)?;
+    let after_kw = text.find("#snippet")? + "#snippet".len();
+    let name_off = after_kw + text[after_kw..].find(block.name.as_str())?;
+    let start = block.range.start + name_off as u32;
+    Some(Range::new(start, start + block.name.len() as u32))
+}
+
+/// A TypeScript-only function statement: `declare function f(): T` or
+/// a bodiless overload signature. Both are ESTree `TSDeclareFunction`
+/// nodes, which the compiler deletes before analysis.
+fn is_ts_declare_function(f: &oxc_ast::ast::Function<'_>) -> bool {
+    f.declare || f.body.is_none()
 }
 
 fn resolve_by_name(scopes: &[Scope], from: ScopeId, name: &str) -> Option<BindingId> {
@@ -2056,6 +2144,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     fn visit_stmt_inner(&mut self, stmt: &Statement<'_>, at_program_top: bool) {
         match stmt {
             Statement::VariableDeclaration(vd) => self.visit_var_decl(vd),
+            // TypeScript-only statements (`declare function`, overload
+            // signatures) are deleted by the compiler's
+            // `remove_typescript_nodes` before any scope is built.
+            Statement::FunctionDeclaration(f) if is_ts_declare_function(f) => {}
             Statement::FunctionDeclaration(f) => {
                 if let Some(id) = &f.id {
                     self.declare_with_ignores(
@@ -2082,12 +2174,17 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 });
             }
             Statement::ClassDeclaration(cls) => self.visit_class_decl(cls),
+            // `import type …` never reaches the compiler's scope builder.
+            Statement::ImportDeclaration(imp) if imp.import_kind.is_type() => {}
             Statement::ImportDeclaration(imp) => {
                 let source = SmolStr::from(imp.source.value.as_str());
                 if let Some(specs) = &imp.specifiers {
                     for s in specs {
                         use oxc_ast::ast::ImportDeclarationSpecifier as S;
                         let (name, span, is_default) = match s {
+                            // `import { type x }` — the specifier is
+                            // filtered out before analysis.
+                            S::ImportSpecifier(s) if s.import_kind.is_type() => continue,
                             S::ImportSpecifier(s) => (s.local.name.as_str(), s.local.span, false),
                             S::ImportDefaultSpecifier(s) => {
                                 (s.local.name.as_str(), s.local.span, true)
@@ -2117,6 +2214,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     use oxc_ast::ast::Declaration;
                     match decl {
                         Declaration::VariableDeclaration(v) => self.visit_var_decl(v),
+                        Declaration::FunctionDeclaration(f) if is_ts_declare_function(f) => {}
                         Declaration::FunctionDeclaration(f) => {
                             if let Some(id) = &f.id {
                                 self.declare_with_ignores(
@@ -2206,9 +2304,15 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 self.visit_expr(&d.test);
             }
             Statement::TryStatement(t) => {
-                for s in &t.block.body {
-                    self.visit_stmt(s);
-                }
+                // The `try` and `finally` bodies are plain block
+                // statements, so each gets its own porous block scope
+                // (upstream `BlockStatement` → `create_block_scope`).
+                let s = self.tree.new_porous_scope(self.cur_scope());
+                self.with_scope(s, |w| {
+                    for s in &t.block.body {
+                        w.visit_stmt(s);
+                    }
+                });
                 if let Some(h) = &t.handler {
                     // Catch params live in a porous scope covering the
                     // handler (upstream `CatchClause` declares them
@@ -2225,9 +2329,12 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     });
                 }
                 if let Some(f) = &t.finalizer {
-                    for s in &f.body {
-                        self.visit_stmt(s);
-                    }
+                    let s = self.tree.new_porous_scope(self.cur_scope());
+                    self.with_scope(s, |w| {
+                        for s in &f.body {
+                            w.visit_stmt(s);
+                        }
+                    });
                 }
             }
             Statement::SwitchStatement(s) => {
@@ -2354,6 +2461,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     }
 
     fn visit_class_decl(&mut self, cls: &Class<'_>) {
+        // `declare class` is removed before analysis.
+        if cls.declare {
+            return;
+        }
         if let Some(h) = self.hooks {
             let range = self.abs(cls.span.start, cls.span.end);
             h.class_declaration(
@@ -2394,6 +2505,18 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
 
     fn visit_class_body(&mut self, body: &ClassBody<'_>) {
         for m in &body.body {
+            // `declare` fields and abstract methods are removed before
+            // analysis.
+            let removed = match m {
+                ClassElement::PropertyDefinition(p) => p.declare,
+                ClassElement::MethodDefinition(md) => {
+                    md.r#type == oxc_ast::ast::MethodDefinitionType::TSAbstractMethodDefinition
+                }
+                _ => false,
+            };
+            if removed {
+                continue;
+            }
             let pushed = self.push_leading_ignores(Some(m.span().start));
             match m {
                 ClassElement::MethodDefinition(md) => {
@@ -2456,6 +2579,10 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     }
 
     fn visit_var_decl(&mut self, vd: &VariableDeclaration<'_>) {
+        // `declare const x: T` is removed before analysis.
+        if vd.declare {
+            return;
+        }
         let decl_kind = match vd.kind {
             oxc_ast::ast::VariableDeclarationKind::Var => DeclarationKind::Var,
             oxc_ast::ast::VariableDeclarationKind::Let => DeclarationKind::Let,
@@ -3206,15 +3333,22 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     }
 
     fn visit_assignment_target(&mut self, t: &AssignmentTarget<'_>) {
+        self.visit_assignment_target_as(t, RefParentKind::AssignmentLeft);
+    }
+
+    /// `id_kind` is the parent kind recorded when `t` itself is a bare
+    /// identifier. Only the direct `left` of an assignment is a
+    /// write-position reference to the compiler (`parent.left ===
+    /// node`); identifiers inside a destructuring target sit under an
+    /// ArrayPattern / Property / RestElement / AssignmentPattern and
+    /// count as reads for `state_referenced_locally`, so nested
+    /// targets recurse with `Read`. The update bookkeeping is the same
+    /// for both.
+    fn visit_assignment_target_as(&mut self, t: &AssignmentTarget<'_>, id_kind: RefParentKind) {
         match t {
             AssignmentTarget::AssignmentTargetIdentifier(id) => {
                 // foo = …
-                self.record_ref_id(
-                    id.name.as_str(),
-                    id.span.start,
-                    id.span.end,
-                    RefParentKind::AssignmentLeft,
-                );
+                self.record_ref_id(id.name.as_str(), id.span.start, id.span.end, id_kind);
                 self.tree.pending_updates.push(PendingUpdate {
                     scope: self.cur_scope(),
                     name: SmolStr::from(id.name.as_str()),
@@ -3268,7 +3402,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     self.visit_assignment_target_maybe_default(el);
                 }
                 if let Some(rest) = &arr.rest {
-                    self.visit_assignment_target(&rest.target);
+                    self.visit_assignment_target_as(&rest.target, RefParentKind::Read);
                 }
             }
             AssignmentTarget::ObjectAssignmentTarget(obj) => {
@@ -3282,7 +3416,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                                 pi.binding.name.as_str(),
                                 pi.binding.span.start,
                                 pi.binding.span.end,
-                                RefParentKind::AssignmentLeft,
+                                RefParentKind::Read,
                             );
                             self.tree.pending_updates.push(PendingUpdate {
                                 scope: self.cur_scope(),
@@ -3305,7 +3439,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                     }
                 }
                 if let Some(rest) = &obj.rest {
-                    self.visit_assignment_target(&rest.target);
+                    self.visit_assignment_target_as(&rest.target, RefParentKind::Read);
                 }
             }
             _ => {}
@@ -3319,12 +3453,12 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         use oxc_ast::ast::AssignmentTargetMaybeDefault as ATMD;
         match t {
             ATMD::AssignmentTargetWithDefault(d) => {
-                self.visit_assignment_target(&d.binding);
+                self.visit_assignment_target_as(&d.binding, RefParentKind::Read);
                 self.visit_expr(&d.init);
             }
             other => {
                 if let Some(target) = other.as_assignment_target() {
-                    self.visit_assignment_target(target);
+                    self.visit_assignment_target_as(target, RefParentKind::Read);
                 }
             }
         }

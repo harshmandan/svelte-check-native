@@ -1,0 +1,5 @@
+{
+    "clean": true,
+    "warnings": [],
+    "_note": "component_name_lowercase resolves the tag name from the element's own template scope; an {#each} context named like the lowercase import shadows it, so no warning. Verified against svelte-check 4.4.6."
+}

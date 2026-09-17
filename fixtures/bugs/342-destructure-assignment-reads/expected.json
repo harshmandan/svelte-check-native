@@ -1,0 +1,30 @@
+{
+    "clean": true,
+    "warnings": [
+        {
+            "file": "src/Swap.svelte",
+            "line": 0,
+            "column": 47,
+            "code": "state_referenced_locally"
+        },
+        {
+            "file": "src/Swap.svelte",
+            "line": 0,
+            "column": 50,
+            "code": "state_referenced_locally"
+        },
+        {
+            "file": "src/Swap.svelte",
+            "line": 0,
+            "column": 56,
+            "code": "state_referenced_locally"
+        },
+        {
+            "file": "src/Swap.svelte",
+            "line": 0,
+            "column": 59,
+            "code": "state_referenced_locally"
+        }
+    ],
+    "_note": "Only the direct left side of an assignment is a write to the compiler's state_referenced_locally check; identifiers inside a destructuring target (`[a, b] = [b, a]`) are reads, so all four references warn. Verified against svelte-check 4.4.6."
+}

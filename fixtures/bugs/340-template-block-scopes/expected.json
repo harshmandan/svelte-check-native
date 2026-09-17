@@ -1,0 +1,30 @@
+{
+    "clean": true,
+    "warnings": [
+        {
+            "file": "src/Legacy.svelte",
+            "line": 0,
+            "column": 19,
+            "code": "export_let_unused"
+        },
+        {
+            "file": "src/NamedSlot.svelte",
+            "line": 0,
+            "column": 70,
+            "code": "non_reactive_update"
+        },
+        {
+            "file": "src/IfConst.svelte",
+            "line": 0,
+            "column": 38,
+            "code": "non_reactive_update"
+        },
+        {
+            "file": "src/Sibling.svelte",
+            "line": 0,
+            "column": 38,
+            "code": "non_reactive_update"
+        }
+    ],
+    "_note": "The Svelte compiler gives every block fragment ({#if} branches, {#each} fallback, {#await} bodies, {#key}, snippet bodies), every element and every named-slot child its own scope, declares {@const} into the innermost one, resolves {#each}/{:then}/snippet pattern defaults inside the block's scope, visits the {:else} fallback of {#each} inside the each scope, and declares a snippet's name in the enclosing scope. A {@const title} inside {#if} therefore no longer hides the script's `title` from a later <h1>{title}</h1> (Legacy2: no export_let_unused), a template read that sits beside a same-named {@const} still counts (IfConst/Sibling: non_reactive_update), each-context and snippet names shadow script bindings (Fallback/Default/Snip: nothing), and a slot=\"…\" child does not see the component's default let: bindings (NamedSlot: non_reactive_update). Verified against svelte-check 4.4.6 / svelte 5.55."
+}

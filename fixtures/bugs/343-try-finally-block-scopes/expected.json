@@ -1,0 +1,12 @@
+{
+    "clean": true,
+    "warnings": [
+        {
+            "file": "src/Runes.svelte",
+            "line": 0,
+            "column": 114,
+            "code": "state_referenced_locally"
+        }
+    ],
+    "_note": "try { } and finally { } bodies are block statements with their own scope in the compiler, so a `let data` / `const data` inside them no longer replaces the outer binding: the legacy prop stays used (no export_let_unused) and the runes read after the try still resolves to the $state binding (state_referenced_locally). Verified against svelte-check 4.4.6."
+}

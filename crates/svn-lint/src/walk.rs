@@ -177,6 +177,7 @@ pub fn walk_parsed(
     // matches `ctx.runes`. Flushed below, between the options
     // warnings and the walk-time binding rules.
     let script_rule_events = std::mem::take(&mut tree.script_rule_events);
+    ctx.pending_template_events = std::mem::take(&mut tree.template_rule_events).into();
     ctx.scope_tree = Some(tree);
 
     // <script>-attribute rules (script_unknown_attribute is
@@ -228,6 +229,7 @@ pub fn walk_parsed(
     let mut ancestors: Vec<Ancestor> = Vec::new();
     walk_fragment_impl(fragment, ctx, None, &mut ancestors, false);
     crate::rules::binding_rules::flush_template_write_violations(ctx, u32::MAX, true);
+    crate::rules::script_ast_rules::flush_template_events_before(u32::MAX, ctx);
 
     // Post-walk declaration loops (non_reactive_update /
     // export_let_unused) — upstream runs them after all three walks.
@@ -434,6 +436,7 @@ fn walk_fragment_impl(
                     ancestors,
                     inside_control_block,
                 );
+                flush_expr_events_before(children_start(&el.children, el.range), ctx);
                 ancestors.push(Ancestor::Element(el.name.to_string()));
                 walk_fragment_impl(
                     &el.children,
@@ -453,6 +456,7 @@ fn walk_fragment_impl(
             }
             Node::Component(comp) => {
                 crate::rules::component_rules::visit(comp, ctx);
+                flush_expr_events_before(children_start(&comp.children, comp.range), ctx);
                 // A Boundary frame: the HTML placement checks stop
                 // here (upstream RegularElement.js breaks at a
                 // Component ancestor), but the a11y is_parent walk
@@ -463,6 +467,7 @@ fn walk_fragment_impl(
             }
             Node::SvelteElement(se) => {
                 crate::rules::svelte_element_rules::visit(se, ctx, ancestors);
+                flush_expr_events_before(children_start(&se.children, se.range), ctx);
                 // Placement checks stop here too, while the a11y
                 // is_parent walk answers "unknown tag — play it safe"
                 // for this frame.
@@ -472,8 +477,10 @@ fn walk_fragment_impl(
             }
             Node::IfBlock(b) => {
                 crate::rules::block_rules::visit_if(b, ctx);
+                flush_expr_events_before(b.consequent.range.start, ctx);
                 walk_fragment_impl(&b.consequent, ctx, parent_tag, ancestors, true);
                 for arm in &b.elseif_arms {
+                    flush_expr_events_before(arm.body.range.start, ctx);
                     walk_fragment_impl(&arm.body, ctx, parent_tag, ancestors, true);
                 }
                 if let Some(else_body) = &b.alternate {
@@ -482,6 +489,7 @@ fn walk_fragment_impl(
             }
             Node::EachBlock(b) => {
                 crate::rules::block_rules::visit_each(b, ctx);
+                flush_expr_events_before(b.body.range.start, ctx);
                 walk_fragment_impl(&b.body, ctx, parent_tag, ancestors, true);
                 if let Some(empty) = &b.alternate {
                     walk_fragment_impl(empty, ctx, parent_tag, ancestors, true);
@@ -489,6 +497,14 @@ fn walk_fragment_impl(
             }
             Node::AwaitBlock(b) => {
                 crate::rules::block_rules::visit_await(b, ctx);
+                let first_body = b
+                    .pending
+                    .as_ref()
+                    .map(|p| p.range.start)
+                    .or(b.then_branch.as_ref().map(|t| t.body.range.start))
+                    .or(b.catch_branch.as_ref().map(|c| c.body.range.start))
+                    .unwrap_or(b.range.end);
+                flush_expr_events_before(first_body, ctx);
                 if let Some(pending) = &b.pending {
                     walk_fragment_impl(pending, ctx, parent_tag, ancestors, true);
                 }
@@ -501,6 +517,7 @@ fn walk_fragment_impl(
             }
             Node::KeyBlock(b) => {
                 crate::rules::block_rules::visit_key(b, ctx);
+                flush_expr_events_before(b.body.range.start, ctx);
                 walk_fragment_impl(&b.body, ctx, parent_tag, ancestors, true);
             }
             Node::SnippetBlock(b) => {
@@ -516,10 +533,42 @@ fn walk_fragment_impl(
             }
             Node::Interpolation(_) | Node::Comment(_) => {}
         }
+        flush_expr_events_before(node_end(node), ctx);
 
         if pushed {
             ctx.pop_ignore();
         }
+    }
+}
+
+fn flush_expr_events_before(until: u32, ctx: &mut LintContext<'_>) {
+    crate::rules::script_ast_rules::flush_template_events_before(until, ctx);
+}
+
+/// Where an element-like node's children begin — its attribute
+/// expressions all precede this point. A childless node's expressions
+/// all precede its end.
+fn children_start(children: &Fragment, node_range: svn_core::Range) -> u32 {
+    if children.nodes.is_empty() {
+        node_range.end
+    } else {
+        children.range.start
+    }
+}
+
+fn node_end(node: &Node) -> u32 {
+    match node {
+        Node::Element(n) => n.range.end,
+        Node::Component(n) => n.range.end,
+        Node::SvelteElement(n) => n.range.end,
+        Node::IfBlock(n) => n.range.end,
+        Node::EachBlock(n) => n.range.end,
+        Node::AwaitBlock(n) => n.range.end,
+        Node::KeyBlock(n) => n.range.end,
+        Node::SnippetBlock(n) => n.range.end,
+        Node::Text(n) => n.range.end,
+        Node::Interpolation(n) => n.range.end,
+        Node::Comment(n) => n.range.end,
     }
 }
 

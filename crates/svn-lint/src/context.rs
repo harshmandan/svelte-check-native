@@ -98,6 +98,12 @@ pub struct LintContext<'src> {
     /// `None` when the caller has no file name (the compiler's
     /// `(unknown)`).
     pub filename: Option<std::path::PathBuf>,
+
+    /// Template-expression rule events not yet emitted, in source
+    /// order (see `ScopeTree::template_rule_events`). The template walk
+    /// drains them as it passes their positions.
+    pub(crate) pending_template_events:
+        std::collections::VecDeque<crate::rules::script_ast_rules::ScriptRuleEvent>,
 }
 
 impl<'src> LintContext<'src> {
@@ -122,6 +128,7 @@ impl<'src> LintContext<'src> {
             custom_element_info: None,
             compat: crate::compat::CompatFeatures::MODERN,
             filename: None,
+            pending_template_events: std::collections::VecDeque::new(),
         }
     }
 

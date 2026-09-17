@@ -304,6 +304,10 @@ fn state_referenced_locally(tree: &ScopeTree, pending: &mut Vec<(svn_core::Range
 /// pattern doesn't need reactivity.
 fn non_reactive_update(tree: &ScopeTree, ctx: &mut LintContext<'_>) {
     for (_, binding) in tree.all_bindings() {
+        // Only module- and instance-level declarations are checked.
+        if binding.scope != tree.module_root && binding.scope != tree.instance_root {
+            continue;
+        }
         if binding.kind != BindingKind::Normal || !binding.reassigned {
             continue;
         }

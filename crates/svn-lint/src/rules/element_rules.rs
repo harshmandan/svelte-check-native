@@ -79,9 +79,14 @@ pub fn visit(
 
     // component_name_lowercase: the tag starts lowercase AND resolves
     // to an import-kind binding with zero references in the script.
-    // Upstream: `visitors/RegularElement.js:120-127`.
+    // Upstream: `visitors/RegularElement.js:120-127` — resolved from
+    // the element's own scope, so a template binding (an each-block
+    // context, a `let:`) shadowing the import suppresses it.
     if let Some(tree) = &ctx.scope_tree
-        && let Some(bid) = tree.resolve_from_template(el.name.as_str())
+        && let Some(bid) = tree.resolve(
+            tree.innermost_template_scope_at(el.range.start),
+            el.name.as_str(),
+        )
     {
         let b = tree.binding(bid);
         if b.declaration_kind == crate::scope::DeclarationKind::Import && b.references.is_empty() {

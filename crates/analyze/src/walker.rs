@@ -713,8 +713,16 @@ impl crate::template_scope::TemplateScopeVisitor for AnalyzeVisitor<'_> {
             crate::template_scope::ScopeKind::LetDirective => {
                 crate::nodes::let_directive::enter(self, bindings);
             }
+            // The compiler-scope kinds never reach this visitor (it
+            // keeps the default `COMPILER_SCOPES = false` walk).
             crate::template_scope::ScopeKind::Snippet
-            | crate::template_scope::ScopeKind::Fragment => {
+            | crate::template_scope::ScopeKind::Fragment
+            | crate::template_scope::ScopeKind::Block
+            | crate::template_scope::ScopeKind::Element
+            | crate::template_scope::ScopeKind::ElementFragment
+            | crate::template_scope::ScopeKind::ComponentDefault
+            | crate::template_scope::ScopeKind::ComponentSlot
+            | crate::template_scope::ScopeKind::AwaitValue => {
                 crate::nodes::snippet_block::enter_unresolved(self, bindings);
             }
         }

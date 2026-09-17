@@ -1,0 +1,18 @@
+{
+    "clean": true,
+    "warnings": [
+        {
+            "file": "src/Bindable.svelte",
+            "line": 0,
+            "column": 57,
+            "code": "store_rune_conflict"
+        },
+        {
+            "file": "src/Plain.svelte",
+            "line": 0,
+            "column": 42,
+            "code": "store_rune_conflict"
+        }
+    ],
+    "_note": "The compiler synthesizes store subscriptions before its analyze pass rewires each $props() destructure binding's initial to the property default, so `let { state = $bindable(0) } = $props()` still counts as a $props() value and `$state(1)` fires store_rune_conflict, exactly like the plain destructure. Verified against svelte-check 4.4.6."
+}

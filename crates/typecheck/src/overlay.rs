@@ -133,38 +133,52 @@ pub fn build(
     if let Some(dir) = kit_types_mirror {
         push_root(dir, &mut root_dirs, &mut seen);
     }
-    // Overlay svelte subdir — where generated files live.
-    push_root(layout.svelte_dir.as_path(), &mut root_dirs, &mut seen);
-    // Workspace root second — so any relative import from a generated
-    // overlay file (e.g. `import x from '../stores/util.ts'` written
-    // inside a .svelte) resolves through TS's rootDirs virtual merge
-    // back to the real source tree. Use the workspace explicitly: the
-    // cache root's parent is no longer the workspace ever since we
-    // moved the cache under node_modules/.cache/.
-    push_root(layout.workspace.as_path(), &mut root_dirs, &mut seen);
-    // UNION `rootDirs` across the whole extends chain. TS semantics
-    // REPLACE the field when a child declares it, but we need the
-    // widest possible virtual-merge in the overlay so every relative
-    // import the user could have written still resolves back to the
-    // real source tree.
-    for file in &chain {
-        let dir = file.config_dir();
-        for rd in &file.compiler_options.root_dirs {
-            let resolved = if Path::new(rd).is_absolute() {
-                PathBuf::from(rd)
-            } else {
-                dir.join(rd)
-            };
-            push_root(normalize(&resolved).as_path(), &mut root_dirs, &mut seen);
+    // The project's own `rootDirs` next, then the overlay's svelte
+    // subdir, as svelte-check writes them: the WINNING declaration in the
+    // extends chain (TypeScript replaces the field, it never merges), each
+    // entry anchored on the config that declared it — or, when no config
+    // declares one, the entry tsconfig's own directory. A relative import
+    // written in a component then resolves from its overlay through this
+    // virtual merge exactly where the compiler resolves it for the source,
+    // and nowhere else: a `../shared/x` that leaves every root is TS2307.
+    match svn_core::tsconfig::winning_field(&chain, |f| {
+        (!f.compiler_options.root_dirs.is_empty()).then_some(&f.compiler_options.root_dirs)
+    }) {
+        Some((file, dirs)) => {
+            let dir = file.config_dir();
+            for rd in dirs {
+                let resolved = if Path::new(rd).is_absolute() {
+                    PathBuf::from(rd)
+                } else {
+                    dir.join(rd)
+                };
+                push_root(normalize(&resolved).as_path(), &mut root_dirs, &mut seen);
+            }
+        }
+        None => {
+            let entry_dir = user_tsconfig.parent().unwrap_or(layout.workspace.as_path());
+            push_root(normalize(entry_dir).as_path(), &mut root_dirs, &mut seen);
+            // The overlay tree mirrors the workspace, so the workspace is
+            // the directory it stands in for. svelte-check's default root
+            // is the tsconfig's directory, which is the same directory
+            // whenever the tsconfig sits at the workspace root; a
+            // tsconfig elsewhere (`--tsconfig ../tsconfig.json`) still
+            // needs the workspace for a component's relative imports to
+            // land beside the component.
+            push_root(layout.workspace.as_path(), &mut root_dirs, &mut seen);
         }
     }
+    push_root(layout.svelte_dir.as_path(), &mut root_dirs, &mut seen);
 
-    // Path aliases. Prepend a cache-mirror candidate to each value-list
-    // so a path-mapped import like `$lib/foo/Bar.svelte.ts` first tries
-    // our generated overlay file and falls back to the source location
-    // if not found. Without this, path-mapped Svelte imports skip
-    // rootDirs entirely and never reach our overlay (rootDirs only
-    // kicks in for raw relative paths).
+    // Path aliases. Each value keeps its place and is followed by its
+    // cache-mirror candidate, the order svelte-check writes them in: a
+    // path-mapped import resolves against the source tree first — so a
+    // `Foo.svelte.ts` runes module beside `Foo.svelte` wins for
+    // `$lib/Foo.svelte`, as the compiler's extension probing decides —
+    // and reaches the component's overlay declaration only when nothing
+    // in the source tree matches. Path-mapped specifiers skip `rootDirs`
+    // entirely, so without the mirror candidate they would never reach
+    // an overlay at all.
     let mut paths_map: serde_json::Map<String, Value> = serde_json::Map::new();
     let mut paths_keys_order: Vec<String> = Vec::new();
     // Ordered Vec for emit-stable output alongside a parallel HashSet so
@@ -226,24 +240,17 @@ pub fn build(
 
     for pattern in paths_keys_order {
         let (values, _) = paths_accumulated.remove(&pattern).unwrap_or_default();
-        // Each pattern's value list runs through two passes: the
-        // mirror-into-overlay rewriting first (so overlay-cache paths
-        // win on lookup) and the original paths second (so out-of-cache
-        // imports keep resolving). `seen` deduplicates across both
-        // passes; the entry-side set above only deduplicates within
-        // the input `values` per sibling.
         let mut merged: Vec<String> = Vec::with_capacity(values.len() * 2);
         let mut seen: HashSet<String> = HashSet::with_capacity(values.len() * 2);
-        for v in &values {
-            if let Some(m) = mirror_into_overlay(layout, v)
+        for v in values {
+            let mirrored = mirror_into_overlay(layout, &v);
+            if seen.insert(v.clone()) {
+                merged.push(v);
+            }
+            if let Some(m) = mirrored
                 && seen.insert(m.clone())
             {
                 merged.push(m);
-            }
-        }
-        for v in values {
-            if seen.insert(v.clone()) {
-                merged.push(v);
             }
         }
         paths_map.insert(

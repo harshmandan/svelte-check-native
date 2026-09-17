@@ -134,7 +134,7 @@ pub struct CheckInput {
     /// with the caller via `Arc` (the CLI already holds the full
     /// corpus in memory for its own passes, so this adds no RSS and
     /// saves a per-file disk re-read inside [`crate::check`]). Empty
-    /// for KitFile / UserTsOverlay kinds — those are identity-mapped
+    /// for the KitFile kind — those are identity-mapped
     /// and the position helpers read the overlay text for both sides.
     pub source: std::sync::Arc<str>,
     /// Generated TypeScript that should be type-checked.
@@ -166,7 +166,7 @@ pub struct CheckInput {
     /// to `exclude` so tsgo only sees our injected-type overlay).
     pub kind: InputKind,
     /// Whether the generated overlay is TypeScript (`.svelte.svn.ts`)
-    /// or JavaScript (`.svelte.svn.js`). True for Kit/UserTsOverlay
+    /// or JavaScript (`.svelte.svn.js`). True for Kit
     /// kinds (always TS) and for Svelte sources whose
     /// `Document::script_lang()` resolves to `Ts`. False only when
     /// the JS-overlay branch is enabled AND the Svelte source has no
@@ -206,16 +206,6 @@ pub enum InputKind {
     /// the original source path into the overlay tsconfig's
     /// `exclude` list so tsgo reads only the typed version.
     KitFile,
-    /// User-authored `.ts` file that statically imports at least one
-    /// `.svelte` component whose directory ALSO contains a sibling
-    /// `.svelte.ts` runes module (the collision case that makes
-    /// tsgo's `rootDirs` resolution pick the runes module instead of
-    /// our overlay). We emit a mirror overlay at `kit_overlay_path`
-    /// with every `.svelte` specifier rewritten to `.svelte.svn.js`,
-    /// so the overlay resolves directly to the cache's generated TS.
-    /// Original source path is pushed into `exclude` so tsgo reads
-    /// only the rewritten version.
-    UserTsOverlay,
 }
 
 /// A single mapped-back diagnostic ready for presentation.

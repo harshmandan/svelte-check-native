@@ -10,7 +10,6 @@
 
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
-mod collisions;
 mod discovery;
 mod output;
 mod svelte_config;
@@ -21,7 +20,6 @@ use std::process::ExitCode;
 use clap::Parser;
 use rayon::prelude::*;
 
-use collisions::rewrite_svelte_imports_for_collisions;
 use discovery::{discover_relevant_files, discover_svelte_files, path_is_under_node_modules};
 use output::{print_diagnostics, print_machine_failure};
 
@@ -359,7 +357,7 @@ fn main() -> ExitCode {
     }
 
     if cli.list_relevant {
-        let (svelte, kit, _runes, _user_ts) = discover_relevant_files(&workspace);
+        let (svelte, kit) = discover_relevant_files(&workspace);
         for p in svelte.iter().chain(kit.iter()) {
             println!("{}", p.display());
         }
@@ -1684,7 +1682,7 @@ fn run_typecheck(
     // findFiles counts from the workspace root with no project scoping,
     // so per-project discovery must not add to it (kit-file
     // classification differs per anchor and would inflate the count).
-    let (root_svelte, root_kit, _runes, _user_ts) =
+    let (root_svelte, root_kit) =
         discovery::discover_relevant_files_with_settings(workspace, kit_files_settings);
     let mut runs: Vec<ProjectRun> = Vec::new();
     for (project_dir, project_config) in projects {
@@ -1868,7 +1866,7 @@ fn check_project(
         let excluded = exclude.as_ref().is_some_and(|set| set.is_match(path));
         included && !excluded
     };
-    let (svelte_files_raw, kit_files_raw, runes_modules_raw, user_scripts_raw) =
+    let (svelte_files_raw, kit_files_raw) =
         discovery::discover_relevant_files_with_settings(workspace, kit_files_settings);
     // Svelte-file emit: we walk ALL discovered `.svelte` files, not
     // just the in-scope subset. An out-of-scope file might be
@@ -1901,20 +1899,6 @@ fn check_project(
         .filter(|p| in_project_scope(p))
         .filter(|p| allow_js || p.extension().is_none_or(|e| e != "js"))
         .cloned()
-        .collect();
-    // `.svelte.ts` runes-module set. Walker paths are canonical
-    // (workspace is canonicalized at startup, `main.rs:180`), so
-    // dropping the per-entry canonicalize here costs nothing as long
-    // as the consumer at `rewrite_svelte_imports_for_collisions`
-    // canonicalizes its probe paths the same way (it does — the
-    // sibling-runes probe still calls `dunce::canonicalize`, which
-    // resolves any `./` / `..` from a relative import specifier into
-    // the same canonical form held in this set).
-    let runes_modules_set: std::collections::HashSet<PathBuf> =
-        runes_modules_raw.into_iter().collect();
-    let user_script_files: Vec<PathBuf> = user_scripts_raw
-        .into_iter()
-        .filter(|p| in_project_scope(p))
         .collect();
     // Resolve each file's nearest svelte.config (warningFilter / runes)
     // now, sequentially — the parallel lint pass below only does
@@ -2203,63 +2187,6 @@ fn check_project(
                 .collect::<Vec<_>>(),
         );
 
-        // User-`.ts`-overlay for the sibling-collision case: when a user
-        // `.ts` file imports `./Foo.svelte` where `Foo.svelte.ts` exists
-        // as sibling, tsgo's `rootDirs` resolution picks the user's source
-        // tree (longest matching prefix), then auto-extends `.svelte` to
-        // `.svelte.ts` and lands on the runes module — which has named
-        // exports but no `default`, firing TS2305. Rewriting the import
-        // specifier to `.svelte.svn.js` in an overlay sidesteps the
-        // auto-extension entirely; tsgo resolves via bundler module
-        // resolution straight to the cache-side `.svelte.svn.ts`.
-        //
-        // Scope: both plain user `.ts` files AND `.svelte.ts` runes
-        // modules themselves — a `Foo.svelte.ts` module can import a
-        // sibling-collision `./Bar.svelte` (where `Bar.svelte.ts` also
-        // exists), and that specifier has the same resolution bug. No
-        // current bench exercises the `.svelte.ts` → collision-sibling
-        // path, but handling it here completes the pattern.
-        //
-        // Only files that actually contain a collision-case import get an
-        // overlay; others pass through tsgo's regular include. Fast-path
-        // skip when no runes modules were discovered.
-        if !runes_modules_set.is_empty() {
-            // Candidate order must be stable: it flows through `inputs`
-            // into the overlay tsconfig's exclude list, and HashSet
-            // iteration order isn't deterministic — sort the runes-
-            // module tail. Then fan out over rayon (read + oxc parse
-            // per file, no shared mutable state); the Vec collect
-            // preserves candidate order.
-            let mut runes_candidates: Vec<&PathBuf> = runes_modules_set.iter().collect();
-            runes_candidates.sort();
-            let rewrite_candidates: Vec<&PathBuf> =
-                user_script_files.iter().chain(runes_candidates).collect();
-            prepared.extend(
-                rewrite_candidates
-                    .par_iter()
-                    .filter_map(|file| {
-                        let source = std::fs::read_to_string(file).ok()?;
-                        let rewritten = rewrite_svelte_imports_for_collisions(
-                            file,
-                            &source,
-                            &runes_modules_set,
-                        )?;
-                        Some(session_ref.prepare(svn_typecheck::CheckInput {
-                            source_path: (*file).clone(),
-                            source: "".into(),
-                            generated_ts: rewritten,
-                            kit_col_shifts: Vec::new(),
-                            line_map: Vec::new(),
-                            token_map: Vec::new(),
-                            overlay_line_starts: Vec::new(),
-                            source_line_starts: Vec::new(),
-                            kind: svn_typecheck::InputKind::UserTsOverlay,
-                            is_ts_overlay: true,
-                        }))
-                    })
-                    .collect::<Vec<_>>(),
-            );
-        }
         checker = Some((session, prepared));
     }
     let t_emit = mark.elapsed();

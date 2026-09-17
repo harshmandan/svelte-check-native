@@ -1,9 +1,8 @@
 //! Workspace file discovery.
 //!
-//! Single-pass walk of the user's workspace producing the four file
-//! categories the typecheck pipeline cares about: Svelte components,
-//! SvelteKit route/hooks files, `.svelte.ts` runes modules, and plain
-//! `.ts` files (candidates for the runes-collision overlay rewrite).
+//! Single-pass walk of the user's workspace producing the two file
+//! categories the typecheck pipeline cares about: Svelte components and
+//! SvelteKit route/hooks files.
 //!
 //! Also hosts the small predicates that govern walk pruning
 //! (`is_excluded_dir`, `path_is_under_node_modules`) and the tsconfig
@@ -34,21 +33,15 @@ pub(crate) fn discover_svelte_files(workspace: &Path) -> Vec<PathBuf> {
 /// Wrapper accepting default Kit-file settings — kept for callers
 /// (notably the `--list-relevant` debug flow) that don't have the
 /// user's `svelte.config.js` parsed yet.
-pub(crate) fn discover_relevant_files(
-    workspace: &Path,
-) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
+pub(crate) fn discover_relevant_files(workspace: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
     discover_relevant_files_with_settings(workspace, &KitFilesSettings::default())
 }
 
-/// Walk the workspace once and return all four file categories the
+/// Walk the workspace once and return the file categories the
 /// typecheck pipeline consumes:
 ///
 /// 1. `.svelte` components.
 /// 2. SvelteKit route/hooks files (`+page.ts`, `+layout.ts`, etc.).
-/// 3. `.svelte.ts` runes modules (separately tracked so the runes-
-///    collision overlay decider can O(1) membership-test).
-/// 4. Plain `.ts` files (candidates for `.svelte`-import rewriting
-///    when their imports collide with a sibling runes module).
 ///
 /// Sharing the walker pass means callers that need multiple
 /// categories don't traverse the filesystem more than once.
@@ -62,23 +55,9 @@ pub(crate) fn discover_relevant_files(
 pub(crate) fn discover_relevant_files_with_settings(
     workspace: &Path,
     kit_settings: &KitFilesSettings,
-) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let mut svelte_files = Vec::new();
     let mut kit_files = Vec::new();
-    // `.svelte.ts` and `.svelte.js` runes modules — siblings of a
-    // `.svelte` component, the pattern that creates the rootDirs
-    // resolution collision fixed by user-script overlays. Collected
-    // here once so the overlay decider can membership-test without
-    // rewalking disk. Both lang variants live in the same set
-    // because the collision is identical and the rewrite output
-    // (`.svelte.svn.js`) is the same regardless of source lang.
-    let mut runes_modules = Vec::new();
-    // User `.ts` and `.js` files that aren't Kit files and aren't
-    // runes modules. Candidates for the `.svelte`-import-rewrite
-    // overlay — final filter (does the file actually import a
-    // sibling-collision `.svelte`?) happens later after all runes
-    // modules are known.
-    let mut user_scripts = Vec::new();
     for e in WalkDir::new(workspace)
         .into_iter()
         // depth 0 is the workspace root itself — never prune it, even
@@ -103,7 +82,6 @@ pub(crate) fn discover_relevant_files_with_settings(
     {
         let path = e.path();
         let ext = path.extension().and_then(|s| s.to_str());
-        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         match ext {
             Some("svelte") => svelte_files.push(path.to_path_buf()),
             // Any classify hit on a `.ts`/`.js` is a kit file — route
@@ -112,16 +90,10 @@ pub(crate) fn discover_relevant_files_with_settings(
             Some("ts" | "js") if classify(path, kit_settings).is_some() => {
                 kit_files.push(path.to_path_buf());
             }
-            Some("ts" | "js")
-                if file_name.ends_with(".svelte.ts") || file_name.ends_with(".svelte.js") =>
-            {
-                runes_modules.push(path.to_path_buf());
-            }
-            Some("ts" | "js") => user_scripts.push(path.to_path_buf()),
             _ => {}
         }
     }
-    (svelte_files, kit_files, runes_modules, user_scripts)
+    (svelte_files, kit_files)
 }
 
 /// Lexically normalize a path, collapsing `.` and `..` segments

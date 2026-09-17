@@ -1110,6 +1110,28 @@ fn emit_document_with_render_name(
         split_imports(content, s.lang, &hoist)
     });
 
+    // svelte2tsx moves the root snippets that stay in the component to
+    // the first byte of the instance script's content. When that byte
+    // starts a statement it hoists out of the render function (an
+    // import written right after `<script>`), the snippets travel with
+    // it and land at module scope ahead of the imports.
+    let snippets_before_imports = split
+        .as_ref()
+        .is_some_and(|s| s.hoisted_byte_offsets.first() == Some(&0));
+    if snippets_before_imports {
+        for (snippet, hoist) in root_snippets.iter().zip(&module_hoisted) {
+            if !*hoist {
+                crate::nodes::snippet_block::emit_snippet_const(
+                    &mut buf,
+                    doc.source,
+                    snippet,
+                    0,
+                    &instantiations,
+                    &mut snippet_action_counter,
+                );
+            }
+        }
+    }
     hoisted_imports::emit_hoisted_imports(&mut buf, split.as_ref(), doc);
 
     // `<script generics="T extends ...">` (extracted above) — expose
@@ -1530,7 +1552,7 @@ fn emit_document_with_render_name(
     // therefore precedes the declarations it captures, and sees their
     // declared types rather than an initializer-narrowed one.
     for (snippet, hoist) in root_snippets.iter().zip(&module_hoisted) {
-        if !*hoist {
+        if !*hoist && !snippets_before_imports {
             crate::nodes::snippet_block::emit_snippet_const(
                 &mut buf,
                 doc.source,

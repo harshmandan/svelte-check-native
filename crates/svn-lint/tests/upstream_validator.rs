@@ -137,6 +137,11 @@ fn strip_link(message: &str) -> &str {
 }
 
 fn validator_samples_dir() -> PathBuf {
+    // A checkout whose submodule is not initialised (e.g. a secondary git
+    // worktree) can point at another clone of the svelte repo instead.
+    if let Some(root) = std::env::var_os("SVELTE_UPSTREAM_DIR") {
+        return PathBuf::from(root).join("packages/svelte/tests/validator/samples");
+    }
     // tests/ runs under the crate dir; reach the workspace root.
     let manifest = env!("CARGO_MANIFEST_DIR");
     let ws = PathBuf::from(manifest)

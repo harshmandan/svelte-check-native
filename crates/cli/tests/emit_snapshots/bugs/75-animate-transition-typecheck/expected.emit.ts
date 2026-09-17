@@ -8,7 +8,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         { svelteHTML.createElement("div", {});             __svn_ensure_transition(fade(__svn_map_element_tag('div'), ({ duration: 'not-a-number' })));
         }
-        { svelteHTML.createElement("div", {});             (undefinedAnim(__svn_map_element_tag('div'), __svn_AnimationMove));
+        { svelteHTML.createElement("div", {});             __svn_ensure_animation(undefinedAnim(__svn_map_element_tag('div'), __svn_AnimationMove));
         }
     });
     return { props: undefined as any as (Record<string, never>), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: undefined as any as string, exports: undefined as any as ({}) };

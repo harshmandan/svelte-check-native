@@ -1,0 +1,59 @@
+{
+    "errors": [
+        {
+            "file": "src/Js.svelte",
+            "line": 8,
+            "column": 9,
+            "code": 2345
+        },
+        {
+            "file": "src/Js.svelte",
+            "line": 9,
+            "column": 6,
+            "code": 2322
+        },
+        {
+            "file": "src/Render.svelte",
+            "line": 10,
+            "column": 9,
+            "code": 2345
+        },
+        {
+            "file": "src/Render.svelte",
+            "line": 11,
+            "column": 9,
+            "code": 2345
+        },
+        {
+            "file": "src/Render.svelte",
+            "line": 13,
+            "column": 6,
+            "code": 2322
+        },
+        {
+            "file": "src/Render.svelte",
+            "line": 14,
+            "column": 34,
+            "code": 2559
+        },
+        {
+            "file": "src/Render.svelte",
+            "line": 14,
+            "column": 39,
+            "code": 2554
+        },
+        {
+            "file": "src/Render.svelte",
+            "line": 15,
+            "column": 34,
+            "code": 2554
+        },
+        {
+            "file": "src/Render.svelte",
+            "line": 15,
+            "column": 34,
+            "code": 2559
+        }
+    ],
+    "_note": "A {@render} call goes through a wrapper whose parameter is the value a Svelte snippet returns, so rendering a plain function (returning void or string) is TS2345 at the call. A standalone snippet declares that snippet-return type (TS: annotation, JS: JSDoc @returns), so passing it to a prop typed () => string is TS2322. An animate: call is wrapped so its result must be an animation config: a function returning a thunk or a number is TS2559, and an arity error on the element/move arguments lands on the last character of the directive name. Positions verified against upstream svelte-check --tsgo with svelte 5.55."
+}

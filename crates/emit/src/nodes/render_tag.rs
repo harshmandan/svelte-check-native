@@ -1,29 +1,16 @@
 //! `{@render foo(x)}` snippet-render tag (Svelte 5+).
 //!
 //! Mirrors upstream svelte2tsx's
-//! `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/RenderTag.ts`.
-//!
-//! Upstream emits `;__sveltets_2_ensureSnippet(foo(x));` so tsgo:
-//!   1. Type-checks the call's arguments against `foo`'s declared
-//!      `Snippet<[…]>` parameter shape.
-//!   2. Validates that `foo` IS a snippet (the
-//!      `__sveltets_2_ensureSnippet` ambient constrains its arg to
-//!      `Snippet<…> | undefined`).
-//!
-//! We emit `(EXPR);` directly (no `__svn_ensure_snippet` ambient yet —
-//! the ambient adds an extra type-narrowing constraint we don't
-//! declare). The bare expression statement still type-checks the call
-//! itself: TS2304 on missing identifiers, TS2554 on argument arity
-//! mismatch, TS2345 on argument type mismatch — covers the common
-//! gap-classes. Adding a `__svn_ensure_snippet<T extends Snippet<…>
-//! | undefined>(value: T): void` ambient is a future refinement that
-//! tightens the "is it actually a snippet?" check.
+//! `language-tools/packages/svelte2tsx/src/htmlxtojsx_v2/nodes/RenderTag.ts`,
+//! which emits `;__sveltets_2_ensureSnippet(foo(x));`. The wrapper's
+//! parameter is Svelte's branded snippet-return type, so tsgo checks
+//! both the call itself (missing names, arity, argument types) and that
+//! the callee really is a snippet: rendering a plain function that
+//! returns `void` or `string` fails the wrapper's argument check.
 
 use crate::emit_buffer::EmitBuffer;
 
-/// Emit `{@render EXPR}` as a bare expression statement so tsgo
-/// type-checks the snippet call's arguments against the declared
-/// `Snippet<[…]>` parameter shape.
+/// Emit `{@render EXPR}` as `__svn_ensure_snippet(EXPR);`.
 pub(crate) fn emit_render_tag(
     buf: &mut EmitBuffer,
     source: &str,
@@ -44,7 +31,7 @@ pub(crate) fn emit_render_tag(
     let trimmed_source_end = trimmed_source_start + trimmed.len() as u32;
     let indent = "    ".repeat(depth);
     buf.append_synthetic(&indent);
-    buf.append_synthetic("(");
+    buf.append_synthetic("__svn_ensure_snippet(");
     buf.append_with_source(
         trimmed,
         svn_core::Range::new(trimmed_source_start, trimmed_source_end),

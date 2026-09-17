@@ -5,13 +5,13 @@
     import type { Component } from 'svelte';
 function $$render_e40e2c10() {
     type $$ComponentProps = { icon: Component<{ size: number }> };
-    const iconSnippet = (): any => { async () => {
+    const iconSnippet = (): ReturnType<import('svelte').Snippet> => { async () => {
         {
             const __svn_C_10f = __svn_ensure_component(Icon);
             new __svn_C_10f({ target: __svn_any(), props: {"size": (16)} });
         }
         };
-        return null as any;
+        return __svn_any(0);
     };
     void iconSnippet;
 
@@ -19,7 +19,7 @@ function $$render_e40e2c10() {
     const { icon: Icon }: /*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/ = $props();
     ;(async () => {
         // template type-check body (incremental)
-        (iconSnippet());
+        __svn_ensure_snippet(iconSnippet());
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }

@@ -3,10 +3,10 @@
 async function $$render_e40e2c10<T>() {
     type $$ComponentProps = { prop?: T };
     type $$Events = {};
-    const x = (): any => { async () => {
+    const x = (): ReturnType<import('svelte').Snippet> => { async () => {
         (await promise);
         };
-        return null as any;
+        return __svn_any(0);
     };
     void x;
 
@@ -45,7 +45,7 @@ async function $$render_e40e2c10<T>() {
             "attribute": (await promise),
         });
         }
-        (x(await promise));
+        __svn_ensure_snippet(x(await promise));
         if ((true)) {
             const x = await promise;
             (x);

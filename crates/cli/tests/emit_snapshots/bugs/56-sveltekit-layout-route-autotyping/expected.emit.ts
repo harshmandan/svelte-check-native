@@ -10,7 +10,7 @@ function $$render_e5225cdb() {
     let { children }: $$ComponentProps = $props();
     ;(async () => {
         // template type-check body (incremental)
-        (children?.());
+        __svn_ensure_snippet(children?.());
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }

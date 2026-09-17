@@ -5,16 +5,16 @@
     import { store } from './foo';
 function $$render_e40e2c10() {
     /*svn:ignore_start*/;let $store = __svn_store_get(store);;let $store2 = __svn_store_get(store2);/*svn:ignore_end*/
-    const _foo = () => { async () => {
+    const _foo = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { async () => {
         ($store);
         };
-        return null;
+        return __svn_any(0);
     };
     void _foo;
-    const _foo2 = () => { async () => {
+    const _foo2 = /** @returns {ReturnType<import('svelte').Snippet>} */ () => { async () => {
         ($store2);
         };
-        return null;
+        return __svn_any(0);
     };
     void _foo2;
 

@@ -1067,6 +1067,39 @@ declare function __svn_map_element_tag(tag: string): HTMLElement;
  * (`crates/emit/src/nodes/animation.rs`).
  */
 declare const __svn_AnimationMove: { from: DOMRect; to: DOMRect };
+declare var __sveltets_2_AnimationMove: { from: DOMRect; to: DOMRect };
+
+/**
+ * Result shape an `animate:` function must return. Mirrors upstream's
+ * `__sveltets_2_SvelteAnimationReturnType`: an all-optional object
+ * type, so a function returning anything with no property in common
+ * (a cleanup thunk, a number) fails as a weak-type mismatch (TS2559).
+ */
+type __SvnAnimationReturnType = {
+    delay?: number;
+    duration?: number;
+    easing?: (t: number) => number;
+    css?: (t: number, u: number) => string;
+    tick?: (t: number, u: number) => void;
+};
+type __sveltets_2_SvelteAnimationReturnType = __SvnAnimationReturnType;
+/** Wraps an `animate:NAME(...)` call so its result is checked as an animation config. */
+declare function __svn_ensure_animation(animationCall: __SvnAnimationReturnType): {};
+declare function __sveltets_2_ensureAnimation(animationCall: __SvnAnimationReturnType): {};
+
+/**
+ * Wraps the call of a `{@render EXPR}` tag. The parameter is the value
+ * a Svelte snippet returns — a branded type no ordinary function
+ * produces — so rendering something that is not a snippet (a function
+ * returning `void` or `string`) fails the argument check (TS2345).
+ * `undefined` / `null` pass, for optional-chained `{@render s?.()}`.
+ */
+declare function __svn_ensure_snippet(
+    val: ReturnType<import('svelte').Snippet> | undefined | null,
+): any;
+declare function __sveltets_2_ensureSnippet(
+    val: ReturnType<import('svelte').Snippet> | undefined | null,
+): any;
 
 /**
  * Validate that a style-directive value expression type-checks
@@ -1523,9 +1556,19 @@ declare module 'svelte' {
         z_$$bindings?: Bindings;
     }
 
-    export type Snippet<Parameters extends any[] = []> = {
-        (...args: Parameters): any;
-    };
+    // Mirrors real svelte's `Snippet`: calling one yields a branded
+    // value no ordinary function returns, which is what lets
+    // `{@render x()}` reject a plain function and lets a snippet be
+    // told apart from other callbacks.
+    const SnippetReturn: unique symbol;
+    export interface Snippet<Parameters extends unknown[] = []> {
+        (
+            this: void,
+            ...args: number extends Parameters['length'] ? never : Parameters
+        ): {
+            '{@render ...} must be called with a Snippet': "import type { Snippet } from 'svelte'";
+        } & typeof SnippetReturn;
+    }
 
     // Mirrors svelte's real `ComponentProps<T>` shape closely enough
     // that `satisfies Partial<ComponentProps<typeof X>>` flows the

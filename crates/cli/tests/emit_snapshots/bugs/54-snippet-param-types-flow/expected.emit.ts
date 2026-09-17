@@ -14,8 +14,8 @@ function $$render_74f92bad() {
 /*Ωignore_endΩ*/ = $props();
     ;(async () => {
         // template type-check body (incremental)
-        (header(['id', 'label']));
-        (row({ id: 1, label: 'a' }));
+        __svn_ensure_snippet(header(['id', 'label']));
+        __svn_ensure_snippet(row({ id: 1, label: 'a' }));
     });
     return { props: undefined as any as ($$ComponentProps), events: undefined as any as { [evt: string]: CustomEvent<any> }, slots: undefined as any as {}, bindings: __svn_$$bindings(), exports: undefined as any as ({}) };
 }

@@ -5,7 +5,7 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         for (let item of __svn_each_items(list)) {
             (item);
-            { svelteHTML.createElement("li", {});                 (flip(__svn_map_element_tag('li'), __svn_AnimationMove, (opt?.)));
+            { svelteHTML.createElement("li", {});                 __svn_ensure_animation(flip(__svn_map_element_tag('li'), __svn_AnimationMove, (opt?.)));
                 (item);
             }
         }

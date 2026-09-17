@@ -13,11 +13,11 @@ function $$render_e40e2c10() {
         // template type-check body (incremental)
         for (let box of __svn_each_items(boxes)) {
             {
-                const foo = (): any => { async () => {
+                const foo = (): ReturnType<import('svelte').Snippet> => { async () => {
                     const area = await 'snippet';
                     (area);
                     };
-                    return null as any;
+                    return __svn_any(0);
                 };
                 void foo;
                 const area = box.width * box.height;

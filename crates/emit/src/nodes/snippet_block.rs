@@ -36,7 +36,7 @@ pub(crate) fn emit_snippet_block(
     insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
     action_counter: &mut usize,
 ) {
-    // Emit the same consolidated `const NAME = (params): any => { … };
+    // Emit the same consolidated `const NAME = (params) => { … };
     // void NAME;` declaration the hoist path in `emit_template_body`
     // produces. The old shape here was a bare `{ void ((params) => {…}) }`
     // wrapper that never DECLARED `NAME`, so a sibling `{@render NAME()}`
@@ -47,9 +47,18 @@ pub(crate) fn emit_snippet_block(
     emit_snippet_const(buf, source, b, depth, insts, action_counter);
 }
 
-/// Emit one `const NAME = (params): any => { <body> … return null as
-/// any; }; void NAME;` snippet declaration at `decl_depth`. Shared by
-/// both the `emit_template_body` hoist loop and `emit_snippet_block`, so
+/// Declared return type of a standalone snippet. A snippet is a
+/// function whose result is Svelte's branded snippet-return value, so a
+/// snippet handed to a prop that expects some other callback (say
+/// `() => string`) is rejected, just as it is by Svelte's own types.
+const SNIPPET_RETURN_TS: &str = ": ReturnType<import('svelte').Snippet>";
+/// The same return type for a JavaScript overlay, where it can only be
+/// stated in a JSDoc comment on the arrow.
+const SNIPPET_RETURN_JSDOC: &str = "/** @returns {ReturnType<import('svelte').Snippet>} */ ";
+
+/// Emit one `const NAME = (params): ReturnType<Snippet> => { <body>
+/// … return __svn_any(0); }; void NAME;` snippet declaration at
+/// `decl_depth`. Shared by both the `emit_template_body` hoist loop and `emit_snippet_block`, so
 /// the snippet shape is single-sourced and matches upstream svelte2tsx's
 /// `SnippetBlock.ts:117-140` (`const NAME = (params) => { … }`).
 pub(crate) fn emit_snippet_const(
@@ -94,19 +103,19 @@ pub(crate) fn emit_snippet_const(
         if is_ts {
             let _ = writeln!(
                 buf,
-                "{decl}const {} = {generics}(): any => {{ async () => {{",
+                "{decl}const {} = {generics}(){SNIPPET_RETURN_TS} => {{ async () => {{",
                 s.name
             );
         } else {
-            let _ = writeln!(buf, "{decl}const {} = () => {{ async () => {{", s.name);
+            let _ = writeln!(
+                buf,
+                "{decl}const {} = {SNIPPET_RETURN_JSDOC}() => {{ async () => {{",
+                s.name
+            );
         }
         emit_template_body(buf, source, &s.body, body_depth, insts, action_counter);
         let _ = writeln!(buf, "{body_i}}};");
-        if is_ts {
-            let _ = writeln!(buf, "{body_i}return null as any;");
-        } else {
-            let _ = writeln!(buf, "{body_i}return null;");
-        }
+        let _ = writeln!(buf, "{body_i}return __svn_any(0);");
         let _ = writeln!(buf, "{decl}}};");
         let _ = writeln!(buf, "{decl}void {};", s.name);
         return;
@@ -126,7 +135,8 @@ pub(crate) fn emit_snippet_const(
     let leading_ws = (raw.len() - raw.trim_start().len()) as u32;
     let params_start = s.parameters_range.start + leading_ws;
     let params_range = svn_core::Range::new(params_start, params_start + params.len() as u32);
-    let _ = write!(buf, "{decl}const {} = {generics}(", s.name);
+    let jsdoc = if is_ts { "" } else { SNIPPET_RETURN_JSDOC };
+    let _ = write!(buf, "{decl}const {} = {jsdoc}{generics}(", s.name);
     buf.append_with_source(params, params_range);
     // Inner `async () =>` wrapper: upstream's "inner async function
     // for potential #await blocks" (`SnippetBlock.ts:70`), giving
@@ -134,17 +144,13 @@ pub(crate) fn emit_snippet_const(
     // snippet arrow. The param `void`s and the return stay in the
     // OUTER arrow, whose scope the params belong to.
     if is_ts {
-        let _ = writeln!(buf, "): any => {{ async () => {{");
+        let _ = writeln!(buf, "){SNIPPET_RETURN_TS} => {{ async () => {{");
     } else {
         let _ = writeln!(buf, ") => {{ async () => {{");
     }
     emit_template_body(buf, source, &s.body, body_depth, insts, action_counter);
     let _ = writeln!(buf, "{body_i}}};");
-    if is_ts {
-        let _ = writeln!(buf, "{body_i}return null as any;");
-    } else {
-        let _ = writeln!(buf, "{body_i}return null;");
-    }
+    let _ = writeln!(buf, "{body_i}return __svn_any(0);");
     let _ = writeln!(buf, "{decl}}};");
     let _ = writeln!(buf, "{decl}void {};", s.name);
 }

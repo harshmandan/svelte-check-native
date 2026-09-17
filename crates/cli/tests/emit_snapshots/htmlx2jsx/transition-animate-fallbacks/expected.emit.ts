@@ -19,7 +19,7 @@ function $$render_e40e2c10() {
         }
         { svelteHTML.createElement("h1", {});             __svn_ensure_transition(blur(__svn_map_element_tag('h1')));
         }
-        { svelteHTML.createElement("h1", {});             (flip(__svn_map_element_tag('h1'), __svn_AnimationMove));
+        { svelteHTML.createElement("h1", {});             __svn_ensure_animation(flip(__svn_map_element_tag('h1'), __svn_AnimationMove));
         }
         { svelteHTML.createElement("h1", {});             __svn_ensure_transition(foo(__svn_map_element_tag('h1')));
         }
@@ -27,7 +27,7 @@ function $$render_e40e2c10() {
         }
         { svelteHTML.createElement("h1", {});             __svn_ensure_transition(foo(__svn_map_element_tag('h1')));
         }
-        { svelteHTML.createElement("h1", {});             (foo(__svn_map_element_tag('h1'), __svn_AnimationMove));
+        { svelteHTML.createElement("h1", {});             __svn_ensure_animation(foo(__svn_map_element_tag('h1'), __svn_AnimationMove));
         }
     });
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: {} };

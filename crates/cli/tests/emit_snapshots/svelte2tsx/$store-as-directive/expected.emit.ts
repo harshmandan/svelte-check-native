@@ -15,7 +15,7 @@ function $$render_e40e2c10() {
         { svelteHTML.createElement("div", __svn_union(__svn_action_0), {});             __svn_ensure_transition($transitionStore(__svn_map_element_tag('div'), ({ y: 100 })));
             __svn_ensure_transition($inStore(__svn_map_element_tag('div')));
             __svn_ensure_transition($outStore(__svn_map_element_tag('div')));
-            ($animateStore(__svn_map_element_tag('div'), __svn_AnimationMove));
+            __svn_ensure_animation($animateStore(__svn_map_element_tag('div'), __svn_AnimationMove));
             void __svn_action_0;
         }
     });

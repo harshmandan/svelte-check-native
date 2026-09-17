@@ -104,6 +104,21 @@ pub struct LintContext<'src> {
     /// drains them as it passes their positions.
     pub(crate) pending_template_events:
         std::collections::VecDeque<crate::rules::script_ast_rules::ScriptRuleEvent>,
+
+    /// The template nodes enclosing the node being visited, outermost
+    /// first — the node-kind view of the compiler's `context.path`
+    /// that its placement and slot validations walk.
+    pub(crate) template_path: Vec<crate::walk::PathFrame>,
+
+    /// The `experimental.async` compiler option from the project's
+    /// Svelte config.
+    pub experimental_async: bool,
+
+    /// The first `on:` directive on an element and whether any element
+    /// carries an `on*` event attribute — mixing both is an error the
+    /// compiler raises once the walks are done.
+    pub(crate) event_directive: Option<(SmolStr, Range)>,
+    pub(crate) uses_event_attributes: bool,
 }
 
 impl<'src> LintContext<'src> {
@@ -129,6 +144,10 @@ impl<'src> LintContext<'src> {
             compat: crate::compat::CompatFeatures::MODERN,
             filename: None,
             pending_template_events: std::collections::VecDeque::new(),
+            template_path: Vec::new(),
+            experimental_async: false,
+            event_directive: None,
+            uses_event_attributes: false,
         }
     }
 

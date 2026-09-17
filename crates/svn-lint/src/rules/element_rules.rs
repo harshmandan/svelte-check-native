@@ -6,6 +6,7 @@ use crate::codes::Code;
 use crate::context::LintContext;
 use crate::messages;
 use crate::rules::util::{is_mathml_element, is_svg_element, is_void_element};
+use crate::walk::PathFrame;
 
 /// Reference: html attribute name → correct JSX-like name (e.g.
 /// `className` → `class`). Mirrors upstream
@@ -18,63 +19,63 @@ pub fn visit(
     ctx: &mut LintContext<'_>,
     parent_tag: Option<&str>,
     ancestors: &[crate::walk::Ancestor],
-    inside_control_block: bool,
 ) {
-    // node_invalid_placement_ssr: fires when the HTML5 tree-model
-    // check says this child can't be here. Upstream emits the
-    // warning variant only from inside a control-flow block; the
-    // plain tree violation is an error elsewhere. We only handle
-    // the warning.
-    if inside_control_block {
-        // Upstream semantics: the parent check and ancestor check
-        // don't both fire for the same disallowed pair. Upstream's
-        // `RegularElement.js` runs the parent check once, then —
-        // walking OUT through further regular-element ancestors —
-        // runs the ancestor check against an extending list, and
-        // BREAKS at a Component / SvelteElement / SnippetBlock
-        // ancestor. The direct parent is NOT re-checked via the
-        // ancestor path.
-        //
-        // `ancestors` is outer-to-inner; take the innermost run of
-        // regular-element frames (stopping at the first boundary,
-        // matching upstream's break), parent first.
-        if let Some(parent) = parent_tag
-            && let Some(msg) = crate::html5::is_tag_valid_with_parent(el.name.as_str(), parent)
-        {
-            let full = messages::node_invalid_placement_ssr(&msg);
-            ctx.emit(Code::node_invalid_placement_ssr, full, el.range);
-        }
-        let element_chain: Vec<&str> = ancestors
-            .iter()
-            .rev()
-            .map_while(|a| match a {
-                crate::walk::Ancestor::Element(n) => Some(n.as_str()),
-                _ => None,
-            })
-            .collect();
-        if element_chain.len() > 1 {
-            // Walk from innermost outer ancestor to outermost,
-            // extending the list each step. Fire on first match.
-            let mut list: Vec<&str> = Vec::new();
-            // Start with parent (upstream ancestors[0]).
-            list.push(element_chain[0]);
-            for outer in &element_chain[1..] {
-                list.push(outer);
-                if let Some(msg) = crate::html5::is_tag_valid_with_ancestor(el.name.as_str(), &list)
+    // `<slot>` is its own node type to the compiler (`SlotElement`),
+    // which runs none of the regular-element checks below.
+    if el.name == "slot" {
+        visit_slot_element(el, ctx);
+        return;
+    }
+
+    // node_invalid_placement / node_invalid_placement_ssr
+    // (`RegularElement.js`): walking out from the element, the parent
+    // element is checked with `is_tag_valid_with_parent`, every
+    // regular-element ancestor beyond it with
+    // `is_tag_valid_with_ancestor` against the growing list, stopping
+    // at a component / `<svelte:element>` / snippet. A control-flow
+    // block passed on the way turns the error into the `_ssr`
+    // warning (it renders as a separate template).
+    if let Some(parent) = parent_tag {
+        let mut past_parent = false;
+        let mut only_warn = false;
+        let mut list: Vec<&str> = vec![parent];
+        let path = std::mem::take(&mut ctx.template_path);
+        for frame in path.iter().rev() {
+            if frame.is_block() {
+                only_warn = true;
+            }
+            let message = match frame {
+                PathFrame::RegularElement { name, .. } if !past_parent => {
+                    if name != parent {
+                        continue;
+                    }
+                    past_parent = true;
+                    crate::html5::is_tag_valid_with_parent(el.name.as_str(), parent)
+                }
+                PathFrame::RegularElement { name, .. } => {
+                    list.push(name.as_str());
+                    crate::html5::is_tag_valid_with_ancestor(el.name.as_str(), &list)
+                }
+                PathFrame::Component { .. }
+                | PathFrame::SvelteElement
+                | PathFrame::SnippetBlock
+                    if past_parent =>
                 {
-                    let full = messages::node_invalid_placement_ssr(&msg);
+                    break;
+                }
+                _ => None,
+            };
+            if let Some(message) = message {
+                if only_warn {
+                    let full = messages::node_invalid_placement_ssr(&message);
                     ctx.emit(Code::node_invalid_placement_ssr, full, el.range);
+                } else {
+                    let full = messages::node_invalid_placement(&message);
+                    ctx.emit_error(Code::node_invalid_placement, full, el.range);
                 }
             }
         }
-    }
-
-    // slot_element_deprecated: `<slot>` in runes mode, unless the
-    // component is a custom element (`<svelte:options customElement>`).
-    // Upstream `visitors/SlotElement.js:13` passes the whole node.
-    if ctx.runes && ctx.custom_element_info.is_none() && el.name == "slot" {
-        let msg = messages::slot_element_deprecated();
-        ctx.emit(Code::slot_element_deprecated, msg, el.range);
+        ctx.template_path = path;
     }
 
     // component_name_lowercase: the tag starts lowercase AND resolves
@@ -126,7 +127,7 @@ pub fn visit(
         }
     }
 
-    let is_custom = is_custom_element_name(&el.name);
+    let is_custom = crate::walk::is_custom_element_node(&el.name, &el.attributes);
     let parent = AttrParent::RegularElement {
         is_custom,
         name: el.name.as_str(),
@@ -143,10 +144,132 @@ pub fn visit(
     crate::rules::a11y_rules::visit_regular(el, ctx, ancestors);
 }
 
-/// Custom element: tag name contains `-` and isn't known HTML.
-/// Upstream: `phases/nodes.js::is_custom_element_node`.
-fn is_custom_element_name(name: &str) -> bool {
-    name.contains('-')
+/// `SlotElement.js`: the deprecation warning, then a static,
+/// non-`default` `name` and nothing but attributes and `let:`
+/// directives.
+fn visit_slot_element(el: &Element, ctx: &mut LintContext<'_>) {
+    // Not in runes mode's custom-element components
+    // (`<svelte:options customElement>`).
+    if ctx.runes && ctx.custom_element_info.is_none() {
+        let msg = messages::slot_element_deprecated();
+        ctx.emit(Code::slot_element_deprecated, msg, el.range);
+    }
+    for attr in &el.attributes {
+        match attr {
+            Attribute::Plain(p) if p.name == "name" => match static_text_value(p, ctx.source) {
+                None => ctx.emit_error(
+                    Code::slot_element_invalid_name,
+                    messages::slot_element_invalid_name(),
+                    p.range,
+                ),
+                Some("default") => ctx.emit_error(
+                    Code::slot_element_invalid_name_default,
+                    messages::slot_element_invalid_name_default(),
+                    p.range,
+                ),
+                Some(_) => {}
+            },
+            Attribute::Expression(e) if e.name == "name" => ctx.emit_error(
+                Code::slot_element_invalid_name,
+                messages::slot_element_invalid_name(),
+                e.range,
+            ),
+            Attribute::Shorthand(s) if s.name == "name" => ctx.emit_error(
+                Code::slot_element_invalid_name,
+                messages::slot_element_invalid_name(),
+                s.range,
+            ),
+            Attribute::Plain(_)
+            | Attribute::Expression(_)
+            | Attribute::Shorthand(_)
+            | Attribute::Spread(_)
+            | Attribute::Comment(_) => {}
+            Attribute::Directive(d) if d.kind == DirectiveKind::Let => {}
+            Attribute::Directive(d) => ctx.emit_error(
+                Code::slot_element_invalid_attribute,
+                messages::slot_element_invalid_attribute(),
+                d.range,
+            ),
+        }
+    }
+}
+
+/// The value of an attribute that is exactly one text chunk
+/// (`is_text_attribute`); an empty quoted value is an empty chunk.
+fn static_text_value<'s>(p: &svn_parser::ast::PlainAttr, source: &'s str) -> Option<&'s str> {
+    let value = p.value.as_ref()?;
+    match value.parts.as_slice() {
+        [] if value.quoted => Some(""),
+        [AttrValuePart::Text { range }] => source.get(range.start as usize..range.end as usize),
+        _ => None,
+    }
+}
+
+/// The compiler's `regex_illegal_attribute_character`:
+/// `/(^[0-9-.])|[\^$@%&#?!|()[\]{}^*+~;]/`.
+fn is_illegal_attribute_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '.')
+        || name.contains([
+            '^', '$', '@', '%', '&', '#', '?', '!', '|', '(', ')', '[', ']', '{', '}', '*', '+',
+            '~', ';',
+        ])
+}
+
+/// `validate_slot_attribute` (`shared/attribute.js`) for a `slot`
+/// attribute on an element (`is_component == false`) or a component.
+/// `text` is the static value when the attribute is a single text
+/// chunk.
+fn validate_slot_attribute(
+    ctx: &mut LintContext<'_>,
+    text: Option<&str>,
+    range: svn_core::Range,
+    is_component: bool,
+) {
+    let path = &ctx.template_path;
+    // The node that owns the fragment the element sits in.
+    let direct_child_of = path.last();
+    // The nearest component-like or custom-element ancestor.
+    let owner = path.iter().rposition(|f| {
+        matches!(
+            f,
+            PathFrame::Component { .. }
+                | PathFrame::SvelteElement
+                | PathFrame::RegularElement { custom: true, .. }
+        )
+    });
+    let invalid_value = text.is_none();
+    let error = if direct_child_of == Some(&PathFrame::SnippetBlock) {
+        invalid_value.then_some(SlotError::InvalidValue)
+    } else {
+        match owner.map(|i| (i, &path[i])) {
+            Some((i, PathFrame::Component { .. })) if i + 1 != path.len() => {
+                (!is_component).then_some(SlotError::InvalidPlacement)
+            }
+            Some((_, PathFrame::Component { .. })) => {
+                invalid_value.then_some(SlotError::InvalidValue)
+            }
+            Some(_) => None,
+            None => (!is_component).then_some(SlotError::InvalidPlacement),
+        }
+    };
+    match error {
+        Some(SlotError::InvalidValue) => ctx.emit_error(
+            Code::slot_attribute_invalid,
+            messages::slot_attribute_invalid(),
+            range,
+        ),
+        Some(SlotError::InvalidPlacement) => ctx.emit_error(
+            Code::slot_attribute_invalid_placement,
+            messages::slot_attribute_invalid_placement(),
+            range,
+        ),
+        None => {}
+    }
+}
+
+enum SlotError {
+    InvalidValue,
+    InvalidPlacement,
 }
 
 /// Parent kinds understood by the shared attribute visitor. Drives
@@ -210,6 +333,40 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
     );
     let fires_invalid_property_name = parent_is_regular_or_svelte;
     let fires_attr_name_checks = !matches!(parent, AttrParent::OtherSvelte);
+    // `validate_slot_attribute` runs for elements and components; for a
+    // component a misplaced `slot` is not an error.
+    let slot_owner_kind = match parent {
+        AttrParent::RegularElement { .. } | AttrParent::SvelteElement => Some(false),
+        AttrParent::Component | AttrParent::SvelteComponentLike => Some(true),
+        _ => None,
+    };
+    // `on*` attributes / `on:` directives on elements, for
+    // `mixed_event_handler_syntaxes`.
+    if parent_is_regular_or_svelte {
+        match attr {
+            Attribute::Plain(p)
+                if p.name.starts_with("on")
+                    && matches!(
+                        p.value.as_ref().map(|v| v.parts.as_slice()),
+                        Some([AttrValuePart::Expression { .. }])
+                    ) =>
+            {
+                ctx.uses_event_attributes = true;
+            }
+            Attribute::Expression(e) if e.name.starts_with("on") => {
+                ctx.uses_event_attributes = true;
+            }
+            Attribute::Shorthand(s) if s.name.starts_with("on") => {
+                ctx.uses_event_attributes = true;
+            }
+            Attribute::Directive(d) if d.kind == DirectiveKind::On => {
+                if ctx.event_directive.is_none() {
+                    ctx.event_directive = Some((d.name.clone(), d.range));
+                }
+            }
+            _ => {}
+        }
+    }
     match attr {
         Attribute::Plain(p) => {
             let name = p.name.as_str();
@@ -256,6 +413,14 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
                 ctx.emit(Code::attribute_quoted, msg, p.range);
             }
 
+            if parent_is_regular_or_svelte && is_illegal_attribute_name(name) {
+                ctx.emit_error(
+                    Code::attribute_invalid_name,
+                    messages::attribute_invalid_name(name),
+                    p.range,
+                );
+            }
+
             // An `on*` attribute on an element must hold exactly one
             // expression; a quoted `"{handler}"` is that expression.
             if parent_is_regular_or_svelte && name.starts_with("on") && name.len() > 2 {
@@ -274,9 +439,21 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
                     ),
                 }
             }
+
+            if name == "slot"
+                && let Some(is_component) = slot_owner_kind
+            {
+                let text = static_text_value(p, ctx.source);
+                validate_slot_attribute(ctx, text, p.range, is_component);
+            }
         }
         Attribute::Shorthand(s) => {
             let name = s.name.as_str();
+            if name == "slot"
+                && let Some(is_component) = slot_owner_kind
+            {
+                validate_slot_attribute(ctx, None, s.range, is_component);
+            }
             if fires_invalid_property_name
                 && let Some(correct) = REACT_ATTRIBUTE_RENAMES
                     .iter()
@@ -320,8 +497,20 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
                 let msg = messages::attribute_invalid_property_name(name, correct);
                 ctx.emit(Code::attribute_invalid_property_name, msg, e.range);
             }
+            if parent_is_regular_or_svelte && is_illegal_attribute_name(name) {
+                ctx.emit_error(
+                    Code::attribute_invalid_name,
+                    messages::attribute_invalid_name(name),
+                    e.range,
+                );
+            }
             if parent_is_regular_or_svelte && name.starts_with("on") && name.len() > 2 {
                 global_event_reference(name, e.expression_range, e.range, ctx);
+            }
+            if name == "slot"
+                && let Some(is_component) = slot_owner_kind
+            {
+                validate_slot_attribute(ctx, None, e.range, is_component);
             }
         }
         Attribute::Directive(d) => {
@@ -360,6 +549,9 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
                     d.range.start,
                     true,
                 );
+                if d.name != "this" {
+                    bind_value_check(d, ctx);
+                }
             }
             if d.kind == DirectiveKind::Bind {
                 use svn_parser::ast::DirectiveValue;
@@ -401,6 +593,73 @@ pub(crate) fn visit_attribute(attr: &Attribute, ctx: &mut LintContext<'_>, paren
             }
         }
         _ => {}
+    }
+}
+
+/// `bind_invalid_value` (`BindDirective.js`): binding an identifier
+/// that is neither state, a prop, an each item, a store nor otherwise
+/// written to — in practice, one that resolves to no binding at all
+/// (every binding a `bind:` names counts as written).
+fn bind_value_check(d: &svn_parser::ast::Directive, ctx: &mut LintContext<'_>) {
+    use crate::scope::BindingKind;
+    use svn_parser::ast::DirectiveValue;
+    let expression = match &d.value {
+        Some(DirectiveValue::Expression {
+            expression_range, ..
+        }) => Some(*expression_range),
+        Some(DirectiveValue::Quoted(v)) => match v.parts.as_slice() {
+            [
+                AttrValuePart::Expression {
+                    expression_range, ..
+                },
+            ] => Some(*expression_range),
+            _ => None,
+        },
+        None => None,
+        _ => return,
+    };
+    let (name, range) = match expression {
+        Some(r) => {
+            let Some(text) = ctx.source.get(r.start as usize..r.end as usize) else {
+                return;
+            };
+            let Some((name, start, end)) = crate::scope_util::identifier_of_text(text) else {
+                return;
+            };
+            (name, svn_core::Range::new(r.start + start, r.start + end))
+        }
+        // `bind:name` names the identifier it binds.
+        None => {
+            let start = d.range.start + "bind:".len() as u32;
+            (
+                d.name.to_string(),
+                svn_core::Range::new(start, start + d.name.len() as u32),
+            )
+        }
+    };
+    let Some(tree) = &ctx.scope_tree else {
+        return;
+    };
+    let scope = tree.innermost_template_scope_at(d.range.start);
+    let valid = tree.resolve(scope, &name).is_some_and(|bid| {
+        let b = tree.binding(bid);
+        matches!(
+            b.kind,
+            BindingKind::State
+                | BindingKind::RawState
+                | BindingKind::Prop
+                | BindingKind::BindableProp
+                | BindingKind::Each
+                | BindingKind::StoreSub
+        ) || b.reassigned
+            || b.mutated
+    });
+    if !valid {
+        ctx.emit_error(
+            Code::bind_invalid_value,
+            messages::bind_invalid_value(),
+            range,
+        );
     }
 }
 

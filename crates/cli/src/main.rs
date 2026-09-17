@@ -523,6 +523,7 @@ fn main() -> ExitCode {
         svelte_config::ResolvedConfig {
             warning_filter_plan: svelte_config_summary.warning_filter_plan,
             runes: svelte_config_summary.runes,
+            experimental_async: svelte_config_summary.experimental_async,
         },
         cli.config.is_some(),
     );
@@ -991,8 +992,12 @@ fn native_diagnostics_for_parsed(
     // (no second parse_sections / line-index scan per file).
     // The nearest config's compilerOptions.runes forces the
     // mode; `None` keeps lint's auto-detection.
-    let config_runes = config_resolver.for_path(path).runes;
-    let warnings = svn_lint::lint_parsed(doc, fragment, source, pm, path, config_runes, compat);
+    let config = config_resolver.for_path(path);
+    let options = svn_lint::LintOptions {
+        runes: config.runes,
+        experimental_async: config.experimental_async,
+    };
+    let warnings = svn_lint::lint_parsed(doc, fragment, source, pm, path, options, compat);
 
     NativeFileDiagnostics {
         path: path.to_path_buf(),
@@ -1999,6 +2004,9 @@ fn check_project(
     let native_compat = run_native.then(|| svn_lint::detect_for_workspace(workspace));
     let config_resolver_ref: &svelte_config::ConfigResolver = config_resolver;
     let mut native_results: Vec<Option<NativeFileDiagnostics>>;
+    // Components whose template the compiler's `parse()` rejects — left
+    // out of the program, the diagnostics and the entry count.
+    let mut dropped_files: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     // TSGO-ENHANCEMENT: native TS2307 for missing relative `.svelte`
     // imports. Collected during the emit fan-out (below) and merged into
     // the diagnostics stream after tsgo, since it's a `js`-source error.
@@ -2037,13 +2045,26 @@ fn check_project(
         // paths derived from this file's source path. rayon distributes
         // across the thread pool and the order-preserving `unzip` keeps
         // the resulting inputs matching `svelte_sources` index-for-index.
-        let (prepared_svelte, natives): (PreparedResults, Vec<_>) = svelte_sources
+        let (prepared_svelte, natives): (Vec<_>, Vec<_>) = svelte_sources
             .par_iter()
             .enumerate()
             .map(|(idx, (file, source))| {
                 let (doc, section_errors) = svn_parser::parse_sections(source);
                 let (fragment, template_errors) =
                     svn_parser::parse_all_template_runs(source, &doc.template.text_runs);
+                // A component the compiler's strict `parse()` rejects is
+                // dropped from the run by upstream: svelte2tsx throws, so
+                // there is no overlay, no diagnostic of any source, and
+                // the file is not an entry.
+                let has_fatal = section_errors
+                    .iter()
+                    .chain(template_errors.iter())
+                    .any(|e| e.is_fatal());
+                if !has_fatal
+                    && svn_lint::template_parse_rejected(&fragment, source, doc.script_lang())
+                {
+                    return (None, (None, Vec::new(), Some(file.clone())));
+                }
                 // Fused native pass: derive fatal/lint diagnostics from
                 // THIS parse instead of re-parsing the corpus after
                 // tsgo. EVERY discovered source is linted, including the
@@ -2112,21 +2133,23 @@ fn check_project(
                     kind,
                     is_ts_overlay: is_ts,
                 };
-                (session_ref.prepare(input), (native, missing))
+                (Some(session_ref.prepare(input)), (native, missing, None))
             })
             .unzip();
-        let mut prepared = prepared_svelte;
-        // Split the per-file `(native, missing)` pairs back apart, keeping
-        // source order for the native merge and flattening the missing-
-        // import diagnostics into one stream.
+        let mut prepared: PreparedResults = prepared_svelte.into_iter().flatten().collect();
+        // Split the per-file `(native, missing, dropped)` triples back
+        // apart, keeping source order for the native merge and
+        // flattening the missing-import diagnostics into one stream.
         let natives: Vec<(
             Option<NativeFileDiagnostics>,
             Vec<svn_typecheck::CheckDiagnostic>,
+            Option<PathBuf>,
         )> = natives;
         native_results = Vec::with_capacity(natives.len());
-        for (native, missing) in natives {
+        for (native, missing, dropped) in natives {
             native_results.push(native);
             missing_import_diags.extend(missing);
+            dropped_files.extend(dropped);
         }
 
         // Kit files (`+server.ts`, `+page.ts`, hooks, params): run them
@@ -2474,6 +2497,7 @@ fn check_project(
     // and the count collapses to diagnostic-bearing files.
     let file_order: Vec<PathBuf> = svelte_files_all
         .iter()
+        .filter(|f| !dropped_files.contains(*f))
         .chain(kit_files_raw.iter())
         .cloned()
         .collect();

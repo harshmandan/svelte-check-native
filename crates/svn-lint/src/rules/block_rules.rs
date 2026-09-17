@@ -1,6 +1,6 @@
 //! Rules that fire on control-flow blocks.
 
-use svn_parser::ast::{AwaitBlock, EachBlock, Fragment, IfBlock, KeyBlock, Node};
+use svn_parser::ast::{AwaitBlock, EachBlock, Fragment, IfBlock, KeyBlock, Node, SnippetBlock};
 
 use crate::codes::Code;
 use crate::context::LintContext;
@@ -39,9 +39,29 @@ pub fn visit_await(b: &AwaitBlock, ctx: &mut LintContext<'_>) {
     }
 }
 
+/// `snippet_conflict` (`SnippetBlock.js`, checked once the snippet's
+/// body has been visited): an explicit `{#snippet children()}` passed
+/// to a component that also has implicit children content.
+pub fn visit_snippet_after_body(b: &SnippetBlock, ctx: &mut LintContext<'_>) {
+    if b.name != "children" {
+        return;
+    }
+    if let Some(crate::walk::PathFrame::Component {
+        implicit_children: true,
+        ..
+    }) = ctx.template_path.last()
+    {
+        ctx.emit_error(
+            Code::snippet_conflict,
+            messages::snippet_conflict(),
+            b.range,
+        );
+    }
+}
+
 /// JS `String.prototype.trim` WhiteSpace + LineTerminator set — differs from
 /// Rust `char::is_whitespace` (which adds U+0085 NEL and omits U+FEFF ZWNBSP).
-fn is_js_trim_ws(c: char) -> bool {
+pub(crate) fn is_js_trim_ws(c: char) -> bool {
     matches!(
         c,
         '\u{0009}'

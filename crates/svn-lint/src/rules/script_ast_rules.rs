@@ -43,13 +43,27 @@ pub(crate) enum ScriptRuleEvent {
     /// `.svelte` source, which needs the FINISHED scope tree — so the
     /// resolution happens in [`flush`].
     LegacyCreationCandidate { callee: SmolStr, range: Range },
+    /// A compile error decided at walk time. The compiler throws it,
+    /// so it replaces every warning and later errors.
+    Error {
+        code: Code,
+        message: String,
+        range: Range,
+    },
+    /// An `await` that suspends rendering (`AwaitExpression.js`). It
+    /// is an error unless the `experimental.async` option is on and
+    /// the file is in runes mode — both known only at flush time.
+    SuspendingAwait { range: Range },
 }
 
 impl ScriptRuleEvent {
     /// The source range the event reports.
     pub(crate) fn range(&self) -> Range {
         match self {
-            Self::Warning { range, .. } | Self::LegacyCreationCandidate { range, .. } => *range,
+            Self::Warning { range, .. }
+            | Self::LegacyCreationCandidate { range, .. }
+            | Self::Error { range, .. }
+            | Self::SuspendingAwait { range } => *range,
         }
     }
 }
@@ -164,6 +178,13 @@ impl ScriptRuleHooks {
             return;
         }
         let is_reactive_statement = self.is_instance && at_program_top;
+        if self.runes && is_reactive_statement {
+            events.push(ScriptRuleEvent::Error {
+                code: Code::legacy_reactive_statement_invalid,
+                message: messages::legacy_reactive_statement_invalid(),
+                range,
+            });
+        }
         if !self.runes
             && !is_reactive_statement
             && !is_ignored(frames, Code::reactive_declaration_invalid_placement)
@@ -302,6 +323,26 @@ pub(crate) fn flush_template_events_before(until: u32, ctx: &mut LintContext<'_>
 
 fn emit_event(event: ScriptRuleEvent, ctx: &mut LintContext<'_>) {
     match event {
+        ScriptRuleEvent::Error {
+            code,
+            message,
+            range,
+        } => ctx.emit_error(code, message, range),
+        ScriptRuleEvent::SuspendingAwait { range } => {
+            if !ctx.experimental_async {
+                ctx.emit_error(
+                    Code::experimental_async,
+                    messages::experimental_async(),
+                    range,
+                );
+            } else if !ctx.runes {
+                ctx.emit_error(
+                    Code::legacy_await_invalid,
+                    messages::legacy_await_invalid(),
+                    range,
+                );
+            }
+        }
         ScriptRuleEvent::Warning {
             code,
             message,

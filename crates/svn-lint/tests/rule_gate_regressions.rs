@@ -1528,8 +1528,19 @@ fn non_reactive_update_emits_after_template_warnings() {
 // DOM element) discriminates the resolved mode.
 // ----------------------------------------------------------------
 
+/// Auto-detected runes mode, with the `experimental.async` option on
+/// so a suspending `await` (which flips runes) compiles.
 fn lint_auto(source: &str) -> Vec<Warning> {
-    svn_lint::lint_file(source, Path::new("t.svelte"), None, CompatFeatures::MODERN)
+    let options = svn_lint::LintOptions {
+        runes: None,
+        experimental_async: true,
+    };
+    svn_lint::lint_file_with_options(
+        source,
+        Path::new("t.svelte"),
+        options,
+        CompatFeatures::MODERN,
+    )
 }
 
 /// A backing `state` binding turns `$state(…)` into a store

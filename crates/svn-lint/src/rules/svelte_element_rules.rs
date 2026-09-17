@@ -8,6 +8,29 @@ use crate::messages;
 use crate::rules::element_rules::{AttrParent, visit_attribute};
 
 pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::walk::Ancestor]) {
+    // svelte_self_invalid_placement (`SvelteSelf.js`): `<svelte:self>`
+    // needs an `{#if}`, `{#each}`, `{#snippet}` or component ancestor.
+    if se.kind == SvelteElementKind::SelfRef
+        && !ctx.template_path.iter().any(|f| {
+            matches!(
+                f,
+                crate::walk::PathFrame::IfBlock
+                    | crate::walk::PathFrame::EachBlock
+                    | crate::walk::PathFrame::SnippetBlock
+                    | crate::walk::PathFrame::Component {
+                        kind: crate::walk::ComponentKind::Component,
+                        ..
+                    }
+            )
+        })
+    {
+        ctx.emit_error(
+            Code::svelte_self_invalid_placement,
+            messages::svelte_self_invalid_placement(),
+            se.range,
+        );
+    }
+
     // svelte_component_deprecated: `<svelte:component>` in runes mode.
     if ctx.runes && se.kind == SvelteElementKind::Component {
         let msg = messages::svelte_component_deprecated();

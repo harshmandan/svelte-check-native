@@ -37,6 +37,7 @@ use svn_core::Range;
 use svn_parser::document::{Document, ScriptSection};
 use svn_parser::parse_script_body;
 
+use crate::codes::Code;
 use crate::rules::script_ast_rules::{ScriptRuleEvent, ScriptRuleHooks};
 pub use crate::scope_rune_detection::is_rune_name;
 use crate::scope_rune_detection::{
@@ -119,6 +120,12 @@ pub struct ScopeTree {
     /// surface in template order, interleaved with the element and
     /// block warnings. Sorted by source position.
     pub(crate) template_rule_events: Vec<crate::rules::script_ast_rules::ScriptRuleEvent>,
+    /// The first error the compiler's scope builder raises while
+    /// declaring bindings (`validate_identifier_name`): a `$` or
+    /// `$`-prefixed name declared at the module / instance level.
+    /// Scope creation precedes every analysis walk, so this error wins
+    /// over anything the walks report.
+    pub(crate) declaration_error: Option<(Code, String, Range)>,
 }
 
 impl ScopeTree {
@@ -472,6 +479,8 @@ struct TreeBuilder {
     has_await: bool,
     /// See [`ScopeTree::template_rule_events`].
     template_rule_events: Vec<ScriptRuleEvent>,
+    /// See [`ScopeTree::declaration_error`].
+    declaration_error: Option<(Code, String, Range)>,
     /// The file's runes mode, for the template-expression rule hooks.
     runes: bool,
     /// See [`ScopeTree::script_rule_events`] — filled by the
@@ -594,6 +603,7 @@ impl TreeBuilder {
             has_await: false,
             script_rule_events: Vec::new(),
             template_rule_events: Vec::new(),
+            declaration_error: None,
             runes: false,
         }
     }
@@ -635,6 +645,20 @@ impl TreeBuilder {
                 };
                 scope = parent;
             }
+        }
+        // `validate_identifier_name(binding, scope.function_depth)`:
+        // outside parameters and synthetic bindings, a name at the
+        // module or instance level (function depth <= 1, which block
+        // scopes do not raise) may not be `$` or start with `$`.
+        if self.declaration_error.is_none()
+            && self.scopes[scope.0 as usize].function_depth <= 1
+            && !matches!(
+                declaration_kind,
+                DeclarationKind::Synthetic | DeclarationKind::Param | DeclarationKind::RestParam
+            )
+            && let Some(error) = dollar_name_error(&name)
+        {
+            self.declaration_error = Some((error.0, error.1, range));
         }
         let id = BindingId(self.bindings.len() as u32);
         self.bindings.push(Binding {
@@ -959,6 +983,10 @@ impl TreeBuilder {
                 runes,
                 is_instance: false,
             }),
+            in_reactive_expression: true,
+            props_calls: 0,
+            declarator_init_call: None,
+            bindable_positions: Vec::new(),
         };
         let events_before = walker.tree.script_rule_events.len();
         for stmt in &parsed.program.body {
@@ -1448,6 +1476,10 @@ impl TreeBuilder {
             ignore_frames: Vec::new(),
             counts_await: is_instance,
             hooks: Some(ScriptRuleHooks { runes, is_instance }),
+            in_reactive_expression: false,
+            props_calls: 0,
+            declarator_init_call: None,
+            bindable_positions: Vec::new(),
         };
         // Push the template-comment ignores so they apply to every
         // reference recorded during this script walk.
@@ -1613,6 +1645,7 @@ impl TreeBuilder {
             nonrunes_export_specs: self.nonrunes_export_specs,
             export_spec_locals: self.export_spec_locals,
             script_rule_events: self.script_rule_events,
+            declaration_error: self.declaration_error,
             template_rule_events: {
                 let mut events = self.template_rule_events;
                 events.sort_by_key(|e| e.range().start);
@@ -1905,6 +1938,25 @@ fn is_reserved_word(token: &str) -> bool {
     )
 }
 
+/// The `validate_identifier_name` error for a declared name, if any:
+/// `$` alone is `dollar_binding_invalid`, any other `$`-prefixed name
+/// `dollar_prefix_invalid`.
+pub(crate) fn dollar_name_error(name: &str) -> Option<(Code, String)> {
+    if name == "$" {
+        Some((
+            Code::dollar_binding_invalid,
+            crate::messages::dollar_binding_invalid(),
+        ))
+    } else if name.starts_with('$') {
+        Some((
+            Code::dollar_prefix_invalid,
+            crate::messages::dollar_prefix_invalid(),
+        ))
+    } else {
+        None
+    }
+}
+
 /// Source range of a `{#snippet NAME(…)}` block's name: the identifier
 /// following the `{#snippet` keyword.
 fn snippet_name_range(block: &svn_parser::SnippetBlock, source: &str) -> Option<Range> {
@@ -1995,6 +2047,22 @@ struct ScriptWalker<'b, 'src> {
     /// Hook sites buffer events into `tree.script_rule_events`;
     /// nothing is emitted during the walk.
     hooks: Option<ScriptRuleHooks>,
+    /// True while walking an expression whose `await`s suspend
+    /// rendering: a template expression or a `$derived(…)` argument,
+    /// up to the next function boundary (the compiler's
+    /// `state.expression`).
+    in_reactive_expression: bool,
+    /// `$props()` calls seen so far in this walk (the compiler's
+    /// `has_props_rune`).
+    props_calls: u32,
+    /// Span start of the call expression that is the direct
+    /// initializer of the declarator being walked — the only
+    /// position a `$props()` may take.
+    declarator_init_call: Option<(u32, u32)>,
+    /// Span starts of the `$bindable()` calls sitting directly as a
+    /// property default of a `$props()` destructure — the only
+    /// position a `$bindable()` may take.
+    bindable_positions: Vec<(u32, u32)>,
 }
 
 impl<'b, 'src> ScriptWalker<'b, 'src> {
@@ -2047,6 +2115,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
     {
         let prev_depth = self.function_depth;
         let prev_closure = self.in_function_closure;
+        let prev_reactive = std::mem::replace(&mut self.in_reactive_expression, false);
         self.function_depth += 1;
         self.in_function_closure = true;
         // Open a fresh non-porous scope for the function body so
@@ -2065,6 +2134,7 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         self.scope_stack.pop();
         self.function_depth = prev_depth;
         self.in_function_closure = prev_closure;
+        self.in_reactive_expression = prev_reactive;
     }
 
     fn visit_stmt(&mut self, stmt: &Statement<'_>) {
@@ -2246,7 +2316,30 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                         Declaration::ClassDeclaration(cls) => self.visit_class_decl(cls),
                         _ => {}
                     }
+                    // `ExportNamedDeclaration.js` (after visiting the
+                    // declaration): `export let` is legacy syntax in a
+                    // runes-mode instance script.
+                    if let Some(h) = self.hooks
+                        && h.runes
+                        && h.is_instance
+                        && let Declaration::VariableDeclaration(v) = decl
+                        && !v.declare
+                        && v.kind == oxc_ast::ast::VariableDeclarationKind::Let
+                    {
+                        let range = self.abs(end.span.start, end.span.end);
+                        self.push_error(
+                            Code::legacy_export_invalid,
+                            crate::messages::legacy_export_invalid(),
+                            range,
+                        );
+                    }
                 }
+            }
+            Statement::ExportNamedDeclaration(end) if !end.export_kind.is_type() => {
+                self.check_default_export_specifiers(&end.specifiers, end.span);
+            }
+            Statement::ExportFromDeclaration(end) if !end.export_kind.is_type() => {
+                self.check_default_export_specifiers(&end.specifiers, end.span);
             }
             Statement::BlockStatement(b) => {
                 // Non-function block — porous w.r.t. function_depth.
@@ -2372,6 +2465,16 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             Statement::LabeledStatement(lbl) => self.visit_labeled(lbl, at_program_top),
             Statement::ThrowStatement(t) => self.visit_expr(&t.argument),
             Statement::ExportDefaultDeclaration(ed) => {
+                // `ExportDefaultDeclaration.js`: a component script may
+                // not default-export anything.
+                if self.hooks.is_some() {
+                    let range = self.abs(ed.span.start, ed.span.end);
+                    self.push_error(
+                        Code::module_illegal_default_export,
+                        crate::messages::module_illegal_default_export(),
+                        range,
+                    );
+                }
                 use oxc_ast::ast::ExportDefaultDeclarationKind as Ed;
                 match &ed.declaration {
                     Ed::FunctionDeclaration(f) => {
@@ -2398,6 +2501,36 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// `export { … as default }` — the error `ExportNamedDeclaration.js`
+    /// raises for a component script. Type-only specifiers are removed
+    /// before analysis.
+    fn check_default_export_specifiers(
+        &mut self,
+        specifiers: &[oxc_ast::ast::ExportSpecifier<'_>],
+        span: oxc_span::Span,
+    ) {
+        use oxc_ast::ast::ModuleExportName;
+        if self.hooks.is_none() {
+            return;
+        }
+        let exports_default = specifiers.iter().any(|s| {
+            !s.export_kind.is_type()
+                && match &s.exported {
+                    ModuleExportName::IdentifierName(id) => id.name == "default",
+                    ModuleExportName::IdentifierReference(id) => id.name == "default",
+                    ModuleExportName::StringLiteral(l) => l.value == "default",
+                }
+        });
+        if exports_default {
+            let range = self.abs(span.start, span.end);
+            self.push_error(
+                Code::module_illegal_default_export,
+                crate::messages::module_illegal_default_export(),
+                range,
+            );
         }
     }
 
@@ -2709,6 +2842,31 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
 
         self.declare_pattern_with(&d.id, decl_kind, binding_kind, &initial, is_props);
 
+        if let Some(h) = self.hooks {
+            // `VariableDeclarator.js` re-validates every declared name
+            // in runes mode, at any depth.
+            if h.runes {
+                for id in crate::scope_util::binding_idents_in_pattern(&d.id) {
+                    if let Some((code, message)) = dollar_name_error(id.name.as_str()) {
+                        let range = self.abs(id.span.start, id.span.end);
+                        self.push_error(code, message, range);
+                    }
+                }
+            }
+            // A `$bindable()` may only be the default of a property of
+            // a `$props()` destructure.
+            if is_props && let BindingPattern::ObjectPattern(op) = &d.id {
+                for prop in &op.properties {
+                    if let BindingPattern::AssignmentPattern(ap) = &prop.value
+                        && let Expression::CallExpression(call) = unwrap_ts_wrappers(&ap.right)
+                    {
+                        self.bindable_positions
+                            .push((call.span.start, call.span.end));
+                    }
+                }
+            }
+        }
+
         // `let { … } = $props()` bare identifier → RestProp (ambient-
         // style). Fix up the binding we just created.
         if is_props_identifier
@@ -2740,7 +2898,13 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
             // for references inside the argument, mirroring upstream
             // `CallExpression.js:244-262`. Handled inside `visit_call`
             // below so we just continue the normal walk.
+            let direct_call = match unwrap_ts_wrappers(init) {
+                Expression::CallExpression(c) => Some((c.span.start, c.span.end)),
+                _ => None,
+            };
+            let prev = std::mem::replace(&mut self.declarator_init_call, direct_call);
             self.visit_expr(init);
+            self.declarator_init_call = prev;
         }
     }
 
@@ -3104,6 +3268,18 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
                 if self.counts_await && !self.in_function_closure {
                     self.tree.has_await = true;
                 }
+                // `AwaitExpression.js`: a top-level instance `await`
+                // (function depth 1, which `$:` bodies, `$inspect` and
+                // `$props()` defaults raise) or one inside a template
+                // expression / `$derived(…)` suspends, which needs the
+                // `experimental.async` option and runes mode.
+                let top_level = self.is_instance && self.function_depth == 1 && self.rune_bump == 0;
+                if self.hooks.is_some() && (top_level || self.in_reactive_expression) {
+                    let range = self.abs(a.span.start, a.span.end);
+                    self.tree
+                        .script_rule_events
+                        .push(ScriptRuleEvent::SuspendingAwait { range });
+                }
                 self.visit_expr(&a.argument)
             }
             Expression::YieldExpression(y) => {
@@ -3199,6 +3375,9 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         // Track `nested_in_state_call` for refs inside arg subtrees —
         // used by state_referenced_locally's message discriminator.
         let push_state = matches!(rune, Some(RuneCall::State) | Some(RuneCall::StateRaw));
+        if self.hooks.is_some() {
+            self.check_rune_call_placement(c, rune);
+        }
         // Callee — flag the identifier (if any) as a child of the
         // CallExpression for `store_rune_conflict`'s sake; arguments
         // are flagged in `visit_argument`.
@@ -3206,12 +3385,66 @@ impl<'b, 'src> ScriptWalker<'b, 'src> {
         if bump {
             self.rune_bump += 1;
         }
+        let prev_reactive = self.in_reactive_expression;
+        if rune == Some(RuneCall::Derived) {
+            self.in_reactive_expression = true;
+        }
         for a in &c.arguments {
             self.visit_argument(a, push_state, true);
         }
+        self.in_reactive_expression = prev_reactive;
         if bump {
             self.rune_bump -= 1;
         }
+    }
+
+    /// The placement errors `CallExpression.js` raises for `$props()`
+    /// and `$bindable()`.
+    fn check_rune_call_placement(&mut self, c: &CallExpression<'_>, rune: Option<RuneCall>) {
+        let range = self.abs(c.span.start, c.span.end);
+        match rune {
+            Some(RuneCall::Props) => {
+                self.props_calls += 1;
+                if self.props_calls > 1 {
+                    self.push_error(
+                        Code::props_duplicate,
+                        crate::messages::props_duplicate("$props"),
+                        range,
+                    );
+                }
+                let top_level_declarator = self.declarator_init_call
+                    == Some((c.span.start, c.span.end))
+                    && self.is_instance
+                    && self.cur_scope() == self.scope_stack[0];
+                if !top_level_declarator {
+                    self.push_error(
+                        Code::props_invalid_placement,
+                        crate::messages::props_invalid_placement(),
+                        range,
+                    );
+                }
+            }
+            Some(RuneCall::Bindable)
+                if !self
+                    .bindable_positions
+                    .contains(&(c.span.start, c.span.end)) =>
+            {
+                self.push_error(
+                    Code::bindable_invalid_location,
+                    crate::messages::bindable_invalid_location(),
+                    range,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn push_error(&mut self, code: Code, message: String, range: Range) {
+        self.tree.script_rule_events.push(ScriptRuleEvent::Error {
+            code,
+            message,
+            range,
+        });
     }
 
     /// One call/new argument. `as_expression()` is None for

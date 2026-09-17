@@ -11,10 +11,23 @@ use oxc_ast::ast::{BindingPattern, Expression, ForStatementInit, PropertyKey};
 /// destructured name) and the export-let promotion pass (to gather
 /// names from `let { a, b } = …;` form).
 pub(crate) fn idents_in_pattern<'a>(pat: &'a BindingPattern<'_>) -> Vec<&'a str> {
+    binding_idents_in_pattern(pat)
+        .into_iter()
+        .map(|id| id.name.as_str())
+        .collect()
+}
+
+/// The identifiers a binding pattern declares, in source order.
+pub(crate) fn binding_idents_in_pattern<'a, 'b>(
+    pat: &'a BindingPattern<'b>,
+) -> Vec<&'a oxc_ast::ast::BindingIdentifier<'b>> {
     let mut out = Vec::new();
-    fn go<'a>(pat: &'a BindingPattern<'_>, out: &mut Vec<&'a str>) {
+    fn go<'a, 'b>(
+        pat: &'a BindingPattern<'b>,
+        out: &mut Vec<&'a oxc_ast::ast::BindingIdentifier<'b>>,
+    ) {
         match pat {
-            BindingPattern::BindingIdentifier(id) => out.push(id.name.as_str()),
+            BindingPattern::BindingIdentifier(id) => out.push(id),
             BindingPattern::ObjectPattern(op) => {
                 for prop in &op.properties {
                     go(&prop.value, out);
@@ -56,6 +69,29 @@ pub(crate) fn base_identifier_of_text(slice: &str) -> Option<String> {
         expr = &p.expression;
     }
     base_identifier(expr).map(|(name, _, _)| name.to_string())
+}
+
+/// The identifier an expression given as source text consists of —
+/// once parentheses and TypeScript wrappers are removed, as the
+/// compiler sees it — with its byte span within `slice`.
+pub(crate) fn identifier_of_text(slice: &str) -> Option<(String, u32, u32)> {
+    use oxc_ast::ast::Statement;
+
+    let wrapped = format!("({slice});");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Ts);
+    let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
+        return None;
+    };
+    match unwrap_ts_wrappers(&stmt.expression) {
+        // The `(` prefix shifts every span by one.
+        Expression::Identifier(id) => Some((
+            id.name.to_string(),
+            id.span.start.checked_sub(1)?,
+            id.span.end.checked_sub(1)?,
+        )),
+        _ => None,
+    }
 }
 
 /// Walk to the leftmost identifier of a member-chain expression.

@@ -199,6 +199,10 @@ pub struct SvelteConfigSummary {
     /// `runes: true` / `runes: false` FORCES the mode; `None` keeps the
     /// per-file auto-detection.
     pub runes: Option<bool>,
+    /// `compilerOptions.experimental.async === true` — lets `await`
+    /// suspend in template expressions, `$derived` and at the top
+    /// level of a component.
+    pub experimental_async: bool,
 }
 
 /// The per-file subset of a config — the settings upstream applies PER
@@ -209,6 +213,8 @@ pub struct ResolvedConfig {
     pub warning_filter_plan: WarningFilterPlan,
     /// `compilerOptions.runes` — see [`SvelteConfigSummary::runes`].
     pub runes: Option<bool>,
+    /// See [`SvelteConfigSummary::experimental_async`].
+    pub experimental_async: bool,
 }
 
 /// Per-file nearest-config resolution for `warningFilter` / `runes`.
@@ -288,6 +294,7 @@ impl ConfigResolver {
                 let rc = std::sync::Arc::new(ResolvedConfig {
                     warning_filter_plan: summary.warning_filter_plan,
                     runes: summary.runes,
+                    experimental_async: summary.experimental_async,
                 });
                 self.nested.push((cfg_path, rc.clone()));
                 rc
@@ -390,6 +397,8 @@ pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
     // compilerOptions.runes — config-forced runes mode.
     summary.runes =
         default_export_config_object(&parsed.program).and_then(|obj| runes_in_object(obj));
+    summary.experimental_async = default_export_config_object(&parsed.program)
+        .is_some_and(|obj| experimental_async_in_object(obj));
 
     summary
 }
@@ -449,6 +458,7 @@ pub fn analyse_vite_config(config_path: &Path) -> Option<SvelteConfigSummary> {
     // compilerOptions.runes — same relative position as in
     // `svelte.config.js`.
     summary.runes = runes_in_object(plugin_obj);
+    summary.experimental_async = experimental_async_in_object(plugin_obj);
 
     Some(summary)
 }
@@ -629,6 +639,20 @@ fn runes_in_object(obj: &ObjectExpression<'_>) -> Option<bool> {
         Expression::BooleanLiteral(b) => Some(b.value),
         _ => None,
     }
+}
+
+/// `compilerOptions.experimental.async` is the literal `true` inside a
+/// config-root object.
+fn experimental_async_in_object(obj: &ObjectExpression<'_>) -> bool {
+    let Some(Expression::ObjectExpression(experimental)) =
+        compiler_options_in_object(obj).and_then(|co| lookup_object_property(co, "experimental"))
+    else {
+        return false;
+    };
+    matches!(
+        lookup_object_property(experimental, "async"),
+        Some(Expression::BooleanLiteral(b)) if b.value
+    )
 }
 
 /// `kit.files` inside the exported config object. Export-shape
@@ -1514,6 +1538,7 @@ export default {
             ResolvedConfig {
                 warning_filter_plan: WarningFilterPlan::default(),
                 runes: Some(false),
+                experimental_async: false,
             },
             true,
         );

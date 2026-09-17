@@ -45,6 +45,7 @@ mod fuzzymatch;
 use svn_parser::html5;
 mod ignore;
 mod messages;
+mod parse_rejection;
 mod rules;
 mod scope;
 mod scope_rune_detection;
@@ -60,6 +61,17 @@ use std::path::Path;
 pub use codes::{CODES, Code};
 pub use compat::{CompatFeatures, SvelteVersion, detect_for_workspace};
 pub use context::{LintContext, Warning};
+pub use parse_rejection::template_parse_rejected;
+
+/// The project compiler options the pass honours (from the nearest
+/// Svelte config).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LintOptions {
+    /// `compilerOptions.runes`: forces the mode when set.
+    pub runes: Option<bool>,
+    /// `compilerOptions.experimental.async`.
+    pub experimental_async: bool,
+}
 
 /// Run the compile-warning pass on one source file.
 ///
@@ -76,12 +88,27 @@ pub fn lint_file(
     runes: Option<bool>,
     compat: CompatFeatures,
 ) -> Vec<Warning> {
+    let options = LintOptions {
+        runes,
+        experimental_async: false,
+    };
+    lint_file_with_options(source, path, options, compat)
+}
+
+/// [`lint_file`] with the full set of project compiler options.
+pub fn lint_file_with_options(
+    source: &str,
+    path: &Path,
+    options: LintOptions,
+    compat: CompatFeatures,
+) -> Vec<Warning> {
     let mut ctx = LintContext::new(source);
     ctx.compat = compat;
+    ctx.experimental_async = options.experimental_async;
     // `walk` resolves runes mode from the document it parses (reusing
     // that parse) — pass the caller's hint through rather than running
     // a separate `infer_runes_mode` parse here.
-    crate::walk::walk(source, path, runes, &mut ctx);
+    crate::walk::walk(source, path, options.runes, &mut ctx);
     ctx.take_warnings()
 }
 
@@ -92,18 +119,19 @@ pub fn lint_file(
 /// one [`PositionMap`](svn_core::PositionMap) per file. This entry lets
 /// it hand the parse (`doc` + `fragment`) and the map straight in,
 /// instead of [`lint_file`] re-parsing and re-indexing the source.
-/// `runes`/`compat` behave as in [`lint_file`].
+/// `options.runes`/`compat` behave as `runes`/`compat` in [`lint_file`].
 pub fn lint_parsed<'src>(
     doc: &svn_parser::Document<'_>,
     fragment: &svn_parser::ast::Fragment,
     source: &'src str,
     positions: svn_core::PositionMap<'src>,
     path: &Path,
-    runes: Option<bool>,
+    options: LintOptions,
     compat: CompatFeatures,
 ) -> Vec<Warning> {
     let mut ctx = LintContext::with_positions(source, positions);
     ctx.compat = compat;
-    crate::walk::walk_parsed(doc, fragment, source, path, runes, &mut ctx);
+    ctx.experimental_async = options.experimental_async;
+    crate::walk::walk_parsed(doc, fragment, source, path, options.runes, &mut ctx);
     ctx.take_warnings()
 }

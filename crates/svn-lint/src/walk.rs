@@ -6,6 +6,8 @@
 
 use std::path::Path;
 
+use smol_str::SmolStr;
+
 use svn_parser::ast::{Attribute, Fragment, Node, SvelteElementKind};
 use svn_parser::{parse_all_template_runs, parse_script_body, parse_sections};
 
@@ -178,7 +180,14 @@ pub fn walk_parsed(
     // warnings and the walk-time binding rules.
     let script_rule_events = std::mem::take(&mut tree.script_rule_events);
     ctx.pending_template_events = std::mem::take(&mut tree.template_rule_events).into();
+    let declaration_error = tree.declaration_error.take();
     ctx.scope_tree = Some(tree);
+
+    // An invalid `$` name raised while the compiler builds its scopes
+    // precedes every analysis diagnostic.
+    if let Some((code, message, range)) = declaration_error {
+        ctx.emit_error(code, message, range);
+    }
 
     // <script>-attribute rules (script_unknown_attribute is
     // parse-time upstream; script_context_deprecated fires early in
@@ -227,13 +236,26 @@ pub fn walk_parsed(
     crate::rules::binding_rules::visit(ctx);
 
     let mut ancestors: Vec<Ancestor> = Vec::new();
-    walk_fragment_impl(fragment, ctx, None, &mut ancestors, false);
+    walk_fragment_impl(fragment, ctx, None, &mut ancestors);
     crate::rules::binding_rules::flush_template_write_violations(ctx, u32::MAX, true);
     crate::rules::script_ast_rules::flush_template_events_before(u32::MAX, ctx);
 
     // Post-walk declaration loops (non_reactive_update /
     // export_let_unused) — upstream runs them after all three walks.
     crate::rules::binding_rules::visit_post_template(ctx);
+
+    // Once every walk is done, the compiler rejects a component that
+    // mixes `on:` directives and `on*` attributes on its elements,
+    // pointing at the first directive.
+    if ctx.uses_event_attributes
+        && let Some((name, range)) = ctx.event_directive.clone()
+    {
+        ctx.emit_error(
+            Code::mixed_event_handler_syntaxes,
+            messages::mixed_event_handler_syntaxes(&name),
+            range,
+        );
+    }
 }
 
 /// Scan the top-level fragment for `<svelte:options>` and fire the
@@ -363,21 +385,90 @@ pub(crate) enum Ancestor {
     Boundary,
 }
 
+/// One enclosing template node, as the compiler's validations see it
+/// in `context.path`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PathFrame {
+    IfBlock,
+    EachBlock,
+    AwaitBlock,
+    KeyBlock,
+    SnippetBlock,
+    /// `<Component>` / `<svelte:component>` / `<svelte:self>`.
+    /// `implicit_children` is set when the component has children
+    /// other than snippets, comments and whitespace.
+    Component {
+        kind: ComponentKind,
+        implicit_children: bool,
+    },
+    /// `<svelte:element>`.
+    SvelteElement,
+    /// A regular DOM element; `custom` marks a custom element (a
+    /// hyphenated name or an `is` attribute).
+    RegularElement {
+        name: SmolStr,
+        custom: bool,
+    },
+    /// Any other element-like node (`<slot>`, `<svelte:head>`,
+    /// `<svelte:fragment>`, `<svelte:boundary>`, …).
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ComponentKind {
+    Component,
+    SvelteComponent,
+    SvelteSelf,
+}
+
+impl PathFrame {
+    pub(crate) fn is_block(&self) -> bool {
+        matches!(
+            self,
+            Self::IfBlock | Self::EachBlock | Self::AwaitBlock | Self::KeyBlock
+        )
+    }
+
+    fn component(kind: ComponentKind, children: &Fragment, source: &str) -> Self {
+        let implicit_children = children.nodes.iter().any(|n| match n {
+            Node::SnippetBlock(_) | Node::Comment(_) => false,
+            Node::Text(t) => !t
+                .range
+                .slice(source)
+                .chars()
+                .all(crate::rules::block_rules::is_js_trim_ws),
+            _ => true,
+        });
+        Self::Component {
+            kind,
+            implicit_children,
+        }
+    }
+}
+
+/// The compiler's `is_custom_element_node`: a regular element whose
+/// name contains `-` or that carries an `is` attribute.
+pub(crate) fn is_custom_element_node(name: &str, attributes: &[Attribute]) -> bool {
+    name.contains('-')
+        || attributes.iter().any(|a| match a {
+            Attribute::Plain(p) => p.name == "is",
+            Attribute::Expression(e) => e.name == "is",
+            Attribute::Shorthand(s) => s.name == "is",
+            _ => false,
+        })
+}
+
 /// Recursively visit every template node, dispatching rules as we go.
 ///
 /// `parent_tag`: closest enclosing regular-element tag, for
 /// `is_tag_valid_with_parent` checks.
 /// `ancestors`: stack of enclosing nodes (outer → inner) — see
 /// [`Ancestor`] for how each consumer interprets the frames.
-/// `inside_control_block`: true if we're currently inside an
-/// `{#if}`/`{#each}`/`{#await}`/`{#key}`. Only in that case does
-/// the placement warning fire (otherwise upstream errors).
 fn walk_fragment_impl(
     fragment: &Fragment,
     ctx: &mut LintContext<'_>,
     parent_tag: Option<&str>,
     ancestors: &mut Vec<Ancestor>,
-    inside_control_block: bool,
 ) {
     let source = ctx.source;
     for (idx, node) in fragment.nodes.iter().enumerate() {
@@ -429,29 +520,32 @@ fn walk_fragment_impl(
 
         match node {
             Node::Element(el) => {
-                crate::rules::element_rules::visit(
-                    el,
-                    ctx,
-                    parent_tag,
-                    ancestors,
-                    inside_control_block,
-                );
+                crate::rules::element_rules::visit(el, ctx, parent_tag, ancestors);
                 flush_expr_events_before(children_start(&el.children, el.range), ctx);
                 ancestors.push(Ancestor::Element(el.name.to_string()));
+                // `<slot>` is a SlotElement to the compiler: it neither
+                // becomes its children's parent element nor counts as a
+                // regular-element ancestor.
+                let is_slot = el.name == "slot";
+                ctx.template_path.push(if is_slot {
+                    PathFrame::Other
+                } else {
+                    PathFrame::RegularElement {
+                        name: el.name.clone(),
+                        custom: is_custom_element_node(&el.name, &el.attributes),
+                    }
+                });
                 walk_fragment_impl(
                     &el.children,
                     ctx,
-                    Some(el.name.as_str()),
+                    if is_slot {
+                        parent_tag
+                    } else {
+                        Some(el.name.as_str())
+                    },
                     ancestors,
-                    // Reset: crossing a regular element means a control
-                    // block above it no longer sits between deeper nodes
-                    // and their nearest regular-element parent. This is
-                    // upstream's per-node `only_warn` for the parent check
-                    // (RegularElement.js:178-190) — a sticky bool fired
-                    // spurious node_invalid_placement_ssr on e.g.
-                    // `{#if x}<ul><p/></ul>{/if}`.
-                    false,
                 );
+                ctx.template_path.pop();
                 ancestors.pop();
             }
             Node::Component(comp) => {
@@ -462,7 +556,13 @@ fn walk_fragment_impl(
                 // Component ancestor), but the a11y is_parent walk
                 // continues past it — upstream's path never resets.
                 ancestors.push(Ancestor::Boundary);
-                walk_fragment_impl(&comp.children, ctx, None, ancestors, false);
+                ctx.template_path.push(PathFrame::component(
+                    ComponentKind::Component,
+                    &comp.children,
+                    source,
+                ));
+                walk_fragment_impl(&comp.children, ctx, None, ancestors);
+                ctx.template_path.pop();
                 ancestors.pop();
             }
             Node::SvelteElement(se) => {
@@ -472,28 +572,54 @@ fn walk_fragment_impl(
                 // is_parent walk answers "unknown tag — play it safe"
                 // for this frame.
                 ancestors.push(Ancestor::SvelteElement);
-                walk_fragment_impl(&se.children, ctx, None, ancestors, false);
+                let (frame, child_parent_tag) = match se.kind {
+                    SvelteElementKind::Component => (
+                        PathFrame::component(ComponentKind::SvelteComponent, &se.children, source),
+                        None,
+                    ),
+                    SvelteElementKind::SelfRef => (
+                        PathFrame::component(ComponentKind::SvelteSelf, &se.children, source),
+                        None,
+                    ),
+                    SvelteElementKind::Element => (PathFrame::SvelteElement, None),
+                    SvelteElementKind::Fragment => (PathFrame::Other, None),
+                    // The remaining special elements have no visitor of
+                    // their own: their children keep the parent element.
+                    SvelteElementKind::Window
+                    | SvelteElementKind::Document
+                    | SvelteElementKind::Body
+                    | SvelteElementKind::Head
+                    | SvelteElementKind::Options
+                    | SvelteElementKind::Boundary => (PathFrame::Other, parent_tag),
+                };
+                ctx.template_path.push(frame);
+                walk_fragment_impl(&se.children, ctx, child_parent_tag, ancestors);
+                ctx.template_path.pop();
                 ancestors.pop();
             }
             Node::IfBlock(b) => {
                 crate::rules::block_rules::visit_if(b, ctx);
                 flush_expr_events_before(b.consequent.range.start, ctx);
-                walk_fragment_impl(&b.consequent, ctx, parent_tag, ancestors, true);
+                ctx.template_path.push(PathFrame::IfBlock);
+                walk_fragment_impl(&b.consequent, ctx, parent_tag, ancestors);
                 for arm in &b.elseif_arms {
                     flush_expr_events_before(arm.body.range.start, ctx);
-                    walk_fragment_impl(&arm.body, ctx, parent_tag, ancestors, true);
+                    walk_fragment_impl(&arm.body, ctx, parent_tag, ancestors);
                 }
                 if let Some(else_body) = &b.alternate {
-                    walk_fragment_impl(else_body, ctx, parent_tag, ancestors, true);
+                    walk_fragment_impl(else_body, ctx, parent_tag, ancestors);
                 }
+                ctx.template_path.pop();
             }
             Node::EachBlock(b) => {
                 crate::rules::block_rules::visit_each(b, ctx);
                 flush_expr_events_before(b.body.range.start, ctx);
-                walk_fragment_impl(&b.body, ctx, parent_tag, ancestors, true);
+                ctx.template_path.push(PathFrame::EachBlock);
+                walk_fragment_impl(&b.body, ctx, parent_tag, ancestors);
                 if let Some(empty) = &b.alternate {
-                    walk_fragment_impl(empty, ctx, parent_tag, ancestors, true);
+                    walk_fragment_impl(empty, ctx, parent_tag, ancestors);
                 }
+                ctx.template_path.pop();
             }
             Node::AwaitBlock(b) => {
                 crate::rules::block_rules::visit_await(b, ctx);
@@ -505,39 +631,77 @@ fn walk_fragment_impl(
                     .or(b.catch_branch.as_ref().map(|c| c.body.range.start))
                     .unwrap_or(b.range.end);
                 flush_expr_events_before(first_body, ctx);
+                ctx.template_path.push(PathFrame::AwaitBlock);
                 if let Some(pending) = &b.pending {
-                    walk_fragment_impl(pending, ctx, parent_tag, ancestors, true);
+                    walk_fragment_impl(pending, ctx, parent_tag, ancestors);
                 }
                 if let Some(then) = &b.then_branch {
-                    walk_fragment_impl(&then.body, ctx, parent_tag, ancestors, true);
+                    walk_fragment_impl(&then.body, ctx, parent_tag, ancestors);
                 }
                 if let Some(catch) = &b.catch_branch {
-                    walk_fragment_impl(&catch.body, ctx, parent_tag, ancestors, true);
+                    walk_fragment_impl(&catch.body, ctx, parent_tag, ancestors);
                 }
+                ctx.template_path.pop();
             }
             Node::KeyBlock(b) => {
                 crate::rules::block_rules::visit_key(b, ctx);
                 flush_expr_events_before(b.body.range.start, ctx);
-                walk_fragment_impl(&b.body, ctx, parent_tag, ancestors, true);
+                ctx.template_path.push(PathFrame::KeyBlock);
+                walk_fragment_impl(&b.body, ctx, parent_tag, ancestors);
+                ctx.template_path.pop();
             }
             Node::SnippetBlock(b) => {
                 // Snippet frames stop the placement checks (upstream
                 // breaks at SnippetBlock) but not the a11y is_parent
                 // walk.
                 ancestors.push(Ancestor::Boundary);
-                walk_fragment_impl(&b.body, ctx, parent_tag, ancestors, false);
+                ctx.template_path.push(PathFrame::SnippetBlock);
+                // The compiler clears the parent element for a
+                // snippet's body.
+                walk_fragment_impl(&b.body, ctx, None, ancestors);
+                ctx.template_path.pop();
                 ancestors.pop();
+                crate::rules::block_rules::visit_snippet_after_body(b, ctx);
             }
             Node::Text(t) => {
+                // `regex_not_whitespace`: anything but space, tab, CR, LF.
+                if let Some(parent) = parent_tag
+                    && t.range
+                        .slice(source)
+                        .chars()
+                        .any(|c| !matches!(c, ' ' | '\t' | '\r' | '\n'))
+                {
+                    text_placement_error(parent, t.range, ctx);
+                }
                 crate::rules::text_rules::visit_text(t, ctx);
             }
-            Node::Interpolation(_) | Node::Comment(_) => {}
+            Node::Interpolation(i) => {
+                if i.kind == svn_parser::InterpolationKind::Expression
+                    && let Some(parent) = parent_tag
+                {
+                    text_placement_error(parent, i.range, ctx);
+                }
+            }
+            Node::Comment(_) => {}
         }
         flush_expr_events_before(node_end(node), ctx);
 
         if pushed {
             ctx.pop_ignore();
         }
+    }
+}
+
+/// `node_invalid_placement` for text content (a Text node or an
+/// `{expression}` tag) whose parent element does not allow text
+/// (`Text.js` / `ExpressionTag.js`).
+fn text_placement_error(parent: &str, range: svn_core::Range, ctx: &mut LintContext<'_>) {
+    if let Some(msg) = crate::html5::is_tag_valid_with_parent("#text", parent) {
+        ctx.emit_error(
+            Code::node_invalid_placement,
+            messages::node_invalid_placement(&msg),
+            range,
+        );
     }
 }
 

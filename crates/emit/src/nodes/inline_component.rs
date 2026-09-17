@@ -282,11 +282,7 @@ pub(crate) fn emit_component_call(
     // matches the simple-identifier path's behavior and is enough to
     // surface TS2304 on the root identifier.
     let _ = write!(buf, "{inner}const {local} = __svn_ensure_component(");
-    let name_range = inst.component_root_range.unwrap_or_else(|| {
-        let name_start = inst.node_start.saturating_add(1);
-        svn_core::Range::new(name_start, name_start.saturating_add(comp.len() as u32))
-    });
-    buf.append_with_source(comp.as_str(), name_range);
+    buf.append_with_source(comp.as_str(), inst.root_range);
     buf.push_str(");\n");
 
     // Implicit-children synthesis: when the user has non-snippet body
@@ -311,7 +307,8 @@ pub(crate) fn emit_component_call(
     if snippet_children.is_empty() && inst.props.is_empty() && !emit_implicit_children {
         let _ = write!(buf, "{inner}{ctor_lhs}");
         let call_start = buf.len() as u32;
-        let _ = write!(buf, "new {local}({{ target: __svn_any(), props: {{}} }})");
+        write_new_ctor(buf, inst, &local);
+        let _ = write!(buf, "({{ target: __svn_any(), props: {{}} }})");
         push_component_call_token_map(buf, call_start, inst.node_start);
         buf.push_str(";\n");
         emit_component_bind_widen_trailers(buf, inst, &inner);
@@ -324,7 +321,8 @@ pub(crate) fn emit_component_call(
     if snippet_children.is_empty() {
         let _ = write!(buf, "{inner}{ctor_lhs}");
         let call_start = buf.len() as u32;
-        let _ = write!(buf, "new {local}({{ target: __svn_any(), props: {{");
+        write_new_ctor(buf, inst, &local);
+        let _ = write!(buf, "({{ target: __svn_any(), props: {{");
         let mut first = true;
         for p in &inst.props {
             if !first {
@@ -352,7 +350,8 @@ pub(crate) fn emit_component_call(
     // Multi-line form with snippets-as-arrow-props.
     let _ = write!(buf, "{inner}{ctor_lhs}");
     let call_start = buf.len() as u32;
-    let _ = writeln!(buf, "new {local}({{");
+    write_new_ctor(buf, inst, &local);
+    let _ = writeln!(buf, "({{");
     let opts_inner = "    ".repeat(depth + 2);
     let props_inner = "    ".repeat(depth + 3);
     let _ = writeln!(buf, "{opts_inner}target: __svn_any(),");
@@ -514,6 +513,14 @@ fn emit_component_bindings_post_check(
 /// Map the whole `new C({ … })` call onto the first byte of the
 /// component's tag name, where upstream anchors a diagnostic on the
 /// call's props object (a missing required prop, an excess one).
+/// Write `new $$_CN`, mapping the constructor reference to the
+/// instantiation's constructor anchor. A component value that is not
+/// constructible (TS2351) is reported there, as upstream reports it.
+fn write_new_ctor(buf: &mut EmitBuffer, inst: &svn_analyze::ComponentInstantiation, local: &str) {
+    buf.push_str("new ");
+    buf.append_with_source(local, inst.ctor_anchor);
+}
+
 fn push_component_call_token_map(buf: &mut EmitBuffer, call_start: u32, node_start: u32) {
     let call_end = buf.len() as u32;
     let source_start = node_start.saturating_add(1);

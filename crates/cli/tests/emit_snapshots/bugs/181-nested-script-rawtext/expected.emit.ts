@@ -18,7 +18,7 @@ function $$render_f883cdb2() {
 $$render_f883cdb2;
 interface $$IsomorphicComponent {
     new (options: import('svelte').ComponentConstructorOptions<Awaited<ReturnType<typeof $$render_f883cdb2>>['props']>): import('svelte').SvelteComponent<Awaited<ReturnType<typeof $$render_f883cdb2>>['props'], Awaited<ReturnType<typeof $$render_f883cdb2>>['events'], Awaited<ReturnType<typeof $$render_f883cdb2>>['slots']> & { $$bindings?: Awaited<ReturnType<typeof $$render_f883cdb2>>['bindings'] } & Awaited<ReturnType<typeof $$render_f883cdb2>>['exports'];
-    (internal: unknown, props: Awaited<ReturnType<typeof $$render_f883cdb2>>['props']): Awaited<ReturnType<typeof $$render_f883cdb2>>['exports'] & { $set?: any; $on?: any };
+    (internal: unknown, props: Awaited<ReturnType<typeof $$render_f883cdb2>>['props'] extends Record<string, never> ? { $$events?: Awaited<ReturnType<typeof $$render_f883cdb2>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_f883cdb2>>['slots'] } : Awaited<ReturnType<typeof $$render_f883cdb2>>['props'] & { $$events?: Awaited<ReturnType<typeof $$render_f883cdb2>>['events']; $$slots?: Awaited<ReturnType<typeof $$render_f883cdb2>>['slots'] }): Awaited<ReturnType<typeof $$render_f883cdb2>>['exports'] & { $set?: any; $on?: any };
     z_$$bindings?: Awaited<ReturnType<typeof $$render_f883cdb2>>['bindings'];
 }
 const __svn_component_default: $$IsomorphicComponent = null as any;

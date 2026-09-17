@@ -1,0 +1,23 @@
+{
+    "errors": [
+        {
+            "file": "src/Parent.svelte",
+            "line": 4,
+            "column": 17,
+            "code": 2454
+        },
+        {
+            "file": "src/use.ts",
+            "line": 3,
+            "column": 50,
+            "code": 2322
+        },
+        {
+            "file": "src/use.ts",
+            "line": 4,
+            "column": 50,
+            "code": 2353
+        }
+    ],
+    "_note": "Default exports follow upstream's addSimpleComponentExport. A JavaScript component is the same isomorphic component a TS one is (unless it is a runes component without slots or events), so its instance has a real $on (no TS2722 on ref.$on) and its slots stay typed (let:untyped is any, not unknown). A legacy JS component's props and slots go through the __sveltets_2_partial fallback: an undefined-typed prop (export let x = undefined) accepts any value. The call signature takes Props & {$$events?, $$slots?}, or only the carriers when the component has no props, so Parameters<typeof C>[1] reports TS2322/TS2353 as upstream does. Verified against upstream svelte-check --tsgo with svelte 5.55."
+}

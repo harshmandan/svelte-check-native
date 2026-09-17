@@ -19,14 +19,8 @@ function $$render_aad4163e() {
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ snapshot: typeof snapshot; }} */ ({}) };
 }
 $$render_aad4163e;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_aad4163e>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_aad4163e>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnExpand<__SvnPropsAnyFallback<Awaited<ReturnType<typeof $$render_aad4163e>>['props']>>, Awaited<ReturnType<typeof $$render_aad4163e>>['events'], __SvnExpand<__SvnSlotsAnyFallback<Awaited<ReturnType<typeof $$render_aad4163e>>['slots']>>, Awaited<ReturnType<typeof $$render_aad4163e>>['exports'], Awaited<ReturnType<typeof $$render_aad4163e>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

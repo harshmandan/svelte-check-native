@@ -299,10 +299,15 @@ pub struct ComponentInstantiation {
     /// Root identifier of the component name (e.g. `MyButton` from
     /// `<MyButton />` or `<ui.MyButton />`).
     pub component_root: SmolStr,
-    /// Where `component_root` was written, when that is not the tag
-    /// name: the `this` expression of `<svelte:component this={X}>`.
-    /// `None` means the root is the tag name right after `<`.
-    pub component_root_range: Option<Range>,
+    /// Source range `component_root` was written at: the tag name, or
+    /// the `this={…}` expression of `<svelte:component>`.
+    pub root_range: Range,
+    /// Source range a diagnostic on the synthesized constructor
+    /// reference (`new $$_C(…)`) lands on. svelte2tsx writes that
+    /// reference right after the moved component name, so its source
+    /// map resolves it to the name's last character — or, after a
+    /// `this={…}` expression, to the closing brace.
+    pub ctor_anchor: Range,
     /// Plain attributes + translated `bind:NAME={x}` directives (as
     /// `Expression` props) + `{...expr}` spreads. Excludes
     /// `on:event` (tracked separately in `on_events`), `bind:this`,

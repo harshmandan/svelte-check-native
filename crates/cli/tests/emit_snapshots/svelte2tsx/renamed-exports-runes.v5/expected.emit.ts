@@ -17,13 +17,7 @@ function $$render_e40e2c10() {
     return { props: /** @type {any} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: {}, bindings: /** @type {string} */ (''), exports: /** @type {{ name3: typeof name; name4: typeof name2; }} */ ({}) };
 }
 $$render_e40e2c10;
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['props']} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {import('svelte').Component<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
 /** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;

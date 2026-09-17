@@ -17,14 +17,8 @@ function $$render_e40e2c10() {
     return { props: /** @type {$$ComponentProps} */({}), events: /** @type {{ [evt: string]: CustomEvent<any> }} */ ({}), slots: { 'default': { x: (x), y: (y) } }, bindings: /** @type {string} */ (''), exports: {} };
 }
 $$render_e40e2c10;
-/**
- * @typedef {__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>} __SvnDefaultProps
- */
-/**
- * @typedef {Awaited<ReturnType<typeof $$render_e40e2c10>>['exports']} __SvnDefaultExports
- */
-/** @type {import('svelte').Component<__SvnDefaultProps, __SvnDefaultExports>} */
+/** @type {__SvnIsomorphicComponent<__SvnSvelte4SlotedProps<Awaited<ReturnType<typeof $$render_e40e2c10>>['props'], Awaited<ReturnType<typeof $$render_e40e2c10>>['props']>, Awaited<ReturnType<typeof $$render_e40e2c10>>['events'], Awaited<ReturnType<typeof $$render_e40e2c10>>['slots'], Awaited<ReturnType<typeof $$render_e40e2c10>>['exports'], Awaited<ReturnType<typeof $$render_e40e2c10>>['bindings']>} */
 export const __svn_component_default = /** @type {any} */ (null);
-/** @typedef {ReturnType<typeof __svn_component_default>} __svn_component_default */
+/** @typedef {InstanceType<typeof __svn_component_default>} __svn_component_default */
 export default __svn_component_default;
 

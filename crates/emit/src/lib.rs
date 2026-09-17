@@ -1589,9 +1589,14 @@ fn emit_document_with_render_name(
     } else {
         prop_type_source.clone()
     };
+    let has_bubbled_events =
+        !summary.bubbled_dom_events.is_empty() || summary.has_bubbled_component_event;
+    let has_inline_typed_members = parsed_instance
+        .as_ref()
+        .is_some_and(|p| svn_analyze::has_inline_typed_dispatcher_members(&p.program));
+    let has_concrete_dispatcher_events =
+        has_inline_typed_members || synthesized_untyped_events.is_some();
     if is_ts {
-        let has_bubbled_events =
-            !summary.bubbled_dom_events.is_empty() || summary.has_bubbled_component_event;
         // Round-7 follow-up #6 / Round-8 follow-up #4: the fn-shape
         // gate cares about CONCRETE events from the dispatcher path
         // — entries that upstream's `events.size > 0` would count.
@@ -1616,11 +1621,6 @@ fn emit_document_with_render_name(
         // type-ref typed dispatcher. Compute the inline-literal
         // signal separately via `has_inline_typed_dispatcher_members`
         // and use the precise OR.
-        let has_inline_typed_members = parsed_instance
-            .as_ref()
-            .is_some_and(|p| svn_analyze::has_inline_typed_dispatcher_members(&p.program));
-        let has_concrete_dispatcher_events =
-            has_inline_typed_members || synthesized_untyped_events.is_some();
         emit_default_export_declarations_ts(
             &mut buf,
             fragment,
@@ -1639,8 +1639,12 @@ fn emit_document_with_render_name(
     } else {
         emit_default_export_declarations_js(
             &mut buf,
+            fragment,
+            doc.source,
             &render_name,
-            svelte4::compat::fragment_contains_default_slot(fragment, doc.source),
+            runes_mode,
+            has_strict_events_decl || has_concrete_dispatcher_events || has_bubbled_events,
+            ambients,
         );
     }
 

@@ -89,15 +89,30 @@ pub(crate) fn collect_component_instantiation(
     source: &str,
     summary: &mut TemplateSummary,
 ) {
+    // The tag name starts right after `<`.
+    let name_start = c.range.start + 1;
+    let name_end = name_start + c.name.len() as u32;
     collect_instantiation_inner(
-        c.name.clone(),
-        None,
+        InstantiationRoot {
+            text: c.name.clone(),
+            range: Range::new(name_start, name_end),
+            ctor_anchor: Range::new(name_end.saturating_sub(1), name_end),
+        },
         &c.attributes,
         &c.children,
         c.range.start,
         source,
         summary,
     );
+}
+
+/// What an instantiation constructs from: the root text emit passes to
+/// `__svn_ensure_component(...)`, and the source positions its
+/// diagnostics map to (see [`ComponentInstantiation::ctor_anchor`]).
+pub(crate) struct InstantiationRoot {
+    pub(crate) text: SmolStr,
+    pub(crate) range: Range,
+    pub(crate) ctor_anchor: Range,
 }
 
 /// Body of [`collect_component_instantiation`] generalised to accept
@@ -110,14 +125,18 @@ pub(crate) fn collect_component_instantiation(
 /// `(EXPR)`), emit recognises the synthetic form and routes
 /// accordingly.
 pub(crate) fn collect_instantiation_inner(
-    component_root: SmolStr,
-    component_root_range: Option<Range>,
+    root: InstantiationRoot,
     attributes: &[Attribute],
     children: &svn_parser::Fragment,
     range_start: u32,
     source: &str,
     summary: &mut TemplateSummary,
 ) {
+    let InstantiationRoot {
+        text: component_root,
+        range: root_range,
+        ctor_anchor,
+    } = root;
     let mut props: Vec<PropShape> = Vec::with_capacity(attributes.len());
     let mut on_events: Vec<OnEventDirective> = Vec::new();
     let mut bind_this_target: Option<Range> = None;
@@ -485,7 +504,8 @@ pub(crate) fn collect_instantiation_inner(
         .component_instantiations
         .push(ComponentInstantiation {
             component_root,
-            component_root_range,
+            root_range,
+            ctor_anchor,
             props,
             has_implicit_children,
             on_events,

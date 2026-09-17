@@ -48,6 +48,10 @@ pub(crate) struct LetDestructure {
     /// diagnostic on the destructure literal maps to the source
     /// NAME the user wrote.
     name_range: Range,
+    /// Source position a diagnostic on text written after this item
+    /// maps to: the brace closing its `={…}` value, or the last
+    /// character of NAME when it has none.
+    tail_anchor: Range,
     /// Source slice for the destructure pattern. For bare `let:foo`
     /// this is `"foo"`; for `let:foo={alias}` it's `"foo: alias"`;
     /// for destructure `let:foo={{a, b}}` it's `"foo: {a, b}"`.
@@ -189,9 +193,26 @@ pub(crate) fn collect_let_destructures(
         };
         let name_start = range.start + DirectiveKind::Let.prefix_len_with_colon();
         let name_end = name_start + name.len() as u32;
+        // Upstream moves `NAME` (and `:EXPR`) into the destructure and
+        // writes its own text after it; its source map resolves that
+        // text to the closing brace after an expression, or to the
+        // name's last character.
+        let tail_anchor = match value {
+            Some(DirectiveValue::Expression {
+                expression_range, ..
+            }) => {
+                let raw = source
+                    .get(expression_range.start as usize..expression_range.end as usize)
+                    .unwrap_or("");
+                let end = expression_range.end - (raw.len() - raw.trim_end().len()) as u32;
+                Range::new(end, end + 1)
+            }
+            _ => Range::new(name_end.saturating_sub(1), name_end),
+        };
         out.push(LetDestructure {
             name_byte_len: name.len(),
             name_range: Range::new(name_start, name_end),
+            tail_anchor,
             pattern_text,
         });
     }
@@ -270,7 +291,16 @@ pub(crate) fn emit_let_slot_destructure(
             buf.push_str("]; $$_$$;\n");
         }
         None if slot_name == "default" => {
-            let _ = writeln!(buf, " }} = {inst_local}.$$slot_def.default; $$_$$;");
+            // A diagnostic on the slot access (a component whose slots
+            // are `unknown`) lands where upstream's does: after the
+            // last `let:` item.
+            buf.push_str(" } = ");
+            let access = format!("{inst_local}.$$slot_def.default");
+            match let_destructures.last() {
+                Some(last) => buf.append_with_source(&access, last.tail_anchor),
+                None => buf.push_str(&access),
+            }
+            buf.push_str("; $$_$$;\n");
         }
         None => {
             let _ = writeln!(

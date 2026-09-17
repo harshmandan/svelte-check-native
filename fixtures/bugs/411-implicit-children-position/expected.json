@@ -1,0 +1,77 @@
+{
+    "errors": [
+        {
+            "file": "src/Use.svelte",
+            "line": 4,
+            "column": 5,
+            "code": 2353
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 5,
+            "column": 5,
+            "code": 2353
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 6,
+            "column": 13,
+            "code": 2353
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 7,
+            "column": 17,
+            "code": 2353
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 8,
+            "column": 13,
+            "code": 2353
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 9,
+            "column": 7,
+            "code": 2353
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 10,
+            "column": 26,
+            "code": 2353
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 11,
+            "column": 7,
+            "code": 2353
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 12,
+            "column": 19,
+            "code": 2353
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 14,
+            "column": 0,
+            "code": 2353
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 16,
+            "column": 7,
+            "code": 2322
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 18,
+            "column": 16,
+            "code": 2353
+        }
+    ],
+    "_note": "An excess implicit `children` prop (default-slot content given to a component without a default slot) is reported where svelte2tsx's start-tag rewrite leaves the unmapped `children` text: the tag name's last character when no whitespace follows the name, the character after that whitespace when no kept range starts there, and otherwise the first character of the last blanked gap between kept ranges. Positions verified against upstream svelte-check --tsgo; before, every case was reported at the tag name's first character."
+}

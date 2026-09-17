@@ -13,6 +13,10 @@
 //!    against `parent_inst.$$slot_def["X"]`. Driven from
 //!    [`walk_child_with_slot_let`].
 //!
+//! 3. `let:` on a child element (or `<svelte:fragment>`) with no
+//!    `slot=` — it fills the parent's default slot, so the same wrapper
+//!    destructures against `parent_inst.$$slot_def.default`.
+//!
 //! The "fallback" path for an `<element let:foo>` that's NOT inside a
 //! slot is [`emit_children_with_let_bindings`] — emits a loose
 //! `{ let foo: any; void foo; …children… }` wrapper so the names
@@ -26,6 +30,24 @@ use svn_core::Range;
 use svn_parser::{Fragment, Node};
 
 use crate::emit_buffer::EmitBuffer;
+
+thread_local! {
+    /// Start offsets of the first `let:` directive of each element whose
+    /// `let:` names a parent component already destructured from its
+    /// default slot. The element's own emit must not shadow them.
+    static PARENT_DESTRUCTURED_LETS: std::cell::RefCell<Vec<u32>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Start offset of the first `let:` directive among `attributes`.
+fn first_let_start(attributes: &[svn_parser::Attribute]) -> Option<u32> {
+    attributes.iter().find_map(|a| match a {
+        svn_parser::Attribute::Directive(d) if d.kind == svn_parser::DirectiveKind::Let => {
+            Some(d.range.start)
+        }
+        _ => None,
+    })
+}
 use crate::emit_template_body;
 use crate::emit_template_node;
 use crate::util::is_simple_js_identifier;
@@ -34,6 +56,8 @@ use crate::util::is_simple_js_identifier;
 /// instantiation, captured for the consumer-side slot-def
 /// destructure emit (`const { …, NAME } = inst.$$slot_def[…];`).
 pub(crate) struct LetDestructure {
+    /// In-tag comments written around the `let:` directive.
+    comments: svn_analyze::CommentThread,
     /// Length in bytes of the leading NAME portion of `pattern_text`
     /// — anchor for the TokenMap entry that maps the NAME bytes in
     /// the destructure literal back to the source `let:NAME`
@@ -90,7 +114,10 @@ pub(crate) fn emit_children_with_let_bindings(
     // consumer expressions inside would all resolve to `any` and lose
     // strictness. Pass through to the children walk instead so the
     // outer destructure stays in scope.
-    let parent_destructured = svn_analyze::literal_attr_value(attributes, "slot", source).is_some();
+    let parent_destructured = svn_analyze::literal_attr_value(attributes, "slot", source).is_some()
+        || first_let_start(attributes).is_some_and(|start| {
+            PARENT_DESTRUCTURED_LETS.with(|set| set.borrow().contains(&start))
+        });
     if let_names.is_empty() || parent_destructured {
         emit_template_body(buf, source, children, depth, insts, action_counter);
         return;
@@ -160,7 +187,7 @@ pub(crate) fn collect_let_destructures(
 ) -> Vec<LetDestructure> {
     use svn_parser::{Attribute, Directive, DirectiveKind, DirectiveValue};
     let mut out: Vec<LetDestructure> = Vec::new();
-    for attr in attributes {
+    for (index, attr) in attributes.iter().enumerate() {
         let Attribute::Directive(d) = attr else {
             continue;
         };
@@ -210,6 +237,7 @@ pub(crate) fn collect_let_destructures(
             _ => Range::new(name_end.saturating_sub(1), name_end),
         };
         out.push(LetDestructure {
+            comments: svn_analyze::comment_thread(attributes, index, source),
             name_byte_len: name.len(),
             name_range: Range::new(name_start, name_end),
             tail_anchor,
@@ -241,6 +269,7 @@ pub(crate) fn collect_let_destructures(
 /// of the name, as upstream's does.
 pub(crate) fn emit_let_slot_destructure(
     buf: &mut EmitBuffer,
+    source: &str,
     inst: &svn_analyze::ComponentInstantiation,
     let_destructures: &[LetDestructure],
     slot_name: &str,
@@ -270,10 +299,12 @@ pub(crate) fn emit_let_slot_destructure(
         // dropped — leaving a real divergence with upstream
         // (e.g. slot-typechecks fixture's TS2339 on `let:d` against
         // a slot typed `{a: boolean, b: string}`).
+        crate::nodes::comment::write_leading_comments(buf, source, &d.comments);
         buf.append_with_source(&d.pattern_text[..d.name_byte_len], d.name_range);
         if d.name_byte_len < d.pattern_text.len() {
             buf.push_str(&d.pattern_text[d.name_byte_len..]);
         }
+        crate::nodes::comment::write_trailing_comments(buf, source, &d.comments);
     }
     match slot_anchor {
         Some((child_start, name_range)) => {
@@ -325,15 +356,30 @@ fn slot_let_attrs(node: &Node) -> Option<&[svn_parser::Attribute]> {
     }
 }
 
-/// True when `node` is a child element carrying `slot="X"` — a slot
-/// consumer of its parent component. Used to pre-flag the parent so its
-/// instance gets hoisted to a local (the wrapper destructure references
-/// `parent_inst.$$slot_def["X"]`).
+/// True when `node` is a slot consumer of its parent component: a child
+/// carrying `slot="X"`, or an element / `<svelte:fragment>` whose `let:`
+/// reads the default slot. Used to pre-flag the parent so its instance
+/// gets hoisted to a local (the wrapper destructure references
+/// `parent_inst.$$slot_def`).
 pub(crate) fn child_is_slot_let_consumer(source: &str, node: &Node) -> bool {
     let Some(attrs) = slot_let_attrs(node) else {
         return false;
     };
     svn_analyze::literal_attr_value(attrs, "slot", source).is_some()
+        || (fills_parent_default_slot(node) && first_let_start(attrs).is_some())
+}
+
+/// Whether `let:` on `node` (with no `slot=`) reads its parent
+/// component's default slot rather than a slot of its own.
+fn fills_parent_default_slot(node: &Node) -> bool {
+    match node {
+        Node::Element(_) => true,
+        Node::SvelteElement(e) => !matches!(
+            e.kind,
+            svn_parser::SvelteElementKind::SelfRef | svn_parser::SvelteElementKind::Component
+        ),
+        _ => false,
+    }
 }
 
 /// If `node` is a child element carrying `slot="X"`, open a wrapper
@@ -363,19 +409,47 @@ fn try_emit_slot_let_consumer_open(
     let Some((slot_name, name_range)) =
         svn_analyze::literal_attr_value_range(attrs, "slot", source)
     else {
-        return false;
+        return try_emit_default_slot_let_open(buf, source, node, attrs, parent_inst, depth);
     };
     let lets = collect_let_destructures(source, attrs);
     let indent = "    ".repeat(depth);
     let _ = writeln!(buf, "{indent}{{");
     emit_let_slot_destructure(
         buf,
+        source,
         parent_inst,
         &lets,
         slot_name,
         Some((node.range().start, name_range)),
         depth + 1,
     );
+    true
+}
+
+/// An element (or `<svelte:fragment>`) with `let:` directives and no
+/// `slot=` fills its parent component's default slot, so svelte2tsx
+/// destructures its `let:` names from the parent's
+/// `$$slot_def.default` (`Element.ts` slot-let transformation). A
+/// component child is excluded: its `let:` reads its own default slot.
+fn try_emit_default_slot_let_open(
+    buf: &mut EmitBuffer,
+    source: &str,
+    node: &Node,
+    attrs: &[svn_parser::Attribute],
+    parent_inst: &svn_analyze::ComponentInstantiation,
+    depth: usize,
+) -> bool {
+    let Some(first_let) = first_let_start(attrs) else {
+        return false;
+    };
+    if !fills_parent_default_slot(node) {
+        return false;
+    }
+    let lets = collect_let_destructures(source, attrs);
+    let indent = "    ".repeat(depth);
+    let _ = writeln!(buf, "{indent}{{");
+    emit_let_slot_destructure(buf, source, parent_inst, &lets, "default", None, depth + 1);
+    PARENT_DESTRUCTURED_LETS.with(|set| set.borrow_mut().push(first_let));
     true
 }
 

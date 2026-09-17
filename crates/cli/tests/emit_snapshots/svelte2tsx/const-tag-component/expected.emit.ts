@@ -43,10 +43,9 @@ function $$render_e40e2c10() {
                     }
                 }
             }
-            { svelteHTML.createElement("svelte:fragment", {});                 {
-                    let box: any;
-                    void box;
-                    const {area, volume} = calculate(width, height, constant);
+            {
+                const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, box: {width, height} } = __svn_inst_fe.$$slot_def.default; $$_$$;
+                { svelteHTML.createElement("svelte:fragment", {});                     const {area, volume} = calculate(width, height, constant);
                     const perimeter = (width + height) * constant;
                     const [_width, _height, sum] = [width * constant, height, width * constant + height];
                     { svelteHTML.createElement("div", {});                         (area);

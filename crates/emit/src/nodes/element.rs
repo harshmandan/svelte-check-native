@@ -246,6 +246,7 @@ pub(crate) fn emit_svelte_element_node(
             let dest_depth = child_depth + 1;
             crate::nodes::let_directive::emit_let_slot_destructure(
                 buf,
+                source,
                 inst,
                 &let_destructures,
                 "default",

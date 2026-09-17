@@ -140,7 +140,15 @@ pub(crate) fn emit_component_node(
         let _ = writeln!(buf, "{inner_open_indent}{{");
         let dest_depth = child_depth + 1;
         if let Some(inst) = inst {
-            emit_let_slot_destructure(buf, inst, &let_destructures, "default", None, dest_depth);
+            emit_let_slot_destructure(
+                buf,
+                source,
+                inst,
+                &let_destructures,
+                "default",
+                None,
+                dest_depth,
+            );
         }
         dest_depth
     } else {
@@ -303,7 +311,8 @@ pub(crate) fn emit_component_call(
         let _ = write!(buf, "({{ target: __svn_any(), props: {{");
         let mut first = true;
         if emit_implicit_children {
-            let _ = write!(buf, "children: () => __svn_snippet_return()");
+            write_implicit_children_key(buf, inst);
+            buf.push_str(": () => __svn_snippet_return()");
             first = false;
         }
         for p in &inst.props {
@@ -311,7 +320,7 @@ pub(crate) fn emit_component_call(
                 let _ = write!(buf, ", ");
             }
             first = false;
-            write_prop_shape(buf, source, p);
+            write_prop_shape(buf, source, inst, p);
         }
         let _ = write!(buf, "}} }})");
         push_component_call_token_map(buf, call_start, inst.node_start);
@@ -334,11 +343,12 @@ pub(crate) fn emit_component_call(
     let _ = writeln!(buf, "{opts_inner}props: {{");
     if emit_implicit_children {
         buf.push_str(&props_inner);
-        let _ = writeln!(buf, "children: () => __svn_snippet_return(),");
+        write_implicit_children_key(buf, inst);
+        let _ = writeln!(buf, ": () => __svn_snippet_return(),");
     }
     for p in &inst.props {
         buf.push_str(&props_inner);
-        write_prop_shape(buf, source, p);
+        write_prop_shape(buf, source, inst, p);
         let _ = writeln!(buf, ",");
     }
     for s in snippet_children {
@@ -355,6 +365,16 @@ pub(crate) fn emit_component_call(
     emit_on_event_calls(buf, source, inst, &inst_local, &inner);
     emit_component_bindings_post_check(buf, inst, &inst_local, &inner);
     emit_snippet_prop_destructure(buf, snippet_children, &inst_local, &inner);
+}
+
+/// Write the implicit `children` key, mapped to the source character
+/// upstream's rewrite leaves in front of it (an excess-`children`
+/// diagnostic lands there).
+fn write_implicit_children_key(buf: &mut EmitBuffer, inst: &svn_analyze::ComponentInstantiation) {
+    match inst.implicit_children_anchor {
+        Some(anchor) => buf.append_with_source("children", anchor),
+        None => buf.push_str("children"),
+    }
 }
 
 /// Emit `const { name1, name2 } = __svn_inst_NN.$$prop_def;` after the
@@ -521,7 +541,9 @@ fn emit_on_event_calls(
         // maps back to the source `on:NAME` position. Without this
         // the diagnostic falls inside the `(async () => {…})` synth
         // scaffolding and gets filtered by `map_diagnostic`.
-        let _ = write!(buf, "{inner}{inst_local}.$on(");
+        buf.push_str(inner);
+        crate::nodes::comment::write_leading_comments(buf, source, &ev.comments);
+        let _ = write!(buf, "{inst_local}.$on(");
         buf.append_with_source(&format!("\"{name}\""), ev.name_range);
         // Reviewer follow-up #1: bare `<Child on:event>` (no value)
         // is event-bubble shorthand. Walker stores those with an
@@ -530,7 +552,9 @@ fn emit_on_event_calls(
         // type-checked against the child's declared Events surface.
         // Mirrors upstream `EventHandler.ts:147`.
         if ev.handler_range.start >= ev.handler_range.end {
-            buf.push_str(", () => {});\n");
+            buf.push_str(", () => {});");
+            crate::nodes::comment::write_trailing_comments(buf, source, &ev.comments);
+            buf.push('\n');
             continue;
         }
         // `handler_range` is a parser-produced span over `source`, so
@@ -540,7 +564,9 @@ fn emit_on_event_calls(
         let expr = &source[ev.handler_range.start as usize..ev.handler_range.end as usize];
         buf.push_str(", (");
         buf.append_with_source(expr, ev.handler_range);
-        buf.push_str("));\n");
+        buf.push_str("));");
+        crate::nodes::comment::write_trailing_comments(buf, source, &ev.comments);
+        buf.push('\n');
     }
 }
 
@@ -586,7 +612,32 @@ fn emit_bind_this_assignment(
 
 /// Write a single property of a component-prop-check object literal,
 /// dispatching on the analyze-side `PropShape` variant.
-fn write_prop_shape(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropShape) {
+fn write_prop_shape(
+    buf: &mut EmitBuffer,
+    source: &str,
+    inst: &svn_analyze::ComponentInstantiation,
+    p: &svn_analyze::PropShape,
+) {
+    let attr_range = p.attr_range();
+    let comments = inst
+        .prop_comments
+        .iter()
+        .find(|(range, _)| *range == attr_range)
+        .map(|(_, thread)| thread);
+    // A shorthand prop is written from its name alone, so svelte2tsx
+    // drops the comments leading it and keeps only the trailing ones.
+    if let Some(thread) = comments
+        && !matches!(p, svn_analyze::PropShape::Shorthand { .. })
+    {
+        crate::nodes::comment::write_leading_comments(buf, source, thread);
+    }
+    write_prop_shape_value(buf, source, p);
+    if let Some(thread) = comments {
+        crate::nodes::comment::write_trailing_comments(buf, source, thread);
+    }
+}
+
+fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::PropShape) {
     let attr_range = p.attr_range();
     match p {
         svn_analyze::PropShape::Literal { name, value, .. } => {

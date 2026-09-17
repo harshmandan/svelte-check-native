@@ -72,6 +72,7 @@ pub use nodes::attribute::{literal_attr_value, literal_attr_value_range};
 pub use nodes::const_tag::{
     CONST_TAG_INVALID_PLACEMENT_MSG, ConstPlacementError, check_const_placement,
 };
+pub use nodes::inline_component::comment_thread;
 pub use props::{PropInfo, PropsInfo, PropsSource, contains_typeof_ref, root_type_name_of};
 pub use root_await::has_root_scope_await;
 pub use runes::{RunesProbe, RunesRule};
@@ -86,6 +87,6 @@ pub use template_scope::extract_at_const_bindings;
 pub use void_refs::VoidRefRegistry;
 pub use walker::{
     BindDirective, BindThisTarget, BubbledComponentEvent, BubbledDomEvent, BubbledDomEventScope,
-    ComponentInstantiation, OnEventDirective, PropShape, ResolvedSlotExpr, SlotAttr, SlotAttrExpr,
-    SlotDef, TemplateSummary, walk_template,
+    CommentThread, ComponentInstantiation, OnEventDirective, PropShape, ResolvedSlotExpr, SlotAttr,
+    SlotAttrExpr, SlotDef, TemplateSummary, ThreadedComment, walk_template,
 };

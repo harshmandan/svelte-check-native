@@ -35,12 +35,28 @@ function $$render_e40e2c10() {
         }
         {
             const __svn_C_20b = __svn_ensure_component(Component);
-            const __svn_inst_20b = new __svn_C_20b({ target: __svn_any(), props: {"foo": "bar", "baz": "qux", ...(attachment), "prop": (bound_prop), ...(spread_props), "trailing": true} });
+            const __svn_inst_20b = new __svn_C_20b({ target: __svn_any(), props: {
+// comment
+"foo": "bar", 
+/* another comment */
+"baz": "qux", 
+// attachment comment
+...(attachment), 
+// binding comment
+"prop": (bound_prop), 
+// spread comment
+...(spread_props), "trailing": true
+// trailing comment newline
+} });
             /*svn:ignore_start*/void (() => { bound_prop = __svn_any(null); });/*svn:ignore_end*/
-            __svn_inst_20b.$on("click", (handler));
+            
+// event handler comment
+__svn_inst_20b.$on("click", (handler));
             __svn_inst_20b.$$bindings = 'prop';
             {
-                const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, item } = __svn_inst_20b.$$slot_def.default; $$_$$;
+                const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/, 
+// let comment
+item } = __svn_inst_20b.$$slot_def.default; $$_$$;
             }
         }
     });

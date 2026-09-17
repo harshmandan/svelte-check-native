@@ -8,8 +8,8 @@ use svn_parser::{AttrValuePart, Attribute, Component, Node};
 use crate::nodes::attribute::{WalkCtx, literal_attr_value, walk_attributes};
 use crate::nodes::destructure::{is_simple_identifier, simple_identifier_in};
 use crate::walker::{
-    AnalyzeVisitor, BindDirective, BubbledComponentEvent, ComponentInstantiation, LetOwnerInfo,
-    OnEventDirective, PropShape, TemplateSummary,
+    AnalyzeVisitor, BindDirective, BubbledComponentEvent, CommentThread, ComponentInstantiation,
+    LetOwnerInfo, OnEventDirective, PropShape, TemplateSummary, ThreadedComment,
 };
 
 pub(crate) fn visit(v: &mut AnalyzeVisitor<'_>, c: &Component) {
@@ -156,7 +156,416 @@ pub(crate) fn collect_instantiation_inner(
         Node::SvelteElement(e) => !in_named_slot(&e.attributes, source),
         _ => true,
     });
-    for attr in attributes {
+    let implicit_children_anchor = if has_implicit_children {
+        let name_move = (component_root.as_str() != "__svn_self_default").then_some(root_range);
+        children.nodes.first().map(|first| {
+            implicit_children_anchor(
+                StartTag {
+                    start: range_start,
+                    end: first.range().start,
+                    name_move,
+                },
+                attributes,
+                source,
+            )
+        })
+    } else {
+        None
+    };
+    let mut prop_comments: Vec<(Range, CommentThread)> = Vec::new();
+    for (index, attr) in attributes.iter().enumerate() {
+        let comments = comment_thread(attributes, index, source);
+        let props_before = props.len();
+        let events_before = on_events.len();
+        collect_attribute(
+            attr,
+            source,
+            &component_root,
+            summary,
+            AttributeSinks {
+                props: &mut props,
+                on_events: &mut on_events,
+                bind_this_target: &mut bind_this_target,
+                bind_this_setter: &mut bind_this_setter,
+                component_bind_widen_targets: &mut component_bind_widen_targets,
+                bind_directives: &mut bind_directives,
+            },
+        );
+        if comments.is_empty() {
+            continue;
+        }
+        if props.len() > props_before
+            && let Some(p) = props.last()
+        {
+            prop_comments.push((p.attr_range(), comments));
+        } else if on_events.len() > events_before
+            && let Some(ev) = on_events.last_mut()
+        {
+            ev.comments = comments;
+        }
+    }
+    summary
+        .component_instantiations
+        .push(ComponentInstantiation {
+            component_root,
+            root_range,
+            ctor_anchor,
+            props,
+            has_implicit_children,
+            on_events,
+            bind_this_target,
+            bind_this_setter,
+            component_bind_widen_targets,
+            bind_directives,
+            prop_comments,
+            implicit_children_anchor,
+            node_start: range_start,
+        });
+}
+
+/// The parts of a component start tag svelte2tsx's rewrite of it
+/// depends on.
+struct StartTag {
+    /// Byte offset of the `<`.
+    start: u32,
+    /// Where the start tag's rewrite ends: the first child's start.
+    end: u32,
+    /// The source range moved in as the constructed component value
+    /// (the tag name, or `<svelte:component>`'s `this` expression);
+    /// `None` for `<svelte:self>`.
+    name_move: Option<Range>,
+}
+
+/// Source offset the synthesized implicit `children` prop maps to.
+///
+/// svelte2tsx rewrites a component start tag by moving the source
+/// ranges it keeps (the name, attribute names and values, directive
+/// expressions, comments) behind the tag and blanking what lies
+/// between them (`htmlxtojsx_v2/utils/node-utils.ts` `transform`). The
+/// `children` prop is plain inserted text with no mapping of its own,
+/// so a diagnostic on it resolves to the source of whatever mapped
+/// text precedes it in the output:
+///
+/// - with no whitespace right after the tag name, that is the name's
+///   last character;
+/// - otherwise the whitespace character after the name is kept as a
+///   range, and `children` is written over the character following it
+///   — unless another range starts there or it is the tag's last
+///   character;
+/// - failing that, the text before `children` is the last blanked gap
+///   the rewrite moved behind the tag, which maps to the gap's first
+///   character (or the name's last character when there is none).
+fn implicit_children_anchor(tag: StartTag, attributes: &[Attribute], source: &str) -> Range {
+    let bytes = source.as_bytes();
+    let tag_name_len = source
+        .get(tag.start as usize + 1..)
+        .map(|rest| {
+            rest.find(|ch: char| ch.is_whitespace() || ch == '/' || ch == '>')
+                .unwrap_or(rest.len())
+        })
+        .unwrap_or(0) as u32;
+    let tag_name_end = tag.start + 1 + tag_name_len;
+    let name_last = match tag.name_move {
+        Some(r) if r.end > r.start => r.end - 1,
+        _ => tag_name_end.saturating_sub(1),
+    };
+    let one = |at: u32| Range::new(at, at + 1);
+    if !bytes
+        .get(tag_name_end as usize)
+        .is_some_and(|b| b.is_ascii_whitespace())
+    {
+        return one(name_last);
+    }
+    let mut ranges: Vec<(u32, u32)> = Vec::with_capacity(attributes.len() * 2 + 2);
+    if let Some(r) = tag.name_move {
+        ranges.push((r.start, r.end));
+    }
+    ranges.push((tag_name_end, tag_name_end + 1));
+    for (index, attr) in attributes.iter().enumerate() {
+        let thread = comment_thread(attributes, index, source);
+        let shorthand = matches!(attr, Attribute::Shorthand(_));
+        if !shorthand {
+            ranges.extend(thread.leading.iter().map(|c| (c.range.start, c.range.end)));
+        }
+        kept_attribute_ranges(attr, source, &mut ranges);
+        ranges.extend(thread.trailing.iter().map(|c| (c.range.start, c.range.end)));
+    }
+    let end = tag.end;
+    let starts_at = |pos: u32| ranges.iter().any(|&(s, _)| s == pos);
+    let mut moved: Vec<(u32, u32)> = ranges
+        .iter()
+        .filter(|(s, e)| s != e)
+        .map(|&(s, e)| {
+            if e + 1 < end && !starts_at(e) {
+                (s, e + 1)
+            } else {
+                (s, e)
+            }
+        })
+        .collect();
+    let blank_end = tag_name_end + 1;
+    if blank_end + 1 < end && !starts_at(blank_end) {
+        return one(blank_end);
+    }
+    moved.sort_unstable();
+    let mut last_gap = None;
+    let mut remove_start = tag.start;
+    for &(s, e) in &moved {
+        if remove_start < s && remove_start > tag_name_end && s < end {
+            last_gap = Some(remove_start);
+        }
+        remove_start = e;
+    }
+    if remove_start < end {
+        remove_start += 1;
+        if remove_start > tag_name_end && remove_start + 1 < end {
+            last_gap = Some(remove_start);
+        }
+    }
+    one(last_gap.unwrap_or(name_last))
+}
+
+/// The source ranges svelte2tsx keeps from one component attribute.
+fn kept_attribute_ranges(attr: &Attribute, source: &str, out: &mut Vec<(u32, u32)>) {
+    let trimmed = |r: Range| {
+        let text = r.slice(source);
+        let start = r.start + (text.len() - text.trim_start().len()) as u32;
+        (start, start + text.trim().len() as u32)
+    };
+    let name_range = |start: u32, name: &str| (start, start + name.len() as u32);
+    match attr {
+        Attribute::Comment(_) => {}
+        Attribute::Plain(p) => {
+            // `slot="x"` under a component names the slot the element
+            // fills; its value is still a kept range.
+            let is_slot_name = p.name.as_str() == "slot";
+            if !is_slot_name {
+                out.push(name_range(p.range.start, p.name.as_str()));
+            }
+            let Some(value) = &p.value else {
+                return;
+            };
+            match value.parts.as_slice() {
+                [] => {}
+                [svn_parser::AttrValuePart::Text { range }] => {
+                    if range.start == range.end {
+                        out.push((range.start.saturating_sub(1), range.end + 1));
+                    } else {
+                        out.push((range.start, range.end));
+                    }
+                }
+                [
+                    svn_parser::AttrValuePart::Expression {
+                        expression_range, ..
+                    },
+                ] if !is_slot_name => out.push(trimmed(*expression_range)),
+                [first, .., last] if !is_slot_name => {
+                    let start = match first {
+                        svn_parser::AttrValuePart::Text { range } => range.start,
+                        svn_parser::AttrValuePart::Expression { range, .. } => range.start,
+                    };
+                    let end = match last {
+                        svn_parser::AttrValuePart::Text { range } => range.end,
+                        svn_parser::AttrValuePart::Expression { range, .. } => range.end,
+                    };
+                    out.push((start, end));
+                }
+                _ => {}
+            }
+        }
+        Attribute::Expression(e) => {
+            out.push(name_range(e.range.start, e.name.as_str()));
+            out.push(trimmed(e.expression_range));
+        }
+        Attribute::Shorthand(s) => {
+            out.push(trimmed(Range::new(s.range.start + 1, s.range.end - 1)))
+        }
+        Attribute::Spread(s) => out.push((s.range.start + 1, s.range.end.saturating_sub(1))),
+        Attribute::Directive(d) => {
+            let prefix = d.kind.prefix_len_with_colon();
+            let name = name_range(d.range.start + prefix, d.name.as_str());
+            match (&d.kind, &d.value) {
+                (svn_parser::DirectiveKind::Bind, None) => out.push(name),
+                (
+                    svn_parser::DirectiveKind::Bind,
+                    Some(svn_parser::DirectiveValue::Expression {
+                        expression_range, ..
+                    }),
+                ) => {
+                    if d.name.as_str() != "this" {
+                        let eq = source
+                            .get(..expression_range.start as usize)
+                            .and_then(|s| s.rfind('='))
+                            .map_or(name.1, |i| i as u32);
+                        out.push((name.0, eq));
+                    }
+                    out.push(trimmed(*expression_range));
+                }
+                (
+                    svn_parser::DirectiveKind::Bind,
+                    Some(svn_parser::DirectiveValue::BindPair {
+                        getter_range,
+                        setter_range,
+                        ..
+                    }),
+                ) => {
+                    if d.name.as_str() == "this" {
+                        out.push(trimmed(*setter_range));
+                    } else {
+                        out.push(name);
+                        out.push(trimmed(*getter_range));
+                        out.push(trimmed(*setter_range));
+                    }
+                }
+                (svn_parser::DirectiveKind::On | svn_parser::DirectiveKind::Let, value) => {
+                    out.push(name);
+                    if let Some(svn_parser::DirectiveValue::Expression {
+                        expression_range, ..
+                    }) = value
+                    {
+                        out.push(trimmed(*expression_range));
+                    }
+                }
+                (svn_parser::DirectiveKind::Class, value) => match value {
+                    Some(svn_parser::DirectiveValue::Expression {
+                        expression_range, ..
+                    }) => out.push(trimmed(*expression_range)),
+                    _ => out.push(name),
+                },
+                (svn_parser::DirectiveKind::Style, value) => match value {
+                    None => out.push((name.0, d.range.end)),
+                    Some(svn_parser::DirectiveValue::Expression {
+                        expression_range, ..
+                    }) => out.push((expression_range.start, expression_range.end)),
+                    Some(svn_parser::DirectiveValue::Quoted(v)) => {
+                        let bounds = v.parts.first().zip(v.parts.last()).map(|(f, l)| {
+                            let start = match f {
+                                svn_parser::AttrValuePart::Text { range } => range.start,
+                                svn_parser::AttrValuePart::Expression { range, .. } => range.start,
+                            };
+                            let end = match l {
+                                svn_parser::AttrValuePart::Text { range } => range.end,
+                                svn_parser::AttrValuePart::Expression { range, .. } => range.end,
+                            };
+                            (start, end)
+                        });
+                        out.extend(bounds);
+                    }
+                    Some(svn_parser::DirectiveValue::BindPair { .. }) => {}
+                },
+                // `use:` / transitions / `animate:` have no meaning on a
+                // component and keep nothing.
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Where [`collect_attribute`] records what one attribute contributes.
+struct AttributeSinks<'a> {
+    props: &'a mut Vec<PropShape>,
+    on_events: &'a mut Vec<OnEventDirective>,
+    bind_this_target: &'a mut Option<Range>,
+    bind_this_setter: &'a mut Option<Range>,
+    component_bind_widen_targets: &'a mut Vec<SmolStr>,
+    bind_directives: &'a mut Vec<BindDirective>,
+}
+
+/// The in-tag comments belonging to `attributes[index]`: the comments
+/// written directly before it (only whitespace between each of them
+/// and the next), and — when it is the tag's last attribute — the
+/// comments written after it, provided nothing but whitespace and an
+/// optional `/` follows them up to the tag's `>`.
+pub fn comment_thread(attributes: &[Attribute], index: usize, source: &str) -> CommentThread {
+    let mut thread = CommentThread::default();
+    let Some(attr) = attributes.get(index) else {
+        return thread;
+    };
+    if matches!(attr, Attribute::Comment(_)) {
+        return thread;
+    }
+    let blank = |from: u32, to: u32| {
+        source
+            .get(from as usize..to as usize)
+            .is_some_and(|s| s.trim().is_empty())
+    };
+    let threaded = |range: Range| ThreadedComment {
+        range,
+        newline: starts_line(source, range.start),
+    };
+    let range = attr.range();
+    let mut search_end = range.start;
+    for prev in attributes[..index].iter().rev() {
+        let Attribute::Comment(c) = prev else {
+            break;
+        };
+        if !blank(c.range.end, search_end) {
+            break;
+        }
+        thread.leading.insert(0, threaded(c.range));
+        search_end = c.range.start;
+    }
+    let rest = &attributes[index + 1..];
+    if !rest.iter().all(|a| matches!(a, Attribute::Comment(_))) {
+        return thread;
+    }
+    let Some(tag_end) = source
+        .get(range.end as usize..)
+        .and_then(|s| s.find('>'))
+        .map(|i| range.end + i as u32)
+    else {
+        return thread;
+    };
+    let mut trailing = Vec::new();
+    let mut search_start = range.end;
+    for next in rest {
+        let Attribute::Comment(c) = next else {
+            break;
+        };
+        if c.range.end > tag_end || !blank(search_start, c.range.start) {
+            break;
+        }
+        trailing.push(threaded(c.range));
+        search_start = c.range.end;
+    }
+    let tail = source
+        .get(search_start as usize..tag_end as usize)
+        .unwrap_or("x");
+    if !trailing.is_empty() && tail.trim().trim_start_matches('/').trim().is_empty() {
+        thread.trailing = trailing;
+    }
+    thread
+}
+
+/// Whether only spaces and tabs sit between the previous line break
+/// and `pos`, looking back at most 100 bytes.
+fn starts_line(source: &str, pos: u32) -> bool {
+    let start = (pos as usize).saturating_sub(100);
+    let Some(before) = source.get(start..pos as usize) else {
+        return false;
+    };
+    let trimmed = before.trim_end_matches([' ', '\t']);
+    trimmed.ends_with('\n')
+}
+
+/// Record what one attribute of a component start tag contributes to
+/// the instantiation.
+fn collect_attribute(
+    attr: &Attribute,
+    source: &str,
+    component_root: &SmolStr,
+    summary: &mut TemplateSummary,
+    sinks: AttributeSinks<'_>,
+) {
+    let AttributeSinks {
+        props,
+        on_events,
+        bind_this_target,
+        bind_this_setter,
+        component_bind_widen_targets,
+        bind_directives,
+    } = sinks;
+    {
         match attr {
             Attribute::Plain(p) => {
                 // SVELTE-4-COMPAT: `slot="x"` on a component is a
@@ -169,14 +578,14 @@ pub(crate) fn collect_instantiation_inner(
                 // handles the case where `slot` *is* explicitly
                 // passed as a prop name.
                 if p.name.as_str() == "slot" {
-                    continue;
+                    return;
                 }
                 let Some(v) = &p.value else {
                     props.push(PropShape::BoolShorthand {
                         name: p.name.clone(),
                         attr_range: p.range,
                     });
-                    continue;
+                    return;
                 };
                 // Single literal text part (no interpolations) — keep it.
                 if v.parts.len() == 1 {
@@ -186,7 +595,7 @@ pub(crate) fn collect_instantiation_inner(
                             value: range.slice(source).to_string(),
                             attr_range: p.range,
                         });
-                        continue;
+                        return;
                     }
                 }
                 // Multi-part interpolated attribute value
@@ -200,7 +609,6 @@ pub(crate) fn collect_instantiation_inner(
                     parts: v.parts.clone(),
                     attr_range: p.range,
                 });
-                continue;
             }
             Attribute::Expression(e) => {
                 props.push(PropShape::Expression {
@@ -250,6 +658,7 @@ pub(crate) fn collect_instantiation_inner(
                             event_name: d.name.clone(),
                             name_range,
                             handler_range: *expression_range,
+                            comments: CommentThread::default(),
                         });
                     } else {
                         // `on:event` with no value — bare re-dispatch
@@ -278,6 +687,7 @@ pub(crate) fn collect_instantiation_inner(
                             event_name: d.name.clone(),
                             name_range,
                             handler_range: Range::new(d.range.start, d.range.start),
+                            comments: CommentThread::default(),
                         });
                         // Round-7 follow-up #7: upstream's
                         // `event-handler.ts:12-15` skips
@@ -292,7 +702,7 @@ pub(crate) fn collect_instantiation_inner(
                         // type-checks against self's events surface;
                         // we just don't register a bubble for it.
                         if component_root.as_str() == "__svn_self_default" {
-                            continue;
+                            return;
                         }
                         summary.has_bubbled_component_event = true;
                         // Reviewer follow-up #2: also record the
@@ -309,7 +719,7 @@ pub(crate) fn collect_instantiation_inner(
                                 position: d.range.start,
                             });
                     }
-                    continue;
+                    return;
                 }
                 // `bind:NAME={x}` on a component (other than
                 // `bind:this`) is type-equivalent to passing `x` as
@@ -346,16 +756,16 @@ pub(crate) fn collect_instantiation_inner(
                         // simple-identifier names — that's for the
                         // declaration-site `!` rewrite which only
                         // applies to simple `let` declarations.
-                        bind_this_target = Some(*expression_range);
+                        *bind_this_target = Some(*expression_range);
                     }
                     // `bind:this={get, set}`: upstream calls the setter
                     // with the instance (`Binding.ts`).
                     if let Some(svn_parser::DirectiveValue::BindPair { setter_range, .. }) =
                         &d.value
                     {
-                        bind_this_setter = Some(*setter_range);
+                        *bind_this_setter = Some(*setter_range);
                     }
-                    continue;
+                    return;
                 }
                 if d.kind == svn_parser::DirectiveKind::Bind
                     && let Some(svn_parser::DirectiveValue::Expression {
@@ -404,7 +814,7 @@ pub(crate) fn collect_instantiation_inner(
                         name: d.name.clone(),
                         range: d.range,
                     });
-                    continue;
+                    return;
                 }
                 // Bare shorthand `bind:NAME` desugars to
                 // `bind:NAME={NAME}` — emit as a Shorthand prop so
@@ -437,7 +847,7 @@ pub(crate) fn collect_instantiation_inner(
                         name: target,
                         range: d.range,
                     });
-                    continue;
+                    return;
                 }
                 // Svelte 5 `bind:NAME={getter, setter}` get/set form
                 // (DirectiveValue::BindPair). Upstream svelte2tsx uses
@@ -474,7 +884,6 @@ pub(crate) fn collect_instantiation_inner(
                         name: target,
                         range: d.range,
                     });
-                    continue;
                 }
                 // Other directives (`use:`, `class:`, `style:`,
                 // transitions, animations) are runtime behaviors
@@ -500,21 +909,6 @@ pub(crate) fn collect_instantiation_inner(
             }
         }
     }
-    summary
-        .component_instantiations
-        .push(ComponentInstantiation {
-            component_root,
-            root_range,
-            ctor_anchor,
-            props,
-            has_implicit_children,
-            on_events,
-            bind_this_target,
-            bind_this_setter,
-            component_bind_widen_targets,
-            bind_directives,
-            node_start: range_start,
-        });
 }
 
 /// `slot="x"` with `x` other than `default` on a component child — the

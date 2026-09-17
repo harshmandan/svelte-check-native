@@ -382,6 +382,14 @@ pub struct ComponentInstantiation {
     /// `htmlxtojsx_v2/nodes/Binding.ts:192-195`'s
     /// `appendToStartEnd([\`${element.name}.$$bindings = '${attr.name}';\`])`.
     pub bind_directives: Vec<BindDirective>,
+    /// In-tag JS comments threaded onto the prop they belong to, keyed
+    /// by that prop's [`PropShape::attr_range`]. Emit writes them
+    /// around the prop inside the props literal so a
+    /// `// @ts-expect-error` / `// @ts-ignore` line applies to it.
+    pub prop_comments: Vec<(Range, CommentThread)>,
+    /// Source character the synthesized implicit `children` prop maps
+    /// to, when [`Self::has_implicit_children`] holds.
+    pub implicit_children_anchor: Option<Range>,
     /// Byte offset of the `<Component` token in the source. Emit keys
     /// the prop-check on this to locate the correct enclosing scope
     /// (i.e. inside the right `{#each}` / `{#if}` / `{#snippet}` body)
@@ -427,6 +435,38 @@ pub struct OnEventDirective {
     /// resolves and the event name's `keyof Events` constraint
     /// fires.
     pub handler_range: Range,
+    /// In-tag JS comments written around this directive.
+    pub comments: CommentThread,
+}
+
+/// One JS comment written inside a start tag (`// …` or `/* … */`
+/// between attributes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThreadedComment {
+    pub range: Range,
+    /// The comment starts its own line (only blanks precede it on it),
+    /// so the generated code opens a new line before writing it.
+    pub newline: bool,
+}
+
+/// The in-tag comments that belong to one attribute: the run written
+/// directly before it, and — for the tag's last attribute only — the
+/// run written after it up to the tag's `>`.
+///
+/// Mirrors svelte2tsx's `handleLeadingStartComment` /
+/// `handleTrailingEndComment` (`htmlxtojsx_v2/nodes/Comment.ts`),
+/// whose output keeps a TS comment directive on the line right above
+/// the generated attribute code it annotates.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommentThread {
+    pub leading: Vec<ThreadedComment>,
+    pub trailing: Vec<ThreadedComment>,
+}
+
+impl CommentThread {
+    pub fn is_empty(&self) -> bool {
+        self.leading.is_empty() && self.trailing.is_empty()
+    }
 }
 
 /// One prop on a component instantiation.

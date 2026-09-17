@@ -3,7 +3,8 @@
 
 The catalog is generated from the compiler's warning messages; codes for
 compiler *errors* that the lint pass also reports are added by hand, in
-the same four places (enum, as_str, from_str, CODES).
+the same four places (enum, as_str, from_str, CODES) and in
+COMPILER_ERROR_CODES.
 
     scripts/add-lint-code.py <code> [<code> ...]
 """
@@ -56,5 +57,12 @@ for code in sys.argv[1:]:
     tail = tail.replace(f"&[&str; {count}]", f"&[&str; {count + 1}]", 1)
     tail = tail.replace(f'    "{nxt}",\n', f'    "{code}",\n    "{nxt}",\n', 1)
     s = s[:a] + tail
+    # COMPILER_ERROR_CODES: every hand-added code is a compiler error.
+    a, b = section("pub const COMPILER_ERROR_CODES: &[&str] = &[\n", "\n];")
+    body = s[a:b]
+    names = re.findall(r'^    "(\w+)",$', body, re.M)
+    entries = "".join(f'    "{n}",\n' for n in sorted(names + [code]))
+    head = "pub const COMPILER_ERROR_CODES: &[&str] = &[\n"
+    s = s[:a] + head + entries.rstrip("\n") + s[b:]
 
 open(path, "w").write(s)

@@ -8,7 +8,7 @@ use smol_str::SmolStr;
 use svn_core::Range;
 use svn_parser::ast::{Comment, Node};
 
-use crate::codes::Code;
+use crate::codes::{COMPILER_ERROR_CODES, Code};
 use crate::context::LintContext;
 use crate::messages;
 
@@ -523,6 +523,7 @@ fn fuzzymatch_known_code(input: &str) -> Option<&'static str> {
     let candidates = crate::codes::CODES
         .iter()
         .copied()
+        .filter(|c| !COMPILER_ERROR_CODES.contains(c))
         .chain(IGNORABLE_RUNTIME_WARNINGS.iter().copied());
     for c in candidates {
         let sim = lev_similarity(&target, c);
@@ -555,8 +556,13 @@ fn lev_similarity(a: &str, b: &str) -> f64 {
     1.0 - prev[bc.len()] as f64 / max
 }
 
+/// A code a `svelte-ignore` comment can name: the compiler's warning
+/// codes plus the ignorable runtime warnings. Our catalog also lists
+/// the compiler errors the lint pass reports; those are not codes to
+/// the compiler's ignore parser.
 fn is_known_code(code: &str) -> bool {
-    Code::try_from_str(code).is_some() || IGNORABLE_RUNTIME_WARNINGS.contains(&code)
+    (Code::try_from_str(code).is_some() && !COMPILER_ERROR_CODES.contains(&code))
+        || IGNORABLE_RUNTIME_WARNINGS.contains(&code)
 }
 
 fn legacy_rename(code: &str) -> Option<&'static str> {

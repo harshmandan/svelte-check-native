@@ -536,3 +536,41 @@ pub const CODES: &[&str; 112] = &[
     "svelte_self_invalid_placement",
     "unknown_code",
 ];
+
+/// The codes above that are compiler errors rather than warnings, kept
+/// by hand next to the hand-added entries. A `svelte-ignore` comment only
+/// knows the compiler's warning codes, so naming one of these reports
+/// `unknown_code` and suppresses nothing.
+pub const COMPILER_ERROR_CODES: &[&str] = &[
+    "attribute_invalid_event_handler",
+    "attribute_invalid_name",
+    "bind_invalid_name",
+    "bind_invalid_target",
+    "bind_invalid_value",
+    "bindable_invalid_location",
+    "component_invalid_directive",
+    "constant_assignment",
+    "constant_binding",
+    "dollar_binding_invalid",
+    "dollar_prefix_invalid",
+    "each_item_invalid_assignment",
+    "event_handler_invalid_component_modifier",
+    "experimental_async",
+    "global_reference_invalid",
+    "legacy_await_invalid",
+    "legacy_export_invalid",
+    "legacy_reactive_statement_invalid",
+    "mixed_event_handler_syntaxes",
+    "module_illegal_default_export",
+    "node_invalid_placement",
+    "props_duplicate",
+    "props_invalid_placement",
+    "slot_attribute_invalid",
+    "slot_attribute_invalid_placement",
+    "slot_element_invalid_attribute",
+    "slot_element_invalid_name",
+    "slot_element_invalid_name_default",
+    "snippet_conflict",
+    "snippet_parameter_assignment",
+    "svelte_self_invalid_placement",
+];

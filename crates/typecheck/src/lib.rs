@@ -33,6 +33,7 @@ mod position;
 mod replay;
 pub mod runner;
 mod template_nodes;
+mod ts_check_shift;
 mod types;
 mod upstream_overlay;
 
@@ -513,6 +514,12 @@ impl CheckSession {
             InputKind::KitFile => std::sync::Arc::from(""),
         };
         let pug_template = template_nodes::pug_template_content(&source_text);
+        let ts_check_prefix = match input.kind {
+            InputKind::Svelte | InputKind::SvelteAuxiliary => {
+                ts_check_shift::prefix_len(&source_text)
+            }
+            InputKind::KitFile => 0,
+        };
         let map_data = MapData {
             line_map: input.line_map,
             token_map: input.token_map,
@@ -527,6 +534,7 @@ impl CheckSession {
             svelte_script_is_ts: input.is_ts_overlay,
             kit_col_shifts: input.kit_col_shifts,
             pug_template,
+            ts_check_prefix,
         };
         // `.svn.ts` (TS) Svelte overlays + Kit-file overlays land in
         // the tsconfig's `files` list directly. `.svn.js` (JS overlays
@@ -1300,6 +1308,13 @@ fn map_diagnostic(
             // positives against synthesized `new $$_C({...})` sites
             // that upstream silently filters.
             let data = map_data.get(&absolute_file)?;
+            // svelte-check reports every diagnostic of a component whose
+            // script opens with a `@ts-check` / `@ts-nocheck` comment a
+            // fixed distance before where tsgo put it; every check below
+            // reads the skewed position, as upstream's do.
+            if data.ts_check_prefix > 0 && !data.identity_map {
+                (raw.line, raw.column) = ts_check_shift::skew(data, raw.line, raw.column);
+            }
             // Ignore-region filter: if the diagnostic's overlay byte
             // position falls inside a `/*svn:ignore_start*/…
             // /*svn:ignore_end*/` region, drop it. Mirrors upstream

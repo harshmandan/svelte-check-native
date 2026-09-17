@@ -121,6 +121,11 @@ pub struct MapData {
     /// and the file's unused-name diagnostics (TS6133 / TS6192), as
     /// svelte-check does.
     pub pug_template: Option<(u32, u32)>,
+    /// UTF-16 units svelte-check's mapper skews every diagnostic of this
+    /// component back by, because its script opens with a `@ts-check` /
+    /// `@ts-nocheck` comment — see [`crate::ts_check_shift`]. 0 for most
+    /// components and for identity-mapped inputs.
+    pub ts_check_prefix: u32,
 }
 
 /// One file to type-check.

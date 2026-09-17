@@ -15,9 +15,13 @@ async function $$render_e40e2c10() {
         void __svn_bind_pair_4;
         /** @type {[() => any, (v: any) => void]} */ let __svn_bind_pair_5 = [() => undefined, () => {}];
         void __svn_bind_pair_5;
-        { svelteHTML.createElement("input", {});             void (__svn_get_set_binding(get,  set) satisfies string);
+        { svelteHTML.createElement("input", {
+            "bind:value": (__svn_get_set_binding(get,  set)),
+        });
         }
-        { svelteHTML.createElement("input", {});             void (__svn_get_set_binding(() => v,  new_v => v = new_v) satisfies string);
+        { svelteHTML.createElement("input", {
+            "bind:value": (__svn_get_set_binding(() => v,  new_v => v = new_v)),
+        });
         }
         { svelteHTML.createElement("div", {});             void (__svn_get_set_binding(null,  set) satisfies HTMLElement['clientWidth']);
         }

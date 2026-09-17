@@ -5,14 +5,14 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         { svelteHTML.createElement("input", {
             "type": `text`,
+            "bind:value": (value),
         });
-            (value);
-            value = /** @type {string} */ (null);
+            /*svn:ignore_start*/void (() => { value = __svn_any(null); });/*svn:ignore_end*/
         }
         { svelteHTML.createElement("input", {
             "type": `checkbox`,
+            "bind:checked": (checked),
         });
-            { /** @type {[boolean | null | undefined]} */ const __svn_t = [checked]; void __svn_t; }
             /*svn:ignore_start*/void (() => { checked = __svn_any(null); });/*svn:ignore_end*/
         }
         {

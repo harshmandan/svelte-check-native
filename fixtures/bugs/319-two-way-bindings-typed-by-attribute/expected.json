@@ -1,0 +1,41 @@
+{
+    "errors": [
+        {
+            "file": "src/input.svelte",
+            "line": 7,
+            "column": 21,
+            "code": 2322
+        },
+        {
+            "file": "src/input.svelte",
+            "line": 8,
+            "column": 17,
+            "code": 2322
+        },
+        {
+            "file": "src/input.svelte",
+            "line": 10,
+            "column": 19,
+            "code": 2322
+        },
+        {
+            "file": "src/input.svelte",
+            "line": 11,
+            "column": 18,
+            "code": 2322
+        },
+        {
+            "file": "src/input.svelte",
+            "line": 12,
+            "column": 37,
+            "code": 2345
+        },
+        {
+            "file": "src/input.svelte",
+            "line": 13,
+            "column": 31,
+            "code": 2345
+        }
+    ],
+    "_note": "`bind:checked`, `bind:files`, `bind:innerHTML`, `bind:paused` and the get/set form are attributes of the element upstream (`\"bind:checked\": EXPR`, `\"bind:value\": __sveltets_2_get_set_binding(get, set)`), checked by the element's attribute type from `svelte/elements`. Positions follow upstream's source map: a mismatched value reports at the directive's `=` when it is the tag's first attribute and at the last character of the preceding attribute otherwise; a get/set mismatch reports at the getter. Our hand-typed assertions reported at the bound expression instead, and `bind:value={n}` on a plain `<input>` (line 9) was a false TS2322."
+}

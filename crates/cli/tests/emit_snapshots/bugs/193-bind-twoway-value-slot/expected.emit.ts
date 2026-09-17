@@ -12,14 +12,14 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         { svelteHTML.createElement("input", {
             "type": `checkbox`,
+            "bind:checked": (widened),
         });
-            { const __svn_t: [boolean | null | undefined] = [widened]; void __svn_t; }
             /*svn:ignore_start*/void (() => { widened = __svn_any(null); });/*svn:ignore_end*/
         }
         { svelteHTML.createElement("input", {
             "type": `checkbox`,
+            "bind:checked": (nullableOk),
         });
-            { const __svn_t: [boolean | null | undefined] = [nullableOk]; void __svn_t; }
             /*svn:ignore_start*/void (() => { nullableOk = __svn_any(null); });/*svn:ignore_end*/
         }
     });

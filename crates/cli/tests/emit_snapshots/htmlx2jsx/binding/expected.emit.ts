@@ -5,16 +5,18 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         { svelteHTML.createElement("input", {
             "type": `text`,
+            "bind:value": (test),
         });
-            (test);
-            test = /** @type {string} */ (null);
+            /*svn:ignore_start*/void (() => { test = __svn_any(null); });/*svn:ignore_end*/
         }
         { svelteHTML.createElement("input", {
             "type": `text`,
+            "bind:value": (test),
         });
         }
         { svelteHTML.createElement("input", {
             "type": `text`,
+            "bind:value": (test),
         });
         }
         {

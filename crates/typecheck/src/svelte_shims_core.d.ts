@@ -1741,6 +1741,11 @@ declare module 'svelte/elements' {
     // here (precise event-name parity needs a vendored svelte stub
     // with full `HTMLElementEventMap` integration; not in scope of
     // this round).
+    /** A played / buffered / seekable range of a media element. */
+    export interface SvelteMediaTimeRange {
+        start: number;
+        end: number;
+    }
     export interface HTMLAttributes<T extends EventTarget = HTMLElement> {
         // Global HTML attributes
         accesskey?: any;
@@ -2234,55 +2239,55 @@ declare module 'svelte/elements' {
         onfullscreenerror?: EventHandler<Event, T> | undefined | null;
         onfullscreenerrorcapture?: EventHandler<Event, T> | undefined | null;
         // Every `bind:` key real svelte declares (across all of its
-        // per-element interfaces), collapsed onto this one interface.
-        // A name outside this list fires 2353 exactly as it does
-        // against the real types; a wildcard here hid that.
-        'bind:contentRect'?: any;
-        'bind:contentBoxSize'?: any;
-        'bind:borderBoxSize'?: any;
-        'bind:devicePixelContentBoxSize'?: any;
-        'bind:clientWidth'?: any;
-        'bind:clientHeight'?: any;
-        'bind:innerHTML'?: any;
-        'bind:textContent'?: any;
-        'bind:innerText'?: any;
-        'bind:focused'?: any;
-        'bind:offsetWidth'?: any;
-        'bind:offsetHeight'?: any;
-        'bind:open'?: any;
-        'bind:naturalWidth'?: any;
-        'bind:naturalHeight'?: any;
-        'bind:checked'?: any;
+        // per-element interfaces), collapsed onto this one interface
+        // with the types it gives them. A name outside this list fires
+        // 2353 exactly as it does against the real types.
+        readonly 'bind:contentRect'?: DOMRectReadOnly | undefined | null;
+        readonly 'bind:contentBoxSize'?: Array<ResizeObserverSize> | undefined | null;
+        readonly 'bind:borderBoxSize'?: Array<ResizeObserverSize> | undefined | null;
+        readonly 'bind:devicePixelContentBoxSize'?: Array<ResizeObserverSize> | undefined | null;
+        readonly 'bind:clientWidth'?: number | undefined | null;
+        readonly 'bind:clientHeight'?: number | undefined | null;
+        'bind:innerHTML'?: string | undefined | null;
+        'bind:textContent'?: string | undefined | null;
+        'bind:innerText'?: string | undefined | null;
+        readonly 'bind:focused'?: boolean | undefined | null;
+        readonly 'bind:offsetWidth'?: number | undefined | null;
+        readonly 'bind:offsetHeight'?: number | undefined | null;
+        'bind:open'?: boolean | undefined | null;
+        readonly 'bind:naturalWidth'?: number | undefined | null;
+        readonly 'bind:naturalHeight'?: number | undefined | null;
+        'bind:checked'?: boolean | undefined | null;
         'bind:value'?: any;
-        'bind:group'?: any;
-        'bind:files'?: any;
-        'bind:indeterminate'?: any;
-        'bind:readyState'?: any;
-        'bind:duration'?: any;
-        'bind:buffered'?: any;
-        'bind:played'?: any;
-        'bind:seekable'?: any;
-        'bind:seeking'?: any;
-        'bind:ended'?: any;
-        'bind:muted'?: any;
-        'bind:volume'?: any;
-        'bind:currentTime'?: any;
-        'bind:playbackRate'?: any;
-        'bind:paused'?: any;
-        'bind:videoWidth'?: any;
-        'bind:videoHeight'?: any;
-        'bind:activeElement'?: any;
-        'bind:fullscreenElement'?: any;
-        'bind:pointerLockElement'?: any;
-        'bind:visibilityState'?: any;
-        'bind:innerWidth'?: any;
-        'bind:innerHeight'?: any;
-        'bind:outerWidth'?: any;
-        'bind:outerHeight'?: any;
-        'bind:devicePixelRatio'?: any;
-        'bind:scrollX'?: any;
-        'bind:scrollY'?: any;
-        'bind:online'?: any;
+        'bind:group'?: any | undefined | null;
+        'bind:files'?: FileList | undefined | null;
+        'bind:indeterminate'?: boolean | undefined | null;
+        readonly 'bind:readyState'?: 0 | 1 | 2 | 3 | 4 | undefined | null;
+        readonly 'bind:duration'?: number | undefined | null;
+        readonly 'bind:buffered'?: SvelteMediaTimeRange[] | undefined | null;
+        readonly 'bind:played'?: SvelteMediaTimeRange[] | undefined | null;
+        readonly 'bind:seekable'?: SvelteMediaTimeRange[] | undefined | null;
+        readonly 'bind:seeking'?: boolean | undefined | null;
+        readonly 'bind:ended'?: boolean | undefined | null;
+        'bind:muted'?: boolean | undefined | null;
+        'bind:volume'?: number | undefined | null;
+        'bind:currentTime'?: number | undefined | null;
+        'bind:playbackRate'?: number | undefined | null;
+        'bind:paused'?: boolean | undefined | null;
+        readonly 'bind:videoWidth'?: number | undefined | null;
+        readonly 'bind:videoHeight'?: number | undefined | null;
+        readonly 'bind:activeElement'?: Document['activeElement'] | undefined | null;
+        readonly 'bind:fullscreenElement'?: Document['fullscreenElement'] | undefined | null;
+        readonly 'bind:pointerLockElement'?: Document['pointerLockElement'] | undefined | null;
+        readonly 'bind:visibilityState'?: Document['visibilityState'] | undefined | null;
+        readonly 'bind:innerWidth'?: Window['innerWidth'] | undefined | null;
+        readonly 'bind:innerHeight'?: Window['innerHeight'] | undefined | null;
+        readonly 'bind:outerWidth'?: Window['outerWidth'] | undefined | null;
+        readonly 'bind:outerHeight'?: Window['outerHeight'] | undefined | null;
+        readonly 'bind:devicePixelRatio'?: Window['devicePixelRatio'] | undefined | null;
+        'bind:scrollX'?: Window['scrollX'] | undefined | null;
+        'bind:scrollY'?: Window['scrollY'] | undefined | null;
+        readonly 'bind:online'?: Window['navigator']['onLine'] | undefined | null;
         [name: `class:${string}`]: any;
         [name: `style:${string}`]: any;
         [name: `transition:${string}`]: any;

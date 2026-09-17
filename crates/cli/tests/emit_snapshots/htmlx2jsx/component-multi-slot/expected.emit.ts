@@ -32,7 +32,10 @@ async function $$render_e40e2c10() {
                     void hi3alias;
                     { svelteHTML.createElement("div", {});                     }
                 }
-                { svelteHTML.createElement("p", {});                 }
+                {
+                    const { /*Ωignore_startΩ*/$$_$$/*Ωignore_endΩ*/ } = __svn_inst_0.$$slot_def["desc"]; $$_$$;
+                    { svelteHTML.createElement("p", {});                     }
+                }
             }
         }
     });

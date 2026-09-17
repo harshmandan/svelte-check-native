@@ -140,7 +140,7 @@ pub(crate) fn emit_component_node(
         let _ = writeln!(buf, "{inner_open_indent}{{");
         let dest_depth = child_depth + 1;
         if let Some(inst) = inst {
-            emit_let_slot_destructure(buf, inst, &let_destructures, "default", dest_depth);
+            emit_let_slot_destructure(buf, inst, &let_destructures, "default", None, dest_depth);
         }
         dest_depth
     } else {

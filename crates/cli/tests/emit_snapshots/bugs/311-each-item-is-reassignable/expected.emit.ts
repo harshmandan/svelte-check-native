@@ -6,8 +6,10 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         for (let name of __svn_each_items(names)) {
             let i: number = 0;
-            { svelteHTML.createElement("input", {});                 (name);
-                name = null as any as string;
+            { svelteHTML.createElement("input", {
+                "bind:value": (name),
+            });
+                /*svn:ignore_start*/void (() => { name = __svn_any(null); });/*svn:ignore_end*/
             }
             { svelteHTML.createElement("button", {
                 "on:click": (() => (name = '')),

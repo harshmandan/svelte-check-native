@@ -9,7 +9,9 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         let __svn_bind_pair_0: [() => any, (v: any) => void] = [() => undefined as any, () => {}];
         void __svn_bind_pair_0;
-        { svelteHTML.createElement("input", {});             void (__svn_get_set_binding(() => pick<string, number>(plain),  (v) => sink(v)) satisfies string);
+        { svelteHTML.createElement("input", {
+            "bind:value": (__svn_get_set_binding(() => pick<string, number>(plain),  (v) => sink(v))),
+        });
         }
         { svelteHTML.createElement("p", {});             (plain);
         }

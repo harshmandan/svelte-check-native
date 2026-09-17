@@ -6,16 +6,20 @@ async function $$render_e40e2c10() {
     ;(async () => {
         // template type-check body (incremental)
         for (let { a, ...rést } of __svn_each_items(xs)) {
-            { svelteHTML.createElement("input", {});                 (rést.b);
-                rést.b = null as any as string;
+            { svelteHTML.createElement("input", {
+                "bind:value": (rést.b),
+            });
+                /*svn:ignore_start*/void (() => { rést.b = __svn_any(null); });/*svn:ignore_end*/
             }
             (a);
             void a;
             void rést;
         }
         for (let { a, ...rest } of __svn_each_items(xs)) {
-            { svelteHTML.createElement("input", {});                 (/* c */ rest.b);
-                /* c */ rest.b = null as any as string;
+            { svelteHTML.createElement("input", {
+                "bind:value": (/* c */ rest.b),
+            });
+                /*svn:ignore_start*/void (() => { /* c */ rest.b = __svn_any(null); });/*svn:ignore_end*/
             }
             (a);
             void a;

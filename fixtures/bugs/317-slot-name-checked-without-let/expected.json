@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/App.svelte",
+            "line": 1,
+            "column": 6,
+            "code": 2551
+        },
+        {
+            "file": "src/App.svelte",
+            "line": 3,
+            "column": 6,
+            "code": 7053
+        }
+    ],
+    "_note": "A child placed in a named slot (`<div slot=\"footre\">`) is destructured from the component's `$$slot_def[\"footre\"]` whether or not it carries a `let:` directive (upstream `addSlotName` for every `slot=` child), so a slot name the component does not declare is reported \u2014 TS2551 with a suggestion when a close name exists, TS7053 otherwise. We only opened that check when a `let:` was present, so a typo'd slot name passed silently."
+}

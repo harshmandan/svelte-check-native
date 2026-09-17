@@ -5,8 +5,10 @@ async function $$render_e40e2c10() {
         // template type-check body (incremental)
         { svelteHTML.createElement("input", {});             obj. = __svn_any(null);
         }
-        { svelteHTML.createElement("input", {});             (obj.);
-            obj. = /** @type {string} */ (null);
+        { svelteHTML.createElement("input", {
+            "bind:value": (obj.),
+        });
+            /*svn:ignore_start*/void (() => { obj. = __svn_any(null); });/*svn:ignore_end*/
         }
         {
             const __svn_C_34 = __svn_ensure_component(Input);

@@ -3,9 +3,9 @@
 function $$render_e40e2c10() {
 
     const f = (s: string) => (t: string) => [s.length, t.length];
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        const __svn_create_slot = __svn_create_create_slot();
         for (let row of __svn_each_items(f("(")(")"))) {
             {
                 __svn_create_slot("x", { r: (row) });

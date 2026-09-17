@@ -5,9 +5,9 @@ function $$render_6a78bc66() {
     // let the parent pick a class for the <span
     /* We let consumers decide (e.g. "big" */
            let xyz: string/*svn:ignore_start*/;xyz = __svn_any(xyz);/*svn:ignore_end*/;
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        const __svn_create_slot = __svn_create_create_slot();
         { svelteHTML.createElement("span", {
             "class": (xyz),
         });

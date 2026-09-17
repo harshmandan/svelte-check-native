@@ -3,9 +3,9 @@
 function $$render_e40e2c10() {
 
     let b = 7;
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        const __svn_create_slot = __svn_create_create_slot();
         { svelteHTML.createElement("div", {});             {
                 __svn_create_slot("default", { a: (b), b, c: `b`, d: `a${b}`, e: (b) });
             }

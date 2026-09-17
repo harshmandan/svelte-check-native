@@ -30,6 +30,14 @@ use svn_parser::{Fragment, Node};
 use crate::emit_buffer::EmitBuffer;
 
 thread_local! {
+    /// For each template position being walked, the instance of the
+    /// component a slot-filling element there belongs to (its
+    /// `node_start`), or `None` inside an element or snippet.
+    /// svelte2tsx pairs an element with the innermost enclosing element
+    /// or component, looking through `{#if}` / `{#each}` / `{#await}` /
+    /// `{#key}` blocks, so blocks leave this untouched.
+    static SLOT_PARENT: std::cell::RefCell<Vec<Option<u32>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
     /// Start offsets of the first `let:` directive of each element whose
     /// `let:` names a parent component already destructured from its
     /// default slot. The element's own emit must not shadow them.
@@ -394,10 +402,9 @@ fn emit_slot_let_consumer_close(buf: &mut EmitBuffer, depth: usize) {
     let _ = writeln!(buf, "{indent}}}");
 }
 
-/// Walk one child of a component, opening a slot-let consumer wrapper
-/// first when the child is a `<Inner slot="X" let:foo>` pattern.
-/// Bumps the walk depth by one inside the wrapper so the child's own
-/// emit nests under the destructure.
+/// Walk one child of a component. Elements it (or a block inside it)
+/// contains that fill one of the component's slots are wrapped by
+/// [`emit_slot_parented_node`].
 pub(crate) fn walk_child_with_slot_let(
     buf: &mut EmitBuffer,
     source: &str,
@@ -407,12 +414,76 @@ pub(crate) fn walk_child_with_slot_let(
     action_counter: &mut usize,
     parent_inst: Option<&svn_analyze::ComponentInstantiation>,
 ) {
-    let opened = parent_inst
+    with_slot_parent(parent_inst.map(|p| p.node_start), || {
+        emit_template_node(buf, source, node, depth, insts, action_counter);
+    });
+}
+
+/// Run `f` with `parent` as the slot parent of the nodes it walks.
+pub(crate) fn with_slot_parent<R>(parent: Option<u32>, f: impl FnOnce() -> R) -> R {
+    SLOT_PARENT.with(|s| s.borrow_mut().push(parent));
+    let out = f();
+    SLOT_PARENT.with(|s| s.borrow_mut().pop());
+    out
+}
+
+/// Emit an element-like node (element, component, special element),
+/// first opening a slot-let consumer wrapper when it fills a slot of
+/// the enclosing component (`<Inner slot="X" let:foo>`, or an element
+/// with `let:` filling the default slot). The node's own children get
+/// no slot parent unless it is a component and sets its own.
+pub(crate) fn emit_slot_parented_node(
+    buf: &mut EmitBuffer,
+    source: &str,
+    node: &Node,
+    depth: usize,
+    insts: &HashMap<u32, &svn_analyze::ComponentInstantiation>,
+    emit: impl FnOnce(&mut EmitBuffer, usize),
+) {
+    let parent = SLOT_PARENT
+        .with(|s| s.borrow().last().copied().flatten())
+        .and_then(|key| insts.get(&key).copied());
+    let opened = parent
         .map(|p| try_emit_slot_let_consumer_open(buf, source, node, p, depth))
         .unwrap_or(false);
     let walk_depth = if opened { depth + 1 } else { depth };
-    emit_template_node(buf, source, node, walk_depth, insts, action_counter);
+    with_slot_parent(None, || emit(buf, walk_depth));
     if opened {
         emit_slot_let_consumer_close(buf, depth);
     }
+}
+
+/// Does a component's content hold a slot consumer of it — directly
+/// or inside blocks, but not inside elements, components or snippets?
+pub(crate) fn fragment_has_slot_let_consumer(source: &str, fragment: &Fragment) -> bool {
+    fragment.nodes.iter().any(|n| match n {
+        Node::IfBlock(b) => {
+            fragment_has_slot_let_consumer(source, &b.consequent)
+                || b.elseif_arms
+                    .iter()
+                    .any(|arm| fragment_has_slot_let_consumer(source, &arm.body))
+                || b.alternate
+                    .as_ref()
+                    .is_some_and(|f| fragment_has_slot_let_consumer(source, f))
+        }
+        Node::EachBlock(b) => {
+            fragment_has_slot_let_consumer(source, &b.body)
+                || b.alternate
+                    .as_ref()
+                    .is_some_and(|f| fragment_has_slot_let_consumer(source, f))
+        }
+        Node::AwaitBlock(b) => {
+            b.pending
+                .as_ref()
+                .is_some_and(|f| fragment_has_slot_let_consumer(source, f))
+                || b.then_branch
+                    .as_ref()
+                    .is_some_and(|t| fragment_has_slot_let_consumer(source, &t.body))
+                || b.catch_branch
+                    .as_ref()
+                    .is_some_and(|c| fragment_has_slot_let_consumer(source, &c.body))
+        }
+        Node::KeyBlock(b) => fragment_has_slot_let_consumer(source, &b.body),
+        other => child_is_slot_let_consumer(source, other),
+    })
 }

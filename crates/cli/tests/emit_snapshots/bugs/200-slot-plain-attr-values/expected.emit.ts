@@ -3,9 +3,9 @@
 function $$render_e40e2c10() {
 
     const known = 'k';
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        const __svn_create_slot = __svn_create_create_slot();
         {
             __svn_create_slot("header", { tooltip: `first line
 second line`, count: (1 + 1), good: `prefix ${known} suffix` });

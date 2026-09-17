@@ -224,11 +224,8 @@ pub(crate) fn emit_svelte_element_node(
         // the hoist signal and named-slot child consumers got
         // dropped (their let-names became undeclared inside the
         // child walk).
-        let any_child_consumes_slot_let = s
-            .children
-            .nodes
-            .iter()
-            .any(|n| crate::nodes::let_directive::child_is_slot_let_consumer(source, n));
+        let any_child_consumes_slot_let =
+            crate::nodes::let_directive::fragment_has_slot_let_consumer(source, &s.children);
         crate::nodes::inline_component::emit_component_call(
             buf,
             source,
@@ -1125,7 +1122,15 @@ fn emit_slot_check(buf: &mut EmitBuffer, source: &str, e: &svn_parser::Element, 
     let inner = "    ".repeat(depth + 1);
     let outer = "    ".repeat(depth);
     let _ = writeln!(buf, "{outer}{{");
-    let _ = write!(buf, "{inner}__svn_create_slot(");
+    // The helper name maps to the `<` of `<slot`, as upstream's moved
+    // start tag does: a root snippet hoisted to module scope cannot see
+    // the helper declared in the render function (TS2304 there).
+    buf.push_str(&inner);
+    buf.append_with_source(
+        "__svn_create_slot",
+        svn_core::Range::new(e.range.start, e.range.start + 1),
+    );
+    buf.push('(');
     // Slot name: `name="X"` plain attr if present, else literal
     // `"default"`. Source range maps to the `name` attribute's full
     // span when present, or the `<slot` token's `slot` identifier

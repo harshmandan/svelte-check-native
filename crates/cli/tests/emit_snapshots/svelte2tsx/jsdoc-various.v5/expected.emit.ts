@@ -12,9 +12,9 @@ function $$render_e40e2c10<T>() {
   /** @type {{ b: T }}*/
   let { b } = $props();
   let rect;
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        const __svn_create_slot = __svn_create_create_slot();
         { svelteHTML.createElement("div", {});             rect = /*svn:ignore_start*//** @type {DOMRectReadOnly} */ (null)/*svn:ignore_end*/;
         }
         {

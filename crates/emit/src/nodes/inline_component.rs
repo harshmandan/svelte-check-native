@@ -15,7 +15,7 @@ use crate::TokenMapEntry;
 use crate::emit_buffer::EmitBuffer;
 use crate::emit_template_body;
 use crate::nodes::let_directive::{
-    child_is_slot_let_consumer, collect_let_destructures, emit_let_slot_destructure,
+    collect_let_destructures, emit_let_slot_destructure, fragment_has_slot_let_consumer,
     walk_child_with_slot_let,
 };
 use crate::util::{is_css_custom_prop_name, is_simple_js_identifier};
@@ -97,11 +97,7 @@ pub(crate) fn emit_component_node(
     // present, the parent (this component) needs its instance hoisted
     // to a local so the consumer wrapper can reference
     // `parent.$$slot_def["X"]`.
-    let any_child_consumes_slot_let = c
-        .children
-        .nodes
-        .iter()
-        .any(|n| child_is_slot_let_consumer(source, n));
+    let any_child_consumes_slot_let = fragment_has_slot_let_consumer(source, &c.children);
 
     // Only emit the call when analyze collected an instantiation for
     // this node. Components disqualified at analyze time fall back to

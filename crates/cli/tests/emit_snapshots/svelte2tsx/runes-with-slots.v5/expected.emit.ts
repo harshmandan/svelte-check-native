@@ -7,9 +7,9 @@ function $$render_e40e2c10() {
     let { a, b } = $props();
     let x = $state(0);
     let y = $derived(x * 2);
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        const __svn_create_slot = __svn_create_create_slot();
         {
             __svn_create_slot("default", { x, y });
         }

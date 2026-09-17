@@ -35,9 +35,9 @@ function $$render_76cc262b() {
 
                                
          let list: (Item | null)[] = []/*svn:ignore_start*/;list = __svn_any(list);/*svn:ignore_end*/;
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        const __svn_create_slot = __svn_create_create_slot();
         for (let item of __svn_each_items(list.filter((x): x is Item => x !== null))) {
             {
                 __svn_create_slot("default", { item });
@@ -64,9 +64,9 @@ function $$render_758c71fe() {
 
                                
          let list: Item[] | undefined = undefined/*svn:ignore_start*/;list = __svn_any(list);/*svn:ignore_end*/;
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        const __svn_create_slot = __svn_create_create_slot();
         for (let item of __svn_each_items(list ?? [])) {
             {
                 __svn_create_slot("default", { item });

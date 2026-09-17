@@ -1,0 +1,41 @@
+{
+    "errors": [
+        {
+            "file": "src/Use.svelte",
+            "line": 1,
+            "column": 32,
+            "code": 2339
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 2,
+            "column": 30,
+            "code": 2339
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 3,
+            "column": 18,
+            "code": "slot_attribute_invalid_placement"
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 3,
+            "column": 36,
+            "code": 2339
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 4,
+            "column": 17,
+            "code": 2353
+        },
+        {
+            "file": "src/Use.svelte",
+            "line": 4,
+            "column": 27,
+            "code": 2304
+        }
+    ],
+    "_note": "svelte2tsx pairs an element with the innermost enclosing element or component and looks through `{#if}` / `{#each}` / `{#await}` / `{#key}` blocks, so an element with `let:` (or `slot=`) inside a block directly in a component still destructures the component's slot: unknown names are TS2339 and known ones are typed. Inside another element (last line) the `let:` is an ordinary attribute. We only handled a component's direct children."
+}

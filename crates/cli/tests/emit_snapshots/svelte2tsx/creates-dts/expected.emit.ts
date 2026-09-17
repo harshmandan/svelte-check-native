@@ -13,9 +13,9 @@ function $$render_e40e2c10() {
 
   const dispatch = createEventDispatcher();
   dispatch('hi');
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        const __svn_create_slot = __svn_create_create_slot();
         { svelteHTML.createElement("button", {
             "on:click": undefined,
         });

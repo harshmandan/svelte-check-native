@@ -3,9 +3,9 @@
 function $$render_e40e2c10() {
     let $$slots = /** @type {Record<string, boolean | undefined>} */ ({});
     void $$slots;
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        const __svn_create_slot = __svn_create_create_slot();
         { svelteHTML.createElement("h1", {});             ($$slots.foo);
         }
         { svelteHTML.createElement("h1", {});             ($$slots['dashed-name']);

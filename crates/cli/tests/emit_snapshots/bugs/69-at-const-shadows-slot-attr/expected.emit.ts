@@ -3,9 +3,9 @@
 function $$render_e40e2c10() {
 
     let item = { id: 1 };
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        const __svn_create_slot = __svn_create_create_slot();
         for (let one of __svn_each_items([item])) {
             const expanded = one.id;
             {

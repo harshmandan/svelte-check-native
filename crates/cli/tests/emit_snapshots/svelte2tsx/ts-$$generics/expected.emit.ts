@@ -19,9 +19,9 @@ function $$render_e40e2c10/*svn:ignore_start*/<A, B extends keyof A, C extends b
            function getA() {
         return a;
     }
+    const __svn_create_slot = __svn_create_create_slot();
     ;(async () => {
         // template type-check body (incremental)
-        const __svn_create_slot = __svn_create_create_slot();
         {
             __svn_create_slot("default", { c });
         }

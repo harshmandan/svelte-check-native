@@ -1968,7 +1968,9 @@ pub(crate) fn emit_template_node(
         Node::KeyBlock(b) => {
             crate::nodes::key::emit_key_block(buf, source, b, depth, insts, action_counter)
         }
-        Node::SnippetBlock(b) => emit_snippet_block(buf, source, b, depth, insts, action_counter),
+        Node::SnippetBlock(b) => crate::nodes::let_directive::with_slot_parent(None, || {
+            emit_snippet_block(buf, source, b, depth, insts, action_counter)
+        }),
         Node::Element(e) => {
             // `<!DOCTYPE html>` parses as a void element named `!DOCTYPE`;
             // it declares the document type, not markup to type-check.
@@ -1980,16 +1982,48 @@ pub(crate) fn emit_template_node(
             if e.name.eq_ignore_ascii_case("!doctype") {
                 return;
             }
-            crate::nodes::element::emit_element_node(buf, source, e, depth, insts, action_counter)
+            crate::nodes::let_directive::emit_slot_parented_node(
+                buf,
+                source,
+                node,
+                depth,
+                insts,
+                |buf, depth| {
+                    crate::nodes::element::emit_element_node(
+                        buf,
+                        source,
+                        e,
+                        depth,
+                        insts,
+                        action_counter,
+                    )
+                },
+            )
         }
-        Node::Component(c) => emit_component_node(buf, source, c, depth, insts, action_counter),
-        Node::SvelteElement(s) => crate::nodes::element::emit_svelte_element_node(
+        Node::Component(c) => crate::nodes::let_directive::emit_slot_parented_node(
             buf,
             source,
-            s,
+            node,
             depth,
             insts,
-            action_counter,
+            |buf, depth| emit_component_node(buf, source, c, depth, insts, action_counter),
+        ),
+        Node::SvelteElement(s) => crate::nodes::let_directive::emit_slot_parented_node(
+            buf,
+            source,
+            node,
+            depth,
+            insts,
+            |buf, depth| {
+                crate::nodes::element::emit_svelte_element_node(
+                    buf,
+                    source,
+                    s,
+                    depth,
+                    insts,
+                    action_counter,
+                )
+            },
         ),
         Node::Interpolation(i) => emit_interpolation(buf, source, i, depth),
         Node::Text(_) | Node::Comment(_) => {}

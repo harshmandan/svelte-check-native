@@ -54,6 +54,22 @@ pub(crate) fn emit_template_check_fn(
     has_strict_slots_decl: bool,
     root_snippets_hoisted: bool,
 ) {
+    let full_fragment = fragment;
+    // When the template has any `<slot>` element (root snippets
+    // included), declare `__svn_create_slot` once in the render
+    // function, outside the check body, where upstream declares
+    // `__sveltets_createSlot`: a root snippet that stays in the render
+    // function sees it, one hoisted to module scope does not. With
+    // `interface $$Slots` declared, the helper's generic narrows to it;
+    // without, the `Record<string, Record<string, any>>` default keeps
+    // Svelte-4 components silent.
+    if svelte4::compat::fragment_contains_slot(full_fragment) {
+        if is_ts && has_strict_slots_decl {
+            buf.push_str("    const __svn_create_slot = __svn_create_create_slot<$$Slots>();\n");
+        } else {
+            buf.push_str("    const __svn_create_slot = __svn_create_create_slot();\n");
+        }
+    }
     let without_root_snippets;
     let fragment = if root_snippets_hoisted {
         without_root_snippets = svn_parser::Fragment {
@@ -79,23 +95,6 @@ pub(crate) fn emit_template_check_fn(
     // form preserves narrowing — see design/gap_c_assignment_narrowing/.
     buf.push_str("    ;(async () => {\n");
     buf.push_str("        // template type-check body (incremental)\n");
-    // R-Conv #20 (B2 #3): when the template has any `<slot>` element,
-    // declare `__svn_create_slot` once at the top of the check body
-    // so per-slot emit downstream can call it. With `interface
-    // $$Slots` declared, the helper's generic narrows to it; without,
-    // the `Record<string, Record<string, any>>` default keeps Svelte-4
-    // components silent. Mirrors upstream svelte2tsx's `;const
-    // __sveltets_createSlot = __sveltets_2_createCreateSlot<$$Slots>();`
-    // emission at `htmlxtojsx_v2/nodes/Slot.ts` + `addComponentExport.ts`.
-    if svelte4::compat::fragment_contains_slot(fragment) {
-        if is_ts && has_strict_slots_decl {
-            buf.push_str(
-                "        const __svn_create_slot = __svn_create_create_slot<$$Slots>();\n",
-            );
-        } else {
-            buf.push_str("        const __svn_create_slot = __svn_create_create_slot();\n");
-        }
-    }
     emit_legacy_action_attrs(buf.raw_string_mut(), summary, is_ts);
     emit_bind_pair_declarations(buf.raw_string_mut(), summary, is_ts);
     // Index component instantiations by source byte offset so the

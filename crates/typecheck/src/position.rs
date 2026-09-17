@@ -126,14 +126,10 @@ pub(crate) fn translate_position(
         ));
     }
     // Identity-map kit files: `kit_inject` splices `: T` annotations on
-    // existing lines and never adds one, so the line passes through and
-    // only the column can move — by exactly the length of whatever was
-    // spliced earlier on that same line.
+    // existing lines and never adds one, so a position moves back by
+    // whatever was spliced ahead of it — see `unshift_kit_position`.
     if data.identity_map {
-        return Some((
-            overlay_line,
-            unshift_column(&data.kit_col_shifts, overlay_line, overlay_col),
-        ));
+        return Some(unshift_kit_position(data, overlay_line, overlay_col));
     }
     None
 }
@@ -194,26 +190,75 @@ fn preceding_token_source_byte(data: &MapData, overlay_line: u32, overlay_col: u
     })
 }
 
-/// Walk an overlay column back to the source column by subtracting the
-/// annotations spliced ahead of it on the same line.
+/// Map a kit overlay position back to the user's file the way
+/// upstream's `toOriginalPos` does, by subtracting the annotations
+/// spliced ahead of it.
 ///
-/// A column that lands *inside* a splice has no source counterpart —
-/// the text there is ours, not the user's — so it collapses to the
-/// splice's start, which is the character the user actually wrote at
-/// that point.
-fn unshift_column(shifts: &[(u32, u32, u32)], line: u32, col: u32) -> u32 {
-    let mut shifted = col;
-    for &(shift_line, shift_col, len) in shifts {
-        if shift_line != line || shift_col > col {
-            continue;
-        }
-        shifted = shifted.saturating_sub(if shift_col + len > col {
-            col - shift_col
-        } else {
-            len
-        });
+/// A position strictly *inside* a splice has no source counterpart —
+/// the text there is ours — so it collapses to the character the user
+/// wrote where the splice went. A position exactly *at* a splice's first
+/// character counts that splice as already passed, so it lands the
+/// splice's length before that character — possibly on an earlier
+/// line, and never before the start of the file.
+fn unshift_kit_position(data: &MapData, line: u32, col: u32) -> (u32, u32) {
+    let shifts = &data.kit_col_shifts;
+    let back = shift_before(shifts, line, col);
+    let target = i64::from(col) - i64::from(back);
+    if target >= 1 {
+        return (line, target as u32);
     }
-    shifted
+    // Walk back over the user's earlier lines: one unit reaches the
+    // previous line's line break, which sits one past its last column.
+    let mut remaining = 1 - target;
+    let mut l = line;
+    while l > 1 {
+        l -= 1;
+        let overlay_len = overlay_line_len_utf16(data, l);
+        let spliced: u32 = shifts
+            .iter()
+            .filter(|&&(sl, _, _)| sl == l)
+            .map(|&(_, _, len)| len)
+            .sum();
+        let user_len = i64::from(overlay_len.saturating_sub(spliced));
+        if remaining <= user_len + 1 {
+            return (l, (user_len + 2 - remaining) as u32);
+        }
+        remaining -= user_len + 1;
+    }
+    (1, 1)
+}
+
+/// The splice length to subtract for overlay column `col` on `line`.
+fn shift_before(shifts: &[(u32, u32, u32)], line: u32, col: u32) -> u32 {
+    shifts
+        .iter()
+        .filter(|&&(shift_line, shift_col, _)| shift_line == line && shift_col <= col)
+        .map(|&(_, shift_col, len)| {
+            if shift_col < col && shift_col + len > col {
+                col - shift_col
+            } else {
+                len
+            }
+        })
+        .sum()
+}
+
+/// UTF-16 length of overlay line `line` (1-based), line break excluded.
+fn overlay_line_len_utf16(data: &MapData, line: u32) -> u32 {
+    let starts = &data.overlay_line_starts;
+    let text = data.overlay_text.get();
+    let Some(&start) = starts.get((line - 1) as usize) else {
+        return 0;
+    };
+    let end = starts
+        .get(line as usize)
+        .map_or(text.len(), |&e| e as usize);
+    text.get(start as usize..end)
+        .unwrap_or("")
+        .trim_end_matches(['\n', '\r'])
+        .chars()
+        .map(|c| c.len_utf16() as u32)
+        .sum()
 }
 
 /// Find the tightest [`TokenMapEntry`] whose overlay byte span
@@ -337,7 +382,7 @@ pub(crate) fn byte_to_position(line_starts: &[u32], text: &str, byte: u32) -> (u
 
 #[cfg(test)]
 mod tests {
-    use super::{translate_position, unshift_column};
+    use super::{shift_before, translate_position};
     use crate::types::MapData;
     use svn_emit::TokenMapEntry;
 
@@ -397,10 +442,16 @@ mod tests {
     /// first splice). Measured from a real overlay, not invented.
     const HOOK_SPLICES: [(u32, u32, u32); 2] = [(1, 48, 53), (1, 103, 51)];
 
+    /// The column a same-line position maps to (the result stays on the
+    /// line for every case below).
+    fn unshift_column_for_test(line: u32, col: u32) -> u32 {
+        col - shift_before(&HOOK_SPLICES, line, col)
+    }
+
     #[test]
     fn columns_before_every_splice_are_untouched() {
-        assert_eq!(unshift_column(&HOOK_SPLICES, 1, 1), 1);
-        assert_eq!(unshift_column(&HOOK_SPLICES, 1, 32), 32);
+        assert_eq!(unshift_column_for_test(1, 1), 1);
+        assert_eq!(unshift_column_for_test(1, 32), 32);
     }
 
     #[test]
@@ -408,25 +459,56 @@ mod tests {
         // Overlay column 105 is the `ReturnType` the async-return
         // diagnostic fires on; the user wrote `=>` at column 50 there,
         // which is where upstream reports it.
-        assert_eq!(unshift_column(&HOOK_SPLICES, 1, 105), 50);
+        assert_eq!(unshift_column_for_test(1, 105), 50);
     }
 
     #[test]
     fn a_column_between_the_splices_loses_only_the_first() {
         // Overlay column 101 is the `)` closing the parameter list.
-        assert_eq!(unshift_column(&HOOK_SPLICES, 1, 101), 48);
+        assert_eq!(unshift_column_for_test(1, 101), 48);
     }
 
     #[test]
     fn columns_inside_a_splice_collapse_to_where_it_starts() {
         // There is no user text under a splice, so the honest answer is
         // the character the user wrote at that point.
-        assert_eq!(unshift_column(&HOOK_SPLICES, 1, 60), 48);
-        assert_eq!(unshift_column(&HOOK_SPLICES, 1, 100), 48);
+        assert_eq!(unshift_column_for_test(1, 60), 48);
+        assert_eq!(unshift_column_for_test(1, 100), 48);
+    }
+
+    #[test]
+    fn a_column_at_a_splice_start_counts_the_splice_as_passed() {
+        // Upstream's `toOriginalPos` subtracts a splice whose first
+        // character the position sits on, so the column lands the
+        // splice's length before the user's character.
+        assert_eq!(shift_before(&HOOK_SPLICES, 1, 103), 53 + 51);
+    }
+
+    #[test]
+    fn a_splice_start_position_can_move_to_an_earlier_line() {
+        // `export function load({ url } = {}) {` on line 2, with a
+        // 38-unit annotation at overlay column 34. A diagnostic at the
+        // annotation's first character lands 38 units before column 34:
+        // 33 units back reaches line 2's start, 1 more is line 1's
+        // break (column 11 after `// comment`), and 4 more is column 7.
+        let source = "// comment\nexport function load({ url } = {}: import('./$types.js').PageLoadEvent) {}\n";
+        let mut data = MapData {
+            overlay_line_starts: svn_emit::compute_line_starts(source),
+            overlay_text: source.into(),
+            identity_map: true,
+            kit_col_shifts: vec![(2, 34, 38)],
+            ..Default::default()
+        };
+        assert_eq!(super::unshift_kit_position(&data, 2, 34), (1, 7));
+        // Past the start of the file it clamps.
+        data.kit_col_shifts = vec![(2, 34, 80)];
+        assert_eq!(super::unshift_kit_position(&data, 2, 34), (1, 1));
+        // Inside the splice: where it went.
+        assert_eq!(super::unshift_kit_position(&data, 2, 40), (2, 34));
     }
 
     #[test]
     fn only_splices_on_the_same_line_apply() {
-        assert_eq!(unshift_column(&HOOK_SPLICES, 2, 105), 105);
+        assert_eq!(unshift_column_for_test(2, 105), 105);
     }
 }

@@ -47,7 +47,7 @@
 //! export upstream's `upsertKitFile` annotates on a kit route file.
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{BindingPattern, Declaration, Statement};
+use oxc_ast::ast::{BindingPattern, Declaration, ExportDefaultDeclarationKind, Statement};
 use oxc_span::GetSpan;
 use std::path::Path;
 use svn_core::sveltekit::{HooksScope, KitFilesSettings, KitRole, ScriptLang, classify};
@@ -139,34 +139,299 @@ fn kit_file_kind(path: &Path, settings: &KitFilesSettings) -> Option<(KitFileKin
     }
 }
 
-/// JS-form gate mirroring upstream `findExports` / `hasTypedParameter`
-/// for non-TS files: an export whose statement is directly preceded by
-/// a JSDoc block carrying `@type` / `@param` / `@satisfies` counts as
-/// user-typed, and the injector must leave it alone (upstream checks
-/// `ts.getJSDocType` / `getJSDocParameterTags` / a `satisfies` tag).
+/// The tags of the JSDoc block TypeScript attaches to a node, as
+/// `(tag name, tag text)` pairs — what `ts.getJSDocTags` reads.
 ///
-/// "Directly preceded" means the last comment before the statement,
-/// with only whitespace between them, is that JSDoc block. A JSDoc
-/// block further up belongs to whatever it precedes, not to this
-/// export.
-fn has_preceding_jsdoc_typing(
+/// A node's JSDoc comes from the `/** … */` comments between the end of
+/// the token before it (`trivia_start`) and its own start. TypeScript
+/// counts such a comment only after a line break outside any comment
+/// (or at the very start of the file), except for the node kinds whose
+/// same-line comments it reads too (`same_line`: variable declarations,
+/// parameters, function expressions and arrows). Only the LAST block
+/// contributes tags; earlier ones are ignored.
+fn attached_jsdoc_tags<'s>(
+    comments: &[oxc_ast::Comment],
+    source: &'s str,
+    trivia_start: usize,
+    node_start: usize,
+    same_line: bool,
+) -> Vec<(&'s str, &'s str)> {
+    let mut collecting = same_line || trivia_start == 0;
+    let mut gap_start = trivia_start;
+    let mut last: Option<&'s str> = None;
+    for comment in comments {
+        let (start, end) = (comment.span.start as usize, comment.span.end as usize);
+        if start < trivia_start || end > node_start {
+            continue;
+        }
+        collecting |= source
+            .get(gap_start..start)
+            .is_some_and(|gap| gap.contains(['\n', '\r']));
+        gap_start = end;
+        let Some(text) = source.get(start..end) else {
+            continue;
+        };
+        if collecting && text.starts_with("/**") && !text.starts_with("/**/") {
+            last = Some(text);
+        }
+    }
+    last.map(jsdoc_block_tags).unwrap_or_default()
+}
+
+/// Split a `/** … */` block into its tags. A tag starts at an `@` that
+/// opens a line (after the optional `*` margin) or follows whitespace,
+/// and runs until the next tag.
+fn jsdoc_block_tags(block: &str) -> Vec<(&str, &str)> {
+    let body = block
+        .strip_prefix("/**")
+        .and_then(|b| b.strip_suffix("*/"))
+        .unwrap_or("");
+    let bytes = body.as_bytes();
+    let mut starts: Vec<(usize, usize)> = Vec::new();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b != b'@' {
+            continue;
+        }
+        let opens = i == 0 || matches!(bytes[i - 1], b' ' | b'\t' | b'\n' | b'\r' | b'*');
+        let name_len = body[i + 1..]
+            .bytes()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == b'_')
+            .count();
+        if opens && name_len > 0 {
+            starts.push((i, i + 1 + name_len));
+        }
+    }
+    starts
+        .iter()
+        .enumerate()
+        .map(|(k, &(_, name_end))| {
+            let text_end = starts.get(k + 1).map_or(body.len(), |&(next, _)| next);
+            (&body[starts[k].0 + 1..name_end], &body[name_end..text_end])
+        })
+        .collect()
+}
+
+fn has_type_tag(tags: &[(&str, &str)]) -> bool {
+    tags.iter().any(|(name, _)| *name == "type")
+}
+
+fn has_satisfies_tag(tags: &[(&str, &str)]) -> bool {
+    tags.iter().any(|(name, _)| *name == "satisfies")
+}
+
+/// `ts.getJSDocParameterTags(first)` is non-empty: a `@param` (or its
+/// `@arg` / `@argument` aliases) naming the parameter, or — for a
+/// destructured one, which TypeScript matches by position — any.
+fn has_param_tag(tags: &[(&str, &str)], first: &LoneParam<'_>) -> bool {
+    tags.iter()
+        .filter(|(name, _)| matches!(*name, "param" | "arg" | "argument"))
+        .any(|(_, text)| match first.name {
+            None => true,
+            Some(name) => param_tag_name(text) == Some(name),
+        })
+}
+
+/// The parameter name a `@param` tag's text documents:
+/// `{Type} name`, `name`, `[name]` or `[name=default]`.
+fn param_tag_name(text: &str) -> Option<&str> {
+    let mut rest = text.trim_start();
+    if rest.starts_with('{') {
+        let mut depth = 0usize;
+        let mut end = rest.len();
+        for (i, c) in rest.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        rest = rest[end..].trim_start();
+    }
+    let rest = rest.strip_prefix('[').unwrap_or(rest).trim_start();
+    let len = rest
+        .bytes()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'$')
+        .count();
+    (len > 0).then(|| &rest[..len])
+}
+
+/// The first parameter of a function, as upstream's
+/// `node.parameters[0]` sees it (a rest parameter counts).
+struct LoneParam<'a> {
+    /// End of the whole parameter, default value included — where
+    /// upstream splices the parameter annotation.
+    end: usize,
+    typed: bool,
+    /// The bound name when the parameter is a plain identifier.
+    name: Option<&'a str>,
+}
+
+/// The parameter count and first parameter of `params`.
+fn first_param<'a>(
+    params: &'a oxc_ast::ast::FormalParameters<'a>,
+) -> (usize, Option<LoneParam<'a>>) {
+    let count = params.items.len() + usize::from(params.rest.is_some());
+    let first = match (params.items.first(), params.rest.as_ref()) {
+        (Some(p), _) => Some(LoneParam {
+            end: p.span.end as usize,
+            typed: p.type_annotation.is_some(),
+            name: match &p.pattern {
+                BindingPattern::BindingIdentifier(id) => Some(id.name.as_str()),
+                _ => None,
+            },
+        }),
+        (None, Some(rest)) => Some(LoneParam {
+            end: rest.span.end as usize,
+            typed: rest.type_annotation.is_some(),
+            name: match &rest.rest.argument {
+                BindingPattern::BindingIdentifier(id) => Some(id.name.as_str()),
+                _ => None,
+            },
+        }),
+        (None, None) => None,
+    };
+    (count, first)
+}
+
+/// The single parameter of a one-parameter function, or `None` when
+/// the function takes more or fewer — upstream only annotates
+/// `parameters.length === 1` handlers.
+fn lone_param<'a>(params: &'a oxc_ast::ast::FormalParameters<'a>) -> Option<LoneParam<'a>> {
+    match first_param(params) {
+        (1, first) => first,
+        _ => None,
+    }
+}
+
+/// Upstream `hasTypedParameter`: the first parameter carries a TS type,
+/// or — in a JS file — the function's JSDoc has a `@type` tag or a
+/// `@param` for that parameter.
+fn has_typed_parameter(
+    params: &oxc_ast::ast::FormalParameters<'_>,
+    is_ts: bool,
+    jsdoc: &[(&str, &str)],
+) -> bool {
+    let first = first_param(params).1;
+    if first.as_ref().is_some_and(|p| p.typed) {
+        return true;
+    }
+    !is_ts && (has_type_tag(jsdoc) || first.is_some_and(|p| has_param_tag(jsdoc, &p)))
+}
+
+/// A function value an exported `const` holds, as upstream's
+/// `findExports` recognises it: an arrow or function expression, bare
+/// or in parentheses. `satisfies`-wrapped functions count too, but are
+/// always typed, so they're reported as `None` here and caught by the
+/// declaration's own type check.
+enum FnValue<'a> {
+    Arrow(&'a oxc_ast::ast::ArrowFunctionExpression<'a>),
+    Function(&'a oxc_ast::ast::Function<'a>),
+}
+
+impl<'a> FnValue<'a> {
+    fn of(init: &'a oxc_ast::ast::Expression<'a>) -> Option<(Self, bool)> {
+        use oxc_ast::ast::Expression;
+        let (inner, parenthesized) = match init {
+            Expression::ParenthesizedExpression(p) => (&p.expression, true),
+            other => (other, false),
+        };
+        match inner {
+            Expression::ArrowFunctionExpression(a) => Some((Self::Arrow(a), parenthesized)),
+            Expression::FunctionExpression(f) => Some((Self::Function(f), parenthesized)),
+            _ => None,
+        }
+    }
+
+    fn params(&self) -> &'a oxc_ast::ast::FormalParameters<'a> {
+        match self {
+            Self::Arrow(a) => &a.params,
+            Self::Function(f) => &f.params,
+        }
+    }
+
+    fn start(&self) -> usize {
+        match self {
+            Self::Arrow(a) => a.span.start as usize,
+            Self::Function(f) => f.span.start as usize,
+        }
+    }
+}
+
+/// Upstream `findExports`' `hasTypeDefinition` for an exported
+/// single-declarator `const`, plus `hasTypedParameter` when its value
+/// is a function.
+///
+/// `stmt_tags` is the export statement's JSDoc. In a JS file the
+/// declaration also reads JSDoc written on itself and on a function
+/// value, and a function value reads the statement's JSDoc unless it
+/// is parenthesized (a parenthesized function is a JSDoc cast target,
+/// not the declaration's own value).
+fn var_export_is_typed(
+    declarator: &oxc_ast::ast::VariableDeclarator<'_>,
+    decl_trivia_start: usize,
+    is_ts: bool,
+    stmt_tags: &[(&str, &str)],
     comments: &[oxc_ast::Comment],
     source: &str,
-    stmt_start: usize,
 ) -> bool {
-    let Some(last) = comments
+    use oxc_ast::ast::Expression;
+    if declarator.type_annotation.is_some() {
+        return true;
+    }
+    let init = declarator.init.as_ref();
+    if matches!(init, Some(Expression::TSSatisfiesExpression(_))) {
+        return true;
+    }
+    let fn_value = init.and_then(FnValue::of);
+    if is_ts {
+        return fn_value.is_some_and(|(f, _)| has_typed_parameter(f.params(), true, &[]));
+    }
+    let own_tags = attached_jsdoc_tags(
+        comments,
+        source,
+        decl_trivia_start,
+        declarator.span.start as usize,
+        true,
+    );
+    // The token before a function value is the `=`.
+    let fn_tags = fn_value.as_ref().map(|(f, _)| {
+        let eq = source[..f.start()].rfind('=').map_or(f.start(), |i| i + 1);
+        attached_jsdoc_tags(comments, source, eq, f.start(), true)
+    });
+    let unparenthesized_fn_tags = match &fn_value {
+        Some((_, false)) => fn_tags.as_deref().unwrap_or(&[]),
+        _ => &[],
+    };
+    let declaration_tags: Vec<(&str, &str)> = stmt_tags
         .iter()
-        .filter(|c| (c.span.end as usize) <= stmt_start)
-        .max_by_key(|c| c.span.end)
-    else {
+        .chain(own_tags.iter())
+        .chain(unparenthesized_fn_tags.iter())
+        .copied()
+        .collect();
+    if has_type_tag(&declaration_tags) || has_satisfies_tag(&declaration_tags) {
+        return true;
+    }
+    let Some((f, parenthesized)) = fn_value else {
         return false;
     };
-    let gap = &source[last.span.end as usize..stmt_start];
-    if !gap.trim().is_empty() || !last.is_jsdoc() {
-        return false;
+    let mut function_tags: Vec<(&str, &str)> = fn_tags.unwrap_or_default();
+    if !parenthesized {
+        function_tags.extend(stmt_tags.iter().copied());
     }
-    let block = &source[last.span.start as usize..last.span.end as usize];
-    block.contains("@type") || block.contains("@param") || block.contains("@satisfies")
+    has_typed_parameter(f.params(), false, &function_tags)
+}
+
+/// The declaration an `export` statement carries, when it's one
+/// upstream's `findExports` reads.
+enum ExportedDecl<'a> {
+    Function(&'a oxc_ast::ast::Function<'a>),
+    Variable(&'a oxc_ast::ast::VariableDeclaration<'a>),
 }
 
 /// A kit file's overlay: the user's source with type annotations
@@ -213,28 +478,50 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
     let alloc = Allocator::default();
     let parsed = parse_script_body(&alloc, source, ParserScriptLang::Ts);
 
+    let comments = &parsed.program.comments;
+    let body = &parsed.program.body;
     let mut insertions: Vec<(usize, String)> = Vec::new();
-    for stmt in &parsed.program.body {
-        // Only the declaration form carries something to annotate; a
-        // bare specifier list (`export { handle }`) declares nothing.
-        let Statement::ExportDeclaration(export) = stmt else {
-            continue;
+    for (idx, stmt) in body.iter().enumerate() {
+        // Upstream's `findExports` registers every statement whose first
+        // modifier is `export`: `export function`, `export default
+        // function` and single-declarator `export const`. A bare
+        // specifier list (`export { handle }`) declares nothing.
+        let (export_start, declaration) = match stmt {
+            Statement::ExportDeclaration(export) => match &export.declaration {
+                Declaration::FunctionDeclaration(func) => {
+                    (export.span.start, ExportedDecl::Function(func))
+                }
+                Declaration::VariableDeclaration(var_decl) => {
+                    (export.span.start, ExportedDecl::Variable(var_decl))
+                }
+                _ => continue,
+            },
+            Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+                ExportDefaultDeclarationKind::FunctionDeclaration(func) => {
+                    (export.span.start, ExportedDecl::Function(func))
+                }
+                _ => continue,
+            },
+            _ => continue,
         };
-        // JS sources: an export the user already JSDoc-typed is
-        // upstream's `hasTypeDefinition` — leave it untouched.
-        let js_user_typed = !is_ts
-            && has_preceding_jsdoc_typing(
-                &parsed.program.comments,
-                source,
-                export.span.start as usize,
-            );
+        let export_start = export_start as usize;
+        let trivia_start = idx
+            .checked_sub(1)
+            .map_or(0, |i| body[i].span().end as usize);
+        // A JS export's own JSDoc — what `ts.getJSDocType` and friends
+        // read for upstream's `hasTypeDefinition`.
+        let stmt_tags = if is_ts {
+            Vec::new()
+        } else {
+            attached_jsdoc_tags(comments, source, trivia_start, export_start, false)
+        };
 
-        match &export.declaration {
-            Declaration::FunctionDeclaration(func) => {
+        match declaration {
+            ExportedDecl::Function(func) => {
                 let Some(name) = func.id.as_ref().map(|id| id.name.as_str()) else {
                     continue;
                 };
-                if js_user_typed {
+                if has_typed_parameter(&func.params, is_ts, &stmt_tags) {
                     continue;
                 }
                 match &kind {
@@ -254,7 +541,7 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                             // path).
                             collect_js_fn_type_insert(
                                 func,
-                                export.span.start as usize,
+                                export_start,
                                 "(arg0: import('./$types.js').RequestEvent) => Response | Promise<Response>",
                                 &mut insertions,
                             );
@@ -277,7 +564,7 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                         } else {
                             collect_js_fn_type_insert(
                                 func,
-                                export.span.start as usize,
+                                export_start,
                                 &types.jsdoc_type(),
                                 &mut insertions,
                             );
@@ -303,7 +590,7 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                                     ));
                                 } else {
                                     insertions.push((
-                                        export.span.start as usize,
+                                        export_start,
                                         format!("/** @type {{{ENTRY_GENERATOR}}} */ "),
                                     ));
                                 }
@@ -323,7 +610,7 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                             // branch.
                             collect_js_param_insert(
                                 &func.params,
-                                export.span.start as usize,
+                                export_start,
                                 &event_type,
                                 &mut insertions,
                             );
@@ -331,7 +618,7 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                     }
                 }
             }
-            Declaration::VariableDeclaration(var_decl) => {
+            ExportedDecl::Variable(var_decl) => {
                 // Upstream's findExports only registers single-declarator
                 // export const statements (declarations.length === 1); a
                 // multi-declarator list is ignored entirely, so skip it
@@ -339,6 +626,7 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                 if var_decl.declarations.len() != 1 {
                     continue;
                 }
+                let decl_trivia_start = var_decl.span.start as usize + var_decl.kind.as_str().len();
                 for declarator in &var_decl.declarations {
                     if declarator.init.is_none() {
                         continue;
@@ -346,7 +634,14 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                     let BindingPattern::BindingIdentifier(id) = &declarator.id else {
                         continue;
                     };
-                    if js_user_typed {
+                    if var_export_is_typed(
+                        declarator,
+                        decl_trivia_start,
+                        is_ts,
+                        &stmt_tags,
+                        comments,
+                        source,
+                    ) {
                         continue;
                     }
 
@@ -602,7 +897,6 @@ pub fn inject(path: &Path, source: &str, opts: &KitInjectOptions<'_>) -> Option<
                     }
                 }
             }
-            _ => {}
         }
     }
 
@@ -696,15 +990,10 @@ fn collect_handler_insert(
     inject_response_return: bool,
     insertions: &mut Vec<(usize, String)>,
 ) {
-    if func.params.items.len() != 1 {
+    let Some(param) = lone_param(&func.params).filter(|p| !p.typed) else {
         return;
-    }
-    let param = &func.params.items[0];
-    if param.type_annotation.is_some() {
-        return;
-    }
-    let insert_at = param.pattern.span().end as usize;
-    insertions.push((insert_at, format!(": {event_type}")));
+    };
+    insertions.push((param.end, format!(": {event_type}")));
 
     // `+server.ts` HTTP handlers additionally get a return-type
     // constraint so a handler that returns a non-`Response` value is
@@ -742,17 +1031,10 @@ fn collect_js_param_insert(
     event_type: &str,
     insertions: &mut Vec<(usize, String)>,
 ) {
-    if params.items.len() != 1 {
+    let Some(param) = lone_param(params).filter(|p| !p.typed) else {
         return;
-    }
-    let param = &params.items[0];
-    if param.type_annotation.is_some() {
-        return;
-    }
-    let name = match &param.pattern {
-        BindingPattern::BindingIdentifier(id) => id.name.as_str(),
-        _ => "arg0",
     };
+    let name = param.name.unwrap_or("arg0");
     insertions.push((insert_at, format!("/** @param {{{event_type}}} {name} */ ")));
 }
 
@@ -768,10 +1050,7 @@ fn collect_js_fn_type_insert(
     fn_type: &str,
     insertions: &mut Vec<(usize, String)>,
 ) {
-    if func.params.items.len() != 1 {
-        return;
-    }
-    if func.params.items[0].type_annotation.is_some() {
+    if lone_param(&func.params).is_none_or(|p| p.typed) {
         return;
     }
     insertions.push((insert_at, format!("/** @type {{{fn_type}}} */ ")));
@@ -835,14 +1114,10 @@ fn collect_projected_handler_insert(
     types: &HandlerTypes,
     insertions: &mut Vec<(usize, String)>,
 ) {
-    if params.items.len() != 1 {
+    let Some(param) = lone_param(params).filter(|p| !p.typed) else {
         return;
-    }
-    let param = &params.items[0];
-    if param.type_annotation.is_some() {
-        return;
-    }
-    insertions.push((param.pattern.span().end as usize, types.param_annotation()));
+    };
+    insertions.push((param.end, types.param_annotation()));
     if let Some(pos) = return_insert_at {
         insertions.push((pos, types.return_annotation()));
     }
@@ -921,7 +1196,7 @@ fn collect_js_value_fn_type_insert(
     types: &HandlerTypes,
     insertions: &mut Vec<(usize, String)>,
 ) {
-    if params.items.len() != 1 || params.items[0].type_annotation.is_some() {
+    if lone_param(params).is_none_or(|p| p.typed) {
         return;
     }
     insertions.push((
@@ -974,15 +1249,10 @@ fn collect_arrow_handler_insert(
     event_type: &str,
     insertions: &mut Vec<(usize, String)>,
 ) {
-    if arrow.params.items.len() != 1 {
+    let Some(param) = lone_param(&arrow.params).filter(|p| !p.typed) else {
         return;
-    }
-    let param = &arrow.params.items[0];
-    if param.type_annotation.is_some() {
-        return;
-    }
-    let insert_at = param.pattern.span().end as usize;
-    insertions.push((insert_at, format!(": {event_type}")));
+    };
+    insertions.push((param.end, format!(": {event_type}")));
 }
 
 #[cfg(test)]
@@ -1384,6 +1654,78 @@ export async function POST({ request }) { return new Response(''); }
                 "should not double-type: {source}"
             );
         }
+    }
+
+    #[test]
+    fn js_jsdoc_typing_follows_typescript_attachment() {
+        // Typed: the last JSDoc block before the export (a line comment
+        // in between doesn't detach it), a same-line JSDoc on the
+        // declaration or on the function value, and a `@param` naming
+        // the parameter.
+        for source in [
+            "/** @type {import('./$types').PageLoad} */\n// note\nexport function load(e) { return {}; }",
+            "export const /** @type {import('./$types').PageLoad} */ load = (e) => ({});",
+            "export const load = /** @type {import('./$types').PageLoad} */ (e) => ({});",
+            "/** @param {import('./$types').PageLoadEvent} e */\nexport const load = (e) => ({});",
+            "/** @param {import('./$types').PageLoadEvent} */\nexport const load = ({ url }) => ({});",
+        ] {
+            assert!(
+                inject(&page_js_path(), source).is_none(),
+                "should not double-type: {source}"
+            );
+        }
+        // Untyped: `@typedef` is not `@type`, an earlier JSDoc block is
+        // shadowed by a later one, a same-line block before `export`
+        // is trailing trivia of the previous statement, and a `@param`
+        // for another name doesn't cover the parameter.
+        for source in [
+            "/** @typedef {{a:1}} T */ export const load = (e) => ({});",
+            "/** @type {import('./$types').PageLoad} */\n/** Loads. */\nexport function load(e) { return {}; }",
+            "const a = 1; /** @type {import('./$types').PageLoad} */\nexport function load(e) { return { a }; }",
+            "/** @param {string} other */\nexport function load(e) { return {}; }",
+        ] {
+            let got = inject(&page_js_path(), source)
+                .unwrap_or_else(|| panic!("untyped load must inject: {source}"));
+            assert!(got.contains("PageLoadEvent} "), "{got}");
+        }
+    }
+
+    #[test]
+    fn export_default_function_is_an_export() {
+        // `export default function GET` — the first modifier is still
+        // `export`, so upstream registers it under its own name.
+        let source = "export default function GET(e) { return new Response(e.url); }";
+        let got = inject(&server_path(), source).unwrap();
+        assert!(
+            got.contains(
+                "GET(e: import('./$types.js').RequestEvent) : Response | Promise<Response> {"
+            ),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn parameter_annotation_goes_after_the_default_value() {
+        // Upstream splices at the end of the whole parameter, default
+        // included — the result doesn't parse, and upstream reports the
+        // syntax errors that follow.
+        let source = "export function load({ url } = {}) { return {}; }";
+        let got = inject(&page_path(), source).unwrap();
+        assert!(
+            got.contains("load({ url } = {}: import('./$types.js').PageLoadEvent)"),
+            "{got}"
+        );
+        let source = "export const load = (...args) => ({});";
+        let got = inject(&page_path(), source).unwrap();
+        assert!(
+            got.contains("(...args: import('./$types.js').PageLoadEvent)"),
+            "{got}"
+        );
+        let got = inject(&page_js_path(), source).unwrap();
+        assert!(
+            got.contains("/** @param {import('./$types.js').PageLoadEvent} args */"),
+            "{got}"
+        );
     }
 
     #[test]

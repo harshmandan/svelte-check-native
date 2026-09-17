@@ -411,6 +411,23 @@ impl CheckSession {
         // dropped here (lazily reloadable from the identical disk
         // copy) or retained (rewrite changed bytes).
         let disk_text = overlay_disk_text(&input, &gen_path, &layout.workspace);
+        // A kit file's typed copy is mapped back by its splices alone,
+        // so the external-import rewrite joins them and the mapper reads
+        // the copy exactly as written.
+        if matches!(input.kind, InputKind::KitFile) {
+            let prefixes = path_utils::external_import_prefixes(
+                &input.generated_ts,
+                &input.source_path,
+                &gen_path,
+                &layout.workspace,
+            );
+            if !prefixes.is_empty() {
+                input.kit_col_shifts =
+                    add_kit_splices(&input.generated_ts, &input.kit_col_shifts, &prefixes);
+                input.generated_ts = splice_all(&input.generated_ts, &prefixes);
+            }
+            input.overlay_line_starts = svn_emit::compute_line_starts(&input.generated_ts);
+        }
         write_if_changed(
             &gen_path,
             disk_text.as_deref().unwrap_or(&input.generated_ts),
@@ -926,6 +943,73 @@ fn overlay_disk_text(input: &CheckInput, gen_path: &Path, workspace: &Path) -> O
     ))
 }
 
+/// `text` with each `(byte offset, insertion)` spliced in; offsets are
+/// ascending and refer to `text`.
+fn splice_all(text: &str, insertions: &[(usize, String)]) -> String {
+    let mut out =
+        String::with_capacity(text.len() + insertions.iter().map(|(_, t)| t.len()).sum::<usize>());
+    let mut cursor = 0;
+    for (at, inserted) in insertions {
+        out.push_str(&text[cursor..*at]);
+        out.push_str(inserted);
+        cursor = *at;
+    }
+    out.push_str(&text[cursor..]);
+    out
+}
+
+/// Merge further insertions into a kit copy's `(line, column, length)`
+/// splice list (columns 1-based UTF-16, in the text the list describes).
+/// `insertions` are ascending byte offsets into `text`, which the
+/// existing splices already describe; every splice after an insertion
+/// on its line moves right by the inserted length.
+fn add_kit_splices(
+    text: &str,
+    shifts: &[(u32, u32, u32)],
+    insertions: &[(usize, String)],
+) -> Vec<(u32, u32, u32)> {
+    let starts = svn_emit::compute_line_starts(text);
+    let mut added: Vec<(u32, u32, u32)> = insertions
+        .iter()
+        .map(|(at, inserted)| {
+            let line_idx = match starts.binary_search(&(*at as u32)) {
+                Ok(i) => i,
+                Err(i) => i.saturating_sub(1),
+            };
+            let line_start = starts.get(line_idx).copied().unwrap_or(0) as usize;
+            let col = text
+                .get(line_start..*at)
+                .unwrap_or("")
+                .chars()
+                .map(|c| c.len_utf16() as u32)
+                .sum::<u32>()
+                + 1;
+            (line_idx as u32 + 1, col, inserted.len() as u32)
+        })
+        .collect();
+    let moved = |line: u32, col: u32, own: Option<usize>| -> u32 {
+        added
+            .iter()
+            .enumerate()
+            .filter(|&(i, &(l, c, _))| l == line && (c < col || (c == col && Some(i) < own)))
+            .map(|(_, &(_, _, len))| len)
+            .sum()
+    };
+    let mut merged: Vec<(u32, u32, u32)> = shifts
+        .iter()
+        .map(|&(line, col, len)| (line, col + moved(line, col, None), len))
+        .collect();
+    let finals: Vec<(u32, u32, u32)> = added
+        .iter()
+        .enumerate()
+        .map(|(i, &(line, col, len))| (line, col + moved(line, col, Some(i)), len))
+        .collect();
+    added = finals;
+    merged.extend(added);
+    merged.sort_unstable();
+    merged
+}
+
 /// The emit-space overlay text handle the diagnostic mapper reads,
 /// chosen so that no overlay string is retained across the tsgo phase
 /// unless correctness requires it:
@@ -1024,6 +1108,18 @@ fn overlay_syntax_failures(
                 layout.workspace.join(&d.file)
             };
             let abs = path_utils::lexical_normalise(&abs);
+            // Only component overlays are our own TypeScript. A kit
+            // mirror is the user's script with upstream's annotations
+            // spliced in, so it fails to parse exactly where upstream's
+            // copy does (a user syntax error, or an annotation after a
+            // parameter default) and its errors are reported as-is.
+            let generated_name = abs.file_name()?.to_str()?;
+            if ![".svelte.svn.ts", ".svelte.svn.js", ".d.svelte.ts"]
+                .iter()
+                .any(|suffix| generated_name.ends_with(suffix))
+            {
+                return None;
+            }
             let source = layout.original_from_generated(&abs)?;
             seen.insert(source.clone()).then(|| CheckDiagnostic {
                 source_path: source,
@@ -1427,6 +1523,20 @@ fn map_diagnostic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kit_splices_merge_with_later_insertions() {
+        // Line 1 already carries a 5-unit splice at column 30; a 3-unit
+        // insertion at column 10 moves it to column 33. Line 2 is
+        // untouched.
+        let text = "0123456789abcdefghijklmnopqrstuvwxyz\nline two\n";
+        let merged = add_kit_splices(text, &[(1, 30, 5), (2, 3, 4)], &[(9, "pre".to_string())]);
+        assert_eq!(merged, vec![(1, 10, 3), (1, 33, 5), (2, 3, 4)]);
+        assert_eq!(
+            splice_all(text, &[(9, "pre".to_string())]),
+            "012345678pre9abcdefghijklmnopqrstuvwxyz\nline two\n"
+        );
+    }
 
     /// The `(ts)` / `(js)` label upstream puts on each diagnostic. A
     /// script file is decided by its extension; a component by its own

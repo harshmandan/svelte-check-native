@@ -1,0 +1,17 @@
+{
+    "errors": [
+        {
+            "file": "src/routes/+page.js",
+            "line": 1,
+            "column": 65,
+            "code": 2339
+        },
+        {
+            "file": "src/routes/api/+server.ts",
+            "line": 1,
+            "column": 55,
+            "code": 2339
+        }
+    ],
+    "warnings": []
+}

@@ -370,7 +370,11 @@ fn main() -> ExitCode {
     let (tsconfig, escaped_solution) = match resolve_tsconfig(&workspace, cli.tsconfig.as_deref()) {
         Ok(pair) => pair,
         Err(msg) => {
-            eprintln!("svelte-check-native: {msg}");
+            if msg.ends_with("svelte-check failed") {
+                eprintln!("Error: {msg}");
+            } else {
+                eprintln!("svelte-check-native: {msg}");
+            }
             return ExitCode::from(2);
         }
     };
@@ -1197,10 +1201,111 @@ fn resolve_tsconfig(workspace: &Path, explicit: Option<&Path>) -> Result<(PathBu
             )
         })?
     };
+    if let Some(err) = std::fs::read_to_string(&candidate)
+        .ok()
+        .and_then(|text| tsconfig_syntax_error(&text))
+    {
+        let (line, col) = line_col(
+            &std::fs::read_to_string(&candidate).unwrap_or_default(),
+            err.0,
+        );
+        return Err(format!(
+            "{}:{line}:{col} - error {}\nsvelte-check failed",
+            candidate.display(),
+            err.1
+        ));
+    }
     match escape_solution_tsconfig(&candidate) {
         Some(escaped) => Ok((escaped, true)),
         None => Ok((candidate, false)),
     }
+}
+
+/// The first thing TypeScript's own config reader (`readConfigFile`)
+/// rejects in a tsconfig, as `(byte offset, "TSxxxx: message")`. Upstream
+/// fails the run on it; our JSON5 reader alone would accept single
+/// quotes, bare keys and `Infinity`. The text is parsed as the JavaScript
+/// expression TypeScript's JSON parser reads, then held to its rules:
+/// double-quoted strings and keys; values that are strings, numbers
+/// (optionally negated), `true`, `false`, `null`, objects or arrays.
+fn tsconfig_syntax_error(text: &str) -> Option<(usize, String)> {
+    use oxc_ast::ast::{
+        ArrayExpressionElement, Expression, ObjectPropertyKind, PropertyKey, Statement,
+        UnaryOperator,
+    };
+    use oxc_span::GetSpan;
+    if text.trim().is_empty() {
+        return None;
+    }
+    let wrapped = format!("({text}\n)");
+    let alloc = oxc_allocator::Allocator::default();
+    let parsed = svn_parser::parse_script_body(&alloc, &wrapped, svn_parser::ScriptLang::Js);
+    if let Some(e) = parsed.errors.first() {
+        let at = e
+            .labels
+            .as_ref()
+            .first()
+            .map_or(0, |l| l.offset().saturating_sub(1));
+        return Some((
+            (at as usize).min(text.len()),
+            format!("TS1005: {}", e.message),
+        ));
+    }
+    let Some(Statement::ExpressionStatement(stmt)) = parsed.program.body.first() else {
+        return None;
+    };
+    let Expression::ParenthesizedExpression(root) = &stmt.expression else {
+        return None;
+    };
+    const DOUBLE: &str = "TS1327: String literal with double quotes expected.";
+    const VALUE: &str = "TS1328: Property value can only be string literal, numeric literal, 'true', 'false', 'null', object literal or array literal.";
+    fn check(e: &Expression<'_>, text: &str) -> Option<(usize, &'static str)> {
+        let at = |span: oxc_span::Span| (span.start as usize).saturating_sub(1);
+        match e {
+            Expression::StringLiteral(s) => {
+                (!text[at(s.span)..].starts_with('"')).then(|| (at(s.span), DOUBLE))
+            }
+            Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_) => None,
+            Expression::UnaryExpression(u)
+                if u.operator == UnaryOperator::UnaryNegation
+                    && matches!(u.argument, Expression::NumericLiteral(_)) =>
+            {
+                None
+            }
+            Expression::ObjectExpression(o) => o.properties.iter().find_map(|p| match p {
+                ObjectPropertyKind::ObjectProperty(prop) => {
+                    let key_ok = matches!(&prop.key, PropertyKey::StringLiteral(k)
+                        if text[at(k.span)..].starts_with('"'));
+                    if !key_ok || prop.shorthand || prop.computed {
+                        return Some((at(prop.key.span()), DOUBLE));
+                    }
+                    check(&prop.value, text)
+                }
+                ObjectPropertyKind::SpreadProperty(sp) => Some((at(sp.span), VALUE)),
+            }),
+            Expression::ArrayExpression(a) => a.elements.iter().find_map(|el| match el {
+                ArrayExpressionElement::Elision(_) => None,
+                ArrayExpressionElement::SpreadElement(sp) => Some((at(sp.span), VALUE)),
+                other => other.as_expression().and_then(|e| check(e, text)),
+            }),
+            Expression::Identifier(id) => Some((at(id.span), VALUE)),
+            other => Some((at(other.span()), VALUE)),
+        }
+    }
+    check(&root.expression, text).map(|(at, msg)| (at, msg.to_string()))
+}
+
+/// 1-based line and column of a byte offset.
+fn line_col(text: &str, offset: usize) -> (usize, usize) {
+    let before = &text[..offset.min(text.len())];
+    let line = before.matches('\n').count() + 1;
+    let col = before
+        .rfind('\n')
+        .map_or(before.len(), |nl| before.len() - nl - 1)
+        + 1;
+    (line, col)
 }
 
 /// If `candidate` is a solution-style tsconfig, try to redirect to a
@@ -2538,6 +2643,30 @@ mod tests {
                     .to_string()
             ),
         );
+    }
+
+    #[test]
+    fn tsconfig_syntax_matches_typescripts_config_reader() {
+        // Results of `ts.parseConfigFileTextToJson` (TypeScript 5.9).
+        let code = |text: &str| tsconfig_syntax_error(text).map(|(at, m)| (at, m[..6].to_string()));
+        for ok in [
+            r#"{ "a": 1, }"#,
+            "{ // x\n \"a\": /* y */ 1 }",
+            r#"{ "a": 0x10 }"#,
+            r#"{ "a": .5 }"#,
+            r#"{ "a": [1,] }"#,
+            r#"{ "a": -1 }"#,
+            "",
+        ] {
+            assert_eq!(code(ok), None, "{ok}");
+        }
+        assert_eq!(code("{ 'a': 1 }"), Some((2, "TS1327".into())));
+        assert_eq!(code("{ a: 1 }"), Some((2, "TS1327".into())));
+        assert_eq!(code(r#"{ "a": 'x' }"#), Some((7, "TS1327".into())));
+        assert_eq!(code(r#"{ "a": +1 }"#), Some((7, "TS1328".into())));
+        assert_eq!(code(r#"{ "a": Infinity }"#), Some((7, "TS1328".into())));
+        assert_eq!(code(r#"{ "a": NaN }"#), Some((7, "TS1328".into())));
+        assert!(code(r#"{ "a": 1"#).is_some());
     }
 
     #[test]

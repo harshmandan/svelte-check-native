@@ -265,15 +265,11 @@ declare type $$Generic<T = any> = T;
 declare function __svn_invalidate<T>(fn: () => T): T;
 
 // @@STATE_AMBIENTS_BEGIN@@
-// `$state` ambient declarations. Stripped when real Svelte 5 is
-// installed because its globals declare the same base overloads and
-// namespace members. Keeping both sets poisons overload resolution:
-// a mismatch reports TS2769 "No overload matches this call" instead
-// of the direct assignability diagnostic. Other rune ambients
-// ($derived, $effect, etc.) aren't stripped because either their
-// single-overload forms are immune to the duplication or our shim
-// carries extra overloads (e.g. `$props<T = any>()`) that Svelte's
-// simpler declarations don't provide.
+// Rune ambient declarations. Stripped when real Svelte 5 is installed,
+// whose own globals declare them: upstream relies on those alone, and
+// keeping both turns every rune into a two-overload set, so a mismatch
+// reports TS2769 "No overload matches this call" instead of the direct
+// assignability diagnostic.
 /** `$state<T>(initial?)` declares reactive state. Macro.
  *
  * Two overloads:
@@ -311,7 +307,6 @@ declare namespace $state {
     function raw<T>(): T | undefined;
     function snapshot<T>(value: T): T;
 }
-// @@STATE_AMBIENTS_END@@
 
 /** `$derived(expression)` re-evaluates whenever its dependencies change. */
 declare function $derived<T>(expression: T): T;
@@ -357,6 +352,7 @@ declare namespace $inspect {
  * Constraint matches real svelte: the parameter must extend `HTMLElement`.
  */
 declare function $host<El extends HTMLElement = HTMLElement>(): El;
+// @@STATE_AMBIENTS_END@@
 
 // Internal helpers emitted by svelte-check-native into generated `.svelte.ts`
 // files. Declared here so the generated code type-checks. The `__svn_*`

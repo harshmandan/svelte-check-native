@@ -83,19 +83,15 @@ const STATE_AMBIENTS_END: &str = "// @@STATE_AMBIENTS_END@@";
 /// locals) as "this is our code, not the user's — don't surface
 /// errors here".
 /// Return the shim text with the fallback `declare module 'svelte/*'`
-/// block AND our `$state` ambient declarations stripped when
+/// block AND our rune ambient declarations stripped when
 /// `keep_fallback` is false (i.e. real svelte is installed). Line
 /// count is preserved — stripped ranges are replaced with blank lines
 /// so diagnostic positions in the shim stay stable.
 ///
-/// Why strip `$state`: Svelte 5 declares the same base overloads and
-/// namespace members. Keeping both poisons overload resolution — a
-/// mismatch reports TS2769 "No overload matches this call" instead
-/// of the direct assignability diagnostic. Other rune ambients
-/// ($derived/$effect/$props/etc.) aren't stripped — either their
-/// single-overload forms don't hit the dedup issue or our shim carries
-/// extra overloads (e.g. `$props<T>()`) that Svelte's simpler
-/// `$props(): any` doesn't provide.
+/// Why strip the runes: Svelte 5 declares them itself, and keeping both
+/// turns each into a two-overload set — a mismatch then reports TS2769
+/// "No overload matches this call" instead of the direct assignability
+/// diagnostic upstream reports.
 fn resolve_shim_text(keep_fallback: bool) -> String {
     if keep_fallback {
         return SVELTE_SHIMS.to_string();

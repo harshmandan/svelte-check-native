@@ -1,0 +1,54 @@
+{
+    "clean": true,
+    "warnings": [
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 5,
+            "code": "a11y_positive_tabindex"
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 0,
+            "code": "a11y_no_noninteractive_tabindex"
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 31,
+            "code": "a11y_positive_tabindex"
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 26,
+            "code": "a11y_no_noninteractive_tabindex"
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 71,
+            "code": "a11y_no_noninteractive_tabindex"
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 100,
+            "code": "a11y_positive_tabindex"
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 125,
+            "code": "a11y_positive_tabindex"
+        },
+        {
+            "file": "src/A.svelte",
+            "line": 0,
+            "column": 120,
+            "code": "a11y_no_noninteractive_tabindex"
+        }
+    ],
+    "_note": "a11y_no_noninteractive_tabindex looks the attribute up by its exact name after the attribute loop (so `tabIndex` does not count) and compares `Number(value) >= 0`; a11y_positive_tabindex lowercases the name and treats a bare attribute as 1 and hex/decimal text with JS Number semantics. Verified against svelte 5.55."
+}

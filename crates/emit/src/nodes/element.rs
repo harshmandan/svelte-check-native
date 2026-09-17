@@ -1089,11 +1089,13 @@ fn emit_let_attribute(
                 name.clone()
             };
             buf.push_str(&"    ".repeat(depth));
-            buf.append_with_source(
-                &format!("\"{key}\""),
+            crate::nodes::attribute::write_attribute_key(
+                buf,
+                &key,
                 svn_core::Range::new(d.range.start, d.range.start + name.len() as u32),
+                false,
             );
-            buf.push_str(": true,\n");
+            buf.push_str(" true,\n");
         }
     }
 }

@@ -290,7 +290,9 @@ pub(crate) fn emit_component_call(
         let _ = write!(buf, "{inner}{ctor_lhs}");
         let call_start = buf.len() as u32;
         write_new_ctor(buf, inst, &local);
-        let _ = write!(buf, "({{ target: __svn_any(), props: {{}} }})");
+        buf.push_str("({ target: __svn_any(), ");
+        write_props_key(buf, inst);
+        buf.push_str(" {} })");
         push_component_call_token_map(buf, call_start, inst.node_start);
         buf.push_str(";\n");
         emit_component_bind_widen_trailers(buf, inst, &inner);
@@ -304,11 +306,13 @@ pub(crate) fn emit_component_call(
         let _ = write!(buf, "{inner}{ctor_lhs}");
         let call_start = buf.len() as u32;
         write_new_ctor(buf, inst, &local);
-        let _ = write!(buf, "({{ target: __svn_any(), props: {{");
+        buf.push_str("({ target: __svn_any(), ");
+        write_props_key(buf, inst);
+        buf.push_str(" {");
         let mut first = true;
         if emit_implicit_children {
             write_implicit_children_key(buf, inst);
-            buf.push_str(": () => __svn_snippet_return()");
+            buf.push_str(" () => __svn_snippet_return()");
             first = false;
         }
         for p in &inst.props {
@@ -336,11 +340,13 @@ pub(crate) fn emit_component_call(
     let opts_inner = "    ".repeat(depth + 2);
     let props_inner = "    ".repeat(depth + 3);
     let _ = writeln!(buf, "{opts_inner}target: __svn_any(),");
-    let _ = writeln!(buf, "{opts_inner}props: {{");
+    buf.push_str(&opts_inner);
+    write_props_key(buf, inst);
+    buf.push_str(" {\n");
     if emit_implicit_children {
         buf.push_str(&props_inner);
         write_implicit_children_key(buf, inst);
-        let _ = writeln!(buf, ": () => __svn_snippet_return(),");
+        let _ = writeln!(buf, " () => __svn_snippet_return(),");
     }
     for p in &inst.props {
         buf.push_str(&props_inner);
@@ -368,8 +374,10 @@ pub(crate) fn emit_component_call(
 /// diagnostic lands there).
 fn write_implicit_children_key(buf: &mut EmitBuffer, inst: &svn_analyze::ComponentInstantiation) {
     match inst.implicit_children_anchor {
-        Some(anchor) => buf.append_with_source("children", anchor),
-        None => buf.push_str("children"),
+        // The `:` shares the anchor, so a range ending right after the
+        // key collapses onto it, as upstream's does.
+        Some(anchor) => buf.append_with_source("children:", anchor),
+        None => buf.push_str("children:"),
     }
 }
 
@@ -644,13 +652,13 @@ fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::P
             if is_css_custom_prop_name(name) {
                 buf.push_str("...__svn_css_prop({");
                 write_quoted_prop_key_with_source(buf, name, attr_range);
-                buf.push_str(": ");
+                buf.push_str(" ");
                 write_js_string_literal_to(buf, value);
                 buf.push_str("})");
                 return;
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);
-            buf.push_str(": ");
+            buf.push_str(" ");
             write_js_string_literal_to(buf, value);
         }
         svn_analyze::PropShape::Expression {
@@ -662,13 +670,13 @@ fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::P
             if is_css_custom_prop_name(name) {
                 buf.push_str("...__svn_css_prop({");
                 write_quoted_prop_key_with_source(buf, name, attr_range);
-                buf.push_str(": (");
+                buf.push_str(" (");
                 buf.append_with_source(expr, *expr_range);
                 buf.push_str(")})");
                 return;
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);
-            buf.push_str(": (");
+            buf.push_str(" (");
             buf.append_with_source(expr, *expr_range);
             buf.push_str(")");
         }
@@ -679,7 +687,7 @@ fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::P
                 buf.append_with_source(name, attr_range);
             } else {
                 write_quoted_prop_key_with_source(buf, name, attr_range);
-                let _ = write!(buf, ": {name}");
+                let _ = write!(buf, " {name}");
             }
         }
         svn_analyze::PropShape::BoolShorthand { name, .. } => {
@@ -698,11 +706,11 @@ fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::P
             if is_css_custom_prop_name(name) {
                 buf.push_str("...__svn_css_prop({");
                 write_quoted_prop_key_with_source(buf, name, attr_range);
-                buf.push_str(": true})");
+                buf.push_str(" true})");
                 return;
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);
-            buf.push_str(": true");
+            buf.push_str(" true");
         }
         svn_analyze::PropShape::Spread { expr_range, .. } => {
             let expr = source
@@ -730,7 +738,7 @@ fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::P
             // `T` from the getter's return, checks the setter's
             // parameter against `T`, and flows the return out to the
             // prop slot.
-            buf.push_str(": __svn_get_set_binding(");
+            buf.push_str(" __svn_get_set_binding(");
             buf.append_with_source(getter, *getter_range);
             buf.push_str(", ");
             buf.append_with_source(setter, *setter_range);
@@ -761,7 +769,7 @@ fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::P
                 buf.push_str("...__svn_css_prop({");
             }
             write_quoted_prop_key_with_source(buf, name, attr_range);
-            buf.push_str(": `");
+            buf.push_str(" `");
             for part in parts {
                 match part {
                     svn_parser::AttrValuePart::Text { range } => {
@@ -803,6 +811,11 @@ fn write_prop_shape_value(buf: &mut EmitBuffer, source: &str, p: &svn_analyze::P
 /// TokenMapEntry covering the synthesized `"name"` text in the overlay
 /// pointing to the user's attribute span so prop-check diagnostics land
 /// at the user's source position.
+/// Write a prop name as a quoted key and its `:`. svelte2tsx keeps the name's
+/// source range and writes the quotes around it (the opening one over
+/// the name's first character), so the opening quote maps to the name's
+/// start and the closing one to the name's end: a diagnostic on the key
+/// spans exactly the name.
 fn write_quoted_prop_key_with_source(
     buf: &mut EmitBuffer,
     name: &str,
@@ -810,7 +823,27 @@ fn write_quoted_prop_key_with_source(
 ) {
     let mut quoted = String::with_capacity(name.len() + 2);
     write_js_string_literal_to(&mut quoted, name);
-    buf.append_with_source(&quoted, attr_range);
+    let start = attr_range.start;
+    let end = start + name.len() as u32;
+    if quoted.len() != name.len() + 2 || end > attr_range.end || name.is_empty() {
+        // An escaped name has no byte-for-byte counterpart.
+        buf.append_with_source(&quoted, attr_range);
+        buf.push(':');
+        return;
+    }
+    buf.append_with_source("\"", svn_core::Range::new(start, start + 1));
+    buf.append_with_source(name, svn_core::Range::new(start, end));
+    // The `:` shares the closing quote's source character, so a range
+    // ending right after the key ends at the name's end.
+    buf.append_with_source("\":", svn_core::Range::new(end, end + 1));
+}
+
+/// Write the `props` key of a component's constructor options. svelte2tsx
+/// writes it as text following the moved component name, so a diagnostic
+/// on the whole props object (a prop it does not accept, an excess
+/// `children`) resolves to the name's last character.
+fn write_props_key(buf: &mut EmitBuffer, inst: &svn_analyze::ComponentInstantiation) {
+    buf.append_with_source("props:", inst.ctor_anchor);
 }
 
 /// Write a `{#snippet name(params)}...{/snippet}` block as an

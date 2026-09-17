@@ -1476,33 +1476,33 @@ fn map_diagnostic(
                         } else {
                             (mapped_end_line, mapped_end_col)
                         };
-                    // A missing-prop error arrives as an empty range at a
-                    // component's start tag; upstream widens it to the tag
-                    // name.
-                    let (mapped_end_line, mapped_end_col) = if !data.identity_map
+                    // A missing-prop error arrives as an empty range inside a
+                    // component's start tag (at the text following the
+                    // component name); upstream moves it onto the tag name
+                    // (`getNodeIfIsInStartTag`: start tag start + 1 through
+                    // the name's end).
+                    let ((mapped_line, mapped_col), (mapped_end_line, mapped_end_col)) = if !data
+                        .identity_map
                         && (mapped_end_line, mapped_end_col) == (mapped_line, mapped_col)
                         && (matches!(raw.code, 2739 | 2741) || raw.message.contains("'Properties<"))
                         && let Some(byte) = to_byte(mapped_line, mapped_col)
                         && let Some((name_start, name_end)) =
                             filters::start_tag_name_around(&data.source_text, byte)
                     {
-                        let (line, col) = position::byte_to_position(
-                            &data.source_line_starts,
-                            &data.source_text,
-                            name_start,
-                        );
-                        let (end_line, end_col) = position::byte_to_position(
-                            &data.source_line_starts,
-                            &data.source_text,
-                            name_end,
-                        );
-                        if (line, col) == (mapped_line, mapped_col) {
-                            (end_line, end_col)
-                        } else {
-                            (mapped_end_line, mapped_end_col)
-                        }
+                        (
+                            position::byte_to_position(
+                                &data.source_line_starts,
+                                &data.source_text,
+                                name_start,
+                            ),
+                            position::byte_to_position(
+                                &data.source_line_starts,
+                                &data.source_text,
+                                name_end,
+                            ),
+                        )
                     } else {
-                        (mapped_end_line, mapped_end_col)
+                        ((mapped_line, mapped_col), (mapped_end_line, mapped_end_col))
                     };
                     let mapped_byte = || to_byte(mapped_line, mapped_col);
                     let mapped_end_byte = || to_byte(mapped_end_line, mapped_end_col);

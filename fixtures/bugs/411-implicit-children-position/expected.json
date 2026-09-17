@@ -1,6 +1,66 @@
 {
     "errors": [
         {
+            "file": "src/PropsKey.svelte",
+            "line": 4,
+            "column": 4,
+            "code": 2322
+        },
+        {
+            "file": "src/PropsKey.svelte",
+            "line": 5,
+            "column": 4,
+            "code": 2322
+        },
+        {
+            "file": "src/PropsKey.svelte",
+            "line": 6,
+            "column": 4,
+            "code": 2322
+        },
+        {
+            "file": "src/PropsKey.svelte",
+            "line": 8,
+            "column": 4,
+            "code": 2322
+        },
+        {
+            "file": "src/PropsKey.svelte",
+            "line": 9,
+            "column": 4,
+            "code": 2322
+        },
+        {
+            "file": "src/PropsKey.svelte",
+            "line": 10,
+            "column": 4,
+            "code": 2322
+        },
+        {
+            "file": "src/PropsKey.svelte",
+            "line": 11,
+            "column": 4,
+            "code": 2322
+        },
+        {
+            "file": "src/PropsKey.svelte",
+            "line": 12,
+            "column": 6,
+            "code": 2322
+        },
+        {
+            "file": "src/PropsKey.svelte",
+            "line": 13,
+            "column": 6,
+            "code": 2322
+        },
+        {
+            "file": "src/PropsKey.svelte",
+            "line": 15,
+            "column": 2,
+            "code": 2322
+        },
+        {
             "file": "src/Use.svelte",
             "line": 4,
             "column": 5,
@@ -73,5 +133,5 @@
             "code": 2353
         }
     ],
-    "_note": "An excess implicit `children` prop (default-slot content given to a component without a default slot) is reported where svelte2tsx's start-tag rewrite leaves the unmapped `children` text: the tag name's last character when no whitespace follows the name, the character after that whitespace when no kept range starts there, and otherwise the first character of the last blanked gap between kept ranges. Positions verified against upstream svelte-check --tsgo; before, every case was reported at the tag name's first character."
+    "_note": "An excess implicit `children` prop (default-slot content given to a component without a default slot) is reported where svelte2tsx's start-tag rewrite leaves the unmapped `children` text: the tag name's last character when no whitespace follows the name, the character after that whitespace when no kept range starts there, and otherwise the first character of the last blanked gap between kept ranges. Positions verified against upstream svelte-check --tsgo; before, every case was reported at the tag name's first character. A diagnostic on the whole props object (PropsKey.svelte: default content given to a component whose required prop is missing) lands on the tag name's last character, where svelte2tsx's `props:` text follows the moved name; a diagnostic on a prop name spans just the name, since the quotes svelte2tsx adds map to the name's first character and its end (end columns verified against upstream, not locked here)."
 }

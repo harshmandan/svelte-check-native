@@ -239,6 +239,34 @@ fn js_number(text: &str) -> Option<f64> {
     t.parse::<f64>().ok()
 }
 
+/// Write an attribute's quoted key and its `:`. svelte2tsx keeps the
+/// name's source range and writes the quotes around it (the opening one
+/// over the name's first character), so a diagnostic on the key spans
+/// the name. Its closing quote follows the name directly when a value
+/// follows, and replaces the name's last character when none does, so
+/// a valueless attribute's range ends one character short.
+pub(crate) fn write_attribute_key(
+    buf: &mut EmitBuffer,
+    key: &str,
+    name_range: svn_core::Range,
+    has_value: bool,
+) {
+    let (start, end) = (name_range.start, name_range.end);
+    if key.len() != (end - start) as usize || key.is_empty() || key.contains(['"', '\\']) {
+        buf.append_with_source(&format!("\"{key}\""), name_range);
+        buf.push(':');
+        return;
+    }
+    buf.append_with_source("\"", svn_core::Range::new(start, start + 1));
+    buf.append_with_source(key, name_range);
+    let close = if has_value {
+        svn_core::Range::new(end, end + 1)
+    } else {
+        svn_core::Range::new(end - 1, end)
+    };
+    buf.append_with_source("\":", close);
+}
+
 pub(crate) fn emit_plain(
     buf: &mut EmitBuffer,
     source: &str,
@@ -253,7 +281,6 @@ pub(crate) fn emit_plain(
     // Lowercase the emitted key for DOM elements (transform preserves
     // byte length, so `name_range` still maps the source name).
     let key_name = transform_attribute_case(name, should_lowercase);
-    let key_text = format!("\"{key_name}\"");
     let wrap = needs_data_attr_wrap(name);
     let (key_prefix, line_suffix) = if wrap {
         ("...__svn_empty({", "}),")
@@ -275,8 +302,8 @@ pub(crate) fn emit_plain(
             };
             buf.push_str(&indent);
             buf.push_str(key_prefix);
-            buf.append_with_source(&key_text, name_range);
-            let _ = writeln!(buf, ": {value}{line_suffix}");
+            write_attribute_key(buf, &key_name, name_range, false);
+            let _ = writeln!(buf, " {value}{line_suffix}");
         }
         Some(v) => {
             // numberOnlyAttributes: a plain number text on an element is
@@ -291,8 +318,8 @@ pub(crate) fn emit_plain(
                 {
                     buf.push_str(&indent);
                     buf.push_str(key_prefix);
-                    buf.append_with_source(&key_text, name_range);
-                    let _ = writeln!(buf, ": {content}{line_suffix}");
+                    write_attribute_key(buf, &key_name, name_range, true);
+                    let _ = writeln!(buf, " {content}{line_suffix}");
                     return;
                 }
             }
@@ -301,8 +328,8 @@ pub(crate) fn emit_plain(
             }
             buf.push_str(&indent);
             buf.push_str(key_prefix);
-            buf.append_with_source(&key_text, name_range);
-            buf.push_str(": ");
+            write_attribute_key(buf, &key_name, name_range, true);
+            buf.push(' ');
             emit_plain_value(buf, source, v);
             let _ = writeln!(buf, "{line_suffix}");
         }
@@ -443,8 +470,8 @@ pub(crate) fn emit_expression(
     buf.push_str(key_prefix);
     let name_range = svn_core::Range::new(e.range.start, e.range.start + name.len() as u32);
     let key_name = transform_attribute_case(name, should_lowercase);
-    buf.append_with_source(&format!("\"{key_name}\""), name_range);
-    buf.push_str(": (");
+    write_attribute_key(buf, &key_name, name_range, true);
+    buf.push_str(" (");
     buf.append_with_source(trimmed, svn_core::Range::new(start, end));
     let _ = writeln!(buf, "){line_suffix}");
 }

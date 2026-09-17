@@ -1,0 +1,7 @@
+{
+    "errors": [
+        { "file": "src/A.svelte", "line": 2, "column": 0, "code": 1184 },
+        { "file": "src/B.svelte", "line": 1, "column": 0, "code": 1184 }
+    ],
+    "_note": "Without a typed `$props()` svelte2tsx moves no type declaration out of the render function, so an `export type` / `export interface` in the instance script stays inside it and its `export` modifier is reported (TS1184). Verified against svelte-check --tsgo."
+}

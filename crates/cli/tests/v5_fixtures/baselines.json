@@ -215,40 +215,6 @@
                 }
             ]
         },
-        "ts-runes-hoistable-props-false-2.v5": {
-            "reason": "`interface Props { [index: typeof a]: boolean }` — index-signature key whose type is `typeof a` (a const). TS1268 per spec: index signature parameters must be `string | number | symbol | template literal`. User-code error preserved verbatim.",
-            "expected_errors": [
-                {
-                    "file": "src/input.svelte",
-                    "line": 4,
-                    "column": 9,
-                    "code": 1268
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 7,
-                    "column": 10,
-                    "code": 2339
-                }
-            ]
-        },
-        "ts-runes-hoistable-props-false-5.v5": {
-            "reason": "`type Shadowed` declared in both `<script module>` and `<script lang=\"ts\">` — duplicate identifier in the composed overlay. Our hoist emits both into the same module scope; upstream scopes module-script types separately. Deferred.",
-            "expected_errors": [
-                {
-                    "file": "src/input.svelte",
-                    "line": 1,
-                    "column": 9,
-                    "code": 2300
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 5,
-                    "column": 9,
-                    "code": 2300
-                }
-            ]
-        },
         "ts-runes-hoistable-props-false-7.v5": {
             "reason": "`let { destructured } = {}; type Props = { prop: typeof destructured };` — property access on `{}` fires TS2339. User-code pattern, verbatim.",
             "expected_errors": [
@@ -256,29 +222,6 @@
                     "file": "src/input.svelte",
                     "line": 1,
                     "column": 7,
-                    "code": 2339
-                }
-            ]
-        },
-        "ts-runes-hoistable-props-false-14.v5": {
-            "reason": "`<script module>enum A {}</script>` + `<script lang=\"ts\">interface A { Abc: number }</script>` — enum + interface share the same name across module and instance scripts. TS2567 fires because both get hoisted into the same overlay scope. Same root cause as hoistable-props-false-5; deferred.",
-            "expected_errors": [
-                {
-                    "file": "src/input.svelte",
-                    "line": 1,
-                    "column": 9,
-                    "code": 2567
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 6,
-                    "column": 10,
-                    "code": 2567
-                },
-                {
-                    "file": "src/input.svelte",
-                    "line": 10,
-                    "column": 5,
                     "code": 2339
                 }
             ]

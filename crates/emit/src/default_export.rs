@@ -173,30 +173,19 @@ pub(crate) fn emit_default_export_declarations_ts(
     }
 
     let prop_ty_root_name = prop_type_source.and_then(svn_analyze::root_type_name_of);
-    // v0.3 Item 3: carry the typed event surface as `& { readonly
-    // __svn_events: <Events> }` on the default export so
-    // `__svn_ensure_component`'s marker branch resolves and
-    // narrows `$on(K, cb)` per declared event.
-    //
-    // Two sources fire this:
-    //   (a) Explicit `interface $$Events` / `type $$Events` —
-    //       reference `$$Events` at module scope (it's hoisted).
-    //   (b) Synthesised `type $$Events = …` from
-    //       `createEventDispatcher<T>()` or untyped
-    //       `dispatch('name', …)` calls (#3a slice). The synth
-    //       lives INSIDE the render body, so we project it back
-    //       out via `Awaited<ReturnType<typeof $$render>>['events']`
-    //       — same indirection used for props / exports.
-    let typed_events_intersection: String = if has_strict_events_decl {
-        " & { readonly __svn_events: $$Events }".to_string()
-    } else if has_dispatcher_call || has_synth_events_alias {
-        // `has_synth_events_alias` covers the bubbled-DOM-only path
-        // (reviewer item #3c part 2): a Child with `<button on:click>`
-        // and no dispatcher synthesises `$$Events = { "click":
-        // HTMLElementEventMap["click"] }` for which the consumer must
-        // see the marker so `__svn_ensure_component`'s typed branch
-        // fires. `has_dispatcher_call` keeps the marker firing on
-        // dispatcher-only / dispatcher+bubbled mixed cases.
+    // Carry the typed event surface as `& { readonly __svn_events:
+    // <Events> }` on the default export so `__svn_ensure_component`'s
+    // marker branch resolves and narrows `$on(K, cb)` per declared
+    // event. It fires for an explicit `interface`/`type $$Events`, for
+    // events synthesised from `createEventDispatcher` / `dispatch(…)`
+    // calls, and for bubbled DOM events. Every one of those types lives
+    // in the render function (a declared `$$Events` stays there, as
+    // upstream leaves it), so the surface is projected back out of the
+    // render function's return, like props and exports.
+    let typed_events_intersection: String = if has_strict_events_decl
+        || has_dispatcher_call
+        || has_synth_events_alias
+    {
         format!(
             " & {{ readonly __svn_events: Awaited<ReturnType<typeof {render_name}>>['events'] }}"
         )

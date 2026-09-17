@@ -45,27 +45,51 @@ pub(crate) struct ScriptAndTemplateAnalysis {
 }
 
 /// Run the cross-cutting analyze pass — see module docs for the
-/// shape produced.
+/// shape produced. `store_refs` comes from [`collect_store_refs`],
+/// which runs earlier because the script split needs it.
+pub(crate) fn analyze_script_and_template_refs<'alloc>(
+    doc: &svn_parser::Document<'_>,
+    parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
+    split: Option<&process_instance_script_content::SplitScript>,
+    props_info: &PropsInfo,
+    effective_props_type_text: Option<&str>,
+    store_refs: Vec<SmolStr>,
+) -> ScriptAndTemplateAnalysis {
+    // `local_only` leaves are excluded: upstream's `;prop;`-on-
+    // $bindable emission only fires for simple top-level elements.
+    let bindable_prop_names: Vec<SmolStr> = props_info
+        .destructures
+        .iter()
+        .filter(|p| p.is_bindable && !p.local_only)
+        .map(|p| p.local_name.clone())
+        .collect();
+
+    let prop_type_source: Option<String> = match (split, &doc.instance_script, parsed_instance) {
+        (Some(_), Some(_), Some(_)) => effective_props_type_text.map(|s| s.to_string()),
+        _ => None,
+    };
+
+    ScriptAndTemplateAnalysis {
+        bindable_prop_names,
+        prop_type_source,
+        store_refs,
+    }
+}
+
+/// `$store` auto-subscribe references from both script sides and the
+/// template, deduplicated, in encounter order.
 ///
 /// Script-binding collection unions the module script, the instance
 /// script (original, with imports visible), and the rewritten
 /// content (so reactive-destructure-introduced names — `$: ({a, b}
 /// = expr)` → `let {a, b} = …` — participate in subsequent `$a`/`$b`
 /// store-alias detection).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn analyze_script_and_template_refs<'alloc>(
+pub(crate) fn collect_store_refs<'alloc>(
     doc: &svn_parser::Document<'_>,
     fragment: &svn_parser::Fragment,
     parsed_instance: Option<&svn_parser::ParsedScript<'alloc>>,
-    split: Option<&process_instance_script_content::SplitScript>,
     rewritten_content: Option<&str>,
-    props_info: &PropsInfo,
-    effective_props_type_text: Option<&str>,
-) -> ScriptAndTemplateAnalysis {
-    // Parse the module script once up front; both `script_bindings`
-    // collection and the type-only-import scan below consume it.
-    // Allocator lives at function scope so the AST stays valid across
-    // both consumers.
+) -> Vec<SmolStr> {
     let alloc_mod = Allocator::default();
     let parsed_mod = doc
         .module_script
@@ -76,31 +100,14 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
     if let Some(parsed) = &parsed_mod {
         collect_top_level_bindings(&parsed.program, &mut script_bindings);
     }
-
-    // `local_only` leaves are excluded: upstream's `;prop;`-on-
-    // $bindable emission only fires for simple top-level elements.
-    let bindable_prop_names: Vec<SmolStr> = props_info
-        .destructures
-        .iter()
-        .filter(|p| p.is_bindable && !p.local_only)
-        .map(|p| p.local_name.clone())
-        .collect();
-
-    let prop_type_source: Option<String> = if let (Some(_s), Some(instance), Some(parsed_orig)) =
-        (split, &doc.instance_script, parsed_instance)
-    {
-        let ty = effective_props_type_text.map(|s| s.to_string());
-
+    if let (Some(instance), Some(parsed_orig)) = (&doc.instance_script, parsed_instance) {
         collect_top_level_bindings(&parsed_orig.program, &mut script_bindings);
         if let Some(rewritten) = rewritten_content {
             let alloc_rw = Allocator::default();
             let parsed_rw = parse_script_body(&alloc_rw, rewritten, instance.lang);
             collect_top_level_bindings(&parsed_rw.program, &mut script_bindings);
         }
-        ty
-    } else {
-        None
-    };
+    }
 
     // Store auto-subscribe scan happens AFTER both module + instance
     // bindings are collected, so a `$properties` use in instance can
@@ -171,9 +178,5 @@ pub(crate) fn analyze_script_and_template_refs<'alloc>(
         store_refs.retain(|r| r != "$derived");
     }
 
-    ScriptAndTemplateAnalysis {
-        bindable_prop_names,
-        prop_type_source,
-        store_refs,
-    }
+    store_refs
 }

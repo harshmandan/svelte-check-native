@@ -228,6 +228,33 @@ fn dollar_generic_decls(script: &str) -> Option<Vec<DollarGenericDecl>> {
     Some(out)
 }
 
+/// The render function's type-parameter names, and the constraint text
+/// of each `type NAME = $$Generic<Constraint>` declaration (an attribute
+/// list has none) — what the type-hoisting decision needs to know about
+/// generics.
+pub(crate) fn generic_hoist_inputs(
+    generics: Option<&(SmolStr, GenericsOrigin)>,
+    script: &str,
+) -> (Vec<SmolStr>, Vec<String>) {
+    match generics {
+        None => (Vec::new(), Vec::new()),
+        Some((list, GenericsOrigin::Attribute)) => (
+            generic_arg_names(list)
+                .split(',')
+                .map(|n| SmolStr::from(n.trim()))
+                .filter(|n| !n.is_empty())
+                .collect(),
+            Vec::new(),
+        ),
+        Some((_, GenericsOrigin::DollarGeneric)) => {
+            let decls = dollar_generic_decls(script).unwrap_or_default();
+            let names = decls.iter().map(|d| d.name.clone()).collect();
+            let constraints = decls.into_iter().filter_map(|d| d.constraint).collect();
+            (names, constraints)
+        }
+    }
+}
+
 /// Blank out `type NAME = $$Generic[<args>];` declarations from a
 /// script body, replacing each declaration with whitespace of equal
 /// length so subsequent line/column source maps stay aligned.

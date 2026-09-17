@@ -1,0 +1,6 @@
+{
+    "errors": [
+        { "file": "src/Use.svelte", "line": 3, "column": 11, "code": 2322 }
+    ],
+    "_note": "`type T = $$Generic<Item>` makes the render function `<T extends Item>`, so svelte2tsx moves the `Item` declaration to module scope; the consumer's `item` is then checked against the real constraint. Verified against svelte-check --tsgo."
+}

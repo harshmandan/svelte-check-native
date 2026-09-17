@@ -1,0 +1,4 @@
+{
+    "errors": [],
+    "_note": "An instance-script `interface Props` shadows the module script's type-only import of the same name inside the render function; it is never moved beside the import, so there is no duplicate declaration. Verified against svelte-check --tsgo."
+}

@@ -1,0 +1,7 @@
+{
+    "errors": [
+        { "file": "src/Parent.svelte", "line": 3, "column": 6, "code": 2322 },
+        { "file": "src/Parent2.svelte", "line": 3, "column": 7, "code": 2322 }
+    ],
+    "_note": "A type that reads an instance-script value through `typeof` cannot leave the render function, so it keeps the value's real signature and a mismatched callback is reported at the consumer. Verified against svelte-check --tsgo."
+}

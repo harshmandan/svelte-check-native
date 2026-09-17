@@ -112,6 +112,7 @@ use svn_parser::{Fragment, Node, SnippetBlock, parse_script_body};
 
 use crate::emit_buffer::EmitBuffer;
 use crate::process_instance_script_content::split_imports;
+use crate::svelte2tsx_nodes::hoistable_interfaces::{HoistContext, PropsTypeShape};
 
 /// Output of [`emit_document`].
 #[derive(Debug, Clone)]
@@ -200,6 +201,36 @@ pub struct TokenMapEntry {
     pub overlay_byte_end: u32,
     pub source_byte_start: u32,
     pub source_byte_end: u32,
+}
+
+/// What the instance-script split needs to decide which type
+/// declarations move to module scope.
+fn hoist_context(
+    doc: &Document<'_>,
+    instance_content: &str,
+    generics: Option<&(SmolStr, util::GenericsOrigin)>,
+    props_info: &PropsInfo,
+    store_refs: &[SmolStr],
+) -> HoistContext {
+    let (generic_names, generic_constraints) =
+        util::generic_hoist_inputs(generics, instance_content);
+    let props_type = match (&props_info.source, props_info.type_text.as_deref()) {
+        (
+            svn_analyze::PropsSource::RuneAnnotation | svn_analyze::PropsSource::RuneGeneric,
+            Some(text),
+        ) => PropsTypeShape::from_type_text(text),
+        _ => PropsTypeShape::Untyped,
+    };
+    HoistContext {
+        module_script: doc.module_script.as_ref().map(|m| m.content.to_string()),
+        generic_names,
+        generic_constraints,
+        accessed_stores: store_refs
+            .iter()
+            .map(|r| SmolStr::from(r.strip_prefix('$').unwrap_or(r)))
+            .collect(),
+        props_type,
+    }
 }
 
 /// Emit the TypeScript scaffold for a parsed Svelte document.
@@ -973,17 +1004,28 @@ fn emit_document_with_render_name(
     // Hoist imports out of the instance script. Required because the
     // instance body gets wrapped in `function $$render() { ... }` and ES
     // `import` declarations can't appear inside a function (TS1232).
+    // Type declarations move with them when upstream's hoisting rules
+    // say so (`svelte2tsx_nodes::hoistable_interfaces`), which read the
+    // stores the component subscribes to.
+    let store_refs = script_template_analysis::collect_store_refs(
+        doc,
+        fragment,
+        parsed_instance.as_ref(),
+        rewritten_content.as_deref(),
+    );
     let split = doc.instance_script.as_ref().map(|s| {
         let content = rewritten_content.as_deref().unwrap_or(s.content);
-        split_imports(
-            content,
-            s.lang,
-            generics.is_some(),
-            props_info.type_root_name.as_deref(),
-        )
+        let hoist = hoist_context(
+            doc,
+            s.content,
+            generics_with_origin.as_ref(),
+            &props_info,
+            &store_refs,
+        );
+        split_imports(content, s.lang, &hoist)
     });
 
-    hoisted_imports::emit_hoisted_imports(&mut buf, split.as_ref(), doc, is_ts);
+    hoisted_imports::emit_hoisted_imports(&mut buf, split.as_ref(), doc);
 
     // `<script generics="T extends ...">` (extracted above) — expose
     // the type params as generics on the wrapping function so
@@ -1350,12 +1392,11 @@ fn emit_document_with_render_name(
         store_refs,
     } = analyze_script_and_template_refs(
         doc,
-        fragment,
         parsed_instance.as_ref(),
         split.as_ref(),
-        rewritten_content.as_deref(),
         &props_info,
         effective_props_type_text.as_deref(),
+        store_refs,
     );
 
     // Stores that come from imports are declared at the start of the

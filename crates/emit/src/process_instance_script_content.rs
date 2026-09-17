@@ -30,7 +30,7 @@ use smol_str::SmolStr;
 use svn_parser::{ScriptLang, parse_script_body};
 
 use crate::svelte2tsx_nodes::exported_type_info::collect_export_type_infos;
-use crate::svelte2tsx_nodes::type_deps::{TypeDeps, collect_alias_deps, collect_interface_deps};
+use crate::svelte2tsx_nodes::hoistable_interfaces::{HoistContext, hoisted_type_spans};
 
 /// `hoisted`: statements lifted to module top level (newline-joined).
 /// `body`: the original script content with hoisted spans blanked out.
@@ -56,12 +56,6 @@ pub struct SplitScript {
     /// whole region into one entry anchored at the first import, which
     /// shifted every diagnostic after a blank source line by one.
     pub hoisted_stmt_spans: Vec<(usize, usize)>,
-    /// Byte offset inside `hoisted` where the real hoisted statements
-    /// start. Lines before this are synthetic `declare const ...` stubs
-    /// with no source-line mapping — emit's line-map builder must skip
-    /// past them so each `hoisted_byte_offsets` entry lines up with the
-    /// right slice of `hoisted`.
-    pub stub_prefix_len: usize,
     /// Per-export type info for assembling the component's Exports
     /// intersection on the default-export type alias. `type_source` is
     /// `None` when the user didn't annotate the declaration (or when
@@ -89,13 +83,6 @@ pub struct ExportedLocalInfo {
     /// Always `true` for `export function` / `export class` (they're
     /// always defined at declaration site).
     pub has_init: bool,
-    /// Identifiers referenced by this export's type annotation (the
-    /// AST-walked equivalent of the old `collect_ident_refs` over the
-    /// annotation text). Empty when the declaration is un-annotated.
-    /// Used to seed `props_reachable`: a Svelte-4-style `export let
-    /// state: TypeFilter` contributes `TypeFilter` so the synthesized
-    /// module-scope Props references hoist alongside it.
-    pub annotation_idents: Vec<SmolStr>,
     /// The name the component exposes, when `export { name as other }`
     /// renames it.
     pub exported_as: Option<SmolStr>,
@@ -104,39 +91,6 @@ pub struct ExportedLocalInfo {
     pub is_named_export: bool,
 }
 
-/// A `type`/`interface` declaration whose hoist decision is deferred
-/// until `body_decl_names` is fully populated (post-pass below). Carries
-/// the AST-walked dependency sets ([`TypeDeps`]) so the decision logic
-/// never re-scans the source slice.
-struct PendingType {
-    start: usize,
-    end: usize,
-    name: SmolStr,
-    deps: TypeDeps,
-}
-
-/// Split out every module-level statement (imports, exports of all
-/// shapes) from a script body.
-///
-/// Re-parses the body once with oxc. If parsing panics on malformed user
-/// code, the content is passed through unchanged.
-///
-/// `has_generics` toggles the hoist behavior for bare `type Foo = ...`
-/// and `interface Foo { ... }` declarations. When the component
-/// declares generic type parameters via `<script generics="T extends
-/// ...">`, those types live only inside the `$$render<T>(...)`
-/// function. Hoisting a `type Props = { item: T; }` declaration to the
-/// overlay module scope would surface `T` in a context where the
-/// render function's generic parameters don't exist, producing
-/// "Cannot find name 'T'". Leaving the declaration in the body keeps
-/// `T` in scope but forfeits the ability to type the default export as
-/// `Component<Props>` (see the caller for that fallback).
-///
-/// `export type Foo = ...` / `export interface Foo { ... }` are always
-/// hoisted regardless — hoisting them is the only way to make them
-/// available to consumers via `import type { Foo } from './X.svelte'`,
-/// and those types are user-facing surface so they're unlikely to
-/// reference private render-scope generics.
 /// Walk backwards from `span_start` through contiguous
 /// `@ts-ignore` / `@ts-expect-error` / `@ts-nocheck` comments (line or
 /// block form) that sit on their own lines directly above it, and
@@ -190,31 +144,18 @@ fn extend_span_for_ts_directives(
     }
 }
 
-pub fn split_imports(
-    content: &str,
-    _lang: ScriptLang,
-    has_generics: bool,
-    // No longer consulted: the `$props()` annotation type stopped
-    // getting hoist priority when the module-scope default export
-    // moved to the `ReturnType<typeof $$render>` projection — kept in
-    // the signature because the callers' value documents which type
-    // the annotation names.
-    _props_type_root: Option<&str>,
-) -> SplitScript {
+/// Split out every module-level statement (imports, exports of all
+/// shapes) from a script body, and move the type declarations
+/// `hoist` says belong at module scope.
+///
+/// Re-parses the body once with oxc. If parsing panics on malformed user
+/// code, the content is passed through unchanged.
+pub fn split_imports(content: &str, _lang: ScriptLang, hoist: &HoistContext) -> SplitScript {
     // Always parse as TypeScript — TS is a superset of JS for our
     // purposes (we're identifying statement spans, not generating
     // runtime code). Parsing as TS lets us correctly handle scripts
     // that use type annotations even when `<script>` doesn't carry
     // `lang="ts"`. (Svelte 5 + svelte:options runes accepts this.)
-    //
-    // Earlier revisions had a 6-keyword substring-based fast path
-    // (`import`/`export`/`interface `/`type `/`namespace `/`module `)
-    // that skipped the parse for scripts with no hoistable shapes.
-    // Dropped per CLAUDE.md rule #1: character-level scans of
-    // embedded JS/TS are fragile — any false negative silently
-    // skips hoisting. The AST walk below is the single source of
-    // truth for which shapes get hoisted; there's no parallel
-    // keyword list to keep in sync.
     let allocator = Allocator::default();
     let parsed = parse_script_body(&allocator, content, ScriptLang::Ts);
 
@@ -225,65 +166,26 @@ pub fn split_imports(
             exported_locals: Vec::new(),
             hoisted_byte_offsets: Vec::new(),
             hoisted_stmt_spans: Vec::new(),
-            stub_prefix_len: 0,
             export_type_infos: Vec::new(),
         };
     }
 
-    // Names declared at the top level of the body — const/let/var,
-    // function, class. Populated as we iterate `parsed.program.body`.
-    // Imports aren't included: imports that get hoisted to module top
-    // level are already visible there, so type aliases referencing them
-    // resolve without needing a `declare` stub.
-    //
-    // Used at the end of this function to decide which names need a
-    // module-level `declare const <name>: any;` stub so that hoisted
-    // type aliases / interfaces referring to them resolve. Example: the
-    // user writes
-    //   ```
-    //   const standaloneChartTypes = ['a', 'b'] as const
-    //   type StandaloneChartType = (typeof standaloneChartTypes)[number]
-    //   ```
-    // We hoist the `type` but keep the `const` in the `$$render` body.
-    // Without a stub, the hoisted `type` fires "Cannot find name
-    // 'standaloneChartTypes'" at module scope.
-    let mut body_decl_names: Vec<SmolStr> = Vec::new();
-    // Spans we hoist verbatim to module top level. For statements that
-    // are pure module-shape (no references to body locals): imports,
-    // `export { x } from 'mod'`, `export * from 'mod'`.
+    // Spans we hoist verbatim to module top level: imports,
+    // `export { x } from 'mod'`, `export * from 'mod'`, and the type
+    // declarations `hoistable_interfaces` moves.
     let mut hoist_spans: Vec<(usize, usize)> = Vec::new();
     // Spans where we strip just the `export ` prefix and let the inner
     // declaration stay in the body. For `export const/let/var/function/class`
     // — the declaration body might reference locals (e.g. `export function
     // getA() { return a; }` where `a` is a local), so hoisting would
-    // break those references. Stripping the keyword keeps everything in
-    // scope; the consumer-facing export goes away (consumers can't
-    // `import { foo } from './X.svelte'` for these names) but the body
-    // type-checks cleanly.
+    // break those references.
     let mut strip_keyword_spans: Vec<(usize, usize)> = Vec::new();
     // Spans we drop entirely (blank in body, don't add to hoisted prelude).
     // For `export { x, y }` (no `from`) re-exports of local names, and
-    // `export default x` where x is a name (we can't easily distinguish
-    // expression-vs-name without more parsing — drop is safer).
+    // `export default x`.
     let mut drop_spans: Vec<(usize, usize)> = Vec::new();
     let mut exported_locals: Vec<SmolStr> = Vec::new();
     let mut export_type_infos: Vec<ExportedLocalInfo> = Vec::new();
-    // Type aliases / interfaces whose hoist decision is deferred until
-    // after body_decl_names is fully populated (post-pass below). Each
-    // carries its AST-walked dependency sets so the decision logic reads
-    // precomputed deps instead of re-scanning the byte slice.
-    let mut pending_type_spans: Vec<PendingType> = Vec::new();
-    // Broad identifier set referenced by every type-bearing declaration
-    // that gets hoisted to module scope (hoisted pending types + `export
-    // type`/`export interface` + namespace top-level type decls). Feeds
-    // the `declare const` stub pass below — the AST-walked equivalent of
-    // the old `collect_ident_refs(scan_text)` over the concatenated
-    // hoist spans. Value-shape hoists (imports, `export … from`) can't
-    // reference body locals, so they contribute nothing and are skipped.
-    let mut hoisted_type_idents: HashSet<SmolStr> = HashSet::new();
-    // Names of namespaces declared in the instance script — un-hoistable,
-    // along with anything that depends on them.
-    let mut namespace_names: Vec<SmolStr> = Vec::new();
     // `export { local as exported }` entries, resolved once every
     // top-level `let`/`var` is known.
     let mut named_exports: Vec<(SmolStr, SmolStr)> = Vec::new();
@@ -307,61 +209,36 @@ pub fn split_imports(
                 hoist_spans.push((start, decl.span.end as usize));
             }
             Statement::VariableDeclaration(decl) => {
-                // Body-level `const/let/var` — stays in body. Record its
-                // names for the `declare const` stub pass.
-                let is_let = matches!(
+                // Body-level `let`/`var` — stays in body; remembered so an
+                // `export { name }` list can tell a prop from a constant.
+                if matches!(
                     decl.kind,
                     oxc_ast::ast::VariableDeclarationKind::Let
                         | oxc_ast::ast::VariableDeclarationKind::Var
-                );
-                for d in &decl.declarations {
-                    let before = body_decl_names.len();
-                    collect_binding_pattern_names(&d.id, &mut body_decl_names);
-                    if is_let {
-                        top_level_lets.extend(body_decl_names[before..].iter().cloned());
+                ) {
+                    let mut names = Vec::new();
+                    for d in &decl.declarations {
+                        collect_binding_pattern_names(&d.id, &mut names);
                     }
+                    top_level_lets.extend(names);
                 }
             }
-            Statement::FunctionDeclaration(decl) => {
-                if let Some(id) = &decl.id {
-                    body_decl_names.push(SmolStr::from(id.name.as_str()));
-                }
-            }
-            Statement::ClassDeclaration(decl) => {
-                if let Some(id) = &decl.id {
-                    body_decl_names.push(SmolStr::from(id.name.as_str()));
-                }
-            }
+            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => {}
             // `export const/type/function/...` — one declaration, no
             // specifiers. Its own statement kind since oxc 0.143.
             Statement::ExportDeclaration(decl) => {
                 let span = (decl.span.start as usize, decl.span.end as usize);
                 {
                     let d = &decl.declaration;
-                    // `export type Foo = ...` / `export interface Foo { ... }` —
-                    // pure type-namespace declarations. Hoist the whole
-                    // statement (including the `export` keyword) so the
-                    // overlay's module top level carries the export and
-                    // consumers writing `import type { Foo } from './X.svelte'`
-                    // resolve. Without this branch we'd fall through to the
-                    // strip-keyword path below, which would blank the
-                    // `export ` prefix and leave `type Foo = ...` in the
-                    // function body — invisible to consumers and never
-                    // re-exported by the overlay.
-                    let exported_type = match d {
-                        Declaration::TSTypeAliasDeclaration(t) => {
-                            Some((t.id.name.as_str(), collect_alias_deps(t)))
-                        }
-                        Declaration::TSInterfaceDeclaration(i) => {
-                            Some((i.id.name.as_str(), collect_interface_deps(i)))
-                        }
-                        _ => None,
-                    };
-                    if let Some((_, deps)) = exported_type {
-                        hoist_spans.push(span);
-                        // `export type`/`export interface` always hoist, so
-                        // their deps always feed the declare-const stub pass.
-                        hoisted_type_idents.extend(deps.idents);
+                    // `export type Foo = ...` / `export interface Foo { ... }`
+                    // are left exactly as written unless the hoisting pass
+                    // below moves them: in the render function the
+                    // `export` modifier is an error, as it is upstream.
+                    if matches!(
+                        d,
+                        Declaration::TSTypeAliasDeclaration(_)
+                            | Declaration::TSInterfaceDeclaration(_)
+                    ) {
                         continue;
                     }
                     // `export const/let/var/function/class` — strip just
@@ -373,12 +250,6 @@ pub fn split_imports(
                     }
                     collect_declaration_names(d, &mut exported_locals);
                     collect_export_type_infos(d, content, &mut export_type_infos);
-                    // Record body-level names too: the declaration stays
-                    // in the body after the `export ` prefix is stripped,
-                    // so a hoisted `type X = typeof name` needs a
-                    // `declare` stub just like for a non-exported
-                    // body-level const.
-                    collect_declaration_names(d, &mut body_decl_names);
                 }
             }
             // `export { x } from 'mod'` — pure module re-export, no
@@ -421,71 +292,15 @@ pub fn split_imports(
             Statement::ExportAllDeclaration(decl) => {
                 hoist_spans.push((decl.span.start as usize, decl.span.end as usize));
             }
-            // `namespace Foo { ... }` / `module Foo { ... }`. A
-            // namespace is invalid inside a function, and the instance
-            // script becomes one — so TS1235 is the correct diagnostic
-            // for writing one here, and upstream lets it fire rather
-            // than hoisting the namespace out to dodge it
-            // (`HoistableInterfaces.analyzeInstanceScriptNode`:
-            // "namespace declaration should not be in the instance
-            // script"). It records the name as un-hoistable instead,
-            // so a type that depends on the namespace stays in the body
-            // beside it rather than hoisting to a scope where the
-            // namespace isn't visible.
-            //
-            // Recording the name is all we do here; leaving the
-            // statement out of `hoist_spans` keeps it in the body.
-            // The dotted form (`namespace Foo.Bar { }`) is nested
-            // declarations whose outer name is still the plain
-            // identifier `Foo`, so it needs no special handling.
-            Statement::TSNamespaceDeclaration(decl) => {
-                namespace_names.push(SmolStr::from(decl.id.name.as_str()));
-            }
-            // `declare module 'foo' { ... }` — a string-named external
-            // module rather than a namespace. Also stays in the body,
-            // but it introduces no name a local type could depend on
-            // (upstream's `ts.isIdentifier(node.name)` guard skips it
-            // for the same reason).
-            Statement::TSExternalModuleDeclaration(_) => {}
-            // `type Foo = ...` and `interface Foo { ... }` — hoist so
-            // the emitted default-export's `Component<Foo>` at module
-            // scope can reference them.
-            //
-            // Hoist decision when the script carries
-            // `<script generics="T...">`:
-            //   - The type re-binds its OWN generic (`interface
-            //     Props<T> { item: T[] }`) — HOIST. The inner T is
-            //     self-contained after hoisting and the Svelte
-            //     convention is to parameterize the Props interface
-            //     this way.
-            //   - The type is bare and might reference the script's
-            //     generic (`type Props = { item: T }`) — KEEP in body.
-            //     Hoisting would leave `T` unbound at module scope.
-            //     The caller falls back to an `any`-typed default.
-            //
-            // Without generics, always hoist (no T to worry about).
-            Statement::TSTypeAliasDeclaration(decl) => {
-                let hoist_safe = !has_generics || decl.type_parameters.is_some();
-                if hoist_safe {
-                    pending_type_spans.push(PendingType {
-                        start: decl.span.start as usize,
-                        end: decl.span.end as usize,
-                        name: SmolStr::from(decl.id.name.as_str()),
-                        deps: collect_alias_deps(decl),
-                    });
-                }
-            }
-            Statement::TSInterfaceDeclaration(decl) => {
-                let hoist_safe = !has_generics || decl.type_parameters.is_some();
-                if hoist_safe {
-                    pending_type_spans.push(PendingType {
-                        start: decl.span.start as usize,
-                        end: decl.span.end as usize,
-                        name: SmolStr::from(decl.id.name.as_str()),
-                        deps: collect_interface_deps(decl),
-                    });
-                }
-            }
+            // Namespaces, `declare module`, and top-level `type` /
+            // `interface` declarations stay in the body unless the
+            // hoisting pass below (`hoistable_interfaces`) moves them. A
+            // namespace is invalid inside a function, so TS1235 fires for
+            // one written here, as upstream lets it.
+            Statement::TSNamespaceDeclaration(_)
+            | Statement::TSExternalModuleDeclaration(_)
+            | Statement::TSTypeAliasDeclaration(_)
+            | Statement::TSInterfaceDeclaration(_) => {}
             // Top-level-only contract: the shapes above are everything
             // this splitter hoists or strips. The module-only TS forms
             // below (`import x = require(…)`, `export =`, `declare
@@ -502,99 +317,6 @@ pub fn split_imports(
         }
     }
 
-    // Post-pass: decide which pending type spans to hoist. A type that
-    // references a body-level name via `typeof <name>` must stay in
-    // body — module-scope `declare const <name>: { [k: string]: any }`
-    // stubs degrade `keyof typeof <name>` to `string | number` (instead
-    // of the literal union the REAL body-scoped const has), which then
-    // fires TS7053 on `computeTriangles[corner as Corner](...)` because
-    // `Corner` resolves to `string | number` at the hoisted site. By
-    // keeping these types body-scoped, `typeof <name>` resolves
-    // against the real value and `keyof` produces the literal union.
-    //
-    // The heuristic: scan the type's source for `typeof ` followed by
-    // an identifier that's in body_decl_names. False positives
-    // (matching inside nested types that aren't indexed) are
-    // acceptable — worst case, a hoistable type stays body-scoped.
-    // Hoist decision per pending type:
-    //   - If the type body references a body-local via
-    //     `typeof <name>`, KEEP in body. `keyof typeof X` then
-    //     evaluates against the real body-scoped declaration rather
-    //     than the lossy stub, preserving literal-keyed precision.
-    //     This applies to the `$props()` annotation type too:
-    //     consumer typing flows through the module-scope
-    //     `ReturnType<typeof $$render>` projection, which reads the
-    //     body-scoped type just fine.
-    //   - Types that don't reference body locals via typeof hoist
-    //     normally.
-    // Hoist decision per type, distinguishing two independent causes:
-    //
-    //   (A) DIRECT `typeof <body-local-var>` in the type body. The
-    //       type CAN hoist via the `declare const <name>: { [k:
-    //       string]: any } & ((...args) => any)` stub — the stub is
-    //       lossy (literal-key precision is replaced by `string |
-    //       number`) but structurally callable/indexable. Consumers
-    //       of the default export still get a USABLE Props type.
-    //       This is what makes a real-world pattern like
-    //       `interface Props { children: Snippet<[{ingestFeedback:
-    //       typeof ingestFeedback, ...}]> }` work — consumers' snippet
-    //       arrows destructure from the stubbed callable shape, which
-    //       is good enough.
-    //
-    //   (B) Reference to another type by NAME that can't be hoisted.
-    //       A component library pattern like `type Props = { variant?:
-    //       Variant }` with `type Variant = VariantProps<typeof
-    //       style>["variant"]` — Variant has a direct typeof, so it's
-    //       body-scoped. Props referencing `Variant` at module scope
-    //       fires TS2304 "Cannot find name 'Variant'" — no stub for
-    //       type names.
-    //
-    // Logic: compute two sets separately.
-    //   - `direct_typeof_body` (Case A): types with direct
-    //      `typeof <body-local-var>`.
-    //   - `transitive_name_body` (Case B): types that reference a
-    //      body-scoped type name (fixed-point). Body-scoped type
-    //      names are those in `direct_typeof_body` plus anything
-    //      already in `transitive_name_body`.
-    //
-    // Hoist if NOT in `transitive_name_body`. Types in
-    // `direct_typeof_body` but not `transitive_name_body` still hoist
-    // (stub carries the approximate shape). This preserves Phase B's
-    // goal of surfacing typed defaults while avoiding TS2304 noise
-    // on chains of body-scoped type names.
-    let body_names_set: HashSet<SmolStr> = body_decl_names.iter().cloned().collect();
-    // Seed "must stay in body" with types containing `keyof typeof
-    // <body-local-var>`. That specific shape is what the declare-const
-    // stub can't approximate: stubbed `keyof typeof X` widens to
-    // `string | number` (from the `{[k: string]: any}` index
-    // signature), losing the literal-key union the real body-scoped
-    // const has. User code that destructures or indexes with the
-    // resulting type then fires TS7053 or TS2322.
-    //
-    // Plain `typeof <body-local-var>` (without a surrounding `keyof`)
-    // stubs OK — the synthesized `{[k: string]: any} & ((...args) =>
-    // any)` carries a callable/indexable shape that's structurally
-    // sufficient for consumer use cases like
-    // `Snippet<[{fn: typeof body_fn}]>`.
-    //
-    // And any type that references ANOTHER must-stay-body type by
-    // name must itself stay in body (fixed-point propagation). Example
-    // chain: `type Variant = ...keyof...typeof style...` → Variant
-    // must stay body; `type Props = { variant?: Variant }` references
-    // Variant by name → Props joins.
-    // Types the emit references BY NAME at module scope must hoist:
-    // the Svelte-4 path synthesizes Props from exported locals'
-    // annotations there, so those annotation types (and everything
-    // they reference) join the set. The Svelte-5 `$props()` root does
-    // NOT: since the iso-port, the module-scope default export
-    // projects everything through
-    // `Awaited<ReturnType<typeof $$render>>['props']`, so the Props
-    // interface itself may stay body-scoped — and when it references
-    // body values via `typeof`, it MUST, or the lossy module-scope
-    // stub replaces the real type. The stub is an intersection with a
-    // callable, so the in-component `{@render children(realValue)}`
-    // check compared the REAL value against the stub's callable shape
-    // and fired an invented TS2322 whenever the value wasn't callable.
     // `export { local as exported }` (`ExportedNames.handleExportDeclaration`):
     // it counts as a `let` export exactly when `local` is a top-level
     // `let`/`var`, and is always optional.
@@ -605,117 +327,11 @@ pub fn split_imports(
             name: local,
             type_source: None,
             has_init: true,
-            annotation_idents: Vec::new(),
             is_named_export: true,
         });
     }
-    let mut props_reachable: HashSet<SmolStr> = HashSet::new();
-    // Svelte-4-style: `export let state: TypeFilter | undefined`.
-    // No single `Props` root — each exported local's annotation
-    // contributes type names to the reachable set. The emit
-    // synthesizes Props from these annotations at module scope, so
-    // every referenced type must also be hoisted (otherwise TS2304).
-    for info in &export_type_infos {
-        for ident in &info.annotation_idents {
-            if pending_type_spans.iter().any(|p| &p.name == ident) {
-                props_reachable.insert(ident.clone());
-            }
-        }
-    }
-    if !props_reachable.is_empty() {
-        loop {
-            let mut added = false;
-            for pending in &pending_type_spans {
-                if !props_reachable.contains(&pending.name) {
-                    continue;
-                }
-                for ident in &pending.deps.idents {
-                    // Track any referenced type by name; the hoist
-                    // walk below will hoist them.
-                    if pending_type_spans.iter().any(|p| &p.name == ident)
-                        && !props_reachable.contains(ident)
-                    {
-                        props_reachable.insert(ident.clone());
-                        added = true;
-                    }
-                }
-            }
-            if !added {
-                break;
-            }
-        }
-    }
-
-    let mut must_stay_body: HashSet<SmolStr> = HashSet::new();
-    // A namespace declared in the instance script never leaves it, so
-    // nothing that references one may hoist either. Seeded before the
-    // rules below so the transitive pass carries it to dependents.
-    must_stay_body.extend(namespace_names);
-    for pending in &pending_type_spans {
-        if body_names_set.is_empty() {
-            continue;
-        }
-        // A type alias that shares its name with a body value (`const
-        // Other = 1; type Other = string;`) is one merged symbol in
-        // upstream's render function: a type-position use of `Other`
-        // counts as a read of the const. Hoisting only the alias would
-        // split the symbol and report the const as never read.
-        if body_names_set.contains(&pending.name) {
-            must_stay_body.insert(pending.name.clone());
-            continue;
-        }
-        // Always stay-body: `keyof typeof <body-local>` (stubbed
-        // `any` widens `keyof` to `string | number | symbol`).
-        let has_keyof_typeof = pending
-            .deps
-            .keyof_typeof_refs
-            .iter()
-            .any(|n| body_names_set.contains(n));
-        // Also stay-body: plain `typeof <body-local>` — UNLESS
-        // the type is transitively reachable from Props
-        // (hoisted declarations need it visible at module
-        // scope). This catches local-only type aliases like
-        // `type MomentDoc = typeof moments; function f(xs:
-        // MomentDoc)` where the stub `any` loses all shape info.
-        let has_plain_typeof = !props_reachable.contains(&pending.name)
-            && pending
-                .deps
-                .typeof_refs
-                .iter()
-                .any(|n| body_names_set.contains(n));
-        if has_keyof_typeof || has_plain_typeof {
-            must_stay_body.insert(pending.name.clone());
-        }
-    }
-    loop {
-        let mut added = false;
-        for pending in &pending_type_spans {
-            if must_stay_body.contains(&pending.name) {
-                continue;
-            }
-            let refs_stay_body = pending
-                .deps
-                .idents
-                .iter()
-                .any(|n| must_stay_body.contains(n));
-            if refs_stay_body {
-                must_stay_body.insert(pending.name.clone());
-                added = true;
-            }
-        }
-        if !added {
-            break;
-        }
-    }
-    for pending in pending_type_spans {
-        if !must_stay_body.contains(&pending.name) {
-            hoist_spans.push((pending.start, pending.end));
-            // This hoisted type's references feed the declare-const
-            // stub pass (replaces the old collect_ident_refs over the
-            // concatenated hoist spans).
-            hoisted_type_idents.extend(pending.deps.idents);
-        }
-    }
+    hoist_spans.extend(hoisted_type_spans(&parsed.program, hoist));
+    hoist_spans.sort_unstable();
 
     if hoist_spans.is_empty() && strip_keyword_spans.is_empty() && drop_spans.is_empty() {
         return SplitScript {
@@ -724,7 +340,6 @@ pub fn split_imports(
             exported_locals,
             hoisted_byte_offsets: Vec::new(),
             hoisted_stmt_spans: Vec::new(),
-            stub_prefix_len: 0,
             export_type_infos,
         };
     }
@@ -737,68 +352,6 @@ pub fn split_imports(
     let mut hoisted = String::new();
     let mut hoisted_byte_offsets: Vec<u32> = Vec::with_capacity(hoist_spans.len());
     let mut hoisted_stmt_spans: Vec<(usize, usize)> = Vec::with_capacity(hoist_spans.len());
-
-    // `declare const` stubs for body-level names referenced from inside
-    // hoisted type aliases / interfaces. The stubs go FIRST (ahead of
-    // the real hoisted statements) so a subsequent `type X = typeof
-    // name` resolves its reference at module scope. We only scan the
-    // hoisted spans that correspond to type aliases / interfaces /
-    // namespaces — value-shape hoists (imports, `export { x } from`,
-    // `export * from`) can't reference body-local names anyway.
-    //
-    // No source-line mapping for these — they're synthetic and tsgo is
-    // expected to never fire a diagnostic on them (`any`-typed
-    // placeholders).
-    let referenced: HashSet<SmolStr> = if body_names_set.is_empty() {
-        HashSet::new()
-    } else {
-        // `hoisted_type_idents` was accumulated (AST-walked) from every
-        // type-bearing decl actually hoisted to module scope: hoisted
-        // pending types (above), `export type`/`export interface`, and
-        // namespace top-level type decls. Only those can reference body
-        // locals in a TS sense; plain `import`/`export … from 'mod'`
-        // spans live in their own namespace and contribute nothing. The
-        // intersection with `body_names_set` keeps only body-level names.
-        // (Replaces the old `collect_ident_refs` byte-scan over the
-        // concatenated hoist spans.)
-        hoisted_type_idents
-            .iter()
-            .filter(|n| body_names_set.contains(*n))
-            .cloned()
-            .collect()
-    };
-    // Emit stubs in original declaration order, to keep diffs stable.
-    //
-    // The stub's type is `{ [key: string]: any }` rather than plain
-    // `any` so downstream `typeof <name>` / `keyof typeof <name>`
-    // patterns retain enough structure for TS to reason about. On the
-    // stub-as-`any` path, `keyof typeof <name>` widens to
-    // `string | number | symbol` and the user's `<name>[stringKey]`
-    // then fires "Type 'symbol' cannot be used as an index type".
-    // Using an index signature preserves `keyof <stub> = string` and
-    // still yields `any` on subscript, which is what the user
-    // actually wants when we can't see the real type.
-    let mut stub_seen: HashSet<SmolStr> = HashSet::new();
-    for name in &body_decl_names {
-        if referenced.contains(name) && stub_seen.insert(name.clone()) {
-            hoisted.push_str("declare const ");
-            hoisted.push_str(name);
-            // Stub type: index-signature + callable intersection so
-            // `typeof <name>` is both indexable (for `X[key]`
-            // subscripts, with `keyof = string`) and callable (for
-            // `typeof fn` references inside a hoisted
-            // `Snippet<[{ fn: typeof fn }]>`). A plain `any` would
-            // widen `keyof typeof X` to `string | number | symbol`
-            // and trip TS1023 on user `X[stringKey]` subscripts.
-            hoisted.push_str(": { [key: string]: any } & ((...args: any[]) => any);\n");
-        }
-    }
-
-    // Everything above this point is synthetic stub prelude. From here
-    // on, each hoisted statement corresponds 1:1 with an entry in
-    // `hoisted_byte_offsets`. Emit's line-map builder uses this to skip
-    // past the stubs before pairing overlay lines with source offsets.
-    let stub_prefix_len = hoisted.len();
 
     for &(start, end) in &hoist_spans {
         // Back up through same-line leading whitespace so the hoisted
@@ -877,7 +430,6 @@ pub fn split_imports(
         exported_locals,
         hoisted_byte_offsets,
         hoisted_stmt_spans,
-        stub_prefix_len,
         export_type_infos,
     }
 }
@@ -939,7 +491,7 @@ mod tests {
 
     #[test]
     fn no_imports_or_exports_passes_through() {
-        let s = split_imports("let x = 1;", ScriptLang::Js, false, None);
+        let s = split_imports("let x = 1;", ScriptLang::Js, &HoistContext::default());
         assert_eq!(s.hoisted, "");
         assert_eq!(s.body, "let x = 1;");
     }
@@ -947,7 +499,7 @@ mod tests {
     #[test]
     fn single_import_is_hoisted() {
         let src = "import { writable } from 'svelte/store';\nlet x = 1;";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(
             s.hoisted
                 .contains("import { writable } from 'svelte/store';")
@@ -963,7 +515,7 @@ import a from 'a';
 import b from 'b';
 let x = 1;
 ";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(s.hoisted.contains("import a from 'a';"));
         assert!(s.hoisted.contains("import b from 'b';"));
         assert!(s.body.contains("let x = 1;"));
@@ -972,7 +524,7 @@ let x = 1;
     #[test]
     fn type_only_imports_hoisted() {
         let src = "import type { Foo } from './foo';\nlet x: Foo = bar;";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(s.hoisted.contains("import type { Foo }"));
     }
 
@@ -982,7 +534,7 @@ let x = 1;
         // The `export ` prefix is blanked but `const PI = 3.14;` stays
         // at its original position in the body.
         let src = "let x = 1;\nexport const PI = 3.14;";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(
             !s.hoisted.contains("export"),
             "should not hoist:\n{}",
@@ -1006,7 +558,7 @@ let x = 1;
         // the function body's references (which may use other locals)
         // stay in scope.
         let src = "let x = $state(0);\nexport function foo() { return x; }";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(!s.hoisted.contains("export"));
         assert!(
             s.body.contains("function foo()"),
@@ -1023,7 +575,7 @@ let x = 1;
         // `a` and `b` live inside $$render. We drop it entirely; the
         // declarations themselves stay intact in the body.
         let src = "let a = 1;\nlet b = 2;\nexport { a, b };";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(
             !s.hoisted.contains("export { a, b }"),
             "re-export without source should NOT be hoisted:\n{}",
@@ -1040,7 +592,7 @@ let x = 1;
     #[test]
     fn renamed_re_export_without_source_is_dropped() {
         let src = "let a = 1;\nexport { a as renamed };";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(!s.hoisted.contains("export"));
         assert!(!s.body.contains("export"));
     }
@@ -1050,7 +602,7 @@ let x = 1;
         // `export { x } from 'mod'` doesn't reference local names — it's a
         // pure module-to-module re-export. Safe to hoist.
         let src = "export { foo } from './other';";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(s.hoisted.contains("export { foo } from './other';"));
         assert!(!s.body.contains("export"));
     }
@@ -1061,7 +613,7 @@ let x = 1;
         // disambiguate. Drop is safer than hoisting. Consumer-side
         // default-export surface goes away but body type-checks.
         let src = "let x = 1;\nexport default x;";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(!s.hoisted.contains("export default"));
         assert!(!s.body.contains("export default"));
         assert!(s.body.contains("let x = 1;"));
@@ -1070,7 +622,7 @@ let x = 1;
     #[test]
     fn export_star_re_export_is_hoisted() {
         let src = "export * from './other';";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(s.hoisted.contains("export * from './other';"));
         assert!(!s.body.contains("export"));
     }
@@ -1085,7 +637,7 @@ let x = 1;
     #[test]
     fn instance_script_namespace_stays_in_the_body() {
         let src = "let x = 1;\nnamespace Foo { export type Bar = number; }";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(
             !s.hoisted.contains("namespace Foo"),
             "namespace must not be hoisted:\n{}",
@@ -1105,7 +657,7 @@ let x = 1;
     #[test]
     fn types_depending_on_a_namespace_stay_in_the_body() {
         let src = "namespace A { export type Abc = number; }\ninterface Props { foo: A.Abc }";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &typed_props("Props"));
         assert!(
             !s.hoisted.contains("interface Props"),
             "dependent interface must not be hoisted:\n{}",
@@ -1124,17 +676,10 @@ let x = 1;
             "const a = 1;\nnamespace Outer.Inner { export type C = typeof a; }",
             "const a = 1;\nnamespace Outer { export namespace Inner { export type C = typeof a; } }",
         ] {
-            let s = split_imports(src, ScriptLang::Ts, false, None);
+            let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
             assert!(
                 !s.hoisted.contains("namespace"),
                 "must not be hoisted:\n{}",
-                s.hoisted
-            );
-            // No `declare const a` stub either: nothing was hoisted, so
-            // nothing needs a module-scope stand-in for the body local.
-            assert!(
-                !s.hoisted.contains("declare const a"),
-                "no stub should be synthesised:\n{}",
                 s.hoisted
             );
             assert!(s.body.contains("namespace Outer"));
@@ -1147,7 +692,7 @@ let x = 1;
     #[test]
     fn external_module_declaration_stays_in_the_body() {
         let src = "declare module 'foo' { export const x: number; }\nlet y = 1;";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(!s.hoisted.contains("declare module"));
         assert!(s.body.contains("declare module 'foo'"));
     }
@@ -1156,7 +701,7 @@ let x = 1;
     fn body_offsets_preserved() {
         let src = "import a from 'a';\nlet x = 1;\nexport const y = 2;\nlet z = 3;";
         let original_let_z = src.find("let z").unwrap();
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         let new_let_z = s.body.find("let z").unwrap();
         assert_eq!(new_let_z, original_let_z);
     }
@@ -1171,7 +716,7 @@ import {
 let x = 1;
 ";
         let original_x_line = src.lines().position(|l| l.contains("let x")).unwrap();
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         let new_x_line = s.body.lines().position(|l| l.contains("let x")).unwrap();
         assert_eq!(new_x_line, original_x_line);
     }
@@ -1181,55 +726,22 @@ let x = 1;
         // Without its own `;`, the export list ends at the `;` that starts
         // the next line. That `;` separates `let a = ''` from the arrow.
         let src = "let a = ''\nexport { a as b }\n;() => {};\n";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert_eq!(s.body, "let a = ''\n                 \n;() => {};\n");
         assert_eq!(s.body.len(), src.len());
 
         // A statement's own `;` is still blanked.
         let src = "let a = ''\nexport { a as b };\n() => {};\n";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert_eq!(s.body, "let a = ''\n                  \n() => {};\n");
     }
 
     #[test]
     fn malformed_script_falls_back_to_passthrough() {
         let src = "import {{{ unbalanced";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         let total = format!("{}{}", s.hoisted, s.body);
         assert!(total.contains("import"));
-    }
-
-    #[test]
-    fn export_type_alias_is_hoisted_with_export_keyword() {
-        // `export type Foo = ...` is a pure type-namespace declaration
-        // that's legal at module top level. Hoist the whole statement so
-        // consumers writing `import type { Foo } from './X.svelte'`
-        // resolve. Stripping just the `export ` would leave the type in
-        // the function body, invisible to consumers.
-        let src = "let x = 1;\nexport type Foo = string | number;";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
-        assert!(
-            s.hoisted.contains("export type Foo = string | number;"),
-            "export type must be hoisted verbatim:\n{}",
-            s.hoisted
-        );
-        assert!(
-            !s.body.contains("type Foo"),
-            "declaration must be removed from body:\n{}",
-            s.body
-        );
-    }
-
-    #[test]
-    fn export_interface_is_hoisted_with_export_keyword() {
-        let src = "let x = 1;\nexport interface Foo { n: number; }";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
-        assert!(
-            s.hoisted.contains("export interface Foo { n: number; }"),
-            "export interface must be hoisted verbatim:\n{}",
-            s.hoisted
-        );
-        assert!(!s.body.contains("interface Foo"));
     }
 
     #[test]
@@ -1239,7 +751,7 @@ let x = 1;
         // exported_locals because emit would wrap it in `void Bar;`
         // which fires TS2693 on a type name.
         let src = "type Bar = string;\nexport { type Bar };";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(
             !s.exported_locals.iter().any(|n| n == "Bar"),
             "type-only specifier must not be voided:\n{:?}",
@@ -1252,7 +764,7 @@ let x = 1;
         // `export type { Bar }` — whole declaration marked type-only.
         // Same rule: don't void the name.
         let src = "type Bar = string;\nexport type { Bar };";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(
             !s.exported_locals.iter().any(|n| n == "Bar"),
             "whole-decl type export must not be voided:\n{:?}",
@@ -1265,7 +777,7 @@ let x = 1;
         // `export { Foo, type Bar }` — Foo is a runtime name (goes to
         // exported_locals for void-emission), Bar is a type (skipped).
         let src = "let Foo = 1;\ntype Bar = string;\nexport { Foo, type Bar };";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(
             s.exported_locals.iter().any(|n| n == "Foo"),
             "value specifier missing:\n{:?}",
@@ -1278,116 +790,116 @@ let x = 1;
         );
     }
 
-    #[test]
-    fn props_type_with_typeof_body_const_stays_body_scoped() {
-        // `type X` references `typeof arr` where `arr` is a body-local
-        // const. Even as the `$props()` annotation type, X stays in the
-        // body: the reference then resolves against the REAL const
-        // (preserving `as const` literal precision) instead of a lossy
-        // module-scope stub whose callable intersection also broke the
-        // in-component snippet-render check for non-callable values.
-        let src = "const arr = [1, 2, 3] as const;\ntype X = (typeof arr)[number];";
-        let s = split_imports(src, ScriptLang::Ts, false, Some("X"));
-        assert!(
-            !s.hoisted.contains("type X ="),
-            "props type with typeof-body reference must stay body-scoped:\n{}",
-            s.hoisted
-        );
-        assert!(
-            !s.hoisted.contains("declare const arr"),
-            "no stub when the referring type is body-scoped:\n{}",
-            s.hoisted
-        );
-        assert!(s.body.contains("type X ="));
+    fn typed_props(name: &str) -> HoistContext {
+        HoistContext {
+            props_type:
+                crate::svelte2tsx_nodes::hoistable_interfaces::PropsTypeShape::from_type_text(name),
+            ..HoistContext::default()
+        }
     }
 
+    /// Without a typed `$props()` nothing moves: an exported type stays
+    /// in the render function exactly as written, `export` included.
     #[test]
-    fn props_type_with_typeof_body_function_stays_body_scoped() {
-        // A `$props()` annotation type referencing a body value via
-        // `typeof` stays in the body, so the reference resolves
-        // against the REAL declaration. It used to be force-hoisted
-        // with a `declare const foo: {...} & ((...args) => any)` stub
-        // whose callable intersection made the in-component
-        // `{@render children(realValue)}` check fail for any
-        // non-callable value. Module scope doesn't need the type by
-        // name — the default export projects through
-        // `ReturnType<typeof $$render>`.
-        let src = "async function foo() { return 1; }\ninterface Props { cb: typeof foo }\n";
-        let s = split_imports(src, ScriptLang::Ts, false, Some("Props"));
-        assert!(
-            !s.hoisted.contains("interface Props"),
-            "props type with typeof-body reference must stay body-scoped:\n{}",
-            s.hoisted
-        );
-        assert!(
-            !s.hoisted.contains("declare const foo:"),
-            "no stub when the referring type is body-scoped:\n{}",
-            s.hoisted
-        );
-        assert!(s.body.contains("interface Props"));
+    fn exported_types_stay_in_the_body_without_typed_props() {
+        let src =
+            "let x = 1;\nexport type Foo = string | number;\nexport interface Bar { n: number; }";
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
+        assert_eq!(s.hoisted, "");
+        assert!(s.body.contains("export type Foo = string | number;"));
+        assert!(s.body.contains("export interface Bar { n: number; }"));
     }
 
+    /// With a hoistable props type, every hoistable declaration moves,
+    /// exported or not, whether or not the props type uses it.
     #[test]
-    fn body_typeof_const_stays_in_body_when_not_props_reachable() {
-        // Inverse of the stub-emit tests: when the type referencing a
-        // body-local isn't part of the Props chain, the hoist-decision
-        // pass keeps it in BODY to preserve exact `typeof` precision
-        // (stubs would widen to `any`-ish).
-        let src = "const arr = [1, 2, 3] as const;\ntype X = (typeof arr)[number];";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
-        // Neither the type nor a stub appear in hoisted — X stays body.
+    fn typed_props_move_every_hoistable_type() {
+        let src = "export type Foo = string;\ntype Unused = number;\ninterface Props { f: Foo }";
+        let s = split_imports(src, ScriptLang::Ts, &typed_props("Props"));
         assert!(
-            !s.hoisted.contains("type X"),
-            "non-Props-reachable type must stay body-scoped:\n{}",
+            s.hoisted.contains("export type Foo = string;"),
+            "{}",
             s.hoisted
         );
-        assert!(
-            !s.hoisted.contains("declare const arr"),
-            "no stub when the referring type is body-scoped:\n{}",
-            s.hoisted
-        );
+        assert!(s.hoisted.contains("type Unused = number;"), "{}", s.hoisted);
+        assert!(s.hoisted.contains("interface Props"), "{}", s.hoisted);
+        assert!(!s.body.contains("type"), "{}", s.body);
     }
 
+    /// A `typeof` read of an instance-script value pins the type (and
+    /// everything that names it) inside the function; when that is the
+    /// props type, nothing moves at all.
     #[test]
-    fn no_declare_stub_for_names_not_referenced_by_hoisted_types() {
-        // `unused` is a body-local const but no hoisted type references
-        // it, so we don't emit a stub (avoids clutter + prevents
-        // collisions with names that happen to match imports).
-        let src = "const unused = 1;\ntype X = number;";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
-        assert!(
-            !s.hoisted.contains("declare const unused"),
-            "no stub should be emitted for unreferenced body names:\n{}",
-            s.hoisted
-        );
+    fn typeof_an_instance_value_blocks_hoisting() {
+        let src = "const arr = [1] as const;\ntype X = (typeof arr)[number];\ntype Y = string;\ninterface Props { x: X }";
+        let s = split_imports(src, ScriptLang::Ts, &typed_props("Props"));
+        assert_eq!(s.hoisted, "");
+        // A property key that happens to share a local's name is not a
+        // dependency.
+        let src = "const x = 1;\ninterface Props { x: number }";
+        let s = split_imports(src, ScriptLang::Ts, &typed_props("Props"));
+        assert!(s.hoisted.contains("interface Props"), "{}", s.hoisted);
     }
 
+    /// Imports are module-scope values, so `typeof` of one is fine —
+    /// unless the component subscribes to it as a store.
     #[test]
-    fn declare_stub_skipped_for_import_names() {
-        // Imported names are already at module scope; we must NOT emit
-        // a `declare const foo: any;` for them (would collide with the
-        // import).
-        let src = "import { foo } from 'mod';\ntype X = typeof foo;";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
-        assert!(
-            !s.hoisted.contains("declare const foo"),
-            "no stub for imported name:\n{}",
-            s.hoisted
-        );
-        assert!(s.hoisted.contains("import { foo }"));
-        assert!(s.hoisted.contains("type X"));
+    fn typeof_an_import_hoists_unless_it_is_a_store() {
+        let src = "import { foo } from 'mod';\ntype X = typeof foo;\ninterface Props { x: X }";
+        let s = split_imports(src, ScriptLang::Ts, &typed_props("Props"));
+        assert!(s.hoisted.contains("type X = typeof foo;"), "{}", s.hoisted);
+        let ctx = HoistContext {
+            accessed_stores: vec![SmolStr::new("foo")],
+            ..typed_props("Props")
+        };
+        let s = split_imports(src, ScriptLang::Ts, &ctx);
+        assert!(!s.hoisted.contains("type X"), "{}", s.hoisted);
     }
 
+    /// A name the module script declares as a type is shadowed inside
+    /// the function, and a script generic only exists there.
     #[test]
-    fn declare_stub_not_emitted_from_value_hoist_scanning() {
-        // An import specifier containing a name that matches a body-level
-        // const must NOT trigger a stub. The scan only runs on type-alias
-        // / interface spans (no value shape).
-        let src = "import { arr } from 'mod';\nconst arr2 = 1;\nconsole.log(arr2);\n";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
-        // arr2 is a body const; `import { arr }` is a hoisted value span.
-        // No hoisted type references arr2 → no stub.
-        assert!(!s.hoisted.contains("declare const arr2"));
+    fn module_types_and_generics_stay_in_the_body() {
+        let src = "interface Props { a: number }";
+        let ctx = HoistContext {
+            module_script: Some("import type { Props } from './types';".to_string()),
+            ..typed_props("Props")
+        };
+        let s = split_imports(src, ScriptLang::Ts, &ctx);
+        assert_eq!(s.hoisted, "");
+
+        let src = "type Props = { item: T };";
+        let ctx = HoistContext {
+            generic_names: vec![SmolStr::new("T")],
+            ..typed_props("Props")
+        };
+        let s = split_imports(src, ScriptLang::Ts, &ctx);
+        assert_eq!(s.hoisted, "");
+    }
+
+    /// An inline props type moves what it names when it can itself.
+    #[test]
+    fn inline_props_type_moves_its_dependencies() {
+        let src = "type A = string;\nlet { a }: { a: A } = $props();";
+        let s = split_imports(src, ScriptLang::Ts, &typed_props("{ a: A }"));
+        assert!(s.hoisted.contains("type A = string;"), "{}", s.hoisted);
+    }
+
+    /// A `$$Generic<Name>` constraint moves `Name` regardless of props.
+    #[test]
+    fn generic_constraint_type_moves() {
+        let src = "interface Item { id: number }\nexport let item: T;";
+        let ctx = HoistContext {
+            generic_names: vec![SmolStr::new("T")],
+            generic_constraints: vec!["Item".to_string()],
+            ..HoistContext::default()
+        };
+        let s = split_imports(src, ScriptLang::Ts, &ctx);
+        assert!(
+            s.hoisted.contains("interface Item { id: number }"),
+            "{}",
+            s.hoisted
+        );
     }
 
     #[test]
@@ -1399,7 +911,7 @@ import { writable } from 'svelte/store';
 let count = writable(0);
 export { count };
 ";
-        let s = split_imports(src, ScriptLang::Ts, false, None);
+        let s = split_imports(src, ScriptLang::Ts, &HoistContext::default());
         assert!(s.hoisted.contains("import { writable }"));
         assert!(!s.hoisted.contains("export { count }"));
         assert!(s.body.contains("let count = writable(0);"));

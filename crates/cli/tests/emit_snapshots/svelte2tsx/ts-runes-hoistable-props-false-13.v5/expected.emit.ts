@@ -4,15 +4,11 @@
     namespace A {
         export type Abd = number
     }
-declare const Abc: { [key: string]: any } & ((...args: any[]) => any);
+function $$render_e40e2c10() {
+
 interface A {
     Abc: number
 }
-function $$render_e40e2c10() {
-
-             
-               
- 
 
 let {Abc}: A = $props()
     ;(async () => {

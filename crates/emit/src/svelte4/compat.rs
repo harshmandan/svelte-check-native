@@ -286,7 +286,7 @@ fn fragment_has_element_where(
 /// `$$Events` interface or type declaration in its instance or module
 /// script via an AST walk over the parsed scripts. When true, the
 /// default-export declaration intersects with
-/// `& { readonly __svn_events: $$Events }` so consumers resolve to
+/// the `__svn_events` events marker so consumers resolve to
 /// `__svn_ensure_component`'s typed overload and get narrowed
 /// `$on("evt", handler)` signatures.
 ///

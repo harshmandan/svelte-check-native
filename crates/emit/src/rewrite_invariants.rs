@@ -140,7 +140,11 @@ fn split_imports_body_preserves_length_and_lines() {
     let src = "import { writable } from 'svelte/store';\n\
                export const flag = true;\n\
                let store = writable(0);\n";
-    let split = split_imports(src, ScriptLang::Ts, false, None);
+    let split = split_imports(
+        src,
+        ScriptLang::Ts,
+        &crate::svelte2tsx_nodes::hoistable_interfaces::HoistContext::default(),
+    );
     assert_ne!(split.body, src, "sample did not trigger any hoisting");
     assert_eq!(
         src.len(),

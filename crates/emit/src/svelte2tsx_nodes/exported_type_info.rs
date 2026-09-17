@@ -15,7 +15,6 @@ use oxc_span::GetSpan;
 use smol_str::SmolStr;
 
 use crate::process_instance_script_content::ExportedLocalInfo;
-use crate::svelte2tsx_nodes::type_deps::collect_type_node_deps;
 
 /// Mirrors upstream svelte2tsx's
 /// `language-tools/packages/svelte2tsx/src/svelte2tsx/nodes/ExportedNames.ts:79+`
@@ -61,7 +60,6 @@ pub(crate) fn collect_export_type_infos(
                 type_source: None,
                 is_let: false,
                 has_init: true,
-                annotation_idents: Vec::new(),
             });
         }
         Declaration::VariableDeclaration(v) => {
@@ -76,16 +74,6 @@ pub(crate) fn collect_export_type_infos(
                             let span = GetSpan::span(&ta.type_annotation);
                             content[span.start as usize..span.end as usize].to_string()
                         });
-                        let annotation_idents = d
-                            .type_annotation
-                            .as_deref()
-                            .map(|ta| {
-                                collect_type_node_deps(&ta.type_annotation)
-                                    .idents
-                                    .into_iter()
-                                    .collect()
-                            })
-                            .unwrap_or_default();
                         out.push(ExportedLocalInfo {
                             exported_as: None,
                             is_named_export: false,
@@ -93,7 +81,6 @@ pub(crate) fn collect_export_type_infos(
                             type_source,
                             is_let,
                             has_init,
-                            annotation_idents,
                         });
                     }
                     // Destructure (`export const { a, b } = obj`,
@@ -118,7 +105,6 @@ pub(crate) fn collect_export_type_infos(
                     type_source: None,
                     is_let: false,
                     has_init: true,
-                    annotation_idents: Vec::new(),
                 });
             }
         }
@@ -147,7 +133,6 @@ fn collect_pattern_export_infos(
             type_source: None,
             is_let,
             has_init,
-            annotation_idents: Vec::new(),
         }),
         BindingPattern::ObjectPattern(op) => {
             for prop in &op.properties {

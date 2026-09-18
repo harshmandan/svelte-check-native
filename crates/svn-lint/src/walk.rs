@@ -267,6 +267,22 @@ pub fn walk_parsed(
     // synthesis loop, before even the options warnings.
     crate::rules::binding_rules::visit_pre_options(ctx);
 
+    // Next the analysis reads the `customElement` and `css` compile
+    // options; a component's own `<svelte:options css>` replaces the
+    // config's `css`.
+    if let Some((option, code, message)) = ctx.compile_options_late_error.take() {
+        let overridden = option == crate::LateOption::Css
+            && fragment.nodes.iter().any(|n| {
+                matches!(n, Node::SvelteElement(se)
+                    if se.kind == SvelteElementKind::Options
+                        && se.attributes.iter().any(|a| matches!(a,
+                            Attribute::Plain(p) if p.name == "css")))
+            });
+        if !overridden {
+            ctx.emit_error(code, message, svn_core::Range::new(0, 0));
+        }
+    }
+
     // `<svelte:options>` attribute warnings. Mirrors the loop over
     // `root.options.attributes` in upstream's analyze phase (before
     // the walks), which fires per attribute in source order:

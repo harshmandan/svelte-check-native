@@ -719,6 +719,21 @@ pub fn props_duplicate(rune: &str) -> String {
     format!("Cannot use `{rune}()` more than once\nhttps://svelte.dev/e/props_duplicate")
 }
 
+/// Invalid compiler option: %details%
+pub fn options_invalid_value(details: &str) -> String {
+    format!("Invalid compiler option: {details}\nhttps://svelte.dev/e/options_invalid_value")
+}
+
+/// Invalid compiler option: %details%
+pub fn options_removed(details: &str) -> String {
+    format!("Invalid compiler option: {details}\nhttps://svelte.dev/e/options_removed")
+}
+
+/// Unrecognised compiler option %keypath%
+pub fn options_unrecognised(keypath: &str) -> String {
+    format!("Unrecognised compiler option {keypath}\nhttps://svelte.dev/e/options_unrecognised")
+}
+
 /// Cyclical dependency detected: %cycle%
 pub fn reactive_declaration_cycle(cycle: &str) -> String {
     format!(

@@ -219,6 +219,9 @@ pub struct SvelteConfigSummary {
     /// svelte-check drops parse errors it blames on missing
     /// preprocessing (see `svn_lint::LintOptions::preprocess_configured`).
     pub preprocess_configured: bool,
+    /// What the compiler's validation of `compilerOptions` reports, when
+    /// the options can be read statically and it reports anything.
+    pub compile_options: Option<std::sync::Arc<svn_lint::CompileOptionsCheck>>,
 }
 
 /// The per-file subset of a config — the settings upstream applies PER
@@ -235,6 +238,8 @@ pub struct ResolvedConfig {
     pub ts_scripts_transpiled: bool,
     /// See [`SvelteConfigSummary::preprocess_configured`].
     pub preprocess_configured: bool,
+    /// See [`SvelteConfigSummary::compile_options`].
+    pub compile_options: Option<std::sync::Arc<svn_lint::CompileOptionsCheck>>,
 }
 
 impl ResolvedConfig {
@@ -338,6 +343,7 @@ impl ConfigResolver {
                     experimental_async: summary.experimental_async,
                     ts_scripts_transpiled: summary.ts_scripts_transpiled,
                     preprocess_configured: summary.preprocess_configured,
+                    compile_options: summary.compile_options,
                 });
                 self.nested.push((cfg_path, rc.clone()));
                 rc
@@ -450,6 +456,8 @@ pub fn analyse(config_path: &Path) -> SvelteConfigSummary {
         .is_some_and(|obj| preprocess_transpiles_ts(obj, &parsed.program));
     summary.preprocess_configured =
         default_export_config_object(&parsed.program).is_some_and(sets_preprocess);
+    summary.compile_options =
+        default_export_config_object(&parsed.program).and_then(compile_options_check);
 
     summary
 }
@@ -527,6 +535,7 @@ pub fn analyse_vite_config(config_path: &Path) -> Option<SvelteConfigSummary> {
     summary.experimental_async = experimental_async_in_object(plugin_obj);
     summary.ts_scripts_transpiled = preprocess_transpiles_ts(plugin_obj, &parsed.program);
     summary.preprocess_configured = sets_preprocess(plugin_obj);
+    summary.compile_options = compile_options_check(plugin_obj);
 
     Some(summary)
 }
@@ -688,6 +697,73 @@ fn compiler_options_in_object<'a>(
     match value {
         Expression::ObjectExpression(inner) => Some(inner),
         _ => None,
+    }
+}
+
+/// The compiler's validation of the config-root object's
+/// `compilerOptions`, when the object literal can be read statically
+/// (no spread or computed keys) and the validation reports anything.
+fn compile_options_check(
+    obj: &ObjectExpression<'_>,
+) -> Option<std::sync::Arc<svn_lint::CompileOptionsCheck>> {
+    let options = compiler_options_in_object(obj)?;
+    let svn_lint::OptionValue::Object(entries) = option_value_of_object(options) else {
+        return None;
+    };
+    let check = svn_lint::check_compile_options(&entries);
+    (!check.is_empty()).then(|| std::sync::Arc::new(check))
+}
+
+/// An object literal as a compile-option value: its entries in source
+/// order, or unknown when a spread or computed key hides them.
+fn option_value_of_object(obj: &ObjectExpression<'_>) -> svn_lint::OptionValue {
+    use svn_lint::OptionValue;
+    let mut entries = Vec::new();
+    for prop in &obj.properties {
+        let ObjectPropertyKind::ObjectProperty(p) = prop else {
+            return OptionValue::Unknown;
+        };
+        if p.computed {
+            return OptionValue::Unknown;
+        }
+        let key = match &p.key {
+            PropertyKey::StaticIdentifier(id) => id.name.to_string(),
+            PropertyKey::StringLiteral(s) => s.value.to_string(),
+            _ => return OptionValue::Unknown,
+        };
+        let value = match p.kind {
+            oxc_ast::ast::PropertyKind::Init if p.method => OptionValue::Function,
+            oxc_ast::ast::PropertyKind::Init => option_value_of(&p.value),
+            _ => OptionValue::Unknown,
+        };
+        entries.push((key, value));
+    }
+    OptionValue::Object(entries)
+}
+
+/// A compile-option value, as far as a static read can tell.
+fn option_value_of(expr: &Expression<'_>) -> svn_lint::OptionValue {
+    use svn_lint::OptionValue;
+    match expr {
+        Expression::ParenthesizedExpression(p) => option_value_of(&p.expression),
+        Expression::TSAsExpression(t) => option_value_of(&t.expression),
+        Expression::TSSatisfiesExpression(t) => option_value_of(&t.expression),
+        Expression::BooleanLiteral(b) => OptionValue::Bool(b.value),
+        Expression::StringLiteral(s) => OptionValue::Str(s.value.to_string()),
+        Expression::NumericLiteral(n) => OptionValue::Num(n.value),
+        Expression::NullLiteral(_) => OptionValue::Null,
+        Expression::Identifier(id) if id.name == "undefined" => OptionValue::Undefined,
+        Expression::TemplateLiteral(t) if t.expressions.is_empty() => t
+            .quasis
+            .first()
+            .and_then(|q| q.value.cooked.as_ref())
+            .map_or(OptionValue::Unknown, |c| OptionValue::Str(c.to_string())),
+        Expression::ArrayExpression(_) => OptionValue::Array,
+        Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
+            OptionValue::Function
+        }
+        Expression::ObjectExpression(o) => option_value_of_object(o),
+        _ => OptionValue::Unknown,
     }
 }
 

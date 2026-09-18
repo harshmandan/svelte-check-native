@@ -131,6 +131,10 @@ pub struct LintContext<'src> {
     /// See [`crate::LintOptions::preprocess_configured`].
     pub(crate) preprocess_configured: bool,
     pub(crate) first_slot: Option<(SmolStr, Range)>,
+    /// The error reading the config's `customElement` / `css` option
+    /// throws during the analysis (see
+    /// [`crate::CompileOptionsCheck::late_error`]).
+    pub(crate) compile_options_late_error: Option<(crate::LateOption, Code, String)>,
 }
 
 impl<'src> LintContext<'src> {
@@ -164,6 +168,7 @@ impl<'src> LintContext<'src> {
             ts_scripts_transpiled: false,
             preprocess_configured: false,
             first_slot: None,
+            compile_options_late_error: None,
         }
     }
 

@@ -37,6 +37,7 @@ mod a11y_constants;
 mod aria_data;
 mod codes;
 mod compat;
+mod compile_options;
 mod context;
 mod fuzzymatch;
 // The vendored HTML5 tree-validation tables live in `svn-parser` (the
@@ -61,12 +62,13 @@ use std::path::Path;
 
 pub use codes::{CODES, Code};
 pub use compat::{CompatFeatures, SvelteVersion, detect_for_workspace};
+pub use compile_options::{CompileOptionsCheck, LateOption, OptionValue, check_compile_options};
 pub use context::{LintContext, Warning};
 pub use parse_rejection::{script_tag_rejected, template_parse_rejected};
 
 /// The project compiler options the pass honours (from the nearest
 /// Svelte config).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct LintOptions {
     /// `compilerOptions.runes`: forces the mode when set.
     pub runes: Option<bool>,
@@ -78,6 +80,30 @@ pub struct LintOptions {
     /// The project's Svelte config supplies its own `preprocess` (the
     /// language server's fallback preprocessor does not count).
     pub preprocess_configured: bool,
+    /// What the compiler's validation of the config's
+    /// `compilerOptions` reports (see [`check_compile_options`]).
+    pub compile_options: Option<std::sync::Arc<CompileOptionsCheck>>,
+    /// The compile options' warnings this component shows. The compiler
+    /// warns about an option once per process, so only the first
+    /// component compiled with it shows each (the caller decides which).
+    pub compile_option_warnings: Vec<(Code, String)>,
+}
+
+/// Report the compile options' validation before anything else: its
+/// warnings (on the first component only) and its error, which the
+/// compiler throws before reading the component.
+fn report_compile_options(options: &LintOptions, ctx: &mut LintContext<'_>) {
+    let at = svn_core::Range::new(0, 0);
+    for (code, message) in &options.compile_option_warnings {
+        ctx.emit(*code, message.clone(), at);
+    }
+    let Some(check) = &options.compile_options else {
+        return;
+    };
+    if let Some((code, message)) = &check.error {
+        ctx.emit_error(*code, message.clone(), at);
+    }
+    ctx.compile_options_late_error = check.late_error.clone();
 }
 
 /// Run the compile-warning pass on one source file.
@@ -114,6 +140,7 @@ pub fn lint_file_with_options(
     ctx.experimental_async = options.experimental_async;
     ctx.ts_scripts_transpiled = options.ts_scripts_transpiled;
     ctx.preprocess_configured = options.preprocess_configured;
+    report_compile_options(&options, &mut ctx);
     // `walk` resolves runes mode from the document it parses (reusing
     // that parse) — pass the caller's hint through rather than running
     // a separate `infer_runes_mode` parse here.
@@ -143,6 +170,7 @@ pub fn lint_parsed<'src>(
     ctx.experimental_async = options.experimental_async;
     ctx.ts_scripts_transpiled = options.ts_scripts_transpiled;
     ctx.preprocess_configured = options.preprocess_configured;
+    report_compile_options(&options, &mut ctx);
     crate::walk::walk_parsed(doc, fragment, source, path, options.runes, &mut ctx);
     ctx.take_warnings()
 }

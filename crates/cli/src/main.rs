@@ -462,6 +462,7 @@ fn main() -> ExitCode {
             experimental_async: svelte_config_summary.experimental_async,
             ts_scripts_transpiled: svelte_config_summary.ts_scripts_transpiled,
             preprocess_configured: svelte_config_summary.preprocess_configured,
+            compile_options: svelte_config_summary.compile_options.clone(),
         },
         cli.config.is_some(),
         analysed_config.is_some(),
@@ -863,6 +864,7 @@ fn native_diagnostics_for_parsed(
     template_errors: &[svn_parser::ParseError],
     config_resolver: &svelte_config::ConfigResolver,
     compat: svn_lint::CompatFeatures,
+    compile_option_warnings: Vec<(svn_lint::Code, String)>,
 ) -> NativeFileDiagnostics {
     let pm = svn_core::PositionMap::new(source);
 
@@ -905,6 +907,8 @@ fn native_diagnostics_for_parsed(
         experimental_async: config.experimental_async,
         ts_scripts_transpiled: config.ts_scripts_transpiled,
         preprocess_configured: config.preprocess_configured,
+        compile_options: config.compile_options.clone(),
+        compile_option_warnings,
     };
     let warnings = svn_lint::lint_parsed(doc, fragment, source, pm, path, options, compat);
 
@@ -1677,6 +1681,25 @@ fn check_project(
     let run_native = sources.svelte && matches!(svelte_warnings_mode, SvelteWarningsMode::Native);
     let native_compat = run_native.then(|| svn_lint::detect_for_workspace(workspace));
     let config_resolver_ref: &svelte_config::ConfigResolver = config_resolver;
+    // The compiler warns about a deprecated or removed compile option
+    // once per process: the first component compiled with it shows the
+    // warning, and no other.
+    let mut compile_option_warnings: Vec<Vec<(svn_lint::Code, String)>> =
+        vec![Vec::new(); svelte_sources.len()];
+    if run_native {
+        let mut warned: std::collections::HashSet<svn_lint::Code> =
+            std::collections::HashSet::new();
+        for (idx, (file, _)) in svelte_sources.iter().enumerate() {
+            if let Some(check) = &config_resolver_ref.for_path(file).compile_options {
+                for (code, message) in &check.warnings {
+                    if warned.insert(*code) {
+                        compile_option_warnings[idx].push((*code, message.clone()));
+                    }
+                }
+            }
+        }
+    }
+    let compile_option_warnings = &compile_option_warnings;
     let mut native_results: Vec<Option<NativeFileDiagnostics>>;
     // Components whose template the compiler's `parse()` rejects — left
     // out of the program, the diagnostics and the entry count.
@@ -1762,6 +1785,7 @@ fn check_project(
                         &template_errors,
                         config_resolver_ref,
                         compat,
+                        compile_option_warnings[idx].clone(),
                     )
                 });
                 // TSGO-ENHANCEMENT: missing `.svelte` imports (TS2307) —

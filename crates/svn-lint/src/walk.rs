@@ -541,6 +541,8 @@ pub(crate) enum PathFrame {
     SvelteFragment,
     /// `<svelte:boundary>`.
     SvelteBoundary,
+    /// `<svelte:head>`.
+    SvelteHead,
     /// Any other element-like node (`<slot>`, `<svelte:head>`, …).
     Other,
 }
@@ -756,10 +758,10 @@ fn walk_fragment_impl(
                     SvelteElementKind::Boundary => (PathFrame::SvelteBoundary, parent_tag),
                     // The remaining special elements have no visitor of
                     // their own: their children keep the parent element.
+                    SvelteElementKind::Head => (PathFrame::SvelteHead, parent_tag),
                     SvelteElementKind::Window
                     | SvelteElementKind::Document
                     | SvelteElementKind::Body
-                    | SvelteElementKind::Head
                     | SvelteElementKind::Options => (PathFrame::Other, parent_tag),
                 };
                 ctx.template_path.push(frame);
@@ -773,6 +775,7 @@ fn walk_fragment_impl(
                 ctx.template_path.push(PathFrame::IfBlock);
                 walk_fragment_impl(&b.consequent, ctx, parent_tag, ancestors);
                 for arm in &b.elseif_arms {
+                    crate::rules::block_rules::visit_elseif(arm, ctx);
                     flush_expr_events_before(arm.body.range.start, ctx);
                     walk_fragment_impl(&arm.body, ctx, parent_tag, ancestors);
                 }
@@ -824,6 +827,7 @@ fn walk_fragment_impl(
                 // Snippet frames stop the placement checks (upstream
                 // breaks at SnippetBlock) but not the a11y is_parent
                 // walk.
+                crate::rules::block_rules::visit_snippet(b, ctx);
                 ancestors.push(Ancestor::Boundary);
                 ctx.template_path.push(PathFrame::SnippetBlock);
                 // The compiler clears the parent element for a
@@ -847,7 +851,17 @@ fn walk_fragment_impl(
             }
             Node::Interpolation(i) => {
                 if i.kind == svn_parser::InterpolationKind::AtRender {
+                    crate::rules::block_rules::visit_render_tag(i, ctx);
                     ctx.uses_render_tags = true;
+                }
+                if i.kind == svn_parser::InterpolationKind::AtConst {
+                    crate::rules::block_rules::visit_const_tag(i, ctx);
+                }
+                if matches!(
+                    i.kind,
+                    svn_parser::InterpolationKind::AtHtml | svn_parser::InterpolationKind::AtDebug
+                ) {
+                    crate::rules::block_rules::visit_html_or_debug_tag(i, ctx);
                 }
                 if i.kind == svn_parser::InterpolationKind::Expression
                     && let Some(parent) = parent_tag

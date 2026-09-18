@@ -67,9 +67,6 @@ pub use events::{
 };
 pub use jsdoc::should_synthesise_js_props;
 pub use nodes::attribute::{literal_attr_value, literal_attr_value_range};
-pub use nodes::const_tag::{
-    CONST_TAG_INVALID_PLACEMENT_MSG, ConstPlacementError, check_const_placement,
-};
 pub use nodes::inline_component::comment_thread;
 pub use props::{PropInfo, PropsInfo, PropsSource, contains_typeof_ref, root_type_name_of};
 pub use root_await::has_root_scope_await;

@@ -826,14 +826,11 @@ fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Opti
 ///    caller drops tsgo's noise for it, and skip the checks below (the
 ///    AST is garbage, as the old lint pass did via the broken filter).
 ///
-/// 2. **Structural analyze-phase errors** on the clean AST
-///    (`svn_analyze::check_const_placement`, …) — `svelte/compiler`
-///    `2-analyze` visitors like a misplaced `{@const}`. NOT marked broken:
-///    svelte2tsx still produces a usable overlay, so tsgo runs and
-///    reports independently.
-///
-/// 3. **Lint warnings** via [`svn_lint::lint_parsed`], reusing this
-///    file's parse and position map.
+/// 2. **Lint diagnostics** via [`svn_lint::lint_parsed`], reusing this
+///    file's parse and position map: the compiler's warnings, or its
+///    first analyze-phase error (which drops the file's warnings, as
+///    the throwing compile does). NOT marked broken: svelte2tsx still
+///    produces a usable overlay, so tsgo runs and reports independently.
 ///
 /// Diagnostics are merged by [`merge_native_diagnostics`] in the
 /// original two-phase emission order (all fatal/structural diagnostics
@@ -845,7 +842,7 @@ fn compiler_code_docs_url(code: &str, severity: svn_typecheck::Severity) -> Opti
 /// `compile_batch`.
 struct NativeFileDiagnostics {
     path: PathBuf,
-    /// Fatal-parse + structural (const-placement) diagnostics.
+    /// Fatal-parse diagnostics.
     diags: Vec<svn_typecheck::CheckDiagnostic>,
     /// Set when a fatal parse error made the AST unusable.
     broken: bool,
@@ -898,35 +895,7 @@ fn native_diagnostics_for_parsed(
         };
     }
 
-    // (2) Structural analyze-phase errors on the clean AST. The
-    // root template fragment is not a legal const-tag host (its
-    // grand-parent is the document Root) — start disallowed.
-    let mut placement_errs = Vec::new();
-    svn_analyze::check_const_placement(&fragment.nodes, false, &mut placement_errs);
-    let diags: Vec<svn_typecheck::CheckDiagnostic> = placement_errs
-        .into_iter()
-        .map(|e| {
-            let (start, end) = pm.range_positions(e.range);
-            svn_typecheck::CheckDiagnostic {
-                source_path: path.to_path_buf(),
-                line: start.line.saturating_add(1),
-                column: start.character.saturating_add(1),
-                end_line: end.line.saturating_add(1),
-                end_column: end.character.saturating_add(1),
-                severity: svn_typecheck::Severity::Error,
-                code: svn_typecheck::DiagnosticCode::Slug(
-                    "const_tag_invalid_placement".to_string(),
-                ),
-                message: svn_analyze::CONST_TAG_INVALID_PLACEMENT_MSG.to_string(),
-                source: svn_typecheck::DiagnosticSource::Svelte,
-                code_description_url: Some(
-                    "https://svelte.dev/e/const_tag_invalid_placement".to_string(),
-                ),
-            }
-        })
-        .collect();
-
-    // (3) Lint warnings — reuse the parse and the position map
+    // (2) Lint warnings — reuse the parse and the position map
     // (no second parse_sections / line-index scan per file).
     // The nearest config's compilerOptions.runes forces the
     // mode; `None` keeps lint's auto-detection.
@@ -941,7 +910,7 @@ fn native_diagnostics_for_parsed(
 
     NativeFileDiagnostics {
         path: path.to_path_buf(),
-        diags,
+        diags: Vec::new(),
         broken: false,
         warnings,
     }

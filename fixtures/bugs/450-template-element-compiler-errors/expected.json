@@ -1,0 +1,157 @@
+{
+    "errors": [
+        {
+            "file": "src/AwaitThenSpace.svelte",
+            "line": 0,
+            "column": 61,
+            "code": "block_unexpected_character"
+        },
+        {
+            "file": "src/BindCall.svelte",
+            "line": 3,
+            "column": 7,
+            "code": "bind_invalid_expression"
+        },
+        {
+            "file": "src/BindChain.svelte",
+            "line": 3,
+            "column": 7,
+            "code": "bind_invalid_expression"
+        },
+        {
+            "file": "src/BodyAttr.svelte",
+            "line": 0,
+            "column": 13,
+            "code": "svelte_body_illegal_attribute"
+        },
+        {
+            "file": "src/ConstInSelf.svelte",
+            "line": 0,
+            "column": 23,
+            "code": "const_tag_invalid_placement"
+        },
+        {
+            "file": "src/EachKeyNoAs.svelte",
+            "line": 0,
+            "column": 50,
+            "code": "each_key_without_as"
+        },
+        {
+            "file": "src/ElseIfSpace.svelte",
+            "line": 0,
+            "column": 43,
+            "code": "block_unexpected_character"
+        },
+        {
+            "file": "src/Files.svelte",
+            "line": 3,
+            "column": 19,
+            "code": "bind_invalid_target"
+        },
+        {
+            "file": "src/FragmentDirective.svelte",
+            "line": 0,
+            "column": 73,
+            "code": "svelte_fragment_invalid_attribute"
+        },
+        {
+            "file": "src/FragmentRoot.svelte",
+            "line": 0,
+            "column": 0,
+            "code": "svelte_fragment_invalid_placement"
+        },
+        {
+            "file": "src/HeadAttr.svelte",
+            "line": 0,
+            "column": 13,
+            "code": "svelte_head_illegal_attribute"
+        },
+        {
+            "file": "src/HtmlSpace.svelte",
+            "line": 0,
+            "column": 37,
+            "code": "block_unexpected_character"
+        },
+        {
+            "file": "src/IfSpaceRunes.svelte",
+            "line": 0,
+            "column": 35,
+            "code": "block_unexpected_character"
+        },
+        {
+            "file": "src/LetOnWindow.svelte",
+            "line": 0,
+            "column": 15,
+            "code": "let_directive_invalid_placement"
+        },
+        {
+            "file": "src/RenderCall.svelte",
+            "line": 0,
+            "column": 28,
+            "code": "render_tag_invalid_call_expression"
+        },
+        {
+            "file": "src/RenderSpread.svelte",
+            "line": 0,
+            "column": 70,
+            "code": "render_tag_invalid_spread_argument"
+        },
+        {
+            "file": "src/SnippetRest.svelte",
+            "line": 0,
+            "column": 12,
+            "code": "snippet_invalid_rest_parameter"
+        },
+        {
+            "file": "src/StyleMod.svelte",
+            "line": 0,
+            "column": 5,
+            "code": "style_directive_invalid_modifier"
+        },
+        {
+            "file": "src/TextareaBoth.svelte",
+            "line": 0,
+            "column": 28,
+            "code": "textarea_invalid_content"
+        },
+        {
+            "file": "src/TitleAttr.svelte",
+            "line": 0,
+            "column": 20,
+            "code": "title_illegal_attribute"
+        },
+        {
+            "file": "src/TitleChild.svelte",
+            "line": 0,
+            "column": 23,
+            "code": "title_invalid_content"
+        },
+        {
+            "file": "src/Transition.svelte",
+            "line": 3,
+            "column": 22,
+            "code": "transition_conflict"
+        },
+        {
+            "file": "src/WindowAttr.svelte",
+            "line": 0,
+            "column": 15,
+            "code": "illegal_element_attribute"
+        },
+        {
+            "file": "src/WindowChild.svelte",
+            "line": 0,
+            "column": 15,
+            "code": "svelte_meta_invalid_content"
+        }
+    ],
+    "warnings": [
+        {
+            "file": "src/SnippetEmpty.svelte",
+            "line": 0,
+            "column": 14,
+            "code": "block_empty"
+        }
+    ],
+    "_note": "Compiler errors raised while validating template elements, directives and blocks, one component per error (the compiler stops at its first error, which also drops the component's warnings). Positions and codes verified against svelte/compiler 5.55."
+}

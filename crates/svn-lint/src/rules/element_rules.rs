@@ -28,7 +28,32 @@ pub fn visit(
         return;
     }
 
+    // `<title>` inside `<svelte:head>` is its own node type to the
+    // compiler (`TitleElement`), with only its own two checks.
+    if el.name == "title" && parent_is_head(&ctx.template_path) {
+        visit_title_element(el, ctx);
+        return;
+    }
+
     validate_element_errors(&el.attributes, false, ctx);
+
+    // A `<textarea>` gets its value from either its content or a
+    // `value` attribute, not both (`RegularElement.js`).
+    if el.name == "textarea"
+        && !el.children.nodes.is_empty()
+        && el.attributes.iter().any(|a| {
+            matches!(
+                a,
+                Attribute::Plain(_) | Attribute::Expression(_) | Attribute::Shorthand(_)
+            ) && attribute_name(a) == Some("value")
+        })
+    {
+        ctx.emit_error(
+            Code::textarea_invalid_content,
+            messages::textarea_invalid_content(),
+            el.range,
+        );
+    }
 
     // node_invalid_placement / node_invalid_placement_ssr
     // (`RegularElement.js`): walking out from the element, the parent
@@ -333,7 +358,9 @@ pub(crate) enum AttrParent<'a> {
     /// `<svelte:window>` / `<svelte:document>` / `<svelte:body>` — the
     /// special elements the compiler validates bindings on, by name.
     SvelteSpecial(&'static str),
-    /// Any other `<svelte:*>` (options/head/fragment/boundary).
+    /// `<svelte:fragment>`.
+    SvelteFragment,
+    /// Any other `<svelte:*>` (options/head/boundary).
     OtherSvelte,
 }
 
@@ -383,7 +410,8 @@ pub(crate) fn visit_attribute(
         AttrParent::RegularElement { .. } | AttrParent::SvelteElement
     );
     let fires_invalid_property_name = parent_is_regular_or_svelte;
-    let fires_attr_name_checks = !matches!(parent, AttrParent::OtherSvelte);
+    let fires_attr_name_checks =
+        !matches!(parent, AttrParent::OtherSvelte | AttrParent::SvelteFragment);
     // `on*` attributes / `on:` directives on elements, for
     // `mixed_event_handler_syntaxes`.
     if parent_is_regular_or_svelte {
@@ -523,6 +551,30 @@ pub(crate) fn visit_attribute(
             }
         }
         Attribute::Directive(d) => {
+            // `let:` belongs on a component, an element, a `<slot>` or
+            // a `<svelte:fragment>` (`LetDirective.js`).
+            if d.kind == DirectiveKind::Let
+                && matches!(
+                    parent,
+                    AttrParent::OtherSvelte | AttrParent::SvelteSpecial(_)
+                )
+            {
+                ctx.emit_error(
+                    Code::let_directive_invalid_placement,
+                    messages::let_directive_invalid_placement(),
+                    d.range,
+                );
+            }
+            // `style:` takes no modifier but `important` (`StyleDirective.js`).
+            if d.kind == DirectiveKind::Style
+                && (d.modifiers.len() > 1 || d.modifiers.iter().any(|m| m != "important"))
+            {
+                ctx.emit_error(
+                    Code::style_directive_invalid_modifier,
+                    messages::style_directive_invalid_modifier(),
+                    d.range,
+                );
+            }
             // event_directive_deprecated: on:click in runes mode on a
             // regular DOM element OR `<svelte:element>` (but NOT
             // Components / svelte:component / svelte:self).
@@ -1351,4 +1403,71 @@ fn bind_group_snippet_check(
             d.range,
         );
     }
+}
+
+/// The parser's `parent_is_head`: the nearest `<svelte:head>`,
+/// element or component frame is a `<svelte:head>`.
+fn parent_is_head(path: &[PathFrame]) -> bool {
+    for frame in path.iter().rev() {
+        match frame {
+            PathFrame::SvelteHead => return true,
+            PathFrame::RegularElement { .. }
+            | PathFrame::Component {
+                kind: crate::walk::ComponentKind::Component,
+                ..
+            } => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// `TitleElement.js`: a `<title>` in `<svelte:head>` takes no
+/// attributes and holds only text and `{expression}` tags.
+fn visit_title_element(el: &Element, ctx: &mut LintContext<'_>) {
+    if let Some(attr) = el
+        .attributes
+        .iter()
+        .find(|a| !matches!(a, Attribute::Comment(_)))
+    {
+        ctx.emit_error(
+            Code::title_illegal_attribute,
+            messages::title_illegal_attribute(),
+            attr.range(),
+        );
+    }
+    for child in &el.children.nodes {
+        let allowed = match child {
+            svn_parser::ast::Node::Text(_) => true,
+            svn_parser::ast::Node::Interpolation(i) => {
+                i.kind == svn_parser::InterpolationKind::Expression
+            }
+            _ => false,
+        };
+        if !allowed {
+            ctx.emit_error(
+                Code::title_invalid_content,
+                messages::title_invalid_content(),
+                child.range(),
+            );
+        }
+    }
+}
+
+/// `validate_slot_attribute` for a `<svelte:fragment>`'s `slot`
+/// attribute.
+pub(crate) fn validate_fragment_slot_attribute(attr: &Attribute, ctx: &mut LintContext<'_>) {
+    if attribute_name(attr) != Some("slot") {
+        return;
+    }
+    let text = match attr {
+        Attribute::Plain(p) => static_text_value(p, ctx.source),
+        _ => None,
+    };
+    validate_slot_attribute(ctx, text, attr.range(), false);
+}
+
+/// The name of a plain, expression or shorthand attribute.
+pub(crate) fn plain_attribute_name(attr: &Attribute) -> Option<&str> {
+    attribute_name(attr)
 }

@@ -8,8 +8,116 @@ use crate::messages;
 use crate::rules::element_rules::{AttrParent, visit_attribute};
 
 pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::walk::Ancestor]) {
-    if se.kind == SvelteElementKind::Element {
-        crate::rules::element_rules::validate_element_errors(&se.attributes, true, ctx);
+    match se.kind {
+        SvelteElementKind::Element => {
+            crate::rules::element_rules::validate_element_errors(&se.attributes, true, ctx);
+        }
+        SvelteElementKind::Head => {
+            if let Some(attr) = first_attribute(&se.attributes) {
+                ctx.emit_error(
+                    Code::svelte_head_illegal_attribute,
+                    messages::svelte_head_illegal_attribute(),
+                    attr.range(),
+                );
+            }
+        }
+        SvelteElementKind::Window | SvelteElementKind::Document | SvelteElementKind::Body => {
+            disallow_children(se, ctx);
+            let name = se.kind.as_str();
+            for attr in &se.attributes {
+                let illegal = match attr {
+                    Attribute::Spread(s) => !s.is_attach,
+                    Attribute::Plain(_) | Attribute::Expression(_) | Attribute::Shorthand(_) => {
+                        !is_event_attribute(attr)
+                    }
+                    _ => false,
+                };
+                if !illegal {
+                    continue;
+                }
+                if se.kind == SvelteElementKind::Body {
+                    ctx.emit_error(
+                        Code::svelte_body_illegal_attribute,
+                        messages::svelte_body_illegal_attribute(),
+                        attr.range(),
+                    );
+                } else {
+                    ctx.emit_error(
+                        Code::illegal_element_attribute,
+                        messages::illegal_element_attribute(&format!("svelte:{name}")),
+                        attr.range(),
+                    );
+                }
+            }
+        }
+        SvelteElementKind::Fragment => {
+            if !matches!(
+                ctx.template_path.last(),
+                Some(crate::walk::PathFrame::Component {
+                    kind: crate::walk::ComponentKind::Component
+                        | crate::walk::ComponentKind::SvelteComponent,
+                    ..
+                })
+            ) {
+                ctx.emit_error(
+                    Code::svelte_fragment_invalid_placement,
+                    messages::svelte_fragment_invalid_placement(),
+                    se.range,
+                );
+            }
+            for attr in &se.attributes {
+                match attr {
+                    Attribute::Plain(_) | Attribute::Expression(_) | Attribute::Shorthand(_) => {
+                        crate::rules::element_rules::validate_fragment_slot_attribute(attr, ctx);
+                    }
+                    Attribute::Directive(d) if d.kind == svn_parser::ast::DirectiveKind::Let => {}
+                    Attribute::Comment(_) => {}
+                    Attribute::Directive(_) | Attribute::Spread(_) => ctx.emit_error(
+                        Code::svelte_fragment_invalid_attribute,
+                        messages::svelte_fragment_invalid_attribute(),
+                        attr.range(),
+                    ),
+                }
+            }
+        }
+        SvelteElementKind::Boundary => {
+            for attr in &se.attributes {
+                if matches!(attr, Attribute::Comment(_)) {
+                    continue;
+                }
+                let valid_name = matches!(
+                    attr,
+                    Attribute::Plain(_) | Attribute::Expression(_) | Attribute::Shorthand(_)
+                ) && matches!(
+                    crate::rules::element_rules::plain_attribute_name(attr),
+                    Some("onerror" | "failed" | "pending")
+                );
+                if !valid_name {
+                    ctx.emit_error(
+                        Code::svelte_boundary_invalid_attribute,
+                        messages::svelte_boundary_invalid_attribute(),
+                        attr.range(),
+                    );
+                }
+                let invalid_value = match attr {
+                    Attribute::Plain(p) => match &p.value {
+                        None => true,
+                        Some(v) => {
+                            !matches!(v.parts.as_slice(), [AttrValuePart::Expression { .. }])
+                        }
+                    },
+                    _ => false,
+                };
+                if invalid_value {
+                    ctx.emit_error(
+                        Code::svelte_boundary_invalid_attribute_value,
+                        messages::svelte_boundary_invalid_attribute_value(),
+                        attr.range(),
+                    );
+                }
+            }
+        }
+        _ => {}
     }
     // svelte_self_invalid_placement (`SvelteSelf.js`): `<svelte:self>`
     // needs an `{#if}`, `{#each}`, `{#snippet}` or component ancestor.
@@ -65,6 +173,7 @@ pub fn visit(se: &SvelteElement, ctx: &mut LintContext<'_>, ancestors: &[crate::
         SvelteElementKind::Window => AttrParent::SvelteSpecial("svelte:window"),
         SvelteElementKind::Document => AttrParent::SvelteSpecial("svelte:document"),
         SvelteElementKind::Body => AttrParent::SvelteSpecial("svelte:body"),
+        SvelteElementKind::Fragment => AttrParent::SvelteFragment,
         _ => AttrParent::OtherSvelte,
     };
     if matches!(parent, AttrParent::SvelteComponentLike) {
@@ -167,4 +276,41 @@ fn component_name(path: &std::path::Path, tree: Option<&crate::scope::ScopeTree>
         .map(|n| format!("{preferred}_{n}"))
         .find(|candidate| !taken(candidate))
         .unwrap_or(preferred)
+}
+
+/// The first attribute (in-tag comments are not attributes).
+fn first_attribute(attributes: &[Attribute]) -> Option<&Attribute> {
+    attributes
+        .iter()
+        .find(|a| !matches!(a, Attribute::Comment(_)))
+}
+
+/// The compiler's `is_event_attribute`: an `on*` attribute whose value
+/// is a single expression.
+fn is_event_attribute(attr: &Attribute) -> bool {
+    match attr {
+        Attribute::Plain(p) => {
+            p.name.starts_with("on")
+                && matches!(
+                    p.value.as_ref().map(|v| v.parts.as_slice()),
+                    Some([AttrValuePart::Expression { .. }])
+                )
+        }
+        Attribute::Expression(e) => e.name.starts_with("on"),
+        Attribute::Shorthand(s) => s.name.starts_with("on"),
+        _ => false,
+    }
+}
+
+/// `disallow_children` (`shared/special-element.js`): a
+/// `<svelte:window>`, `<svelte:document>` or `<svelte:body>` has no
+/// content, reported over the whole of it.
+fn disallow_children(se: &SvelteElement, ctx: &mut LintContext<'_>) {
+    if let (Some(first), Some(last)) = (se.children.nodes.first(), se.children.nodes.last()) {
+        ctx.emit_error(
+            Code::svelte_meta_invalid_content,
+            messages::svelte_meta_invalid_content(&format!("svelte:{}", se.kind.as_str())),
+            svn_core::Range::new(first.range().start, last.range().end),
+        );
+    }
 }

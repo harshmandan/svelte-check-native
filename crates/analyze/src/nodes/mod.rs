@@ -12,7 +12,6 @@ pub mod action;
 pub mod attribute;
 pub mod await_pending_catch_block;
 pub mod binding;
-pub mod const_tag;
 pub mod destructure;
 pub mod each_block;
 pub mod element;

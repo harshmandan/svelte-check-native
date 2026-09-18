@@ -1,5 +1,12 @@
 {
-    "clean": true,
+    "errors": [
+        {
+            "file": "input.svelte",
+            "line": 12,
+            "column": 0,
+            "code": "block_unexpected_character"
+        }
+    ],
     "warnings": [],
-    "_note": "Whitespace is allowed between the mustache '{' and the sigil that classifies the tag: the Svelte compiler's tag lexer advances past '{' and skips whitespace BEFORE dispatching on '#'/':'/'/'/'@', so '{ #if}', '{ :else}', '{ /if}', '{ @html}' and '{ const}' are all valid. The template parser dispatched on literal two-byte prefixes ('{:', '{/', '{#', '{@'), so '{ /if}' fell through to expression parsing where the '/' read as a regex opener, producing an unterminated-mustache error and dropping the rest of the fragment. The section pre-pass classifier already skipped the whitespace, so the two layers disagreed about the same bytes. All layers now share one sigil classifier."
+    "_note": "Whitespace is allowed between the mustache '{' and the sigil that classifies the tag: the Svelte compiler's tag lexer advances past '{' and skips whitespace BEFORE dispatching on '#'/':'/'/'/'@', so '{ #if}', '{ :else}', '{ /if}', '{ @html}' and '{ const}' are all valid. The template parser dispatched on literal two-byte prefixes ('{:', '{/', '{#', '{@'), so '{ /if}' fell through to expression parsing where the '/' read as a regex opener, producing an unterminated-mustache error and dropping the rest of the fragment. The section pre-pass classifier already skipped the whitespace, so the two layers disagreed about the same bytes. All layers now share one sigil classifier. The compiler still rejects the whitespace in an `{ #each}` opening tag once parsed (its each-block visitor checks the opening tag in every mode; the other blocks and tags only in runes mode), so the file reports that one compiler error."
 }

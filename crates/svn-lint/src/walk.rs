@@ -195,6 +195,16 @@ pub fn walk_parsed(
     let declaration_error = tree.declaration_error.take();
     ctx.scope_tree = Some(tree);
 
+    // A template the compiler's `parse()` rejects fails before any
+    // analysis.
+    if let Some(finding) = crate::parse_errors::first_template_parse_error(
+        fragment,
+        source,
+        doc.script_lang() == svn_parser::ScriptLang::Ts,
+    ) {
+        ctx.emit_error(finding.code, finding.message, finding.range);
+    }
+
     // The compiler parses each script while it reads the component, so
     // a syntax error in one precedes everything the analysis reports.
     {

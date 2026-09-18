@@ -39,6 +39,16 @@ pub fn attribute_contenteditable_missing() -> String {
     )
 }
 
+/// Attributes need to be unique
+pub fn attribute_duplicate() -> String {
+    format!("Attributes need to be unique\nhttps://svelte.dev/e/attribute_duplicate")
+}
+
+/// Attribute shorthand cannot be empty
+pub fn attribute_empty_shorthand() -> String {
+    format!("Attribute shorthand cannot be empty\nhttps://svelte.dev/e/attribute_empty_shorthand")
+}
+
 /// 'multiple' attribute must be static if select uses two-way binding
 pub fn attribute_invalid_multiple() -> String {
     format!(
@@ -95,10 +105,24 @@ pub fn bind_invalid_parens(name: &str) -> String {
     )
 }
 
+/// {#%name% ...} block cannot be %location%
+pub fn block_invalid_placement(name: &str, location: &str) -> String {
+    format!(
+        "{{#{name} ...}} block cannot be {location}\nhttps://svelte.dev/e/block_invalid_placement"
+    )
+}
+
 /// Expected a `%character%` character immediately following the opening bracket
 pub fn block_unexpected_character(character: &str) -> String {
     format!(
         "Expected a `{character}` character immediately following the opening bracket\nhttps://svelte.dev/e/block_unexpected_character"
+    )
+}
+
+/// {@const ...} must consist of a single variable declaration
+pub fn const_tag_invalid_expression() -> String {
+    format!(
+        "{{@const ...}} must consist of a single variable declaration\nhttps://svelte.dev/e/const_tag_invalid_expression"
     )
 }
 
@@ -107,6 +131,25 @@ pub fn const_tag_invalid_placement() -> String {
     format!(
         "`{{@const}}` must be the immediate child of `{{#snippet}}`, `{{#if}}`, `{{:else if}}`, `{{:else}}`, `{{#each}}`, `{{:then}}`, `{{:catch}}`, `<svelte:fragment>`, `<svelte:boundary>` or `<Component>`\nhttps://svelte.dev/e/const_tag_invalid_placement"
     )
+}
+
+/// {@debug ...} arguments must be identifiers, not arbitrary expressions
+pub fn debug_tag_invalid_arguments() -> String {
+    format!(
+        "{{@debug ...}} arguments must be identifiers, not arbitrary expressions\nhttps://svelte.dev/e/debug_tag_invalid_arguments"
+    )
+}
+
+/// Directive value must be a JavaScript expression enclosed in curly braces
+pub fn directive_invalid_value() -> String {
+    format!(
+        "Directive value must be a JavaScript expression enclosed in curly braces\nhttps://svelte.dev/e/directive_invalid_value"
+    )
+}
+
+/// `%type%` name cannot be empty
+pub fn directive_missing_name(type_: &str) -> String {
+    format!("`{type_}` name cannot be empty\nhttps://svelte.dev/e/directive_missing_name")
 }
 
 /// An `{#each ...}` block without an `as` clause cannot have a key
@@ -125,6 +168,13 @@ pub fn event_handler_invalid_modifier(list: &str) -> String {
 pub fn event_handler_invalid_modifier_combination(modifier1: &str, modifier2: &str) -> String {
     format!(
         "The '{modifier1}' and '{modifier2}' modifiers cannot be used together\nhttps://svelte.dev/e/event_handler_invalid_modifier_combination"
+    )
+}
+
+/// Expected 'html', 'render', 'attach', 'const', or 'debug'
+pub fn expected_tag() -> String {
+    format!(
+        "Expected 'html', 'render', 'attach', 'const', or 'debug'\nhttps://svelte.dev/e/expected_tag"
     )
 }
 
@@ -153,6 +203,13 @@ pub fn let_directive_invalid_placement() -> String {
 pub fn render_tag_invalid_call_expression() -> String {
     format!(
         "Calling a snippet function using apply, bind or call is not allowed\nhttps://svelte.dev/e/render_tag_invalid_call_expression"
+    )
+}
+
+/// `{@render ...}` tags can only contain call expressions
+pub fn render_tag_invalid_expression() -> String {
+    format!(
+        "`{{@render ...}}` tags can only contain call expressions\nhttps://svelte.dev/e/render_tag_invalid_expression"
     )
 }
 
@@ -212,6 +269,27 @@ pub fn svelte_boundary_invalid_attribute_value() -> String {
     )
 }
 
+/// Invalid component definition — must be an `{expression}`
+pub fn svelte_component_invalid_this() -> String {
+    format!(
+        "Invalid component definition — must be an `{{expression}}`\nhttps://svelte.dev/e/svelte_component_invalid_this"
+    )
+}
+
+/// `<svelte:component>` must have a 'this' attribute
+pub fn svelte_component_missing_this() -> String {
+    format!(
+        "`<svelte:component>` must have a 'this' attribute\nhttps://svelte.dev/e/svelte_component_missing_this"
+    )
+}
+
+/// `<svelte:element>` must have a 'this' attribute with a value
+pub fn svelte_element_missing_this() -> String {
+    format!(
+        "`<svelte:element>` must have a 'this' attribute with a value\nhttps://svelte.dev/e/svelte_element_missing_this"
+    )
+}
+
 /// `<svelte:fragment>` can only have a slot attribute and (optionally) a let: directive
 pub fn svelte_fragment_invalid_attribute() -> String {
     format!(
@@ -233,9 +311,96 @@ pub fn svelte_head_illegal_attribute() -> String {
     )
 }
 
+/// A component can only have one `<%name%>` element
+pub fn svelte_meta_duplicate(name: &str) -> String {
+    format!(
+        "A component can only have one `<{name}>` element\nhttps://svelte.dev/e/svelte_meta_duplicate"
+    )
+}
+
 /// <%name%> cannot have children
 pub fn svelte_meta_invalid_content(name: &str) -> String {
     format!("<{name}> cannot have children\nhttps://svelte.dev/e/svelte_meta_invalid_content")
+}
+
+/// `<%name%>` tags cannot be inside elements or blocks
+pub fn svelte_meta_invalid_placement(name: &str) -> String {
+    format!(
+        "`<{name}>` tags cannot be inside elements or blocks\nhttps://svelte.dev/e/svelte_meta_invalid_placement"
+    )
+}
+
+/// "tag" option is deprecated — use "customElement" instead
+pub fn svelte_options_deprecated_tag() -> String {
+    format!(
+        "\"tag\" option is deprecated — use \"customElement\" instead\nhttps://svelte.dev/e/svelte_options_deprecated_tag"
+    )
+}
+
+/// `<svelte:options>` can only receive static attributes
+pub fn svelte_options_invalid_attribute() -> String {
+    format!(
+        "`<svelte:options>` can only receive static attributes\nhttps://svelte.dev/e/svelte_options_invalid_attribute"
+    )
+}
+
+/// Value must be %list%, if specified
+pub fn svelte_options_invalid_attribute_value(list: &str) -> String {
+    format!(
+        "Value must be {list}, if specified\nhttps://svelte.dev/e/svelte_options_invalid_attribute_value"
+    )
+}
+
+/// "customElement" must be a string literal defining a valid custom element name or an object of the form { tag?: string; shadow?: "open" | "none" | `ShadowRootInit`; props?: { [key: string]: { attribute?: string; reflect?: boolean; type: .. } } }
+pub fn svelte_options_invalid_customelement() -> String {
+    format!(
+        "\"customElement\" must be a string literal defining a valid custom element name or an object of the form {{ tag?: string; shadow?: \"open\" | \"none\" | `ShadowRootInit`; props?: {{ [key: string]: {{ attribute?: string; reflect?: boolean; type: .. }} }} }}\nhttps://svelte.dev/e/svelte_options_invalid_customelement"
+    )
+}
+
+/// "props" must be a statically analyzable object literal of the form "{ [key: string]: { attribute?: string; reflect?: boolean; type?: "String" | "Boolean" | "Number" | "Array" | "Object" }"
+pub fn svelte_options_invalid_customelement_props() -> String {
+    format!(
+        "\"props\" must be a statically analyzable object literal of the form \"{{ [key: string]: {{ attribute?: string; reflect?: boolean; type?: \"String\" | \"Boolean\" | \"Number\" | \"Array\" | \"Object\" }}\"\nhttps://svelte.dev/e/svelte_options_invalid_customelement_props"
+    )
+}
+
+/// "shadow" must be either "open", "none" or `ShadowRootInit` object.
+pub fn svelte_options_invalid_customelement_shadow() -> String {
+    format!(
+        "\"shadow\" must be either \"open\", \"none\" or `ShadowRootInit` object.\nhttps://svelte.dev/e/svelte_options_invalid_customelement_shadow"
+    )
+}
+
+/// Tag name must be lowercase and hyphenated
+pub fn svelte_options_invalid_tagname() -> String {
+    format!(
+        "Tag name must be lowercase and hyphenated\nhttps://svelte.dev/e/svelte_options_invalid_tagname"
+    )
+}
+
+/// Tag name is reserved
+pub fn svelte_options_reserved_tagname() -> String {
+    format!("Tag name is reserved\nhttps://svelte.dev/e/svelte_options_reserved_tagname")
+}
+
+/// `<svelte:options>` unknown attribute '%name%'
+pub fn svelte_options_unknown_attribute(name: &str) -> String {
+    format!(
+        "`<svelte:options>` unknown attribute '{name}'\nhttps://svelte.dev/e/svelte_options_unknown_attribute"
+    )
+}
+
+/// Expected a valid element or component name. Components must have a valid variable name or dot notation expression
+pub fn tag_invalid_name() -> String {
+    format!(
+        "Expected a valid element or component name. Components must have a valid variable name or dot notation expression\nhttps://svelte.dev/e/tag_invalid_name"
+    )
+}
+
+/// {@%name% ...} tag cannot be %location%
+pub fn tag_invalid_placement(name: &str, location: &str) -> String {
+    format!("{{@{name} ...}} tag cannot be {location}\nhttps://svelte.dev/e/tag_invalid_placement")
 }
 
 /// A `<textarea>` can have either a value attribute or (equivalently) child content, but not both
@@ -270,5 +435,12 @@ pub fn transition_conflict(type_: &str, existing: &str) -> String {
 pub fn transition_duplicate(type_: &str) -> String {
     format!(
         "Cannot use multiple `{type_}:` directives on a single element\nhttps://svelte.dev/e/transition_duplicate"
+    )
+}
+
+/// '%word%' is a reserved word in JavaScript and cannot be used here
+pub fn unexpected_reserved_word(word: &str) -> String {
+    format!(
+        "'{word}' is a reserved word in JavaScript and cannot be used here\nhttps://svelte.dev/e/unexpected_reserved_word"
     )
 }

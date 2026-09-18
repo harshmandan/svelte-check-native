@@ -145,9 +145,11 @@ impl ParseError {
     /// Whether the Svelte compiler's `parse()` throws on the input this
     /// error describes. svelte-check converts components with
     /// svelte2tsx in strict mode, so such a component is left out of
-    /// the run entirely.
+    /// the run entirely. Every variant qualifies: a block keyword other
+    /// than `if` / `each` / `await` / `key` / `snippet` is the
+    /// compiler's `expected_block_type`.
     pub fn compiler_rejects(&self) -> bool {
-        self.is_fatal()
+        true
     }
 
     /// A stable kebab-case slug per variant, used as the diagnostic

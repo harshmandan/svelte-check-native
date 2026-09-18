@@ -1,0 +1,12 @@
+{
+    "errors": [
+        {
+            "file": "src/Kept.svelte",
+            "line": 0,
+            "column": 24,
+            "code": 2322
+        }
+    ],
+    "warnings": [],
+    "_note": "Every component here but Kept.svelte has a template the Svelte compiler's parse() rejects (duplicate attribute, text directive value, <svelte:element> without this, {@html} in an attribute value, {@debug} of a member, {@render} of a non-call, {@const} sequence, unknown {@tag}, duplicate and nested <svelte:window>/<svelte:body>, invalid <svelte:options> values, empty {}, an unparsable snippet parameter list, a reserved-word shorthand, an unknown block). svelte-check converts each component with svelte2tsx, which calls parse(); when it throws, the component leaves the run, so its script's type error is never reported. Only Kept.svelte's is. Verified against svelte-check --tsgo with svelte 5.55."
+}

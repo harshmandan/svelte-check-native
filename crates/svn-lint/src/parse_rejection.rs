@@ -10,9 +10,9 @@
 //!
 //! - a template expression that is not valid JavaScript / TypeScript
 //!   (`js_parse_error`, e.g. `{a +}`);
-//! - a `<svelte:options runes>` value that is not a static boolean
-//!   (`svelte_options_invalid_attribute_value`, e.g. `runes="true"` or
-//!   `runes={flag}`) — `read_options` runs inside `parse()`;
+//! - the errors `crate::parse_errors` ports (duplicate attributes,
+//!   misplaced `<svelte:*>` tags, invalid `<svelte:options>` values,
+//!   malformed `{@…}` tags, …);
 //! - in a TypeScript component, an `{#each a, b as item}` head: the
 //!   compiler first reads `a, b as item` as one expression (a sequence
 //!   ending in a type assertion), keeps only `a`, and then needs an
@@ -24,15 +24,15 @@ use oxc_parser::Parser;
 use oxc_span::SourceType;
 use svn_analyze::template_scope::{TemplateScopeVisitor, walk_with_visitor};
 use svn_core::Range;
-use svn_parser::ast::{
-    AttrValuePart, Attribute, DirectiveValue, Fragment, Node, SvelteElementKind,
-};
+use svn_parser::ast::{AttrValuePart, Attribute, DirectiveValue, Fragment};
 use svn_parser::{Component, Element, ScriptLang, SvelteElement};
 
 /// True when the compiler's `parse()` would throw on this template for
 /// one of the reasons in the module doc.
 pub fn template_parse_rejected(fragment: &Fragment, source: &str, lang: ScriptLang) -> bool {
-    if has_invalid_runes_option(fragment, source) {
+    if crate::parse_errors::first_template_parse_error(fragment, source, lang == ScriptLang::Ts)
+        .is_some()
+    {
         return true;
     }
     let mut finder = InvalidExpressionFinder {
@@ -43,44 +43,6 @@ pub fn template_parse_rejected(fragment: &Fragment, source: &str, lang: ScriptLa
     };
     walk_with_visitor(fragment, source, &mut finder);
     finder.found
-}
-
-/// `read_options`' `get_boolean_value`: the value must be absent (bare
-/// attribute) or a single `{true}` / `{false}` literal.
-fn has_invalid_runes_option(fragment: &Fragment, source: &str) -> bool {
-    fragment.nodes.iter().any(|node| {
-        let Node::SvelteElement(se) = node else {
-            return false;
-        };
-        se.kind == SvelteElementKind::Options
-            && se.attributes.iter().any(|attr| match attr {
-                Attribute::Plain(p) if p.name == "runes" => match &p.value {
-                    None => false,
-                    Some(v) => match v.parts.as_slice() {
-                        [
-                            AttrValuePart::Expression {
-                                expression_range, ..
-                            },
-                        ] => !is_boolean_literal(*expression_range, source),
-                        _ => true,
-                    },
-                },
-                Attribute::Expression(e) if e.name == "runes" => {
-                    !is_boolean_literal(e.expression_range, source)
-                }
-                Attribute::Shorthand(s) => s.name == "runes",
-                _ => false,
-            })
-    })
-}
-
-fn is_boolean_literal(range: Range, source: &str) -> bool {
-    matches!(
-        source
-            .get(range.start as usize..range.end as usize)
-            .map(str::trim),
-        Some("true" | "false")
-    )
 }
 
 struct InvalidExpressionFinder<'s> {
@@ -246,6 +208,72 @@ mod tests {
         assert!(!rejected(&format!("{ts}{{#each a, i}}{{/each}}")));
         assert!(!rejected(&format!("{ts}{{#each a as item, i}}{{/each}}")));
         assert!(!rejected("{#each true, [1] as item}{/each}"));
+    }
+
+    #[test]
+    fn template_errors_of_the_compilers_parser_are_rejected() {
+        for source in [
+            "<div a=\"1\" a=\"2\"></div>",
+            "<input value=\"1\" bind:value={v} />",
+            "<div class:a class:a></div>",
+            "<div style:color=\"red\" style:color|important=\"red\"></div>",
+            "<div on:click=\"foo\"></div>",
+            "<div on:click=\"\"></div>",
+            "<svelte:element></svelte:element>",
+            "<svelte:element this></svelte:element>",
+            "<svelte:component></svelte:component>",
+            "<svelte:component this=\"x\"></svelte:component>",
+            "<div title=\"{@html a}\"></div>",
+            "{@debug a.b}",
+            "{@render a}",
+            "{#if a}{@const b = 1, c = 2}{/if}",
+            "{@foo x}",
+            "{@attach x}",
+            "<svelte:window /><svelte:window />",
+            "{#if a}<svelte:window />{/if}",
+            "<div><svelte:head></svelte:head></div>",
+            "<svelte:options tag=\"my-el\" />",
+            "<svelte:options foo />",
+            "<svelte:options namespace=\"foo\" />",
+            "<svelte:options css=\"external\" />",
+            "<svelte:options immutable=\"yes\" />",
+            "<svelte:options on:click={() => {}} />",
+            "<svelte:options>hi</svelte:options>",
+            "<svelte:options customElement />",
+            "<svelte:options customElement={42} />",
+            "<svelte:options customElement=\"font-face\" />",
+            "<svelte:options customElement=\"Invalid\" />",
+            "<div. ></div.>",
+            "<p>{}</p>",
+            "<div title={}></div>",
+            "{#snippet s({ class })}x{/snippet}",
+            "<div {this}></div>",
+            "{#each items as x, default}{x}{/each}",
+        ] {
+            assert!(rejected(source), "{source}");
+        }
+    }
+
+    #[test]
+    fn templates_the_compilers_parser_accepts_are_kept() {
+        for source in [
+            "<script>let el;</script><svelte:element this=\"div\" bind:this={el}></svelte:element>",
+            "<div class=\"a\" class:a style:color=\"red\" style:a=\"b\"></div>",
+            "<div on:click={f} on:click={g}></div>",
+            "<svelte:element this={tag}></svelte:element>",
+            "<svelte:component this={C}></svelte:component>",
+            "{#if a}{@const b = (1, 2)}{b}{/if}",
+            "{@debug a, b}{@debug}",
+            "{@render a?.()}",
+            "<svelte:options customElement={null} />",
+            "<svelte:options customElement={{ tag: \"my-el\", props: { a: { type: \"String\" } } }} />",
+            "<svelte:options namespace=\"svg\" immutable accessors={false} css=\"injected\" />",
+            "<enhanced:img src=\"x\" /><Foo.Bar /><my-element />",
+            "<!DOCTYPE html>",
+            "{#snippet s({ a, b = 1 }, ...rest)}x{/snippet}",
+        ] {
+            assert!(!rejected(source), "{source}");
+        }
     }
 
     #[test]

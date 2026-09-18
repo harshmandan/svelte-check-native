@@ -45,6 +45,7 @@ mod fuzzymatch;
 use svn_parser::html5;
 mod ignore;
 mod messages;
+mod parse_errors;
 mod parse_rejection;
 mod rules;
 mod scope;

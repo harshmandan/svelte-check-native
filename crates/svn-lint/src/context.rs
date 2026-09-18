@@ -134,6 +134,13 @@ pub struct LintContext<'src> {
     pub(crate) ts_scripts_transpiled: bool,
     /// See [`crate::LintOptions::preprocess_configured`].
     pub(crate) preprocess_configured: bool,
+    /// The component's diagnostics depend on the real output of the
+    /// language server's fallback TypeScript transpile (see
+    /// `crate::transpile_sensitive`).
+    pub(crate) needs_real_transpile: bool,
+    /// tsgo cannot print the transpile faithfully for this component
+    /// (see `crate::transpile_sensitive::printed_differently_by_tsgo`).
+    pub(crate) real_transpile_unavailable: bool,
     pub(crate) first_slot: Option<(SmolStr, Range)>,
     /// The error reading the config's `customElement` / `css` option
     /// throws during the analysis (see
@@ -172,6 +179,8 @@ impl<'src> LintContext<'src> {
             uses_render_tags: false,
             ts_scripts_transpiled: false,
             preprocess_configured: false,
+            needs_real_transpile: false,
+            real_transpile_unavailable: false,
             first_slot: None,
             compile_options_late_error: None,
         }

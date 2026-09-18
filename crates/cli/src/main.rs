@@ -11,6 +11,7 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 mod discovery;
+mod fallback_transpile;
 mod output;
 mod svelte_config;
 
@@ -849,6 +850,10 @@ struct NativeFileDiagnostics {
     broken: bool,
     /// Lint warnings (empty for broken files — they're skipped).
     warnings: Vec<svn_lint::Warning>,
+    /// The warnings should come from the component as the fallback
+    /// preprocessor really transpiles it (see
+    /// [`relint_with_real_transpile`]).
+    needs_real_transpile: bool,
 }
 
 /// One file's native diagnostics from an ALREADY-PARSED document —
@@ -865,6 +870,7 @@ fn native_diagnostics_for_parsed(
     config_resolver: &svelte_config::ConfigResolver,
     compat: svn_lint::CompatFeatures,
     compile_option_warnings: Vec<(svn_lint::Code, String)>,
+    already_transpiled: bool,
 ) -> NativeFileDiagnostics {
     let pm = svn_core::PositionMap::new(source);
 
@@ -894,6 +900,7 @@ fn native_diagnostics_for_parsed(
             }],
             broken: true,
             warnings: Vec::new(),
+            needs_real_transpile: false,
         };
     }
 
@@ -905,7 +912,9 @@ fn native_diagnostics_for_parsed(
     let options = svn_lint::LintOptions {
         runes: config.runes,
         experimental_async: config.experimental_async,
-        ts_scripts_transpiled: config.ts_scripts_transpiled,
+        // A component already run through the preprocessor has no
+        // TypeScript left to transpile.
+        ts_scripts_transpiled: config.ts_scripts_transpiled && !already_transpiled,
         preprocess_configured: config.preprocess_configured,
         compile_options: config.compile_options.clone(),
         compile_option_warnings,
@@ -936,6 +945,111 @@ fn native_diagnostics_for_parsed(
         diags,
         broken: false,
         warnings: report.warnings,
+        needs_real_transpile: report.needs_real_transpile,
+    }
+}
+
+/// Re-lint the components whose compiler diagnostics depend on what
+/// the fallback preprocessor's TypeScript transpile really prints (no
+/// Svelte config; see [`fallback_transpile`]): print their scripts with
+/// tsgo in one batch, lint each component as the compiler receives it,
+/// and map every diagnostic back the way the language server does.
+/// A component keeps its modelled result when anything here fails.
+#[allow(clippy::too_many_arguments)]
+fn relint_with_real_transpile(
+    workspace: &Path,
+    sources: &[(PathBuf, std::sync::Arc<str>)],
+    results: &mut [Option<NativeFileDiagnostics>],
+    config_resolver: &svelte_config::ConfigResolver,
+    compat: svn_lint::CompatFeatures,
+    compile_option_warnings: &[Vec<(svn_lint::Code, String)>],
+) {
+    let wanted: Vec<usize> = results
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| {
+            r.as_ref()
+                .is_some_and(|r| r.needs_real_transpile && !r.broken)
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+    if wanted.is_empty() {
+        return;
+    }
+    let tags: Vec<Vec<fallback_transpile::ScriptTag>> = wanted
+        .iter()
+        .map(|&idx| fallback_transpile::script_tags(&sources[idx].1))
+        .collect();
+    let contents: Vec<&str> = wanted
+        .iter()
+        .zip(&tags)
+        .flat_map(|(&idx, tags)| {
+            tags.iter()
+                .filter(|t| t.transpiled)
+                .map(move |t| &sources[idx].1[t.content.clone()])
+        })
+        .collect();
+    if contents.is_empty() {
+        return;
+    }
+    let mut printed = fallback_transpile::print_scripts(workspace, &contents).into_iter();
+    for (&idx, tags) in wanted.iter().zip(&tags) {
+        let count = tags.iter().filter(|t| t.transpiled).count();
+        let scripts: Vec<_> = printed.by_ref().take(count).collect();
+        let Some(scripts) = scripts.into_iter().collect::<Option<Vec<_>>>() else {
+            continue;
+        };
+        let (path, source) = &sources[idx];
+        let pre = fallback_transpile::preprocess(source, tags, &scripts);
+        let (doc, section_errors) = svn_parser::parse_sections(&pre.text);
+        let (fragment, template_errors) =
+            svn_parser::parse_all_template_runs(&pre.text, &doc.template.text_runs);
+        let relinted = native_diagnostics_for_parsed(
+            path,
+            &pre.text,
+            &doc,
+            &fragment,
+            &section_errors,
+            &template_errors,
+            config_resolver,
+            compat,
+            compile_option_warnings[idx].clone(),
+            true,
+        );
+        if relinted.broken {
+            continue;
+        }
+        let warnings = relinted
+            .warnings
+            .into_iter()
+            .filter(|w| {
+                !fallback_transpile::is_transpile_false_positive(
+                    w.code.as_str(),
+                    &w.message,
+                    source,
+                )
+            })
+            .map(|w| {
+                let ((sl, sc), (el, ec)) = fallback_transpile::map_range(
+                    &pre,
+                    (w.start_line.saturating_sub(1), w.start_column),
+                    (w.end_line.saturating_sub(1), w.end_column),
+                );
+                // `range` stays in the preprocessed text's offsets;
+                // only the line/column pairs are reported.
+                svn_lint::Warning {
+                    start_line: sl + 1,
+                    start_column: sc,
+                    end_line: el + 1,
+                    end_column: ec,
+                    ..w
+                }
+            })
+            .collect();
+        if let Some(result) = &mut results[idx] {
+            result.warnings = warnings;
+            result.needs_real_transpile = false;
+        }
     }
 }
 
@@ -1805,6 +1919,7 @@ fn check_project(
                         config_resolver_ref,
                         compat,
                         compile_option_warnings[idx].clone(),
+                        false,
                     )
                 });
                 // TSGO-ENHANCEMENT: missing `.svelte` imports (TS2307) —
@@ -1877,6 +1992,16 @@ fn check_project(
             native_results.push(native);
             missing_import_diags.extend(missing);
             dropped_files.extend(dropped);
+        }
+        if let Some(compat) = native_compat {
+            relint_with_real_transpile(
+                workspace,
+                &svelte_sources,
+                &mut native_results,
+                config_resolver_ref,
+                compat,
+                compile_option_warnings,
+            );
         }
 
         // Kit files (`+server.ts`, `+page.ts`, hooks, params): run them

@@ -147,6 +147,20 @@ pub fn walk_parsed(
         .map(|s| parse_script_body(&script_alloc, s.content, script_lang(s)));
     let module_program = parsed_module.as_ref().map(|p| &p.program);
     let instance_program = parsed_instance.as_ref().map(|p| &p.program);
+    // Only the language server's fallback preprocessor (no Svelte
+    // config) is TypeScript's own transpile.
+    if ctx.ts_scripts_transpiled && !ctx.preprocess_configured {
+        let scripts: Vec<_> = [
+            (doc.module_script.as_ref(), parsed_module.as_ref()),
+            (doc.instance_script.as_ref(), parsed_instance.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(section, parsed)| Some((section?, parsed?)))
+        .collect();
+        ctx.needs_real_transpile = crate::transpile_sensitive::needs_real_transpile(&scripts);
+        ctx.real_transpile_unavailable =
+            crate::transpile_sensitive::printed_differently_by_tsgo(&scripts);
+    }
     ctx.runes = forced.unwrap_or_else(|| scripts_signal_runes(module_program, instance_program));
 
     // Build the scope tree once; Phase-C rules query it by binding
@@ -248,6 +262,16 @@ pub fn walk_parsed(
             .or_else(|| merged.and_then(|(_, error)| error))
         {
             ctx.emit_error(Code::js_parse_error, message, range);
+            // Where a syntax error lands depends on the transpiled
+            // layout, or on the source map around it.
+            if ctx.ts_scripts_transpiled
+                && !ctx.preprocess_configured
+                && scripts.iter().any(|s| {
+                    crate::rules::typescript_features::script_is_transpiled(s.section, true)
+                })
+            {
+                ctx.needs_real_transpile = true;
+            }
         }
     }
 

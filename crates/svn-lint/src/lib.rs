@@ -56,6 +56,7 @@ mod scope_rune_detection;
 // `crate::scope::Binding` etc. unchanged.
 mod scope_types;
 mod scope_util;
+mod transpile_sensitive;
 mod walk;
 
 use std::path::Path;
@@ -173,9 +174,11 @@ pub fn lint_parsed<'src>(
     report_compile_options(&options, &mut ctx);
     crate::walk::walk_parsed(doc, fragment, source, path, options.runes, &mut ctx);
     let exception = ctx.take_exception();
+    let needs_real_transpile = ctx.needs_real_transpile && !ctx.real_transpile_unavailable;
     LintReport {
         warnings: ctx.take_warnings(),
         exception,
+        needs_real_transpile,
     }
 }
 
@@ -188,4 +191,11 @@ pub struct LintReport {
     /// with instead of compiling the component. svelte-check reports
     /// it as an error with no code, at the start of the file.
     pub exception: Option<String>,
+    /// The warnings come from modelling TypeScript's transpile, and the
+    /// component has something that model cannot follow: the caller
+    /// should lint the real transpiled component instead (see
+    /// `transpile_sensitive`). Only set when the project has no Svelte
+    /// config, so the language server's fallback TypeScript transpile
+    /// is the preprocessor.
+    pub needs_real_transpile: bool,
 }
